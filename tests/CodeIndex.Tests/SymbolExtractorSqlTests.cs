@@ -32,18 +32,12 @@ public partial class SymbolExtractorTests
         var content = "CREATE TEMP TABLE users (\n  id INT PRIMARY KEY\n);\n\nCREATE OR REPLACE FUNCTION get_user(id INT) RETURNS void;\n\nCREATE MATERIALIZED VIEW active_users AS SELECT * FROM users;\n\nCREATE TYPE color AS ENUM ('red', 'green');\nCREATE TYPE inventory_item AS (name text);\nCREATE SCHEMA analytics;\nCREATE SCHEMA AUTHORIZATION analytics_owner;\nCREATE SEQUENCE order_seq;\nCREATE EXTENSION IF NOT EXISTS pgcrypto;\nCREATE DOMAIN positive_int AS integer CHECK (VALUE > 0);\nCREATE UNIQUE INDEX users_email_idx ON users (id);\n\nALTER TABLE users ADD COLUMN email TEXT;";
         var symbols = SymbolExtractor.Extract(1, "sql", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "users");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "get_user");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "active_users");
-        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "color");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "inventory_item");
-        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "analytics");
-        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "analytics_owner");
+        AssertSymbolsContain(symbols, "class", "users", "active_users", "inventory_item", "order_seq", "positive_int", "users_email_idx");
+        AssertSymbolsContain(symbols, "function", "get_user");
+        AssertSymbolsContain(symbols, "enum", "color");
+        AssertSymbolsContain(symbols, "namespace", "analytics", "analytics_owner");
         Assert.DoesNotContain(symbols, s => s.Kind == "namespace" && s.Name == "AUTHORIZATION");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "order_seq");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "pgcrypto");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "positive_int");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "users_email_idx");
+        AssertSymbolsContain(symbols, "import", "pgcrypto");
     }
 
     [Fact]
@@ -69,8 +63,7 @@ public partial class SymbolExtractorTests
 
         var symbols = SymbolExtractor.Extract(1, "sql", content);
 
-        Assert.Contains(symbols, s => s.Kind == "definer" && s.Name == "admin@%");
-        Assert.Contains(symbols, s => s.Kind == "definer" && s.Name == "app_user@localhost");
+        AssertSymbolsContain(symbols, "definer", "admin@%", "app_user@localhost");
     }
 
     [Fact]

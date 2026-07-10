@@ -40,6 +40,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - `SymbolExtractor*Tests.cs` and `ReferenceExtractor*Tests.cs`
   Extractor coverage is split by language or feature area with partial test classes, while shared helpers remain on the root `SymbolExtractorTests` / `ReferenceExtractorTests` parts.
   When moving repeated extractor scenarios out of a giant suite, keep the new partial file grouped by a readable domain such as language, build-file format, or protocol surface, and prefer small semantic assertion helpers over repeated raw substring or predicate assertions.
+  Use `AssertSymbolsContain(...)` when a fixture only needs to verify several symbol names of the same kind across language-specific partials; keep direct predicates for metadata such as line, container, subtype, or return type.
   `ReferenceExtractorTests.ExtractSymbolsAndReferences(...)` owns the common symbol-then-reference extraction setup for tests that need both lists; use it instead of repeating the two extractor calls when the fixture does not need a specialized path or workspace symbol setup, and discard the symbol tuple element with `_` instead of keeping an unused `symbols` local when the test only asserts references.
 - `FileIndexerTests.cs`, `FileIndexerContentLoadingTests.cs`, `FileIndexerTestSupport.cs`
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
@@ -323,6 +324,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `SymbolExtractor*Tests.cs` と `ReferenceExtractor*Tests.cs`
   extractor のカバレッジは言語または機能領域ごとの partial test class に分割し、共有 helper は root 側の `SymbolExtractorTests` / `ReferenceExtractorTests` に残します。
   巨大 suite から繰り返しの extractor シナリオを切り出す場合は、言語、build-file 形式、protocol surface など読みやすい領域ごとの partial file にまとめ、raw substring や predicate assertion の繰り返しより小さな semantic assertion helper を優先してください。
+  fixture が同じ kind の複数 symbol name だけを検証する場合は、言語別 partial をまたいで `AssertSymbolsContain(...)` を使ってください。line、container、subtype、return type などの metadata を検証する場合は直接 predicate を維持します。
   `ReferenceExtractorTests.ExtractSymbolsAndReferences(...)` は symbol 抽出から reference 抽出までの共通 setup を所有します。fixture が特殊な path や workspace symbol setup を必要としない場合は 2 つの extractor 呼び出しを繰り返さずこの helper を使い、reference だけを検証するテストでは未使用の `symbols` local を残さず symbol 側を `_` で捨ててください。
 - `FileIndexerTests.cs`、`FileIndexerContentLoadingTests.cs`、`FileIndexerTestSupport.cs`
   ファイル走査、言語判定、scan result 言語の再利用、content loading / canonicalization、checksum、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。共有 `FileIndexerTests` helper は `FileIndexerTestSupport.cs` に置きます。
