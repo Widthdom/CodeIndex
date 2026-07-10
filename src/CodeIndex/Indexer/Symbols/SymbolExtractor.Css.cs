@@ -497,7 +497,8 @@ public static partial class SymbolExtractor
         int lineIndex) =>
         lang == "css"
         && pattern.Kind == "class"
-        && !matchLine.TrimStart().StartsWith('@')
+        && matchLine.AsSpan().TrimStart() is var trimmedLine
+        && (trimmedLine.IsEmpty || trimmedLine[0] != '@')
         && getCssQualifiedRuleAncestors?.Invoke() is { } cssQualifiedRuleAncestors
         && cssQualifiedRuleAncestors[lineIndex];
 
