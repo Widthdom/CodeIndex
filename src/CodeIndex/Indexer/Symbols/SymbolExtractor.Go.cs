@@ -471,7 +471,7 @@ public static partial class SymbolExtractor
         for (var i = 0; i < lines.Length; i++)
         {
             var rawLine = lines[i];
-            var trimmed = rawLine.TrimStart();
+            var trimmed = rawLine.AsSpan().TrimStart();
 
             if (!inInterfaceBody)
             {
@@ -498,13 +498,13 @@ public static partial class SymbolExtractor
                 awaitingInterfaceBody = false;
                 interfaceBodyDepth = CountGoBraceDelta(rawLine);
 
-                var sameLineBody = rawLine.AsSpan(openBraceIndex + 1).TrimStart().ToString();
+                var sameLineBody = rawLine.AsSpan(openBraceIndex + 1).TrimStart();
                 if (sameLineBody.Length > 0
                     && !sameLineBody.StartsWith("//", StringComparison.Ordinal)
                     && !sameLineBody.StartsWith("/*", StringComparison.Ordinal)
                     && !sameLineBody.StartsWith("}", StringComparison.Ordinal))
                 {
-                    TryAddGoInterfaceBodySymbols(fileId, rawLine, i, symbols, extractionState, sameLineBody);
+                    TryAddGoInterfaceBodySymbols(fileId, rawLine, i, symbols, extractionState, sameLineBody.ToString());
                 }
 
                 if (interfaceBodyDepth <= 0)
@@ -536,7 +536,7 @@ public static partial class SymbolExtractor
                 candidate = GetGoPrefixTrimmedEnd(candidate, trailingBraceIndex);
 
             if (candidate.Length > 0 && !candidate.StartsWith("}", StringComparison.Ordinal))
-                TryAddGoInterfaceBodySymbols(fileId, rawLine, i, symbols, extractionState, candidate);
+                TryAddGoInterfaceBodySymbols(fileId, rawLine, i, symbols, extractionState, candidate.ToString());
 
             interfaceBodyDepth += CountGoBraceDelta(rawLine);
             if (interfaceBodyDepth <= 0)
