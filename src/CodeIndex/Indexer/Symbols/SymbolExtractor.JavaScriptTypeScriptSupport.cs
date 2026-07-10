@@ -2362,7 +2362,7 @@ public static partial class SymbolExtractor
                 ? lineEndColumn + 1
                 : sanitizedLine.Length;
 
-            var sanitizedSlice = sanitizedLine[lineStartColumn..lineEndExclusive].Trim();
+            var sanitizedSlice = sanitizedLine.AsSpan(lineStartColumn, lineEndExclusive - lineStartColumn).Trim();
             if (sanitizedSlice.Length > 0)
             {
                 if (clauseBuilder.Length > 0)
@@ -2370,7 +2370,8 @@ public static partial class SymbolExtractor
                 clauseBuilder.Append(sanitizedSlice);
             }
 
-            var rawSlice = rawLine[lineStartColumn..Math.Min(rawLine.Length, lineEndExclusive)].Trim();
+            var rawSliceEndExclusive = Math.Min(rawLine.Length, lineEndExclusive);
+            var rawSlice = rawLine.AsSpan(lineStartColumn, rawSliceEndExclusive - lineStartColumn).Trim();
             if (rawSlice.Length > 0)
             {
                 if (signatureBuilder.Length > 0)
@@ -2479,7 +2480,7 @@ public static partial class SymbolExtractor
                 ? lineEndColumn + 1
                 : sanitizedLine.Length;
 
-            var sanitizedSlice = sanitizedLine[lineStartColumn..lineEndExclusive].Trim();
+            var sanitizedSlice = sanitizedLine.AsSpan(lineStartColumn, lineEndExclusive - lineStartColumn).Trim();
             if (sanitizedSlice.Length > 0)
             {
                 if (clauseBuilder.Length > 0)
@@ -2487,7 +2488,8 @@ public static partial class SymbolExtractor
                 clauseBuilder.Append(sanitizedSlice);
             }
 
-            var rawSlice = rawLine[lineStartColumn..Math.Min(rawLine.Length, lineEndExclusive)].Trim();
+            var rawSliceEndExclusive = Math.Min(rawLine.Length, lineEndExclusive);
+            var rawSlice = rawLine.AsSpan(lineStartColumn, rawSliceEndExclusive - lineStartColumn).Trim();
             if (rawSlice.Length > 0)
             {
                 if (signatureBuilder.Length > 0)
@@ -2653,7 +2655,7 @@ public static partial class SymbolExtractor
                             startColumnText,
                             endLineIndex,
                             endColumn);
-                        return specifiers.Trim().Length > 0;
+                        return specifiers.AsSpan().Trim().Length > 0;
                     }
 
                     if (braceDepth < 0)
