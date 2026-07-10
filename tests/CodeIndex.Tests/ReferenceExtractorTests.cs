@@ -193,6 +193,29 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain("literal", masked[1], StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void StructuralLineMasker_MaskLines_JsTsTemplateLiteralsReuseUnchangedLinesUntilMaskNeeded(string language)
+    {
+        var lines = new[]
+        {
+            "function run() {",
+            "    const value = `literal`;",
+            "    callReal();",
+            "}",
+        };
+
+        var masked = StructuralLineMasker.MaskLines(language, lines);
+
+        Assert.NotSame(lines, masked);
+        Assert.Same(lines[0], masked[0]);
+        Assert.NotSame(lines[1], masked[1]);
+        Assert.Same(lines[2], masked[2]);
+        Assert.Same(lines[3], masked[3]);
+        Assert.DoesNotContain("literal", masked[1], StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Extract_CancelledToken_ThrowsBeforeWork()
     {

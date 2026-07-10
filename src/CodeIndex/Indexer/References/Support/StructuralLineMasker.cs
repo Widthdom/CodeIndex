@@ -1779,7 +1779,8 @@ internal static class StructuralLineMasker
             if (line.Length == 0)
                 continue;
 
-            var masked = line.ToCharArray();
+            char[]? masked = null;
+            char[] GetMaskedLine() => masked ??= line.ToCharArray();
             var pos = 0;
 
             while (pos < line.Length)
@@ -1796,7 +1797,7 @@ internal static class StructuralLineMasker
                             // テンプレートホール内の `${/* f(); */ g()}` のような
                             // block comment で `f` が疑似参照として残らないよう、
                             // `*/` 自体も本文と同様に空白化する。
-                            ReplaceWithSpaces(masked, pos, 2);
+                            ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                             frames.Pop();
                             pos += 2;
                             continue;
@@ -1806,7 +1807,7 @@ internal static class StructuralLineMasker
                         // block comment do not survive into reference extraction.
                         // ホール内 block comment 本文は空白化し、内部の識別子が
                         // 参照抽出まで残らないようにする。
-                        masked[pos] = ' ';
+                        GetMaskedLine()[pos] = ' ';
                         pos++;
                         continue;
                     }
@@ -1815,14 +1816,14 @@ internal static class StructuralLineMasker
                     {
                         if (line[pos] == '\\')
                         {
-                            ReplaceWithSpaces(masked, pos, Math.Min(2, line.Length - pos));
+                            ReplaceWithSpaces(GetMaskedLine(), pos, Math.Min(2, line.Length - pos));
                             pos += Math.Min(2, line.Length - pos);
                             continue;
                         }
 
                         if (pos + 1 < line.Length && line[pos] == '$' && line[pos + 1] == '{')
                         {
-                            ReplaceWithSpaces(masked, pos, 2);
+                            ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                             pos += 2;
                             frames.Push(new JsTemplateHoleFrame());
                             lexState = default;
@@ -1838,7 +1839,7 @@ internal static class StructuralLineMasker
                             // テンプレート開始時に退避した lex state を復元し、閉じ backtick
                             // の後ろに paren stack や class header hint、case label hint を
                             // 引き継ぐ。
-                            masked[pos] = ' ';
+                            GetMaskedLine()[pos] = ' ';
                             pos++;
                             lexState = tplFrame.SavedLexState;
                             lexState.SetKind(JsPrevTokenKind.Literal);
@@ -1846,7 +1847,7 @@ internal static class StructuralLineMasker
                             continue;
                         }
 
-                        masked[pos] = ' ';
+                        GetMaskedLine()[pos] = ' ';
                         pos++;
                         continue;
                     }
@@ -1855,7 +1856,7 @@ internal static class StructuralLineMasker
                     {
                         if (activeJsHoleStringQuote != '\0')
                         {
-                            pos = MaskJsTemplateHoleString(line, pos, masked, activeJsHoleStringQuote, startsInsideString: true, out var continuesOnNextLine);
+                            pos = MaskJsTemplateHoleString(line, pos, GetMaskedLine(), activeJsHoleStringQuote, startsInsideString: true, out var continuesOnNextLine);
                             if (continuesOnNextLine)
                                 break;
 
@@ -1872,7 +1873,7 @@ internal static class StructuralLineMasker
                             // `//` コメント以降を空白化し、後続処理 — とくに前行の
                             // `lines[li]` を読む複数行タグ走査 — がコメント内の識別子を
                             // コードと誤認しないようにする。
-                            ReplaceWithSpaces(masked, pos, masked.Length - pos);
+                            ReplaceWithSpaces(GetMaskedLine(), pos, line.Length - pos);
                             break;
                         }
 
@@ -1882,7 +1883,7 @@ internal static class StructuralLineMasker
                             // span is fully whitespace for downstream extraction.
                             // ホールの block comment 開始 `/*` を空白化し、
                             // 下流抽出から見えるスパン全体を空白化する。
-                            ReplaceWithSpaces(masked, pos, 2);
+                            ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                             frames.Push(new BlockCommentFrame());
                             pos += 2;
                             continue;
@@ -1902,7 +1903,7 @@ internal static class StructuralLineMasker
                             // hole 側の lex state を退避し、閉じ backtick 後に paren
                             // などの context を元に戻せるようにする。
                             if (collectTaggedTemplateHits)
-                                TryRecordJsTaggedTemplateHit(lines, masked, i, pos, ref taggedTemplateHits, allowGenericTag);
+                                TryRecordJsTaggedTemplateHit(lines, GetMaskedLine(), i, pos, ref taggedTemplateHits, allowGenericTag);
                             pos++;
                             frames.Push(new JsTemplateLiteralFrame { SavedLexState = lexState });
                             lexState = default;
@@ -1913,7 +1914,7 @@ internal static class StructuralLineMasker
                         if (line[pos] == '"' || line[pos] == '\'')
                         {
                             var quote = line[pos];
-                            pos = MaskJsTemplateHoleString(line, pos, masked, quote, startsInsideString: false, out var continuesOnNextLine);
+                            pos = MaskJsTemplateHoleString(line, pos, GetMaskedLine(), quote, startsInsideString: false, out var continuesOnNextLine);
                             if (continuesOnNextLine)
                             {
                                 activeJsHoleStringQuote = quote;
@@ -1966,7 +1967,7 @@ internal static class StructuralLineMasker
                                 // for downstream symbol-body brace counting.
                                 // ホールを閉じる `}` もマスクし、後段の symbol 本体の
                                 // brace 数え上げで brace バランスを崩さないようにする。
-                                masked[pos] = ' ';
+                                GetMaskedLine()[pos] = ' ';
                                 frames.Pop();
                                 pos++;
                                 lexState.SetKind(JsPrevTokenKind.Other);
@@ -1995,7 +1996,7 @@ internal static class StructuralLineMasker
 
                 if (activeJsTopLevelStringQuote != '\0')
                 {
-                    pos = MaskJsTemplateHoleString(line, pos, masked, activeJsTopLevelStringQuote, startsInsideString: true, out var continuesOnNextLine);
+                    pos = MaskJsTemplateHoleString(line, pos, GetMaskedLine(), activeJsTopLevelStringQuote, startsInsideString: true, out var continuesOnNextLine);
                     if (continuesOnNextLine)
                         break;
 
@@ -2013,7 +2014,7 @@ internal static class StructuralLineMasker
                     // `//` コメント以降を空白化し、前行の `lines[li]` を直接読む複数行
                     // タグ走査が `return tag // trailing comment` の `comment` のような
                     // コメント内識別子をタグと誤認しないようにする。
-                    ReplaceWithSpaces(masked, pos, masked.Length - pos);
+                    ReplaceWithSpaces(GetMaskedLine(), pos, line.Length - pos);
                     break;
                 }
 
@@ -2022,7 +2023,7 @@ internal static class StructuralLineMasker
                     // Blank the top-level `/*` opener to match the hole-side
                     // behavior and keep downstream extraction consistent.
                     // 先頭レベルでも `/*` 開始を空白化し、ホール側と挙動を揃える。
-                    ReplaceWithSpaces(masked, pos, 2);
+                    ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                     frames.Push(new BlockCommentFrame());
                     pos += 2;
                     continue;
@@ -2042,8 +2043,8 @@ internal static class StructuralLineMasker
                     // テンプレート直前の lex state を退避し、閉じ backtick で paren
                     // stack や statement-head hint を復元できるようにする。
                     if (collectTaggedTemplateHits)
-                        TryRecordJsTaggedTemplateHit(lines, masked, i, pos, ref taggedTemplateHits, allowGenericTag);
-                    masked[pos] = ' ';
+                        TryRecordJsTaggedTemplateHit(lines, GetMaskedLine(), i, pos, ref taggedTemplateHits, allowGenericTag);
+                    GetMaskedLine()[pos] = ' ';
                     pos++;
                     frames.Push(new JsTemplateLiteralFrame { SavedLexState = lexState });
                     lexState = default;
@@ -2058,7 +2059,7 @@ internal static class StructuralLineMasker
                     pos = SkipJsSingleLineStringContinuation(line, pos, out var continuesOnNextLine);
                     if (continuesOnNextLine)
                     {
-                        ReplaceWithSpaces(masked, start, pos - start);
+                        ReplaceWithSpaces(GetMaskedLine(), start, pos - start);
                         activeJsTopLevelStringQuote = quote;
                         break;
                     }
@@ -2070,7 +2071,8 @@ internal static class StructuralLineMasker
                 pos = AdvanceJsToken(line, pos, ref lexState);
             }
 
-            lines[i] = new string(masked);
+            if (masked is not null)
+                lines[i] = new string(masked);
         }
 
         // Post-pass: drop `of` hits whose enclosing `for (...)` header is a for-of or
