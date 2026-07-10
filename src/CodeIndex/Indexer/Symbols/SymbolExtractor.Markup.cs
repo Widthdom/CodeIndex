@@ -2016,7 +2016,7 @@ public static partial class SymbolExtractor
         if (closingBraceIndex < 0)
             return "";
 
-        var content = value[1..closingBraceIndex].Trim();
+        var content = value.AsSpan(1, closingBraceIndex - 1).Trim().ToString();
         var payloadStart = FindTopLevelMarkupPayloadStart(content);
         if (payloadStart < 0)
             return "";
@@ -2153,9 +2153,9 @@ public static partial class SymbolExtractor
         if (closingBraceIndex < 0)
             return value;
 
-        var normalized = NormalizeXamlMarkupExtensionContent(value[1..closingBraceIndex].Trim());
-        var suffix = value[(closingBraceIndex + 1)..].Trim();
-        return suffix.Length == 0 ? normalized : normalized + suffix;
+        var normalized = NormalizeXamlMarkupExtensionContent(value.AsSpan(1, closingBraceIndex - 1).Trim().ToString());
+        var suffix = value.AsSpan(closingBraceIndex + 1).Trim();
+        return suffix.IsEmpty ? normalized : string.Concat(normalized, suffix.ToString());
     }
 
     private static string NormalizeXamlMarkupExtensionContent(string value)
