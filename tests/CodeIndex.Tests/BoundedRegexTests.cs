@@ -1,5 +1,6 @@
 using CodeIndex.Cli;
 using CodeIndex.Indexer;
+using System.Text.RegularExpressions;
 
 namespace CodeIndex.Tests;
 
@@ -20,6 +21,14 @@ public sealed class BoundedRegexTests
     public void DefaultMatchTimeout_MatchesRuntimeSafetyTimeout()
     {
         Assert.Equal(RuntimeSafety.RegexMatchTimeout, BoundedRegex.DefaultMatchTimeout);
+    }
+
+    [Fact]
+    public void StaticPatternCache_CoversSharedExtractionPatternSet()
+    {
+        _ = BoundedRegex.IsMatch("token", "token");
+
+        Assert.True(Regex.CacheSize >= BoundedRegex.MinimumStaticPatternCacheSize);
     }
 
     [Fact]
