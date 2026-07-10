@@ -1090,12 +1090,12 @@ public static partial class SymbolExtractor
         bool treatAsFromImport,
         string? pythonModulePrefix)
     {
-        importedNames = importedNames.Trim();
-        if (importedNames.Length == 0)
+        var importedNamesSpan = importedNames.AsSpan().Trim();
+        if (importedNamesSpan.IsEmpty)
             return;
 
-        if (importedNames.StartsWith('(') && importedNames.EndsWith(')'))
-            importedNames = importedNames[1..^1].Trim();
+        if (importedNamesSpan[0] == '(' && importedNamesSpan[^1] == ')')
+            importedNamesSpan = importedNamesSpan[1..^1].Trim();
 
         var searchStartColumn = absoluteStartColumn;
         var normalizedModulePart = treatAsFromImport
@@ -1105,19 +1105,20 @@ public static partial class SymbolExtractor
             ? ResolvePythonRelativeFromImportModuleName(modulePart, pythonModulePrefix)
             : null;
         var specStart = 0;
-        while (specStart <= importedNames.Length)
+        while (specStart <= importedNamesSpan.Length)
         {
-            var commaIndex = importedNames.IndexOf(',', specStart);
-            var specEnd = commaIndex >= 0 ? commaIndex : importedNames.Length;
+            var commaOffset = importedNamesSpan[specStart..].IndexOf(',');
+            var commaIndex = commaOffset >= 0 ? specStart + commaOffset : -1;
+            var specEnd = commaIndex >= 0 ? commaIndex : importedNamesSpan.Length;
             var trimStart = specStart;
             var trimEnd = specEnd;
-            while (trimStart < trimEnd && char.IsWhiteSpace(importedNames[trimStart]))
+            while (trimStart < trimEnd && char.IsWhiteSpace(importedNamesSpan[trimStart]))
                 trimStart++;
-            while (trimEnd > trimStart && char.IsWhiteSpace(importedNames[trimEnd - 1]))
+            while (trimEnd > trimStart && char.IsWhiteSpace(importedNamesSpan[trimEnd - 1]))
                 trimEnd--;
 
             if (trimStart == trimEnd
-                || (trimEnd == trimStart + 1 && importedNames[trimStart] == '*'))
+                || (trimEnd == trimStart + 1 && importedNamesSpan[trimStart] == '*'))
             {
                 if (commaIndex < 0)
                     break;
@@ -1126,11 +1127,11 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            var spec = importedNames[trimStart..trimEnd];
+            var spec = importedNamesSpan[trimStart..trimEnd];
             var aliasIndex = spec.IndexOf(" as ", StringComparison.Ordinal);
             var importedName = aliasIndex >= 0
                 ? SliceTrimmedPythonImportPart(spec, 0, aliasIndex)
-                : spec;
+                : spec.ToString();
             var localName = aliasIndex >= 0
                 ? SliceTrimmedPythonImportPart(spec, aliasIndex + " as ".Length, spec.Length)
                 : GetPythonImportLocalName(importedName);
@@ -1209,14 +1210,14 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static string SliceTrimmedPythonImportPart(string value, int startIndex, int endIndex)
+    private static string SliceTrimmedPythonImportPart(ReadOnlySpan<char> value, int startIndex, int endIndex)
     {
         while (startIndex < endIndex && char.IsWhiteSpace(value[startIndex]))
             startIndex++;
         while (endIndex > startIndex && char.IsWhiteSpace(value[endIndex - 1]))
             endIndex--;
 
-        return startIndex == endIndex ? string.Empty : value[startIndex..endIndex];
+        return startIndex == endIndex ? string.Empty : value[startIndex..endIndex].ToString();
     }
 
     private static string GetPythonImportLocalName(string importedName)
