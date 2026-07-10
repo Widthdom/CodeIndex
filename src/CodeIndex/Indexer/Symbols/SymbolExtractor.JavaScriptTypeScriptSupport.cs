@@ -6507,21 +6507,21 @@ public static partial class SymbolExtractor
 
     private static string NormalizeJavaScriptTypeScriptExportedSpecifierName(string exportedName)
     {
-        exportedName = exportedName.Trim();
-        if (exportedName.Length < 2 || exportedName[0] is not ('\'' or '"'))
-            return exportedName;
+        var trimmedName = exportedName.AsSpan().Trim();
+        if (trimmedName.Length < 2 || trimmedName[0] is not ('\'' or '"'))
+            return MaterializeTrimmedJavaScriptTypeScriptSpecifierName(exportedName, trimmedName);
 
-        var quote = exportedName[0];
-        if (exportedName[^1] != quote)
-            return exportedName;
+        var quote = trimmedName[0];
+        if (trimmedName[^1] != quote)
+            return MaterializeTrimmedJavaScriptTypeScriptSpecifierName(exportedName, trimmedName);
 
-        var builder = new StringBuilder(Math.Max(0, exportedName.Length - 2));
-        for (var index = 1; index < exportedName.Length - 1; index++)
+        var builder = new StringBuilder(Math.Max(0, trimmedName.Length - 2));
+        for (var index = 1; index < trimmedName.Length - 1; index++)
         {
-            var ch = exportedName[index];
-            if (ch == '\\' && index + 1 < exportedName.Length - 1)
+            var ch = trimmedName[index];
+            if (ch == '\\' && index + 1 < trimmedName.Length - 1)
             {
-                builder.Append(exportedName[index + 1]);
+                builder.Append(trimmedName[index + 1]);
                 index++;
                 continue;
             }
@@ -6531,6 +6531,9 @@ public static partial class SymbolExtractor
 
         return builder.ToString();
     }
+
+    private static string MaterializeTrimmedJavaScriptTypeScriptSpecifierName(string original, ReadOnlySpan<char> trimmed)
+        => trimmed.Length == original.Length ? original : trimmed.ToString();
 
     // Scans forward from (`startLineIndex`, `startColumn`) through the lex-sanitized source for
     // the first `{`, hopping across lines when only whitespace (including newlines) remains. The
