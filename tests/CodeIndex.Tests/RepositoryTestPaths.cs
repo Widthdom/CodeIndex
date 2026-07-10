@@ -25,6 +25,10 @@ internal static class RepositoryTestPaths
     internal static string[] ReadNormalizedLines(params string[] relativeParts)
         => ReadNormalizedText(relativeParts).Split('\n');
 
+    internal static string ReadDockerfile() => ReadText("Dockerfile");
+
+    internal static string ReadDockerIgnore() => ReadText(".dockerignore");
+
     internal static IReadOnlyList<(string FileName, string Content)> ReadNormalizedWorkflows()
     {
         var workflowsDirectory = Combine(".github", "workflows");

@@ -79,6 +79,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Workflow tests that compare multiline YAML snippets should use `RepositoryTestPaths.ReadNormalizedWorkflow(...)` so line-ending normalization stays centralized across CI, release, package-lock, and mutation workflow contracts.
   Reuse that normalized value for all assertions in a test instead of reading or retaining both raw and normalized copies of the same workflow.
   Use `RepositoryTestPaths.ReadNormalizedText(...)` for other checked-in multiline fixtures such as `Dockerfile`; workflow-specific reads should continue through `ReadNormalizedWorkflow(...)`.
+  Use `ReadDockerfile()` and `ReadDockerIgnore()` for release-container contract tests so canonical fixture paths do not drift across workflow suites.
   Whole-workflow policy audits should use `RepositoryTestPaths.ReadNormalizedWorkflows()` so enumeration order, extension filtering, file naming, and normalization are shared instead of being rebuilt inside individual test classes.
   When one policy test checks several step-level rules, parse workflow step blocks once and filter the retained blocks for each rule instead of rerunning the multiline step regex for every assertion family.
 - `IndexCommandRunnerTests.Run_CancelDuringFreshIndex_ReturnsInterruptedJson`, `Run_CancelDuringDryRunScan_ReturnsInterruptedJson`, and `Run_CancelBeforeFreshScan_ReturnsInterruptedJson`
@@ -370,6 +371,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   複数行の YAML snippet を比較する workflow test は `RepositoryTestPaths.ReadNormalizedWorkflow(...)` を使い、CI、release、package-lock、mutation workflow contract 間の line-ending normalization を一か所に集約します。
   同じ test 内の全 assertion でその normalized value を再利用し、同じ workflow の raw copy と normalized copy を重複して読み込んだり保持したりしません。
   `Dockerfile` など workflow 以外の checked-in multiline fixture には `RepositoryTestPaths.ReadNormalizedText(...)` を使い、workflow 固有の読み込みは引き続き `ReadNormalizedWorkflow(...)` を使います。
+  release-container contract test では `ReadDockerfile()` と `ReadDockerIgnore()` を使い、canonical fixture path が workflow suite 間でずれないようにします。
   workflow 全体の policy audit には `RepositoryTestPaths.ReadNormalizedWorkflows()` を使い、列挙順、extension filter、file name、normalization を個別 test class 内で再構築せず共有します。
   1つの policy test が複数の step-level rule を検証する場合は、workflow step block を一度だけ解析して保持し、assertion family ごとに multiline step regex を再実行せず保持済み block を絞り込みます。
 - `IndexCommandRunnerTests.Run_CancelDuringFreshIndex_ReturnsInterruptedJson`、`Run_CancelDuringDryRunScan_ReturnsInterruptedJson`、`Run_CancelBeforeFreshScan_ReturnsInterruptedJson`

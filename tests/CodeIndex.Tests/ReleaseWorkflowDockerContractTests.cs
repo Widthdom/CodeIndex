@@ -8,7 +8,7 @@ public partial class ReleaseWorkflowTests
     [Fact]
     public void ReleaseWorkflow_DockerfileDocumentsSdkRuntimeSplit()
     {
-        var dockerfile = RepositoryTestPaths.ReadText("Dockerfile");
+        var dockerfile = RepositoryTestPaths.ReadDockerfile();
 
         Assert.Contains("Build uses the repository-pinned .NET 9 SDK", dockerfile);
         Assert.Contains("runtime-deps because cdidx targets net8.0", dockerfile);
