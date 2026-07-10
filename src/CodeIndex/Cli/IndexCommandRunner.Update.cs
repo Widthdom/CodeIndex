@@ -272,23 +272,14 @@ public static partial class IndexCommandRunner
             throw new IndexInterruptedException(updated + removed, targetPaths.Count);
         }
 
-        string ToUpdateAbsolutePath(string path)
-            => Path.IsPathRooted(path)
-                ? path
-                : Path.Combine(projectRoot, path.Replace('/', Path.DirectorySeparatorChar));
-
-        string ToUpdateRelativePath(string path)
-            => Path.IsPathRooted(path)
-                ? FileIndexer.GetRelativePathFromProjectRoot(projectRoot, path)
-                : path;
-
         List<CSharpStaticInterfacePrepass.FileTarget> BuildCSharpPrepassTargets(
             IReadOnlyDictionary<string, string>? scannedLanguages)
         {
-            var targets = new List<CSharpStaticInterfacePrepass.FileTarget>();
+            var targets = new List<CSharpStaticInterfacePrepass.FileTarget>(targetPaths.Count);
             foreach (var targetPath in targetPaths)
             {
-                var absPath = ToUpdateAbsolutePath(targetPath);
+                var updateTarget = UpdateFileTarget.Create(projectRoot, targetPath);
+                var absPath = updateTarget.FilePath;
                 string? language = null;
                 if (scannedLanguages != null && scannedLanguages.TryGetValue(absPath, out var scannedLanguage))
                 {
@@ -306,7 +297,12 @@ public static partial class IndexCommandRunner
                     language = detection.Language;
                 }
 
-                var target = CSharpStaticInterfacePrepass.FileTarget.Create(projectRoot, absPath, language);
+                var target = new CSharpStaticInterfacePrepass.FileTarget(
+                    updateTarget.FilePath,
+                    updateTarget.RelativePath,
+                    updateTarget.DisplayRelativePath,
+                    updateTarget.IndexPath,
+                    language);
                 targets.Add(target with
                 {
                     GeneratedExtractionSuppressed = indexer.HasGeneratedCodeExtractionSuppressionPatterns
@@ -399,9 +395,12 @@ public static partial class IndexCommandRunner
 
         StartUpdateSpinnerIfNeeded();
 
-        var updateTargetPaths = targetPaths.ToArray();
-        var knownReadableFileSizes = new long[updateTargetPaths.Length];
-        var knownReadableFileSizeKnown = new bool[updateTargetPaths.Length];
+        var updateTargets = new UpdateFileTarget[targetPaths.Count];
+        var updateTargetIndex = 0;
+        foreach (var targetPath in targetPaths)
+            updateTargets[updateTargetIndex++] = UpdateFileTarget.Create(projectRoot, targetPath);
+        var knownReadableFileSizes = new long[updateTargets.Length];
+        var knownReadableFileSizeKnown = new bool[updateTargets.Length];
         var knownReadableFileCount = 0;
         long knownReadableBytesRead = 0;
         void RememberReadableFileSize(int targetIndex, long size)
@@ -423,12 +422,12 @@ public static partial class IndexCommandRunner
         {
             long total = knownReadableBytesRead;
             long skippedSizeCount = 0;
-            for (var targetIndex = 0; targetIndex < updateTargetPaths.Length; targetIndex++)
+            for (var targetIndex = 0; targetIndex < updateTargets.Length; targetIndex++)
             {
                 if (knownReadableFileSizeKnown[targetIndex])
                     continue;
 
-                var path = ToUpdateAbsolutePath(updateTargetPaths[targetIndex]);
+                var path = updateTargets[targetIndex].FilePath;
                 try
                 {
                     var info = new FileInfo(path);
@@ -460,15 +459,15 @@ public static partial class IndexCommandRunner
         });
         try
         {
-            for (var targetIndex = 0; targetIndex < updateTargetPaths.Length; targetIndex++)
+            for (var targetIndex = 0; targetIndex < updateTargets.Length; targetIndex++)
             {
-                var targetPath = updateTargetPaths[targetIndex];
+                var target = updateTargets[targetIndex];
                 ThrowIfUpdateCancelled();
                 StartUpdateSpinnerIfNeeded();
-                var relPath = ToUpdateRelativePath(targetPath);
+                var relPath = target.RelativePath;
                 currentUpdatePath = relPath;
-                var absPath = ToUpdateAbsolutePath(targetPath);
-                var dbPath = FileIndexer.NormalizeIndexPath(relPath);
+                var absPath = target.FilePath;
+                var dbPath = target.IndexPath;
                 var fileBatchMarked = false;
                 string? knownLanguage = null;
                 try
@@ -1234,7 +1233,7 @@ public static partial class IndexCommandRunner
             if (options.MemoryTrace)
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
             var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);
-            var bytesRead = knownReadableFileCount == updateTargetPaths.Length
+            var bytesRead = knownReadableFileCount == updateTargets.Length
                 ? new FileByteReadSummary(knownReadableBytesRead, 0)
                 : MeasureRemainingUpdateReadableFileBytes();
             StampLastIndexRunMetadata(

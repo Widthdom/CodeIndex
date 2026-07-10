@@ -1322,6 +1322,29 @@ public static partial class IndexCommandRunner
         }
     }
 
+    private readonly record struct UpdateFileTarget(
+        string FilePath,
+        string RelativePath,
+        string DisplayRelativePath,
+        string IndexPath)
+    {
+        public static UpdateFileTarget Create(string projectRoot, string path)
+        {
+            var isRooted = Path.IsPathRooted(path);
+            var filePath = isRooted
+                ? path
+                : Path.Combine(projectRoot, path.Replace('/', Path.DirectorySeparatorChar));
+            var relativePath = isRooted
+                ? FileIndexer.GetRelativePathFromProjectRoot(projectRoot, path)
+                : path;
+            return new UpdateFileTarget(
+                filePath,
+                relativePath,
+                FileIndexer.NormalizePathSeparators(relativePath),
+                FileIndexer.NormalizeIndexPath(relativePath));
+        }
+    }
+
     private sealed record FullScanFileWorkItem(
         int FileIndex,
         string FilePath,
