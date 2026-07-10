@@ -2107,18 +2107,20 @@ internal static class StructuralLineMasker
         }
     }
 
-    // Returns a copy of the masker output where single/double-quoted string spans,
-    // regex literals, and `//` line-comment tails are blanked out. Template literal
-    // bodies and block comments are already blanked by the outer masker, so we only
-    // need to handle the three remaining kinds. The returned buffer keeps identical
-    // column offsets so hit coordinates (Line, Column) remain valid.
-    // 外側の masker の出力を複製し、文字列リテラル・regex リテラル・`//` 行コメント末尾を
-    // 追加で空白化したバッファを返す。template 本体と block コメントは既に空白化済みなの
-    // で、残る 3 種類だけを処理する。列オフセットは元の buffer と一致するため Hit 座標は
+    // Returns the masker output with single/double-quoted string spans, regex
+    // literals, and `//` line-comment tails blanked out. Template literal bodies and
+    // block comments are already blanked by the outer masker, so we only need to
+    // handle the three remaining kinds. Unchanged lines are reused; any returned
+    // replacement keeps identical column offsets so hit coordinates (Line, Column)
+    // remain valid.
+    // 外側の masker の出力に対し、文字列リテラル・regex リテラル・`//` 行コメント末尾を
+    // 追加で空白化して返す。template 本体と block コメントは既に空白化済みなので、残る
+    // 3 種類だけを処理する。未変更行は再利用し、置換行も列オフセットは元の buffer と
+    // 一致するため Hit 座標は
     // そのまま利用できる。
     private static string[] BuildJsForOfScanBuffer(string[] lines)
     {
-        var result = new string[lines.Length];
+        string[]? result = null;
         var lexState = default(JsLexState);
         var activeJsStringQuote = '\0';
         lexState.Reset();
@@ -2127,16 +2129,18 @@ internal static class StructuralLineMasker
             var line = lines[i];
             if (line.Length == 0)
             {
-                result[i] = line;
+                if (result != null)
+                    result[i] = line;
                 continue;
             }
-            var buf = line.ToCharArray();
+            char[]? buf = null;
+            char[] GetBuffer() => buf ??= line.ToCharArray();
             int pos = 0;
             while (pos < line.Length)
             {
                 if (activeJsStringQuote != '\0')
                 {
-                    pos = MaskJsTemplateHoleString(line, pos, buf, activeJsStringQuote, startsInsideString: true, out var continuesOnNextLine);
+                    pos = MaskJsTemplateHoleString(line, pos, GetBuffer(), activeJsStringQuote, startsInsideString: true, out var continuesOnNextLine);
                     if (continuesOnNextLine)
                         break;
 
@@ -2147,8 +2151,9 @@ internal static class StructuralLineMasker
 
                 if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '/')
                 {
+                    var buffer = GetBuffer();
                     for (int k = pos; k < line.Length; k++)
-                        buf[k] = ' ';
+                        buffer[k] = ' ';
                     pos = line.Length;
                     break;
                 }
@@ -2156,7 +2161,7 @@ internal static class StructuralLineMasker
                 if (ch == '"' || ch == '\'')
                 {
                     var quote = ch;
-                    pos = MaskJsTemplateHoleString(line, pos, buf, quote, startsInsideString: false, out var continuesOnNextLine);
+                    pos = MaskJsTemplateHoleString(line, pos, GetBuffer(), quote, startsInsideString: false, out var continuesOnNextLine);
                     if (continuesOnNextLine)
                     {
                         activeJsStringQuote = quote;
@@ -2169,17 +2174,27 @@ internal static class StructuralLineMasker
                 if (ch == '/' && CanStartJsRegexLiteral(lexState))
                 {
                     int end = SkipJsRegexLiteral(line, pos);
+                    var buffer = GetBuffer();
                     for (int k = pos; k < end; k++)
-                        buf[k] = ' ';
+                        buffer[k] = ' ';
                     pos = end;
                     lexState.SetKind(JsPrevTokenKind.Literal);
                     continue;
                 }
                 pos = AdvanceJsToken(line, pos, ref lexState);
             }
-            result[i] = new string(buf);
+            var outputLine = buf is null ? line : new string(buf);
+            if (result != null)
+            {
+                result[i] = outputLine;
+            }
+            else if (!ReferenceEquals(outputLine, line))
+            {
+                result = (string[])lines.Clone();
+                result[i] = outputLine;
+            }
         }
-        return result;
+        return result ?? lines;
     }
 
     // From (lineIdx, colIdx) pointing at the start of the `of` token, decide whether `of`
