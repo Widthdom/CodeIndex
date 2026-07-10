@@ -26,7 +26,7 @@ public static partial class SymbolExtractor
         List<(string Name, int StartColumn)>? results = null;
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
         {
-            var segment = list.Substring(segmentStart, segmentLength);
+            var segment = list.AsSpan(segmentStart, segmentLength);
             var leading = 0;
             while (leading < segment.Length && char.IsWhiteSpace(segment[leading]))
                 leading++;
@@ -41,10 +41,10 @@ public static partial class SymbolExtractor
                 index++;
 
             var name = segment[leading..index];
-            if (name.Length == 0)
+            if (name.IsEmpty)
                 return null;
 
-            var result = (name, listStart + segmentStart + leading);
+            var result = (name.ToString(), listStart + segmentStart + leading);
             if (firstResult is null)
             {
                 firstResult = result;
@@ -81,7 +81,7 @@ public static partial class SymbolExtractor
         List<(string Name, int StartColumn)>? results = null;
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
         {
-            var segment = list.Substring(segmentStart, segmentLength);
+            var segment = list.AsSpan(segmentStart, segmentLength);
             var leading = 0;
             while (leading < segment.Length && char.IsWhiteSpace(segment[leading]))
                 leading++;
@@ -96,10 +96,10 @@ public static partial class SymbolExtractor
                 index++;
 
             var name = segment[leading..index];
-            if (name.Length == 0)
+            if (name.IsEmpty)
                 return null;
 
-            var result = (name, listStart + segmentStart + leading);
+            var result = (name.ToString(), listStart + segmentStart + leading);
             if (firstResult is null)
             {
                 firstResult = result;
