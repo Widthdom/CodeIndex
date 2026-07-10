@@ -638,10 +638,11 @@ public static partial class ReferenceExtractor
             if (match.Index < searchStart)
                 continue;
             int listStart = match.Index + match.Length;
-            var remaining = line.Substring(listStart);
-            var nextWhereMatch = CSharpWhereClauseRegex.Match(remaining);
-            int nextWhere = nextWhereMatch.Success ? nextWhereMatch.Index : -1;
-            int end = FindTypeListTerminator(remaining, allowArrow: true);
+            var remaining = line.AsSpan(listStart);
+            var nextWhereMatch = CSharpWhereClauseRegex.Match(line, listStart);
+            int nextWhere = nextWhereMatch.Success ? nextWhereMatch.Index - listStart : -1;
+            int terminator = FindTypeListTerminator(remaining, allowArrow: true);
+            int end = terminator;
             if (nextWhere >= 0 && (end < 0 || nextWhere < end))
                 end = nextWhere;
             if (end < 0)
@@ -658,7 +659,7 @@ public static partial class ReferenceExtractor
                 resolveContainerForColumn,
                 lineWhereNames);
 
-            if (listStart + end >= line.Length && nextWhere < 0 && FindTypeListTerminator(remaining, allowArrow: true) < 0)
+            if (listStart + end >= line.Length && nextWhere < 0 && terminator < 0)
             {
                 pendingWhereConstraint.Active = true;
                 pendingWhereConstraint.IgnoredSegments.Clear();
@@ -2405,7 +2406,9 @@ public static partial class ReferenceExtractor
         return -1;
     }
 
-    private static int FindFirstTopLevelChar(string text, char target)
+    private static int FindFirstTopLevelChar(string text, char target) => FindFirstTopLevelChar(text.AsSpan(), target);
+
+    private static int FindFirstTopLevelChar(ReadOnlySpan<char> text, char target)
     {
         int angleDepth = 0;
         int parenDepth = 0;
@@ -2712,7 +2715,9 @@ public static partial class ReferenceExtractor
         return count;
     }
 
-    internal static int FindTypeListTerminator(string text, bool allowArrow)
+    internal static int FindTypeListTerminator(string text, bool allowArrow) => FindTypeListTerminator(text.AsSpan(), allowArrow);
+
+    internal static int FindTypeListTerminator(ReadOnlySpan<char> text, bool allowArrow)
     {
         int brace = FindFirstTopLevelChar(text, '{');
         int semi = FindFirstTopLevelChar(text, ';');

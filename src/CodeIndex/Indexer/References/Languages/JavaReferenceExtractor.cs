@@ -1066,10 +1066,11 @@ internal static class JavaReferenceExtractor
         int listStart = keywordIndex + "throws".Length;
         while (listStart < line.Length && char.IsWhiteSpace(line[listStart]))
             listStart++;
-        int listEnd = ReferenceExtractor.FindTypeListTerminator(line.Substring(listStart), allowArrow: false);
+        var remaining = line.AsSpan(listStart);
+        int listEnd = ReferenceExtractor.FindTypeListTerminator(remaining, allowArrow: false);
         if (listEnd < 0)
-            listEnd = line.Length - listStart;
-        var typeList = line.AsSpan(listStart, listEnd);
+            listEnd = remaining.Length;
+        var typeList = remaining[..listEnd];
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(typeList))
         {
             var leading = ReferenceExtractor.CountLeadingWhitespace(typeList, segmentStart, segmentLength);
