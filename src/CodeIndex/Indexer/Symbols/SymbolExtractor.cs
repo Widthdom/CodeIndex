@@ -2665,8 +2665,9 @@ public static partial class SymbolExtractor
         // 損なう。続いて行頭 U+FEFF のみ剥がし、1 行目と mid-file の行頭 BOM 両方
         // で `^\s*` 固定パターンを成立させる。行頭以外の U+FEFF (文字列リテラル中
         // の意図的な ZWNBSP 等) はそのまま保持する。Closes #183.
+        List<SymbolPattern>? patterns = null;
         var usesLineBasedExtractor = lang is "commonlisp" or "racket" or "solidity" or "html" or "assembly"
-            || (lang is not null && PatternCache.ContainsKey(lang));
+            || (lang is not null && PatternCache.TryGetValue(lang, out patterns));
         if (!usesLineBasedExtractor)
             return [];
 
@@ -2677,13 +2678,6 @@ public static partial class SymbolExtractor
 
         if (lang == "solidity")
             return ExtractSoliditySymbols(fileId, lines);
-
-        if (lang == null || !PatternCache.TryGetValue(lang, out var patterns))
-            return [];
-
-        var pythonModulePrefix = lang == "python"
-            ? GetPythonModulePrefix(filePath)
-            : null;
 
         // HTML has no brace/indent-scoped bodies, so the generic pattern loop's
         // "first match per line" semantics drop every additional symbol on the
@@ -2702,6 +2696,13 @@ public static partial class SymbolExtractor
 
         if (lang == "assembly")
             return ExtractAssemblySymbols(fileId, lines);
+
+        if (patterns == null || lang == null)
+            return [];
+
+        var pythonModulePrefix = lang == "python"
+            ? GetPythonModulePrefix(filePath)
+            : null;
 
         var structuralLines = StructuralLineMasker.MaskLines(lang, lines);
         string[]? javaScriptTypeScriptSanitizedLines = null;
