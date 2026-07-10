@@ -3904,9 +3904,11 @@ public static partial class ReferenceExtractor
             while (i < expression.Length && IsTypeExpressionIdentifierPart(language, expression[i]))
                 i++;
 
-            var rawSegment = expression.Substring(segmentStart, i - segmentStart);
-            var isEscapedCSharpIdentifier = rawSegment.Length > 0 && rawSegment[0] == '@';
-            var segment = NormalizeCSharpIdentifier(rawSegment);
+            var segmentLength = i - segmentStart;
+            var isEscapedCSharpIdentifier = segmentLength > 0 && expression[segmentStart] == '@';
+            var segment = isEscapedCSharpIdentifier
+                ? expression.Substring(segmentStart + 1, segmentLength - 1)
+                : expression.Substring(segmentStart, segmentLength);
             if (i + 1 < expression.Length && expression[i] == ':' && expression[i + 1] == ':')
             {
                 i++;
