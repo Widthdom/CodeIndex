@@ -4935,6 +4935,17 @@ public static partial class SymbolExtractor
         return false;
     }
 
+    private static bool LinesContain(IReadOnlyList<string> lines, char value)
+    {
+        for (var i = 0; i < lines.Count; i++)
+        {
+            if (lines[i].IndexOf(value) >= 0)
+                return true;
+        }
+
+        return false;
+    }
+
     private static bool LinesContainAny(
         IReadOnlyList<string> lines,
         string value1,
@@ -7005,7 +7016,7 @@ public static partial class SymbolExtractor
         string[] structuralLines,
         CSharpTypeBodyScope typeBodyScope)
     {
-        if (!LinesContain(structuralLines, "(", StringComparison.Ordinal))
+        if (!LinesContain(structuralLines, '('))
             return CSharpCallableParameterScope.Empty;
 
         bool[]? lineStartInsideParameterList = null;
@@ -7235,7 +7246,7 @@ public static partial class SymbolExtractor
     {
         if (!LinesContain(structuralLines, "class", StringComparison.Ordinal))
             return DartClassBodyScope.Empty;
-        if (!LinesContain(structuralLines, "{", StringComparison.Ordinal))
+        if (!LinesContain(structuralLines, '{'))
             return DartClassBodyScope.Empty;
 
         var lineStartInsideClassBody = new bool[structuralLines.Length];

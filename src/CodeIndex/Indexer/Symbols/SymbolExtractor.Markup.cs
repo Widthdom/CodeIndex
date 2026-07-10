@@ -16,7 +16,7 @@ public static partial class SymbolExtractor
     {
         const string defaultSlotSymbolName = "(default)";
 
-        if (!LinesContain(lines, "<", StringComparison.Ordinal))
+        if (!LinesContain(lines, '<'))
             return [];
 
         // HTML needs proper tag-structure awareness so attribute lookalikes inside

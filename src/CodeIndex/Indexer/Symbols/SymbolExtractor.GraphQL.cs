@@ -30,7 +30,7 @@ public static partial class SymbolExtractor
         if (!TryGetGraphQLMemberMarkers(lines, out var hasInputBlocks, out var hasUnions))
             return;
 
-        if (hasInputBlocks && LinesContain(lines, "{", StringComparison.Ordinal))
+        if (hasInputBlocks && LinesContain(lines, '{'))
         {
             var content = string.Join('\n', lines);
             List<int>? lineStarts = null;

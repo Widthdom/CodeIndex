@@ -44,7 +44,7 @@ public static partial class SymbolExtractor
         string[] lines,
         Func<JavaScriptScopePrivacyFlags[][]> getPrivateScopeColumns)
     {
-        if (!LinesContain(lines, "{", StringComparison.Ordinal))
+        if (!LinesContain(lines, '{'))
             return [];
 
         var privateScopeColumns = getPrivateScopeColumns();
@@ -1881,7 +1881,7 @@ public static partial class SymbolExtractor
         Func<JavaScriptScopePrivacyFlags[][]> getPrivateScopeColumns,
         Func<string[]> getSanitizedLines)
     {
-        if (!LinesContain(lines, "=", StringComparison.Ordinal))
+        if (!LinesContain(lines, '='))
             return;
 
         var privateScopeColumns = getPrivateScopeColumns();
@@ -6935,7 +6935,7 @@ public static partial class SymbolExtractor
 
     private static JavaScriptScopePrivacyFlags[][] BuildJavaScriptTypeScriptPrivateScopeColumns(string[] lines, string lang)
     {
-        if (!LinesContain(lines, "{", StringComparison.Ordinal)
+        if (!LinesContain(lines, '{')
             && !LinesContain(lines, "=>", StringComparison.Ordinal))
         {
             return BuildEmptyJavaScriptTypeScriptPrivateScopeColumns(lines.Length);

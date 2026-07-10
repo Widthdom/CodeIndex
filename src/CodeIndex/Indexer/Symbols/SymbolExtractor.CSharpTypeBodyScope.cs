@@ -55,7 +55,7 @@ public static partial class SymbolExtractor
 
     private static CSharpTypeBodyScope BuildCSharpTypeBodyScope(string[] structuralLines)
     {
-        if (!LinesContain(structuralLines, "{", StringComparison.Ordinal))
+        if (!LinesContain(structuralLines, '{'))
             return CSharpTypeBodyScope.Empty;
         if (!LinesContainAny(structuralLines, "class", "struct", "interface", StringComparison.Ordinal)
             && !LinesContain(structuralLines, "record", StringComparison.Ordinal))
