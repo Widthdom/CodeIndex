@@ -21,7 +21,7 @@ internal static class LuaReferenceExtractor
         if (!MayContainLongBracket(originalLines))
             return originalLines as string[] ?? originalLines.ToArray();
 
-        var result = new string[originalLines.Count];
+        string[]? result = null;
         var longTextEqualsCount = -1;
 
         for (var lineIndex = 0; lineIndex < originalLines.Count; lineIndex++)
@@ -78,9 +78,31 @@ internal static class LuaReferenceExtractor
                 }
             }
 
-            result[lineIndex] = chars == null ? line : new string(chars);
+            var maskedLine = chars == null ? line : new string(chars);
+            if (result != null)
+            {
+                result[lineIndex] = maskedLine;
+                continue;
+            }
+
+            if (ReferenceEquals(maskedLine, line))
+                continue;
+
+            result = CopyLuaLines(originalLines);
+            result[lineIndex] = maskedLine;
         }
 
+        return result ?? (originalLines as string[] ?? originalLines.ToArray());
+    }
+
+    private static string[] CopyLuaLines(IReadOnlyList<string> originalLines)
+    {
+        if (originalLines is string[] lineArray)
+            return (string[])lineArray.Clone();
+
+        var result = new string[originalLines.Count];
+        for (var i = 0; i < originalLines.Count; i++)
+            result[i] = originalLines[i];
         return result;
     }
 
