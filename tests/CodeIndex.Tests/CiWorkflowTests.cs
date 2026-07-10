@@ -24,7 +24,19 @@ public class CiWorkflowTests
             "--results-directory\", \"./TestResults");
         AssertContainsAll(
             workflow,
-            "include:\n          - os: ubuntu-24.04\n            test-framework: net8.0\n            primary_lane: true",
+            "include:\n" +
+            "          - os: ubuntu-24.04\n" +
+            "            test-framework: net8.0\n" +
+            "            primary_lane: true\n" +
+            "          - os: ubuntu-24.04\n" +
+            "            test-framework: net9.0\n" +
+            "            primary_lane: false\n" +
+            "          - os: windows-2022\n" +
+            "            test-framework: net8.0\n" +
+            "            primary_lane: false\n" +
+            "          - os: macos-14\n" +
+            "            test-framework: net8.0\n" +
+            "            primary_lane: false",
             "- name: Set up .NET SDKs\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: |\n            8.0.413\n            9.0.301",
             "- name: Restore dependencies\n        if: matrix.primary_lane\n        run: dotnet restore CodeIndex.sln --locked-mode",
             "- name: Restore test dependencies\n        if: ${{ !matrix.primary_lane }}\n        run: dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=${{ matrix.test-framework }} --locked-mode");
