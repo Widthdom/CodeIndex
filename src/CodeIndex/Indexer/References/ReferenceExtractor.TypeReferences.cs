@@ -565,11 +565,11 @@ public static partial class ReferenceExtractor
         if (genericEnd <= genericStart)
             return [];
 
-        var list = text.Substring(genericStart + 1, genericEnd - genericStart - 1);
+        var list = text.AsSpan(genericStart + 1, genericEnd - genericStart - 1);
         var arguments = new List<string>();
         foreach (var span in SplitTopLevelCommaSpans(list))
         {
-            var item = list.Substring(span.Start, span.Length).Trim();
+            var item = list.Slice(span.Start, span.Length).Trim().ToString();
             if (item.Length > 0)
                 arguments.Add(item);
         }
