@@ -29,8 +29,8 @@ public static partial class SymbolExtractor
     {
         for (var i = defLineIndex - 1; i >= 0; i--)
         {
-            var trimmed = lines[i].Trim();
-            if (!trimmed.StartsWith('@'))
+            var trimmed = lines[i].AsSpan().Trim();
+            if (trimmed.IsEmpty || trimmed[0] != '@')
                 return null;
 
             var decorator = NormalizePythonDecoratorName(trimmed);
@@ -49,8 +49,8 @@ public static partial class SymbolExtractor
     {
         for (var i = defLineIndex - 1; i >= 0; i--)
         {
-            var trimmed = lines[i].Trim();
-            if (!trimmed.StartsWith('@'))
+            var trimmed = lines[i].AsSpan().Trim();
+            if (trimmed.IsEmpty || trimmed[0] != '@')
                 return false;
 
             if (IsPythonPropertyDecorator(trimmed))
@@ -60,7 +60,7 @@ public static partial class SymbolExtractor
         return false;
     }
 
-    private static bool IsPythonPropertyDecorator(string trimmedDecorator)
+    private static bool IsPythonPropertyDecorator(ReadOnlySpan<char> trimmedDecorator)
     {
         var decorator = NormalizePythonDecoratorName(trimmedDecorator);
         return decorator is "property" or "cached_property" or "abstractproperty"
@@ -71,7 +71,7 @@ public static partial class SymbolExtractor
             || decorator.EndsWith(".deleter", StringComparison.Ordinal);
     }
 
-    private static string NormalizePythonDecoratorName(string trimmedDecorator)
+    private static string NormalizePythonDecoratorName(ReadOnlySpan<char> trimmedDecorator)
     {
         var decorator = trimmedDecorator[1..];
         var commentIndex = decorator.IndexOf('#');
@@ -81,8 +81,7 @@ public static partial class SymbolExtractor
         if (parenIndex >= 0)
             decorator = decorator[..parenIndex];
 
-        decorator = decorator.Trim();
-        return decorator;
+        return decorator.Trim().ToString();
     }
 
     private static bool IsPythonClassHook(string name) =>
