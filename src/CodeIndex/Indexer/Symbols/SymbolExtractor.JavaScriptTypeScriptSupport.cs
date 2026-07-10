@@ -5365,7 +5365,34 @@ public static partial class SymbolExtractor
         if (index >= rhs.Length || rhs[index] != '<')
             return false;
 
-        return StartsJavaScriptTypeScriptGenericArrowAssignmentValue(rhs[index..]);
+        var genericEnd = FindJavaScriptTypeScriptBalancedGenericListEnd(rhs, index);
+        if (genericEnd < 0)
+            return false;
+
+        var remainderIndex = SkipJavaScriptTypeScriptWhitespace(rhs, genericEnd + 1);
+        if (remainderIndex >= rhs.Length)
+            return false;
+
+        if (rhs[remainderIndex] == '(')
+        {
+            var parameterListEnd = FindJavaScriptTypeScriptBalancedDelimiterEnd(rhs, remainderIndex, '(', ')');
+            if (parameterListEnd < 0)
+                return false;
+
+            remainderIndex = SkipJavaScriptTypeScriptWhitespace(rhs, parameterListEnd + 1);
+        }
+        else
+        {
+            var parameterNameLength = ReadJavaScriptTypeScriptIdentifierLength(rhs, remainderIndex);
+            if (parameterNameLength <= 0)
+                return false;
+
+            remainderIndex = SkipJavaScriptTypeScriptWhitespace(rhs, remainderIndex + parameterNameLength);
+        }
+
+        return remainderIndex + 1 < rhs.Length
+            && rhs[remainderIndex] == '='
+            && rhs[remainderIndex + 1] == '>';
     }
 
     private static bool StartsJavaScriptTypeScriptArrowAssignmentValue(string rhs, int startColumn)
@@ -5616,41 +5643,7 @@ public static partial class SymbolExtractor
     }
 
     private static bool StartsJavaScriptTypeScriptGenericArrowAssignmentValue(string rhs)
-    {
-        rhs = TrimJavaScriptTypeScriptStart(rhs);
-        if (IsJavaScriptTypeScriptKeywordAt(rhs, 0, "async"))
-            rhs = TrimJavaScriptTypeScriptStart(rhs, "async".Length);
-
-        if (rhs.Length == 0 || rhs[0] != '<')
-            return false;
-
-        var genericEnd = FindJavaScriptTypeScriptBalancedGenericListEnd(rhs, 0);
-        if (genericEnd < 0)
-            return false;
-
-        var remainder = TrimJavaScriptTypeScriptStart(rhs, genericEnd + 1);
-        if (remainder.Length == 0)
-            return false;
-
-        if (remainder[0] == '(')
-        {
-            var parameterListEnd = FindJavaScriptTypeScriptBalancedDelimiterEnd(remainder, 0, '(', ')');
-            if (parameterListEnd < 0)
-                return false;
-
-            remainder = TrimJavaScriptTypeScriptStart(remainder, parameterListEnd + 1);
-        }
-        else
-        {
-            var parameterNameLength = ReadJavaScriptTypeScriptIdentifierLength(remainder, 0);
-            if (parameterNameLength <= 0)
-                return false;
-
-            remainder = TrimJavaScriptTypeScriptStart(remainder, parameterNameLength);
-        }
-
-        return remainder.StartsWith("=>", StringComparison.Ordinal);
-    }
+        => StartsJavaScriptTypeScriptGenericArrowAssignmentValue(rhs, 0);
 
     private static bool TryCollectJavaScriptTypeScriptAssignedRhs(
         string[] rawLines,
