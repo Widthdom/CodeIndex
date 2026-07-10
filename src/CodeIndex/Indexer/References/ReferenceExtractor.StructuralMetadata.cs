@@ -73,7 +73,7 @@ public static partial class ReferenceExtractor
     private static List<ReferenceRecord> ExtractSolutionReferences(long fileId, string[] lines, int? maxReferenceCount)
     {
         var references = CreateReferenceList(maxReferenceCount, EstimateReferenceListInitialCapacity(lines.Length));
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var seen = CreateReferenceSeenSet(lines.Length);
         foreach (var project in SolutionFileParser.ExtractProjects(lines))
         {
             AddReference(

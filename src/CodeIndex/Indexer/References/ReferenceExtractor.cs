@@ -1179,6 +1179,14 @@ public static partial class ReferenceExtractor
         return Math.Min(ReferenceListInitialCapacityMax, Math.Max(16, lineCount / 4));
     }
 
+    private static HashSet<string> CreateReferenceSeenSet(int lineCount)
+    {
+        var capacity = EstimateReferenceListInitialCapacity(lineCount);
+        return capacity > 0
+            ? new HashSet<string>(capacity, StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
+    }
+
     internal static bool ReferenceLimitReached(List<ReferenceRecord> references)
         => references is BoundedReferenceList bounded
             && bounded.Count >= bounded.MaxReferenceCount;
