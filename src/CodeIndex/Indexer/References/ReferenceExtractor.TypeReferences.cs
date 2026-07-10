@@ -3852,12 +3852,13 @@ public static partial class ReferenceExtractor
         var ignoredSegments = language == "kotlin"
             ? KotlinTypeProjectionModifierNames
             : null;
+        var argumentsExpression = preparedLine.Substring(argumentsStart, argumentsLength);
 
         AddTypeExpressionSegments(
             references,
             seen,
             fileId,
-            preparedLine.Substring(argumentsStart, argumentsLength),
+            argumentsExpression,
             argumentsStart,
             context,
             lineNumber,
@@ -3868,7 +3869,7 @@ public static partial class ReferenceExtractor
             references,
             seen,
             fileId,
-            preparedLine.Substring(argumentsStart, argumentsLength),
+            argumentsExpression,
             argumentsStart,
             context,
             lineNumber,
