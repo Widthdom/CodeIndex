@@ -759,7 +759,7 @@ public static partial class IndexCommandRunner
 
         try
         {
-            var relative = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, path));
+            var relative = FileIndexer.NormalizePathSeparators(FileIndexer.GetRelativePathFromDirectory(projectRoot, path));
             return IsOutsideProjectRoot(relative) ? path : relative;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
@@ -1196,7 +1196,7 @@ public static partial class IndexCommandRunner
             var dbDirAbsolute = Path.GetDirectoryName(dbAbsolutePath);
             if (string.IsNullOrEmpty(dbDirAbsolute)) return;
 
-            var dbDirRelative = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, dbDirAbsolute));
+            var dbDirRelative = FileIndexer.NormalizePathSeparators(FileIndexer.GetRelativePathFromDirectory(projectRoot, dbDirAbsolute));
             if (IsOutsideProjectRoot(dbDirRelative)) return;
 
             string[] patterns;
