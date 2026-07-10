@@ -22,6 +22,16 @@ internal static class RepositoryTestPaths
     internal static string ReadNormalizedText(params string[] relativeParts)
         => ReadText(relativeParts).ReplaceLineEndings("\n");
 
+    internal static IReadOnlyList<(string FileName, string Content)> ReadNormalizedWorkflows()
+    {
+        var workflowsDirectory = Combine(".github", "workflows");
+        return Directory
+            .EnumerateFiles(workflowsDirectory, "*.yml")
+            .OrderBy(static path => Path.GetFileName(path), StringComparer.Ordinal)
+            .Select(static path => (Path.GetFileName(path), File.ReadAllText(path).ReplaceLineEndings("\n")))
+            .ToArray();
+    }
+
     private static string LocateRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

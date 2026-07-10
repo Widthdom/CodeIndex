@@ -151,7 +151,7 @@ public class CiWorkflowTests
     [Fact]
     public void GitHubActionsWorkflows_FollowRunnerArtifactCacheAndContinueOnErrorPolicy()
     {
-        var workflows = ReadWorkflowFiles();
+        var workflows = RepositoryTestPaths.ReadNormalizedWorkflows();
         var allWorkflows = string.Join("\n", workflows.Select(static workflow => workflow.Content));
 
         AssertContainsAll(allWorkflows, "ubuntu-24.04", "windows-2022", "macos-14");
@@ -316,16 +316,6 @@ public class CiWorkflowTests
     {
         foreach (var excluded in excludedValues)
             Assert.DoesNotContain(excluded, text, comparisonType);
-    }
-
-    private static IReadOnlyList<(string FileName, string Content)> ReadWorkflowFiles()
-    {
-        var workflowsDirectory = RepositoryTestPaths.Combine(".github", "workflows");
-        return Directory
-            .EnumerateFiles(workflowsDirectory, "*.yml")
-            .OrderBy(static path => Path.GetFileName(path), StringComparer.Ordinal)
-            .Select(static path => (Path.GetFileName(path), File.ReadAllText(path).ReplaceLineEndings("\n")))
-            .ToArray();
     }
 
     private static IEnumerable<(string FileName, string Text)> FindStepBlocks(
