@@ -2748,9 +2748,15 @@ public static partial class ReferenceExtractor
 
     internal static int FindJavaTypeListTerminator(string text, int start)
     {
+        int terminator = FindJavaTypeListTerminator(text.AsSpan(start));
+        return terminator >= 0 ? start + terminator : -1;
+    }
+
+    internal static int FindJavaTypeListTerminator(ReadOnlySpan<char> text)
+    {
         int angleDepth = 0;
         int parenDepth = 0;
-        for (int i = start; i < text.Length; i++)
+        for (int i = 0; i < text.Length; i++)
         {
             char c = text[i];
             if (c == '<')
@@ -2769,9 +2775,9 @@ public static partial class ReferenceExtractor
             {
                 if (c == '{' || c == ';')
                     return i;
-                if (IsJavaBaseListTerminatorKeyword(text, i, start, "implements")
-                    || IsJavaBaseListTerminatorKeyword(text, i, start, "permits")
-                    || IsJavaBaseListTerminatorKeyword(text, i, start, "throws"))
+                if (IsJavaBaseListTerminatorKeyword(text, i, 0, "implements")
+                    || IsJavaBaseListTerminatorKeyword(text, i, 0, "permits")
+                    || IsJavaBaseListTerminatorKeyword(text, i, 0, "throws"))
                 {
                     return i;
                 }

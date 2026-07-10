@@ -770,10 +770,11 @@ internal static class JavaReferenceExtractor
         while (listStart < line.Length && char.IsWhiteSpace(line[listStart]))
             listStart++;
 
-        int listEnd = ReferenceExtractor.FindJavaTypeListTerminator(line, listStart);
+        var remaining = line.AsSpan(listStart);
+        int listEnd = ReferenceExtractor.FindJavaTypeListTerminator(remaining);
         if (listEnd < 0)
-            listEnd = line.Length;
-        var typeList = line.AsSpan(listStart, listEnd - listStart);
+            listEnd = remaining.Length;
+        var typeList = remaining[..listEnd];
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(typeList))
         {
             var leading = ReferenceExtractor.CountLeadingWhitespace(typeList, segmentStart, segmentLength);

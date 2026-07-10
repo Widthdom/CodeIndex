@@ -2544,15 +2544,19 @@ public static partial class ReferenceExtractor
     internal static bool IsJavaIdentifierPart(char c) =>
         char.IsLetterOrDigit(c) || c == '_' || c == '$';
 
-    private static bool IsJavaBaseListTerminatorKeyword(string signature, int i, int start, string keyword)
+    private static bool IsJavaBaseListTerminatorKeyword(string signature, int i, int start, string keyword) =>
+        IsJavaBaseListTerminatorKeyword(signature.AsSpan(), i, start, keyword);
+
+    private static bool IsJavaBaseListTerminatorKeyword(ReadOnlySpan<char> signature, int i, int start, string keyword)
     {
-        if (i + keyword.Length > signature.Length)
+        var keywordSpan = keyword.AsSpan();
+        if (i + keywordSpan.Length > signature.Length)
             return false;
         if (i != start && IsJavaIdentifierPart(signature[i - 1]))
             return false;
-        if (string.CompareOrdinal(signature, i, keyword, 0, keyword.Length) != 0)
+        if (!signature.Slice(i, keywordSpan.Length).SequenceEqual(keywordSpan))
             return false;
-        if (i + keyword.Length < signature.Length && IsJavaIdentifierPart(signature[i + keyword.Length]))
+        if (i + keywordSpan.Length < signature.Length && IsJavaIdentifierPart(signature[i + keywordSpan.Length]))
             return false;
         return true;
     }
