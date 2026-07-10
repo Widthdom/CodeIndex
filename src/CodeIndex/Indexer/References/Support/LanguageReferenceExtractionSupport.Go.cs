@@ -758,10 +758,11 @@ internal static partial class LanguageReferenceExtractionSupport
             return;
 
         var group = match.Groups["types"];
-        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(group.Value))
+        var typeList = group.ValueSpan;
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(typeList))
         {
-            var rawType = group.Value.Substring(segmentStart, segmentLength);
-            var expression = rawType.Trim();
+            var expressionSpan = TrimGoCommaSegment(typeList.Slice(segmentStart, segmentLength), out var trimStart);
+            var expression = expressionSpan.ToString();
             if (expression.Length == 0
                 || expression is "nil" or "default"
                 || !IsLikelyGoTypeSwitchCaseType(expression))
@@ -769,7 +770,6 @@ internal static partial class LanguageReferenceExtractionSupport
                 continue;
             }
 
-            var trimStart = rawType.IndexOf(expression, StringComparison.Ordinal);
             EmitGoTypeExpression(expression, group.Index + segmentStart + Math.Max(0, trimStart), references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         }
     }
@@ -897,15 +897,14 @@ internal static partial class LanguageReferenceExtractionSupport
             if (afterClose >= line.Length || line[afterClose] != '(')
                 continue;
 
-            var typeArguments = line[(open + 1)..close];
+            var typeArguments = line.AsSpan(open + 1, close - open - 1);
             foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(typeArguments))
             {
-                var rawArgument = typeArguments.Substring(segmentStart, segmentLength);
-                var expression = rawArgument.Trim();
+                var expressionSpan = TrimGoCommaSegment(typeArguments.Slice(segmentStart, segmentLength), out var trimStart);
+                var expression = expressionSpan.ToString();
                 if (expression.Length == 0 || !ContainsLikelyGoTypeArgument(expression))
                     continue;
 
-                var trimStart = rawArgument.IndexOf(expression, StringComparison.Ordinal);
                 var absoluteStart = open + 1 + segmentStart + Math.Max(0, trimStart);
                 EmitGoTypeExpression(expression, absoluteStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
             }
@@ -982,15 +981,14 @@ internal static partial class LanguageReferenceExtractionSupport
 
             ReferenceExtractor.AddReference(references, seen, fileId, typeName, nameStart, "instantiate", context, lineNumber, resolveContainerForColumn(nameStart));
 
-            var typeArguments = line[(open + 1)..close];
+            var typeArguments = line.AsSpan(open + 1, close - open - 1);
             foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(typeArguments))
             {
-                var rawArgument = typeArguments.Substring(segmentStart, segmentLength);
-                var expression = rawArgument.Trim();
+                var expressionSpan = TrimGoCommaSegment(typeArguments.Slice(segmentStart, segmentLength), out var trimStart);
+                var expression = expressionSpan.ToString();
                 if (expression.Length == 0 || !ContainsLikelyGoTypeArgument(expression))
                     continue;
 
-                var trimStart = rawArgument.IndexOf(expression, StringComparison.Ordinal);
                 var absoluteStart = open + 1 + segmentStart + Math.Max(0, trimStart);
                 EmitGoTypeExpression(expression, absoluteStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
             }
@@ -1720,15 +1718,14 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        var typeArguments = line[(open + 1)..close];
+        var typeArguments = line.AsSpan(open + 1, close - open - 1);
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(typeArguments))
         {
-            var rawArgument = typeArguments.Substring(segmentStart, segmentLength);
-            var expression = rawArgument.Trim();
+            var expressionSpan = TrimGoCommaSegment(typeArguments.Slice(segmentStart, segmentLength), out var trimStart);
+            var expression = expressionSpan.ToString();
             if (expression.Length == 0 || !ContainsLikelyGoTypeArgument(expression))
                 continue;
 
-            var trimStart = rawArgument.IndexOf(expression, StringComparison.Ordinal);
             var absoluteStart = open + 1 + segmentStart + Math.Max(0, trimStart);
             EmitGoTypeExpression(expression, absoluteStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         }
@@ -2065,11 +2062,11 @@ internal static partial class LanguageReferenceExtractionSupport
         if (close < 0 || close > searchEnd)
             return;
 
-        var list = line[(open + 1)..close];
+        var list = line.AsSpan(open + 1, close - open - 1);
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
         {
-            var rawSegment = list.Substring(segmentStart, segmentLength);
-            var fragment = rawSegment.Trim();
+            var fragmentSpan = TrimGoCommaSegment(list.Slice(segmentStart, segmentLength), out var fragmentTrimStart);
+            var fragment = fragmentSpan.ToString();
             if (fragment.Length == 0)
                 continue;
 
@@ -2077,7 +2074,6 @@ internal static partial class LanguageReferenceExtractionSupport
             if (constraintStart < 0)
                 continue;
 
-            var fragmentTrimStart = rawSegment.IndexOf(fragment, StringComparison.Ordinal);
             var absoluteStart = open + 1 + segmentStart + Math.Max(0, fragmentTrimStart) + constraintStart;
             EmitGoTypeExpression(fragment[constraintStart..], absoluteStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         }
@@ -2116,16 +2112,15 @@ internal static partial class LanguageReferenceExtractionSupport
         if (end <= start)
             return;
 
-        var list = line[start..end];
+        var list = line.AsSpan(start, end - start);
         List<(string Expression, int AbsoluteStart)>? pendingSingleExpressions = null;
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
         {
-            var rawSegment = list.Substring(segmentStart, segmentLength);
-            var fragment = rawSegment.Trim();
+            var fragmentSpan = TrimGoCommaSegment(list.Slice(segmentStart, segmentLength), out var fragmentTrimStart);
+            var fragment = fragmentSpan.ToString();
             if (fragment.Length == 0)
                 continue;
 
-            var fragmentTrimStart = rawSegment.IndexOf(fragment, StringComparison.Ordinal);
             var absoluteFragmentStart = start + segmentStart + Math.Max(0, fragmentTrimStart);
             var typeStartInFragment = LastWhitespaceSeparatedTokenStart(fragment);
             if (typeStartInFragment < 0)
@@ -2147,6 +2142,19 @@ internal static partial class LanguageReferenceExtractionSupport
 
         foreach (var (expression, absoluteStart) in pendingSingleExpressions)
             EmitGoTypeExpression(expression, absoluteStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static ReadOnlySpan<char> TrimGoCommaSegment(ReadOnlySpan<char> segment, out int leading)
+    {
+        leading = 0;
+        while (leading < segment.Length && char.IsWhiteSpace(segment[leading]))
+            leading++;
+
+        var length = segment.Length - leading;
+        while (length > 0 && char.IsWhiteSpace(segment[leading + length - 1]))
+            length--;
+
+        return segment.Slice(leading, length);
     }
 
     private static void EmitGoTypeExpression(
