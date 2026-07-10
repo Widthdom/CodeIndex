@@ -2789,7 +2789,8 @@ public static partial class SymbolExtractor
             ? GetCssQualifiedRuleAncestors
             : null;
         var fsharpTypeBodyState = FSharpTypeBodyState.None;
-        var symbols = new SymbolExtractionList();
+        var initialSymbolCapacity = EstimateSymbolListInitialCapacity(lines.Length);
+        var symbols = new SymbolExtractionList(initialSymbolCapacity);
         var extractionState = symbols.ExtractionState;
         List<PendingRecordPrimaryComponents>? pendingRecordPrimaryComponents = null;
         var cssSeenSymbols = lang == "css"
@@ -6124,12 +6125,18 @@ public static partial class SymbolExtractor
 
     private sealed class SymbolExtractionState
     {
+        private readonly int _initialCapacity;
         private SymbolAddState? _symbolAddState;
         private SymbolLineIdentityState? _symbolLineIdentityState;
 
+        public SymbolExtractionState(int initialCapacity = 0)
+        {
+            _initialCapacity = initialCapacity;
+        }
+
         public static SymbolExtractionState FromSymbols(List<SymbolRecord> symbols)
         {
-            var state = new SymbolExtractionState();
+            var state = new SymbolExtractionState(symbols.Count);
             foreach (var symbol in symbols)
                 state.Record(symbol);
             return state;
@@ -6147,11 +6154,11 @@ public static partial class SymbolExtractor
             if (symbols.Count == 0)
                 return false;
 
-            return (_symbolLineIdentityState ??= new()).Contains(symbols, identity);
+            return (_symbolLineIdentityState ??= new(_initialCapacity)).Contains(symbols, identity);
         }
 
         public void Record(SymbolRecord symbol) =>
-            (_symbolAddState ??= new()).Record(symbol);
+            (_symbolAddState ??= new(_initialCapacity)).Record(symbol);
 
         public void Remove(SymbolRecord symbol) =>
             _symbolAddState?.Remove(symbol);
@@ -6159,13 +6166,25 @@ public static partial class SymbolExtractor
 
     private sealed class SymbolExtractionList : List<SymbolRecord>
     {
-        public SymbolExtractionState ExtractionState { get; } = new();
+        public SymbolExtractionList(int initialCapacity)
+            : base(initialCapacity)
+        {
+            ExtractionState = new SymbolExtractionState(initialCapacity);
+        }
+
+        public SymbolExtractionState ExtractionState { get; }
     }
 
     private sealed class SymbolAddState
     {
+        private readonly int _initialCapacity;
         private Dictionary<SymbolRecordIdentity, int>? _exactCounts;
         private Dictionary<SameLineSignatureKey, int>? _sameLineSignatureCounts;
+
+        public SymbolAddState(int initialCapacity)
+        {
+            _initialCapacity = initialCapacity;
+        }
 
         public int GetExactDuplicateCount(SymbolRecord symbol)
         {
@@ -6190,14 +6209,14 @@ public static partial class SymbolExtractor
         public void Record(SymbolRecord symbol)
         {
             var exactKey = new SymbolRecordIdentity(symbol);
-            var exactCounts = _exactCounts ??= new();
+            var exactCounts = _exactCounts ??= CreateSymbolRecordIdentityDictionary(_initialCapacity);
             exactCounts[exactKey] = exactCounts.TryGetValue(exactKey, out var exactCount)
                 ? exactCount + 1
                 : 1;
 
             if (TryGetSameLineSignatureKey(symbol, out var sameLineKey))
             {
-                var sameLineSignatureCounts = _sameLineSignatureCounts ??= new();
+                var sameLineSignatureCounts = _sameLineSignatureCounts ??= CreateSameLineSignatureDictionary(_initialCapacity);
                 sameLineSignatureCounts[sameLineKey] = sameLineSignatureCounts.TryGetValue(sameLineKey, out var sameLineCount)
                     ? sameLineCount + 1
                     : 1;
@@ -6234,6 +6253,16 @@ public static partial class SymbolExtractor
         }
     }
 
+    private static Dictionary<SymbolRecordIdentity, int> CreateSymbolRecordIdentityDictionary(int initialCapacity) =>
+        initialCapacity == 0
+            ? new Dictionary<SymbolRecordIdentity, int>()
+            : new Dictionary<SymbolRecordIdentity, int>(initialCapacity);
+
+    private static Dictionary<SameLineSignatureKey, int> CreateSameLineSignatureDictionary(int initialCapacity) =>
+        initialCapacity == 0
+            ? new Dictionary<SameLineSignatureKey, int>()
+            : new Dictionary<SameLineSignatureKey, int>(initialCapacity);
+
     private readonly record struct SymbolRecordIdentity(
         string Kind,
         string Name,
@@ -6268,8 +6297,13 @@ public static partial class SymbolExtractor
 
     private sealed class SymbolLineIdentityState
     {
-        private readonly HashSet<SymbolLineIdentity> _identities = [];
+        private readonly HashSet<SymbolLineIdentity> _identities;
         private int _knownCount;
+
+        public SymbolLineIdentityState(int initialCapacity)
+        {
+            _identities = initialCapacity == 0 ? [] : new HashSet<SymbolLineIdentity>(initialCapacity);
+        }
 
         public bool Contains(List<SymbolRecord> symbols, SymbolLineIdentity identity)
         {
@@ -6290,10 +6324,10 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static HashSet<SymbolLineIdentity> BuildSymbolLineIdentities(IEnumerable<SymbolRecord> symbols)
+    private static HashSet<SymbolLineIdentity> BuildSymbolLineIdentities(IEnumerable<SymbolRecord> symbols, int expectedAdditionalLines = 0)
     {
         var identities = symbols is ICollection<SymbolRecord> collection
-            ? new HashSet<SymbolLineIdentity>(collection.Count)
+            ? new HashSet<SymbolLineIdentity>(collection.Count + EstimateSymbolListInitialCapacity(expectedAdditionalLines))
             : new HashSet<SymbolLineIdentity>();
         foreach (var symbol in symbols)
             identities.Add(GetSymbolLineIdentity(symbol));

@@ -1980,7 +1980,7 @@ public static partial class SymbolExtractor
                         lines,
                         symbols,
                         syntheticClassTargets ??= [],
-                        symbolLineIdentities ??= BuildSymbolLineIdentities(symbols),
+                        symbolLineIdentities ??= BuildSymbolLineIdentities(symbols, lines.Length),
                         targetIdentities ??= [],
                         i,
                         absoluteMatchIndex,
@@ -7832,7 +7832,7 @@ public static partial class SymbolExtractor
             }
 
             targets ??= [];
-            symbolLineIdentities ??= BuildSymbolLineIdentities(symbols);
+            symbolLineIdentities ??= BuildSymbolLineIdentities(symbols, lines.Length);
             targetIdentities ??= new HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>();
             AddJavaScriptTypeScriptSyntheticClassTarget(
                 fileId,
@@ -7878,7 +7878,7 @@ public static partial class SymbolExtractor
                     return;
 
                 targets ??= [];
-                symbolLineIdentities ??= BuildSymbolLineIdentities(symbols);
+                symbolLineIdentities ??= BuildSymbolLineIdentities(symbols, lines.Length);
                 targetIdentities ??= new HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>();
                 AddJavaScriptTypeScriptSyntheticClassTarget(
                     fileId,
@@ -7934,7 +7934,7 @@ public static partial class SymbolExtractor
             ?? (classExpressionBindingMatch.Groups["moduleExports"].Success ? "default" : null)
             ?? "class";
         targets ??= [];
-        symbolLineIdentities ??= BuildSymbolLineIdentities(symbols);
+        symbolLineIdentities ??= BuildSymbolLineIdentities(symbols, lines.Length);
         targetIdentities ??= new HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>();
         AddJavaScriptTypeScriptSyntheticClassTarget(
             fileId,
