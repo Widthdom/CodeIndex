@@ -265,7 +265,7 @@ public class CiWorkflowTests
     [Fact]
     public void DotnetWorkflow_UsesSdkCompatibleNuGetAudit()
     {
-        var workflow = RepositoryTestPaths.ReadWorkflow("dotnet.yml");
+        var workflow = RepositoryTestPaths.ReadDotnetWorkflow();
 
         AssertContainsAll(
             workflow,
