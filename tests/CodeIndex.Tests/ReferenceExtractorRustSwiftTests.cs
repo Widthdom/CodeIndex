@@ -30,22 +30,10 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "swift", content);
         var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
 
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "State"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "count");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Environment"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "scheme");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "MyWrapper"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "value");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "State"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "qualifiedCount");
+        AssertReferencesContain(references, "type_reference", "count", "State");
+        AssertReferencesContain(references, "type_reference", "scheme", "Environment");
+        AssertReferencesContain(references, "type_reference", "value", "MyWrapper");
+        AssertReferencesContain(references, "type_reference", "qualifiedCount", "State");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName is "IBOutlet" or "NSManaged"
             && reference.ReferenceKind == "type_reference");

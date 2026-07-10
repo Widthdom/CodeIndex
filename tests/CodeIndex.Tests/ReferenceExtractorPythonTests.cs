@@ -59,14 +59,7 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "python", content);
         var references = ReferenceExtractor.Extract(1, "python", content, symbols);
 
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Payload"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "Job");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Result"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "Job");
+        AssertReferencesContain(references, "type_reference", "Job", "Payload", "Result");
         Assert.Contains(references, reference =>
             reference.SymbolName == "list"
             && reference.ReferenceKind == "call"
