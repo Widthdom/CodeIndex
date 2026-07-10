@@ -5,6 +5,39 @@ namespace CodeIndex.Tests;
 public partial class SymbolExtractorTests
 {
     [Fact]
+    public void SolidityMaskCommentsAndStrings_ReturnsOriginalArrayWithoutMasking()
+    {
+        var lines = new[]
+        {
+            "contract Vault {",
+            "    function deposit(uint256 amount) external {}",
+            "}",
+        };
+
+        var masked = SolidityLanguageSupport.MaskCommentsAndStrings(lines);
+
+        Assert.Same(lines, masked);
+    }
+
+    [Fact]
+    public void SolidityMaskCommentsAndStrings_ClonesWhenMaskingRequired()
+    {
+        var lines = new[]
+        {
+            "contract Vault {",
+            "    string constant Text = \"function Nope() public {};\";",
+            "}",
+        };
+
+        var masked = SolidityLanguageSupport.MaskCommentsAndStrings(lines);
+
+        Assert.NotSame(lines, masked);
+        Assert.Same(lines[0], masked[0]);
+        Assert.DoesNotContain("Nope", masked[1], StringComparison.Ordinal);
+        Assert.Same(lines[2], masked[2]);
+    }
+
+    [Fact]
     public void Extract_Solidity_DetectsContractsMembersAndRanges()
     {
         const string content = """
