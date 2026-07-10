@@ -1584,28 +1584,87 @@ public static partial class SymbolExtractor
         int startColumn,
         int endLineIndex,
         int endColumn)
+        => BuildJavaScriptTypeScriptTrimmedLineSliceSignature(rawLines, startLineIndex, startColumn, endLineIndex, endColumn);
+
+    private static string BuildJavaScriptTypeScriptTrimmedLineSliceSignature(
+        string[] rawLines,
+        int startLineIndex,
+        int startColumn,
+        int endLineIndex,
+        int endColumn)
     {
         if (startLineIndex == endLineIndex)
         {
             var line = rawLines[startLineIndex];
             var start = Math.Min(Math.Max(0, startColumn), line.Length);
             var endExclusive = Math.Min(Math.Max(start, endColumn + 1), line.Length);
-            return line[start..endExclusive].Trim();
+            return line.AsSpan(start, endExclusive - start).Trim().ToString();
+        }
+
+        var firstLineIndex = -1;
+        var firstColumn = -1;
+        for (var lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++)
+        {
+            var line = rawLines[lineIndex];
+            var sliceStart = lineIndex == startLineIndex ? Math.Min(Math.Max(0, startColumn), line.Length) : 0;
+            var sliceEnd = lineIndex == endLineIndex ? Math.Min(Math.Max(sliceStart, endColumn + 1), line.Length) : line.Length;
+            for (var column = sliceStart; column < sliceEnd; column++)
+            {
+                if (!char.IsWhiteSpace(line[column]))
+                {
+                    firstLineIndex = lineIndex;
+                    firstColumn = column;
+                    break;
+                }
+            }
+
+            if (firstLineIndex >= 0)
+                break;
+        }
+
+        if (firstLineIndex < 0)
+            return string.Empty;
+
+        var lastLineIndex = firstLineIndex;
+        var lastColumnExclusive = firstColumn + 1;
+        var foundLast = false;
+        for (var lineIndex = endLineIndex; lineIndex >= firstLineIndex && !foundLast; lineIndex--)
+        {
+            var line = rawLines[lineIndex];
+            var sliceStart = lineIndex == startLineIndex ? Math.Min(Math.Max(0, startColumn), line.Length) : 0;
+            var sliceEnd = lineIndex == endLineIndex ? Math.Min(Math.Max(sliceStart, endColumn + 1), line.Length) : line.Length;
+            if (lineIndex == firstLineIndex)
+                sliceStart = firstColumn;
+
+            for (var column = sliceEnd - 1; column >= sliceStart; column--)
+            {
+                if (!char.IsWhiteSpace(line[column]))
+                {
+                    lastLineIndex = lineIndex;
+                    lastColumnExclusive = column + 1;
+                    foundLast = true;
+                    break;
+                }
+            }
         }
 
         var builder = new StringBuilder(EstimateJavaScriptTypeScriptLineSliceLength(rawLines, startLineIndex, endLineIndex));
-        for (var lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++)
+        for (var lineIndex = firstLineIndex; lineIndex <= lastLineIndex; lineIndex++)
         {
-            if (lineIndex > startLineIndex)
+            if (lineIndex > firstLineIndex)
                 builder.Append('\n');
 
             var line = rawLines[lineIndex];
             var sliceStart = lineIndex == startLineIndex ? Math.Min(Math.Max(0, startColumn), line.Length) : 0;
             var sliceEnd = lineIndex == endLineIndex ? Math.Min(Math.Max(sliceStart, endColumn + 1), line.Length) : line.Length;
-            builder.Append(line[sliceStart..sliceEnd]);
+            if (lineIndex == firstLineIndex)
+                sliceStart = firstColumn;
+            if (lineIndex == lastLineIndex)
+                sliceEnd = lastColumnExclusive;
+            builder.Append(line.AsSpan(sliceStart, sliceEnd - sliceStart));
         }
 
-        return builder.ToString().Trim();
+        return builder.ToString();
     }
 
     private static bool TryFindJavaScriptTypeScriptDynamicImportCloseParen(
@@ -1680,24 +1739,7 @@ public static partial class SymbolExtractor
         int startLineIndex,
         int endLineIndex,
         int endColumn)
-    {
-        if (startLineIndex == endLineIndex)
-            return rawLines[startLineIndex].Trim();
-
-        var builder = new StringBuilder(EstimateJavaScriptTypeScriptLineSliceLength(rawLines, startLineIndex, endLineIndex));
-        for (var lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++)
-        {
-            if (lineIndex > startLineIndex)
-                builder.Append('\n');
-
-            var line = rawLines[lineIndex];
-            var sliceEnd = lineIndex == endLineIndex ? Math.Min(endColumn + 1, line.Length) : line.Length;
-
-            builder.Append(line[..sliceEnd]);
-        }
-
-        return builder.ToString().Trim();
-    }
+        => BuildJavaScriptTypeScriptTrimmedLineSliceSignature(rawLines, startLineIndex, 0, endLineIndex, endColumn);
 
     private static int EstimateJavaScriptTypeScriptLineSliceLength(string[] lines, int startLineIndex, int endLineIndex)
     {
