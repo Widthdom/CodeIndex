@@ -3659,8 +3659,8 @@ public static partial class SymbolExtractor
         if (length <= 0 || startColumn < 0 || startColumn + length > rawLine.Length)
             return null;
 
-        var rawName = rawLine.Substring(startColumn, length).Trim();
-        return rawName.Length == 0 ? null : rawName;
+        var rawName = rawLine.AsSpan(startColumn, length).Trim();
+        return rawName.IsEmpty ? null : rawName.ToString();
     }
 
     private static void ExtractJavaScriptTypeScriptDefaultExportArrowFunctionSymbols(
