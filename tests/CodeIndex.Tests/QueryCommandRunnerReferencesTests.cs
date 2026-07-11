@@ -4184,17 +4184,17 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (auditExitCode, auditStdout, auditStderr) = RunBuiltCli(["references", "audit_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (insertedExitCode, insertedStdout, insertedStderr) = RunBuiltCli(["references", "inserted_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (insertedBatchExitCode, insertedBatchStdout, insertedBatchStderr) = RunBuiltCli(["references", "#inserted_batch", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (batchExitCode, batchStdout, batchStderr) = RunBuiltCli(["references", "#batch_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (batchSourceExitCode, batchSourceStdout, batchSourceStderr) = RunBuiltCli(["references", "staging_batch", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (topUsersExitCode, topUsersStdout, topUsersStderr) = RunBuiltCli(["references", "top_users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (usersExitCode, usersStdout, usersStderr) = RunBuiltCli(["references", "users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (fnExitCode, fnStdout, fnStderr) = RunBuiltCli(["references", "fn_users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (topExitCode, topStdout, topStderr) = RunBuiltCli(["references", "TOP", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (onlyExitCode, onlyStdout, onlyStderr) = RunBuiltCli(["references", "ONLY", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (lateralExitCode, lateralStdout, lateralStderr) = RunBuiltCli(["references", "LATERAL", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (auditExitCode, auditStdout, auditStderr) = RunReferencesInProcess("audit_log", dbPath);
+            var (insertedExitCode, insertedStdout, insertedStderr) = RunReferencesInProcess("inserted_log", dbPath);
+            var (insertedBatchExitCode, insertedBatchStdout, insertedBatchStderr) = RunReferencesInProcess("#inserted_batch", dbPath);
+            var (batchExitCode, batchStdout, batchStderr) = RunReferencesInProcess("#batch_log", dbPath);
+            var (batchSourceExitCode, batchSourceStdout, batchSourceStderr) = RunReferencesInProcess("staging_batch", dbPath);
+            var (topUsersExitCode, topUsersStdout, topUsersStderr) = RunReferencesInProcess("top_users", dbPath);
+            var (usersExitCode, usersStdout, usersStderr) = RunReferencesInProcess("users", dbPath);
+            var (fnExitCode, fnStdout, fnStderr) = RunReferencesInProcess("fn_users", dbPath);
+            var (topExitCode, topStdout, topStderr) = RunReferencesInProcess("TOP", dbPath);
+            var (onlyExitCode, onlyStdout, onlyStderr) = RunReferencesInProcess("ONLY", dbPath);
+            var (lateralExitCode, lateralStdout, lateralStderr) = RunReferencesInProcess("LATERAL", dbPath);
 
             var auditRows = ParseJsonLines(auditStdout);
             var insertedRows = ParseJsonLines(insertedStdout);
@@ -4286,15 +4286,15 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (usersExitCode, usersStdout, usersStderr) = RunBuiltCli(["references", "users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (archivedExitCode, archivedStdout, archivedStderr) = RunBuiltCli(["references", "archived_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (logsExitCode, logsStdout, logsStderr) = RunBuiltCli(["references", "logs", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (accountsExitCode, accountsStdout, accountsStderr) = RunBuiltCli(["references", "accounts", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (onlyExitCode, onlyStdout, onlyStderr) = RunBuiltCli(["references", "ONLY", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (qualifiedExitCode, qualifiedStdout, qualifiedStderr) = RunBuiltCli(["references", "public.users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (mangledBracketExitCode, mangledBracketStdout, mangledBracketStderr) = RunBuiltCli(["references", "dbo].[users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (mangledBacktickExitCode, mangledBacktickStdout, mangledBacktickStderr) = RunBuiltCli(["references", "analytics`.`logs", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (mangledDoubleQuoteExitCode, mangledDoubleQuoteStdout, mangledDoubleQuoteStderr) = RunBuiltCli(["references", "public\".\"accounts", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (usersExitCode, usersStdout, usersStderr) = RunReferencesInProcess("users", dbPath);
+            var (archivedExitCode, archivedStdout, archivedStderr) = RunReferencesInProcess("archived_log", dbPath);
+            var (logsExitCode, logsStdout, logsStderr) = RunReferencesInProcess("logs", dbPath);
+            var (accountsExitCode, accountsStdout, accountsStderr) = RunReferencesInProcess("accounts", dbPath);
+            var (onlyExitCode, onlyStdout, onlyStderr) = RunReferencesInProcess("ONLY", dbPath);
+            var (qualifiedExitCode, qualifiedStdout, qualifiedStderr) = RunReferencesInProcess("public.users", dbPath);
+            var (mangledBracketExitCode, mangledBracketStdout, mangledBracketStderr) = RunReferencesInProcess("dbo].[users", dbPath);
+            var (mangledBacktickExitCode, mangledBacktickStdout, mangledBacktickStderr) = RunReferencesInProcess("analytics`.`logs", dbPath);
+            var (mangledDoubleQuoteExitCode, mangledDoubleQuoteStdout, mangledDoubleQuoteStderr) = RunReferencesInProcess("public\".\"accounts", dbPath);
 
             var usersRows = ParseJsonLines(usersStdout);
             var archivedRows = ParseJsonLines(archivedStdout);
@@ -4369,14 +4369,14 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (stagingExitCode, stagingStdout, stagingStderr) = RunBuiltCli(["references", "staging_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (archivedExitCode, archivedStdout, archivedStderr) = RunBuiltCli(["references", "archived_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (stageExitCode, stageStdout, stageStderr) = RunBuiltCli(["references", "stage_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (sourceExitCode, sourceStdout, sourceStderr) = RunBuiltCli(["references", "source", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (qualifiedTargetExitCode, qualifiedTargetStdout, qualifiedTargetStderr) = RunBuiltCli(["references", "public.audit_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (qualifiedSourceExitCode, qualifiedSourceStdout, qualifiedSourceStderr) = RunBuiltCli(["references", "staging.stage_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (mangledBracketExitCode, mangledBracketStdout, mangledBracketStderr) = RunBuiltCli(["references", "archive].[archived_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (mangledDoubleQuoteExitCode, mangledDoubleQuoteStdout, mangledDoubleQuoteStderr) = RunBuiltCli(["references", "public\".\"source", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (stagingExitCode, stagingStdout, stagingStderr) = RunReferencesInProcess("staging_log", dbPath);
+            var (archivedExitCode, archivedStdout, archivedStderr) = RunReferencesInProcess("archived_log", dbPath);
+            var (stageExitCode, stageStdout, stageStderr) = RunReferencesInProcess("stage_log", dbPath);
+            var (sourceExitCode, sourceStdout, sourceStderr) = RunReferencesInProcess("source", dbPath);
+            var (qualifiedTargetExitCode, qualifiedTargetStdout, qualifiedTargetStderr) = RunReferencesInProcess("public.audit_log", dbPath);
+            var (qualifiedSourceExitCode, qualifiedSourceStdout, qualifiedSourceStderr) = RunReferencesInProcess("staging.stage_log", dbPath);
+            var (mangledBracketExitCode, mangledBracketStdout, mangledBracketStderr) = RunReferencesInProcess("archive].[archived_log", dbPath);
+            var (mangledDoubleQuoteExitCode, mangledDoubleQuoteStdout, mangledDoubleQuoteStderr) = RunReferencesInProcess("public\".\"source", dbPath);
 
             var stagingRows = ParseJsonLines(stagingStdout);
             var archivedRows = ParseJsonLines(archivedStdout);
@@ -4455,11 +4455,11 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (stagingExitCode, stagingStdout, stagingStderr) = RunBuiltCli(["references", "staging_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (archiveTargetExitCode, archiveTargetStdout, archiveTargetStderr) = RunBuiltCli(["references", "audit_log_archive", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (archiveSourceExitCode, archiveSourceStdout, archiveSourceStderr) = RunBuiltCli(["references", "staging_archive", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (btreeExitCode, btreeStdout, btreeStderr) = RunBuiltCli(["references", "btree", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (lowerExitCode, lowerStdout, lowerStderr) = RunBuiltCli(["references", "lower", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (stagingExitCode, stagingStdout, stagingStderr) = RunReferencesInProcess("staging_log", dbPath);
+            var (archiveTargetExitCode, archiveTargetStdout, archiveTargetStderr) = RunReferencesInProcess("audit_log_archive", dbPath);
+            var (archiveSourceExitCode, archiveSourceStdout, archiveSourceStderr) = RunReferencesInProcess("staging_archive", dbPath);
+            var (btreeExitCode, btreeStdout, btreeStderr) = RunReferencesInProcess("btree", dbPath);
+            var (lowerExitCode, lowerStdout, lowerStderr) = RunReferencesInProcess("lower", dbPath);
 
             var stagingRows = ParseJsonLines(stagingStdout);
             var archiveTargetRows = ParseJsonLines(archiveTargetStdout);
@@ -4522,7 +4522,7 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (stagingExitCode, stagingStdout, stagingStderr) = RunBuiltCli(["references", "staging_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (stagingExitCode, stagingStdout, stagingStderr) = RunReferencesInProcess("staging_log", dbPath);
 
             var stagingRows = ParseJsonLines(stagingStdout);
 
@@ -4560,8 +4560,8 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (targetExitCode, targetStdout, targetStderr) = RunBuiltCli(["references", "#audit_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (sourceExitCode, sourceStdout, sourceStderr) = RunBuiltCli(["references", "staging_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (targetExitCode, targetStdout, targetStderr) = RunReferencesInProcess("#audit_log", dbPath);
+            var (sourceExitCode, sourceStdout, sourceStderr) = RunReferencesInProcess("staging_log", dbPath);
 
             var targetRows = ParseJsonLines(targetStdout);
             var sourceRows = ParseJsonLines(sourceStdout);
@@ -4612,10 +4612,10 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (targetExitCode, targetStdout, targetStderr) = RunBuiltCli(["references", "#audit_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (sourceExitCode, sourceStdout, sourceStderr) = RunBuiltCli(["references", "staging_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (archiveTargetExitCode, archiveTargetStdout, archiveTargetStderr) = RunBuiltCli(["references", "#archive_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (archiveSourceExitCode, archiveSourceStdout, archiveSourceStderr) = RunBuiltCli(["references", "staging_archive", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (targetExitCode, targetStdout, targetStderr) = RunReferencesInProcess("#audit_log", dbPath);
+            var (sourceExitCode, sourceStdout, sourceStderr) = RunReferencesInProcess("staging_log", dbPath);
+            var (archiveTargetExitCode, archiveTargetStdout, archiveTargetStderr) = RunReferencesInProcess("#archive_log", dbPath);
+            var (archiveSourceExitCode, archiveSourceStdout, archiveSourceStderr) = RunReferencesInProcess("staging_archive", dbPath);
 
             var targetRows = ParseJsonLines(targetStdout);
             var sourceRows = ParseJsonLines(sourceStdout);
@@ -4681,9 +4681,9 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (deleteExitCode, deleteStdout, deleteStderr) = RunBuiltCli(["references", "staging_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (mergeExitCode, mergeStdout, mergeStderr) = RunBuiltCli(["references", "staging_merge", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (tempExitCode, tempStdout, tempStderr) = RunBuiltCli(["references", "#comment_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (deleteExitCode, deleteStdout, deleteStderr) = RunReferencesInProcess("staging_log", dbPath);
+            var (mergeExitCode, mergeStdout, mergeStderr) = RunReferencesInProcess("staging_merge", dbPath);
+            var (tempExitCode, tempStdout, tempStderr) = RunReferencesInProcess("#comment_temp", dbPath);
 
             var deleteRows = ParseJsonLines(deleteStdout);
             var mergeRows = ParseJsonLines(mergeStdout);
@@ -4743,9 +4743,9 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (tempExitCode, tempStdout, tempStderr) = RunBuiltCli(["references", "#comment_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (deleteExitCode, deleteStdout, deleteStderr) = RunBuiltCli(["references", "archived_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (mergeExitCode, mergeStdout, mergeStderr) = RunBuiltCli(["references", "staging_merge", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (tempExitCode, tempStdout, tempStderr) = RunReferencesInProcess("#comment_temp", dbPath);
+            var (deleteExitCode, deleteStdout, deleteStderr) = RunReferencesInProcess("archived_log", dbPath);
+            var (mergeExitCode, mergeStdout, mergeStderr) = RunReferencesInProcess("staging_merge", dbPath);
 
             var tempRows = ParseJsonLines(tempStdout);
             var deleteRows = ParseJsonLines(deleteStdout);
@@ -4808,11 +4808,11 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (auditExitCode, auditStdout, auditStderr) = RunBuiltCli(["references", "audit_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (updateExitCode, updateStdout, updateStderr) = RunBuiltCli(["references", "#update_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (deleteExitCode, deleteStdout, deleteStderr) = RunBuiltCli(["references", "#delete_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (truncateExitCode, truncateStdout, truncateStderr) = RunBuiltCli(["references", "#truncate_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (createExitCode, createStdout, createStderr) = RunBuiltCli(["references", "#create_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (auditExitCode, auditStdout, auditStderr) = RunReferencesInProcess("audit_log", dbPath);
+            var (updateExitCode, updateStdout, updateStderr) = RunReferencesInProcess("#update_temp", dbPath);
+            var (deleteExitCode, deleteStdout, deleteStderr) = RunReferencesInProcess("#delete_temp", dbPath);
+            var (truncateExitCode, truncateStdout, truncateStderr) = RunReferencesInProcess("#truncate_temp", dbPath);
+            var (createExitCode, createStdout, createStderr) = RunReferencesInProcess("#create_temp", dbPath);
 
             var auditRows = ParseJsonLines(auditStdout);
             var updateRows = ParseJsonLines(updateStdout);
@@ -4872,8 +4872,8 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (truncateExitCode, truncateStdout, truncateStderr) = RunBuiltCli(["references", "#truncate_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (futureExitCode, futureStdout, futureStderr) = RunBuiltCli(["references", "#future_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (truncateExitCode, truncateStdout, truncateStderr) = RunReferencesInProcess("#truncate_temp", dbPath);
+            var (futureExitCode, futureStdout, futureStderr) = RunReferencesInProcess("#future_temp", dbPath);
 
             var truncateRows = ParseJsonLines(truncateStdout);
             var futureRows = ParseJsonLines(futureStdout);
@@ -4916,8 +4916,8 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (dollarExitCode, dollarStdout, dollarStderr) = RunBuiltCli(["references", "my$table", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (prefixExitCode, prefixStdout, prefixStderr) = RunBuiltCli(["references", "my", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (dollarExitCode, dollarStdout, dollarStderr) = RunReferencesInProcess("my$table", dbPath);
+            var (prefixExitCode, prefixStdout, prefixStderr) = RunReferencesInProcess("my", dbPath);
 
             var dollarRows = ParseJsonLines(dollarStdout);
             using var prefixDocument = ParseJsonOutput(prefixStdout);
@@ -4960,7 +4960,7 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (symbolExitCode, symbolStdout, symbolStderr) = RunBuiltCli(["references", "ユーザー", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (symbolExitCode, symbolStdout, symbolStderr) = RunReferencesInProcess("ユーザー", dbPath);
 
             var rows = ParseJsonLines(symbolStdout);
 
@@ -4998,9 +4998,9 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (futureExitCode, futureStdout, futureStderr) = RunBuiltCli(["references", "#future_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (setExitCode, setStdout, setStderr) = RunBuiltCli(["references", "#set_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (declareExitCode, declareStdout, declareStderr) = RunBuiltCli(["references", "#declare_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (futureExitCode, futureStdout, futureStderr) = RunReferencesInProcess("#future_temp", dbPath);
+            var (setExitCode, setStdout, setStderr) = RunReferencesInProcess("#set_temp", dbPath);
+            var (declareExitCode, declareStdout, declareStderr) = RunReferencesInProcess("#declare_temp", dbPath);
 
             using var futureDocument = ParseJsonOutput(futureStdout);
             var setRows = ParseJsonLines(setStdout);
@@ -5046,8 +5046,8 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (ifExitCode, ifStdout, ifStderr) = RunBuiltCli(["references", "#if_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (whileExitCode, whileStdout, whileStderr) = RunBuiltCli(["references", "#while_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (ifExitCode, ifStdout, ifStderr) = RunReferencesInProcess("#if_temp", dbPath);
+            var (whileExitCode, whileStdout, whileStderr) = RunReferencesInProcess("#while_temp", dbPath);
 
             var ifRows = ParseJsonLines(ifStdout);
             var whileRows = ParseJsonLines(whileStdout);
@@ -5087,7 +5087,7 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (usersExitCode, usersStdout, usersStderr) = RunBuiltCli(["references", "users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (usersExitCode, usersStdout, usersStderr) = RunReferencesInProcess("users", dbPath);
 
             var usersRows = ParseJsonLines(usersStdout);
 
@@ -5122,7 +5122,7 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (exitCode, stdout, stderr) = RunBuiltCli(["references", "#temp_users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (exitCode, stdout, stderr) = RunReferencesInProcess("#temp_users", dbPath);
 
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
@@ -5162,7 +5162,7 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (exitCode, stdout, stderr) = RunBuiltCli(["references", "#later_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (exitCode, stdout, stderr) = RunReferencesInProcess("#later_temp", dbPath);
 
             var rows = ParseJsonLines(stdout);
 
@@ -5195,7 +5195,7 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (usersExitCode, usersStdout, usersStderr) = RunBuiltCli(["references", "users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (usersExitCode, usersStdout, usersStderr) = RunReferencesInProcess("users", dbPath);
 
             var usersRows = ParseJsonLines(usersStdout);
 
@@ -5230,8 +5230,8 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (phantomExitCode, phantomStdout, phantomStderr) = RunBuiltCli(["references", "phantom", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (usersExitCode, usersStdout, usersStderr) = RunBuiltCli(["references", "users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (phantomExitCode, phantomStdout, phantomStderr) = RunReferencesInProcess("phantom", dbPath);
+            var (usersExitCode, usersStdout, usersStderr) = RunReferencesInProcess("users", dbPath);
 
             using var phantomDocument = ParseJsonOutput(phantomStdout);
             var usersRows = ParseJsonLines(usersStdout);
@@ -5275,8 +5275,8 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (usersExitCode, usersStdout, usersStderr) = RunBuiltCli(["references", "users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (tempExitCode, tempStdout, tempStderr) = RunBuiltCli(["references", "#temp_users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (usersExitCode, usersStdout, usersStderr) = RunReferencesInProcess("users", dbPath);
+            var (tempExitCode, tempStdout, tempStderr) = RunReferencesInProcess("#temp_users", dbPath);
 
             var usersRows = ParseJsonLines(usersStdout);
             using var tempDocument = ParseJsonOutput(tempStdout);
@@ -5328,8 +5328,8 @@ public partial class QueryCommandRunnerTests
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (phantomExitCode, phantomStdout, phantomStderr) = RunBuiltCli(["references", "phantom", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (accountsExitCode, accountsStdout, accountsStderr) = RunBuiltCli(["references", "accounts", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (phantomExitCode, phantomStdout, phantomStderr) = RunReferencesInProcess("phantom", dbPath);
+            var (accountsExitCode, accountsStdout, accountsStderr) = RunReferencesInProcess("accounts", dbPath);
 
             using var phantomDocument = ParseJsonOutput(phantomStdout);
             var accountsRows = ParseJsonLines(accountsStdout);

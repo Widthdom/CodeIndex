@@ -6097,6 +6097,14 @@ public partial class QueryCommandRunnerTests
         return (process.ExitCode, stdOut, stdErr);
     }
 
+    private (int ExitCode, string StdOut, string StdErr) RunReferencesInProcess(
+        string query,
+        string dbPath,
+        string lang = "sql")
+        => CaptureConsole(() => QueryCommandRunner.RunReferences(
+            [query, "--db", dbPath, "--json", "--lang", lang, "--exact-name"],
+            _jsonOptions));
+
     private static void InvokeWriteDatabaseOpenFailure(Exception exception)
     {
         var method = typeof(QueryCommandRunner).GetMethod(
