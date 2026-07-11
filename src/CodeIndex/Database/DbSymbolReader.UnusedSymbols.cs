@@ -9,6 +9,86 @@ namespace CodeIndex.Database;
 
 public partial class DbReader
 {
+    private static string BuildSameFilePrivateUseExclusionSql(string symbolAlias, string fileAlias, string visibilitySql, string startLineSql, string endLineSql)
+    {
+        return $@"
+              AND NOT (
+                  {fileAlias}.lang = 'csharp'
+                  AND {visibilitySql} IN ('private', 'fileprivate')
+                  AND {symbolAlias}.name <> ''
+                  AND EXISTS (
+                      SELECT 1
+                      FROM chunks same_file_chunk
+                      WHERE same_file_chunk.file_id = {symbolAlias}.file_id
+                        AND csharp_identifier_occurrence_count(same_file_chunk.content, {symbolAlias}.name) > 0
+                        AND (
+                            same_file_chunk.end_line < {startLineSql}
+                            OR same_file_chunk.start_line > {endLineSql}
+                            OR csharp_identifier_occurrence_count(same_file_chunk.content, {symbolAlias}.name) > 1
+                        )
+                  )
+              )";
+    }
+
+    private string BuildCSharpPartialContainingTypeUseExclusionSql(string symbolAlias, string fileAlias, string visibilitySql)
+    {
+        var containerKindSql = GetSymbolColumnSql("container_kind", "''", symbolAlias);
+        var containerNameSql = GetSymbolColumnSql("container_name", "''", symbolAlias);
+        var containerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name", containerNameSql, symbolAlias);
+        var ownContainerNameSql = GetSymbolColumnSql("container_name", "''", "partial_own_type");
+        var ownSignatureSql = GetSymbolColumnSql("signature", "''", "partial_own_type");
+        var peerContainerNameSql = GetSymbolColumnSql("container_name", "''", "partial_peer_type");
+        var peerSignatureSql = GetSymbolColumnSql("signature", "''", "partial_peer_type");
+        var ownQualifiedNameSql = $@"CASE
+                            WHEN {ownContainerNameSql} <> '' THEN {ownContainerNameSql} || '.' || partial_own_type.name
+                            ELSE partial_own_type.name
+                        END";
+        var peerQualifiedNameSql = $@"CASE
+                            WHEN {peerContainerNameSql} <> '' THEN {peerContainerNameSql} || '.' || partial_peer_type.name
+                            ELSE partial_peer_type.name
+                        END";
+
+        return $@"
+              AND NOT (
+                  {fileAlias}.lang = 'csharp'
+                  AND {visibilitySql} IN ('private', 'fileprivate')
+                  AND {symbolAlias}.name <> ''
+                  AND {containerKindSql} IN ('class', 'struct', 'interface')
+                  AND {containerNameSql} <> ''
+                  AND EXISTS (
+                      SELECT 1
+                      FROM symbols partial_own_type
+                      WHERE partial_own_type.file_id = {symbolAlias}.file_id
+                        AND partial_own_type.kind = {containerKindSql}
+                        AND partial_own_type.name = {containerNameSql}
+                        AND lower({ownSignatureSql}) LIKE '%partial%'
+                        AND (
+                            {containerQualifiedNameSql} = ''
+                            OR {containerQualifiedNameSql} = partial_own_type.name
+                            OR {containerQualifiedNameSql} = {ownQualifiedNameSql}
+                        )
+                  )
+                  AND EXISTS (
+                      SELECT 1
+                      FROM symbols partial_peer_type
+                      JOIN files partial_peer_file ON partial_peer_file.id = partial_peer_type.file_id
+                      JOIN chunks partial_peer_chunk ON partial_peer_chunk.file_id = partial_peer_type.file_id
+                      WHERE partial_peer_file.lang = 'csharp'
+                        AND partial_peer_type.file_id <> {symbolAlias}.file_id
+                        AND partial_peer_type.kind = {containerKindSql}
+                        AND partial_peer_type.name = {containerNameSql}
+                        AND lower({peerSignatureSql}) LIKE '%partial%'
+                        AND (
+                            {containerQualifiedNameSql} = ''
+                            OR {containerQualifiedNameSql} = partial_peer_type.name
+                            OR {containerQualifiedNameSql} = {peerQualifiedNameSql}
+                        )
+                        AND csharp_identifier_occurrence_count(partial_peer_chunk.content, {symbolAlias}.name) > 0
+                      LIMIT 1
+                  )
+              )";
+    }
+
     private const string UnusedBucketLikelyPrivate = "likely_unused_private";
     private const string UnusedBucketMaybeNonPublic = "maybe_unused_nonpublic";
     private const string UnusedBucketPublicOrExported = "public_or_exported_no_refs";

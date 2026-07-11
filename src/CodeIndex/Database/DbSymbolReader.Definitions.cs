@@ -6,6 +6,10 @@ namespace CodeIndex.Database;
 
 public partial class DbReader
 {
+    internal const int DefinitionBodyMaxLines = 20;
+    internal const int DefinitionBodyMaxRequestedLines = 1_000;
+    internal const int DefinitionBodyMaxBytes = 16 * 1024;
+
     /// <summary>
     /// Resolve symbol definitions with reconstructed excerpts.
     /// シンボル定義を抜粋付きで解決する。

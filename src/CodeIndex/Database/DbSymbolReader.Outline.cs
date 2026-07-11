@@ -7,22 +7,6 @@ namespace CodeIndex.Database;
 
 public partial class DbReader
 {
-    private static void ApplyQueryOutputSignatureLimits(IEnumerable<OutlineSymbol> symbols)
-    {
-        foreach (var symbol in symbols)
-            ApplyQueryOutputSignatureLimit(symbol);
-    }
-
-    private static void ApplyQueryOutputSignatureLimit(OutlineSymbol symbol)
-    {
-        if (!TryTruncateQueryOutputSignature(symbol.Signature, out var signature, out var originalLength))
-            return;
-
-        symbol.Signature = signature;
-        symbol.SignatureTruncated = true;
-        symbol.SignatureOriginalLength = originalLength;
-    }
-
     /// <summary>
     /// Return a structured outline of symbols in a single file, ordered deterministically.
     /// 1ファイルのシンボルを決定的な順序の構造化アウトラインとして返す。
