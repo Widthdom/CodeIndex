@@ -184,20 +184,6 @@ public partial class DbWriter
     }
 
     /// <summary>
-    /// Get total counts for the summary output.
-    /// サマリー出力用の合計件数を取得する。
-    /// </summary>
-    public (long files, long chunks, long symbols, long references) GetCounts()
-    {
-        CountsReadForTesting?.Invoke();
-        long files = ExecuteScalar("SELECT COUNT(*) FROM files");
-        long chunks = ExecuteScalar("SELECT COUNT(*) FROM chunks");
-        long symbols = ExecuteScalar("SELECT COUNT(*) FROM symbols");
-        long references = ExecuteScalar("SELECT COUNT(*) FROM symbol_references");
-        return (files, chunks, symbols, references);
-    }
-
-    /// <summary>
     /// Optimize FTS5 index to merge internal b-tree segments for better query performance.
     /// FTS5インデックスを最適化して内部b-treeセグメントを統合し、クエリ性能を改善する。
     /// </summary>
@@ -2394,10 +2380,4 @@ public partial class DbWriter
 
     private bool IsInTransaction() => _transactionDepth > 0;
 
-    private long ExecuteScalar(string sql)
-    {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = sql;
-        return (long)cmd.ExecuteScalar()!;
-    }
 }
