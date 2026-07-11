@@ -43,6 +43,8 @@ jobs:
           dotnet-version: |
             8.0.413
             9.0.301
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
