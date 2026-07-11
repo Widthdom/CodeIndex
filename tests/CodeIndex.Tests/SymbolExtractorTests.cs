@@ -308,7 +308,7 @@ public partial class SymbolExtractorTests
     [Fact]
     public void Extract_JsonBroadObject_EmitsStructuredDataTruncationDiagnostic_Issue3765()
     {
-        var properties = string.Join(",\n", Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 5).Select(index => $"  \"p{index}\": {index}"));
+        var properties = string.Join(",\n", Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 1).Select(index => $"  \"p{index}\": {index}"));
         var content = "{\n" + properties + "\n}";
 
         var symbols = SymbolExtractor.Extract(1, "json", content);
@@ -335,7 +335,7 @@ public partial class SymbolExtractorTests
     [Fact]
     public void Extract_YamlBroadMapping_EmitsStructuredDataTruncationDiagnostic_Issue3765()
     {
-        var content = string.Join('\n', Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 5).Select(index => $"p{index}: {index}"));
+        var content = string.Join('\n', Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 1).Select(index => $"p{index}: {index}"));
 
         var symbols = SymbolExtractor.Extract(1, "yaml", content);
 

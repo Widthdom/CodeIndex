@@ -172,6 +172,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Keep tests deterministic. Do not depend on machine-global git config, locale-specific output, or ambient files.
 - Prefer `ManualTimeProvider` for fake clocks and `TestDeterminism.CreateRandom` for randomized fixture input so repeated test runs replay the same timeline and data. Use `TestDeterminism.WaitUntilAsync` or the synchronous `WaitUntil` for bounded polling/eventual assertions instead of local `Task.Delay` loops or fixed sleeps. Use `AssertConditionRemainsTrue` for short absence/stability observations, and `TestDeterminism.RunConcurrentlyAsync` when a test needs workers to start from the same gate.
 - Prefer small fixtures and explicit assertions over broad snapshot-style checks. The one narrow exception is the `--json` output contract harness (`JsonOutputSnapshotTests`), which pins the full field shape on purpose — see "JSON `--json` output snapshots" below.
+- For cross-language extractor budget tests, exceed the shared boundary by the smallest value that triggers truncation; do not add arbitrary padding independently per language.
 - When repeated expected-value construction obscures a boundary contract such as raw bytes vs canonical content, use a narrowly named local helper instead of duplicating the low-level expression at each assertion.
 - When a test locks a long table of equivalent key/value expectations, keep the table as data and route the repeated lookup/assertion shape through one helper so duplicate rows are visible.
 - When extractor tests repeat the same `SymbolName` / `ReferenceKind` predicate shape across positive and negative reference assertions, use a semantic assertion helper so each call site names only the behavioral differences such as container name/kind, context, line, column, or the excluded symbol set.
@@ -568,6 +569,8 @@ GitHub workflow、`global.json`、ドキュメントなど、checked-in され�
 - ワークスペース鮮度や trust メタデータ
 
 基本は最も近い既存の `*Tests.cs` を拡張してください。既存ファイルに自然に収まらない場合だけ新しいテストファイルを作ります。
+
+- 複数言語で共有する抽出上限のテストは、切り詰めを発生させる最小値だけ境界を超え、言語ごとに任意の余裕値を足さないでください。
 
 ### CLI / コンソール系テスト
 
