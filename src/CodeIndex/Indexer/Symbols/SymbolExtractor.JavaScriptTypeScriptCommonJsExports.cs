@@ -775,4 +775,266 @@ public static partial class SymbolExtractor
         signature = BuildJavaScriptTypeScriptStatementSignature(rawLines, startLineIndex, objectColumn, endLineIndex, endColumn);
         return true;
     }
+
+    private static void ExtractJavaScriptTypeScriptCommonJsExportObjectLiteralKeys(
+        long fileId,
+        string lang,
+        string[] rawLines,
+        string[] sanitizedLines,
+        List<SymbolRecord> symbols,
+        int descriptorObjectLineIndex,
+        int descriptorObjectColumn,
+        string signature)
+    {
+        var (_, bodyStartLine, bodyEndLine) = ResolveRange(rawLines, descriptorObjectLineIndex, BodyStyle.Brace, lang, descriptorObjectColumn);
+        if (bodyStartLine == null || bodyEndLine == null)
+            return;
+
+        var target = CreateJavaScriptClassScanTarget(
+            rawLines,
+            lang,
+            descriptorObjectLineIndex,
+            descriptorObjectColumn,
+            bodyStartLine,
+            bodyEndLine,
+            "object",
+            "exports",
+            isExported: true);
+        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+        var braceDepth = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var skippingPropertyValue = false;
+
+        for (int lineIndex = target.ScanStartIndex; lineIndex < target.ScanEndExclusive; lineIndex++)
+        {
+            var sanitizedLine = sanitizedLines[lineIndex];
+            var scanColumn = lineIndex == target.ScanStartIndex
+                ? target.FirstLineScanOffset
+                : 0;
+
+            while (scanColumn < sanitizedLine.Length)
+            {
+                var ch = sanitizedLine[scanColumn];
+                if (skippingPropertyValue)
+                {
+                    if (braceDepth == 0 && parenDepth == 0 && bracketDepth == 0)
+                    {
+                        if (ch == ',')
+                        {
+                            skippingPropertyValue = false;
+                            scanColumn++;
+                            continue;
+                        }
+
+                        if (ch == '}')
+                        {
+                            skippingPropertyValue = false;
+                            continue;
+                        }
+                    }
+
+                    switch (ch)
+                    {
+                        case '{':
+                            braceDepth++;
+                            break;
+                        case '}':
+                            if (braceDepth > 0)
+                                braceDepth--;
+                            break;
+                        case '(':
+                            parenDepth++;
+                            break;
+                        case ')':
+                            if (parenDepth > 0)
+                                parenDepth--;
+                            break;
+                        case '[':
+                            bracketDepth++;
+                            break;
+                        case ']':
+                            if (bracketDepth > 0)
+                                bracketDepth--;
+                            break;
+                    }
+
+                    scanColumn++;
+                    continue;
+                }
+
+                if (braceDepth == 0 && parenDepth == 0 && bracketDepth == 0)
+                {
+                    while (scanColumn < sanitizedLine.Length
+                        && (char.IsWhiteSpace(sanitizedLine[scanColumn]) || sanitizedLine[scanColumn] is ',' or ';'))
+                    {
+                        scanColumn++;
+                    }
+
+                    if (scanColumn >= sanitizedLine.Length)
+                        break;
+
+                    if (scanColumn + 2 < sanitizedLine.Length
+                        && sanitizedLine[scanColumn] == '.'
+                        && sanitizedLine[scanColumn + 1] == '.'
+                        && sanitizedLine[scanColumn + 2] == '.')
+                    {
+                        scanColumn += 3;
+                        skippingPropertyValue = true;
+                        continue;
+                    }
+
+                    if (TryReadJavaScriptTypeScriptIdentifierObjectLiteralKeyName(
+                            sanitizedLine,
+                            scanColumn,
+                            out var propertyName,
+                            out var identifierValueStartColumn))
+                    {
+                        AddJavaScriptTypeScriptCommonJsExportObjectLiteralSymbol(
+                            fileId,
+                            rawLines,
+                            symbols,
+                            seenNames,
+                            propertyName,
+                            lineIndex,
+                            scanColumn,
+                            signature);
+                        scanColumn = identifierValueStartColumn;
+                        skippingPropertyValue = true;
+                        continue;
+                    }
+
+                    if (TryReadJavaScriptTypeScriptLiteralObjectLiteralKeyName(
+                            sanitizedLine,
+                            rawLines[lineIndex],
+                            scanColumn,
+                            out var literalPropertyName,
+                            out var literalValueStartColumn))
+                    {
+                        AddJavaScriptTypeScriptCommonJsExportObjectLiteralSymbol(
+                            fileId,
+                            rawLines,
+                            symbols,
+                            seenNames,
+                            literalPropertyName,
+                            lineIndex,
+                            scanColumn,
+                            signature);
+                        scanColumn = literalValueStartColumn;
+                        skippingPropertyValue = true;
+                        continue;
+                    }
+
+                    if (TryReadJavaScriptTypeScriptComputedLiteralObjectLiteralKeyName(
+                            sanitizedLine,
+                            rawLines[lineIndex],
+                            scanColumn,
+                            out var computedLiteralPropertyName,
+                            out var computedLiteralValueStartColumn))
+                    {
+                        AddJavaScriptTypeScriptCommonJsExportObjectLiteralSymbol(
+                            fileId,
+                            rawLines,
+                            symbols,
+                            seenNames,
+                            computedLiteralPropertyName,
+                            lineIndex,
+                            scanColumn,
+                            signature);
+                        scanColumn = computedLiteralValueStartColumn;
+                        skippingPropertyValue = true;
+                        continue;
+                    }
+
+                    if (TrySkipJavaScriptTypeScriptNonIdentifierObjectLiteralKey(sanitizedLine, ref scanColumn))
+                    {
+                        skippingPropertyValue = true;
+                        continue;
+                    }
+
+                    if (TryReadJavaScriptTypeScriptShorthandObjectLiteralKeyName(
+                            sanitizedLine,
+                            scanColumn,
+                            out var shorthandPropertyName,
+                            out var shorthandEndColumn))
+                    {
+                        AddJavaScriptTypeScriptCommonJsExportObjectLiteralSymbol(
+                            fileId,
+                            rawLines,
+                            symbols,
+                            seenNames,
+                            shorthandPropertyName,
+                            lineIndex,
+                            scanColumn,
+                            signature);
+                        scanColumn = shorthandEndColumn;
+                        continue;
+                    }
+                }
+
+                switch (ch)
+                {
+                    case '{':
+                        braceDepth++;
+                        break;
+                    case '}':
+                        if (braceDepth > 0)
+                            braceDepth--;
+                        break;
+                    case '(':
+                        parenDepth++;
+                        break;
+                    case ')':
+                        if (parenDepth > 0)
+                            parenDepth--;
+                        break;
+                    case '[':
+                        bracketDepth++;
+                        break;
+                    case ']':
+                        if (bracketDepth > 0)
+                            bracketDepth--;
+                        break;
+                }
+
+                scanColumn++;
+            }
+        }
+    }
+
+    private static void AddJavaScriptTypeScriptCommonJsExportObjectLiteralSymbol(
+        long fileId,
+        string[] rawLines,
+        List<SymbolRecord> symbols,
+        HashSet<string> seenNames,
+        string propertyName,
+        int lineIndex,
+        int startColumn,
+        string signature)
+    {
+        if (propertyName.Length == 0
+            || propertyName == "__esModule"
+            || !seenNames.Add(propertyName))
+        {
+            return;
+        }
+
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineIndex + 1,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = propertyName,
+                Line = lineIndex + 1,
+                StartLine = lineIndex + 1,
+                StartColumn = startColumn,
+                EndLine = lineIndex + 1,
+                Signature = signature,
+                Visibility = "export",
+            },
+            rawLines[lineIndex]);
+    }
 }
