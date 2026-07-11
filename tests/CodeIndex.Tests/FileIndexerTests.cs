@@ -387,7 +387,7 @@ public partial class FileIndexerTests
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx-oversize-gitignore");
         var tempDir = project.Root;
-        File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "generated.py\n" + new string('x', 300 * 1024));
+        TestProjectHelper.WriteSparseFile(tempDir, ".gitignore", 300 * 1024);
         File.WriteAllText(Path.Combine(tempDir, "generated.py"), "print('generated')\n");
 
         var result = new FileIndexer(tempDir).ScanFilesDetailed();
