@@ -1103,50 +1103,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScan_DoesNotPurgeFilesFromUnreadableDirectory()
-    {
-        if (OperatingSystem.IsWindows())
-            return;
-
-        var projectRoot = CreateTempProject();
-        var secretDir = Path.Combine(projectRoot, "secret");
-        try
-        {
-            Directory.CreateDirectory(secretDir);
-            File.WriteAllText(Path.Combine(secretDir, "a.cs"), "public class A { }\n");
-
-            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
-            Assert.Equal(CommandExitCodes.Success, initialExitCode);
-
-            SetUnixPermissions(secretDir, UnixFileMode.None);
-
-            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("partial", json.GetProperty("status").GetString());
-            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
-            Assert.Equal("secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
-            Assert.Equal("Could not scan directory due to permissions.", json.GetProperty("errors")[0].GetProperty("message").GetString());
-
-            var (humanExitCode, _, stderr) = RunAndCaptureStreams([projectRoot]);
-            Assert.Equal(CommandExitCodes.Success, humanExitCode);
-            Assert.Contains("secret", stderr);
-            Assert.Contains("Could not scan directory due to permissions.", stderr);
-
-            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
-            Assert.Contains("secret/a.cs", indexedPaths);
-        }
-        finally
-        {
-            if (Directory.Exists(secretDir))
-                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-            DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void Run_FullScan_WritesCheckpointAndUsesItOnSuccessfulRetry()
+    public void Run_FullScan_UnreadableDirectoryPreservesFilesAndCheckpointSupportsRetry()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -1175,8 +1132,20 @@ public partial class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, partialExitCode);
             Assert.Equal("partial", partialJson.GetProperty("status").GetString());
+            Assert.Equal(0, partialJson.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Equal(1, partialJson.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal("secret", partialJson.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.Equal(
+                "Could not scan directory due to permissions.",
+                partialJson.GetProperty("errors")[0].GetProperty("message").GetString());
+
             var checkpointPath = Path.Combine(projectRoot, ".cdidx", "scan-checkpoint.json");
             Assert.True(File.Exists(checkpointPath));
+
+            var (humanExitCode, _, stderr) = RunAndCaptureStreams([projectRoot]);
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("secret", stderr);
+            Assert.Contains("Could not scan directory due to permissions.", stderr);
 
             SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             File.Delete(srcFile);
