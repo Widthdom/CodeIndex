@@ -203,7 +203,7 @@ public class DbDebugTests
     {
         var path = "/Users/example/private/project/secret_module.cs";
         var sql = "SELECT * FROM files WHERE path = '" + path + "' " +
-            string.Join(" ", Enumerable.Range(0, DbDebug.MaxSlowQuerySqlChars).Select(i => $"UNION ALL SELECT column_{i}"));
+            new string('x', DbDebug.MaxSlowQuerySqlChars + 1);
 
         var formatted = DbDebug.FormatSqlForProfile(sql, out var truncated, out var redactedChars);
 
