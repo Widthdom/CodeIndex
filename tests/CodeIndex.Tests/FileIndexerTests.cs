@@ -30,6 +30,15 @@ public partial class FileIndexerTests
         Assert.Equal(expected, FileIndexer.ResolveInitialScanFileCapacity(hint));
     }
 
+    [Theory]
+    [InlineData(256, 64)]
+    [InlineData(8_000, 1_000)]
+    [InlineData(int.MaxValue, FileIndexer.MaxInitialScanDirectoryCapacity)]
+    public void ResolveInitialScanDirectoryCapacity_BoundsEstimatedDirectories(int hint, int expected)
+    {
+        Assert.Equal(expected, FileIndexer.ResolveInitialScanDirectoryCapacity(hint));
+    }
+
     [Fact]
     public void NormalizeIgnorePath_PosixPreservesLiteralBackslash()
     {

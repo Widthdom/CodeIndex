@@ -19,16 +19,17 @@ public partial class FileIndexer
     {
         cancellationToken.ThrowIfCancellationRequested();
         var resolvedFileCapacity = ResolveInitialScanFileCapacity(initialFileCapacity);
+        var resolvedDirectoryCapacity = ResolveInitialScanDirectoryCapacity(resolvedFileCapacity);
         var files = new List<string>(resolvedFileCapacity);
         var fileLanguages = new Dictionary<string, string>(resolvedFileCapacity, StringComparer.Ordinal);
         var languageCounts = new Dictionary<string, int>(InitialScanLanguageCapacity, StringComparer.Ordinal);
         var errors = new List<ScanError>(_submoduleLoadWarnings.Count);
-        var listedDirectories = new HashSet<string>(InitialScanDirectoryCapacity, StringComparer.Ordinal);
-        var fullyScannedDirectories = new HashSet<string>(InitialScanDirectoryCapacity, StringComparer.Ordinal);
+        var listedDirectories = new HashSet<string>(resolvedDirectoryCapacity, StringComparer.Ordinal);
+        var fullyScannedDirectories = new HashSet<string>(resolvedDirectoryCapacity, StringComparer.Ordinal);
         IReadOnlySet<string> activeCheckpointedDirectories = checkpointedDirectories is { Count: > 0 }
             ? new HashSet<string>(checkpointedDirectories, StringComparer.Ordinal)
             : EmptyCheckpointedDirectorySet;
-        var visitedDirectories = new HashSet<string>(InitialScanDirectoryCapacity, StringComparer.Ordinal)
+        var visitedDirectories = new HashSet<string>(resolvedDirectoryCapacity, StringComparer.Ordinal)
         {
             NormalizePathForComparison(_projectRoot),
         };

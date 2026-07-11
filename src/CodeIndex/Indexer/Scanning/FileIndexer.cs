@@ -35,10 +35,14 @@ public partial class FileIndexer
     private const int InitialScanFileCapacity = 256;
     internal const int MaxInitialScanFileCapacity = 1_000_000;
     private const int InitialScanDirectoryCapacity = 64;
+    internal const int MaxInitialScanDirectoryCapacity = 131_072;
     private const int InitialScanLanguageCapacity = 32;
 
     internal static int ResolveInitialScanFileCapacity(int? capacityHint) =>
         Math.Clamp(capacityHint ?? InitialScanFileCapacity, InitialScanFileCapacity, MaxInitialScanFileCapacity);
+
+    internal static int ResolveInitialScanDirectoryCapacity(int fileCapacityHint) =>
+        Math.Clamp(fileCapacityHint / 8, InitialScanDirectoryCapacity, MaxInitialScanDirectoryCapacity);
     public const string MaxFileSizeEnvironmentVariable = "CDIDX_MAX_FILE_BYTES";
     // Default maximum file size to index (4 MiB). Larger generated/vendor payloads
     // can still be opted in with --max-file-bytes, but the default path should not
