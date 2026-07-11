@@ -171,7 +171,7 @@ public class LicensePolicyTests
             Assert.Equal(2, CountOccurrences(policyWorkflow, $"- '{triggerPath}'"));
         Assert.Contains("actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0", policyWorkflow);
         Assert.Contains("8.0.413", policyWorkflow);
-        Assert.DoesNotContain("9.0.301", policyWorkflow);
+        Assert.Contains("9.0.301", policyWorkflow);
         Assert.Contains("cache: true", policyWorkflow);
         Assert.Contains("cache-dependency-path: '**/packages.lock.json'", policyWorkflow);
         Assert.Contains("dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=net8.0 --locked-mode", policyWorkflow);

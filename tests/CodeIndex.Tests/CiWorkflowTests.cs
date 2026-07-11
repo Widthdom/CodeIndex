@@ -275,6 +275,7 @@ public class CiWorkflowTests
 
         foreach (var workflowName in new[]
         {
+            "changelog-fragments.yml",
             "codeql.yml",
             "dotnet.yml",
             "mutation-testing.yml",
@@ -285,10 +286,6 @@ public class CiWorkflowTests
             AssertContainsAll(workflow, "8.0.413", "9.0.301");
             AssertDoesNotContainAny(workflow, "8.0.x", "9.0.x");
         }
-
-        var changelogWorkflow = RepositoryTestPaths.ReadWorkflow("changelog-fragments.yml");
-        AssertContainsAll(changelogWorkflow, "8.0.413");
-        AssertDoesNotContainAny(changelogWorkflow, "8.0.x", "9.0.x", "9.0.301");
 
         var mutationWorkflow = RepositoryTestPaths.ReadWorkflow("mutation-testing.yml");
         AssertContainsAll(
