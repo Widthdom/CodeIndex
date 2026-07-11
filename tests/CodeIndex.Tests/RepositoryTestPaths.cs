@@ -1,7 +1,13 @@
+using System.Collections.Concurrent;
+
 namespace CodeIndex.Tests;
 
 internal static class RepositoryTestPaths
 {
+    private static readonly ConcurrentDictionary<string, string> TextCache = new(StringComparer.Ordinal);
+    private static readonly Lazy<IReadOnlyList<(string FileName, string Content)>> NormalizedWorkflows =
+        new(ReadNormalizedWorkflowsCore, LazyThreadSafetyMode.ExecutionAndPublication);
+
     internal static string Root { get; } = LocateRoot();
 
     internal static string Combine(params string[] relativeSegments)
@@ -12,7 +18,11 @@ internal static class RepositoryTestPaths
         return Path.Combine(segments);
     }
 
-    internal static string ReadText(params string[] relativeSegments) => File.ReadAllText(Combine(relativeSegments));
+    internal static string ReadText(params string[] relativeSegments)
+    {
+        var path = Combine(relativeSegments);
+        return TextCache.GetOrAdd(path, static filePath => File.ReadAllText(filePath));
+    }
 
     internal static string ReadWorkflow(string fileName) => ReadText(".github", "workflows", fileName);
 
@@ -38,12 +48,15 @@ internal static class RepositoryTestPaths
     internal static string ReadDockerIgnore() => ReadText(".dockerignore");
 
     internal static IReadOnlyList<(string FileName, string Content)> ReadNormalizedWorkflows()
+        => NormalizedWorkflows.Value;
+
+    private static IReadOnlyList<(string FileName, string Content)> ReadNormalizedWorkflowsCore()
     {
         var workflowsDirectory = Combine(".github", "workflows");
         return Directory
             .EnumerateFiles(workflowsDirectory, "*.yml")
             .OrderBy(static path => Path.GetFileName(path), StringComparer.Ordinal)
-            .Select(static path => (Path.GetFileName(path), File.ReadAllText(path).ReplaceLineEndings("\n")))
+            .Select(static path => (Path.GetFileName(path), TextCache.GetOrAdd(path, static filePath => File.ReadAllText(filePath)).ReplaceLineEndings("\n")))
             .ToArray();
     }
 
