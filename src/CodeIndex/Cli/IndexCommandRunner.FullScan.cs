@@ -184,6 +184,20 @@ public static partial class IndexCommandRunner
         return null;
     }
 
+    private readonly record struct ActiveExtractionPhase(string? Path, string? Phase)
+    {
+        public string? Format() => Path == null || Phase == null ? null : FormatIndexPhasePath(Path, Phase);
+    }
+
+    private static IEnumerable<string> FormatActiveExtractionPhases(ActiveExtractionPhase[] phases)
+    {
+        foreach (var phase in phases)
+        {
+            if (phase.Format() is { } formatted)
+                yield return formatted;
+        }
+    }
+
     internal static string? GetJsonIndexHeartbeatPath(string? currentFile, IEnumerable<string> activeExtractionPhases)
     {
         if (!string.IsNullOrEmpty(currentFile))
@@ -218,7 +232,7 @@ public static partial class IndexCommandRunner
         TimeSpan timeout,
         long lastProgressTimestamp,
         string? currentFile,
-        string?[] activeExtractionPhases,
+        ActiveExtractionPhase[] activeExtractionPhases,
         Action cancelStalledWork)
     {
         if (!TryGetFullScanExtractionStallPath(
@@ -227,7 +241,7 @@ public static partial class IndexCommandRunner
                 timeout,
                 lastProgressTimestamp,
                 currentFile,
-                activeExtractionPhases.OfType<string>(),
+                FormatActiveExtractionPhases(activeExtractionPhases),
                 out var activePath))
         {
             return;
@@ -1094,7 +1108,7 @@ public static partial class IndexCommandRunner
         var indexedSymbolExtractorLanguages = new HashSet<string>(languageCounts.Count, StringComparer.Ordinal);
         var lastJsonProgressAt = Stopwatch.GetTimestamp();
         string? currentJsonIndexFile = null;
-        string?[] activeExtractionPhases = [];
+        ActiveExtractionPhase[] activeExtractionPhases = [];
         CancellationTokenSource? jsonHeartbeatCts = null;
         Task? jsonHeartbeatTask = null;
         var extractionParallelism = Math.Max(1, options.Parallelism);
@@ -1235,7 +1249,7 @@ public static partial class IndexCommandRunner
 
                     var file = GetJsonIndexHeartbeatPath(
                         currentJsonIndexFile,
-                        activeExtractionPhases.OfType<string>());
+                        FormatActiveExtractionPhases(activeExtractionPhases));
                     var fileSuffix = string.IsNullOrEmpty(file) ? string.Empty : $": {file}";
                     ConsoleUi.TryWriteErrorLine($"cdidx: still indexing {processed:N0}/{files.Count:N0} file(s){fileSuffix}...");
                 }
@@ -1510,7 +1524,7 @@ public static partial class IndexCommandRunner
 
                 FullScanExtractionWorkStartedForTesting?.Invoke();
                 var extractionWorkerCount = Math.Min(extractionParallelism, extractionWorkItemCount);
-                activeExtractionPhases = new string?[extractionWorkerCount];
+                activeExtractionPhases = new ActiveExtractionPhase[extractionWorkerCount];
                 var extractionQueueCapacity = parallelizeExtraction
                     ? Math.Max(1, extractionWorkerCount * 2)
                     : 1;
@@ -1542,7 +1556,7 @@ public static partial class IndexCommandRunner
                             var displayRelativePath = target.DisplayRelativePath;
                             try
                             {
-                                activeExtractionPhases[workerIndex] = FormatIndexPhasePath(displayRelativePath, "reading");
+                                activeExtractionPhases[workerIndex] = new(displayRelativePath, "reading");
                                 FullScanFileContentLoadForTesting?.Invoke(displayRelativePath);
                                 var loaded = indexer.BuildLoadedRecordWithRawBytes(
                                     filePath,
@@ -1563,13 +1577,13 @@ public static partial class IndexCommandRunner
                                     : null;
                                 if (parallelizeExtraction)
                                 {
-                                    activeExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "chunking");
+                                    activeExtractionPhases[workerIndex] = new(record.Path, "chunking");
                                     chunks = ChunkSplitter.SplitNormalized(0, content, hasOversizeLine, record.Lines);
                                     if (generatedSuppressionIssue != null)
                                     {
                                         symbols = [];
                                         references = [];
-                                        activeExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
+                                        activeExtractionPhases[workerIndex] = new(record.Path, "validating");
                                         issues = AppendIssueIfMissing(
                                             FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine, loaded.ConflictMarkerLine),
                                             generatedSuppressionIssue);
@@ -1589,7 +1603,7 @@ public static partial class IndexCommandRunner
                                             extractionCancellationToken);
                                         continue;
                                     }
-                                    activeExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "symbols");
+                                    activeExtractionPhases[workerIndex] = new(record.Path, "symbols");
                                     var symbolExtraction = ExtractSymbolsWithStallTimeout(
                                         0,
                                         record.Lang,
@@ -1597,7 +1611,7 @@ public static partial class IndexCommandRunner
                                         filePath,
                                         projectRoot,
                                         record.Path,
-                                        activeExtractionPhases[workerIndex]!,
+                                        activeExtractionPhases[workerIndex].Format()!,
                                         true,
                                         hasOversizeLine,
                                         loaded.ConflictMarkerLine,
@@ -1625,7 +1639,7 @@ public static partial class IndexCommandRunner
                                     }
                                     else
                                     {
-                                        activeExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "references");
+                                        activeExtractionPhases[workerIndex] = new(record.Path, "references");
                                         using var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction");
                                         referenceExtraction = ReferenceExtractor.ExtractDetailedNormalized(
                                             0,
@@ -1641,7 +1655,7 @@ public static partial class IndexCommandRunner
                                         references = referenceExtraction.References;
                                         referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                                     }
-                                    activeExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
+                                    activeExtractionPhases[workerIndex] = new(record.Path, "validating");
                                     issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine, loaded.ConflictMarkerLine);
                                     if (symbolRegexTimeoutIssue != null)
                                         issues = AppendIssue(issues, symbolRegexTimeoutIssue);
@@ -1658,7 +1672,7 @@ public static partial class IndexCommandRunner
                                 }
                                 else
                                 {
-                                    activeExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
+                                    activeExtractionPhases[workerIndex] = new(record.Path, "validating");
                                     issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine, loaded.ConflictMarkerLine);
                                 }
                                 extractionResults.Add(
@@ -1732,7 +1746,7 @@ public static partial class IndexCommandRunner
                             }
                             finally
                             {
-                                activeExtractionPhases[workerIndex] = null;
+                                activeExtractionPhases[workerIndex] = default;
                             }
                         }
                     }, cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default))
