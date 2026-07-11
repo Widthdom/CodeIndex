@@ -87,6 +87,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   License-policy contract tests use the same accessor for legal notices, workflow files, and distribution docs instead of rediscovering the repository root and rereading overlapping files.
   Repository-backed documentation, source-audit, JSONL-policy, and trimmed-publish tests reuse `RepositoryTestPaths.Root` instead of maintaining suite-local upward directory walks.
   Large command-runner, installer, and extractor suites also delegate their legacy root helpers to that single cached root.
+  Changelog limit tests resolve checked-in files through `RepositoryTestPaths` instead of performing another root walk.
   Whole-workflow policy audits should use `RepositoryTestPaths.ReadNormalizedWorkflows()` so enumeration order, extension filtering, file naming, and normalization are shared instead of being rebuilt inside individual test classes.
   When one policy test checks several step-level rules, parse workflow step blocks once and filter the retained blocks for each rule instead of rerunning the multiline step regex for every assertion family.
 - `IndexCommandRunnerTests.Run_CancelDuringFreshIndex_ReturnsInterruptedJson`, `Run_CancelDuringDryRunScan_ReturnsInterruptedJson`, and `Run_CancelBeforeFreshScan_ReturnsInterruptedJson`
@@ -389,6 +390,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   license-policy contract test は legal notice、workflow file、distribution doc に同じ accessor を使い、repository root の再検出や重複 file read を行いません。
   repository-backed の documentation、source-audit、JSONL-policy、trimmed-publish test は suite ごとの上位 directory walk を持たず、`RepositoryTestPaths.Root` を再利用します。
   大規模な command-runner、installer、extractor suite の legacy root helper も、その単一の cached root へ委譲します。
+  changelog limit test も別の root walk を行わず、`RepositoryTestPaths` 経由で checked-in file を解決します。
   workflow 全体の policy audit には `RepositoryTestPaths.ReadNormalizedWorkflows()` を使い、列挙順、extension filter、file name、normalization を個別 test class 内で再構築せず共有します。
   1つの policy test が複数の step-level rule を検証する場合は、workflow step block を一度だけ解析して保持し、assertion family ごとに multiline step regex を再実行せず保持済み block を絞り込みます。
 - `IndexCommandRunnerTests.Run_CancelDuringFreshIndex_ReturnsInterruptedJson`、`Run_CancelDuringDryRunScan_ReturnsInterruptedJson`、`Run_CancelBeforeFreshScan_ReturnsInterruptedJson`
