@@ -785,7 +785,7 @@ public partial class IndexCommandRunnerTests
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
-            File.WriteAllBytes(Path.Combine(projectRoot, "huge.py"), new byte[10 * 1024 * 1024 + 1]);
+            TestProjectHelper.WriteSparseFile(projectRoot, "huge.py", 10 * 1024 * 1024 + 1L);
 
             var (exitCode, _, stderr) = RunCliInSubprocess([projectRoot], projectRoot);
 

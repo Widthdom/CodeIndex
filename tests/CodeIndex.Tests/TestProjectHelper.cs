@@ -86,6 +86,15 @@ internal static class TestProjectHelper
         return path;
     }
 
+    internal static string WriteSparseFile(string projectRoot, string relativePath, long length)
+    {
+        var path = ProjectPath(projectRoot, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        using var stream = File.Create(path);
+        stream.SetLength(length);
+        return path;
+    }
+
     internal static string AppendTextFile(string projectRoot, string relativePath, string content)
     {
         var path = ProjectPath(projectRoot, relativePath);

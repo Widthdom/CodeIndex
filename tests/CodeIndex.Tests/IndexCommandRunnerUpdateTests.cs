@@ -1312,7 +1312,7 @@ public partial class IndexCommandRunnerTests
             var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
-            File.WriteAllBytes(Path.Combine(projectRoot, "huge.py"), new byte[10 * 1024 * 1024 + 1]);
+            TestProjectHelper.WriteSparseFile(projectRoot, "huge.py", 10 * 1024 * 1024 + 1L);
 
             var (exitCode, _, stderr) = RunCliInSubprocess([projectRoot, "--files", "huge.py"], projectRoot);
 
