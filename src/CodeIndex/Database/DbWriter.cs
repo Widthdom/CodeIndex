@@ -840,14 +840,24 @@ public class DbWriter
                     OR (@checksum IS NULL AND modified = @modified AND (@size IS NULL OR size = @size) AND (@lines IS NULL OR lines = @lines))
                 )
                 {staleIssuePredicate}
-                AND (SELECT COUNT(*) FROM symbols WHERE file_id = files.id) <= @max_symbols
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM symbols
+                    WHERE file_id = files.id
+                    LIMIT 1 OFFSET @max_symbols
+                )
                 AND NOT EXISTS (
                     SELECT 1
                     FROM file_issues
                     WHERE file_id = files.id
                       AND kind = 'symbol_count_exceeded'
                 )
-                AND (SELECT COUNT(*) FROM symbol_references WHERE file_id = files.id) <= @max_references
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM symbol_references
+                    WHERE file_id = files.id
+                    LIMIT 1 OFFSET @max_references
+                )
                 AND NOT EXISTS (
                     SELECT 1
                     FROM file_issues
