@@ -180,6 +180,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - When repeated expected-value construction obscures a boundary contract such as raw bytes vs canonical content, use a narrowly named local helper instead of duplicating the low-level expression at each assertion.
 - Batch independent file mutations into one `--files` update when a file-indexer test only needs to verify their normalized paths and outcomes after the same initial index.
 - Keep related index invalidation transitions in one fixture when every intermediate state is asserted; static-interface contract add, remove, restore, and delete coverage should not rebuild equivalent projects independently.
+- Cap issue lifecycle tests should reuse one indexed fixture across full-scan and update transitions when they assert the issue after each low/high boundary change.
 - When a test locks a long table of equivalent key/value expectations, keep the table as data and route the repeated lookup/assertion shape through one helper so duplicate rows are visible.
 - When extractor tests repeat the same `SymbolName` / `ReferenceKind` predicate shape across positive and negative reference assertions, use a semantic assertion helper so each call site names only the behavioral differences such as container name/kind, context, line, column, or the excluded symbol set.
 - When a production comment or error string is bilingual, preserve that expectation in tests where it matters.
@@ -504,6 +505,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - raw bytes と canonical content のような境界契約で期待値生成が重複して読みづらくなる場合は、各 assertion に低レベル式を複製せず、契約名が分かる小さな local helper に寄せてください。
 - file-indexer テストが同じ初回 index 後の normalized path と結果だけを検証する場合は、独立した file mutation を 1 回の `--files` update にまとめてください。
 - 関連する index invalidation の各中間状態を assertion する場合は 1 fixture にまとめてください。static-interface contract の追加、除去、復元、削除を同等の project 再構築へ分割しないでください。
+- cap issue lifecycle test は low/high boundary の変更ごとに issue を assertion する場合、full-scan と update の遷移で 1 つの indexed fixture を再利用してください。
 - 同種の key/value 期待値を長い表で固定するテストでは、期待値をデータとして残し、繰り返しの lookup/assertion 形は helper に通してください。重複行を見つけやすくするためです。
 - extractor テストで `SymbolName` / `ReferenceKind` の同じ predicate 形を positive / negative reference assertion の両方に繰り返す場合は、semantic assertion helper を使い、各 call site には container name/kind、context、line、column、除外 symbol set など挙動差分だけを残してください。
 - 境界を証明するテストでは、その境界をまたぐ最小の fixture を使う。1 ページ、1 chunk、1 cache、1 offset overflow で十分なら、それ以上に synthetic data を増やさない。ただし、より大きいサイズ自体が契約の一部なら例外です。
