@@ -3523,7 +3523,8 @@ exit 7
             }
 
             var currentPath = Path.Combine(logDir, $"stderr-{fixedNow:yyyyMMdd}-p{Environment.ProcessId}-{fixedNow:HHmmss}.log");
-            File.WriteAllBytes(currentPath, new byte[1024 * 1024]);
+            using (var stream = File.Create(currentPath))
+                stream.SetLength(1024 * 1024);
             File.SetLastWriteTimeUtc(currentPath, DateTime.UtcNow);
 
             env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");

@@ -107,6 +107,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Oversized file guards create sparse length-only fixtures when content is irrelevant, avoiding a matching managed byte-array allocation.
 - Full-scan and scoped-update oversized-file warning tests share `TestProjectHelper.WriteSparseFile(...)` so both execution modes avoid 10 MiB fixture allocations.
 - Suggestion store and archive cap tests share one sparse-file helper instead of allocating arrays at either persisted-size limit.
+- Persistent-log rotation tests size existing log fixtures through `FileStream.SetLength(...)` rather than allocating a 1 MiB zero buffer.
 - Synchronized console-write coverage uses the smallest repeated slow-writer workload that still exercises both concurrent producers; do not scale iteration counts as a stress test.
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
   is a coarse runaway guard for the real `InstallScriptTests.cs` C# extraction fixture. Its wall-clock budget is intentionally broader than a benchmark so slower or noisy CI hosts do not fail the suite for ordinary variance.
@@ -414,6 +415,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - 内容が契約に無関係な oversized file guard は sparse な length-only fixture を作り、同サイズの managed byte array 割り当てを避けます。
 - full-scan と scoped-update の oversized-file warning test は `TestProjectHelper.WriteSparseFile(...)` を共有し、両方の実行モードで 10 MiB fixture 割り当てを避けます。
 - suggestion store と archive cap の test は、どちらの persisted-size limit でも array を割り当てず、1 つの sparse-file helper を共有します。
+- persistent-log rotation test は 1 MiB の zero buffer を割り当てず、`FileStream.SetLength(...)` で既存 log fixture のサイズを設定します。
 - synchronized console write の coverage は、2 つの concurrent producer を検証できる最小の反復 slow-writer workload を使います。stress test として iteration 数を増やさないでください。
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
   は実ファイル `InstallScriptTests.cs` を C# 抽出に通す coarse な runaway guard です。wall-clock の予算は benchmark より意図的に広く取り、遅い / 混雑した CI host で通常の揺れだけにより suite が失敗しないようにしています。
