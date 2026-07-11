@@ -69,12 +69,12 @@ public partial class FileIndexer
     }
 
     private static IReadOnlyList<string> MaterializePathSet(HashSet<string>? paths)
-        => paths is not { Count: > 0 } ? Array.Empty<string>() : new List<string>(paths);
+        => paths is not { Count: > 0 } ? Array.Empty<string>() : paths.ToArray();
 
     private IReadOnlyList<string> MaterializeAncestorIgnoreDirectories()
         => _ancestorIgnoreDirectories.Count == 0
             ? Array.Empty<string>()
-            : new List<string>(_ancestorIgnoreDirectories);
+            : _ancestorIgnoreDirectories.ToArray();
 
     private static IReadOnlyDictionary<string, int> MaterializeLanguageCounts(Dictionary<string, int> counts)
         => counts.Count == 0
@@ -86,8 +86,8 @@ public partial class FileIndexer
         if (paths is not { Count: > 0 })
             return Array.Empty<string>();
 
-        var sorted = new List<string>(paths);
-        sorted.Sort(StringComparer.Ordinal);
+        var sorted = paths.ToArray();
+        Array.Sort(sorted, StringComparer.Ordinal);
         return sorted;
     }
 
