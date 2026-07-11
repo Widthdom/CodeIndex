@@ -94,6 +94,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   relies on `BackgroundTaskObserver`'s fault-only continuation contract: canceled
   tasks are awaited directly and do not need a post-cancellation fixed sleep to
   prove warnings were suppressed.
+- Cancellation-only timeout tests use an infinite cancellable delay so the fixture has no unrelated wall-clock completion path.
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
   is a coarse runaway guard for the real `InstallScriptTests.cs` C# extraction fixture. Its wall-clock budget is intentionally broader than a benchmark so slower or noisy CI hosts do not fail the suite for ordinary variance.
 - `SymbolExtractorTests.Extract_JavaScriptLargeExportedObjectLiteralProperties_CompletesWithinPracticalBudget` and `Extract_CSharp_ReferenceExtractorFixture_CompletesWithinPracticalBudget`
@@ -387,6 +388,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   は `BackgroundTaskObserver` の fault-only continuation 契約に依存します。canceled
   task は直接 await し、warning が抑止されたことを示すための cancellation 後の固定 sleep
   は不要です。
+- cancellation だけを検証する timeout test は、fixture に無関係な wall-clock 完了経路を持たせないよう infinite cancellable delay を使います。
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
   は実ファイル `InstallScriptTests.cs` を C# 抽出に通す coarse な runaway guard です。wall-clock の予算は benchmark より意図的に広く取り、遅い / 混雑した CI host で通常の揺れだけにより suite が失敗しないようにしています。
 - `SymbolExtractorTests.Extract_JavaScriptLargeExportedObjectLiteralProperties_CompletesWithinPracticalBudget` と `Extract_CSharp_ReferenceExtractorFixture_CompletesWithinPracticalBudget`
