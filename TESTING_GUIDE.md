@@ -189,6 +189,7 @@ Use the inventory below before adding or moving a test class:
 - Temporary repositories and files: create them through `TestProjectHelper` when practical, and do not depend on user-level git config.
 - Long-running or performance-oriented tests: keep them skipped by default or give them broad deterministic budgets; if CI reports them in xUnit long-running diagnostics, first check runner load before tightening thresholds.
 - When a response-size algorithm needs a large production ceiling, prefer a narrowly scoped test-only budget override and a small representative payload; restore process-global overrides in `finally` and keep the suite non-parallel.
+- Pagination and suppression fixtures should cross the fetched-window boundary with the fewest additional records needed to distinguish full totals from the returned page.
 
 ## Shared Helpers
 
@@ -215,6 +216,7 @@ Prefer the existing helper before writing new setup code.
 - Prefer `DeleteFile(path)` for temp DB, lock, metadata, cache, script, and outside-fixture file cleanup instead of hand-written `File.Exists(...)` / `File.Delete(...)` pairs.
 - When a test class already has a robust file cleanup wrapper that clears SQLite pools, route temporary DB cleanup through that wrapper and keep non-DB sidecars on `TestProjectHelper.DeleteFile`.
 - DB maintenance test files may keep thin local helpers such as `InitializeEmptyDb`, `ReleaseSqlitePools`, and `DeleteDbFile` when a class owns standalone `.db` files directly; keep those wrappers delegated to `DbContext`, `SqliteConnection.ClearAllPools()`, and `TestProjectHelper.DeleteFile` so pool-release intent remains explicit.
+- ページングや抑制の fixture は、返却ページと全件集計を区別できる最小限の追加レコードで fetch window の境界を超えてください。
 - `SqlitePoolCleanup` centralizes the Windows SQLite pool workaround for tests. Tests that own a temporary SQLite file for their whole lifetime can enter an exclusive owner lease and dispose it idempotently before deleting the file, instead of calling `SqliteConnection.ClearAllPools()` directly from `Dispose`.
 - Tests that intentionally call `SqliteConnection.ClearAllPools()`, mutate process-global environment variables, or override the process current directory are grouped into the non-parallel `SQLite pool sensitive` xUnit collection. Add new tests with those hazards to that collection instead of letting them run in parallel with unrelated classes.
 - Tests that mutate process-global environment variables should use `EnvironmentVariableScope.Capture(...)` so the original values are restored from a single disposable cleanup path even if setup or assertions fail.
