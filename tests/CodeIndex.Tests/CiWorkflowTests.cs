@@ -170,10 +170,26 @@ public class CiWorkflowTests
         }
 
         var continueOnErrorBlocks = FindStepBlocks(stepBlocks, "continue-on-error: true").ToArray();
-        var continueOnErrorBlock = Assert.Single(continueOnErrorBlocks);
-        Assert.Equal("dotnet.yml", continueOnErrorBlock.FileName);
+        Assert.Equal(2, continueOnErrorBlocks.Length);
+        var sdkSetupBlock = Assert.Single(
+            continueOnErrorBlocks,
+            block => block.Text.Contains("- name: Set up .NET SDKs", StringComparison.Ordinal));
+        Assert.Equal("dotnet.yml", sdkSetupBlock.FileName);
         AssertContainsAll(
-            continueOnErrorBlock.Text,
+            sdkSetupBlock.Text,
+            StringComparison.Ordinal,
+            "id: setup-dotnet",
+            "actions/setup-dotnet@");
+        AssertContainsAll(
+            allWorkflows,
+            "- name: Retry .NET SDK setup\n        if: steps.setup-dotnet.outcome == 'failure'");
+
+        var diagnosticUploadBlock = Assert.Single(
+            continueOnErrorBlocks,
+            block => block.Text.Contains("- name: Upload diagnostic dumps", StringComparison.Ordinal));
+        Assert.Equal("dotnet.yml", diagnosticUploadBlock.FileName);
+        AssertContainsAll(
+            diagnosticUploadBlock.Text,
             StringComparison.Ordinal,
             "- name: Upload diagnostic dumps",
             "if: failure()",
