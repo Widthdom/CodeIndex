@@ -167,6 +167,27 @@ public class CiWorkflowTests
     }
 
     [Fact]
+    public void TestWorkflows_CancelSupersededPullRequestRunsOnly()
+    {
+        const string concurrencyPolicy =
+            "concurrency:\n" +
+            "  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}\n" +
+            "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}";
+
+        foreach (var workflowName in new[]
+        {
+            "changelog-fragments.yml",
+            "codeql.yml",
+            "dotnet.yml",
+            "license-policy.yml",
+        })
+        {
+            var workflow = RepositoryTestPaths.ReadWorkflow(workflowName).Replace("\r\n", "\n");
+            Assert.Equal(1, CountOccurrences(workflow, concurrencyPolicy));
+        }
+    }
+
+    [Fact]
     public void GitHubActionsWorkflows_FollowRunnerArtifactCacheAndContinueOnErrorPolicy()
     {
         var workflows = RepositoryTestPaths.ReadNormalizedWorkflows();
