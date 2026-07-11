@@ -3753,16 +3753,16 @@ public partial class QueryCommandRunnerTests
 
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
         var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-        var (interfaceExitCode, interfaceStdout, interfaceStderr) = RunBuiltCli(
-            ["symbols", "StaticVirt", "--db", dbPath, "--json", "--kind", "event", "--exact-name", "--lang", "csharp"]);
-        var (structPropertyExitCode, structPropertyStdout, structPropertyStderr) = RunBuiltCli(
-            ["symbols", "P", "--db", dbPath, "--json", "--kind", "property", "--exact-name", "--lang", "csharp"]);
-        var (structEventExitCode, structEventStdout, structEventStderr) = RunBuiltCli(
-            ["symbols", "E", "--db", dbPath, "--json", "--kind", "event", "--exact-name", "--lang", "csharp"]);
-        var (outlineExitCode, outlineStdout, outlineStderr) = RunBuiltCli(
-            ["outline", "src/fixture.cs", "--db", dbPath, "--json"]);
-        var (inspectExitCode, inspectStdout, inspectStderr) = RunBuiltCli(
-            ["inspect", "StaticVirt", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"]);
+        var (interfaceExitCode, interfaceStdout, interfaceStderr) = RunSymbolsInProcess(
+            "StaticVirt", "--db", dbPath, "--json", "--kind", "event", "--exact-name", "--lang", "csharp");
+        var (structPropertyExitCode, structPropertyStdout, structPropertyStderr) = RunSymbolsInProcess(
+            "P", "--db", dbPath, "--json", "--kind", "property", "--exact-name", "--lang", "csharp");
+        var (structEventExitCode, structEventStdout, structEventStderr) = RunSymbolsInProcess(
+            "E", "--db", dbPath, "--json", "--kind", "event", "--exact-name", "--lang", "csharp");
+        var (outlineExitCode, outlineStdout, outlineStderr) = RunOutlineInProcess(
+            "src/fixture.cs", "--db", dbPath, "--json");
+        var (inspectExitCode, inspectStdout, inspectStderr) = RunInspectInProcess(
+            "StaticVirt", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp");
 
         var interfaceRow = Assert.Single(ParseJsonLines(interfaceStdout)).RootElement;
         var structPropertyRow = Assert.Single(ParseJsonLines(structPropertyStdout)).RootElement;
@@ -6104,6 +6104,15 @@ public partial class QueryCommandRunnerTests
         => CaptureConsole(() => QueryCommandRunner.RunReferences(
             [query, "--db", dbPath, "--json", "--lang", lang, "--exact-name"],
             _jsonOptions));
+
+    private (int ExitCode, string StdOut, string StdErr) RunSymbolsInProcess(params string[] args)
+        => CaptureConsole(() => QueryCommandRunner.RunSymbols(args, _jsonOptions));
+
+    private (int ExitCode, string StdOut, string StdErr) RunOutlineInProcess(params string[] args)
+        => CaptureConsole(() => QueryCommandRunner.RunOutline(args, _jsonOptions));
+
+    private (int ExitCode, string StdOut, string StdErr) RunInspectInProcess(params string[] args)
+        => CaptureConsole(() => QueryCommandRunner.RunInspect(args, _jsonOptions));
 
     private static void InvokeWriteDatabaseOpenFailure(Exception exception)
     {
