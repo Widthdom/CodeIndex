@@ -120,6 +120,11 @@ jobs:
           dotnet-version: |
             8.0.413
             9.0.301
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+
+      - name: Restore license policy test dependencies
+        run: dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=net8.0 --locked-mode
 
       - name: Run license policy contract tests
-        run: dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework net8.0 --filter FullyQualifiedName~LicensePolicyTests --nologo
+        run: dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework net8.0 --filter FullyQualifiedName~LicensePolicyTests --no-restore --nologo
