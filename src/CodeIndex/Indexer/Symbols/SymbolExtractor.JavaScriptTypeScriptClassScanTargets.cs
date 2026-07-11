@@ -95,4 +95,39 @@ public static partial class SymbolExtractor
             ? scanEndComparison
             : left.OriginalIndex.CompareTo(right.OriginalIndex);
     }
+
+    private static List<JavaScriptClassScanTarget> CollectJavaScriptTypeScriptSyntheticClassScanTargets(
+        long fileId,
+        string lang,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        Func<JavaScriptScopePrivacyFlags[][]> getPrivateScopeColumns)
+    {
+        if (!LinesContain(lines, "class", StringComparison.Ordinal))
+            return [];
+
+        var privateScopeColumns = getPrivateScopeColumns();
+        List<JavaScriptClassScanTarget>? targets = null;
+        HashSet<SymbolLineIdentity>? symbolLineIdentities = null;
+        HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>? targetIdentities = null;
+        var lexState = new JavaScriptLexState();
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var lexedLine = LexJavaScriptLine(lines[i], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+            var lineOffset = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, 0);
+            while (lineOffset >= 0 && lineOffset < sanitizedLine.Length)
+            {
+                TryAddJavaScriptTypeScriptSyntheticClassTarget(fileId, lang, lines, symbols, ref targets, ref symbolLineIdentities, ref targetIdentities, i, lineOffset, sanitizedLine, privateScopeColumns);
+                lineOffset = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, lineOffset + 1);
+            }
+        }
+
+        if (targets is null)
+            return [];
+
+        SortJavaScriptTypeScriptClassScanTargets(targets);
+        return targets;
+    }
 }
