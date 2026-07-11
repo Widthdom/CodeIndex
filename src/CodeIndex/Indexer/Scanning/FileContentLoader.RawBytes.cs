@@ -85,9 +85,12 @@ internal sealed partial class FileContentLoader
                     cancellationToken);
             }
 
+            if (matched)
+                return true;
+
             var modifiedUtc = File.GetLastWriteTimeUtc(ioPath);
-            if (matched || modifiedUtc == modifiedBeforeRead || attempt > 0)
-                return matched;
+            if (modifiedUtc == modifiedBeforeRead || attempt > 0)
+                return false;
         }
     }
 
