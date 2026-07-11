@@ -97,7 +97,7 @@ public class CiWorkflowTests
             "-Framework \"${{ matrix.test-framework }}\"",
             "id: test",
             "steps.test.outputs.summarize == 'true' || failure()",
-            "run: dotnet run --project tools/CodeIndex.TestTelemetry --configuration Release -- summarize",
+            "run: dotnet run --project tools/CodeIndex.TestTelemetry --configuration Release --no-build --no-restore -- summarize",
             "TestResults/**/*.trx",
             "TestResults/**/*.txt",
             "TestResults/**/*.xml",
@@ -111,7 +111,6 @@ public class CiWorkflowTests
             "- name: Upload build artifact\n        if: matrix.primary_lane");
         AssertDoesNotContainAny(
             workflow,
-            "tools/CodeIndex.TestTelemetry --configuration Release --no-build",
             "TestResults/**/*Sequence*.xml",
             "if: matrix.os == 'ubuntu-24.04' && matrix.test-framework == 'net8.0'",
             "always() && matrix.os == 'ubuntu-24.04' && matrix.test-framework == 'net8.0'",
