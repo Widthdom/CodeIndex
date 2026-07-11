@@ -461,4 +461,318 @@ public static partial class SymbolExtractor
         propertyEndColumn = probe - 1;
         return propertyName.Length > 0;
     }
+
+    private static void ExtractJavaScriptTypeScriptCommonJsDefinePropertiesExports(
+        long fileId,
+        string lang,
+        string[] rawLines,
+        string[] sanitizedLines,
+        List<SymbolRecord> symbols,
+        JavaScriptScopePrivacyFlags[][] privateScopeColumns)
+    {
+        for (int i = 0; i < sanitizedLines.Length; i++)
+        {
+            var sanitizedLine = sanitizedLines[i];
+            var statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, 0);
+            while (statementStart >= 0)
+            {
+                if (!TryReadJavaScriptTypeScriptCommonJsDefinePropertiesExportObject(
+                        rawLines,
+                        sanitizedLines,
+                        i,
+                        statementStart,
+                        lang,
+                        out var objectColumn,
+                        out var descriptorObjectLineIndex,
+                        out var descriptorObjectColumn,
+                        out var endLineIndex,
+                        out var endColumn,
+                        out var signature))
+                {
+                    statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, statementStart + 1);
+                    continue;
+                }
+
+                if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, i, objectColumn, sanitizedLine, includeBlockScope: false)
+                    || IsJavaScriptTypeScriptMatchInNamespaceScope(privateScopeColumns, i, objectColumn, sanitizedLine))
+                {
+                    statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, statementStart + 1);
+                    continue;
+                }
+
+                ExtractJavaScriptTypeScriptCommonJsExportObjectLiteralKeys(
+                    fileId,
+                    lang,
+                    rawLines,
+                    sanitizedLines,
+                    symbols,
+                    descriptorObjectLineIndex,
+                    descriptorObjectColumn,
+                    signature);
+
+                if (endLineIndex > i)
+                    i = endLineIndex;
+                statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLines[i], endColumn + 1);
+                sanitizedLine = sanitizedLines[i];
+            }
+        }
+    }
+
+    private static bool TryReadJavaScriptTypeScriptCommonJsDefinePropertiesExportObject(
+        string[] rawLines,
+        string[] sanitizedLines,
+        int startLineIndex,
+        int startColumn,
+        string lang,
+        out int objectColumn,
+        out int descriptorObjectLineIndex,
+        out int descriptorObjectColumn,
+        out int endLineIndex,
+        out int endColumn,
+        out string signature)
+    {
+        objectColumn = -1;
+        descriptorObjectLineIndex = -1;
+        descriptorObjectColumn = -1;
+        endLineIndex = -1;
+        endColumn = -1;
+        signature = string.Empty;
+
+        var startLine = sanitizedLines[startLineIndex];
+        objectColumn = SkipWhitespace(startLine, startColumn);
+        const string definePropertiesCall = "Object.defineProperties";
+        if (!startLine.AsSpan(objectColumn).StartsWith(definePropertiesCall, StringComparison.Ordinal))
+            return false;
+
+        var afterCallColumn = objectColumn + definePropertiesCall.Length;
+        if (afterCallColumn < startLine.Length && IsJavaScriptTypeScriptIdentifierPart(startLine[afterCallColumn]))
+            return false;
+
+        var scanEndExclusive = Math.Min(sanitizedLines.Length, startLineIndex + 48);
+        if (!TryFindNextJavaScriptTypeScriptNonWhitespace(
+                sanitizedLines,
+                startLineIndex,
+                afterCallColumn,
+                scanEndExclusive,
+                out var openParenLineIndex,
+                out var openParenColumn)
+            || sanitizedLines[openParenLineIndex][openParenColumn] != '(')
+        {
+            return false;
+        }
+
+        if (!TryFindNextJavaScriptTypeScriptNonWhitespace(
+                sanitizedLines,
+                openParenLineIndex,
+                openParenColumn + 1,
+                scanEndExclusive,
+                out var targetLineIndex,
+                out var targetColumn)
+            || !TryReadJavaScriptTypeScriptCommonJsDefinePropertyTarget(
+                sanitizedLines[targetLineIndex],
+                targetColumn,
+                out var targetEndColumn))
+        {
+            return false;
+        }
+
+        if (!TryFindNextJavaScriptTypeScriptNonWhitespace(
+                sanitizedLines,
+                targetLineIndex,
+                targetEndColumn,
+                scanEndExclusive,
+                out var commaLineIndex,
+                out var commaColumn)
+            || sanitizedLines[commaLineIndex][commaColumn] != ',')
+        {
+            return false;
+        }
+
+        if (!TryFindNextJavaScriptTypeScriptNonWhitespace(
+                sanitizedLines,
+                commaLineIndex,
+                commaColumn + 1,
+                scanEndExclusive,
+                out descriptorObjectLineIndex,
+                out descriptorObjectColumn)
+            || sanitizedLines[descriptorObjectLineIndex][descriptorObjectColumn] != '{')
+        {
+            return false;
+        }
+
+        var (_, bodyStartLine, bodyEndLine) = ResolveRange(rawLines, descriptorObjectLineIndex, BodyStyle.Brace, lang, descriptorObjectColumn);
+        if (bodyStartLine == null || bodyEndLine == null)
+            return false;
+
+        if (!TryFindJavaScriptTypeScriptDynamicImportCloseParen(
+                sanitizedLines,
+                openParenLineIndex,
+                openParenColumn,
+                scanEndExclusive,
+                out endLineIndex,
+                out endColumn))
+        {
+            return false;
+        }
+
+        signature = BuildJavaScriptTypeScriptStatementSignature(rawLines, startLineIndex, objectColumn, endLineIndex, endColumn);
+        return true;
+    }
+
+    private static void ExtractJavaScriptTypeScriptCommonJsObjectAssignExports(
+        long fileId,
+        string lang,
+        string[] rawLines,
+        string[] sanitizedLines,
+        List<SymbolRecord> symbols,
+        JavaScriptScopePrivacyFlags[][] privateScopeColumns)
+    {
+        for (int i = 0; i < sanitizedLines.Length; i++)
+        {
+            var sanitizedLine = sanitizedLines[i];
+            var statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, 0);
+            while (statementStart >= 0)
+            {
+                if (!TryReadJavaScriptTypeScriptCommonJsObjectAssignExportObject(
+                        rawLines,
+                        sanitizedLines,
+                        i,
+                        statementStart,
+                        lang,
+                        out var objectColumn,
+                        out var sourceObjectLineIndex,
+                        out var sourceObjectColumn,
+                        out var endLineIndex,
+                        out var endColumn,
+                        out var signature))
+                {
+                    statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, statementStart + 1);
+                    continue;
+                }
+
+                if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, i, objectColumn, sanitizedLine, includeBlockScope: false)
+                    || IsJavaScriptTypeScriptMatchInNamespaceScope(privateScopeColumns, i, objectColumn, sanitizedLine))
+                {
+                    statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, statementStart + 1);
+                    continue;
+                }
+
+                ExtractJavaScriptTypeScriptCommonJsExportObjectLiteralKeys(
+                    fileId,
+                    lang,
+                    rawLines,
+                    sanitizedLines,
+                    symbols,
+                    sourceObjectLineIndex,
+                    sourceObjectColumn,
+                    signature);
+
+                if (endLineIndex > i)
+                    i = endLineIndex;
+                statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLines[i], endColumn + 1);
+                sanitizedLine = sanitizedLines[i];
+            }
+        }
+    }
+
+    private static bool TryReadJavaScriptTypeScriptCommonJsObjectAssignExportObject(
+        string[] rawLines,
+        string[] sanitizedLines,
+        int startLineIndex,
+        int startColumn,
+        string lang,
+        out int objectColumn,
+        out int sourceObjectLineIndex,
+        out int sourceObjectColumn,
+        out int endLineIndex,
+        out int endColumn,
+        out string signature)
+    {
+        objectColumn = -1;
+        sourceObjectLineIndex = -1;
+        sourceObjectColumn = -1;
+        endLineIndex = -1;
+        endColumn = -1;
+        signature = string.Empty;
+
+        var startLine = sanitizedLines[startLineIndex];
+        objectColumn = SkipWhitespace(startLine, startColumn);
+        const string objectAssignCall = "Object.assign";
+        if (!startLine.AsSpan(objectColumn).StartsWith(objectAssignCall, StringComparison.Ordinal))
+            return false;
+
+        var afterCallColumn = objectColumn + objectAssignCall.Length;
+        if (afterCallColumn < startLine.Length && IsJavaScriptTypeScriptIdentifierPart(startLine[afterCallColumn]))
+            return false;
+
+        var scanEndExclusive = Math.Min(sanitizedLines.Length, startLineIndex + 48);
+        if (!TryFindNextJavaScriptTypeScriptNonWhitespace(
+                sanitizedLines,
+                startLineIndex,
+                afterCallColumn,
+                scanEndExclusive,
+                out var openParenLineIndex,
+                out var openParenColumn)
+            || sanitizedLines[openParenLineIndex][openParenColumn] != '(')
+        {
+            return false;
+        }
+
+        if (!TryFindNextJavaScriptTypeScriptNonWhitespace(
+                sanitizedLines,
+                openParenLineIndex,
+                openParenColumn + 1,
+                scanEndExclusive,
+                out var targetLineIndex,
+                out var targetColumn)
+            || !TryReadJavaScriptTypeScriptCommonJsDefinePropertyTarget(
+                sanitizedLines[targetLineIndex],
+                targetColumn,
+                out var targetEndColumn))
+        {
+            return false;
+        }
+
+        if (!TryFindNextJavaScriptTypeScriptNonWhitespace(
+                sanitizedLines,
+                targetLineIndex,
+                targetEndColumn,
+                scanEndExclusive,
+                out var commaLineIndex,
+                out var commaColumn)
+            || sanitizedLines[commaLineIndex][commaColumn] != ',')
+        {
+            return false;
+        }
+
+        if (!TryFindNextJavaScriptTypeScriptNonWhitespace(
+                sanitizedLines,
+                commaLineIndex,
+                commaColumn + 1,
+                scanEndExclusive,
+                out sourceObjectLineIndex,
+                out sourceObjectColumn)
+            || sanitizedLines[sourceObjectLineIndex][sourceObjectColumn] != '{')
+        {
+            return false;
+        }
+
+        var (_, bodyStartLine, bodyEndLine) = ResolveRange(rawLines, sourceObjectLineIndex, BodyStyle.Brace, lang, sourceObjectColumn);
+        if (bodyStartLine == null || bodyEndLine == null)
+            return false;
+
+        if (!TryFindJavaScriptTypeScriptDynamicImportCloseParen(
+                sanitizedLines,
+                openParenLineIndex,
+                openParenColumn,
+                scanEndExclusive,
+                out endLineIndex,
+                out endColumn))
+        {
+            return false;
+        }
+
+        signature = BuildJavaScriptTypeScriptStatementSignature(rawLines, startLineIndex, objectColumn, endLineIndex, endColumn);
+        return true;
+    }
 }
