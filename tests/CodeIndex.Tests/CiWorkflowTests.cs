@@ -150,6 +150,23 @@ public class CiWorkflowTests
     }
 
     [Fact]
+    public void BuildAndCodeqlWorkflows_IgnoreLicenseTextHandledByFocusedPolicyWorkflow()
+    {
+        var dotnetWorkflow = RepositoryTestPaths.ReadNormalizedDotnetWorkflow();
+        var codeqlWorkflow = RepositoryTestPaths.ReadWorkflow("codeql.yml").Replace("\r\n", "\n");
+        var licensePolicyWorkflow = RepositoryTestPaths.ReadWorkflow("license-policy.yml");
+        const string licenseTextIgnoreBlock =
+            "paths-ignore:\n" +
+            "      - '**.md'\n" +
+            "      - 'LICENSE'\n" +
+            "      - 'LICENSES/**'";
+
+        Assert.Equal(2, CountOccurrences(dotnetWorkflow, licenseTextIgnoreBlock));
+        Assert.Equal(2, CountOccurrences(codeqlWorkflow, licenseTextIgnoreBlock));
+        AssertContainsAll(licensePolicyWorkflow, "- 'LICENSE'", "- 'LICENSES/**'");
+    }
+
+    [Fact]
     public void GitHubActionsWorkflows_FollowRunnerArtifactCacheAndContinueOnErrorPolicy()
     {
         var workflows = RepositoryTestPaths.ReadNormalizedWorkflows();
@@ -334,6 +351,19 @@ public class CiWorkflowTests
     {
         foreach (var excluded in excludedValues)
             Assert.DoesNotContain(excluded, text, comparisonType);
+    }
+
+    private static int CountOccurrences(string text, string value)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+
+        return count;
     }
 
     private static IReadOnlyList<(string FileName, string Text)> ReadStepBlocks(
