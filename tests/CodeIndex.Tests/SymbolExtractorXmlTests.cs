@@ -17,7 +17,7 @@ public partial class SymbolExtractorTests
     [Fact]
     public void Extract_XmlBroadXaml_EmitsStructuredDataTruncationDiagnostic_Issue3765()
     {
-        var elements = string.Join('\n', Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 5).Select(index => $"""  <Button x:Name="Button{index}" />"""));
+        var elements = string.Join('\n', Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 1).Select(index => $"""  <Button x:Name="Button{index}" />"""));
         var content = $$"""
             <Window x:Class="App.MainWindow" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
             {{elements}}

@@ -749,14 +749,14 @@ public partial class SymbolExtractorTests
     [Fact]
     public void Extract_Json_CapsBroadObjects_Issue3808()
     {
-        var properties = Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 8)
+        var properties = Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 1)
             .Select(i => $"\"p{i}\": {i}");
         var content = "{" + string.Join(", ", properties) + "}";
 
         var symbols = SymbolExtractor.Extract(1, "json", content);
 
         Assert.Equal(SymbolExtractor.StructuredDataMaxSymbols, symbols.Count);
-        Assert.DoesNotContain(symbols, symbol => symbol.Name == "p" + (SymbolExtractor.StructuredDataMaxSymbols + 7));
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "p" + SymbolExtractor.StructuredDataMaxSymbols);
     }
 
     [Fact]
@@ -882,13 +882,13 @@ public partial class SymbolExtractorTests
     [Fact]
     public void Extract_Yaml_CapsBroadMappings_Issue3808()
     {
-        var content = string.Join('\n', Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 8)
+        var content = string.Join('\n', Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 1)
             .Select(i => $"key{i}: value"));
 
         var symbols = SymbolExtractor.Extract(1, "yaml", content);
 
         Assert.Equal(SymbolExtractor.StructuredDataMaxSymbols, symbols.Count);
-        Assert.DoesNotContain(symbols, symbol => symbol.Name == "key" + (SymbolExtractor.StructuredDataMaxSymbols + 7));
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "key" + SymbolExtractor.StructuredDataMaxSymbols);
     }
 
     [Fact]
