@@ -652,4 +652,115 @@ public static partial class SymbolExtractor
 
         return true;
     }
+
+    private static int FindJavaScriptTypeScriptBalancedGenericListEnd(string text, int startIndex)
+    {
+        if (startIndex < 0
+            || startIndex >= text.Length
+            || text[startIndex] != '<')
+        {
+            return -1;
+        }
+
+        var depth = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        for (int index = startIndex; index < text.Length; index++)
+        {
+            var ch = text[index];
+            switch (ch)
+            {
+                case '<':
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                        depth++;
+                    break;
+                case '>':
+                    if (parenDepth == 0
+                        && bracketDepth == 0
+                        && braceDepth == 0
+                        && depth > 0
+                        && (index == 0 || text[index - 1] != '='))
+                    {
+                        depth--;
+                        if (depth == 0)
+                            return index;
+                    }
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    break;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindJavaScriptTypeScriptBalancedDelimiterEnd(string text, int startIndex, char openChar, char closeChar)
+    {
+        if (startIndex < 0
+            || startIndex >= text.Length
+            || text[startIndex] != openChar)
+        {
+            return -1;
+        }
+
+        var depth = 0;
+        for (int index = startIndex; index < text.Length; index++)
+        {
+            var ch = text[index];
+            if (ch == openChar)
+            {
+                depth++;
+            }
+            else if (ch == closeChar)
+            {
+                depth--;
+                if (depth == 0)
+                    return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int ReadJavaScriptTypeScriptIdentifierLength(string text, int startIndex)
+    {
+        if (startIndex < 0 || startIndex >= text.Length)
+            return 0;
+
+        var first = text[startIndex];
+        if (!(char.IsLetter(first) || first is '_' or '$'))
+            return 0;
+
+        var index = startIndex + 1;
+        while (index < text.Length)
+        {
+            var ch = text[index];
+            if (!(char.IsLetterOrDigit(ch) || ch is '_' or '$'))
+                break;
+
+            index++;
+        }
+
+        return index - startIndex;
+    }
 }
