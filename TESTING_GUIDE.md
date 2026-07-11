@@ -110,6 +110,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Persistent-log rotation tests size existing log fixtures through `FileStream.SetLength(...)` rather than allocating a 1 MiB zero buffer.
 - JSON-depth boundary fixtures use fixed-width character strings instead of `Enumerable.Repeat` pipelines for repeated brackets.
 - CSV entry-cap tests share `TestProjectHelper.RepeatCsvEntry(...)` across index and query parsers so boundary construction stays consistent.
+- Raw FTS operator boundary tests reuse the same joined-entry builder with their grammar-specific separators.
 - Synchronized console-write coverage uses the smallest repeated slow-writer workload that still exercises both concurrent producers; do not scale iteration counts as a stress test.
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
   is a coarse runaway guard for the real `InstallScriptTests.cs` C# extraction fixture. Its wall-clock budget is intentionally broader than a benchmark so slower or noisy CI hosts do not fail the suite for ordinary variance.
@@ -420,6 +421,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - persistent-log rotation test は 1 MiB の zero buffer を割り当てず、`FileStream.SetLength(...)` で既存 log fixture のサイズを設定します。
 - JSON-depth 境界 fixture の繰り返し bracket には、`Enumerable.Repeat` pipeline ではなく固定幅の文字列を使います。
 - CSV entry cap test は index / query parser 間で `TestProjectHelper.RepeatCsvEntry(...)` を共有し、境界 fixture の構築を揃えます。
+- raw FTS operator 境界 test も、grammar 固有の separator を指定して同じ joined-entry builder を再利用します。
 - synchronized console write の coverage は、2 つの concurrent producer を検証できる最小の反復 slow-writer workload を使います。stress test として iteration 数を増やさないでください。
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
   は実ファイル `InstallScriptTests.cs` を C# 抽出に通す coarse な runaway guard です。wall-clock の予算は benchmark より意図的に広く取り、遅い / 混雑した CI host で通常の揺れだけにより suite が失敗しないようにしています。

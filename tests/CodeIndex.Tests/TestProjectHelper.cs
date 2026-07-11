@@ -10,7 +10,10 @@ namespace CodeIndex.Tests;
 internal static class TestProjectHelper
 {
     internal static string RepeatCsvEntry(string value, int count)
-        => string.Join(',', Enumerable.Repeat(value, count));
+        => RepeatJoinedEntry(value, count, ",");
+
+    internal static string RepeatJoinedEntry(string value, int count, string separator)
+        => string.Join(separator, Enumerable.Repeat(value, count));
 
     internal static string CreateTempProject(string prefix)
     {

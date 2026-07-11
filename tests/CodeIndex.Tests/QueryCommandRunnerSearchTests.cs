@@ -7808,7 +7808,7 @@ jobs:
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } }");
-            var query = string.Join(" OR ", Enumerable.Repeat("NEAR(spawn app, 5)", DbReader.MaxRawFtsNearOperators + 1));
+            var query = TestProjectHelper.RepeatJoinedEntry("NEAR(spawn app, 5)", DbReader.MaxRawFtsNearOperators + 1, " OR ");
 
             var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 [query, "--db", dbPath, "--fts", "--count"],
@@ -7833,7 +7833,7 @@ jobs:
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "and or not near");
-            var query = string.Join(" ", Enumerable.Repeat("and", DbReader.MaxRawFtsBooleanOperators + 1));
+            var query = TestProjectHelper.RepeatJoinedEntry("and", DbReader.MaxRawFtsBooleanOperators + 1, " ");
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 [query, "--db", dbPath, "--fts", "--count"],
