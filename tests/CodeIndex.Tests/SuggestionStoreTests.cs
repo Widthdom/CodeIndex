@@ -87,7 +87,7 @@ public class SuggestionStoreTests : IDisposable
     public void LoadAll_OversizedStore_PreservesBackupAndReturnsEmpty()
     {
         var path = Path.Combine(_tempDir, "suggestions-codeindex.json");
-        File.WriteAllBytes(path, Enumerable.Repeat((byte)'x', SuggestionStore.MaxSuggestionStoreBytes + 1).ToArray());
+        CreateOversizedStore(path);
 
         var records = _store.LoadAll();
 
@@ -100,7 +100,7 @@ public class SuggestionStoreTests : IDisposable
     public void LoadByStatus_OversizedStore_PreservesBackupAndReturnsEmpty()
     {
         var path = Path.Combine(_tempDir, "suggestions-codeindex.json");
-        File.WriteAllBytes(path, Enumerable.Repeat((byte)'x', SuggestionStore.MaxSuggestionStoreBytes + 1).ToArray());
+        CreateOversizedStore(path);
 
         var records = _store.LoadByStatus(SuggestionStatus.Draft);
 
@@ -120,6 +120,12 @@ public class SuggestionStoreTests : IDisposable
         Assert.Empty(records);
         Assert.False(File.Exists(path));
         Assert.True(File.Exists(path + ".bak"));
+    }
+
+    private static void CreateOversizedStore(string path)
+    {
+        using var stream = File.Create(path);
+        stream.SetLength(SuggestionStore.MaxSuggestionStoreBytes + 1L);
     }
 
     [Fact]

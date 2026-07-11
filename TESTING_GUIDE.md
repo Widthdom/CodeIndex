@@ -104,6 +104,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   prove warnings were suppressed.
 - Cancellation-only timeout tests use an infinite cancellable delay so the fixture has no unrelated wall-clock completion path.
 - SQL diagnostic truncation tests cross the character cap with a minimal fixed-width suffix instead of constructing thousands of progressively longer `UNION` clauses.
+- Oversized file guards create sparse length-only fixtures when content is irrelevant, avoiding a matching managed byte-array allocation.
 - Synchronized console-write coverage uses the smallest repeated slow-writer workload that still exercises both concurrent producers; do not scale iteration counts as a stress test.
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
   is a coarse runaway guard for the real `InstallScriptTests.cs` C# extraction fixture. Its wall-clock budget is intentionally broader than a benchmark so slower or noisy CI hosts do not fail the suite for ordinary variance.
@@ -408,6 +409,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   は不要です。
 - cancellation だけを検証する timeout test は、fixture に無関係な wall-clock 完了経路を持たせないよう infinite cancellable delay を使います。
 - SQL diagnostic truncation test は、長さが増え続ける数千個の `UNION` 句を組み立てず、最小の固定幅 suffix で文字数 cap を超えます。
+- 内容が契約に無関係な oversized file guard は sparse な length-only fixture を作り、同サイズの managed byte array 割り当てを避けます。
 - synchronized console write の coverage は、2 つの concurrent producer を検証できる最小の反復 slow-writer workload を使います。stress test として iteration 数を増やさないでください。
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
   は実ファイル `InstallScriptTests.cs` を C# 抽出に通す coarse な runaway guard です。wall-clock の予算は benchmark より意図的に広く取り、遅い / 混雑した CI host で通常の揺れだけにより suite が失敗しないようにしています。
