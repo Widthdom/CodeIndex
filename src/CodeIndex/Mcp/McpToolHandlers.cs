@@ -5736,6 +5736,7 @@ public partial class McpServer
                 includeExistingSymbols: !rebuild && !startedWithNoIndexedFiles,
                 canReuseExistingSymbolsWithoutRead: CanReuseCSharpPrepassTargetWithoutRead,
                 isGeneratedCodeExtractionSuppressed: IsGeneratedExtractionSuppressed,
+                parallelism: 1,
                 cancellationToken: requestToken);
         }
         if (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)

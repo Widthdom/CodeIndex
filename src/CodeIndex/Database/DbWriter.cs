@@ -807,7 +807,7 @@ public class DbWriter
             return null;
 
         var hasIssueMetadataColumns = HasIssueMetadataColumns();
-        var isSolutionFile = string.Equals(Path.GetExtension(relativePath), ".sln", StringComparison.OrdinalIgnoreCase);
+        var isSolutionFile = relativePath.AsSpan().EndsWith(".sln", StringComparison.OrdinalIgnoreCase);
         var staleIssuePredicate = hasIssueMetadataColumns
             ? @"
                 AND NOT EXISTS (
@@ -840,14 +840,24 @@ public class DbWriter
                     OR (@checksum IS NULL AND modified = @modified AND (@size IS NULL OR size = @size) AND (@lines IS NULL OR lines = @lines))
                 )
                 {staleIssuePredicate}
-                AND (SELECT COUNT(*) FROM symbols WHERE file_id = files.id) <= @max_symbols
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM symbols
+                    WHERE file_id = files.id
+                    LIMIT 1 OFFSET @max_symbols
+                )
                 AND NOT EXISTS (
                     SELECT 1
                     FROM file_issues
                     WHERE file_id = files.id
                       AND kind = 'symbol_count_exceeded'
                 )
-                AND (SELECT COUNT(*) FROM symbol_references WHERE file_id = files.id) <= @max_references
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM symbol_references
+                    WHERE file_id = files.id
+                    LIMIT 1 OFFSET @max_references
+                )
                 AND NOT EXISTS (
                     SELECT 1
                     FROM file_issues
@@ -988,14 +998,24 @@ public class DbWriter
                 AND f.modified = @modified
                 AND f.size = @size
                 {staleIssuePredicate}
-                AND (SELECT COUNT(*) FROM symbols WHERE file_id = f.id) <= @max_symbols
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM symbols
+                    WHERE file_id = f.id
+                    LIMIT 1 OFFSET @max_symbols
+                )
                 AND NOT EXISTS (
                     SELECT 1
                     FROM file_issues
                     WHERE file_id = f.id
                       AND kind = 'symbol_count_exceeded'
                 )
-                AND (SELECT COUNT(*) FROM symbol_references WHERE file_id = f.id) <= @max_references
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM symbol_references
+                    WHERE file_id = f.id
+                    LIMIT 1 OFFSET @max_references
+                )
                 AND NOT EXISTS (
                     SELECT 1
                     FROM file_issues
@@ -1100,6 +1120,20 @@ public class DbWriter
         try
         {
             return cmd.ExecuteScalar() != null;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+    }
+
+    public int GetIndexedFileCount()
+    {
+        var cmd = RentCommand("SELECT COUNT(*) FROM files", static _ => { });
+        try
+        {
+            var count = Convert.ToInt64(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+            return count >= int.MaxValue ? int.MaxValue : (int)count;
         }
         finally
         {
@@ -2843,22 +2877,19 @@ public class DbWriter
         Action? beforeCommit = null,
         IReadOnlySet<string>? preservedMissingPaths = null)
     {
-        // Collect all paths currently in DB / DB内の全パスを収集
-        var dbPaths = LoadCurrentFilePaths();
-
-        // Identify stale files (no longer on disk) / ディスク上に存在しないファイルを特定
-        var staleIds = new List<long>();
-        foreach (var (id, relativePath) in dbPaths)
+        // Identify stale files (no longer on disk) while streaming the current rows so
+        // large indexes retain only deletion candidates rather than a second full path list.
+        // 現在行を stream し、巨大 index でも全 path の複製ではなく削除候補だけを保持する。
+        var staleIds = CollectCurrentFileIds((_, relativePath) =>
         {
             var absolutePath = Path.Combine(projectRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
             // Wrap with the Windows extended-length prefix before File.Exists so deep monorepo
             // paths (>= 248 chars) are not silently classified as stale and DELETED from the DB.
             // Without this wrap, the FileIndexer walker can index a long path successfully and
             // the next index run will purge it. See LongPath.cs and #1547.
-            if (!File.Exists(LongPath.EnsureWindowsPrefix(absolutePath))
-                && (preservedMissingPaths == null || !preservedMissingPaths.Contains(relativePath)))
-                staleIds.Add(id);
-        }
+            return !File.Exists(LongPath.EnsureWindowsPrefix(absolutePath))
+                && (preservedMissingPaths == null || !preservedMissingPaths.Contains(relativePath));
+        });
 
         if (staleIds.Count == 0)
             return 0;
@@ -2874,12 +2905,7 @@ public class DbWriter
     /// </summary>
     public int PurgeFilesOutsideRetainedSet(IReadOnlySet<string> retainedRelativePaths)
     {
-        var staleIds = new List<long>();
-        foreach (var (id, path) in LoadCurrentFilePaths())
-        {
-            if (!retainedRelativePaths.Contains(path))
-                staleIds.Add(id);
-        }
+        var staleIds = CollectCurrentFileIds((_, path) => !retainedRelativePaths.Contains(path));
 
         return DeleteFilesById(staleIds);
     }
@@ -2905,16 +2931,14 @@ public class DbWriter
         IReadOnlySet<string> listedDirectories,
         IReadOnlySet<string> attributePrunedDirectories)
     {
-        var staleIds = new List<long>();
-        foreach (var (id, path) in LoadCurrentFilePaths())
+        var staleIds = CollectCurrentFileIds((_, path) =>
         {
             if (retainedRelativePaths.Contains(path))
-                continue;
+                return false;
 
-            if (HasListedParentDirectory(path, listedDirectories)
-                || IsUnderAttributePrunedDirectory(path, attributePrunedDirectories))
-                staleIds.Add(id);
-        }
+            return HasListedParentDirectory(path, listedDirectories)
+                || IsUnderAttributePrunedDirectory(path, attributePrunedDirectories);
+        });
 
         if (staleIds.Count == 0)
             return 0;
@@ -2922,16 +2946,20 @@ public class DbWriter
         return DeleteFilesById(staleIds);
     }
 
-    private List<(long id, string path)> LoadCurrentFilePaths()
+    private List<long> CollectCurrentFileIds(Func<long, string, bool> shouldCollect)
     {
         var cmd = RentCommand("SELECT id, path FROM files", static _ => { });
         try
         {
-            var dbPaths = new List<(long id, string path)>();
+            var fileIds = new List<long>();
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
-                dbPaths.Add((reader.GetInt64(0), reader.GetString(1)));
-            return dbPaths;
+            {
+                var id = reader.GetInt64(0);
+                if (shouldCollect(id, reader.GetString(1)))
+                    fileIds.Add(id);
+            }
+            return fileIds;
         }
         finally
         {

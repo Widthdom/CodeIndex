@@ -214,6 +214,37 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void GetActiveCSharpPrepassPath_CompletedCandidateDoesNotClearRemainingWorker()
+    {
+        string?[] activePaths = ["src/Slow.cs", "src/Fast.cs"];
+
+        IndexCommandRunner.SetActiveCSharpPrepassPath(activePaths, 1, null);
+
+        Assert.Equal("src/Slow.cs", IndexCommandRunner.GetActiveCSharpPrepassPath(activePaths));
+    }
+
+    [Fact]
+    public async Task ActiveCSharpPrepassPath_CrossThreadPublishAndClearRemainVisible()
+    {
+        string?[] activePaths = new string?[1];
+        using var published = new ManualResetEventSlim();
+        using var clear = new ManualResetEventSlim();
+        var worker = Task.Run(() =>
+        {
+            IndexCommandRunner.SetActiveCSharpPrepassPath(activePaths, 0, "src/Worker.cs");
+            published.Set();
+            clear.Wait();
+            IndexCommandRunner.SetActiveCSharpPrepassPath(activePaths, 0, null);
+        });
+
+        Assert.True(published.Wait(TimeSpan.FromSeconds(5)));
+        Assert.Equal("src/Worker.cs", IndexCommandRunner.GetActiveCSharpPrepassPath(activePaths));
+        clear.Set();
+        await worker;
+        Assert.Null(IndexCommandRunner.GetActiveCSharpPrepassPath(activePaths));
+    }
+
+    [Fact]
     public void Run_FilesMode_WhenSymbolExtractionStalls_ReportsStallInsteadOfInterrupt()
     {
         var priorTimeout = IndexCommandRunner.IndexExtractionStallTimeoutForTesting;

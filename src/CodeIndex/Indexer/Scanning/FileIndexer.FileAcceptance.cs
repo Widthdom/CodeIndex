@@ -1,4 +1,5 @@
 using CodeIndex.Models;
+using System.Runtime.InteropServices;
 
 namespace CodeIndex.Indexer;
 
@@ -123,7 +124,7 @@ public partial class FileIndexer
 
         if (TryGetFileIdentity(file, out var identity, out var linkCount)
             && linkCount > 1
-            && !scanState.VisitedFileIdentities.Add(identity))
+            && !scanState.RecordFileIdentity(identity))
         {
             var relativeFile = ToRelativePath(file);
             scanState.Errors.Add(new ScanError(
@@ -137,9 +138,11 @@ public partial class FileIndexer
         if (language.Language is { Length: > 0 } acceptedLanguage)
         {
             scanState.FileLanguages[file] = acceptedLanguage;
-            scanState.LanguageCounts[acceptedLanguage] = scanState.LanguageCounts.TryGetValue(acceptedLanguage, out var count)
-                ? count + 1
-                : 1;
+            ref var count = ref CollectionsMarshal.GetValueRefOrAddDefault(
+                scanState.LanguageCounts,
+                acceptedLanguage,
+                out _);
+            count++;
         }
         return true;
     }

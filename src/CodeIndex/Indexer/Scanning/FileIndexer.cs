@@ -33,8 +33,16 @@ public partial class FileIndexer
     private const int MaxProjectMarkerFingerprintFiles = 4096;
     private const int MaxIgnorePatternLength = 512;
     private const int InitialScanFileCapacity = 256;
+    internal const int MaxInitialScanFileCapacity = 1_000_000;
     private const int InitialScanDirectoryCapacity = 64;
+    internal const int MaxInitialScanDirectoryCapacity = 131_072;
     private const int InitialScanLanguageCapacity = 32;
+
+    internal static int ResolveInitialScanFileCapacity(int? capacityHint) =>
+        Math.Clamp(capacityHint ?? InitialScanFileCapacity, InitialScanFileCapacity, MaxInitialScanFileCapacity);
+
+    internal static int ResolveInitialScanDirectoryCapacity(int fileCapacityHint) =>
+        Math.Clamp(fileCapacityHint / 8, InitialScanDirectoryCapacity, MaxInitialScanDirectoryCapacity);
     public const string MaxFileSizeEnvironmentVariable = "CDIDX_MAX_FILE_BYTES";
     // Default maximum file size to index (4 MiB). Larger generated/vendor payloads
     // can still be opted in with --max-file-bytes, but the default path should not
@@ -91,7 +99,6 @@ public partial class FileIndexer
             HashSet<string> listedDirectories,
             HashSet<string> fullyScannedDirectories,
             IReadOnlySet<string> checkpointedDirectories,
-            HashSet<FileIdentity> visitedFileIdentities,
             HashSet<string> visitedDirectories)
         {
             Results = results;
@@ -101,7 +108,6 @@ public partial class FileIndexer
             ListedDirectories = listedDirectories;
             FullyScannedDirectories = fullyScannedDirectories;
             CheckpointedDirectories = checkpointedDirectories;
-            VisitedFileIdentities = visitedFileIdentities;
             VisitedDirectories = visitedDirectories;
         }
 
@@ -118,8 +124,11 @@ public partial class FileIndexer
         public HashSet<string>? AttributePrunedDirectories { get; private set; }
         public HashSet<string>? NestedRepositories { get; private set; }
         public HashSet<string>? DanglingSymlinks { get; private set; }
-        public HashSet<FileIdentity> VisitedFileIdentities { get; }
+        private HashSet<FileIdentity>? VisitedFileIdentities { get; set; }
         public HashSet<string> VisitedDirectories { get; }
+
+        public bool RecordFileIdentity(FileIdentity identity)
+            => (VisitedFileIdentities ??= []).Add(identity);
 
         public void RecordNonIndexablePath(string path)
             => (NonIndexablePaths ??= CreatePathSet()).Add(path);
