@@ -175,8 +175,9 @@ public static partial class IndexCommandRunner
 
     internal static string? GetActiveCSharpPrepassPath(string?[] activePaths)
     {
-        foreach (var path in activePaths)
+        for (var index = 0; index < activePaths.Length; index++)
         {
+            var path = Volatile.Read(ref activePaths[index]);
             if (path != null)
                 return path;
         }
@@ -184,17 +185,21 @@ public static partial class IndexCommandRunner
         return null;
     }
 
-    private readonly record struct ActiveExtractionPhase(string? Path, string? Phase)
+    internal static void SetActiveCSharpPrepassPath(string?[] activePaths, int index, string? path) =>
+        Volatile.Write(ref activePaths[index], path);
+
+    private sealed record ActiveExtractionPhase(string Path, string Phase)
     {
-        public string? Format() => Path == null || Phase == null ? null : FormatIndexPhasePath(Path, Phase);
+        public string Format() => FormatIndexPhasePath(Path, Phase);
     }
 
-    private static IEnumerable<string> FormatActiveExtractionPhases(ActiveExtractionPhase[] phases)
+    private static IEnumerable<string> FormatActiveExtractionPhases(ActiveExtractionPhase?[] phases)
     {
-        foreach (var phase in phases)
+        for (var index = 0; index < phases.Length; index++)
         {
-            if (phase.Format() is { } formatted)
-                yield return formatted;
+            var phase = Volatile.Read(ref phases[index]);
+            if (phase != null)
+                yield return phase.Format();
         }
     }
 
@@ -232,7 +237,7 @@ public static partial class IndexCommandRunner
         TimeSpan timeout,
         long lastProgressTimestamp,
         string? currentFile,
-        ActiveExtractionPhase[] activeExtractionPhases,
+        ActiveExtractionPhase?[] activeExtractionPhases,
         Action cancelStalledWork)
     {
         if (!TryGetFullScanExtractionStallPath(
@@ -1120,7 +1125,7 @@ public static partial class IndexCommandRunner
         var indexedSymbolExtractorLanguages = new HashSet<string>(languageCounts.Count, StringComparer.Ordinal);
         var lastJsonProgressAt = Stopwatch.GetTimestamp();
         string? currentJsonIndexFile = null;
-        ActiveExtractionPhase[] activeExtractionPhases = [];
+        ActiveExtractionPhase?[] activeExtractionPhases = [];
         CancellationTokenSource? jsonHeartbeatCts = null;
         Task? jsonHeartbeatTask = null;
         var extractionParallelism = Math.Max(1, options.Parallelism);
@@ -1388,7 +1393,7 @@ public static partial class IndexCommandRunner
                         csharpPrepassTargets,
                         includeExistingSymbols: !options.Rebuild && !startedWithNoIndexedFiles,
                         canReuseExistingSymbolsWithoutRead: CanReuseCSharpPrepassTargetWithoutRead,
-                        reportCandidateFile: (candidateIndex, path) => activeCSharpWorkspaceFiles[candidateIndex] = path,
+                        reportCandidateFile: (candidateIndex, path) => SetActiveCSharpPrepassPath(activeCSharpWorkspaceFiles, candidateIndex, path),
                         parallelism: extractionParallelism,
                         cancellationToken: cancellationToken);
                 }
@@ -1536,7 +1541,7 @@ public static partial class IndexCommandRunner
 
                 FullScanExtractionWorkStartedForTesting?.Invoke();
                 var extractionWorkerCount = Math.Min(extractionParallelism, extractionWorkItemCount);
-                activeExtractionPhases = new ActiveExtractionPhase[extractionWorkerCount];
+                activeExtractionPhases = new ActiveExtractionPhase?[extractionWorkerCount];
                 var extractionQueueCapacity = parallelizeExtraction
                     ? Math.Max(1, extractionWorkerCount * 2)
                     : 1;
@@ -1568,7 +1573,7 @@ public static partial class IndexCommandRunner
                             var displayRelativePath = target.DisplayRelativePath;
                             try
                             {
-                                activeExtractionPhases[workerIndex] = new(displayRelativePath, "reading");
+                                Volatile.Write(ref activeExtractionPhases[workerIndex], new(displayRelativePath, "reading"));
                                 FullScanFileContentLoadForTesting?.Invoke(displayRelativePath);
                                 var loaded = indexer.BuildLoadedRecordWithRawBytes(
                                     filePath,
@@ -1589,13 +1594,13 @@ public static partial class IndexCommandRunner
                                     : null;
                                 if (parallelizeExtraction)
                                 {
-                                    activeExtractionPhases[workerIndex] = new(record.Path, "chunking");
+                                    Volatile.Write(ref activeExtractionPhases[workerIndex], new(record.Path, "chunking"));
                                     chunks = ChunkSplitter.SplitNormalized(0, content, hasOversizeLine, record.Lines);
                                     if (generatedSuppressionIssue != null)
                                     {
                                         symbols = [];
                                         references = [];
-                                        activeExtractionPhases[workerIndex] = new(record.Path, "validating");
+                                        Volatile.Write(ref activeExtractionPhases[workerIndex], new(record.Path, "validating"));
                                         issues = AppendIssueIfMissing(
                                             FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine, loaded.ConflictMarkerLine),
                                             generatedSuppressionIssue);
@@ -1615,7 +1620,7 @@ public static partial class IndexCommandRunner
                                             extractionCancellationToken);
                                         continue;
                                     }
-                                    activeExtractionPhases[workerIndex] = new(record.Path, "symbols");
+                                    Volatile.Write(ref activeExtractionPhases[workerIndex], new(record.Path, "symbols"));
                                     var symbolExtraction = ExtractSymbolsWithStallTimeout(
                                         0,
                                         record.Lang,
@@ -1623,7 +1628,7 @@ public static partial class IndexCommandRunner
                                         filePath,
                                         projectRoot,
                                         record.Path,
-                                        activeExtractionPhases[workerIndex].Format()!,
+                                        Volatile.Read(ref activeExtractionPhases[workerIndex])!.Format(),
                                         true,
                                         hasOversizeLine,
                                         loaded.ConflictMarkerLine,
@@ -1651,7 +1656,7 @@ public static partial class IndexCommandRunner
                                     }
                                     else
                                     {
-                                        activeExtractionPhases[workerIndex] = new(record.Path, "references");
+                                        Volatile.Write(ref activeExtractionPhases[workerIndex], new(record.Path, "references"));
                                         using var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction");
                                         referenceExtraction = ReferenceExtractor.ExtractDetailedNormalized(
                                             0,
@@ -1667,7 +1672,7 @@ public static partial class IndexCommandRunner
                                         references = referenceExtraction.References;
                                         referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                                     }
-                                    activeExtractionPhases[workerIndex] = new(record.Path, "validating");
+                                    Volatile.Write(ref activeExtractionPhases[workerIndex], new(record.Path, "validating"));
                                     issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine, loaded.ConflictMarkerLine);
                                     if (symbolRegexTimeoutIssue != null)
                                         issues = AppendIssue(issues, symbolRegexTimeoutIssue);
@@ -1684,7 +1689,7 @@ public static partial class IndexCommandRunner
                                 }
                                 else
                                 {
-                                    activeExtractionPhases[workerIndex] = new(record.Path, "validating");
+                                    Volatile.Write(ref activeExtractionPhases[workerIndex], new(record.Path, "validating"));
                                     issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine, loaded.ConflictMarkerLine);
                                 }
                                 extractionResults.Add(
@@ -1758,7 +1763,7 @@ public static partial class IndexCommandRunner
                             }
                             finally
                             {
-                                activeExtractionPhases[workerIndex] = default;
+                                Volatile.Write(ref activeExtractionPhases[workerIndex], null);
                             }
                         }
                     }, cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default))
