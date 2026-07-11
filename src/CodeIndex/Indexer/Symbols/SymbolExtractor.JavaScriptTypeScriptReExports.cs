@@ -1,3 +1,4 @@
+using System.Text;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -390,4 +391,339 @@ public static partial class SymbolExtractor
         startColumnText = -1;
         return false;
     }
+
+    private static string TrimJavaScriptTypeScriptQuotedModuleName(string moduleName)
+    {
+        if (moduleName.Length >= 2
+            && moduleName[0] == moduleName[^1]
+            && (moduleName[0] == '\'' || moduleName[0] == '"'))
+        {
+            return moduleName[1..^1];
+        }
+
+        return moduleName;
+    }
+
+    private static bool TryExtractJavaScriptTypeScriptReExportModuleName(
+        string[] rawLines,
+        string[] sanitizedLines,
+        int startLineIndex,
+        int endLineIndex,
+        int startColumn,
+        bool waitForClosedSpecifierList,
+        out string moduleName)
+    {
+        moduleName = string.Empty;
+        var braceDepth = 0;
+        var sawOpeningBrace = !waitForClosedSpecifierList;
+
+        for (int lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++)
+        {
+            var sanitizedLine = sanitizedLines[lineIndex];
+            var column = lineIndex == startLineIndex ? Math.Max(0, startColumn) : 0;
+            for (; column < sanitizedLine.Length; column++)
+            {
+                var ch = sanitizedLine[column];
+                if (waitForClosedSpecifierList)
+                {
+                    if (ch == '{')
+                    {
+                        braceDepth++;
+                        sawOpeningBrace = true;
+                        continue;
+                    }
+
+                    if (!sawOpeningBrace)
+                        continue;
+
+                    if (ch == '}' && braceDepth > 0)
+                    {
+                        braceDepth--;
+                        continue;
+                    }
+
+                    if (braceDepth > 0)
+                        continue;
+                }
+
+                if (!IsJavaScriptTypeScriptKeywordAt(sanitizedLine, column, "from"))
+                    continue;
+
+                if (!TryFindJavaScriptTypeScriptReExportModuleQuote(rawLines, sanitizedLines, lineIndex, endLineIndex, column + "from".Length, out var quoteLineIndex, out var quoteColumn))
+                    return false;
+
+                var rawLine = rawLines[quoteLineIndex];
+                var quoteChar = rawLine[quoteColumn];
+                var closeQuoteColumn = rawLine.IndexOf(quoteChar, quoteColumn + 1);
+                if (closeQuoteColumn <= quoteColumn)
+                    return false;
+
+                moduleName = TrimJavaScriptTypeScriptQuotedModuleName(rawLine[quoteColumn..(closeQuoteColumn + 1)]);
+                return moduleName.Length > 0;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryFindJavaScriptTypeScriptReExportModuleQuote(
+        string[] rawLines,
+        string[] sanitizedLines,
+        int startLineIndex,
+        int endLineIndex,
+        int startColumn,
+        out int quoteLineIndex,
+        out int quoteColumn)
+    {
+        quoteLineIndex = -1;
+        quoteColumn = -1;
+
+        for (int lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++)
+        {
+            var sanitizedLine = sanitizedLines[lineIndex];
+            var column = lineIndex == startLineIndex ? startColumn : 0;
+            for (; column < sanitizedLine.Length; column++)
+            {
+                var ch = sanitizedLine[column];
+                if (char.IsWhiteSpace(ch))
+                    continue;
+
+                if (ch is '\'' or '"')
+                {
+                    quoteLineIndex = lineIndex;
+                    quoteColumn = column;
+                    return column < rawLines[lineIndex].Length;
+                }
+
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    private static ReadOnlySpan<char> SkipJavaScriptTypeScriptTypeOnlyExportModifier(ReadOnlySpan<char> exportRemainder)
+    {
+        if (IsJavaScriptTypeScriptKeywordAt(exportRemainder, 0, "type"))
+            return exportRemainder["type".Length..].TrimStart();
+
+        return exportRemainder;
+    }
+
+    private static IEnumerable<string> ParseJavaScriptTypeScriptReExportedNames(string specifierList)
+    {
+        foreach (var rawSpecifier in SplitJavaScriptTypeScriptExportSpecifiers(specifierList))
+        {
+            var specifier = rawSpecifier.Trim();
+            if (specifier.Length == 0)
+                continue;
+
+            if (specifier.StartsWith("type ", StringComparison.Ordinal))
+                specifier = TrimJavaScriptTypeScriptStart(specifier, "type ".Length);
+
+            var asIndex = specifier.LastIndexOf(" as ", StringComparison.Ordinal);
+            var exportedName = asIndex >= 0
+                ? specifier[(asIndex + " as ".Length)..].Trim()
+                : specifier;
+            exportedName = NormalizeJavaScriptTypeScriptExportedSpecifierName(exportedName);
+            if (exportedName.Length == 0)
+                continue;
+
+            yield return exportedName;
+        }
+    }
+
+    private static IEnumerable<string> SplitJavaScriptTypeScriptExportSpecifiers(string specifierList)
+    {
+        var start = 0;
+        var quote = '\0';
+        var escapeNext = false;
+
+        for (var index = 0; index < specifierList.Length; index++)
+        {
+            var ch = specifierList[index];
+            if (quote != '\0')
+            {
+                if (escapeNext)
+                {
+                    escapeNext = false;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    escapeNext = true;
+                    continue;
+                }
+
+                if (ch == quote)
+                    quote = '\0';
+
+                continue;
+            }
+
+            if (ch is '\'' or '"')
+            {
+                quote = ch;
+                continue;
+            }
+
+            if (ch == ',')
+            {
+                yield return specifierList[start..index];
+                start = index + 1;
+            }
+        }
+
+        yield return specifierList[start..];
+    }
+
+    private static string StripJavaScriptTypeScriptSpecifierComments(string specifiers)
+    {
+        var builder = new StringBuilder(specifiers.Length);
+        var quote = '\0';
+        var escapeNext = false;
+
+        for (var index = 0; index < specifiers.Length; index++)
+        {
+            var ch = specifiers[index];
+            var next = index + 1 < specifiers.Length ? specifiers[index + 1] : '\0';
+
+            if (quote != '\0')
+            {
+                builder.Append(ch);
+                if (escapeNext)
+                {
+                    escapeNext = false;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    escapeNext = true;
+                    continue;
+                }
+
+                if (ch == quote)
+                    quote = '\0';
+
+                continue;
+            }
+
+            if (ch is '\'' or '"')
+            {
+                quote = ch;
+                builder.Append(ch);
+                continue;
+            }
+
+            if (ch == '/' && next == '/')
+            {
+                index += 2;
+                while (index < specifiers.Length && specifiers[index] != '\n')
+                    index++;
+                if (index < specifiers.Length)
+                    builder.Append('\n');
+                continue;
+            }
+
+            if (ch == '/' && next == '*')
+            {
+                index += 2;
+                while (index + 1 < specifiers.Length && (specifiers[index] != '*' || specifiers[index + 1] != '/'))
+                    index++;
+                if (index + 1 < specifiers.Length)
+                    index++;
+                builder.Append(' ');
+                continue;
+            }
+
+            builder.Append(ch);
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool TryExtractJavaScriptTypeScriptExportSpecifierListFromSignature(string signature, out string specifiers)
+    {
+        specifiers = string.Empty;
+
+        var openBraceIndex = signature.IndexOf('{', StringComparison.Ordinal);
+        if (openBraceIndex < 0)
+            return false;
+
+        var quote = '\0';
+        var escapeNext = false;
+        for (var index = openBraceIndex + 1; index < signature.Length; index++)
+        {
+            var ch = signature[index];
+            if (quote != '\0')
+            {
+                if (escapeNext)
+                {
+                    escapeNext = false;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    escapeNext = true;
+                    continue;
+                }
+
+                if (ch == quote)
+                    quote = '\0';
+
+                continue;
+            }
+
+            if (ch is '\'' or '"')
+            {
+                quote = ch;
+                continue;
+            }
+
+            if (ch == '}')
+            {
+                specifiers = signature[(openBraceIndex + 1)..index];
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsJavaScriptTypeScriptStringLiteralSpecifierName(string specifiers)
+        => specifiers.IndexOf('"', StringComparison.Ordinal) >= 0
+            || specifiers.IndexOf('\'', StringComparison.Ordinal) >= 0;
+
+    private static string NormalizeJavaScriptTypeScriptExportedSpecifierName(string exportedName)
+    {
+        var trimmedName = exportedName.AsSpan().Trim();
+        if (trimmedName.Length < 2 || trimmedName[0] is not ('\'' or '"'))
+            return MaterializeTrimmedJavaScriptTypeScriptSpecifierName(exportedName, trimmedName);
+
+        var quote = trimmedName[0];
+        if (trimmedName[^1] != quote)
+            return MaterializeTrimmedJavaScriptTypeScriptSpecifierName(exportedName, trimmedName);
+
+        var builder = new StringBuilder(Math.Max(0, trimmedName.Length - 2));
+        for (var index = 1; index < trimmedName.Length - 1; index++)
+        {
+            var ch = trimmedName[index];
+            if (ch == '\\' && index + 1 < trimmedName.Length - 1)
+            {
+                builder.Append(trimmedName[index + 1]);
+                index++;
+                continue;
+            }
+
+            builder.Append(ch);
+        }
+
+        return builder.ToString();
+    }
+
+    private static string MaterializeTrimmedJavaScriptTypeScriptSpecifierName(string original, ReadOnlySpan<char> trimmed)
+        => trimmed.Length == original.Length ? original : trimmed.ToString();
 }
