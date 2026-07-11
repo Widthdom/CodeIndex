@@ -1168,7 +1168,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScan_ReportsCheckpointSaveFailureAsWarning()
+    public void Run_FullScan_ReportsCheckpointSaveAndDeleteFailuresAsWarnings()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -1202,38 +1202,8 @@ public partial class IndexCommandRunnerTests
                     warning.GetProperty("file").GetString() == "<scan_checkpoint>"
                     && warning.GetProperty("message").GetString()!.Contains("scan checkpoint save failed", StringComparison.Ordinal)
                     && warning.GetProperty("message").GetString()!.Contains("IOException", StringComparison.Ordinal));
-        }
-        finally
-        {
+
             IndexCommandRunner.WriteScanCheckpointForTesting = null;
-            if (Directory.Exists(secretDir))
-                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-            DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void Run_FullScan_ReportsCheckpointDeleteFailureAsWarning()
-    {
-        if (OperatingSystem.IsWindows())
-            return;
-
-        var projectRoot = CreateTempProject();
-        var secretDir = Path.Combine(projectRoot, "secret");
-        try
-        {
-            RunGit(projectRoot, "init");
-            RunGit(projectRoot, "config", "user.email", "test@example.com");
-            RunGit(projectRoot, "config", "user.name", "Test");
-            Directory.CreateDirectory(secretDir);
-            File.WriteAllText(Path.Combine(secretDir, "a.cs"), "public class A { }\n");
-            RunGit(projectRoot, "add", ".");
-            RunGit(projectRoot, "commit", "-m", "initial");
-
-            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
-            Assert.Equal(CommandExitCodes.Success, initialExitCode);
-
-            SetUnixPermissions(secretDir, UnixFileMode.None);
             var (partialExitCode, partialJson) = RunAndCaptureJson([projectRoot, "--json"]);
             Assert.Equal(CommandExitCodes.Success, partialExitCode);
             Assert.Equal("partial", partialJson.GetProperty("status").GetString());
@@ -1244,12 +1214,12 @@ public partial class IndexCommandRunnerTests
             SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             IndexCommandRunner.DeleteScanCheckpointForTesting = _ => throw new IOException("checkpoint delete denied");
 
-            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+            var (deleteExitCode, deleteJson) = RunAndCaptureJson([projectRoot, "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(CommandExitCodes.Success, deleteExitCode);
+            Assert.Equal("success", deleteJson.GetProperty("status").GetString());
             Assert.Contains(
-                json.GetProperty("warnings").EnumerateArray(),
+                deleteJson.GetProperty("warnings").EnumerateArray(),
                 warning =>
                     warning.GetProperty("file").GetString() == "<scan_checkpoint>"
                     && warning.GetProperty("message").GetString()!.Contains("scan checkpoint delete failed", StringComparison.Ordinal)
@@ -1258,6 +1228,7 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
+            IndexCommandRunner.WriteScanCheckpointForTesting = null;
             IndexCommandRunner.DeleteScanCheckpointForTesting = null;
             if (Directory.Exists(secretDir))
                 SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
