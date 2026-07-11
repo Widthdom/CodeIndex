@@ -224,11 +224,12 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScanAfterHeadChange_DoesNotPreExtractUnchangedFiles()
+    public void Run_FullScanAfterHeadChange_ParallelizesOnlyChangedFiles()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_head_changed_skip_before_extract");
         bool? parallelized = null;
         string? reason = null;
+        int? queueCapacity = null;
         var loadedPaths = new ConcurrentBag<string>();
         var statLookups = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
         try
@@ -256,6 +257,7 @@ public partial class IndexCommandRunnerTests
                         reason = why;
                     };
                     IndexCommandRunner.FullScanFileContentLoadForTesting = path => loadedPaths.Add(path);
+                    IndexCommandRunner.FullScanExtractionQueueCapacityForTesting = capacity => queueCapacity = capacity;
                     IndexedFileStatReuse.LookupForTesting = path => statLookups.AddOrUpdate(path, 1, static (_, count) => count + 1);
 
                     var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
@@ -263,8 +265,9 @@ public partial class IndexCommandRunnerTests
                     Assert.Equal(CommandExitCodes.Success, refreshExitCode);
                     Assert.Equal("success", refreshJson.GetProperty("status").GetString());
                     Assert.True(refreshJson.GetProperty("head_changed").GetBoolean());
-                    Assert.False(parallelized);
-                    Assert.Null(reason);
+                    Assert.True(parallelized);
+                    Assert.Equal("incremental_changes", reason);
+                    Assert.Equal(2, queueCapacity);
                     Assert.Equal(2, refreshJson.GetProperty("summary").GetProperty("files_skipped").GetInt32());
                     Assert.DoesNotContain("app.cs", loadedPaths);
                     Assert.DoesNotContain("app.ts", loadedPaths);
@@ -278,6 +281,7 @@ public partial class IndexCommandRunnerTests
                 {
                     IndexCommandRunner.FullScanExtractionSchedulingForTesting = null;
                     IndexCommandRunner.FullScanFileContentLoadForTesting = null;
+                    IndexCommandRunner.FullScanExtractionQueueCapacityForTesting = null;
                     IndexedFileStatReuse.LookupForTesting = null;
                 }
             }

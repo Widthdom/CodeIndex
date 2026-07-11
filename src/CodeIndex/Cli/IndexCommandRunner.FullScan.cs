@@ -207,7 +207,7 @@ public static partial class IndexCommandRunner
         TimeSpan timeout,
         long lastProgressTimestamp,
         string? currentFile,
-        ConcurrentDictionary<int, string> activeExtractionPhases,
+        string?[] activeExtractionPhases,
         Action cancelStalledWork)
     {
         if (!TryGetFullScanExtractionStallPath(
@@ -216,7 +216,7 @@ public static partial class IndexCommandRunner
                 timeout,
                 lastProgressTimestamp,
                 currentFile,
-                activeExtractionPhases.OrderBy(static kvp => kvp.Key).Select(static kvp => kvp.Value),
+                activeExtractionPhases.OfType<string>(),
                 out var activePath))
         {
             return;
@@ -1083,7 +1083,7 @@ public static partial class IndexCommandRunner
         var indexedSymbolExtractorLanguages = new HashSet<string>(languageCounts.Count, StringComparer.Ordinal);
         var lastJsonProgressAt = Stopwatch.GetTimestamp();
         string? currentJsonIndexFile = null;
-        var activeJsonExtractionPhases = new ConcurrentDictionary<int, string>();
+        string?[] activeExtractionPhases = [];
         CancellationTokenSource? jsonHeartbeatCts = null;
         Task? jsonHeartbeatTask = null;
         var extractionParallelism = Math.Max(1, options.Parallelism);
@@ -1224,7 +1224,7 @@ public static partial class IndexCommandRunner
 
                     var file = GetJsonIndexHeartbeatPath(
                         currentJsonIndexFile,
-                        activeJsonExtractionPhases.OrderBy(static kvp => kvp.Key).Select(static kvp => kvp.Value));
+                        activeExtractionPhases.OfType<string>());
                     var fileSuffix = string.IsNullOrEmpty(file) ? string.Empty : $": {file}";
                     ConsoleUi.TryWriteErrorLine($"cdidx: still indexing {processed:N0}/{files.Count:N0} file(s){fileSuffix}...");
                 }
@@ -1471,11 +1471,14 @@ public static partial class IndexCommandRunner
                 maxSymbolCount: options.MaxSymbolsPerFile + 1,
                 maxReferenceCount: options.MaxReferencesPerFile + 1);
             var hasPostExtractionHooks = postExtractionHooks.Hooks.Count > 0;
-            var parallelizeExtraction = (options.Rebuild || startedWithNoIndexedFiles)
-                && !options.SymbolKindFilter.IsActive
+            var parallelizeExtraction = !options.SymbolKindFilter.IsActive
                 && !hasPostExtractionHooks;
             var parallelizeExtractionReason = parallelizeExtraction
-                ? options.Rebuild ? "rebuild" : "empty_index"
+                ? options.Rebuild
+                    ? "rebuild"
+                    : startedWithNoIndexedFiles
+                        ? "empty_index"
+                        : "incremental_changes"
                 : null;
             FullScanExtractionSchedulingForTesting?.Invoke(
                 parallelizeExtraction,
@@ -1494,19 +1497,23 @@ public static partial class IndexCommandRunner
                 }
 
                 FullScanExtractionWorkStartedForTesting?.Invoke();
+                var extractionWorkerCount = Math.Min(extractionParallelism, extractionWorkItemCount);
+                activeExtractionPhases = new string?[extractionWorkerCount];
                 var extractionQueueCapacity = parallelizeExtraction
-                    ? Math.Max(1, extractionParallelism * 4)
+                    ? Math.Max(1, extractionWorkerCount * 2)
                     : 1;
                 FullScanExtractionQueueCapacityForTesting?.Invoke(extractionQueueCapacity);
                 using var extractionResults = new BlockingCollection<FullScanFileWorkItem>(extractionQueueCapacity);
                 using var extractionStallCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                using var mainSymbolExtractionWorker = new SymbolExtractionWorkerClient(options.MaxFileSizeBytes);
+                using var mainSymbolExtractionWorker = new LazyDisposable<SymbolExtractionWorkerClient>(
+                    () => new SymbolExtractionWorkerClient(options.MaxFileSizeBytes));
                 var extractionCancellationToken = extractionStallCts.Token;
                 var nextExtractionIndex = -1;
-                var workers = Enumerable.Range(0, extractionParallelism)
+                var workers = Enumerable.Range(0, extractionWorkerCount)
                     .Select(workerIndex => Task.Factory.StartNew(() =>
                     {
-                        using var workerSymbolExtractionWorker = new SymbolExtractionWorkerClient(options.MaxFileSizeBytes);
+                        using var workerSymbolExtractionWorker = new LazyDisposable<SymbolExtractionWorkerClient>(
+                            () => new SymbolExtractionWorkerClient(options.MaxFileSizeBytes));
                         while (true)
                         {
                             extractionCancellationToken.ThrowIfCancellationRequested();
@@ -1523,7 +1530,7 @@ public static partial class IndexCommandRunner
                             var displayRelativePath = target.DisplayRelativePath;
                             try
                             {
-                                activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(displayRelativePath, "reading");
+                                activeExtractionPhases[workerIndex] = FormatIndexPhasePath(displayRelativePath, "reading");
                                 FullScanFileContentLoadForTesting?.Invoke(displayRelativePath);
                                 var loaded = indexer.BuildLoadedRecordWithRawBytes(
                                     filePath,
@@ -1544,13 +1551,13 @@ public static partial class IndexCommandRunner
                                     : null;
                                 if (parallelizeExtraction)
                                 {
-                                    activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "chunking");
+                                    activeExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "chunking");
                                     chunks = ChunkSplitter.SplitNormalized(0, content, hasOversizeLine, record.Lines);
                                     if (generatedSuppressionIssue != null)
                                     {
                                         symbols = [];
                                         references = [];
-                                        activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
+                                        activeExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
                                         issues = AppendIssueIfMissing(
                                             FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine, loaded.ConflictMarkerLine),
                                             generatedSuppressionIssue);
@@ -1570,7 +1577,7 @@ public static partial class IndexCommandRunner
                                             extractionCancellationToken);
                                         continue;
                                     }
-                                    activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "symbols");
+                                    activeExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "symbols");
                                     var symbolExtraction = ExtractSymbolsWithStallTimeout(
                                         0,
                                         record.Lang,
@@ -1578,11 +1585,11 @@ public static partial class IndexCommandRunner
                                         filePath,
                                         projectRoot,
                                         record.Path,
-                                        activeJsonExtractionPhases[workerIndex],
+                                        activeExtractionPhases[workerIndex]!,
                                         true,
                                         hasOversizeLine,
                                         loaded.ConflictMarkerLine,
-                                        workerSymbolExtractionWorker,
+                                        workerSymbolExtractionWorker.Value,
                                         extractionCancellationToken);
                                     symbols = symbolExtraction.Symbols;
                                     var symbolRegexTimeoutIssue = symbolExtraction.RegexTimeoutIssue;
@@ -1606,7 +1613,7 @@ public static partial class IndexCommandRunner
                                     }
                                     else
                                     {
-                                        activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "references");
+                                        activeExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "references");
                                         using var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction");
                                         referenceExtraction = ReferenceExtractor.ExtractDetailedNormalized(
                                             0,
@@ -1622,7 +1629,7 @@ public static partial class IndexCommandRunner
                                         references = referenceExtraction.References;
                                         referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                                     }
-                                    activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
+                                    activeExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
                                     issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine, loaded.ConflictMarkerLine);
                                     if (symbolRegexTimeoutIssue != null)
                                         issues = AppendIssue(issues, symbolRegexTimeoutIssue);
@@ -1639,7 +1646,7 @@ public static partial class IndexCommandRunner
                                 }
                                 else
                                 {
-                                    activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
+                                    activeExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
                                     issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine, loaded.ConflictMarkerLine);
                                 }
                                 extractionResults.Add(
@@ -1713,7 +1720,7 @@ public static partial class IndexCommandRunner
                             }
                             finally
                             {
-                                activeJsonExtractionPhases.TryRemove(workerIndex, out _);
+                                activeExtractionPhases[workerIndex] = null;
                             }
                         }
                     }, cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default))
@@ -1741,7 +1748,7 @@ public static partial class IndexCommandRunner
                             extractionStallTimeout,
                             lastExtractionProgressAt,
                             currentJsonIndexFile,
-                            activeJsonExtractionPhases,
+                            activeExtractionPhases,
                             extractionStallCts.Cancel);
                         continue;
                     }
@@ -1939,7 +1946,7 @@ public static partial class IndexCommandRunner
                                 true,
                                 item.HasOversizeLine,
                                 item.ConflictMarkerLine,
-                                mainSymbolExtractionWorker,
+                                mainSymbolExtractionWorker.Value,
                                 cancellationToken)).Symbols
                             : ReassignSymbolFileIds(item.Symbols, fileId);
                         var symbolRegexTimeoutIssue = symbolExtraction?.RegexTimeoutIssue;
