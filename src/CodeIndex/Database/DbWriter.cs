@@ -807,7 +807,7 @@ public class DbWriter
             return null;
 
         var hasIssueMetadataColumns = HasIssueMetadataColumns();
-        var isSolutionFile = string.Equals(Path.GetExtension(relativePath), ".sln", StringComparison.OrdinalIgnoreCase);
+        var isSolutionFile = relativePath.AsSpan().EndsWith(".sln", StringComparison.OrdinalIgnoreCase);
         var staleIssuePredicate = hasIssueMetadataColumns
             ? @"
                 AND NOT EXISTS (
