@@ -178,6 +178,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Prefer small fixtures and explicit assertions over broad snapshot-style checks. The one narrow exception is the `--json` output contract harness (`JsonOutputSnapshotTests`), which pins the full field shape on purpose — see "JSON `--json` output snapshots" below.
 - For cross-language extractor budget tests, exceed the shared boundary by the smallest value that triggers truncation; do not add arbitrary padding independently per language.
 - When repeated expected-value construction obscures a boundary contract such as raw bytes vs canonical content, use a narrowly named local helper instead of duplicating the low-level expression at each assertion.
+- Batch independent file mutations into one `--files` update when a file-indexer test only needs to verify their normalized paths and outcomes after the same initial index.
 - When a test locks a long table of equivalent key/value expectations, keep the table as data and route the repeated lookup/assertion shape through one helper so duplicate rows are visible.
 - When extractor tests repeat the same `SymbolName` / `ReferenceKind` predicate shape across positive and negative reference assertions, use a semantic assertion helper so each call site names only the behavioral differences such as container name/kind, context, line, column, or the excluded symbol set.
 - When a production comment or error string is bilingual, preserve that expectation in tests where it matters.
@@ -500,6 +501,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - 本番コードが `TimeProvider` を受け取れる場合は `ManualTimeProvider` を使い、fixture data の時刻は wall clock ではなく明示的に進めてください。ランダム入力は `TestDeterminism.CreateRandom` を使い、同じ timeline とデータを再実行できるようにします。境界付きポーリング / 最終的な条件成立のアサーションには、ローカルの `Task.Delay` loop や固定 sleep ではなく `TestDeterminism.WaitUntilAsync` または同期版の `WaitUntil` を使い、短い不在・安定性の観測には `AssertConditionRemainsTrue` を使ってください。ワーカーを同じ gate から開始したい場合は `TestDeterminism.RunConcurrentlyAsync` を使ってください。
 - 広いスナップショット風の検証より、小さなフィクスチャと明示的な assertion を優先する。例外は `--json` 出力契約の harness (`JsonOutputSnapshotTests`) で、こちらは意図的にフィールド形状全体を固定します（下記「JSON `--json` 出力 snapshot」参照）。
 - raw bytes と canonical content のような境界契約で期待値生成が重複して読みづらくなる場合は、各 assertion に低レベル式を複製せず、契約名が分かる小さな local helper に寄せてください。
+- file-indexer テストが同じ初回 index 後の normalized path と結果だけを検証する場合は、独立した file mutation を 1 回の `--files` update にまとめてください。
 - 同種の key/value 期待値を長い表で固定するテストでは、期待値をデータとして残し、繰り返しの lookup/assertion 形は helper に通してください。重複行を見つけやすくするためです。
 - extractor テストで `SymbolName` / `ReferenceKind` の同じ predicate 形を positive / negative reference assertion の両方に繰り返す場合は、semantic assertion helper を使い、各 call site には container name/kind、context、line、column、除外 symbol set など挙動差分だけを残してください。
 - 境界を証明するテストでは、その境界をまたぐ最小の fixture を使う。1 ページ、1 chunk、1 cache、1 offset overflow で十分なら、それ以上に synthetic data を増やさない。ただし、より大きいサイズ自体が契約の一部なら例外です。

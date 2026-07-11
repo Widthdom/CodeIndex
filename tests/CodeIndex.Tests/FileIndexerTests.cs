@@ -4288,21 +4288,23 @@ public partial class FileIndexerTests
         using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
         var tempDir = project.Root;
         var nfdPath = "Cafe\u0301.cs";
+        var nfdBinaryPath = "Cafe\u0301Binary.cs";
         var sourcePath = TestProjectHelper.WriteTextFile(tempDir, nfdPath, "class FirstCafe { }\n");
+        var binaryPath = TestProjectHelper.WriteTextFile(tempDir, nfdBinaryPath, "class BinaryCafe { }\n");
 
         var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
         Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([tempDir, "--json", "--quiet"], jsonOptions));
 
         File.WriteAllText(sourcePath, "class UpdatedCafe { }\n");
-        Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([tempDir, "--files", nfdPath, "--json", "--quiet"], jsonOptions));
+        File.WriteAllBytes(binaryPath, [0, 1, 2, 3]);
+        Assert.Equal(
+            CommandExitCodes.Success,
+            IndexCommandRunner.Run([tempDir, "--files", nfdPath, nfdBinaryPath, "--json", "--quiet"], jsonOptions));
 
         var dbPath = Path.Combine(tempDir, ".cdidx", "codeindex.db");
         Assert.Equal("class UpdatedCafe { }", ReadSingleChunkContent(dbPath, "Caf\u00e9.cs"));
-
-        File.WriteAllBytes(sourcePath, [0, 1, 2, 3]);
-        Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([tempDir, "--files", nfdPath, "--json", "--quiet"], jsonOptions));
-        Assert.True(HasIndexedFile(dbPath, "Caf\u00e9.cs"));
-        Assert.True(HasFileIssue(dbPath, "Caf\u00e9.cs", "null_byte"));
+        Assert.True(HasIndexedFile(dbPath, "Caf\u00e9Binary.cs"));
+        Assert.True(HasFileIssue(dbPath, "Caf\u00e9Binary.cs", "null_byte"));
     }
 
     [Fact]
