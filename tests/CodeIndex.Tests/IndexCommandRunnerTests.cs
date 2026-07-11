@@ -1314,8 +1314,8 @@ public partial class IndexCommandRunnerTests
         try
         {
             var depth = IndexCommandRunner.MaxScanCheckpointJsonDepth + 4;
-            var nestedStart = string.Concat(Enumerable.Repeat("[", depth));
-            var nestedEnd = string.Concat(Enumerable.Repeat("]", depth));
+            var nestedStart = new string('[', depth);
+            var nestedEnd = new string(']', depth);
             File.WriteAllText(
                 checkpointPath,
                 $$"""{"Version":1,"GitHead":"abc123","Directories":{{nestedStart}}"src"{{nestedEnd}}}""");

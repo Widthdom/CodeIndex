@@ -777,8 +777,8 @@ public class IndexWatchRunnerTests
     public void FormatHumanSummary_DeepSubRunJson_UsesTerseSummary()
     {
         var depth = IndexWatchRunner.MaxHumanSummaryJsonDepth + 4;
-        var nestedStart = string.Concat(Enumerable.Repeat("[", depth));
-        var nestedEnd = string.Concat(Enumerable.Repeat("]", depth));
+        var nestedStart = new string('[', depth);
+        var nestedEnd = new string(']', depth);
         var deepJson = $$"""{"summary":{"updated":1,"removed":2,"errors":3},"deep":{{nestedStart}}0{{nestedEnd}}}""";
 
         var summary = InvokeFormatHumanSummary(
