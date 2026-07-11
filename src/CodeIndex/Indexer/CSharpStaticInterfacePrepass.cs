@@ -23,8 +23,9 @@ internal static class CSharpStaticInterfacePrepass
         int parallelism = 1,
         CancellationToken cancellationToken = default)
     {
-        var candidates = new List<FileTarget>();
-        var pendingPaths = new HashSet<string>(StringComparer.Ordinal);
+        var targetCount = fileTargets.TryGetNonEnumeratedCount(out var count) ? count : 0;
+        var candidates = new List<FileTarget>(targetCount);
+        var pendingPaths = new HashSet<string>(targetCount, StringComparer.Ordinal);
         foreach (var target in fileTargets)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -62,8 +63,9 @@ internal static class CSharpStaticInterfacePrepass
             CancellationToken = cancellationToken,
             MaxDegreeOfParallelism = Math.Max(1, parallelism),
         };
-        Parallel.For(0, candidates.Count, parallelOptions, candidateIndex =>
-        {
+        if (candidates.Count > 0)
+            Parallel.For(0, candidates.Count, parallelOptions, candidateIndex =>
+            {
             var target = candidates[candidateIndex];
             if (parallelOptions.MaxDegreeOfParallelism == 1)
                 reportCurrentFile?.Invoke(target.DisplayRelativePath);
@@ -99,9 +101,13 @@ internal static class CSharpStaticInterfacePrepass
                     reportCurrentFile?.Invoke(null);
                 reportCandidateFile?.Invoke(candidateIndex, null);
             }
-        });
+            });
 
-        var pendingSymbols = new List<SymbolRecord>();
+        var pendingSymbolCount = 0;
+        foreach (var extracted in extractedByCandidate)
+            pendingSymbolCount += extracted?.Count ?? 0;
+
+        var pendingSymbols = new List<SymbolRecord>(pendingSymbolCount);
         foreach (var extracted in extractedByCandidate)
         {
             if (extracted != null)
