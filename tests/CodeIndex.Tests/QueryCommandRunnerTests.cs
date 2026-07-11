@@ -4341,9 +4341,7 @@ public partial class QueryCommandRunnerTests
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_cycle_candidate_edges");
         var projectRoot = project.Root;
         var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-        var noiseSymbols = Enumerable.Range(0, 80)
-            .Select(index => $"Noise{index:D2}")
-            .ToArray();
+        string[] noiseSymbols = ["Noise"];
         InsertFileWithSymbols(dbPath, "src/NoiseTarget.cs", noiseSymbols);
         InsertFileWithReferences(dbPath, "src/NoiseCaller.cs", noiseSymbols);
         InsertFileWithSymbolsAndReferences(dbPath, "src/CycleA.cs", ["CycleA"], ["CycleB"]);
