@@ -108,6 +108,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Full-scan and scoped-update oversized-file warning tests share `TestProjectHelper.WriteSparseFile(...)` so both execution modes avoid 10 MiB fixture allocations.
 - Oversized ignore-file rejection uses the same sparse helper because the size preflight rejects the file before rule contents matter.
 - Per-line oversize detection uses four short physical lines; hundreds of repetitions add no boundary coverage because the contract is independent per line.
+- Captured-output overflow tests cross the character budget by one character unless a larger excess is itself part of the contract.
 - Suggestion store and archive cap tests share one sparse-file helper instead of allocating arrays at either persisted-size limit.
 - Persistent-log rotation tests size existing log fixtures through `FileStream.SetLength(...)` rather than allocating a 1 MiB zero buffer.
 - JSON-depth boundary fixtures use fixed-width character strings instead of `Enumerable.Repeat` pipelines for repeated brackets.
@@ -421,6 +422,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - full-scan と scoped-update の oversized-file warning test は `TestProjectHelper.WriteSparseFile(...)` を共有し、両方の実行モードで 10 MiB fixture 割り当てを避けます。
 - oversized ignore-file rejection も同じ sparse helper を使います。size preflight が rule 内容を読む前に拒否するためです。
 - per-line oversize detection は 4 本の短い物理行を使います。契約は各行で独立しており、数百回の反復は境界 coverage を増やしません。
+- captured-output overflow test は、より大きな超過量自体が契約でない限り、文字数 budget を 1 文字だけ超えます。
 - suggestion store と archive cap の test は、どちらの persisted-size limit でも array を割り当てず、1 つの sparse-file helper を共有します。
 - persistent-log rotation test は 1 MiB の zero buffer を割り当てず、`FileStream.SetLength(...)` で既存 log fixture のサイズを設定します。
 - JSON-depth 境界 fixture の繰り返し bracket には、`Enumerable.Repeat` pipeline ではなく固定幅の文字列を使います。

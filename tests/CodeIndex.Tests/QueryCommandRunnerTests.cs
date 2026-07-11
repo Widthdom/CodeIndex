@@ -1036,7 +1036,7 @@ public partial class QueryCommandRunnerTests
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_summary_capture_limit");
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
-        var overLimitLine = new string('x', JsonEnvelopeWrapper.MaxCapturedOutputChars + 1024);
+        var overLimitLine = new string('x', JsonEnvelopeWrapper.MaxCapturedOutputChars + 1);
         TestProjectHelper.InsertIndexedFile(dbPath, "docs/huge.txt", "text", overLimitLine);
         var input = """
         ["excerpt","docs/huge.txt","--start","1","--max-line-width","0"]
