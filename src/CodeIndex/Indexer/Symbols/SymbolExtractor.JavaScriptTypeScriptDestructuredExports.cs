@@ -266,4 +266,339 @@ public static partial class SymbolExtractor
 
         return false;
     }
+
+    private static IReadOnlyList<string> ParseJavaScriptTypeScriptDestructuredBindingNames(string pattern)
+    {
+        var names = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        CollectJavaScriptTypeScriptObjectBindingNames(pattern, 0, pattern.Length, names, seen);
+        return names;
+    }
+
+    private static void CollectJavaScriptTypeScriptObjectBindingNames(
+        string text,
+        int start,
+        int end,
+        List<string> names,
+        HashSet<string> seen)
+    {
+        var index = start;
+        while (index < end)
+        {
+            index = SkipJavaScriptTypeScriptDestructuredSeparators(text, index, end);
+            if (index >= end)
+                return;
+
+            if (StartsJavaScriptTypeScriptDestructuredRest(text, index))
+            {
+                index += 3;
+                TryCollectJavaScriptTypeScriptDestructuredIdentifier(text, ref index, end, names, seen);
+                index = SkipJavaScriptTypeScriptDestructuredSegment(text, index, end);
+                continue;
+            }
+
+            var keyStart = index;
+            string? shorthandName = null;
+            if (TryReadJavaScriptTypeScriptDestructuredPropertyKey(text, ref index, end, out var keyName))
+                shorthandName = keyName;
+            else
+                index = SkipJavaScriptTypeScriptDestructuredSegment(text, index + 1, end);
+
+            var afterKey = SkipJavaScriptTypeScriptDestructuredWhitespace(text, index, end);
+            if (afterKey < end && text[afterKey] == ':')
+            {
+                index = SkipJavaScriptTypeScriptDestructuredWhitespace(text, afterKey + 1, end);
+                CollectJavaScriptTypeScriptBindingNamesFromPattern(text, ref index, end, names, seen);
+            }
+            else
+            {
+                if (shorthandName != null)
+                    AddJavaScriptTypeScriptDestructuredBindingName(shorthandName, names, seen);
+                index = SkipJavaScriptTypeScriptDestructuredDefaultValue(text, afterKey, end);
+            }
+
+            if (index == keyStart)
+                index++;
+        }
+    }
+
+    private static void CollectJavaScriptTypeScriptArrayBindingNames(
+        string text,
+        int start,
+        int end,
+        List<string> names,
+        HashSet<string> seen)
+    {
+        var index = start;
+        while (index < end)
+        {
+            index = SkipJavaScriptTypeScriptDestructuredSeparators(text, index, end);
+            if (index >= end)
+                return;
+
+            CollectJavaScriptTypeScriptBindingNamesFromPattern(text, ref index, end, names, seen);
+        }
+    }
+
+    private static void CollectJavaScriptTypeScriptBindingNamesFromPattern(
+        string text,
+        ref int index,
+        int end,
+        List<string> names,
+        HashSet<string> seen)
+    {
+        index = SkipJavaScriptTypeScriptDestructuredWhitespace(text, index, end);
+        if (index >= end)
+            return;
+
+        if (StartsJavaScriptTypeScriptDestructuredRest(text, index))
+        {
+            index += 3;
+            TryCollectJavaScriptTypeScriptDestructuredIdentifier(text, ref index, end, names, seen);
+            index = SkipJavaScriptTypeScriptDestructuredSegment(text, index, end);
+            return;
+        }
+
+        if (text[index] == '{'
+            && TryFindJavaScriptTypeScriptDestructuredBalancedClose(text, index, end, '{', '}', out var objectClose))
+        {
+            CollectJavaScriptTypeScriptObjectBindingNames(text, index + 1, objectClose, names, seen);
+            index = SkipJavaScriptTypeScriptDestructuredDefaultValue(text, objectClose + 1, end);
+            return;
+        }
+
+        if (text[index] == '['
+            && TryFindJavaScriptTypeScriptDestructuredBalancedClose(text, index, end, '[', ']', out var arrayClose))
+        {
+            CollectJavaScriptTypeScriptArrayBindingNames(text, index + 1, arrayClose, names, seen);
+            index = SkipJavaScriptTypeScriptDestructuredDefaultValue(text, arrayClose + 1, end);
+            return;
+        }
+
+        if (TryCollectJavaScriptTypeScriptDestructuredIdentifier(text, ref index, end, names, seen))
+        {
+            index = SkipJavaScriptTypeScriptDestructuredDefaultValue(text, index, end);
+            return;
+        }
+
+        index = SkipJavaScriptTypeScriptDestructuredSegment(text, index + 1, end);
+    }
+
+    private static bool TryReadJavaScriptTypeScriptDestructuredPropertyKey(
+        string text,
+        ref int index,
+        int end,
+        out string? keyName)
+    {
+        keyName = null;
+        index = SkipJavaScriptTypeScriptDestructuredWhitespace(text, index, end);
+        if (index >= end)
+            return false;
+
+        if (IsJavaScriptTypeScriptIdentifierStart(text[index]))
+        {
+            var start = index;
+            index++;
+            while (index < end && IsJavaScriptTypeScriptIdentifierPart(text[index]))
+                index++;
+            keyName = text[start..index];
+            return true;
+        }
+
+        if (text[index] is '\'' or '"' or '`')
+            return TrySkipJavaScriptTypeScriptDestructuredQuotedLiteral(text, ref index, end);
+
+        if (text[index] == '['
+            && TryFindJavaScriptTypeScriptDestructuredBalancedClose(text, index, end, '[', ']', out var close))
+        {
+            index = close + 1;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryCollectJavaScriptTypeScriptDestructuredIdentifier(
+        string text,
+        ref int index,
+        int end,
+        List<string> names,
+        HashSet<string> seen)
+    {
+        index = SkipJavaScriptTypeScriptDestructuredWhitespace(text, index, end);
+        if (index >= end || !IsJavaScriptTypeScriptIdentifierStart(text[index]))
+            return false;
+
+        var start = index;
+        index++;
+        while (index < end && IsJavaScriptTypeScriptIdentifierPart(text[index]))
+            index++;
+
+        AddJavaScriptTypeScriptDestructuredBindingName(text[start..index], names, seen);
+        return true;
+    }
+
+    private static void AddJavaScriptTypeScriptDestructuredBindingName(
+        string name,
+        List<string> names,
+        HashSet<string> seen)
+    {
+        if (name.Length > 0 && seen.Add(name))
+            names.Add(name);
+    }
+
+    private static int SkipJavaScriptTypeScriptDestructuredWhitespace(string text, int index, int end)
+    {
+        while (index < end && char.IsWhiteSpace(text[index]))
+            index++;
+        return index;
+    }
+
+    private static int SkipJavaScriptTypeScriptDestructuredSeparators(string text, int index, int end)
+    {
+        while (index < end && (char.IsWhiteSpace(text[index]) || text[index] == ','))
+            index++;
+        return index;
+    }
+
+    private static bool StartsJavaScriptTypeScriptDestructuredRest(string text, int index) =>
+        index + 2 < text.Length
+        && text[index] == '.'
+        && text[index + 1] == '.'
+        && text[index + 2] == '.';
+
+    private static int SkipJavaScriptTypeScriptDestructuredDefaultValue(string text, int index, int end)
+    {
+        index = SkipJavaScriptTypeScriptDestructuredWhitespace(text, index, end);
+        if (index >= end || text[index] != '=')
+            return index;
+
+        return SkipJavaScriptTypeScriptDestructuredSegment(text, index + 1, end);
+    }
+
+    private static int SkipJavaScriptTypeScriptDestructuredSegment(string text, int index, int end)
+    {
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+
+        while (index < end)
+        {
+            var ch = text[index];
+            if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && ch == ',')
+                return index + 1;
+
+            switch (ch)
+            {
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    break;
+                case '\'':
+                case '"':
+                case '`':
+                    TrySkipJavaScriptTypeScriptDestructuredQuotedLiteral(text, ref index, end);
+                    continue;
+            }
+
+            index++;
+        }
+
+        return index;
+    }
+
+    private static bool TryFindJavaScriptTypeScriptDestructuredBalancedClose(
+        string text,
+        int openIndex,
+        int end,
+        char open,
+        char close,
+        out int closeIndex)
+    {
+        closeIndex = -1;
+        var depth = 0;
+        for (var index = openIndex; index < end; index++)
+        {
+            var ch = text[index];
+            if (ch == open)
+            {
+                depth++;
+                continue;
+            }
+
+            if (ch == close)
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    closeIndex = index;
+                    return true;
+                }
+
+                continue;
+            }
+
+            if (ch is '\'' or '"' or '`')
+            {
+                TrySkipJavaScriptTypeScriptDestructuredQuotedLiteral(text, ref index, end);
+                index--;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TrySkipJavaScriptTypeScriptDestructuredQuotedLiteral(string text, ref int index, int end)
+    {
+        if (index >= end || text[index] is not ('\'' or '"' or '`'))
+            return false;
+
+        var delimiter = text[index];
+        index++;
+        var escapeNext = false;
+        while (index < end)
+        {
+            var ch = text[index];
+            if (escapeNext)
+            {
+                escapeNext = false;
+                index++;
+                continue;
+            }
+
+            if (ch == '\\')
+            {
+                escapeNext = true;
+                index++;
+                continue;
+            }
+
+            if (ch == delimiter)
+            {
+                index++;
+                return true;
+            }
+
+            index++;
+        }
+
+        return false;
+    }
 }
