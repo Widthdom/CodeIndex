@@ -68,41 +68,41 @@ internal static class CSharpStaticInterfacePrepass
         if (candidates.Count > 0)
             Parallel.For(0, candidates.Count, parallelOptions, candidateIndex =>
             {
-            var target = candidates[candidateIndex];
-            if (parallelOptions.MaxDegreeOfParallelism == 1)
-                reportCurrentFile?.Invoke(target.DisplayRelativePath);
-            reportCandidateFile?.Invoke(candidateIndex, target.DisplayRelativePath);
-            try
-            {
-                if (!indexer.RawFileMayContainCSharpStaticInterfaceContract(
-                    target.FilePath,
-                    target.RelativePath,
-                    cancellationToken))
-                    return;
-
-                var content = indexer.LoadNormalizedContentForPrepass(
-                    target.FilePath,
-                    target.RelativePath,
-                    cancellationToken);
-                if (MayContainCSharpStaticInterfaceContract(content))
-                    extractedByCandidate[candidateIndex] = SymbolExtractor.Extract(
-                        0,
-                        "csharp",
-                        content,
-                        target.IndexPath,
-                        cancellationToken: cancellationToken);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
-            {
-                // The real indexing pass reports file failures; this pre-pass only supplies
-                // workspace symbols for cross-file static interface member matching.
-            }
-            finally
-            {
+                var target = candidates[candidateIndex];
                 if (parallelOptions.MaxDegreeOfParallelism == 1)
-                    reportCurrentFile?.Invoke(null);
-                reportCandidateFile?.Invoke(candidateIndex, null);
-            }
+                    reportCurrentFile?.Invoke(target.DisplayRelativePath);
+                reportCandidateFile?.Invoke(candidateIndex, target.DisplayRelativePath);
+                try
+                {
+                    if (!indexer.RawFileMayContainCSharpStaticInterfaceContract(
+                        target.FilePath,
+                        target.RelativePath,
+                        cancellationToken))
+                        return;
+
+                    var content = indexer.LoadNormalizedContentForPrepass(
+                        target.FilePath,
+                        target.RelativePath,
+                        cancellationToken);
+                    if (MayContainCSharpStaticInterfaceContract(content))
+                        extractedByCandidate[candidateIndex] = SymbolExtractor.Extract(
+                            0,
+                            "csharp",
+                            content,
+                            target.IndexPath,
+                            cancellationToken: cancellationToken);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+                {
+                    // The real indexing pass reports file failures; this pre-pass only supplies
+                    // workspace symbols for cross-file static interface member matching.
+                }
+                finally
+                {
+                    if (parallelOptions.MaxDegreeOfParallelism == 1)
+                        reportCurrentFile?.Invoke(null);
+                    reportCandidateFile?.Invoke(candidateIndex, null);
+                }
             });
 
         var pendingSymbolCount = 0;
