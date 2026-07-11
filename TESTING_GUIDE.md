@@ -95,6 +95,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   tasks are awaited directly and do not need a post-cancellation fixed sleep to
   prove warnings were suppressed.
 - Cancellation-only timeout tests use an infinite cancellable delay so the fixture has no unrelated wall-clock completion path.
+- Synchronized console-write coverage uses the smallest repeated slow-writer workload that still exercises both concurrent producers; do not scale iteration counts as a stress test.
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
   is a coarse runaway guard for the real `InstallScriptTests.cs` C# extraction fixture. Its wall-clock budget is intentionally broader than a benchmark so slower or noisy CI hosts do not fail the suite for ordinary variance.
 - `SymbolExtractorTests.Extract_JavaScriptLargeExportedObjectLiteralProperties_CompletesWithinPracticalBudget` and `Extract_CSharp_ReferenceExtractorFixture_CompletesWithinPracticalBudget`
@@ -389,6 +390,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   task は直接 await し、warning が抑止されたことを示すための cancellation 後の固定 sleep
   は不要です。
 - cancellation だけを検証する timeout test は、fixture に無関係な wall-clock 完了経路を持たせないよう infinite cancellable delay を使います。
+- synchronized console write の coverage は、2 つの concurrent producer を検証できる最小の反復 slow-writer workload を使います。stress test として iteration 数を増やさないでください。
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
   は実ファイル `InstallScriptTests.cs` を C# 抽出に通す coarse な runaway guard です。wall-clock の予算は benchmark より意図的に広く取り、遅い / 混雑した CI host で通常の揺れだけにより suite が失敗しないようにしています。
 - `SymbolExtractorTests.Extract_JavaScriptLargeExportedObjectLiteralProperties_CompletesWithinPracticalBudget` と `Extract_CSharp_ReferenceExtractorFixture_CompletesWithinPracticalBudget`

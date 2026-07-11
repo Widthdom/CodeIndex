@@ -557,7 +557,7 @@ public class ConsoleUiTests
         using var capture = ConsoleCapture.Start(output, error: null);
         ConsoleUi.EnsureConsoleWritersSynchronized();
 
-        const int iterations = 40;
+        const int iterations = 8;
         var left = new Thread(() =>
         {
             for (var i = 0; i < iterations; i++)
