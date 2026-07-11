@@ -191,6 +191,7 @@ Use the inventory below before adding or moving a test class:
 - When a response-size algorithm needs a large production ceiling, prefer a narrowly scoped test-only budget override and a small representative payload; restore process-global overrides in `finally` and keep the suite non-parallel.
 - Pagination and suppression fixtures should cross the fetched-window boundary with the fewest additional records needed to distinguish full totals from the returned page.
 - Graph edge-budget tests should seed the minimum symbols needed to create each distinct edge; repeated references between the same file pair do not strengthen a distinct-edge assertion.
+- Ignore-rule fail-closed tests use a restored test-only rule budget so the parser boundary is exercised without generating thousands of irrelevant patterns.
 
 ## Shared Helpers
 
@@ -219,6 +220,7 @@ Prefer the existing helper before writing new setup code.
 - DB maintenance test files may keep thin local helpers such as `InitializeEmptyDb`, `ReleaseSqlitePools`, and `DeleteDbFile` when a class owns standalone `.db` files directly; keep those wrappers delegated to `DbContext`, `SqliteConnection.ClearAllPools()`, and `TestProjectHelper.DeleteFile` so pool-release intent remains explicit.
 - ページングや抑制の fixture は、返却ページと全件集計を区別できる最小限の追加レコードで fetch window の境界を超えてください。
 - グラフの edge budget テストは各 distinct edge を作る最小限のシンボルだけを投入し、同じファイル間の参照を重複させないでください。
+- ignore rule の fail-closed テストは復元可能なテスト専用上限を使い、無関係なパターンを数千件生成せず parser 境界を検証してください。
 - `SqlitePoolCleanup` centralizes the Windows SQLite pool workaround for tests. Tests that own a temporary SQLite file for their whole lifetime can enter an exclusive owner lease and dispose it idempotently before deleting the file, instead of calling `SqliteConnection.ClearAllPools()` directly from `Dispose`.
 - Tests that intentionally call `SqliteConnection.ClearAllPools()`, mutate process-global environment variables, or override the process current directory are grouped into the non-parallel `SQLite pool sensitive` xUnit collection. Add new tests with those hazards to that collection instead of letting them run in parallel with unrelated classes.
 - Tests that mutate process-global environment variables should use `EnvironmentVariableScope.Capture(...)` so the original values are restored from a single disposable cleanup path even if setup or assertions fail.
