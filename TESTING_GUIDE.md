@@ -157,6 +157,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   The `dotnet.yml` matrix test step delegates test argument construction, coverage gating, `TestResults` path ownership for failure-log capture, TestSessionTimeout handling, and single flaky retry classification to this script. Keep workflow YAML limited to matrix/lane parameter wiring, and update `CiWorkflowTests` when changing either the script contract or artifact/summarize gating.
 - `.github/scripts/configure-windows-test-host.ps1`
   The `dotnet.yml` and `release.yml` Windows lanes share TMP/TEMP pinning and Defender exclusion setup here so both workflows keep the same test-host performance assumptions. Update `CiWorkflowTests` when changing this script or its workflow call contract.
+- The `dotnet.yml` SDK setup has one conditional retry for transient SDK download failures. Keep the first attempt marked `continue-on-error` only while the retry is guarded by its failed outcome, so a second failure still fails the job.
 - `DbRecoveryTests.cs`
   Database corruption recovery and graceful degradation behavior. Filesystem setup failures for `cdidx index` (read-only DB files and unwritable DB parent directories) are covered in `IndexCommandRunnerTests.cs` so they exercise the same CLI JSON/stderr boundary users see.
 - `JsonOutputSnapshotTests.cs`, `JsonOutputSnapshotHelper.cs`
@@ -609,6 +610,7 @@ GitHub workflow、`global.json`、ドキュメントなど、checked-in され�
 - テストセットアップ内で repo-local の `user.name` と `user.email` を設定する。
 - fixture リポジトリでは repo-local の commit/tag signing を無効化し、global signing 設定が非対話実行でプロンプトや失敗を起こさないようにする。
 - shell 依存の quoting ではなく、ヘルパーや `ProcessStartInfo.ArgumentList` を使う。
+- `dotnet.yml` の SDK setup は一時的な download 失敗に対して条件付きで 1 回だけ再試行します。2 回目の失敗が job を失敗させるよう、最初の `continue-on-error` と失敗 outcome guard を対で維持してください。
 
 ### DB 系テスト
 
