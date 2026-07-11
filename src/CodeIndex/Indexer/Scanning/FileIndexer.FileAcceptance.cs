@@ -123,7 +123,7 @@ public partial class FileIndexer
 
         if (TryGetFileIdentity(file, out var identity, out var linkCount)
             && linkCount > 1
-            && !scanState.VisitedFileIdentities.Add(identity))
+            && !scanState.RecordFileIdentity(identity))
         {
             var relativeFile = ToRelativePath(file);
             scanState.Errors.Add(new ScanError(

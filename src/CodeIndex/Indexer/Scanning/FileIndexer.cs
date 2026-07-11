@@ -95,7 +95,6 @@ public partial class FileIndexer
             HashSet<string> listedDirectories,
             HashSet<string> fullyScannedDirectories,
             IReadOnlySet<string> checkpointedDirectories,
-            HashSet<FileIdentity> visitedFileIdentities,
             HashSet<string> visitedDirectories)
         {
             Results = results;
@@ -105,7 +104,6 @@ public partial class FileIndexer
             ListedDirectories = listedDirectories;
             FullyScannedDirectories = fullyScannedDirectories;
             CheckpointedDirectories = checkpointedDirectories;
-            VisitedFileIdentities = visitedFileIdentities;
             VisitedDirectories = visitedDirectories;
         }
 
@@ -122,8 +120,11 @@ public partial class FileIndexer
         public HashSet<string>? AttributePrunedDirectories { get; private set; }
         public HashSet<string>? NestedRepositories { get; private set; }
         public HashSet<string>? DanglingSymlinks { get; private set; }
-        public HashSet<FileIdentity> VisitedFileIdentities { get; }
+        private HashSet<FileIdentity>? VisitedFileIdentities { get; set; }
         public HashSet<string> VisitedDirectories { get; }
+
+        public bool RecordFileIdentity(FileIdentity identity)
+            => (VisitedFileIdentities ??= []).Add(identity);
 
         public void RecordNonIndexablePath(string path)
             => (NonIndexablePaths ??= CreatePathSet()).Add(path);

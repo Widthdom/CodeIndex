@@ -28,7 +28,6 @@ public partial class FileIndexer
         IReadOnlySet<string> activeCheckpointedDirectories = checkpointedDirectories is { Count: > 0 }
             ? new HashSet<string>(checkpointedDirectories, StringComparer.Ordinal)
             : EmptyCheckpointedDirectorySet;
-        var visitedFileIdentities = new HashSet<FileIdentity>();
         var visitedDirectories = new HashSet<string>(InitialScanDirectoryCapacity, StringComparer.Ordinal)
         {
             NormalizePathForComparison(_projectRoot),
@@ -41,7 +40,6 @@ public partial class FileIndexer
             listedDirectories,
             fullyScannedDirectories,
             activeCheckpointedDirectories,
-            visitedFileIdentities,
             visitedDirectories);
         errors.AddRange(_submoduleLoadWarnings);
         var fullyScanned = true;
