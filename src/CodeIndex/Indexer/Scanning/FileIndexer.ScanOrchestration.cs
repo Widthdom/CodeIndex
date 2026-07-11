@@ -99,7 +99,7 @@ public partial class FileIndexer
         {
             return fullyScannedDirectories.Count == 0
                 ? EmptyCheckpointedDirectorySet
-                : new HashSet<string>(fullyScannedDirectories, StringComparer.Ordinal);
+                : fullyScannedDirectories;
         }
 
         var result = new HashSet<string>(
