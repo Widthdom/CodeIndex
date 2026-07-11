@@ -5,7 +5,7 @@ public class DbSymbolReaderSqlTests
     [Fact]
     public void HotspotFilteredCandidates_UseExplicitProjection()
     {
-        var source = File.ReadAllText(Path.Combine(GetRepositoryRoot(), "src", "CodeIndex", "Database", "DbSymbolReader.cs"));
+        var source = RepositoryTestPaths.ReadText("src", "CodeIndex", "Database", "DbSymbolReader.cs");
         var filteredBlocks = source.Split("filtered_candidates AS (", StringSplitOptions.None).Skip(1).ToList();
 
         Assert.Equal(2, filteredBlocks.Count);
@@ -26,16 +26,4 @@ public class DbSymbolReaderSqlTests
         }
     }
 
-    private static string GetRepositoryRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null)
-        {
-            if (File.Exists(Path.Combine(dir.FullName, "CodeIndex.sln")) || Directory.Exists(Path.Combine(dir.FullName, "src", "CodeIndex")))
-                return dir.FullName;
-            dir = dir.Parent;
-        }
-
-        throw new InvalidOperationException("Could not locate repository root / リポジトリルートを特定できませんでした");
-    }
 }

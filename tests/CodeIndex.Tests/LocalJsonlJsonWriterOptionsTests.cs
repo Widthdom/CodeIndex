@@ -19,7 +19,7 @@ public class LocalJsonlJsonWriterOptionsTests
     [Fact]
     public void RelaxedEncoderAndHelperStayLimitedToLocalJsonlSinks()
     {
-        var repositoryRoot = FindRepositoryRootForTest();
+        var repositoryRoot = RepositoryTestPaths.Root;
         AssertOnlyAllowedFilesContain(
             repositoryRoot,
             "UnsafeRelaxedJsonEscaping",
@@ -119,20 +119,4 @@ public class LocalJsonlJsonWriterOptionsTests
     private static string NormalizeRelativePath(string path) =>
         path.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
 
-    private static string FindRepositoryRootForTest()
-    {
-        var current = new DirectoryInfo(AppContext.BaseDirectory);
-        while (current is not null)
-        {
-            if (File.Exists(Path.Combine(current.FullName, "CHANGELOG.md")) &&
-                File.Exists(Path.Combine(current.FullName, "CodeIndex.sln")))
-            {
-                return current.FullName;
-            }
-
-            current = current.Parent;
-        }
-
-        throw new InvalidOperationException("Could not locate repository root.");
-    }
 }
