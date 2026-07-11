@@ -87,7 +87,7 @@ public class SuggestionStoreTests : IDisposable
     public void LoadAll_OversizedStore_PreservesBackupAndReturnsEmpty()
     {
         var path = Path.Combine(_tempDir, "suggestions-codeindex.json");
-        CreateOversizedStore(path);
+        CreateSparseFile(path, SuggestionStore.MaxSuggestionStoreBytes + 1L);
 
         var records = _store.LoadAll();
 
@@ -100,7 +100,7 @@ public class SuggestionStoreTests : IDisposable
     public void LoadByStatus_OversizedStore_PreservesBackupAndReturnsEmpty()
     {
         var path = Path.Combine(_tempDir, "suggestions-codeindex.json");
-        CreateOversizedStore(path);
+        CreateSparseFile(path, SuggestionStore.MaxSuggestionStoreBytes + 1L);
 
         var records = _store.LoadByStatus(SuggestionStatus.Draft);
 
@@ -122,10 +122,10 @@ public class SuggestionStoreTests : IDisposable
         Assert.True(File.Exists(path + ".bak"));
     }
 
-    private static void CreateOversizedStore(string path)
+    private static void CreateSparseFile(string path, long length)
     {
         using var stream = File.Create(path);
-        stream.SetLength(SuggestionStore.MaxSuggestionStoreBytes + 1L);
+        stream.SetLength(length);
     }
 
     [Fact]
@@ -1162,7 +1162,7 @@ public class SuggestionStoreTests : IDisposable
         Assert.True(store.TryAdd(old));
 
         var archivePath = Path.Combine(_tempDir, "suggestions-codeindex.archive.jsonl");
-        File.WriteAllBytes(archivePath, new byte[SuggestionStore.MaxSuggestionArchiveBytes]);
+        CreateSparseFile(archivePath, SuggestionStore.MaxSuggestionArchiveBytes);
 
         clock.SetUtcNow(new DateTimeOffset(2032, 2, 5, 0, 0, 0, TimeSpan.Zero));
         var fresh = MakeRecord("other", null, "Fresh suggestion");
