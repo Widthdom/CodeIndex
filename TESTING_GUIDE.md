@@ -188,6 +188,7 @@ Use the inventory below before adding or moving a test class:
 - `Console.Out` or `Console.Error` replacement: lock `TestConsoleLock.Gate` around the whole capture/swap window.
 - Temporary repositories and files: create them through `TestProjectHelper` when practical, and do not depend on user-level git config.
 - Long-running or performance-oriented tests: keep them skipped by default or give them broad deterministic budgets; if CI reports them in xUnit long-running diagnostics, first check runner load before tightening thresholds.
+- When a response-size algorithm needs a large production ceiling, prefer a narrowly scoped test-only budget override and a small representative payload; restore process-global overrides in `finally` and keep the suite non-parallel.
 
 ## Shared Helpers
 
@@ -613,6 +614,7 @@ GitHub workflow、`global.json`、ドキュメントなど、checked-in され�
 ## クロスプラットフォームのルール
 
 - Windows、macOS、Linux すべてで成立するよう `Path.Combine` と相対パスを使う。
+- 応答サイズ処理の本番上限が大きい場合は、限定的なテスト専用上限と小さな代表データを使い、process-global な上書きは `finally` で復元して non-parallel suite に置いてください。
 - 改行自体が論点でない場合は、改行依存のフィクスチャを正規化して扱う。
 - Windows では SQLite 接続やファイル属性の影響で削除が遅れることがあるため、後片付けを甘く見ない。
 - shell ツール、パス区切り、プロセス挙動が各 OS で同じとは仮定しない。

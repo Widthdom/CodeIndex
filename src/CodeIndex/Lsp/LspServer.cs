@@ -35,6 +35,7 @@ internal sealed class LspServer : IDisposable
     internal const int MaxDocumentSymbolMaterialization = MaxDocumentSymbols;
     internal const int MaxDocumentSymbolDetailChars = 512;
     internal const int MaxDocumentSymbolResponseBytes = 512 * 1024;
+    internal static int? DocumentSymbolResponseBytesForTesting { get; set; }
     internal const int MaxPositionLineChars = 16 * 1024;
     internal const int MaxCompletionItems = 100;
     internal const int MaxCodeLensItems = 200;
@@ -969,8 +970,9 @@ internal sealed class LspServer : IDisposable
 
     private void TrimDocumentSymbolsToBudget(JsonArray roots)
     {
+        var responseBudget = DocumentSymbolResponseBytesForTesting ?? MaxDocumentSymbolResponseBytes;
         var responseBytes = MeasureJsonUtf8Bytes(roots);
-        while (roots.Count > 0 && responseBytes > MaxDocumentSymbolResponseBytes)
+        while (roots.Count > 0 && responseBytes > responseBudget)
         {
             if (!RemoveLastDocumentSymbol(roots, out var removedBytes))
                 break;
