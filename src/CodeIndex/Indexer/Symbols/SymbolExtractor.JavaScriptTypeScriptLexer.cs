@@ -269,4 +269,88 @@ public static partial class SymbolExtractor
 
         return new JavaScriptLexedLine(sanitized is null ? line : new string(sanitized), state);
     }
+
+    private static bool CanStartJavaScriptRegexLiteral(JavaScriptLexState state)
+    {
+        if (state.PreviousTokenKind == JavaScriptPrevTokenKind.None)
+            return true;
+
+        if (state.PreviousTokenKind == JavaScriptPrevTokenKind.Other)
+            return true;
+
+        if (state.PreviousTokenKind == JavaScriptPrevTokenKind.Identifier)
+        {
+            return IsJavaScriptRegexPrefixKeyword(state.PreviousIdentifier);
+        }
+
+        if (state.PreviousTokenKind == JavaScriptPrevTokenKind.CloseParen)
+            return state.RegexAllowedAfterControlFlowParen;
+
+        return false;
+    }
+
+    private static bool IsJavaScriptControlFlowKeyword(string identifier)
+    {
+        return identifier is "if" or "for" or "while" or "switch" or "catch" or "with";
+    }
+
+    private static bool IsJavaScriptRegexPrefixKeyword(string? identifier)
+    {
+        return identifier is
+            "return" or "throw" or "case" or "delete" or "typeof" or "void" or "new" or
+            "in" or "of" or "instanceof" or "yield" or "await" or "else" or "do" or "finally";
+    }
+
+    private static int SkipJavaScriptRegexLiteral(string line, char[] sanitized, int slashIndex)
+    {
+        var i = slashIndex + 1;
+        var inCharacterClass = false;
+
+        while (i < line.Length)
+        {
+            sanitized[i] = ' ';
+            var ch = line[i];
+            if (ch == '\\')
+            {
+                if (i + 1 < line.Length)
+                {
+                    sanitized[i + 1] = ' ';
+                    i += 2;
+                    continue;
+                }
+
+                return i;
+            }
+
+            if (ch == '[')
+            {
+                inCharacterClass = true;
+                i++;
+                continue;
+            }
+
+            if (ch == ']' && inCharacterClass)
+            {
+                inCharacterClass = false;
+                i++;
+                continue;
+            }
+
+            if (ch == '/' && !inCharacterClass)
+            {
+                i++;
+                while (i < line.Length && char.IsLetter(line[i]))
+                {
+                    sanitized[i] = ' ';
+                    i++;
+                }
+
+                return i - 1;
+            }
+
+            i++;
+        }
+
+        return line.Length - 1;
+    }
 }
