@@ -988,14 +988,24 @@ public class DbWriter
                 AND f.modified = @modified
                 AND f.size = @size
                 {staleIssuePredicate}
-                AND (SELECT COUNT(*) FROM symbols WHERE file_id = f.id) <= @max_symbols
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM symbols
+                    WHERE file_id = f.id
+                    LIMIT 1 OFFSET @max_symbols
+                )
                 AND NOT EXISTS (
                     SELECT 1
                     FROM file_issues
                     WHERE file_id = f.id
                       AND kind = 'symbol_count_exceeded'
                 )
-                AND (SELECT COUNT(*) FROM symbol_references WHERE file_id = f.id) <= @max_references
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM symbol_references
+                    WHERE file_id = f.id
+                    LIMIT 1 OFFSET @max_references
+                )
                 AND NOT EXISTS (
                     SELECT 1
                     FROM file_issues
