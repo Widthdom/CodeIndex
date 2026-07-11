@@ -49,7 +49,7 @@ public sealed class OperationTimeoutScopeTests
             CancellationToken.None);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            async () => await Task.Delay(TimeSpan.FromSeconds(5), scope.Token));
+            async () => await Task.Delay(Timeout.InfiniteTimeSpan, scope.Token));
 
         Assert.True(scope.IsTimeoutCancellationRequested);
         Assert.Equal(OperationTimeoutCategories.McpRequest, scope.Category);
@@ -67,7 +67,7 @@ public sealed class OperationTimeoutScopeTests
         cts.Cancel();
         Assert.True(scope.Token.IsCancellationRequested);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            async () => await Task.Delay(TimeSpan.FromSeconds(5), scope.Token));
+            async () => await Task.Delay(Timeout.InfiniteTimeSpan, scope.Token));
 
         Assert.False(scope.IsTimeoutCancellationRequested);
     }

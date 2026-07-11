@@ -387,7 +387,7 @@ public partial class FileIndexerTests
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx-oversize-gitignore");
         var tempDir = project.Root;
-        File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "generated.py\n" + new string('x', 300 * 1024));
+        TestProjectHelper.WriteSparseFile(tempDir, ".gitignore", 300 * 1024);
         File.WriteAllText(Path.Combine(tempDir, "generated.py"), "print('generated')\n");
 
         var result = new FileIndexer(tempDir).ScanFilesDetailed();
@@ -409,13 +409,24 @@ public partial class FileIndexerTests
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx-gitignore-rule-cap");
         var tempDir = project.Root;
-        var rules = Enumerable.Range(0, 4096)
+        const int ruleBudget = 2;
+        FileIndexer.IgnoreRulesPerFileBudgetForTesting = ruleBudget;
+        var rules = Enumerable.Range(0, ruleBudget)
             .Select(i => $"unused{i}.py")
             .Concat(["late.py"]);
         File.WriteAllText(Path.Combine(tempDir, ".gitignore"), string.Join('\n', rules) + "\n");
         File.WriteAllText(Path.Combine(tempDir, "late.py"), "print('late')\n");
 
-        var result = new FileIndexer(tempDir).ScanFilesDetailed();
+        (IReadOnlyList<string> Files, IReadOnlyList<FileIndexer.ScanError> Errors, bool HadErrors) result;
+        try
+        {
+            var scan = new FileIndexer(tempDir).ScanFilesDetailed();
+            result = (scan.Files, scan.Errors, scan.HadErrors);
+        }
+        finally
+        {
+            FileIndexer.IgnoreRulesPerFileBudgetForTesting = null;
+        }
         var files = result.Files
             .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
             .ToList();
@@ -423,9 +434,9 @@ public partial class FileIndexerTests
         Assert.Empty(files);
         Assert.Contains(
             result.Errors,
-            error => error.Path == ".gitignore:4097"
+            error => error.Path == ".gitignore:3"
                 && error.Severity == FileIndexer.ScanIssueSeverity.Error
-                && error.Message.Contains("4096 rules", StringComparison.OrdinalIgnoreCase));
+                && error.Message.Contains("2 rules", StringComparison.OrdinalIgnoreCase));
         Assert.True(result.HadErrors);
     }
 

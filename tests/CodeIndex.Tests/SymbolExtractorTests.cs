@@ -308,7 +308,7 @@ public partial class SymbolExtractorTests
     [Fact]
     public void Extract_JsonBroadObject_EmitsStructuredDataTruncationDiagnostic_Issue3765()
     {
-        var properties = string.Join(",\n", Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 5).Select(index => $"  \"p{index}\": {index}"));
+        var properties = string.Join(",\n", Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 1).Select(index => $"  \"p{index}\": {index}"));
         var content = "{\n" + properties + "\n}";
 
         var symbols = SymbolExtractor.Extract(1, "json", content);
@@ -335,7 +335,7 @@ public partial class SymbolExtractorTests
     [Fact]
     public void Extract_YamlBroadMapping_EmitsStructuredDataTruncationDiagnostic_Issue3765()
     {
-        var content = string.Join('\n', Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 5).Select(index => $"p{index}: {index}"));
+        var content = string.Join('\n', Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 1).Select(index => $"p{index}: {index}"));
 
         var symbols = SymbolExtractor.Extract(1, "yaml", content);
 
@@ -749,14 +749,14 @@ public partial class SymbolExtractorTests
     [Fact]
     public void Extract_Json_CapsBroadObjects_Issue3808()
     {
-        var properties = Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 8)
+        var properties = Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 1)
             .Select(i => $"\"p{i}\": {i}");
         var content = "{" + string.Join(", ", properties) + "}";
 
         var symbols = SymbolExtractor.Extract(1, "json", content);
 
         Assert.Equal(SymbolExtractor.StructuredDataMaxSymbols, symbols.Count);
-        Assert.DoesNotContain(symbols, symbol => symbol.Name == "p" + (SymbolExtractor.StructuredDataMaxSymbols + 7));
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "p" + SymbolExtractor.StructuredDataMaxSymbols);
     }
 
     [Fact]
@@ -882,13 +882,13 @@ public partial class SymbolExtractorTests
     [Fact]
     public void Extract_Yaml_CapsBroadMappings_Issue3808()
     {
-        var content = string.Join('\n', Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 8)
+        var content = string.Join('\n', Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 1)
             .Select(i => $"key{i}: value"));
 
         var symbols = SymbolExtractor.Extract(1, "yaml", content);
 
         Assert.Equal(SymbolExtractor.StructuredDataMaxSymbols, symbols.Count);
-        Assert.DoesNotContain(symbols, symbol => symbol.Name == "key" + (SymbolExtractor.StructuredDataMaxSymbols + 7));
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "key" + SymbolExtractor.StructuredDataMaxSymbols);
     }
 
     [Fact]
@@ -13936,17 +13936,7 @@ public partial class SymbolExtractorTests
 
 
     private static string GetRepositoryRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null)
-        {
-            if (File.Exists(Path.Combine(dir.FullName, "CodeIndex.sln")))
-                return dir.FullName;
-            dir = dir.Parent;
-        }
-
-        throw new InvalidOperationException("Could not locate repository root / リポジトリルートを特定できませんでした");
-    }
+        => RepositoryTestPaths.Root;
     [Fact]
     public void Extract_Shell_DetectsMultipleAliases()
     {

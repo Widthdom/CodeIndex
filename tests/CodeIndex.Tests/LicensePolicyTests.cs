@@ -55,7 +55,7 @@ public class LicensePolicyTests
     [Fact]
     public void LicenseFile_UsesFslWithFutureApacheLicenseNotice()
     {
-        var license = File.ReadAllText(Path.Combine(GetRepositoryRoot(), "LICENSE"));
+        var license = RepositoryTestPaths.ReadText("LICENSE");
 
         Assert.Contains("CodeIndex is source-available under a Fair Source-style license.", license);
         Assert.Contains("Functional Source License, Version 1.1, ALv2 Future License (FSL-1.1-ALv2).", license);
@@ -69,7 +69,7 @@ public class LicensePolicyTests
     [Fact]
     public void NuGetPackage_EmbedsCustomLicenseAndRequiresAcceptance()
     {
-        var project = File.ReadAllText(Path.Combine(GetRepositoryRoot(), "src", "CodeIndex", "CodeIndex.csproj"));
+        var project = RepositoryTestPaths.ReadText("src", "CodeIndex", "CodeIndex.csproj");
 
         Assert.Contains("fair-source", project);
         Assert.Contains("<PackageLicenseFile>LICENSE</PackageLicenseFile>", project);
@@ -87,7 +87,7 @@ public class LicensePolicyTests
     [Fact]
     public void Readme_AdvertisesFairSourceLicenseInBothLanguageSections()
     {
-        var readme = File.ReadAllText(Path.Combine(GetRepositoryRoot(), "README.md"));
+        var readme = RepositoryTestPaths.ReadText("README.md");
 
         Assert.Equal(2, CountOccurrences(readme, "License-FSL--1.1--ALv2-orange"));
         Assert.Contains("License and Fair Source Use", readme);
@@ -101,7 +101,7 @@ public class LicensePolicyTests
     [Fact]
     public void ReleaseWorkflow_IsLimitedToCanonicalRepository()
     {
-        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
+        var workflow = RepositoryTestPaths.ReadReleaseWorkflow();
 
         Assert.True(CountOccurrences(workflow, "if: github.repository == 'Widthdom/CodeIndex'") >= 3);
         Assert.Contains("environment: release-production", workflow);
@@ -114,9 +114,8 @@ public class LicensePolicyTests
     [Fact]
     public void TrademarkAndCommercialPolicies_BlockCompetingDerivativeBranding()
     {
-        var root = GetRepositoryRoot();
-        var commercial = File.ReadAllText(Path.Combine(root, "COMMERCIAL_LICENSE.md"));
-        var trademarks = File.ReadAllText(Path.Combine(root, "TRADEMARKS.md"));
+        var commercial = RepositoryTestPaths.ReadText("COMMERCIAL_LICENSE.md");
+        var trademarks = RepositoryTestPaths.ReadText("TRADEMARKS.md");
 
         Assert.Contains("Allowed Without a Separate Agreement", commercial);
         Assert.Contains("commercial product or service", commercial);
@@ -129,16 +128,15 @@ public class LicensePolicyTests
     [Fact]
     public void LicenseDistributionSurfacesStayAligned_Issue4172()
     {
-        var root = GetRepositoryRoot();
-        var project = ReadRepositoryFile(root, "src/CodeIndex/CodeIndex.csproj");
-        var installer = ReadRepositoryFile(root, "install_modules/20-installer.sh");
-        var uninstaller = ReadRepositoryFile(root, "install_modules/40-uninstall.sh");
-        var releaseWorkflow = ReadRepositoryFile(root, ".github/workflows/release.yml");
-        var policyWorkflow = ReadRepositoryFile(root, ".github/workflows/license-policy.yml");
-        var readme = ReadRepositoryFile(root, "README.md");
-        var userGuide = ReadRepositoryFile(root, "USER_GUIDE.md");
-        var distribution = ReadRepositoryFile(root, "DISTRIBUTION.md");
-        var nugetReadme = ReadRepositoryFile(root, "docs/NUGET_README.md");
+        var project = RepositoryTestPaths.ReadText("src", "CodeIndex", "CodeIndex.csproj");
+        var installer = RepositoryTestPaths.ReadText("install_modules", "20-installer.sh");
+        var uninstaller = RepositoryTestPaths.ReadText("install_modules", "40-uninstall.sh");
+        var releaseWorkflow = RepositoryTestPaths.ReadReleaseWorkflow();
+        var policyWorkflow = RepositoryTestPaths.ReadWorkflow("license-policy.yml");
+        var readme = RepositoryTestPaths.ReadText("README.md");
+        var userGuide = RepositoryTestPaths.ReadText("USER_GUIDE.md");
+        var distribution = RepositoryTestPaths.ReadText("DISTRIBUTION.md");
+        var nugetReadme = RepositoryTestPaths.ReadText("docs", "NUGET_README.md");
 
         foreach (var legalNoticeFile in CanonicalLegalNoticeFiles)
         {
@@ -174,7 +172,10 @@ public class LicensePolicyTests
         Assert.Contains("actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0", policyWorkflow);
         Assert.Contains("8.0.413", policyWorkflow);
         Assert.Contains("9.0.301", policyWorkflow);
-        Assert.Contains("dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework net8.0 --filter FullyQualifiedName~LicensePolicyTests --nologo", policyWorkflow);
+        Assert.Contains("cache: true", policyWorkflow);
+        Assert.Contains("cache-dependency-path: '**/packages.lock.json'", policyWorkflow);
+        Assert.Contains("dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=net8.0 --locked-mode", policyWorkflow);
+        Assert.Contains("dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework net8.0 --filter FullyQualifiedName~LicensePolicyTests --no-restore --nologo", policyWorkflow);
 
         AssertContainsAll(readme, new[]
         {
@@ -214,27 +215,4 @@ public class LicensePolicyTests
             Assert.Contains(needle, haystack);
     }
 
-    private static string ReadRepositoryFile(string root, string relativePath)
-        => File.ReadAllText(GetRepositoryPath(root, relativePath));
-
-    private static string GetRepositoryPath(string root, string relativePath)
-    {
-        var path = root;
-        foreach (var part in relativePath.Split('/'))
-            path = Path.Combine(path, part);
-        return path;
-    }
-
-    private static string GetRepositoryRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null)
-        {
-            if (File.Exists(Path.Combine(dir.FullName, "CodeIndex.sln")) || Directory.Exists(Path.Combine(dir.FullName, "src", "CodeIndex")))
-                return dir.FullName;
-            dir = dir.Parent;
-        }
-
-        throw new InvalidOperationException("Could not locate repository root / リポジトリルートを特定できませんでした");
-    }
 }

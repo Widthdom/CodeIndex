@@ -26,7 +26,7 @@ public partial class QueryCommandRunnerTests
     [InlineData("--exclude-visibility")]
     public void ParseArgs_VisibilityFiltersRejectTooManyCsvEntries_Issue2912(string optionName)
     {
-        var tooMany = string.Join(',', Enumerable.Repeat("public", QueryCommandRunner.MaxVisibilityFilterCsvEntries + 1));
+        var tooMany = TestProjectHelper.RepeatCsvEntry("public", QueryCommandRunner.MaxVisibilityFilterCsvEntries + 1);
 
         var options = QueryCommandRunner.ParseArgs(
             ["RunSearch", optionName, tooMany],
@@ -56,7 +56,7 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void ParseArgs_StatusCheckScopesRejectsTooManyCsvEntries_Issue2913()
     {
-        var tooMany = string.Join(',', Enumerable.Repeat("workspace", QueryCommandRunner.MaxStatusCheckScopesCsvEntries + 1));
+        var tooMany = TestProjectHelper.RepeatCsvEntry("workspace", QueryCommandRunner.MaxStatusCheckScopesCsvEntries + 1);
 
         var options = QueryCommandRunner.ParseArgs(
             [$"--check={tooMany}"],

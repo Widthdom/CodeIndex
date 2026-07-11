@@ -29,8 +29,10 @@ public partial class FileIndexer
     private const int MaxIgnoreFileBytes = 256 * 1024;
     private const int MaxIgnoreFileLines = 8192;
     private const int MaxIgnoreRulesPerFile = 4096;
+    internal static int? IgnoreRulesPerFileBudgetForTesting { get; set; }
     private const int MaxProjectMarkerFingerprintDirectories = 8192;
     private const int MaxProjectMarkerFingerprintFiles = 4096;
+    internal static int? ProjectMarkerFingerprintDirectoryBudgetForTesting { get; set; }
     private const int MaxIgnorePatternLength = 512;
     private const int InitialScanFileCapacity = 256;
     internal const int MaxInitialScanFileCapacity = 1_000_000;

@@ -29,6 +29,9 @@ Use the full suite by default. Use targeted filters only while iterating locally
 - CI runs the test project through `tests/CodeIndex.Tests/CodeIndex.Tests.runsettings`, enables VSTest blame crash and hang collection, applies a 45-minute session timeout plus 60-second xUnit long-running diagnostics, and reruns the suite once after an initial failure. If the retry passes, CI uploads `TestResults/flaky-retry.txt` with the TRX and blame artifacts so the run is treated as suspect instead of silently trusted. TRX telemetry summaries and test-result artifact uploads run only for failed or pass-on-retry lanes, not for clean first-pass success lanes; streamed test output is also written under `TestResults` only after a failed run needs upload/timeout inspection, and that failure-log directory is created only on the failure path. The telemetry summarizer runs with `--configuration Release` and may build its helper during failure diagnostics so every matrix lane can produce a TRX summary. XPlat Code Coverage collection is limited to the `ubuntu-24.04` / `net8.0` lane so every active CI lane still exercises the full suite without paying collector overhead. OS coverage runs on `net8.0`, the production CLI target, while `net9.0` compatibility coverage runs on `ubuntu-24.04` only. Test execution runs with `--no-build` after locked restore and Release build steps: the primary lane restores the full solution for audit and publish coverage, then builds `tests/CodeIndex.Tests/CodeIndex.Tests.csproj` for the matrix framework; non-primary lanes restore only that test project's matrix framework with `RestoreTargetFrameworks` before the same per-framework build. CI installs both the production `8.0.413` SDK and the pinned `9.0.301` SDK on every lane because `global.json` disables SDK roll-forward before target-framework-specific restore/build filtering can run. `CodeIndex.Tests.runsettings` is the single owner of the `TestResults` output directory; local `dev.sh coverage` follows that same ownership instead of passing a second results-directory argument. The `ubuntu-24.04` / `net8.0` lane no longer builds the test project's unused `net9.0` target; `net9.0` build coverage stays in the Ubuntu compatibility lane. It also uses `make lint` as the single formatting verifier. The NuGet cache key is based on `packages.lock.json` and `global.json` instead of every project file, with an OS-scoped restore key for partial cache reuse; locked restore still catches package-input drift, while test-only project edits no longer evict the package cache. The weekly mutation workflow also caches the pinned Stryker global tool and NuGet packages so scheduled mutation runs avoid reinstalling unchanged test tooling.
 - Keep the CI initial test run and its single retry routed through one workflow helper so logger, blame, and coverage arguments cannot drift. When a PowerShell helper returns the test exit code, keep streamed test output off the function success stream so assignments capture only the numeric exit code.
 - Keep package audit, primary-lane build/lint, coverage collection, coverage artifact upload, publish, and build artifact upload keyed to the matrix `primary_lane` value; define the lane set once with explicit matrix entries instead of recomputing or excluding combinations in later steps.
+- Workflow path filters do not repeat individual Markdown files already covered by `**.md`; keep equivalent push and pull-request filters aligned.
+- The focused license-policy workflow caches NuGet packages, performs a locked `net8.0`-only restore, and runs its filtered tests with `--no-restore` so dependency resolution is not repeated.
+- The C# CodeQL lane uses setup-dotnet's lock-file-keyed NuGet cache; the Actions-only lane skips both SDK setup and package caching.
 
 ## Test Layout
 
@@ -80,6 +83,11 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Reuse that normalized value for all assertions in a test instead of reading or retaining both raw and normalized copies of the same workflow.
   Use `RepositoryTestPaths.ReadNormalizedText(...)` for other checked-in multiline fixtures such as `Dockerfile`; workflow-specific reads should continue through `ReadNormalizedWorkflow(...)`.
   Use `ReadDockerfile()` and `ReadDockerIgnore()` for release-container contract tests so canonical fixture paths do not drift across workflow suites.
+  `RepositoryTestPaths` caches checked-in text, normalized derived text, and normalized workflow inventories for the lifetime of the test process. Keep it for immutable repository contracts only; tests that rewrite fixtures must use their own temporary paths.
+  License-policy contract tests use the same accessor for legal notices, workflow files, and distribution docs instead of rediscovering the repository root and rereading overlapping files.
+  Repository-backed documentation, source-audit, JSONL-policy, and trimmed-publish tests reuse `RepositoryTestPaths.Root` instead of maintaining suite-local upward directory walks.
+  Large command-runner, installer, and extractor suites also delegate their legacy root helpers to that single cached root.
+  Changelog limit tests resolve checked-in files through `RepositoryTestPaths` instead of performing another root walk.
   Whole-workflow policy audits should use `RepositoryTestPaths.ReadNormalizedWorkflows()` so enumeration order, extension filtering, file naming, and normalization are shared instead of being rebuilt inside individual test classes.
   When one policy test checks several step-level rules, parse workflow step blocks once and filter the retained blocks for each rule instead of rerunning the multiline step regex for every assertion family.
 - `IndexCommandRunnerTests.Run_CancelDuringFreshIndex_ReturnsInterruptedJson`, `Run_CancelDuringDryRunScan_ReturnsInterruptedJson`, and `Run_CancelBeforeFreshScan_ReturnsInterruptedJson`
@@ -87,12 +95,26 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - `IndexCommandRunnerTests.SymbolExtractionWorker_LegacyEnvironmentHooksAreIgnored_Issue3398`
   launches the isolated symbol worker to prove legacy worker environment variables are ignored. Its callback budget includes process startup and is intentionally wider than ordinary in-process checks so local process load does not turn the legacy-env regression check into a timeout flake (#3863).
 - `IndexCommandRunnerTests` and `FileIndexerTests` also cover `CSharpStaticInterfacePrepass` text, raw-byte, chunked raw-token, and streaming file contract probes. Keep byte-array, chunked, and file-level probe coverage aligned so the prepass can avoid whole-file allocation without losing UTF-8 / UTF-16 static-interface contract candidates.
+- Project-marker budget integration coverage overrides the directory budget to its smallest boundary and enumerates one child; do not materialize the production 8,192-directory cap merely to prove warning propagation.
 - `IndexWatchRunnerTests.RunCore_CancellationToken_StopsImmediately` and `RunCore_EmitsHumanFriendlyStartStop_WhenJsonDisabled`
-  exercise watch-loop startup and shutdown under redirected console output. These tests wait for the watch start line before cancelling and always cancel/drain the dedicated watch task before restoring `Console.Out` / `Console.Error`; do not replace that synchronization with fixed sleeps because full-suite load can delay the long-running task startup.
+  exercise watch-loop startup and shutdown under redirected console output. They call the asynchronous watch core directly without prebuilding an unused index, cancel after its synchronous startup prefix emits the start event, and use a bounded shutdown wait; do not reintroduce index setup, dedicated threads, signal polling, or fixed sleeps for this path.
 - `BackgroundTaskObserverTests`
   relies on `BackgroundTaskObserver`'s fault-only continuation contract: canceled
   tasks are awaited directly and do not need a post-cancellation fixed sleep to
   prove warnings were suppressed.
+- Cancellation-only timeout tests use an infinite cancellable delay so the fixture has no unrelated wall-clock completion path.
+- SQL diagnostic truncation tests cross the character cap with a minimal fixed-width suffix instead of constructing thousands of progressively longer `UNION` clauses.
+- Oversized file guards create sparse length-only fixtures when content is irrelevant, avoiding a matching managed byte-array allocation.
+- Full-scan and scoped-update oversized-file warning tests share `TestProjectHelper.WriteSparseFile(...)` so both execution modes avoid 10 MiB fixture allocations.
+- Oversized ignore-file rejection uses the same sparse helper because the size preflight rejects the file before rule contents matter.
+- Per-line oversize detection uses four short physical lines; hundreds of repetitions add no boundary coverage because the contract is independent per line.
+- Captured-output overflow tests cross the character budget by one character unless a larger excess is itself part of the contract.
+- Suggestion store and archive cap tests share one sparse-file helper instead of allocating arrays at either persisted-size limit.
+- Persistent-log rotation tests size existing log fixtures through `FileStream.SetLength(...)` rather than allocating a 1 MiB zero buffer.
+- JSON-depth boundary fixtures use fixed-width character strings instead of `Enumerable.Repeat` pipelines for repeated brackets.
+- CSV entry-cap tests share `TestProjectHelper.RepeatCsvEntry(...)` across index and query parsers so boundary construction stays consistent.
+- Raw FTS operator boundary tests reuse the same joined-entry builder with their grammar-specific separators.
+- Synchronized console-write coverage uses the smallest repeated slow-writer workload that still exercises both concurrent producers; do not scale iteration counts as a stress test.
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
   is a coarse runaway guard for the real `InstallScriptTests.cs` C# extraction fixture. Its wall-clock budget is intentionally broader than a benchmark so slower or noisy CI hosts do not fail the suite for ordinary variance.
 - `SymbolExtractorTests.Extract_JavaScriptLargeExportedObjectLiteralProperties_CompletesWithinPracticalBudget` and `Extract_CSharp_ReferenceExtractorFixture_CompletesWithinPracticalBudget`
@@ -135,6 +157,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   The `dotnet.yml` matrix test step delegates test argument construction, coverage gating, `TestResults` path ownership for failure-log capture, TestSessionTimeout handling, and single flaky retry classification to this script. Keep workflow YAML limited to matrix/lane parameter wiring, and update `CiWorkflowTests` when changing either the script contract or artifact/summarize gating.
 - `.github/scripts/configure-windows-test-host.ps1`
   The `dotnet.yml` and `release.yml` Windows lanes share TMP/TEMP pinning and Defender exclusion setup here so both workflows keep the same test-host performance assumptions. Update `CiWorkflowTests` when changing this script or its workflow call contract.
+- The `dotnet.yml` SDK setup has one conditional retry for transient SDK download failures. Keep the first attempt marked `continue-on-error` only while the retry is guarded by its failed outcome, so a second failure still fails the job.
 - `DbRecoveryTests.cs`
   Database corruption recovery and graceful degradation behavior. Filesystem setup failures for `cdidx index` (read-only DB files and unwritable DB parent directories) are covered in `IndexCommandRunnerTests.cs` so they exercise the same CLI JSON/stderr boundary users see.
 - `JsonOutputSnapshotTests.cs`, `JsonOutputSnapshotHelper.cs`
@@ -150,6 +173,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Keep tests deterministic. Do not depend on machine-global git config, locale-specific output, or ambient files.
 - Prefer `ManualTimeProvider` for fake clocks and `TestDeterminism.CreateRandom` for randomized fixture input so repeated test runs replay the same timeline and data. Use `TestDeterminism.WaitUntilAsync` or the synchronous `WaitUntil` for bounded polling/eventual assertions instead of local `Task.Delay` loops or fixed sleeps. Use `AssertConditionRemainsTrue` for short absence/stability observations, and `TestDeterminism.RunConcurrentlyAsync` when a test needs workers to start from the same gate.
 - Prefer small fixtures and explicit assertions over broad snapshot-style checks. The one narrow exception is the `--json` output contract harness (`JsonOutputSnapshotTests`), which pins the full field shape on purpose — see "JSON `--json` output snapshots" below.
+- For cross-language extractor budget tests, exceed the shared boundary by the smallest value that triggers truncation; do not add arbitrary padding independently per language.
 - When repeated expected-value construction obscures a boundary contract such as raw bytes vs canonical content, use a narrowly named local helper instead of duplicating the low-level expression at each assertion.
 - When a test locks a long table of equivalent key/value expectations, keep the table as data and route the repeated lookup/assertion shape through one helper so duplicate rows are visible.
 - When extractor tests repeat the same `SymbolName` / `ReferenceKind` predicate shape across positive and negative reference assertions, use a semantic assertion helper so each call site names only the behavioral differences such as container name/kind, context, line, column, or the excluded symbol set.
@@ -165,6 +189,10 @@ Use the inventory below before adding or moving a test class:
 - `Console.Out` or `Console.Error` replacement: lock `TestConsoleLock.Gate` around the whole capture/swap window.
 - Temporary repositories and files: create them through `TestProjectHelper` when practical, and do not depend on user-level git config.
 - Long-running or performance-oriented tests: keep them skipped by default or give them broad deterministic budgets; if CI reports them in xUnit long-running diagnostics, first check runner load before tightening thresholds.
+- When a response-size algorithm needs a large production ceiling, prefer a narrowly scoped test-only budget override and a small representative payload; restore process-global overrides in `finally` and keep the suite non-parallel.
+- Pagination and suppression fixtures should cross the fetched-window boundary with the fewest additional records needed to distinguish full totals from the returned page.
+- Graph edge-budget tests should seed the minimum symbols needed to create each distinct edge; repeated references between the same file pair do not strengthen a distinct-edge assertion.
+- Ignore-rule fail-closed tests use a restored test-only rule budget so the parser boundary is exercised without generating thousands of irrelevant patterns.
 
 ## Shared Helpers
 
@@ -191,6 +219,9 @@ Prefer the existing helper before writing new setup code.
 - Prefer `DeleteFile(path)` for temp DB, lock, metadata, cache, script, and outside-fixture file cleanup instead of hand-written `File.Exists(...)` / `File.Delete(...)` pairs.
 - When a test class already has a robust file cleanup wrapper that clears SQLite pools, route temporary DB cleanup through that wrapper and keep non-DB sidecars on `TestProjectHelper.DeleteFile`.
 - DB maintenance test files may keep thin local helpers such as `InitializeEmptyDb`, `ReleaseSqlitePools`, and `DeleteDbFile` when a class owns standalone `.db` files directly; keep those wrappers delegated to `DbContext`, `SqliteConnection.ClearAllPools()`, and `TestProjectHelper.DeleteFile` so pool-release intent remains explicit.
+- ページングや抑制の fixture は、返却ページと全件集計を区別できる最小限の追加レコードで fetch window の境界を超えてください。
+- グラフの edge budget テストは各 distinct edge を作る最小限のシンボルだけを投入し、同じファイル間の参照を重複させないでください。
+- ignore rule の fail-closed テストは復元可能なテスト専用上限を使い、無関係なパターンを数千件生成せず parser 境界を検証してください。
 - `SqlitePoolCleanup` centralizes the Windows SQLite pool workaround for tests. Tests that own a temporary SQLite file for their whole lifetime can enter an exclusive owner lease and dispose it idempotently before deleting the file, instead of calling `SqliteConnection.ClearAllPools()` directly from `Dispose`.
 - Tests that intentionally call `SqliteConnection.ClearAllPools()`, mutate process-global environment variables, or override the process current directory are grouped into the non-parallel `SQLite pool sensitive` xUnit collection. Add new tests with those hazards to that collection instead of letting them run in parallel with unrelated classes.
 - Tests that mutate process-global environment variables should use `EnvironmentVariableScope.Capture(...)` so the original values are restored from a single disposable cleanup path even if setup or assertions fail.
@@ -322,6 +353,9 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - CI は `tests/CodeIndex.Tests/CodeIndex.Tests.runsettings` 経由でテストプロジェクトを実行し、VSTest の blame crash / hang 収集、45分のセッションタイムアウト、60秒の xUnit long-running 診断を有効にします。初回失敗時は suite を1回だけ再実行し、再実行で成功した場合は TRX / blame artifact と一緒に `TestResults/flaky-retry.txt` を upload して、その実行を疑わしい flaky run として扱います。TRX telemetry summary と test-result artifact upload は失敗または retry 成功 lane だけで実行し、初回で clean に成功した lane では実行しません。stream された test output も、失敗後に upload / timeout inspection が必要な場合だけ `TestResults` 配下へ書き、failure log directory もその failure path でだけ作成します。telemetry summarizer は `--configuration Release` で実行し、failure diagnostics 中に必要なら helper を build するため、全 matrix lane で TRX summary を出せます。XPlat Code Coverage の収集は `ubuntu-24.04` / `net8.0` lane に限定し、すべての active CI lane で full suite を実行しつつ collector overhead を避けます。OS coverage は production CLI target の `net8.0` で実行し、`net9.0` compatibility coverage は `ubuntu-24.04` のみに絞ります。テスト実行は locked restore と Release build の後に `--no-build` で走らせます。primary lane は audit / publish coverage のため solution 全体を restore し、その後 `tests/CodeIndex.Tests/CodeIndex.Tests.csproj` を matrix framework 向けに build します。non-primary lane は同じ per-framework build の前に、`RestoreTargetFrameworks` でその test project の matrix framework だけを restore します。CI は production 用の `8.0.413` SDK と pinned `9.0.301` SDK を全 lane に入れます。`global.json` が SDK roll-forward を無効化しており、target framework 別の restore / build 絞り込みより前に SDK 解決が走るためです。`TestResults` 出力ディレクトリは `CodeIndex.Tests.runsettings` だけが管理します。ローカルの `dev.sh coverage` も同じ所有関係に従い、2 つ目の results-directory 引数は渡しません。`ubuntu-24.04` / `net8.0` lane では test project の未使用 `net9.0` target を build しません。`net9.0` build coverage は Ubuntu compatibility lane で維持します。また、formatting verifier は `make lint` だけを使います。NuGet cache key は全 project file ではなく `packages.lock.json` と `global.json` に基づき、OS 単位の restore key で partial cache reuse も許可します。package 入力の drift は locked restore で検出しつつ、テスト用 project だけの変更では package cache を失効させません。weekly mutation workflow も pinned Stryker global tool と NuGet package を cache し、変更のない test tooling を scheduled mutation run で再インストールしないようにします。
 - CI の初回テスト実行と1回だけの retry は同じ workflow helper 経由にし、logger、blame、coverage 引数が drift しないようにしてください。PowerShell helper がテストの exit code を返す場合は、stream されたテスト出力を関数の success stream に載せず、代入で数値の exit code だけを受け取れるようにします。
 - package audit、primary-lane build/lint、coverage の収集、coverage artifact upload、publish、build artifact upload は matrix の `primary_lane` 値に揃えてください。lane の組み合わせは明示的な matrix entry で一度だけ定義し、後続 step で再計算したり exclude したりしません。
+- workflow path filter では `**.md` がすでに対象とする個別 Markdown file を重複して列挙せず、同等の push / pull-request filter を同期させます。
+- focused license-policy workflow は NuGet package を cache し、`net8.0` だけを locked restore した後、dependency resolution を繰り返さないよう filtered test を `--no-restore` で実行します。
+- C# CodeQL lane は setup-dotnet の lock-file-keyed NuGet cache を使い、Actions だけの lane は SDK setup と package cache の両方を skip します。
 
 ## テスト構成
 
@@ -372,6 +406,11 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   同じ test 内の全 assertion でその normalized value を再利用し、同じ workflow の raw copy と normalized copy を重複して読み込んだり保持したりしません。
   `Dockerfile` など workflow 以外の checked-in multiline fixture には `RepositoryTestPaths.ReadNormalizedText(...)` を使い、workflow 固有の読み込みは引き続き `ReadNormalizedWorkflow(...)` を使います。
   release-container contract test では `ReadDockerfile()` と `ReadDockerIgnore()` を使い、canonical fixture path が workflow suite 間でずれないようにします。
+  `RepositoryTestPaths` は checked-in text、normalized derived text、normalized workflow inventory を test process の生命期間 cache します。不変の repository contract だけに使い、fixture を書き換えるテストは独自の一時 path を使ってください。
+  license-policy contract test は legal notice、workflow file、distribution doc に同じ accessor を使い、repository root の再検出や重複 file read を行いません。
+  repository-backed の documentation、source-audit、JSONL-policy、trimmed-publish test は suite ごとの上位 directory walk を持たず、`RepositoryTestPaths.Root` を再利用します。
+  大規模な command-runner、installer、extractor suite の legacy root helper も、その単一の cached root へ委譲します。
+  changelog limit test も別の root walk を行わず、`RepositoryTestPaths` 経由で checked-in file を解決します。
   workflow 全体の policy audit には `RepositoryTestPaths.ReadNormalizedWorkflows()` を使い、列挙順、extension filter、file name、normalization を個別 test class 内で再構築せず共有します。
   1つの policy test が複数の step-level rule を検証する場合は、workflow step block を一度だけ解析して保持し、assertion family ごとに multiline step regex を再実行せず保持済み block を絞り込みます。
 - `IndexCommandRunnerTests.Run_CancelDuringFreshIndex_ReturnsInterruptedJson`、`Run_CancelDuringDryRunScan_ReturnsInterruptedJson`、`Run_CancelBeforeFreshScan_ReturnsInterruptedJson`
@@ -379,12 +418,26 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `IndexCommandRunnerTests.SymbolExtractionWorker_LegacyEnvironmentHooksAreIgnored_Issue3398`
   isolated symbol worker を起動し、legacy worker 環境変数が無視されることを検証します。この callback budget はプロセス起動時間も含むため、通常の in-process チェックより意図的に広く取り、ローカル負荷で legacy-env 回帰テストが timeout flake にならないようにします（#3863）。
 - `IndexCommandRunnerTests` と `FileIndexerTests` は `CSharpStaticInterfacePrepass` のテキスト判定、raw-byte、chunked raw-token、streaming file 契約 probe も扱います。prepass がファイル全体の割り当てを避けても UTF-8 / UTF-16 の static-interface 契約候補を落とさないよう、byte-array、chunked、file-level probe のカバレッジを揃えてください。
+- project-marker budget の integration coverage は directory budget を最小境界に override し、child を 1 件だけ列挙します。warning 伝播の検証だけのために本番の 8,192-directory cap を実体化しないでください。
 - `IndexWatchRunnerTests.RunCore_CancellationToken_StopsImmediately` と `RunCore_EmitsHumanFriendlyStartStop_WhenJsonDisabled`
-  リダイレクトした console 出力の下で watch loop の起動と停止を検証する。これらのテストは watch start 行を待ってからキャンセルし、`Console.Out` / `Console.Error` を戻す前に専用 watch task を必ず cancel/drain する。full suite の負荷で long-running task の起動が遅れることがあるため、この同期を固定 sleep に戻さないこと。
+  リダイレクトした console 出力の下で watch loop の起動と停止を検証する。未使用の index を事前構築せず非同期 watch core を直接呼び、同期的な起動 prefix が start event を出力した後に cancel して bounded shutdown wait を行う。この経路に index setup、専用 thread、signal polling、固定 sleep を再導入しないこと。
 - `BackgroundTaskObserverTests`
   は `BackgroundTaskObserver` の fault-only continuation 契約に依存します。canceled
   task は直接 await し、warning が抑止されたことを示すための cancellation 後の固定 sleep
   は不要です。
+- cancellation だけを検証する timeout test は、fixture に無関係な wall-clock 完了経路を持たせないよう infinite cancellable delay を使います。
+- SQL diagnostic truncation test は、長さが増え続ける数千個の `UNION` 句を組み立てず、最小の固定幅 suffix で文字数 cap を超えます。
+- 内容が契約に無関係な oversized file guard は sparse な length-only fixture を作り、同サイズの managed byte array 割り当てを避けます。
+- full-scan と scoped-update の oversized-file warning test は `TestProjectHelper.WriteSparseFile(...)` を共有し、両方の実行モードで 10 MiB fixture 割り当てを避けます。
+- oversized ignore-file rejection も同じ sparse helper を使います。size preflight が rule 内容を読む前に拒否するためです。
+- per-line oversize detection は 4 本の短い物理行を使います。契約は各行で独立しており、数百回の反復は境界 coverage を増やしません。
+- captured-output overflow test は、より大きな超過量自体が契約でない限り、文字数 budget を 1 文字だけ超えます。
+- suggestion store と archive cap の test は、どちらの persisted-size limit でも array を割り当てず、1 つの sparse-file helper を共有します。
+- persistent-log rotation test は 1 MiB の zero buffer を割り当てず、`FileStream.SetLength(...)` で既存 log fixture のサイズを設定します。
+- JSON-depth 境界 fixture の繰り返し bracket には、`Enumerable.Repeat` pipeline ではなく固定幅の文字列を使います。
+- CSV entry cap test は index / query parser 間で `TestProjectHelper.RepeatCsvEntry(...)` を共有し、境界 fixture の構築を揃えます。
+- raw FTS operator 境界 test も、grammar 固有の separator を指定して同じ joined-entry builder を再利用します。
+- synchronized console write の coverage は、2 つの concurrent producer を検証できる最小の反復 slow-writer workload を使います。stress test として iteration 数を増やさないでください。
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
   は実ファイル `InstallScriptTests.cs` を C# 抽出に通す coarse な runaway guard です。wall-clock の予算は benchmark より意図的に広く取り、遅い / 混雑した CI host で通常の揺れだけにより suite が失敗しないようにしています。
 - `SymbolExtractorTests.Extract_JavaScriptLargeExportedObjectLiteralProperties_CompletesWithinPracticalBudget` と `Extract_CSharp_ReferenceExtractorFixture_CompletesWithinPracticalBudget`
@@ -525,6 +578,8 @@ GitHub workflow、`global.json`、ドキュメントなど、checked-in され�
 
 基本は最も近い既存の `*Tests.cs` を拡張してください。既存ファイルに自然に収まらない場合だけ新しいテストファイルを作ります。
 
+- 複数言語で共有する抽出上限のテストは、切り詰めを発生させる最小値だけ境界を超え、言語ごとに任意の余裕値を足さないでください。
+
 ### CLI / コンソール系テスト
 
 - stdout と stderr を明示的にキャプチャする。
@@ -555,6 +610,7 @@ GitHub workflow、`global.json`、ドキュメントなど、checked-in され�
 - テストセットアップ内で repo-local の `user.name` と `user.email` を設定する。
 - fixture リポジトリでは repo-local の commit/tag signing を無効化し、global signing 設定が非対話実行でプロンプトや失敗を起こさないようにする。
 - shell 依存の quoting ではなく、ヘルパーや `ProcessStartInfo.ArgumentList` を使う。
+- `dotnet.yml` の SDK setup は一時的な download 失敗に対して条件付きで 1 回だけ再試行します。2 回目の失敗が job を失敗させるよう、最初の `continue-on-error` と失敗 outcome guard を対で維持してください。
 
 ### DB 系テスト
 
@@ -566,6 +622,7 @@ GitHub workflow、`global.json`、ドキュメントなど、checked-in され�
 ## クロスプラットフォームのルール
 
 - Windows、macOS、Linux すべてで成立するよう `Path.Combine` と相対パスを使う。
+- 応答サイズ処理の本番上限が大きい場合は、限定的なテスト専用上限と小さな代表データを使い、process-global な上書きは `finally` で復元して non-parallel suite に置いてください。
 - 改行自体が論点でない場合は、改行依存のフィクスチャを正規化して扱う。
 - Windows では SQLite 接続やファイル属性の影響で削除が遅れることがあるため、後片付けを甘く見ない。
 - shell ツール、パス区切り、プロセス挙動が各 OS で同じとは仮定しない。

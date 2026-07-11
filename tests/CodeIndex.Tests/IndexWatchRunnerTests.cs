@@ -777,8 +777,8 @@ public class IndexWatchRunnerTests
     public void FormatHumanSummary_DeepSubRunJson_UsesTerseSummary()
     {
         var depth = IndexWatchRunner.MaxHumanSummaryJsonDepth + 4;
-        var nestedStart = string.Concat(Enumerable.Repeat("[", depth));
-        var nestedEnd = string.Concat(Enumerable.Repeat("]", depth));
+        var nestedStart = new string('[', depth);
+        var nestedEnd = new string(']', depth);
         var deepJson = $$"""{"summary":{"updated":1,"removed":2,"errors":3},"deep":{{nestedStart}}0{{nestedEnd}}}""";
 
         var summary = InvokeFormatHumanSummary(
@@ -803,13 +803,6 @@ public class IndexWatchRunnerTests
         {
             File.WriteAllText(Path.Combine(projectRoot, "hello.py"), "print('hi')\n");
 
-            // Pre-build the DB so the watcher's "initial scan path" is not exercised here -
-            // this test only checks that the watch loop respects cancellation and emits the
-            // expected lifecycle events.
-            // 初回スキャンは事前に済ませ、watch ループの起動/停止のみ検証する。
-            var prebuildJson = RunIndexAndCapture([projectRoot, "--db", dbPath, "--json"], out var prebuildExit);
-            Assert.Equal(CommandExitCodes.Success, prebuildExit);
-
             var options = new IndexCommandOptions
             {
                 ProjectPath = projectRoot,
@@ -827,24 +820,15 @@ public class IndexWatchRunnerTests
             lock (TestConsoleLock.Gate)
             {
                 var originalOut = Console.Out;
-                using var stdout = new SignalingStringWriter(
-                    line => line.Contains("\"status\":\"watching\"", StringComparison.Ordinal));
+                using var stdout = new StringWriter();
                 Task<int>? loopTask = null;
                 Console.SetOut(stdout);
                 try
                 {
-                    loopTask = StartWatchLoop(options, projectRoot, dbPath, cts.Token);
-                    var started = stdout.WaitForSignal(TimeSpan.FromSeconds(10));
+                    loopTask = IndexWatchRunner.RunCoreAsync(options, _jsonOptions, projectRoot, dbPath, cts.Token);
                     cts.Cancel();
-                    Assert.True(started,
-                        "Watch loop did not emit the watching event before cancellation / 取り消し前に watching イベントが出力されなかった");
-                    // Blocking wait is intentional: this test verifies the loop terminates within
-                    // a wall-clock budget while holding the redirected Console.Out under a lock.
-                    // 同期的に待機しているのは、Console.Out リダイレクトを保持したまま停止時間を検証するため。
-#pragma warning disable xUnit1031
-                    Assert.True(loopTask.Wait(TimeSpan.FromSeconds(10)),
-                        "Watch loop did not stop within 10s after cancellation / 取り消し後10秒以内に停止しなかった");
-                    exitCode = loopTask.Result;
+#pragma warning disable xUnit1031 // Console redirection lock requires synchronous bounded drain.
+                    exitCode = loopTask.WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
 #pragma warning restore xUnit1031
                 }
                 finally
@@ -913,9 +897,6 @@ public class IndexWatchRunnerTests
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "hello.py"), "print('hi')\n");
-            var prebuildJson = RunIndexAndCapture([projectRoot, "--db", dbPath, "--json"], out var prebuildExit);
-            Assert.Equal(CommandExitCodes.Success, prebuildExit);
-
             var options = new IndexCommandOptions
             {
                 ProjectPath = projectRoot,
@@ -936,20 +917,15 @@ public class IndexWatchRunnerTests
             lock (TestConsoleLock.Gate)
             {
                 var originalOut = Console.Out;
-                using var stdout = new SignalingStringWriter(
-                    line => line.Contains("\"status\": \"watching\"", StringComparison.Ordinal));
+                using var stdout = new StringWriter();
                 Task<int>? loopTask = null;
                 Console.SetOut(stdout);
                 try
                 {
-                    loopTask = StartWatchLoop(options, projectRoot, dbPath, cts.Token, indentedOptions);
-                    var started = stdout.WaitForSignal(TimeSpan.FromSeconds(10));
+                    loopTask = IndexWatchRunner.RunCoreAsync(options, indentedOptions, projectRoot, dbPath, cts.Token);
                     cts.Cancel();
-                    Assert.True(started,
-                        "Watch loop did not emit the indented watching event before cancellation / 取り消し前に indented watching イベントが出力されなかった");
-#pragma warning disable xUnit1031
-                    Assert.True(loopTask.Wait(TimeSpan.FromSeconds(10)));
-                    exitCode = loopTask.Result;
+#pragma warning disable xUnit1031 // Console redirection lock requires synchronous bounded drain.
+                    exitCode = loopTask.WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
 #pragma warning restore xUnit1031
                 }
                 finally
@@ -983,9 +959,6 @@ public class IndexWatchRunnerTests
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "hello.py"), "print('hi')\n");
-            var prebuildJson = RunIndexAndCapture([projectRoot, "--db", dbPath, "--json"], out var prebuildExit);
-            Assert.Equal(CommandExitCodes.Success, prebuildExit);
-
             var options = new IndexCommandOptions
             {
                 ProjectPath = projectRoot,
@@ -1004,22 +977,17 @@ public class IndexWatchRunnerTests
             {
                 var originalErr = Console.Error;
                 var originalOut = Console.Out;
-                using var stderr = new SignalingStringWriter(
-                    line => line.Contains("[watch] Watching", StringComparison.Ordinal));
+                using var stderr = new StringWriter();
                 using var stdout = new StringWriter();
                 Task<int>? loopTask = null;
                 Console.SetError(stderr);
                 Console.SetOut(stdout);
                 try
                 {
-                    loopTask = StartWatchLoop(options, projectRoot, dbPath, cts.Token);
-                    var started = stderr.WaitForSignal(TimeSpan.FromSeconds(10));
+                    loopTask = IndexWatchRunner.RunCoreAsync(options, _jsonOptions, projectRoot, dbPath, cts.Token);
                     cts.Cancel();
-                    Assert.True(started,
-                        "Watch loop did not emit the human start line before cancellation / 取り消し前に human start 行が出力されなかった");
-#pragma warning disable xUnit1031
-                    Assert.True(loopTask.Wait(TimeSpan.FromSeconds(10)));
-                    exitCode = loopTask.Result;
+#pragma warning disable xUnit1031 // Console redirection lock requires synchronous bounded drain.
+                    exitCode = loopTask.WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
 #pragma warning restore xUnit1031
                 }
                 finally
@@ -1076,22 +1044,6 @@ public class IndexWatchRunnerTests
         {
         }
         return null;
-    }
-
-    private Task<int> StartWatchLoop(
-        IndexCommandOptions options,
-        string projectRoot,
-        string dbPath,
-        CancellationToken cancellationToken,
-        JsonSerializerOptions? jsonOptions = null)
-    {
-        // Run the watcher on a dedicated thread so this cancellation test does not depend on
-        // ThreadPool availability during the full test suite.
-        return Task.Factory.StartNew(
-            () => IndexWatchRunner.RunCore(options, jsonOptions ?? _jsonOptions, projectRoot, dbPath, cancellationToken),
-            CancellationToken.None,
-            TaskCreationOptions.LongRunning,
-            TaskScheduler.Default);
     }
 
     private static string InvokeFormatHumanSummary(

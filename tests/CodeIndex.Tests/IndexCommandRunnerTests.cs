@@ -1314,8 +1314,8 @@ public partial class IndexCommandRunnerTests
         try
         {
             var depth = IndexCommandRunner.MaxScanCheckpointJsonDepth + 4;
-            var nestedStart = string.Concat(Enumerable.Repeat("[", depth));
-            var nestedEnd = string.Concat(Enumerable.Repeat("]", depth));
+            var nestedStart = new string('[', depth);
+            var nestedEnd = new string(']', depth);
             File.WriteAllText(
                 checkpointPath,
                 $$"""{"Version":1,"GitHead":"abc123","Directories":{{nestedStart}}"src"{{nestedEnd}}}""");
@@ -2038,7 +2038,7 @@ public sealed class Caller
     [Fact]
     public void ParseArgs_SymbolKindFilterRejectsTooManyCsvEntries_Issue2906()
     {
-        var tooMany = string.Join(',', Enumerable.Repeat("class", IndexCommandRunner.MaxSymbolKindFilterCsvEntries + 1));
+        var tooMany = TestProjectHelper.RepeatCsvEntry("class", IndexCommandRunner.MaxSymbolKindFilterCsvEntries + 1);
 
         var options = IndexCommandRunner.ParseArgs([".", "--exclude-symbol-kind", tooMany]);
 
@@ -2052,7 +2052,7 @@ public sealed class Caller
         using var env = EnvironmentVariableScope.Capture(IndexCommandRunner.IncludeSymbolKindsEnvironmentVariable);
         Environment.SetEnvironmentVariable(
             IndexCommandRunner.IncludeSymbolKindsEnvironmentVariable,
-            string.Join(',', Enumerable.Repeat("function", IndexCommandRunner.MaxSymbolKindFilterCsvEntries + 1)));
+            TestProjectHelper.RepeatCsvEntry("function", IndexCommandRunner.MaxSymbolKindFilterCsvEntries + 1));
 
         var options = IndexCommandRunner.ParseArgs(["."]);
 
@@ -6736,17 +6736,7 @@ public sealed class Caller
     }
 
     private static string GetRepositoryRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null)
-        {
-            if (File.Exists(Path.Combine(dir.FullName, "CodeIndex.sln")) || Directory.Exists(Path.Combine(dir.FullName, "src", "CodeIndex")))
-                return dir.FullName;
-            dir = dir.Parent;
-        }
-
-        throw new InvalidOperationException("Could not locate repository root / リポジトリルートを特定できませんでした");
-    }
+        => RepositoryTestPaths.Root;
 
     private static SqliteConnection OpenNonPoolingConnection(string dbPath)
     {

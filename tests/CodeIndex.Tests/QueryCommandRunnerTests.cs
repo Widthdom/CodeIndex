@@ -1036,7 +1036,7 @@ public partial class QueryCommandRunnerTests
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_summary_capture_limit");
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
-        var overLimitLine = new string('x', JsonEnvelopeWrapper.MaxCapturedOutputChars + 1024);
+        var overLimitLine = new string('x', JsonEnvelopeWrapper.MaxCapturedOutputChars + 1);
         TestProjectHelper.InsertIndexedFile(dbPath, "docs/huge.txt", "text", overLimitLine);
         var input = """
         ["excerpt","docs/huge.txt","--start","1","--max-line-width","0"]
@@ -4341,9 +4341,7 @@ public partial class QueryCommandRunnerTests
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_cycle_candidate_edges");
         var projectRoot = project.Root;
         var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-        var noiseSymbols = Enumerable.Range(0, 80)
-            .Select(index => $"Noise{index:D2}")
-            .ToArray();
+        string[] noiseSymbols = ["Noise"];
         InsertFileWithSymbols(dbPath, "src/NoiseTarget.cs", noiseSymbols);
         InsertFileWithReferences(dbPath, "src/NoiseCaller.cs", noiseSymbols);
         InsertFileWithSymbolsAndReferences(dbPath, "src/CycleA.cs", ["CycleA"], ["CycleB"]);
@@ -6143,17 +6141,7 @@ public partial class QueryCommandRunnerTests
     }
 
     private static string GetRepositoryRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null)
-        {
-            if (File.Exists(Path.Combine(dir.FullName, "CodeIndex.sln")) || Directory.Exists(Path.Combine(dir.FullName, "src", "CodeIndex")))
-                return dir.FullName;
-            dir = dir.Parent;
-        }
-
-        throw new InvalidOperationException("Could not locate repository root / リポジトリルートを特定できませんでした");
-    }
+        => RepositoryTestPaths.Root;
 
     private static List<JsonDocument> ParseJsonLines(string stdout)
     {

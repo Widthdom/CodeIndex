@@ -37,7 +37,8 @@ public class CiWorkflowTests
             "          - os: macos-14\n" +
             "            test-framework: net8.0\n" +
             "            primary_lane: false",
-            "- name: Set up .NET SDKs\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: |\n            8.0.413\n            9.0.301",
+            "- name: Set up .NET SDKs\n        id: setup-dotnet\n        continue-on-error: true\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: |\n            8.0.413\n            9.0.301",
+            "- name: Retry .NET SDK setup\n        if: steps.setup-dotnet.outcome == 'failure'\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: |\n            8.0.413\n            9.0.301",
             "- name: Restore dependencies\n        if: matrix.primary_lane\n        run: dotnet restore CodeIndex.sln --locked-mode",
             "- name: Restore test dependencies\n        if: ${{ !matrix.primary_lane }}\n        run: dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=${{ matrix.test-framework }} --locked-mode");
         AssertDoesNotContainAny(
@@ -169,10 +170,26 @@ public class CiWorkflowTests
         }
 
         var continueOnErrorBlocks = FindStepBlocks(stepBlocks, "continue-on-error: true").ToArray();
-        var continueOnErrorBlock = Assert.Single(continueOnErrorBlocks);
-        Assert.Equal("dotnet.yml", continueOnErrorBlock.FileName);
+        Assert.Equal(2, continueOnErrorBlocks.Length);
+        var sdkSetupBlock = Assert.Single(
+            continueOnErrorBlocks,
+            block => block.Text.Contains("- name: Set up .NET SDKs", StringComparison.Ordinal));
+        Assert.Equal("dotnet.yml", sdkSetupBlock.FileName);
         AssertContainsAll(
-            continueOnErrorBlock.Text,
+            sdkSetupBlock.Text,
+            StringComparison.Ordinal,
+            "id: setup-dotnet",
+            "actions/setup-dotnet@");
+        AssertContainsAll(
+            allWorkflows,
+            "- name: Retry .NET SDK setup\n        if: steps.setup-dotnet.outcome == 'failure'");
+
+        var diagnosticUploadBlock = Assert.Single(
+            continueOnErrorBlocks,
+            block => block.Text.Contains("- name: Upload diagnostic dumps", StringComparison.Ordinal));
+        Assert.Equal("dotnet.yml", diagnosticUploadBlock.FileName);
+        AssertContainsAll(
+            diagnosticUploadBlock.Text,
             StringComparison.Ordinal,
             "- name: Upload diagnostic dumps",
             "if: failure()",

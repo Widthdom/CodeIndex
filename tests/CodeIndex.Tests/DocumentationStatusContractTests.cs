@@ -67,9 +67,7 @@ public class DocumentationStatusContractTests
     [InlineData("AGENT_GUIDE.md")]
     public void StatusContractDocs_MentionEveryTrustField(string relativePath)
     {
-        var repoRoot = GetRepositoryRoot();
-        var docPath = Path.Combine(repoRoot, relativePath);
-        var content = File.ReadAllText(docPath);
+        var content = RepositoryTestPaths.ReadText(relativePath);
 
         foreach (var field in StatusContractFields)
         {
@@ -77,19 +75,4 @@ public class DocumentationStatusContractTests
         }
     }
 
-    private static string GetRepositoryRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            if (File.Exists(Path.Combine(directory.FullName, "AGENT_GUIDE.md")))
-            {
-                return directory.FullName;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new InvalidOperationException("Could not locate repository root from test output directory.");
-    }
 }

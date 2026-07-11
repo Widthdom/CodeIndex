@@ -138,16 +138,17 @@ public partial class FileIndexer
 
             var lineNumber = 0;
             var rulesInFile = 0;
+            var ruleBudget = IgnoreRulesPerFileBudgetForTesting ?? MaxIgnoreRulesPerFile;
             foreach (var line in lines)
             {
                 lineNumber++;
                 if (IgnoreRule.TryParse(sourceDirectory, line, _ignoreCase, out var rule, out var errorMessage) && rule != null)
                 {
-                    if (rulesInFile >= MaxIgnoreRulesPerFile)
+                    if (rulesInFile >= ruleBudget)
                     {
                         errors?.Add(new ScanError(
                             $"{ToRelativePath(ignorePath)}:{lineNumber}",
-                            $"Stopped scanning because {ignoreFileName} exceeds {MaxIgnoreRulesPerFile} rules."));
+                            $"Stopped scanning because {ignoreFileName} exceeds {ruleBudget} rules."));
                         fullyScanned = false;
                         return false;
                     }

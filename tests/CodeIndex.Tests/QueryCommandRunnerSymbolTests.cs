@@ -1617,7 +1617,7 @@ public partial class QueryCommandRunnerTests
             {
                 var writer = new DbWriter(db.Connection);
                 var fileId = GetIndexedFileId(db.Connection, "src/config/unused_fixture.cs");
-                var extraSuppressed = Enumerable.Range(0, 20)
+                var extraSuppressed = Enumerable.Range(0, 4)
                     .Select(i => new SymbolRecord
                     {
                         FileId = fileId,
@@ -1645,9 +1645,9 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.Equal(27, suppression.GetProperty("suppressed_count").GetInt32());
-            Assert.Equal(23, suppression.GetProperty("suppressed_contract_domain_counts").GetProperty("public_api_surface").GetInt32());
-            Assert.Equal(27, json.GetProperty("summary").GetProperty("suppressed").GetProperty("suppressed_count").GetInt32());
+            Assert.Equal(11, suppression.GetProperty("suppressed_count").GetInt32());
+            Assert.Equal(7, suppression.GetProperty("suppressed_contract_domain_counts").GetProperty("public_api_surface").GetInt32());
+            Assert.Equal(11, json.GetProperty("summary").GetProperty("suppressed").GetProperty("suppressed_count").GetInt32());
         }
         finally
         {

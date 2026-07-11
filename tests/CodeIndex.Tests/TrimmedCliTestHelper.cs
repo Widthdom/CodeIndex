@@ -76,7 +76,7 @@ internal static class TrimmedCliTestHelper
 
         var psi = new ProcessStartInfo("dotnet")
         {
-            WorkingDirectory = GetRepositoryRoot(),
+            WorkingDirectory = RepositoryTestPaths.Root,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -141,16 +141,4 @@ internal static class TrimmedCliTestHelper
         return frameworkLine == null ? reason : $"{reason} {frameworkLine}";
     }
 
-    private static string GetRepositoryRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null)
-        {
-            if (File.Exists(Path.Combine(dir.FullName, "CodeIndex.sln")))
-                return dir.FullName;
-            dir = dir.Parent;
-        }
-
-        throw new InvalidOperationException("Could not locate repository root / リポジトリルートを特定できませんでした");
-    }
 }

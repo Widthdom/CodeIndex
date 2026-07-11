@@ -9,6 +9,12 @@ namespace CodeIndex.Tests;
 
 internal static class TestProjectHelper
 {
+    internal static string RepeatCsvEntry(string value, int count)
+        => RepeatJoinedEntry(value, count, ",");
+
+    internal static string RepeatJoinedEntry(string value, int count, string separator)
+        => string.Join(separator, Enumerable.Repeat(value, count));
+
     internal static string CreateTempProject(string prefix)
     {
         var projectRoot = Path.Combine(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}");
@@ -83,6 +89,15 @@ internal static class TestProjectHelper
         var path = ProjectPath(projectRoot, relativePath);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllBytes(path, content);
+        return path;
+    }
+
+    internal static string WriteSparseFile(string projectRoot, string relativePath, long length)
+    {
+        var path = ProjectPath(projectRoot, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        using var stream = File.Create(path);
+        stream.SetLength(length);
         return path;
     }
 

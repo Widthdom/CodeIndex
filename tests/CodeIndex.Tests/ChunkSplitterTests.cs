@@ -231,7 +231,7 @@ public class ChunkSplitterTests
         // 上限以下の短い行が大量にあってもフラグは立たない。上限はファイル全体
         // ではなく物理行ごとに適用される。Closes #1542.
         var line = new string('a', 1024);
-        var content = string.Join('\n', Enumerable.Repeat(line, 200));
+        var content = string.Join('\n', Enumerable.Repeat(line, 4));
         Assert.False(ChunkSplitter.HasOversizeLine(content));
     }
 

@@ -23,13 +23,15 @@ public partial class IndexCommandRunnerTests
     {
         var projectRoot = CreateTempProject();
         var previousEnumerator = FileIndexer.EnumerateProjectMarkerDirectoriesForTesting;
+        var previousDirectoryBudget = FileIndexer.ProjectMarkerFingerprintDirectoryBudgetForTesting;
         try
         {
             var childDir = Path.Combine(projectRoot, "nested");
             Directory.CreateDirectory(childDir);
             File.WriteAllText(Path.Combine(projectRoot, "App.cs"), "public class App { }\n");
             FileIndexer.EnumerateProjectMarkerDirectoriesForTesting =
-                _ => Enumerable.Repeat(childDir, 8192);
+                _ => [childDir];
+            FileIndexer.ProjectMarkerFingerprintDirectoryBudgetForTesting = 1;
 
             var (exitCode, json, _) = RunAndCaptureJsonWithStderr([projectRoot, "--json"]);
 
@@ -43,6 +45,7 @@ public partial class IndexCommandRunnerTests
         finally
         {
             FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = previousEnumerator;
+            FileIndexer.ProjectMarkerFingerprintDirectoryBudgetForTesting = previousDirectoryBudget;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
@@ -782,7 +785,7 @@ public partial class IndexCommandRunnerTests
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
-            File.WriteAllBytes(Path.Combine(projectRoot, "huge.py"), new byte[10 * 1024 * 1024 + 1]);
+            TestProjectHelper.WriteSparseFile(projectRoot, "huge.py", 10 * 1024 * 1024 + 1L);
 
             var (exitCode, _, stderr) = RunCliInSubprocess([projectRoot], projectRoot);
 

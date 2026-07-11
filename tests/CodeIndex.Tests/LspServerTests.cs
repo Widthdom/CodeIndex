@@ -1225,14 +1225,16 @@ public class LspServerTests
     [InlineData(true)]
     public void HandleMessage_DocumentSymbol_TruncatesDetailsAndCapsResponse_Issue3130_Issue3743(bool writeIndented)
     {
+        const int responseBudget = 4 * 1024;
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_budget");
+        LspServer.DocumentSymbolResponseBytesForTesting = responseBudget;
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             var sourcePath = Path.Combine(projectRoot, "large.cs");
             var parameters = string.Join(", ", Enumerable.Range(0, 90).Select(i => $"int argument{i:D2}"));
             var source = new StringBuilder("class LargeSymbols\n{\n");
-            for (var i = 0; i < LspServer.MaxDocumentSymbols; i++)
+            for (var i = 0; i < 12; i++)
                 source.Append("    void Method").Append(i.ToString("D4", CultureInfo.InvariantCulture)).Append('(').Append(parameters).Append(") { }\n");
             source.Append("}\n");
 
@@ -1261,7 +1263,7 @@ public class LspServerTests
             var symbols = response!["result"]!.AsArray();
             Assert.NotEmpty(symbols);
             Assert.True(symbols.Count < LspServer.MaxDocumentSymbols);
-            Assert.True(Encoding.UTF8.GetByteCount(symbols.ToJsonString(jsonOptions)) <= LspServer.MaxDocumentSymbolResponseBytes);
+            Assert.True(Encoding.UTF8.GetByteCount(symbols.ToJsonString(jsonOptions)) <= responseBudget);
             var allSymbols = FlattenDocumentSymbols(symbols).ToArray();
             Assert.True(allSymbols.Length < LspServer.MaxDocumentSymbols);
             Assert.Contains(allSymbols, symbol =>
@@ -1279,6 +1281,7 @@ public class LspServerTests
         }
         finally
         {
+            LspServer.DocumentSymbolResponseBytesForTesting = null;
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
