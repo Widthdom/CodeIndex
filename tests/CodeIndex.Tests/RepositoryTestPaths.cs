@@ -5,6 +5,7 @@ namespace CodeIndex.Tests;
 internal static class RepositoryTestPaths
 {
     private static readonly ConcurrentDictionary<string, string> TextCache = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, string> NormalizedTextCache = new(StringComparer.Ordinal);
     private static readonly Lazy<IReadOnlyList<(string FileName, string Content)>> NormalizedWorkflows =
         new(ReadNormalizedWorkflowsCore, LazyThreadSafetyMode.ExecutionAndPublication);
 
@@ -38,7 +39,12 @@ internal static class RepositoryTestPaths
         => ReadNormalizedText(".github", "workflows", fileName);
 
     internal static string ReadNormalizedText(params string[] relativeParts)
-        => ReadText(relativeParts).ReplaceLineEndings("\n");
+    {
+        var path = Combine(relativeParts);
+        return NormalizedTextCache.GetOrAdd(
+            path,
+            static filePath => TextCache.GetOrAdd(filePath, static path => File.ReadAllText(path)).ReplaceLineEndings("\n"));
+    }
 
     internal static string[] ReadNormalizedLines(params string[] relativeParts)
         => ReadNormalizedText(relativeParts).Split('\n');
@@ -56,7 +62,9 @@ internal static class RepositoryTestPaths
         return Directory
             .EnumerateFiles(workflowsDirectory, "*.yml")
             .OrderBy(static path => Path.GetFileName(path), StringComparer.Ordinal)
-            .Select(static path => (Path.GetFileName(path), TextCache.GetOrAdd(path, static filePath => File.ReadAllText(filePath)).ReplaceLineEndings("\n")))
+            .Select(static path => (Path.GetFileName(path), NormalizedTextCache.GetOrAdd(
+                path,
+                static filePath => TextCache.GetOrAdd(filePath, static textPath => File.ReadAllText(textPath)).ReplaceLineEndings("\n"))))
             .ToArray();
     }
 
