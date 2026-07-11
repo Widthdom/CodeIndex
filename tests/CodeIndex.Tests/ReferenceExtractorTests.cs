@@ -15,6 +15,48 @@ namespace CodeIndex.Tests;
 /// </summary>
 public partial class ReferenceExtractorTests
 {
+    private static void AssertReferencesContain(
+        IEnumerable<ReferenceRecord> references,
+        string referenceKind,
+        string? containerName,
+        params string[] symbolNames)
+    {
+        var actualNames = references
+            .Where(reference => reference.ReferenceKind == referenceKind
+                && (containerName is null || reference.ContainerName == containerName))
+            .Select(reference => reference.SymbolName)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.All(symbolNames, symbolName => Assert.Contains(symbolName, actualNames));
+    }
+
+    private static void AssertReferencesContainInContext(
+        IEnumerable<ReferenceRecord> references,
+        string referenceKind,
+        string context,
+        params string[] symbolNames)
+    {
+        var actualNames = references
+            .Where(reference => reference.ReferenceKind == referenceKind && reference.Context == context)
+            .Select(reference => reference.SymbolName)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.All(symbolNames, symbolName => Assert.Contains(symbolName, actualNames));
+    }
+
+    private static void AssertReferencesDoNotContain(
+        IEnumerable<ReferenceRecord> references,
+        string referenceKind,
+        params string[] symbolNames)
+    {
+        var actualNames = references
+            .Where(reference => reference.ReferenceKind == referenceKind)
+            .Select(reference => reference.SymbolName)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.All(symbolNames, symbolName => Assert.DoesNotContain(symbolName, actualNames));
+    }
+
     private static (List<SymbolRecord> Symbols, List<ReferenceRecord> References) ExtractSymbolsAndReferences(
         string lang,
         string content,

@@ -8,7 +8,7 @@ public partial class ReleaseWorkflowTests
     [Fact]
     public void ReleaseWorkflow_DockerfileDocumentsSdkRuntimeSplit()
     {
-        var dockerfile = RepositoryTestPaths.ReadText("Dockerfile");
+        var dockerfile = RepositoryTestPaths.ReadDockerfile();
 
         Assert.Contains("Build uses the repository-pinned .NET 9 SDK", dockerfile);
         Assert.Contains("runtime-deps because cdidx targets net8.0", dockerfile);
@@ -21,7 +21,7 @@ public partial class ReleaseWorkflowTests
     [Fact]
     public void ReleaseWorkflow_DockerfileLocksRuntimePackagesAndRidMapping()
     {
-        var dockerfile = RepositoryTestPaths.ReadText("Dockerfile").ReplaceLineEndings("\n");
+        var dockerfile = RepositoryTestPaths.ReadNormalizedText("Dockerfile");
 
         Assert.Equal(2, dockerfile.Split('\n').Count(line => line.Contains("amd64) rid=\"linux-musl-x64\" ;;", StringComparison.Ordinal)));
         Assert.Equal(2, dockerfile.Split('\n').Count(line => line.Contains("arm64) rid=\"linux-musl-arm64\" ;;", StringComparison.Ordinal)));

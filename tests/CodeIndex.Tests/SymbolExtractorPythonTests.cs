@@ -53,8 +53,7 @@ public partial class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "python", content);
 
         Assert.Equal(2, symbols.Count);
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "authenticate");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fetch_data");
+        AssertSymbolsContain(symbols, "function", "authenticate", "fetch_data");
     }
 
     [Fact]

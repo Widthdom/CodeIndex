@@ -23,26 +23,7 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
         var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
 
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Array"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "unwrap");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "U"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "unwrap");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Promise"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "unwrap");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Nested"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "unwrap");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Fallback"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "unwrap");
+        AssertReferencesContain(references, "type_reference", "unwrap", "Array", "U", "Promise", "Nested", "Fallback");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "infer"
             && reference.ReferenceKind == "type_reference");
@@ -60,18 +41,13 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
         var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
 
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "DefaultKey"
-            && reference.ReferenceKind == "type_reference"
-            && reference.Context == "type Dict<K = DefaultKey, V = DefaultValue> = Record<K, V>;");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "DefaultValue"
-            && reference.ReferenceKind == "type_reference"
-            && reference.Context == "type Dict<K = DefaultKey, V = DefaultValue> = Record<K, V>;");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Record"
-            && reference.ReferenceKind == "type_reference"
-            && reference.Context == "type Dict<K = DefaultKey, V = DefaultValue> = Record<K, V>;");
+        AssertReferencesContainInContext(
+            references,
+            "type_reference",
+            "type Dict<K = DefaultKey, V = DefaultValue> = Record<K, V>;",
+            "DefaultKey",
+            "DefaultValue",
+            "Record");
     }
 
     [Fact]

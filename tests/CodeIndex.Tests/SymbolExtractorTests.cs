@@ -18,6 +18,19 @@ namespace CodeIndex.Tests;
 /// </summary>
 public partial class SymbolExtractorTests
 {
+    private static void AssertSymbolsContain(
+        IEnumerable<SymbolRecord> symbols,
+        string kind,
+        params string[] names)
+    {
+        var actualNames = symbols
+            .Where(symbol => symbol.Kind == kind)
+            .Select(symbol => symbol.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.All(names, name => Assert.Contains(name, actualNames));
+    }
+
     [Fact]
     public void Extract_CancelledToken_ThrowsBeforeWork()
     {

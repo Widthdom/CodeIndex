@@ -824,8 +824,8 @@ public partial class ReleaseWorkflowTests
     public void ReleaseWorkflow_PublishesOfficialContainerImage()
     {
         var workflow = ReadReleaseWorkflow();
-        var dockerfile = RepositoryTestPaths.ReadText("Dockerfile");
-        var dockerignore = RepositoryTestPaths.ReadText(".dockerignore");
+        var dockerfile = RepositoryTestPaths.ReadDockerfile();
+        var dockerignore = RepositoryTestPaths.ReadDockerIgnore();
         var entrypoint = RepositoryTestPaths.ReadText("scripts", "docker-entrypoint.sh");
         var project = RepositoryTestPaths.ReadText("src", "CodeIndex", "CodeIndex.csproj");
 
@@ -839,7 +839,7 @@ public partial class ReleaseWorkflowTests
     [Fact]
     public void ReleaseWorkflow_SecretAndTokenScopesStayOfficialAndMinimal_Issue4331()
     {
-        var workflow = ReadReleaseWorkflow().ReplaceLineEndings("\n");
+        var workflow = RepositoryTestPaths.ReadNormalizedReleaseWorkflow();
 
         AssertContainsAll(
             workflow,
@@ -1063,7 +1063,7 @@ public partial class ReleaseWorkflowTests
         AssertDoesNotContainAny(project, "Microsoft.NET.ILLink.Tasks\" Version=\"10.");
     }
 
-    private static string ReadReleaseWorkflow() => RepositoryTestPaths.ReadWorkflow("release.yml");
+    private static string ReadReleaseWorkflow() => RepositoryTestPaths.ReadReleaseWorkflow();
 
     private static int CountOccurrences(string text, string value)
     {

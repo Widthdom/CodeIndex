@@ -13,10 +13,8 @@ public class CiWorkflowTests
     [Fact]
     public void DotnetWorkflow_RunsTestsWithRunsettingsBlameRetryAndArtifacts()
     {
-        var workflow = RepositoryTestPaths.ReadWorkflow("dotnet.yml");
-        var normalizedWorkflow = workflow.ReplaceLineEndings("\n");
+        var workflow = RepositoryTestPaths.ReadNormalizedDotnetWorkflow();
         var testScript = RepositoryTestPaths.ReadText(".github", "scripts", "run-dotnet-tests.ps1");
-        var normalizedTestScript = testScript.ReplaceLineEndings("\n");
 
         AssertContainsAll(
             testScript,
@@ -25,22 +23,23 @@ public class CiWorkflowTests
             testScript,
             "--results-directory\", \"./TestResults");
         AssertContainsAll(
-            normalizedWorkflow,
-            "- name: Select CI lane\n        id: lane");
-        AssertContainsAll(
             workflow,
-            "\"primary_lane=$primaryLaneText\" | Out-File -FilePath $env:GITHUB_OUTPUT");
-        Assert.True(
-            normalizedWorkflow.IndexOf("- name: Select CI lane\n        id: lane", StringComparison.Ordinal)
-            < normalizedWorkflow.IndexOf("- name: Set up .NET SDKs", StringComparison.Ordinal));
-        AssertContainsAll(
-            normalizedWorkflow,
+            "include:\n" +
+            "          - os: ubuntu-24.04\n" +
+            "            test-framework: net8.0\n" +
+            "            primary_lane: true\n" +
+            "          - os: ubuntu-24.04\n" +
+            "            test-framework: net9.0\n" +
+            "            primary_lane: false\n" +
+            "          - os: windows-2022\n" +
+            "            test-framework: net8.0\n" +
+            "            primary_lane: false\n" +
+            "          - os: macos-14\n" +
+            "            test-framework: net8.0\n" +
+            "            primary_lane: false",
             "- name: Set up .NET SDKs\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: |\n            8.0.413\n            9.0.301",
-            "- name: Restore dependencies\n        if: steps.lane.outputs.primary_lane == 'true'\n        run: dotnet restore CodeIndex.sln --locked-mode",
-            "- name: Restore test dependencies\n        if: steps.lane.outputs.primary_lane != 'true'\n        run: dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=${{ matrix.test-framework }} --locked-mode");
-        Assert.True(
-            normalizedWorkflow.IndexOf("- name: Select CI lane\n        id: lane", StringComparison.Ordinal)
-            < normalizedWorkflow.IndexOf("- name: Restore dependencies", StringComparison.Ordinal));
+            "- name: Restore dependencies\n        if: matrix.primary_lane\n        run: dotnet restore CodeIndex.sln --locked-mode",
+            "- name: Restore test dependencies\n        if: ${{ !matrix.primary_lane }}\n        run: dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=${{ matrix.test-framework }} --locked-mode");
         AssertDoesNotContainAny(
             workflow,
             "collect_coverage",
@@ -50,17 +49,16 @@ public class CiWorkflowTests
         AssertContainsAll(
             workflow,
             "key: ${{ runner.os }}-dotnet-nuget-${{ hashFiles('**/packages.lock.json', 'global.json') }}",
-            "\"${{ matrix.os }}\" -eq \"ubuntu-24.04\" -and \"${{ matrix.test-framework }}\" -eq \"net8.0\"");
+            "primary_lane: true");
         AssertContainsAll(
-            normalizedWorkflow,
-            "exclude:\n          - os: windows-2022\n            test-framework: net9.0\n          - os: macos-14\n            test-framework: net9.0",
-            "- name: Audit NuGet package vulnerabilities\n        if: steps.lane.outputs.primary_lane == 'true'",
-            "- name: Verify Release test build\n        if: steps.lane.outputs.primary_lane == 'true'\n        run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-restore -p:UseSharedCompilation=false",
-            "- name: Verify developer task wrapper\n        if: steps.lane.outputs.primary_lane == 'true'\n        run: make lint",
-            "- name: Build\n        if: steps.lane.outputs.primary_lane != 'true'",
-            "run: |\n          ./.github/scripts/run-dotnet-tests.ps1 `\n            -Framework \"${{ matrix.test-framework }}\" `\n            -CollectCoverage \"${{ steps.lane.outputs.primary_lane }}\"");
+            workflow,
+            "- name: Audit NuGet package vulnerabilities\n        if: matrix.primary_lane",
+            "- name: Verify Release test build\n        if: matrix.primary_lane\n        run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-restore -p:UseSharedCompilation=false",
+            "- name: Verify developer task wrapper\n        if: matrix.primary_lane\n        run: make lint",
+            "- name: Build\n        if: ${{ !matrix.primary_lane }}",
+            "run: |\n          ./.github/scripts/run-dotnet-tests.ps1 `\n            -Framework \"${{ matrix.test-framework }}\" `\n            -CollectCoverage \"${{ matrix.primary_lane }}\"");
         AssertDoesNotContainAny(
-            normalizedWorkflow,
+            workflow,
             "- name: Verify Release solution build",
             "dotnet build CodeIndex.sln --configuration Release --no-restore",
             "- name: Verify formatting");
@@ -104,12 +102,12 @@ public class CiWorkflowTests
             "TestResults/**/*.xml",
             "TestResults/**/*.dmp",
             "TestResults/**/*.dump",
-            "if: always() && steps.lane.outputs.primary_lane == 'true'");
+            "if: always() && matrix.primary_lane");
         AssertContainsAll(
-            normalizedWorkflow,
+            workflow,
             "- name: Upload test results\n        if: always() && (steps.test.outputs.summarize == 'true' || failure())",
-            "- name: Publish\n        if: steps.lane.outputs.primary_lane == 'true'",
-            "- name: Upload build artifact\n        if: steps.lane.outputs.primary_lane == 'true'");
+            "- name: Publish\n        if: matrix.primary_lane",
+            "- name: Upload build artifact\n        if: matrix.primary_lane");
         AssertDoesNotContainAny(
             workflow,
             "tools/CodeIndex.TestTelemetry --configuration Release --no-build",
@@ -118,17 +116,17 @@ public class CiWorkflowTests
             "always() && matrix.os == 'ubuntu-24.04' && matrix.test-framework == 'net8.0'",
             "always() && !(matrix.os == 'windows-2022' && matrix.test-framework == 'net9.0')");
         AssertDoesNotContainAny(
-            normalizedWorkflow,
+            workflow,
             "if: always()\n        run: dotnet run --project tools/CodeIndex.TestTelemetry",
             "- name: Upload test results\n        if: always()\n");
-        Assert.Contains("function Invoke-TestRun", normalizedTestScript);
+        Assert.Contains("function Invoke-TestRun", testScript);
     }
 
     [Fact]
     public void WindowsTestHostSetup_IsSharedAcrossDotnetAndReleaseWorkflows()
     {
-        var dotnetWorkflow = RepositoryTestPaths.ReadWorkflow("dotnet.yml").ReplaceLineEndings("\n");
-        var releaseWorkflow = RepositoryTestPaths.ReadWorkflow("release.yml").ReplaceLineEndings("\n");
+        var dotnetWorkflow = RepositoryTestPaths.ReadNormalizedDotnetWorkflow();
+        var releaseWorkflow = RepositoryTestPaths.ReadNormalizedReleaseWorkflow();
         var setupScript = RepositoryTestPaths.ReadText(".github", "scripts", "configure-windows-test-host.ps1");
         const string expectedStep =
             "- name: Configure Windows test host\n" +
@@ -153,8 +151,9 @@ public class CiWorkflowTests
     [Fact]
     public void GitHubActionsWorkflows_FollowRunnerArtifactCacheAndContinueOnErrorPolicy()
     {
-        var workflows = ReadWorkflowFiles();
+        var workflows = RepositoryTestPaths.ReadNormalizedWorkflows();
         var allWorkflows = string.Join("\n", workflows.Select(static workflow => workflow.Content));
+        var stepBlocks = ReadStepBlocks(workflows);
 
         AssertContainsAll(allWorkflows, "ubuntu-24.04", "windows-2022", "macos-14");
 
@@ -169,7 +168,7 @@ public class CiWorkflowTests
                 "macos-latest");
         }
 
-        var continueOnErrorBlocks = FindStepBlocks(workflows, "continue-on-error: true").ToArray();
+        var continueOnErrorBlocks = FindStepBlocks(stepBlocks, "continue-on-error: true").ToArray();
         var continueOnErrorBlock = Assert.Single(continueOnErrorBlocks);
         Assert.Equal("dotnet.yml", continueOnErrorBlock.FileName);
         AssertContainsAll(
@@ -179,17 +178,17 @@ public class CiWorkflowTests
             "if: failure()",
             "actions/upload-artifact@");
 
-        foreach (var uploadBlock in FindStepBlocks(workflows, "actions/upload-artifact@"))
+        foreach (var uploadBlock in FindStepBlocks(stepBlocks, "actions/upload-artifact@"))
         {
             AssertContainsAll(uploadBlock.Text, StringComparison.Ordinal, "retention-days:");
         }
 
-        foreach (var downloadBlock in FindStepBlocks(workflows, "actions/download-artifact@"))
+        foreach (var downloadBlock in FindStepBlocks(stepBlocks, "actions/download-artifact@"))
         {
             AssertContainsAll(downloadBlock.Text, StringComparison.Ordinal, "pattern:", "path:");
         }
 
-        foreach (var cacheBlock in FindStepBlocks(workflows, "actions/cache@"))
+        foreach (var cacheBlock in FindStepBlocks(stepBlocks, "actions/cache@"))
         {
             AssertContainsAll(
                 cacheBlock.Text,
@@ -266,7 +265,7 @@ public class CiWorkflowTests
     [Fact]
     public void DotnetWorkflow_UsesSdkCompatibleNuGetAudit()
     {
-        var workflow = RepositoryTestPaths.ReadWorkflow("dotnet.yml");
+        var workflow = RepositoryTestPaths.ReadDotnetWorkflow();
 
         AssertContainsAll(
             workflow,
@@ -320,29 +319,23 @@ public class CiWorkflowTests
             Assert.DoesNotContain(excluded, text, comparisonType);
     }
 
-    private static IReadOnlyList<(string FileName, string Content)> ReadWorkflowFiles()
+    private static IReadOnlyList<(string FileName, string Text)> ReadStepBlocks(
+        IEnumerable<(string FileName, string Content)> workflows)
     {
-        var workflowsDirectory = RepositoryTestPaths.Combine(".github", "workflows");
-        return Directory
-            .EnumerateFiles(workflowsDirectory, "*.yml")
-            .OrderBy(static path => Path.GetFileName(path), StringComparer.Ordinal)
-            .Select(static path => (Path.GetFileName(path), File.ReadAllText(path).ReplaceLineEndings("\n")))
-            .ToArray();
-    }
-
-    private static IEnumerable<(string FileName, string Text)> FindStepBlocks(
-        IEnumerable<(string FileName, string Content)> workflows,
-        string requiredText)
-    {
+        var blocks = new List<(string FileName, string Text)>();
         foreach (var workflow in workflows)
         {
             foreach (Match block in StepBlockPattern.Matches(workflow.Content))
-            {
-                if (block.Value.Contains(requiredText, StringComparison.Ordinal))
-                    yield return (workflow.FileName, block.Value);
-            }
+                blocks.Add((workflow.FileName, block.Value));
         }
+
+        return blocks;
     }
+
+    private static IEnumerable<(string FileName, string Text)> FindStepBlocks(
+        IEnumerable<(string FileName, string Text)> stepBlocks,
+        string requiredText)
+        => stepBlocks.Where(block => block.Text.Contains(requiredText, StringComparison.Ordinal));
 
     private static void AssertTopLevelContentsPermissionStaysReadOnly(string fileName, string workflow)
     {

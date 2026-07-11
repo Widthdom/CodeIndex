@@ -59,14 +59,7 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "python", content);
         var references = ReferenceExtractor.Extract(1, "python", content, symbols);
 
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Payload"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "Job");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Result"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "Job");
+        AssertReferencesContain(references, "type_reference", "Job", "Payload", "Result");
         Assert.Contains(references, reference =>
             reference.SymbolName == "list"
             && reference.ReferenceKind == "call"
@@ -205,43 +198,23 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "python", content, symbols);
 
         Assert.Equal(9, references.Count(reference => reference.ReferenceKind == "decorator"));
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "bare_decorator"
-            && reference.ReferenceKind == "decorator");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "parametrized"
-            && reference.ReferenceKind == "decorator");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "staticmethod"
-            && reference.ReferenceKind == "decorator");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "pytest.fixture"
-            && reference.ReferenceKind == "decorator");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "pytest.mark.parametrize"
-            && reference.ReferenceKind == "decorator");
+        AssertReferencesContain(
+            references,
+            "decorator",
+            null,
+            "bare_decorator",
+            "parametrized",
+            "staticmethod",
+            "pytest.fixture",
+            "pytest.mark.parametrize");
         Assert.Contains(references, reference =>
             reference.SymbolName == "parametrized"
             && reference.ReferenceKind == "call");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "target_func"
-            && reference.ReferenceKind == "reference"
-            && reference.Context == "@functools.wraps(target_func)");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "memoize"
-            && reference.ReferenceKind == "call"
-            && reference.Context == "@cache_with(timeout=30)(memoize(target_func))");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "target_func"
-            && reference.ReferenceKind == "reference"
-            && reference.Context == "@cache_with(timeout=30)(memoize(target_func))");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "make_factory"
-            && reference.ReferenceKind == "call"
-            && reference.Context == "@cache_with(factory=make_factory())");
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "DEFAULT_TIMEOUT"
-            && reference.ReferenceKind == "call");
+        AssertReferencesContainInContext(references, "reference", "@functools.wraps(target_func)", "target_func");
+        AssertReferencesContainInContext(references, "call", "@cache_with(timeout=30)(memoize(target_func))", "memoize");
+        AssertReferencesContainInContext(references, "reference", "@cache_with(timeout=30)(memoize(target_func))", "target_func");
+        AssertReferencesContainInContext(references, "call", "@cache_with(factory=make_factory())", "make_factory");
+        AssertReferencesDoNotContain(references, "call", "DEFAULT_TIMEOUT");
     }
 
     [Fact]

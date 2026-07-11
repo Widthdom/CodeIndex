@@ -16,6 +16,37 @@ internal static class RepositoryTestPaths
 
     internal static string ReadWorkflow(string fileName) => ReadText(".github", "workflows", fileName);
 
+    internal static string ReadReleaseWorkflow() => ReadWorkflow("release.yml");
+
+    internal static string ReadDotnetWorkflow() => ReadWorkflow("dotnet.yml");
+
+    internal static string ReadNormalizedReleaseWorkflow() => ReadNormalizedWorkflow("release.yml");
+
+    internal static string ReadNormalizedDotnetWorkflow() => ReadNormalizedWorkflow("dotnet.yml");
+
+    internal static string ReadNormalizedWorkflow(string fileName)
+        => ReadNormalizedText(".github", "workflows", fileName);
+
+    internal static string ReadNormalizedText(params string[] relativeParts)
+        => ReadText(relativeParts).ReplaceLineEndings("\n");
+
+    internal static string[] ReadNormalizedLines(params string[] relativeParts)
+        => ReadNormalizedText(relativeParts).Split('\n');
+
+    internal static string ReadDockerfile() => ReadText("Dockerfile");
+
+    internal static string ReadDockerIgnore() => ReadText(".dockerignore");
+
+    internal static IReadOnlyList<(string FileName, string Content)> ReadNormalizedWorkflows()
+    {
+        var workflowsDirectory = Combine(".github", "workflows");
+        return Directory
+            .EnumerateFiles(workflowsDirectory, "*.yml")
+            .OrderBy(static path => Path.GetFileName(path), StringComparer.Ordinal)
+            .Select(static path => (Path.GetFileName(path), File.ReadAllText(path).ReplaceLineEndings("\n")))
+            .ToArray();
+    }
+
     private static string LocateRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
