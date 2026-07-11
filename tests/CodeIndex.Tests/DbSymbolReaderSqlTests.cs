@@ -5,7 +5,7 @@ public class DbSymbolReaderSqlTests
     [Fact]
     public void HotspotFilteredCandidates_UseExplicitProjection()
     {
-        var source = RepositoryTestPaths.ReadText("src", "CodeIndex", "Database", "DbSymbolReader.cs");
+        var source = RepositoryTestPaths.ReadText("src", "CodeIndex", "Database", "DbSymbolReader.Hotspots.cs");
         var filteredBlocks = source.Split("filtered_candidates AS (", StringSplitOptions.None).Skip(1).ToList();
 
         Assert.Equal(2, filteredBlocks.Count);
