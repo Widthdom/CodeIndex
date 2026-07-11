@@ -5100,11 +5100,14 @@ public partial class QueryCommandRunnerTests
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (referencesCountExitCode, referencesCountStdout, referencesCountStderr) = RunBuiltCli(["references", "$primary", "--db", dbPath, "--json", "--lang", "css", "--exact-name", "--count"]);
-            var (callersExitCode, callersStdout, callersStderr) = RunBuiltCli(["callers", "$primary", "--db", dbPath, "--json", "--lang", "css", "--exact-name"]);
-            var (callersCountExitCode, callersCountStdout, callersCountStderr) = RunBuiltCli(["callers", "$primary", "--db", dbPath, "--json", "--lang", "css", "--exact-name", "--count"]);
-            var (calleesExitCode, calleesStdout, calleesStderr) = RunBuiltCli(["callees", "$rounded", "--db", dbPath, "--json", "--lang", "css", "--exact-name"]);
-            var (calleesCountExitCode, calleesCountStdout, calleesCountStderr) = RunBuiltCli(["callees", "$rounded", "--db", dbPath, "--json", "--lang", "css", "--exact-name", "--count"]);
+            var (referencesCountExitCode, referencesCountStdout, referencesCountStderr) = RunReferencesInProcess(
+                "$primary", dbPath, "css", true, "--count");
+            var (callersExitCode, callersStdout, callersStderr) = RunCallersInProcess("$primary", dbPath, "css");
+            var (callersCountExitCode, callersCountStdout, callersCountStderr) = RunCallersInProcess(
+                "$primary", dbPath, "css", true, "--count");
+            var (calleesExitCode, calleesStdout, calleesStderr) = RunCalleesInProcess("$rounded", dbPath, "css");
+            var (calleesCountExitCode, calleesCountStdout, calleesCountStderr) = RunCalleesInProcess(
+                "$rounded", dbPath, "css", true, "--count");
 
             using var referencesCountDocument = ParseJsonOutput(referencesCountStdout);
             using var callersCountDocument = ParseJsonOutput(callersCountStdout);
@@ -6100,10 +6103,42 @@ public partial class QueryCommandRunnerTests
     private (int ExitCode, string StdOut, string StdErr) RunReferencesInProcess(
         string query,
         string dbPath,
-        string lang = "sql")
-        => CaptureConsole(() => QueryCommandRunner.RunReferences(
-            [query, "--db", dbPath, "--json", "--lang", lang, "--exact-name"],
-            _jsonOptions));
+        string lang = "sql",
+        bool exactName = true,
+        params string[] extraArgs)
+        => RunNamedQueryInProcess(QueryCommandRunner.RunReferences, query, dbPath, lang, exactName, extraArgs);
+
+    private (int ExitCode, string StdOut, string StdErr) RunCallersInProcess(
+        string query,
+        string dbPath,
+        string lang = "csharp",
+        bool exactName = true,
+        params string[] extraArgs)
+        => RunNamedQueryInProcess(QueryCommandRunner.RunCallers, query, dbPath, lang, exactName, extraArgs);
+
+    private (int ExitCode, string StdOut, string StdErr) RunCalleesInProcess(
+        string query,
+        string dbPath,
+        string lang = "csharp",
+        bool exactName = true,
+        params string[] extraArgs)
+        => RunNamedQueryInProcess(QueryCommandRunner.RunCallees, query, dbPath, lang, exactName, extraArgs);
+
+    private (int ExitCode, string StdOut, string StdErr) RunNamedQueryInProcess(
+        Func<string[], JsonSerializerOptions, int> command,
+        string query,
+        string dbPath,
+        string lang,
+        bool exactName,
+        params string[] extraArgs)
+    {
+        var args = new List<string> { query, "--db", dbPath, "--json", "--lang", lang };
+        if (exactName)
+            args.Add("--exact-name");
+        args.AddRange(extraArgs);
+
+        return CaptureConsole(() => command([.. args], _jsonOptions));
+    }
 
     private (int ExitCode, string StdOut, string StdErr) RunSymbolsInProcess(params string[] args)
         => CaptureConsole(() => QueryCommandRunner.RunSymbols(args, _jsonOptions));
