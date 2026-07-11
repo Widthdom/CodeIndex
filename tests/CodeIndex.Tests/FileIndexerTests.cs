@@ -20,6 +20,16 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public partial class FileIndexerTests
 {
+    [Theory]
+    [InlineData(null, 256)]
+    [InlineData(1, 256)]
+    [InlineData(50_000, 50_000)]
+    [InlineData(int.MaxValue, FileIndexer.MaxInitialScanFileCapacity)]
+    public void ResolveInitialScanFileCapacity_BoundsHints(int? hint, int expected)
+    {
+        Assert.Equal(expected, FileIndexer.ResolveInitialScanFileCapacity(hint));
+    }
+
     [Fact]
     public void NormalizeIgnorePath_PosixPreservesLiteralBackslash()
     {

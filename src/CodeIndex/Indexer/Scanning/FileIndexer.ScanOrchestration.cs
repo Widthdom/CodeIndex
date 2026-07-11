@@ -14,11 +14,13 @@ public partial class FileIndexer
     internal ScanFilesResult ScanFilesDetailed(
         IReadOnlySet<string>? checkpointedDirectories = null,
         bool continueOnError = true,
+        int? initialFileCapacity = null,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var files = new List<string>(InitialScanFileCapacity);
-        var fileLanguages = new Dictionary<string, string>(InitialScanFileCapacity, StringComparer.Ordinal);
+        var resolvedFileCapacity = ResolveInitialScanFileCapacity(initialFileCapacity);
+        var files = new List<string>(resolvedFileCapacity);
+        var fileLanguages = new Dictionary<string, string>(resolvedFileCapacity, StringComparer.Ordinal);
         var languageCounts = new Dictionary<string, int>(InitialScanLanguageCapacity, StringComparer.Ordinal);
         var errors = new List<ScanError>(_submoduleLoadWarnings.Count);
         var listedDirectories = new HashSet<string>(InitialScanDirectoryCapacity, StringComparer.Ordinal);

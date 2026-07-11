@@ -1117,6 +1117,20 @@ public class DbWriter
         }
     }
 
+    public int GetIndexedFileCount()
+    {
+        var cmd = RentCommand("SELECT COUNT(*) FROM files", static _ => { });
+        try
+        {
+            var count = Convert.ToInt64(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+            return count >= int.MaxValue ? int.MaxValue : (int)count;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+    }
+
     public bool HasAnyFilesWithLanguage(string lang)
     {
         LanguagePresenceCheckForTesting?.Invoke(lang);

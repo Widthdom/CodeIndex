@@ -690,6 +690,7 @@ public static partial class IndexCommandRunner
         string projectRoot,
         IndexCommandOptions options,
         string[] spinnerFrames,
+        int? initialFileCapacity,
         CancellationToken cancellationToken)
     {
         var actualMode = options.Rebuild ? "rebuild" : "incremental";
@@ -727,7 +728,11 @@ public static partial class IndexCommandRunner
         try
         {
             ThrowIfDiscoveryCancelled();
-            scanResult = indexer.ScanFilesDetailed(checkpointedDirectories, continueOnError: true, cancellationToken: cancellationToken);
+            scanResult = indexer.ScanFilesDetailed(
+                checkpointedDirectories,
+                continueOnError: true,
+                initialFileCapacity: initialFileCapacity,
+                cancellationToken: cancellationToken);
             ThrowIfDiscoveryCancelled();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -893,7 +898,14 @@ public static partial class IndexCommandRunner
             throw new IndexInterruptedException(filesProcessed, filesTotal, actualMode);
         }
 
-        var discovery = DiscoverFullScanFiles(indexer, projectRoot, options, spinnerFrames, cancellationToken);
+        int? initialScanFileCapacity = options.Rebuild ? null : writer.GetIndexedFileCount();
+        var discovery = DiscoverFullScanFiles(
+            indexer,
+            projectRoot,
+            options,
+            spinnerFrames,
+            initialScanFileCapacity,
+            cancellationToken);
         var scanResult = discovery.ScanResult;
         var scanHadErrors = scanResult.HadErrors;
         var files = discovery.Files;
