@@ -195,54 +195,6 @@ public static partial class SymbolExtractor
         return sanitizedLines ?? lines;
     }
 
-    private static bool TrySkipJavaScriptTypeScriptNonIdentifierObjectLiteralKey(string sanitizedLine, ref int index)
-    {
-        var probe = index;
-        if (TryReadJavaScriptTypeScriptQuotedLiteralToken(sanitizedLine, ref probe, out _)
-            || TryReadJavaScriptTypeScriptNumericLiteralToken(sanitizedLine, ref probe, out _))
-        {
-            while (probe < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[probe]))
-                probe++;
-
-            if (probe >= sanitizedLine.Length || sanitizedLine[probe] != ':')
-                return false;
-
-            index = probe + 1;
-            return true;
-        }
-
-        if (probe >= sanitizedLine.Length || sanitizedLine[probe] != '[')
-            return false;
-
-        var bracketDepth = 1;
-        probe++;
-        while (probe < sanitizedLine.Length && bracketDepth > 0)
-        {
-            if (sanitizedLine[probe] == '[')
-            {
-                bracketDepth++;
-            }
-            else if (sanitizedLine[probe] == ']')
-            {
-                bracketDepth--;
-            }
-
-            probe++;
-        }
-
-        if (bracketDepth != 0)
-            return false;
-
-        while (probe < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[probe]))
-            probe++;
-
-        if (probe >= sanitizedLine.Length || sanitizedLine[probe] != ':')
-            return false;
-
-        index = probe + 1;
-        return true;
-    }
-
     private static string TrimJavaScriptTypeScriptQuotedModuleName(string moduleName)
     {
         if (moduleName.Length >= 2
