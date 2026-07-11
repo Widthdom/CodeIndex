@@ -9,6 +9,9 @@ namespace CodeIndex.Tests;
 
 internal static class TestProjectHelper
 {
+    internal static string RepeatCsvEntry(string value, int count)
+        => string.Join(',', Enumerable.Repeat(value, count));
+
     internal static string CreateTempProject(string prefix)
     {
         var projectRoot = Path.Combine(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}");

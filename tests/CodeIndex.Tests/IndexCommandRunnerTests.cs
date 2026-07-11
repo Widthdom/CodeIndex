@@ -2038,7 +2038,7 @@ public sealed class Caller
     [Fact]
     public void ParseArgs_SymbolKindFilterRejectsTooManyCsvEntries_Issue2906()
     {
-        var tooMany = string.Join(',', Enumerable.Repeat("class", IndexCommandRunner.MaxSymbolKindFilterCsvEntries + 1));
+        var tooMany = TestProjectHelper.RepeatCsvEntry("class", IndexCommandRunner.MaxSymbolKindFilterCsvEntries + 1);
 
         var options = IndexCommandRunner.ParseArgs([".", "--exclude-symbol-kind", tooMany]);
 
@@ -2052,7 +2052,7 @@ public sealed class Caller
         using var env = EnvironmentVariableScope.Capture(IndexCommandRunner.IncludeSymbolKindsEnvironmentVariable);
         Environment.SetEnvironmentVariable(
             IndexCommandRunner.IncludeSymbolKindsEnvironmentVariable,
-            string.Join(',', Enumerable.Repeat("function", IndexCommandRunner.MaxSymbolKindFilterCsvEntries + 1)));
+            TestProjectHelper.RepeatCsvEntry("function", IndexCommandRunner.MaxSymbolKindFilterCsvEntries + 1));
 
         var options = IndexCommandRunner.ParseArgs(["."]);
 
