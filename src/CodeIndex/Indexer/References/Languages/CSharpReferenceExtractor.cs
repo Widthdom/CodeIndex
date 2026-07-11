@@ -11,7 +11,7 @@ using CSharpWhereConstraintState = CodeIndex.Indexer.ReferenceExtractor.CSharpWh
 
 namespace CodeIndex.Indexer;
 
-internal static class CSharpReferenceExtractor
+internal static partial class CSharpReferenceExtractor
 {
     private const string CallerInfoAttributeNamespace = "System.Runtime.CompilerServices.";
     private static readonly Dictionary<string, string> CallerInfoAttributeTypeNames = new(StringComparer.Ordinal)
