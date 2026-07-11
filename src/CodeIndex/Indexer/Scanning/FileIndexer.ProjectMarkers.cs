@@ -48,7 +48,11 @@ public partial class FileIndexer
     internal ProjectMarkerFingerprintResult GetProjectMarkerFingerprintResult(
         string? lang,
         CancellationToken cancellationToken = default) =>
-        GetProjectMarkerFingerprintResult(lang, MaxProjectMarkerFingerprintDirectories, MaxProjectMarkerFingerprintFiles, cancellationToken);
+        GetProjectMarkerFingerprintResult(
+            lang,
+            ProjectMarkerFingerprintDirectoryBudgetForTesting ?? MaxProjectMarkerFingerprintDirectories,
+            MaxProjectMarkerFingerprintFiles,
+            cancellationToken);
 
     internal string? GetProjectMarkerFingerprintForTesting(
         string? lang,
