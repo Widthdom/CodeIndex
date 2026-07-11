@@ -13936,17 +13936,7 @@ public partial class SymbolExtractorTests
 
 
     private static string GetRepositoryRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null)
-        {
-            if (File.Exists(Path.Combine(dir.FullName, "CodeIndex.sln")))
-                return dir.FullName;
-            dir = dir.Parent;
-        }
-
-        throw new InvalidOperationException("Could not locate repository root / リポジトリルートを特定できませんでした");
-    }
+        => RepositoryTestPaths.Root;
     [Fact]
     public void Extract_Shell_DetectsMultipleAliases()
     {

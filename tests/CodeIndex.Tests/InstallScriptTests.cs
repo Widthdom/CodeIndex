@@ -5990,15 +5990,5 @@ public sealed class InstallScriptTests : IDisposable
     private static string GetInstallScriptPath() => Path.Combine(GetRepositoryRoot(), "install.sh");
 
     private static string GetRepositoryRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null)
-        {
-            if (File.Exists(Path.Combine(dir.FullName, "CodeIndex.sln")) || File.Exists(Path.Combine(dir.FullName, "install.sh")))
-                return dir.FullName;
-            dir = dir.Parent;
-        }
-
-        throw new InvalidOperationException("Could not locate repository root / リポジトリルートを特定できませんでした");
-    }
+        => RepositoryTestPaths.Root;
 }
