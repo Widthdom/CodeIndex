@@ -629,7 +629,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScan_CsharpStaticInterfaceMembersAcrossFiles_IndexesImplicitImplementationReference()
+    public void Run_FullScan_ParallelCsharpStaticInterfacePrepass_IndexesImplicitImplementationReference()
     {
         var projectRoot = CreateTempProject();
         try
@@ -651,7 +651,9 @@ public partial class IndexCommandRunnerTests
                 }
                 """);
 
-            var exitCode = IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions);
+            var exitCode = IndexCommandRunner.Run(
+                [projectRoot, "--parallelism", "4", "--json", "--quiet"],
+                _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, exitCode);
 
             using var conn = OpenNonPoolingConnection(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));

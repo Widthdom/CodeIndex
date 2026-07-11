@@ -19,9 +19,11 @@ internal static class CSharpStaticInterfacePrepass
         Func<FileTarget, bool>? canReuseExistingSymbolsWithoutRead = null,
         Func<FileTarget, bool>? isGeneratedCodeExtractionSuppressed = null,
         Action<string?>? reportCurrentFile = null,
+        Action<int, string?>? reportCandidateFile = null,
+        int parallelism = 1,
         CancellationToken cancellationToken = default)
     {
-        var pendingSymbols = new List<SymbolRecord>();
+        var candidates = new List<FileTarget>();
         var pendingPaths = new HashSet<string>(StringComparer.Ordinal);
         foreach (var target in fileTargets)
         {
@@ -44,32 +46,47 @@ internal static class CSharpStaticInterfacePrepass
             if (language != "csharp")
                 continue;
 
+            if (includeExistingSymbols && canReuseExistingSymbolsWithoutRead?.Invoke(target) == true)
+                continue;
+
+            var generatedExtractionSuppressed = isGeneratedCodeExtractionSuppressed?.Invoke(target)
+                ?? target.GeneratedExtractionSuppressed
+                ?? indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath);
+            if (!generatedExtractionSuppressed)
+                candidates.Add(target);
+        }
+
+        var extractedByCandidate = new List<SymbolRecord>?[candidates.Count];
+        var parallelOptions = new ParallelOptions
+        {
+            CancellationToken = cancellationToken,
+            MaxDegreeOfParallelism = Math.Max(1, parallelism),
+        };
+        Parallel.For(0, candidates.Count, parallelOptions, candidateIndex =>
+        {
+            var target = candidates[candidateIndex];
+            if (parallelOptions.MaxDegreeOfParallelism == 1)
+                reportCurrentFile?.Invoke(target.DisplayRelativePath);
+            reportCandidateFile?.Invoke(candidateIndex, target.DisplayRelativePath);
             try
             {
-                if (includeExistingSymbols && canReuseExistingSymbolsWithoutRead?.Invoke(target) == true)
-                    continue;
-
-                reportCurrentFile?.Invoke(relativePath);
-                var generatedExtractionSuppressed = isGeneratedCodeExtractionSuppressed?.Invoke(target)
-                    ?? target.GeneratedExtractionSuppressed
-                    ?? indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath);
-                if (generatedExtractionSuppressed)
-                    continue;
-
                 if (!indexer.RawFileMayContainCSharpStaticInterfaceContract(
-                    absolutePath,
+                    target.FilePath,
                     target.RelativePath,
                     cancellationToken))
-                    continue;
+                    return;
 
                 var content = indexer.LoadNormalizedContentForPrepass(
-                    absolutePath,
+                    target.FilePath,
                     target.RelativePath,
                     cancellationToken);
-                if (!MayContainCSharpStaticInterfaceContract(content))
-                    continue;
-
-                pendingSymbols.AddRange(SymbolExtractor.Extract(0, "csharp", content, target.IndexPath, cancellationToken: cancellationToken));
+                if (MayContainCSharpStaticInterfaceContract(content))
+                    extractedByCandidate[candidateIndex] = SymbolExtractor.Extract(
+                        0,
+                        "csharp",
+                        content,
+                        target.IndexPath,
+                        cancellationToken: cancellationToken);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
             {
@@ -78,8 +95,17 @@ internal static class CSharpStaticInterfacePrepass
             }
             finally
             {
-                reportCurrentFile?.Invoke(null);
+                if (parallelOptions.MaxDegreeOfParallelism == 1)
+                    reportCurrentFile?.Invoke(null);
+                reportCandidateFile?.Invoke(candidateIndex, null);
             }
+        });
+
+        var pendingSymbols = new List<SymbolRecord>();
+        foreach (var extracted in extractedByCandidate)
+        {
+            if (extracted != null)
+                pendingSymbols.AddRange(extracted);
         }
 
         var symbols = includeExistingSymbols
@@ -110,6 +136,8 @@ internal static class CSharpStaticInterfacePrepass
             canReuseExistingSymbolsWithoutRead: null,
             isGeneratedCodeExtractionSuppressed: null,
             reportCurrentFile: reportCurrentFile,
+            reportCandidateFile: null,
+            parallelism: 1,
             cancellationToken: cancellationToken);
     }
 

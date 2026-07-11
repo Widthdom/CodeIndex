@@ -173,6 +173,17 @@ public static partial class IndexCommandRunner
     internal static string FormatIndexPhasePath(string path, string phase) =>
         $"{path} ({phase})";
 
+    internal static string? GetActiveCSharpPrepassPath(string?[] activePaths)
+    {
+        foreach (var path in activePaths)
+        {
+            if (path != null)
+                return path;
+        }
+
+        return null;
+    }
+
     internal static string? GetJsonIndexHeartbeatPath(string? currentFile, IEnumerable<string> activeExtractionPhases)
     {
         if (!string.IsNullOrEmpty(currentFile))
@@ -1331,11 +1342,11 @@ public static partial class IndexCommandRunner
         else
         {
             WriteFullScanJsonLiveness(options, "preparing C# workspace symbols...");
-            string? currentCSharpWorkspaceFile = null;
+            var activeCSharpWorkspaceFiles = new string?[csharpPrepassTargets.Count];
             var csharpWorkspaceHeartbeat = StartFullScanJsonPhaseHeartbeat(
                 options,
                 "preparing C# workspace symbols",
-                () => currentCSharpWorkspaceFile);
+                () => GetActiveCSharpPrepassPath(activeCSharpWorkspaceFiles));
             try
             {
                 if (csharpPrepassTargets.Count == 0)
@@ -1351,7 +1362,8 @@ public static partial class IndexCommandRunner
                         csharpPrepassTargets,
                         includeExistingSymbols: !options.Rebuild && !startedWithNoIndexedFiles,
                         canReuseExistingSymbolsWithoutRead: CanReuseCSharpPrepassTargetWithoutRead,
-                        reportCurrentFile: path => currentCSharpWorkspaceFile = path,
+                        reportCandidateFile: (candidateIndex, path) => activeCSharpWorkspaceFiles[candidateIndex] = path,
+                        parallelism: extractionParallelism,
                         cancellationToken: cancellationToken);
                 }
             }
@@ -1361,7 +1373,7 @@ public static partial class IndexCommandRunner
             }
             finally
             {
-                currentCSharpWorkspaceFile = null;
+                Array.Clear(activeCSharpWorkspaceFiles);
                 StopFullScanJsonPhaseHeartbeat(csharpWorkspaceHeartbeat);
             }
         }

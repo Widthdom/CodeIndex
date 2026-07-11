@@ -332,6 +332,7 @@ public static partial class IndexCommandRunner
                     writer,
                     indexer,
                     csharpPrepassTargets,
+                    parallelism: options.Parallelism,
                     cancellationToken: cancellationToken);
             }
         }
@@ -370,6 +371,7 @@ public static partial class IndexCommandRunner
                         writer,
                         indexer,
                         csharpPrepassTargets,
+                        parallelism: options.Parallelism,
                         cancellationToken: cancellationToken);
                 }
             }
