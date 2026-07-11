@@ -43,6 +43,11 @@ jobs:
           dotnet-version: |
             8.0.413
             9.0.301
+          cache: true
+          cache-dependency-path: tools/CodeIndex.Changelog/packages.lock.json
+
+      - name: Restore changelog tool dependencies
+        run: dotnet restore tools/CodeIndex.Changelog/CodeIndex.Changelog.csproj --locked-mode
 
       - name: Validate changelog fragments
-        run: dotnet run --project tools/CodeIndex.Changelog -- check
+        run: dotnet run --project tools/CodeIndex.Changelog --no-restore -- check

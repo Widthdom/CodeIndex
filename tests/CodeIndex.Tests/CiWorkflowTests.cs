@@ -187,6 +187,19 @@ public class CiWorkflowTests
     }
 
     [Fact]
+    public void ChangelogWorkflow_CachesAndRestoresLockedToolDependenciesOnce()
+    {
+        var workflow = RepositoryTestPaths.ReadWorkflow("changelog-fragments.yml").Replace("\r\n", "\n");
+
+        AssertContainsAll(
+            workflow,
+            "cache: true",
+            "cache-dependency-path: tools/CodeIndex.Changelog/packages.lock.json",
+            "dotnet restore tools/CodeIndex.Changelog/CodeIndex.Changelog.csproj --locked-mode",
+            "dotnet run --project tools/CodeIndex.Changelog --no-restore -- check");
+    }
+
+    [Fact]
     public void GitHubActionsWorkflows_FollowRunnerArtifactCacheAndContinueOnErrorPolicy()
     {
         var workflows = RepositoryTestPaths.ReadNormalizedWorkflows();
