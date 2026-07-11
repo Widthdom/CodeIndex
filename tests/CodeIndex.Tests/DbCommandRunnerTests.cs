@@ -1094,8 +1094,11 @@ public class DbCommandRunnerTests
                 var checkpointPath = Path.Combine(checkpointRoot, $"checkpoint-{i:D4}");
                 Directory.CreateDirectory(checkpointPath);
                 File.WriteAllText(Path.Combine(checkpointPath, "codeindex.db"), "db");
-                for (var file = 0; file < DbCommandRunner.CheckpointFileInspectLimit + 1; file++)
-                    File.WriteAllText(Path.Combine(checkpointPath, $"extra-{file:D4}.txt"), "x");
+                if (i == 0)
+                {
+                    for (var file = 0; file < DbCommandRunner.CheckpointFileInspectLimit + 1; file++)
+                        File.WriteAllText(Path.Combine(checkpointPath, $"extra-{file:D4}.txt"), "x");
+                }
             }
 
             var (listExit, json) = RunAndCaptureJson(["checkpoints", "--list", "--db", dbPath, "--json"]);

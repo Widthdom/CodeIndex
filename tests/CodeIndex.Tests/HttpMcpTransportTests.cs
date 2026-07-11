@@ -1130,6 +1130,9 @@ public class HttpMcpTransportTests : IDisposable
     public async Task HttpTransport_EventsStream_RemovesDisconnectedStreams()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+        harness.SetKeepAlive(
+            TimeSpan.FromMilliseconds(10),
+            () => """{"jsonrpc":"2.0","method":"notifications/test"}""");
 
         using var client = CreateHttpClient();
         using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);

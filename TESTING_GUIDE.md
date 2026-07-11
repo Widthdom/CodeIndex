@@ -56,6 +56,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   SQLite schema, write paths, migrations, and query behavior. DbReader coverage is split by query family, including search, SQL qualified-name handling, file dependencies, impact, and symbol-query suites, while shared seeded fixture state remains on the root `DbReaderTests` part.
   `DbSchemaConstraintTests.cs` also locks schema constraints to `SymbolKindCatalog` and required file foreign keys so DB readiness checks fail when code enums and SQLite CHECK clauses drift.
   Hotspot ranking fixtures should use the smallest counts that cross each ranking threshold; for structural-rank tests, keep one side just above the raw-reference comparison and the other just above the symbol-count threshold instead of scaling both far beyond the boundary.
+  Checkpoint listing cap fixtures should exceed the checkpoint count cap once and exceed the inspected-file cap on only one checkpoint; multiplying both caps together adds filesystem work without increasing boundary coverage.
 - `ConcurrencyTests.cs`
   WAL snapshot and shared-writer stress tests. The concurrent reader/writer
   snapshot tests stop after enough reader and writer iterations are observed,
@@ -131,6 +132,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Stdio response-order tests use the same signal-gated pattern: make the synthetic transport signal the parse-error path instead of sleeping in the response serializer.
 - `HttpMcpTransportTests.cs`
   HTTP MCP transport behavior, including authentication responses, warm server reuse, concurrent requests, and request logging. Request-log assertions must validate recorded contents without assuming callback order between independently handled HTTP requests.
+  Event-stream disconnect tests that only need stream removal should use a short test-owned keep-alive or another explicit write trigger instead of waiting for the production heartbeat interval.
 - `GitHelperTests.cs`, `GitProcessRunnerTests.cs`
   Git-specific behavior, including worktrees, commit-based updates, direct git process runner diagnostics, and cancellation of git subprocesses. Tests that create real repositories or launch real/fake git subprocesses use `ExternalProcessFactAttribute` / `ExternalProcessTheoryAttribute` and run only on the `net8.0` test target; keep pure `.git` metadata parsing and trusted-candidate enumeration cross-target. Timeout and cancellation wall-clock assertions should stay below the fake git scripts' natural completion while leaving room for macOS CI scheduling and process-cleanup overhead. Fake git scripts that run after commit-ref validation should echo the verified commit argument for `rev-parse --verify <ref>^{commit}` so timeout tests reach the intended git command.
 - `WorkspaceMetadataEnricherTests.cs`
@@ -380,6 +382,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   SQLite スキーマ、書き込み経路、マイグレーション、クエリ挙動のテスト。DbReader のカバレッジは search、SQL qualified name、file dependency、impact、symbol query などの query family ごとの partial suite に分割し、共有の seed 済み fixture 状態は root 側の `DbReaderTests` に残します。
   `DbSchemaConstraintTests.cs` は DB readiness check が code enum と SQLite CHECK 句の drift を検出できるよう、schema constraint と `SymbolKindCatalog`、必須 file foreign key の同期も固定します。
   hotspot ranking fixture は各 ranking threshold を跨ぐ最小 count を使ってください。structural-rank test では、raw reference 比較をわずかに超える側と symbol-count threshold をわずかに超える側を用意し、境界から大きく離れた件数まで膨らませないでください。
+  checkpoint listing cap fixture は checkpoint count cap を 1 件だけ超え、inspected-file cap は 1 checkpoint だけで超えてください。両方の cap を掛け合わせても boundary coverage は増えず、filesystem work だけが増えます。
 - `ConcurrencyTests.cs`
   WAL snapshot と shared-writer の stress test。concurrent reader/writer snapshot
   テストは reader / writer の十分な反復を観測した時点で停止し、遅い host 用に
@@ -452,6 +455,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   stdio response-order test も同じ signal-gated pattern を使い、response serializer で sleep する代わりに synthetic transport が parse-error path を signal するようにします。
 - `HttpMcpTransportTests.cs`
   HTTP MCP transport の挙動。認証レスポンス、warm server reuse、並行リクエスト、リクエストログを含みます。リクエストログの assertion は、独立に処理される HTTP リクエスト間の callback 順序を仮定せず、記録内容を検証してください。
+  stream removal だけを必要とする event-stream disconnect test は、production heartbeat interval を待たず、短い test-owned keep-alive または別の明示的な write trigger を使ってください。
 - `GitHelperTests.cs`、`GitProcessRunnerTests.cs`
   worktree や commit ベース更新、direct git process runner diagnostics、git subprocess の cancellation を含む Git まわりのテスト。実 repo を作る、または real/fake git subprocess を起動するテストは `ExternalProcessFactAttribute` / `ExternalProcessTheoryAttribute` を使い、`net8.0` test target だけで実行します。純粋な `.git` metadata parsing と trusted-candidate enumeration は cross-target のままにしてください。Timeout と cancellation の wall-clock assertion は fake git script の自然完了より短く保ちつつ、macOS CI の scheduling や process cleanup の遅れを許容する余裕を持たせます。commit-ref validation 後に使う fake git script は `rev-parse --verify <ref>^{commit}` の検証対象 commit 引数を返し、timeout テストが意図した git command まで到達するようにします。
 - `WorkspaceMetadataEnricherTests.cs`
