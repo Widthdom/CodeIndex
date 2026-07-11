@@ -25,14 +25,16 @@ internal static class CSharpStaticInterfacePrepass
     {
         var targetCount = fileTargets.TryGetNonEnumeratedCount(out var count) ? count : 0;
         var candidates = new List<FileTarget>(targetCount);
-        var pendingPaths = new HashSet<string>(targetCount, StringComparer.Ordinal);
+        var pendingPaths = includeExistingSymbols
+            ? new HashSet<string>(targetCount, StringComparer.Ordinal)
+            : null;
         foreach (var target in fileTargets)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var absolutePath = target.FilePath;
             var relativePath = target.DisplayRelativePath;
             if (includeExistingSymbols && !IsOutsideProjectRoot(relativePath))
-                pendingPaths.Add(target.IndexPath);
+                pendingPaths!.Add(target.IndexPath);
 
             var language = target.Language;
             if (language == null)
@@ -115,11 +117,11 @@ internal static class CSharpStaticInterfacePrepass
         }
 
         var symbols = includeExistingSymbols
-            ? writer.LoadCSharpStaticInterfaceContractSymbols(pendingPaths)
+            ? writer.LoadCSharpStaticInterfaceContractSymbols(pendingPaths!)
             : [];
         symbols.AddRange(pendingSymbols);
         var hadPendingContracts = includeExistingSymbols
-            && writer.HasCSharpStaticInterfaceContractSymbolsInPaths(pendingPaths);
+            && writer.HasCSharpStaticInterfaceContractSymbolsInPaths(pendingPaths!);
         return new CSharpStaticInterfaceWorkspaceSymbols(
             symbols,
             HasCSharpStaticInterfaceContractSymbol(symbols) || hadPendingContracts);
