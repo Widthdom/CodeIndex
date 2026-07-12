@@ -9295,7 +9295,7 @@ jobs:
     }
 
     [Fact]
-    public void RunSearch_ExactSubstringTreatsCSharpVerbatimQualifiedNamesAsCanonical()
+    public void SearchAndFind_ExactTreatCSharpVerbatimQualifiedNamesAsCanonical()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_csharp_verbatim");
         try
@@ -9322,6 +9322,18 @@ jobs:
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(1, json.GetProperty("count").GetInt32());
             Assert.Equal(1, json.GetProperty("files").GetInt32());
+
+            var (findExitCode, findStdout, findStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["Foo.Bar", "--db", dbPath, "--path", "src/app.cs", "--json", "--exact", "--count"],
+                _jsonOptions));
+
+            using var findDocument = ParseJsonOutput(findStdout);
+            var findJson = findDocument.RootElement;
+            Assert.Equal(CommandExitCodes.Success, findExitCode);
+            Assert.Equal(string.Empty, findStderr);
+            Assert.Equal(1, findJson.GetProperty("count").GetInt32());
+            Assert.Equal(1, findJson.GetProperty("files").GetInt32());
+            Assert.Equal(1, findJson.GetProperty("file_count").GetInt32());
         }
         finally
         {
@@ -9330,7 +9342,7 @@ jobs:
     }
 
     [Fact]
-    public void RunSearch_ExactSubstringTreatsJavaUnicodeEscapesAsCanonical()
+    public void SearchAndFind_ExactTreatJavaUnicodeEscapesAsCanonical()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_java_unicode");
         try
@@ -9358,43 +9370,19 @@ jobs:
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(1, json.GetProperty("count").GetInt32());
             Assert.Equal(1, json.GetProperty("files").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunFind_ExactTreatsJavaUnicodeEscapesAsCanonical()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_exact_java_unicode");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/App.java",
-                "java",
-                """
-                public class \u0046oo
-                {
-                    void match() {}
-                }
-                """);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            var (findExitCode, findStdout, findStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
                 ["Foo", "--db", dbPath, "--path", "src/App.java", "--json", "--exact", "--count"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+            using var findDocument = ParseJsonOutput(findStdout);
+            var findJson = findDocument.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.Equal(1, json.GetProperty("files").GetInt32());
-            Assert.Equal(1, json.GetProperty("file_count").GetInt32());
+            Assert.Equal(CommandExitCodes.Success, findExitCode);
+            Assert.Equal(string.Empty, findStderr);
+            Assert.Equal(1, findJson.GetProperty("count").GetInt32());
+            Assert.Equal(1, findJson.GetProperty("files").GetInt32());
+            Assert.Equal(1, findJson.GetProperty("file_count").GetInt32());
         }
         finally
         {
@@ -9428,42 +9416,6 @@ jobs:
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(1, json.GetProperty("count").GetInt32());
             Assert.Equal(1, json.GetProperty("files").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunFind_ExactTreatsCSharpVerbatimQualifiedNamesAsCanonical()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_exact_csharp_verbatim");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/app.cs",
-                "csharp",
-                """
-                namespace Demo;
-
-                using @Foo.@Bar;
-                """);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
-                ["Foo.Bar", "--db", dbPath, "--path", "src/app.cs", "--json", "--exact", "--count"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.Equal(1, json.GetProperty("files").GetInt32());
-            Assert.Equal(1, json.GetProperty("file_count").GetInt32());
         }
         finally
         {
