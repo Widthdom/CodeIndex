@@ -15023,4 +15023,27 @@ public partial class ReferenceExtractorTests
         var qualifier = Assert.Single(qualifierReferences);
         Assert.Equal("type_reference", qualifier.ReferenceKind);
     }
+
+    [Fact]
+    public void Extract_CSharpFieldReceiver_UsesQualifiedReferenceIdentity_Issue4414()
+    {
+        const string content = """
+            class Service
+            {
+                private readonly Reader _reader;
+                void Run()
+                {
+                    _reader.Read();
+                }
+            }
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("csharp", content);
+        var receiver = Assert.Single(references.Where(reference =>
+            reference.SymbolName.EndsWith("Service._reader", StringComparison.Ordinal)));
+
+        Assert.Equal("reference", receiver.ReferenceKind);
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "_reader" && reference.ReferenceKind == "call");
+    }
 }

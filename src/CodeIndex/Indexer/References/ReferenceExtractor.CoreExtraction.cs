@@ -2254,6 +2254,47 @@ public static partial class ReferenceExtractor
                     return false;
 
                 var callContainer = ResolveContainerForCall(callIndex);
+                if (language == "csharp"
+                    && callIndex + name.Length < preparedLine.Length
+                    && preparedLine.AsSpan(callIndex + name.Length).TrimStart().StartsWith(".", StringComparison.Ordinal))
+                {
+                    var receiverLookups = GetCSharpValueReceiverLookups();
+                    if (HasCSharpValueReceiverConflict(
+                            normalizedName,
+                            normalizedName,
+                            lineNumber,
+                            callIndex,
+                            callContainer,
+                            receiverLookups.ByContainingType,
+                            receiverLookups.ByFunctionStartLine))
+                    {
+                        var containingType = GetContainingTypeQualifiedName(callContainer);
+                        if (containingType != null
+                            && receiverLookups.ByContainingType.TryGetValue(containingType, out var receiverNames)
+                            && (receiverNames.InstanceNames.Contains(normalizedName) || receiverNames.StaticNames.Contains(normalizedName)))
+                        {
+                            references.RemoveAll(reference =>
+                                reference.FileId == fileId
+                                && reference.Line == lineNumber
+                                && reference.Column == callIndex + 1
+                                && reference.ReferenceKind == "type_reference"
+                                && string.Equals(reference.SymbolName, normalizedName, StringComparison.Ordinal));
+                            AddReference(
+                                references,
+                                seen,
+                                fileId,
+                                $"{containingType}.{normalizedName}",
+                                callIndex,
+                                "reference",
+                                context,
+                                lineNumber,
+                                callContainer,
+                                language);
+                        }
+
+                        return false;
+                    }
+                }
                 if (IsConstructorCallName(language, preparedLine, callIndex))
                 {
                     AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer, language);
@@ -3234,6 +3275,41 @@ public static partial class ReferenceExtractor
                 references,
                 seen,
                 fileId);
+        }
+
+        if (language == "csharp")
+        {
+            foreach (var reference in references)
+            {
+                if (reference.ReferenceKind != "type_reference"
+                    || reference.Line <= 0
+                    || reference.Line > preparedLines.Length
+                    || reference.Column <= 0)
+                {
+                    continue;
+                }
+
+                var line = preparedLines[reference.Line - 1];
+                var tokenEnd = reference.Column - 1 + reference.SymbolName.Length;
+                if (tokenEnd >= line.Length || !line.AsSpan(tokenEnd).TrimStart().StartsWith(".", StringComparison.Ordinal))
+                    continue;
+
+                var owner = containerCandidates.FirstOrDefault(candidate =>
+                    candidate.Name == reference.ContainerName
+                    && candidate.BodyStartLine <= reference.Line
+                    && candidate.BodyEndLine >= reference.Line);
+                var containingType = GetContainingTypeQualifiedName(owner);
+                if (containingType == null || !symbols.Any(symbol =>
+                        symbol.Kind == "property"
+                        && symbol.Name == reference.SymbolName
+                        && symbol.ContainerQualifiedName == containingType))
+                {
+                    continue;
+                }
+
+                reference.SymbolName = $"{containingType}.{reference.SymbolName}";
+                reference.ReferenceKind = "reference";
+            }
         }
 
         ApplyCSharpUsingAliasReferenceNames(references);
