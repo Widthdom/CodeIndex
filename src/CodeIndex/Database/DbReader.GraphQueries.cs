@@ -167,10 +167,7 @@ public partial class DbReader
             sql += @"
             GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, " + groupedReferenceKindGroupSql + @", r.reference_kind
             )
-            SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind,
-                   CASE WHEN lang = 'solution' AND reference_kind = 'project_reference' THEN path
-                        ELSE " + BuildCallerNameProjectionSql("r") + @" END AS container_name,
-                   symbol_name,
+            SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, symbol_name,
                    " + (rawKinds ? GetGroupedCallerReferenceKindSql("r.reference_kind") : "MIN(r.reference_kind)") + @" AS reference_kind,
                    MIN(line) AS first_line, SUM(r.reference_count) AS reference_count,
                    GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds,
@@ -1028,7 +1025,10 @@ public partial class DbReader
         sql += @"
                 GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind, r.file_id, r.line, r.column_number
             )
-            SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, symbol_name,
+            SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind,
+                   CASE WHEN lang = 'solution' AND reference_kind = 'project_reference' THEN path
+                        ELSE " + BuildCallerNameProjectionSql("r") + @" END AS container_name,
+                   symbol_name,
                    reference_kind, MIN(line) AS first_line, COUNT(*) AS reference_count,
                    MAX(is_self_reference) AS is_self_reference,
                    MAX(is_mutual_recursion) AS is_mutual_recursion
