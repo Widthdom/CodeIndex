@@ -9,7 +9,7 @@ namespace CodeIndex.Cli;
 
 internal static class SuggestionsCommandRunner
 {
-    private const string Usage = "Usage: cdidx suggestions [list|show|export|add] [id|description] [--db <path>] [--json] [--description <text>] [--context <text>] [--title <text>] [--evidence-path <path>] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--issue-state <open|closed|all>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>]";
+    private const string Usage = "Usage: cdidx suggestions [list|show|export|add|update|delete] [id|description] [--db <path>] [--json] [--description <text>] [--context <text>] [--title <text>] [--evidence-path <path>] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--issue-state <open|closed|all>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>]";
     internal const int MaxOpenIssuesJsonBytes = IssueDuplicatePreflight.MaxOpenIssuesJsonBytes;
     internal const int MaxOpenIssuesJsonDepth = IssueDuplicatePreflight.MaxOpenIssuesJsonDepth;
     internal const int MaxSuggestionExportTextFieldLength = 4096;
@@ -94,6 +94,10 @@ internal static class SuggestionsCommandRunner
         var store = CreateStore(options.DbPath);
         if (verb == "add")
             return RunAdd(store, options, jsonOptions);
+        if (verb == "update")
+            return RunUpdate(store, store.LoadAll(), options, jsonOptions);
+        if (verb == "delete")
+            return RunDelete(store, store.LoadAll(), options, jsonOptions);
 
         var records = ApplyFilters(store.LoadAll(), options)
             .OrderByDescending(s => s.CreatedAt)
@@ -111,6 +115,83 @@ internal static class SuggestionsCommandRunner
             _ => WriteUsageError($"Unknown suggestions subcommand: {verb}", options.Json, jsonOptions)
         };
     }
+
+    private static int RunUpdate(SuggestionStore store, List<SuggestionRecord> records, Options options, JsonSerializerOptions jsonOptions)
+    {
+        if (string.IsNullOrWhiteSpace(options.Id))
+            return WriteUsageError("suggestions update requires an id.", options.Json, jsonOptions);
+        if (options.HasQueryOnlyOptions)
+            return WriteUsageError("suggestions update cannot be combined with query or export options.", options.Json, jsonOptions);
+        if (!options.HasEditableFields)
+            return WriteUsageError("suggestions update requires at least one of --description, --context, --title, --evidence-path, --category, --language, or --agent.", options.Json, jsonOptions);
+
+        var record = ResolveById(records, options.Id);
+        if (record == null)
+            return WriteMutationNotFound(options, jsonOptions);
+        var originalHash = record.Hash;
+
+        if (options.DescriptionSpecified)
+        {
+            var description = NormalizeOptional(options.Description);
+            if (description == null)
+                return WriteUsageError("--description must not be empty.", options.Json, jsonOptions);
+            record.Description = description;
+        }
+        if (options.CategorySpecified)
+        {
+            var category = NormalizeOptional(options.Category)?.ToLowerInvariant();
+            if (category == null || !SuggestionRecord.ValidCategories.Contains(category, StringComparer.Ordinal))
+                return WriteUsageError($"--category must be one of {string.Join(", ", SuggestionRecord.ValidCategories)}.", options.Json, jsonOptions);
+            record.Category = category;
+        }
+        if (options.LanguageSpecified)
+            record.Language = NormalizeOptional(options.Language);
+        if (options.ContextSpecified)
+            record.Context = NormalizeOptional(options.Context);
+        if (options.TitleSpecified)
+            record.SampledTitle = NormalizeOptional(options.Title);
+        if (options.AgentSpecified)
+            record.Agent = NormalizeOptional(options.Agent);
+        if (options.EvidencePathsSpecified)
+            record.EvidencePaths = options.EvidencePaths.Select(NormalizeOptional).Where(value => value != null).Cast<string>().Distinct(StringComparer.Ordinal).ToArray();
+
+        record.Hash = SuggestionStore.ComputeHash(record.Category, record.Language, record.Description);
+        var result = store.TryUpdate(originalHash, record, out var updated);
+        if (result == SuggestionStore.MutationResult.Duplicate)
+            return CommandErrorWriter.WriteJsonOrHuman(options.Json, jsonOptions, "Updated suggestion would duplicate another stored suggestion.", CommandExitCodes.UsageError);
+        if (result == SuggestionStore.MutationResult.NotFound || updated == null)
+            return WriteMutationNotFound(options, jsonOptions);
+
+        return WriteMutationSuccess("updated", updated, options, jsonOptions);
+    }
+
+    private static int RunDelete(SuggestionStore store, List<SuggestionRecord> records, Options options, JsonSerializerOptions jsonOptions)
+    {
+        if (string.IsNullOrWhiteSpace(options.Id))
+            return WriteUsageError("suggestions delete requires an id.", options.Json, jsonOptions);
+        if (options.HasQueryOnlyOptions || options.HasEditableFields)
+            return WriteUsageError("suggestions delete accepts only an id, --db, and --json.", options.Json, jsonOptions);
+
+        var record = ResolveById(records, options.Id);
+        if (record == null)
+            return WriteMutationNotFound(options, jsonOptions);
+        var result = store.TryDelete(record.Hash, out var deleted);
+        if (result == SuggestionStore.MutationResult.NotFound || deleted == null)
+            return WriteMutationNotFound(options, jsonOptions);
+        return WriteMutationSuccess("deleted", deleted, options, jsonOptions);
+    }
+
+    private static int WriteMutationSuccess(string action, SuggestionRecord record, Options options, JsonSerializerOptions jsonOptions)
+    {
+        if (options.Json)
+            CommandOutputWriter.WriteJson(new SuggestionMutationJsonResult(JsonOutputContract.ApiVersion, action, ToDetail(record)), CliJsonSerializerContextFactory.Create(jsonOptions).SuggestionMutationJsonResult);
+        else
+            Console.WriteLine($"Suggestion {action}: {ShortId(record.Hash)}");
+        return CommandExitCodes.Success;
+    }
+
+    private static int WriteMutationNotFound(Options options, JsonSerializerOptions jsonOptions)
+        => CommandErrorWriter.WriteJsonOrHuman(options.Json, jsonOptions, $"Suggestion not found: {options.Id}", CommandExitCodes.NotFound, "run `cdidx suggestions list --json` to inspect available suggestion ids.");
 
     private static int RunAdd(SuggestionStore store, Options options, JsonSerializerOptions jsonOptions)
     {
@@ -829,6 +910,7 @@ internal static class SuggestionsCommandRunner
                         return options;
                     }
                     options.Language = language;
+                    options.LanguageSpecified = true;
                     break;
                 case "--category":
                     if (!TryReadSchemaValue("--category", out var category, out var categoryError))
@@ -837,6 +919,7 @@ internal static class SuggestionsCommandRunner
                         return options;
                     }
                     options.Category = category;
+                    options.CategorySpecified = true;
                     break;
                 case "--description":
                     if (!TryReadSchemaValue("--description", out var description, out var descriptionError))
@@ -845,6 +928,7 @@ internal static class SuggestionsCommandRunner
                         return options;
                     }
                     options.Description = description;
+                    options.DescriptionSpecified = true;
                     break;
                 case "--context":
                     if (!TryReadSchemaValue("--context", out var context, out var contextError))
@@ -853,6 +937,7 @@ internal static class SuggestionsCommandRunner
                         return options;
                     }
                     options.Context = context;
+                    options.ContextSpecified = true;
                     break;
                 case "--title":
                     if (!TryReadSchemaValue("--title", out var title, out var titleError))
@@ -861,6 +946,7 @@ internal static class SuggestionsCommandRunner
                         return options;
                     }
                     options.Title = title;
+                    options.TitleSpecified = true;
                     break;
                 case "--evidence-path":
                     if (!TryReadSchemaValue("--evidence-path", out var evidencePath, out var evidencePathError))
@@ -869,6 +955,7 @@ internal static class SuggestionsCommandRunner
                         return options;
                     }
                     options.EvidencePaths.Add(evidencePath);
+                    options.EvidencePathsSpecified = true;
                     break;
                 case "--agent":
                     if (!TryReadSchemaValue("--agent", out var agent, out var agentError))
@@ -877,6 +964,7 @@ internal static class SuggestionsCommandRunner
                         return options;
                     }
                     options.Agent = agent;
+                    options.AgentSpecified = true;
                     break;
                 case "--limit":
                     if (!TryReadSchemaValue("--limit", out var limit, out var limitError))
@@ -1072,6 +1160,13 @@ internal static class SuggestionsCommandRunner
         public string? Title { get; set; }
         public List<string> EvidencePaths { get; } = [];
         public string? Agent { get; set; }
+        public bool LanguageSpecified { get; set; }
+        public bool CategorySpecified { get; set; }
+        public bool DescriptionSpecified { get; set; }
+        public bool ContextSpecified { get; set; }
+        public bool TitleSpecified { get; set; }
+        public bool EvidencePathsSpecified { get; set; }
+        public bool AgentSpecified { get; set; }
         public int? Limit { get; set; }
         public int Offset { get; set; }
         public bool OffsetSpecified { get; set; }
@@ -1087,6 +1182,8 @@ internal static class SuggestionsCommandRunner
         public DateTimeOffset? Since { get; set; }
         public string? Error { get; set; }
         public bool HasPagination => Limit.HasValue || OffsetSpecified;
+        public bool HasEditableFields => LanguageSpecified || CategorySpecified || DescriptionSpecified || ContextSpecified || TitleSpecified || EvidencePathsSpecified || AgentSpecified;
+        public bool HasQueryOnlyOptions => HasPagination || Since != null || StatusSpecified || FormatSpecified || OpenIssuesPath != null || OpenIssuesRepository != null || IssueState != IssueDuplicatePreflight.DefaultIssueState || DuplicateConfidenceSpecified || DuplicateThresholdSpecified;
     }
 }
 
@@ -1094,6 +1191,11 @@ internal sealed record SuggestionAddJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
     [property: JsonPropertyName("created")] bool Created,
     [property: JsonPropertyName("duplicate")] bool Duplicate,
+    [property: JsonPropertyName("suggestion")] SuggestionDetailJsonResult Suggestion);
+
+internal sealed record SuggestionMutationJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("action")] string Action,
     [property: JsonPropertyName("suggestion")] SuggestionDetailJsonResult Suggestion);
 
 internal sealed record SuggestionListItemJsonResult(

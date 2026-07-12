@@ -1182,6 +1182,52 @@ public class ProgramCliTests
     }
 
     [ProductionRuntimeFact]
+    public void Suggestions_UpdateCorrectsDraftAndReplacesDedupIdentity_Issue4441()
+    {
+        using var fixture = SuggestionFixture.Create();
+        var record = fixture.Add("bug", "csharp", "Malformed draft description", submitted: false, context: "bad context", sampledTitle: "Stale title");
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+            "suggestions", "update", record.Hash[..12], "--db", fixture.DbPath, "--json",
+            "--description", "Corrected draft description", "--context", "correct context", "--title", "Corrected title",
+            "--evidence-path", "src/CodeIndex/Cli/SuggestionsCommandRunner.cs"
+        ]);
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        var suggestion = doc.RootElement.GetProperty("suggestion");
+        Assert.Equal("updated", doc.RootElement.GetProperty("action").GetString());
+        Assert.Equal("Corrected draft description", suggestion.GetProperty("description").GetString());
+        Assert.Equal("correct context", suggestion.GetProperty("context").GetString());
+        Assert.Equal("Corrected title", suggestion.GetProperty("sampled_title").GetString());
+        Assert.Equal("src/CodeIndex/Cli/SuggestionsCommandRunner.cs", suggestion.GetProperty("evidence_paths")[0].GetString());
+        Assert.NotEqual(record.Hash, suggestion.GetProperty("id").GetString());
+        Assert.Equal(record.CreatedAt, suggestion.GetProperty("created_at").GetDateTime());
+    }
+
+    [ProductionRuntimeFact]
+    public void Suggestions_DeleteRemovesDraft_Issue4441()
+    {
+        using var fixture = SuggestionFixture.Create();
+        var record = fixture.Add("bug", "csharp", "Draft to remove", submitted: false);
+
+        var (deleteExitCode, deleteStdout, deleteStderr) = RunCliInSubprocess([
+            "suggestions", "delete", record.Hash[..12], "--db", fixture.DbPath, "--json"
+        ]);
+        var (showExitCode, _, _) = RunCliInSubprocess([
+            "suggestions", "show", record.Hash[..12], "--db", fixture.DbPath, "--json"
+        ]);
+
+        Assert.Equal(CommandExitCodes.Success, deleteExitCode);
+        Assert.Equal(string.Empty, deleteStderr);
+        using var doc = JsonDocument.Parse(deleteStdout);
+        Assert.Equal("deleted", doc.RootElement.GetProperty("action").GetString());
+        Assert.Equal(record.Hash, doc.RootElement.GetProperty("suggestion").GetProperty("id").GetString());
+        Assert.Equal(CommandExitCodes.NotFound, showExitCode);
+    }
+
+    [ProductionRuntimeFact]
     public void Suggestions_ListJsonIncludesSubmitDiagnostics()
     {
         using var fixture = SuggestionFixture.Create();

@@ -174,6 +174,66 @@ public class SuggestionStore
         });
     }
 
+    public enum MutationResult
+    {
+        Success,
+        NotFound,
+        Duplicate,
+    }
+
+    /// <summary>
+    /// Atomically replaces the editable fields of a stored suggestion while preserving
+    /// its lifecycle metadata. The deduplication hash is recalculated by the caller.
+    /// 保存済み提案の編集可能フィールドを lifecycle metadata を保持したまま原子的に置換する。
+    /// 重複排除 hash は呼び出し元が再計算する。
+    /// </summary>
+    public MutationResult TryUpdate(string hash, SuggestionRecord replacement, out SuggestionRecord? updated)
+    {
+        SuggestionRecord? result = null;
+        var mutationResult = WithFileLock(() =>
+        {
+            var records = ReadUnlocked();
+            var index = records.FindIndex(record => string.Equals(record.Hash, hash, StringComparison.Ordinal));
+            if (index < 0)
+                return MutationResult.NotFound;
+
+            replacement = RedactRecordForPersistence(replacement);
+            var otherRecords = records.Where((_, candidateIndex) => candidateIndex != index).ToList();
+            if (FindDuplicate(otherRecords, replacement, ResolveDedupThreshold()).Record != null)
+                return MutationResult.Duplicate;
+
+            records[index] = replacement;
+            SaveUnlocked(records);
+            result = replacement;
+            return MutationResult.Success;
+        });
+        updated = result;
+        return mutationResult;
+    }
+
+    /// <summary>
+    /// Atomically removes a stored suggestion by its full hash.
+    /// 保存済み提案を完全な hash で原子的に削除する。
+    /// </summary>
+    public MutationResult TryDelete(string hash, out SuggestionRecord? deleted)
+    {
+        SuggestionRecord? result = null;
+        var mutationResult = WithFileLock(() =>
+        {
+            var records = ReadUnlocked();
+            var index = records.FindIndex(record => string.Equals(record.Hash, hash, StringComparison.Ordinal));
+            if (index < 0)
+                return MutationResult.NotFound;
+
+            result = records[index];
+            records.RemoveAt(index);
+            SaveUnlocked(records);
+            return MutationResult.Success;
+        });
+        deleted = result;
+        return mutationResult;
+    }
+
     /// <summary>
     /// Result of TryAddAndSubmit: whether the record was new or duplicate,
     /// whether it was already submitted, its lifecycle status, and the upstream URL if known.

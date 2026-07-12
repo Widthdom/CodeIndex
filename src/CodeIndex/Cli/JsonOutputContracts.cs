@@ -922,6 +922,7 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(SuggestionIssueDraftPreflightSummaryJsonResult))]
 [JsonSerializable(typeof(SuggestionIssueDraftSourceJsonResult))]
 [JsonSerializable(typeof(SuggestionAddJsonResult))]
+[JsonSerializable(typeof(SuggestionMutationJsonResult))]
 [JsonSerializable(typeof(SuggestionListItemJsonResult))]
 [JsonSerializable(typeof(SymbolAnalysisResult))]
 [JsonSerializable(typeof(SymbolHotspotJsonResult))]
