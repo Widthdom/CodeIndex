@@ -1441,6 +1441,7 @@ public partial class McpServer
         {
             var requestToken = _currentRequestToken.Value;
             var status = reader.GetStatus();
+            QueryCommandRunner.ApplyStatusSymbolKindLimits(status, reader.GetSymbolKindCounts());
             WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit, requestToken);
             var macProfile = MacProfileDetector.DetectCurrentWithDiagnostics();
             status.MacProfile = macProfile.Profile;
@@ -1492,6 +1493,7 @@ public partial class McpServer
                 status.RecommendedAction = BuildFoldBackfillCommand(_dbPath, _dbPathExplicit);
                 status.AlternativeAction = BuildFoldRebuildRepairCommand(status.ProjectRoot, _dbPath, _dbPathExplicit);
             }
+            status.Summary = QueryCommandRunner.BuildStatusSummary(status);
             var checkFailures = checkWorkspace
                 ? BuildMcpStatusCheckFailures(status, statusScopes)
                 : [];

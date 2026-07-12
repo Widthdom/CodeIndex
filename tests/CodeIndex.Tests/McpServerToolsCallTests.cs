@@ -4434,6 +4434,8 @@ public partial class McpServerTests
         Assert.Equal(1, response["result"]!["structuredContent"]!["chunks"]!.GetValue<long>());
         Assert.Equal(2, response["result"]!["structuredContent"]!["symbols"]!.GetValue<long>());
         Assert.Equal(0, response["result"]!["structuredContent"]!["references"]!.GetValue<long>());
+        Assert.Contains("1 files, 2 symbols, 0 refs", response["result"]!["structuredContent"]!["summary"]!.GetValue<string>());
+        Assert.Equal(1, response["result"]!["structuredContent"]!["symbolKinds"]!["function"]!.GetValue<long>());
         Assert.NotNull(response["result"]!["structuredContent"]!["indexedAt"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["latestModified"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["project_root"]);
@@ -4454,6 +4456,7 @@ public partial class McpServerTests
 
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal("compact", structured["format"]!.GetValue<string>());
+        Assert.Contains("1 files, 2 symbols, 0 refs", structured["summary"]!.GetValue<string>());
         Assert.Equal(60, structured["stale_after_seconds"]!.GetValue<long>());
         Assert.NotNull(structured["workspace_check"]);
         Assert.Empty(structured["failed_checks"]!.AsArray());
