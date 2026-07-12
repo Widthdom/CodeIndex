@@ -1050,7 +1050,7 @@ Supported symbol kinds by language:
 | Shell | function declarations | command-style calls, sources, aliases | -- |
 | Terraform | variables, outputs, locals, resources, data sources, modules, dotted dependencies | same-file `var.*`, `local.*`, `module.*`, `data.*`, `TYPE.NAME` references | -- |
 | Protobuf / GraphQL | protobuf RPC/messages/services/enums; GraphQL operations/types/interfaces/enums | protobuf imports | -- |
-| Gradle / Makefile | Gradle tasks/defs; Makefile targets | Gradle plugin declarations | -- |
+| Gradle / Makefile | Gradle tasks/defs; Makefile targets and `.PHONY` metadata | Gradle plugin declarations; Makefile target prerequisites and `.PHONY` target lists | -- |
 | Dockerfile | named stages and base-image/stage dependencies | `FROM`, `COPY --from` | -- |
 | Lua / R / Haskell / F# | language-specific functions/types/modules/signatures | imports/requires/opens where supported | mixed |
 | VB.NET | subs/functions, classes/modules, structures, interfaces, enums, properties, events | namespaces/imports, `AddressOf`, `Handles` | yes |
@@ -3488,7 +3488,7 @@ SQL 固有の symbol extraction:
 | Shell | function declaration | command-style call、source、alias | -- |
 | Terraform | variable、output、locals、resource、data、module、dotted dependency | same-file `var.*`, `local.*`, `module.*`, `data.*`, `TYPE.NAME` reference | -- |
 | Protobuf / GraphQL | protobuf RPC/message/service/enum、GraphQL operation/type/interface/enum | protobuf import | -- |
-| Gradle / Makefile | Gradle task/def、Makefile target | Gradle plugin declaration | -- |
+| Gradle / Makefile | Gradle task/def、Makefile target と `.PHONY` metadata | Gradle plugin declaration、Makefile target の前提条件と `.PHONY` target list | -- |
 | Dockerfile | named stage、base-image/stage dependency | `FROM`, `COPY --from` | -- |
 | Lua / R / Haskell / F# | 言語別の function / type / module / signature | import / require / open など対応済み surface | mixed |
 | VB.NET | Sub/Function、Class/Module、Structure、Interface、Enum、Property、Event | Namespace、Imports、`AddressOf`、`Handles` | yes |

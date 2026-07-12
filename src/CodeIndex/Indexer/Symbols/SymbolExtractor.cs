@@ -17,6 +17,7 @@ public static partial class SymbolExtractor
     public const int ExpandedLanguageContractVersion = 2;
     public const int CSharpContractVersion = 2;
     public const int DockerfileContractVersion = 2;
+    public const int MakefileContractVersion = 2;
     public const int StyleAndXamlContractVersion = 2;
     public const int FunctionalLanguageContractVersion = 2;
     public const int DynamicLanguageContractVersion = 2;
@@ -71,6 +72,7 @@ public static partial class SymbolExtractor
             null or "" => DefaultContractVersion,
             "csharp" => CSharpContractVersion,
             "dockerfile" => DockerfileContractVersion,
+            "makefile" => MakefileContractVersion,
             "sass" or "stylus" or "xml" => StyleAndXamlContractVersion,
             "clojure" or "erlang" or "ocaml" or "raku" => FunctionalLanguageContractVersion,
             "crystal" or "groovy" or "julia" or "tcl" => DynamicLanguageContractVersion,
@@ -1943,7 +1945,8 @@ public static partial class SymbolExtractor
         ["makefile"] =
         [
             new("property", new Regex(@"^(?<name>[\w.-]+)\s*(?::=|::=|=|\?=|\+=)", RegexOptions.Compiled), BodyStyle.None),  // Makefile variable assignments / Makefile変数代入
-            new("function", new Regex(@"^(?<name>[\w.%-]+)\s*:(?!=|:=)", RegexOptions.Compiled), BodyStyle.None),  // Makefile targets / Makefileターゲット
+            new("rule", new Regex(@"^(?<name>\.PHONY)\s*:(?!=|:=)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),  // Makefile special-target metadata / Makefile特殊ターゲットメタデータ
+            new("function", new Regex(@"^(?!\.PHONY\s*:)(?<name>[\w.%-]+)\s*:(?!=|:=)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),  // Makefile targets / Makefileターゲット
         ],
         ["cmake"] =
         [

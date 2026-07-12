@@ -1231,7 +1231,7 @@ public static partial class ReferenceExtractor
             }
 
             var context = originalLine.Trim();
-            if (language is "cmake" or "justfile" or "msbuild"
+            if (language is "cmake" or "justfile" or "makefile" or "msbuild"
                 && context.Length > 0)
             {
                 var buildAutomationContainer = containerResolver.Find(lineNumber);

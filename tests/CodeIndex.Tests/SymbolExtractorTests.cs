@@ -11864,6 +11864,8 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "clean");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "install");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "%.o");
+        Assert.Contains(symbols, s => s.Kind == "rule" && s.Name == ".PHONY");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == ".PHONY");
 
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "CC");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "CFLAGS");
@@ -12005,10 +12007,12 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void GetContractVersion_DockerfileSpecificKinds_UsesDedicatedVersion()
+    public void GetContractVersion_LanguageSpecificKinds_UseDedicatedVersions()
     {
         Assert.Equal(SymbolExtractor.DockerfileContractVersion, SymbolExtractor.GetContractVersion("dockerfile"));
         Assert.True(SymbolExtractor.DockerfileContractVersion > SymbolExtractor.DefaultContractVersion);
+        Assert.Equal(SymbolExtractor.MakefileContractVersion, SymbolExtractor.GetContractVersion("makefile"));
+        Assert.True(SymbolExtractor.MakefileContractVersion > SymbolExtractor.DefaultContractVersion);
         Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("sass"));
         Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("stylus"));
         Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("xml"));
