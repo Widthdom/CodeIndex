@@ -120,11 +120,18 @@ public partial class SymbolExtractorTests
             symbol.Kind == "assembly"
             && symbol.Name == "CodeIndex.App"
             && symbol.Line == 3);
-        Assert.Contains(symbols, symbol => symbol.Name == "assemblyIdentity.version");
-        Assert.Contains(symbols, symbol => symbol.Name == "requestedExecutionLevel.level");
-        Assert.Contains(symbols, symbol => symbol.Name == "requestedExecutionLevel.uiAccess");
-        Assert.Contains(symbols, symbol => symbol.Name == "supportedOS.{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}");
-        Assert.Contains(symbols, symbol => symbol.Name == "longPathAware");
+        Assert.Contains(symbols, symbol => symbol.Name == "assembly.assemblyIdentity.@version");
+        Assert.Contains(symbols, symbol => symbol.Name.EndsWith("requestedExecutionLevel.@level", StringComparison.Ordinal));
+        Assert.Contains(symbols, symbol => symbol.Name.EndsWith("requestedExecutionLevel.@uiAccess", StringComparison.Ordinal));
+        Assert.Contains(symbols, symbol => symbol.Name.EndsWith("supportedOS.{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}", StringComparison.Ordinal));
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "property"
+            && symbol.Name == "assembly.application.windowsSettings.longPathAware"
+            && symbol.ContainerName == "assembly.application.windowsSettings");
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "namespace"
+            && symbol.Name == "assembly.application.windowsSettings"
+            && symbol.ContainerName == "assembly.application");
     }
 
     [Theory]

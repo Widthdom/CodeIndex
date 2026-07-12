@@ -40,23 +40,41 @@ public static partial class SymbolExtractor
     private static List<SymbolRecord> ExtractAppManifestSymbols(long fileId, string content, string[] lines)
     {
         List<SymbolRecord>? symbols = null;
+        var elementPaths = new Stack<string>();
 
         try
         {
             using var reader = XmlReader.Create(new StringReader(content), CreateExtractionXmlReaderSettings(DtdProcessing.Ignore));
             while (reader.Read())
             {
+                if (reader.NodeType == XmlNodeType.EndElement)
+                {
+                    if (elementPaths.Count > 0)
+                        elementPaths.Pop();
+                    continue;
+                }
+
                 if (reader.NodeType != XmlNodeType.Element)
                     continue;
 
                 var elementName = reader.LocalName;
+                var parentPath = elementPaths.Count == 0 ? null : elementPaths.Peek();
+                var elementPath = parentPath == null ? elementName : $"{parentPath}.{elementName}";
                 var lineNumber = reader is IXmlLineInfo lineInfo && lineInfo.HasLineInfo()
                     ? lineInfo.LineNumber
                     : 1;
 
+                (symbols ??= []).Add(CreateManifestSymbol(
+                    fileId,
+                    string.Equals(elementName, "longPathAware", StringComparison.OrdinalIgnoreCase) ? "property" : "namespace",
+                    elementPath,
+                    lineNumber,
+                    lines,
+                    parentPath));
+
                 if (string.Equals(elementName, "assemblyIdentity", StringComparison.OrdinalIgnoreCase))
                 {
-                    AddManifestAssemblyIdentitySymbols(fileId, lines, ref symbols, reader, lineNumber);
+                    AddManifestAssemblyIdentitySymbols(fileId, lines, ref symbols, reader, lineNumber, elementPath);
                 }
                 else if (string.Equals(elementName, "requestedExecutionLevel", StringComparison.OrdinalIgnoreCase))
                 {
@@ -65,36 +83,29 @@ public static partial class SymbolExtractor
                         lines,
                         ref symbols,
                         "property",
-                        "requestedExecutionLevel.level",
+                        $"{elementPath}.@level",
                         reader.GetAttribute("level"),
                         lineNumber,
-                        parentName: "requestedExecutionLevel");
+                        parentName: elementPath);
                     AddManifestAttributeSymbol(
                         fileId,
                         lines,
                         ref symbols,
                         "property",
-                        "requestedExecutionLevel.uiAccess",
+                        $"{elementPath}.@uiAccess",
                         reader.GetAttribute("uiAccess"),
                         lineNumber,
-                        parentName: "requestedExecutionLevel");
+                        parentName: elementPath);
                 }
                 else if (string.Equals(elementName, "supportedOS", StringComparison.OrdinalIgnoreCase))
                 {
                     var id = reader.GetAttribute("Id");
-                    var name = string.IsNullOrWhiteSpace(id) ? "supportedOS" : $"supportedOS.{id}";
-                    AddManifestAttributeSymbol(fileId, lines, ref symbols, "property", name, id, lineNumber, parentName: "compatibility");
+                    var name = string.IsNullOrWhiteSpace(id) ? elementPath : $"{elementPath}.{id}";
+                    AddManifestAttributeSymbol(fileId, lines, ref symbols, "property", name, id, lineNumber, parentName: elementPath);
                 }
-                else if (string.Equals(elementName, "longPathAware", StringComparison.OrdinalIgnoreCase))
-                {
-                    (symbols ??= []).Add(CreateManifestSymbol(
-                        fileId,
-                        "property",
-                        "longPathAware",
-                        lineNumber,
-                        lines,
-                        parentName: "application"));
-                }
+
+                if (!reader.IsEmptyElement)
+                    elementPaths.Push(elementPath);
             }
         }
         catch (XmlException)
@@ -202,7 +213,8 @@ public static partial class SymbolExtractor
         string[] lines,
         ref List<SymbolRecord>? symbols,
         XmlReader reader,
-        int lineNumber)
+        int lineNumber,
+        string elementPath)
     {
         var assemblyName = reader.GetAttribute("name");
         if (!string.IsNullOrWhiteSpace(assemblyName))
@@ -217,10 +229,10 @@ public static partial class SymbolExtractor
                 lines,
                 ref symbols,
                 "property",
-                $"assemblyIdentity.{attributeName}",
+                $"{elementPath}.@{attributeName}",
                 reader.GetAttribute(attributeName),
                 lineNumber,
-                parentName: "assemblyIdentity");
+                parentName: elementPath);
         }
     }
 
