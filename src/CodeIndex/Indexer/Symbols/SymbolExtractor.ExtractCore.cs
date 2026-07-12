@@ -51,6 +51,11 @@ public static partial class SymbolExtractor
             return ExtractJsonSymbols(fileId, content, SplitContentLines(content));
         }
 
+        if (lang == "jsonl")
+        {
+            return ExtractJsonLinesSymbols(fileId, content, SplitContentLines(content));
+        }
+
         if (lang == "yaml")
         {
             return ExtractYamlSymbols(fileId, SplitContentLines(content));
