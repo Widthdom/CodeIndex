@@ -38,7 +38,6 @@ internal sealed class LspServer : IDisposable
     internal static int? DocumentSymbolResponseBytesForTesting { get; set; }
     internal const int MaxPositionLineChars = 16 * 1024;
     internal const int MaxCompletionItems = 100;
-    internal const int MaxCodeLensItems = 200;
     internal const int MaxInlayHintItems = 200;
     internal const int MaxSemanticTokenItems = 1000;
     internal const int MaxDocumentPathFallbackCandidates = 32;
@@ -247,7 +246,6 @@ internal sealed class LspServer : IDisposable
                     "textDocument/completion" => Result(id, Completion(root, "textDocument/completion")),
                     "textDocument/documentHighlight" => Result(id, DocumentHighlight(root, "textDocument/documentHighlight")),
                     "textDocument/semanticTokens/full" => Result(id, SemanticTokensFull(root)),
-                    "textDocument/codeLens" => Result(id, CodeLens(root)),
                     "textDocument/inlayHint" => Result(id, InlayHint(root)),
                     _ => hasId ? Error(id, -32601, $"Method not found: {SanitizeUnknownMethod(method)}") : null,
                 };
@@ -442,10 +440,6 @@ internal sealed class LspServer : IDisposable
                 },
                 ["full"] = true,
                 ["range"] = false,
-            },
-            ["codeLensProvider"] = new JsonObject
-            {
-                ["resolveProvider"] = false,
             },
             ["inlayHintProvider"] = new JsonObject
             {
@@ -691,17 +685,6 @@ internal sealed class LspServer : IDisposable
         return new JsonObject { ["data"] = data };
     }
 
-    private JsonArray CodeLens(JsonElement root)
-    {
-        if (!TryResolveIndexedDocument(root, out var document))
-            return [];
-
-        var array = new JsonArray();
-        foreach (var symbol in GetDocumentSymbols(document.IndexedPath, MaxCodeLensItems).Take(MaxCodeLensItems))
-            array.Add((JsonNode)ToCodeLens(symbol));
-        return array;
-    }
-
     private JsonArray InlayHint(JsonElement root)
     {
         if (!TryResolveIndexedDocument(root, out var document))
@@ -805,23 +788,6 @@ internal sealed class LspServer : IDisposable
             ["kind"] = 1,
         });
     }
-
-    private JsonObject ToCodeLens(SymbolResult symbol) => new()
-    {
-        ["range"] = ToRange(symbol.Line, 1, symbol.Line, 1),
-        ["command"] = new JsonObject
-        {
-            ["title"] = $"cdidx: {symbol.Kind}",
-            ["command"] = "cdidx.showSymbol",
-            ["arguments"] = new JsonArray(new JsonObject
-            {
-                ["name"] = symbol.Name,
-                ["kind"] = symbol.Kind,
-                ["path"] = symbol.Path,
-                ["line"] = symbol.Line,
-            }),
-        },
-    };
 
     private JsonObject ToInlayHint(IndexedDocumentContext document, SymbolResult symbol, Dictionary<int, string?> lineCache)
     {
