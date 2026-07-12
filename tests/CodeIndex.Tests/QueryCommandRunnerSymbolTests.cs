@@ -1937,7 +1937,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_WithJsonBucketFilterReturnsOnlyRequestedBucket()
+    public void RunUnused_BucketAndConfidenceFiltersShareFixture()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
         try
@@ -1957,32 +1957,20 @@ public partial class QueryCommandRunnerTests
             Assert.False(json.GetProperty("returned_bucket_counts").TryGetProperty("maybe_unused_nonpublic", out _));
             Assert.Equal("Hidden", symbols[0].GetProperty("name").GetString());
             Assert.Equal("likely_unused_private", symbols[0].GetProperty("unused_bucket").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunUnused_WithJsonMinConfidenceFiltersLowerConfidenceBuckets()
-    {
-        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
-        try
-        {
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            var (confidenceExitCode, confidenceStdout, confidenceStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
                 ["--db", dbPath, "--json", "--lang", "csharp", "--min-confidence", "medium"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+            using var confidenceDocument = ParseJsonOutput(confidenceStdout);
+            var confidenceJson = confidenceDocument.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.Equal("Hidden", json.GetProperty("symbols")[0].GetProperty("name").GetString());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("by_confidence").GetProperty("medium").GetInt32());
-            Assert.False(json.GetProperty("summary").GetProperty("by_confidence").TryGetProperty("low", out _));
+            Assert.Equal(CommandExitCodes.Success, confidenceExitCode);
+            Assert.Equal(string.Empty, confidenceStderr);
+            Assert.Equal(1, confidenceJson.GetProperty("count").GetInt32());
+            Assert.Equal("Hidden", confidenceJson.GetProperty("symbols")[0].GetProperty("name").GetString());
+            Assert.Equal(1, confidenceJson.GetProperty("summary").GetProperty("by_confidence").GetProperty("medium").GetInt32());
+            Assert.False(confidenceJson.GetProperty("summary").GetProperty("by_confidence").TryGetProperty("low", out _));
         }
         finally
         {
