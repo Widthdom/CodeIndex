@@ -10,6 +10,18 @@ namespace CodeIndex.Tests;
 public partial class ReleaseWorkflowTests
 {
     [Fact]
+    public void ReleaseWorkflow_CachesAndRestoresCuratedNotesToolOnce()
+    {
+        var workflow = ReadReleaseWorkflow();
+
+        AssertContainsAll(
+            workflow,
+            "cache-dependency-path: tools/CodeIndex.Changelog/packages.lock.json",
+            "dotnet restore tools/CodeIndex.Changelog/CodeIndex.Changelog.csproj --locked-mode",
+            "dotnet run --project tools/CodeIndex.Changelog --no-restore -- release-notes");
+    }
+
+    [Fact]
     public void ReleaseWorkflow_ReusesLockedRestoreForTests()
     {
         var workflow = ReadReleaseWorkflow();
@@ -217,7 +229,7 @@ public partial class ReleaseWorkflowTests
             "select(.tagName != \\\"${TAG_NAME}\\\")",
             "No previous non-draft, non-prerelease GitHub release was found",
             "Latest GitHub release tag is not a v-prefixed SemVer version",
-            "dotnet run --project tools/CodeIndex.Changelog -- release-notes",
+            "dotnet run --project tools/CodeIndex.Changelog --no-restore -- release-notes",
             "--previous-version \"${previous_version}\"",
             "--notes-file release-notes.md",
             "--notes-file release-install-notes.md");
