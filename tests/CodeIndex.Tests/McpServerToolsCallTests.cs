@@ -22,19 +22,28 @@ namespace CodeIndex.Tests;
 public partial class McpServerTests
 {
     [Fact]
-    public void ToolsCall_SearchFormatCompactEmitsFileLineOnly_Issue1642()
+    public void ToolsCall_SearchFormatCompactEmitsMatchLineAndNoTerminalCursor_Issues1642And4402()
     {
+        InsertIndexedFile(
+            "src/compact-line.cs",
+            "csharp",
+            "class CompactLine\n{\n    void Needle4402() { }\n}\n");
         var request = JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"Run","format":"compact"}}}""")!;
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"Needle4402","format":"compact","limit":1}}}""")!;
 
         var response = _server.HandleMessage(request)!;
         var structured = response["result"]!["structuredContent"]!;
         var row = Assert.Single(structured["results"]!.AsArray());
 
         Assert.Equal("compact", structured["format"]!.GetValue<string>());
-        Assert.Equal("src/app.cs", row!["file"]!.GetValue<string>());
-        Assert.Equal(1, row["line"]!.GetValue<int>());
+        Assert.Equal("src/compact-line.cs", row!["file"]!.GetValue<string>());
+        Assert.Equal(3, row["line"]!.GetValue<int>());
         Assert.Null(row["snippet"]);
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal(1, structured["total"]!.GetValue<int>());
+        Assert.False(structured["truncated"]!.GetValue<bool>());
+        Assert.False(structured["more_available"]!.GetValue<bool>());
+        Assert.Null(structured["next_cursor"]);
     }
 
     [Fact]
