@@ -84,6 +84,18 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_GenericXml_BoundsSignaturesBeforeMaterializingLongSharedLine_Issue4419()
+    {
+        var elements = string.Concat(Enumerable.Range(0, 128).Select(index => $"<value id=\"{index}\" />"));
+        var content = "<configuration>" + new string(' ', 16 * 1024) + elements + "</configuration>";
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+
+        Assert.NotEmpty(symbols);
+        Assert.All(symbols, symbol => Assert.True(symbol.Signature == null || symbol.Signature.Length <= SymbolExtractor.StructuredDataMaxSignatureLength));
+    }
+
+    [Fact]
     public void Extract_XmlBroadXaml_EmitsStructuredDataTruncationDiagnostic_Issue3765()
     {
         var elements = string.Join('\n', Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 1).Select(index => $"""  <Button x:Name="Button{index}" />"""));

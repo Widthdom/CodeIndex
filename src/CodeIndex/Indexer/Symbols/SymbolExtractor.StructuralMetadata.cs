@@ -267,7 +267,7 @@ public static partial class SymbolExtractor
         string[] lines,
         string? parentName)
     {
-        var line = GetLineOrEmpty(lines, lineNumber).Trim();
+        var line = GetLineOrEmpty(lines, lineNumber);
         return new SymbolRecord
         {
             FileId = fileId,
@@ -276,7 +276,7 @@ public static partial class SymbolExtractor
             Line = lineNumber,
             StartLine = lineNumber,
             EndLine = lineNumber,
-            Signature = string.IsNullOrEmpty(line) ? null : LimitStructuredDataSignature(line),
+            Signature = string.IsNullOrEmpty(line) ? null : LimitStructuredDataLineSignature(line),
             ContainerKind = parentName == null ? null : "namespace",
             ContainerName = parentName,
             ContainerQualifiedName = parentName,
