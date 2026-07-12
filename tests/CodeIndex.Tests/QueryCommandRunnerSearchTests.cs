@@ -1383,6 +1383,45 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("lsp")]
+    [InlineData("qf")]
+    [InlineData("sarif")]
+    public void RunSearch_EditorFormatsApplyLimitAfterOccurrenceExpansion_Issue4437(string format)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_editor_limit");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public class App { void Run() { Marker(); Marker(); Marker(); } }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Marker", "--db", dbPath, "--exact-substring", "--format", format, "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            if (format == "qf")
+                Assert.Single(stdout.Trim().Split(Environment.NewLine));
+            else
+            {
+                using var document = ParseJsonOutput(stdout);
+                var results = format == "sarif"
+                    ? document.RootElement.GetProperty("runs")[0].GetProperty("results")
+                    : document.RootElement;
+                Assert.Equal(1, results.GetArrayLength());
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void RunSearch_FormatSarifEmitsResultsArray()
     {

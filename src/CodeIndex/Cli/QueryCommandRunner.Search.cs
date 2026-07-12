@@ -724,22 +724,22 @@ public static partial class QueryCommandRunner
                 }
                 if (TryWriteFormattedLocations(
                     options,
-                    displayRows.SelectMany(row => ToSearchFormattedLocations(row, options.Query, exactSearch)),
+                    displayRows.SelectMany(row => ToSearchFormattedLocations(row, options.Query, exactSearch)).Take(options.Limit),
                     jsonOptions))
                     return CommandExitCodes.Success;
                 if (options.OutputFormat == OutputFormatLsp)
                 {
-                    WriteLspLocations(displayRows.SelectMany(row => ToSearchLspLocations(row, exactSearch)), jsonOptions);
+                    WriteLspLocations(displayRows.SelectMany(row => ToSearchLspLocations(row, exactSearch)).Take(options.Limit), jsonOptions);
                     return CommandExitCodes.Success;
                 }
                 if (options.OutputFormat == OutputFormatQf)
                 {
-                    WriteQuickfix(displayRows.SelectMany(row => ToSearchQuickfixItems(row, options.Query, exactSearch)));
+                    WriteQuickfix(displayRows.SelectMany(row => ToSearchQuickfixItems(row, options.Query, exactSearch)).Take(options.Limit));
                     return CommandExitCodes.Success;
                 }
                 if (options.OutputFormat == OutputFormatSarif)
                 {
-                    WriteSarif(displayRows.SelectMany(row => ToSearchSarifItems(row, options.Query, exactSearch)), jsonOptions);
+                    WriteSarif(displayRows.SelectMany(row => ToSearchSarifItems(row, options.Query, exactSearch)).Take(options.Limit), jsonOptions);
                     return CommandExitCodes.Success;
                 }
                 if (options.JsonOutputFormat == JsonOutputFormatArray)
