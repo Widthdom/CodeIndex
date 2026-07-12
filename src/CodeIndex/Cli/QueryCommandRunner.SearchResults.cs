@@ -382,10 +382,11 @@ public static partial class QueryCommandRunner
         if (options.SampleSize.HasValue && rows.Count > options.SampleSize.Value)
             rows = SampleSearchRows(rows, options.SampleSize.Value);
 
-        if (rows.Count > options.Limit)
+        var limitTruncated = rows.Count > options.Limit;
+        if (limitTruncated)
             rows = rows.Take(options.Limit).ToList();
 
-        return new SearchOutputSelection(rows, originalCount, rows.Count < originalCount);
+        return new SearchOutputSelection(rows, originalCount, rows.Count < originalCount, limitTruncated);
     }
 
     private static List<SearchDisplayRow> SampleSearchRows(List<SearchDisplayRow> rows, int sampleSize)
@@ -628,7 +629,7 @@ public static partial class QueryCommandRunner
         }
     }
 
-    private sealed record SearchOutputSelection(List<SearchDisplayRow> Rows, int OriginalCount, bool Truncated);
+    private sealed record SearchOutputSelection(List<SearchDisplayRow> Rows, int OriginalCount, bool Truncated, bool LimitTruncated);
 
     private sealed record SearchGroupOutputSelection(
         List<SearchGroupedCountItemJsonResult> Groups,

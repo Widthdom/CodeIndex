@@ -4957,6 +4957,33 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_NdjsonDoneDoesNotTreatSamplingAsMoreResults_Issue4447()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_ndjson_sample");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/a.cs", "csharp", "class A { void Marker() { } }");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/b.cs", "csharp", "class B { void Marker() { } }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Marker", "--db", dbPath, "--json", "--format", "json", "--sample", "1", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var lines = stdout.Trim().Split(Environment.NewLine);
+            using var doneDocument = JsonDocument.Parse(lines[^1]);
+            Assert.False(doneDocument.RootElement.GetProperty("truncated").GetBoolean());
+            Assert.False(doneDocument.RootElement.GetProperty("has_more").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_JsonParseRecipeGroupsApiFamilies_Issues3710_3714()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_json_parse_recipe");

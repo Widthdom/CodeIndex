@@ -632,7 +632,7 @@ public static partial class QueryCommandRunner
             var ftsQueryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
             var displayRows = ReadSearchDisplayRows(reader, options, exactSearch);
             var selection = ApplySearchOutputSelection(displayRows, options);
-            jsonDoneTruncated = selection.Truncated;
+            jsonDoneTruncated = selection.LimitTruncated;
             displayRows = selection.Rows;
             if (displayRows.Count == 0)
             {
