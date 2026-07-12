@@ -570,30 +570,30 @@ public partial class QueryCommandRunnerTests
 
 
 
-    [Theory]
-    [InlineData("references", "MissingSymbol")]
-    [InlineData("callers", "MissingSymbol")]
-    [InlineData("callees", "MissingSymbol")]
-    public void GraphCommands_SymbolKindArgumentWarnsAboutReferenceKindSemantics(string command, string query)
+    [Fact]
+    public void GraphCommands_SymbolKindArgumentWarnsAboutReferenceKindSemantics()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_{command}_kind_warning");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_graph_kind_warning");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             MarkGraphAndFoldReady(dbPath);
 
-            var (exitCode, _, stderr) = CaptureConsole(() => RunGraphCommand(
-                command,
-                [query, "--db", dbPath, "--kind", "class"],
-                _jsonOptions));
+            foreach (var command in new[] { "references", "callers", "callees" })
+            {
+                var (exitCode, _, stderr) = CaptureConsole(() => RunGraphCommand(
+                    command,
+                    ["MissingSymbol", "--db", dbPath, "--kind", "class"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Contains("symbol kind", stderr);
-            Assert.Contains("filters by reference kind", stderr);
-            Assert.Contains("call", stderr);
-            Assert.Contains("friend", stderr);
-            Assert.Contains("instantiate", stderr);
-            Assert.Contains("subscribe", stderr);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Contains("symbol kind", stderr);
+                Assert.Contains("filters by reference kind", stderr);
+                Assert.Contains("call", stderr);
+                Assert.Contains("friend", stderr);
+                Assert.Contains("instantiate", stderr);
+                Assert.Contains("subscribe", stderr);
+            }
         }
         finally
         {
