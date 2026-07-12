@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Lsp;
+using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
@@ -474,7 +475,63 @@ public class LspServerTests
 
             var inlayHints = server.HandleMessage(CreateTextDocumentRequest("textDocument/inlayHint", sourcePath, 35367));
             Assert.NotNull(inlayHints);
-            Assert.NotEmpty(inlayHints!["result"]!.AsArray());
+            Assert.True(inlayHints!["error"] is null, inlayHints["error"]?.ToJsonString());
+            Assert.Empty(inlayHints!["result"]!.AsArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_InlayHint_HonorsRangeAndSuppressesExplicitTypes_Issue4418()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_inlay_hint_range");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            var sourceBuilder = new StringBuilder();
+            var symbols = new List<SymbolRecord>();
+            for (var index = 0; index < 1003; index++)
+            {
+                var name = $"value{index:D4}";
+                sourceBuilder.Append("    ").Append(name).Append(" = ").Append(index).AppendLine(";");
+                symbols.Add(new SymbolRecord
+                {
+                    Kind = "field",
+                    Name = name,
+                    Line = index + 1,
+                    StartLine = index + 1,
+                    EndLine = index + 1,
+                    ReturnType = "int",
+                });
+            }
+            var source = sourceBuilder.ToString();
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
+            using (var fixtureDb = new DbContext(dbPath))
+            {
+                using var fileIdCommand = fixtureDb.Connection.CreateCommand();
+                fileIdCommand.CommandText = "SELECT id FROM files WHERE path = 'app.cs'";
+                var fileId = Convert.ToInt64(fileIdCommand.ExecuteScalar(), CultureInfo.InvariantCulture);
+                var writer = new DbWriter(fixtureDb.Connection);
+                foreach (var symbol in symbols)
+                    symbol.FileId = fileId;
+                writer.InsertSymbols(symbols);
+            }
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+
+            var response = server.HandleMessage(CreateInlayHintRequest(sourcePath, 4418, 1001, 0, 1002, 0));
+
+            Assert.NotNull(response);
+            Assert.True(response!["error"] is null, response["error"]?.ToJsonString());
+            var hint = Assert.Single(response!["result"]!.AsArray());
+            Assert.Equal(1001, hint!["position"]!["line"]!.GetValue<int>());
+            Assert.Equal(13, hint["position"]!["character"]!.GetValue<int>());
+            Assert.Equal(": int", hint["label"]!.GetValue<string>());
         }
         finally
         {
@@ -2275,6 +2332,29 @@ public class LspServerTests
             @params = new
             {
                 textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
+            },
+        });
+
+    private static string CreateInlayHintRequest(
+        string sourcePath,
+        int id,
+        int startLine,
+        int startCharacter,
+        int endLine,
+        int endCharacter) =>
+        JsonSerializer.Serialize(new
+        {
+            jsonrpc = "2.0",
+            id,
+            method = "textDocument/inlayHint",
+            @params = new
+            {
+                textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
+                range = new
+                {
+                    start = new { line = startLine, character = startCharacter },
+                    end = new { line = endLine, character = endCharacter },
+                },
             },
         });
 
