@@ -334,37 +334,30 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_Healthz_ReplacesInvalidProviderJson_Issue3815()
+    public async Task HttpTransport_Healthz_ReplacesInvalidAndOversizedProviderJson_Issue3815()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
         harness.SetHealthJsonProvider(() => "not-json");
 
         using var client = CreateHttpClient();
-        using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
+        using (var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz")))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var body = await response.Content.ReadAsStringAsync();
+            using var document = JsonDocument.Parse(body);
+            var root = document.RootElement;
+            Assert.Equal("degraded", root.GetProperty("status").GetString());
+            Assert.Equal("health_provider_invalid", root.GetProperty("error").GetString());
+        }
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        using var document = JsonDocument.Parse(body);
-        var root = document.RootElement;
-        Assert.Equal("degraded", root.GetProperty("status").GetString());
-        Assert.Equal("health_provider_invalid", root.GetProperty("error").GetString());
-    }
-
-    [Fact]
-    public async Task HttpTransport_Healthz_ReplacesOversizedProviderJson_Issue3815()
-    {
         var oversizedJson = $$"""{"status":"{{new string('x', HttpMcpTransport.MaxHealthJsonBytes)}}","db_open":true}""";
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
         harness.SetHealthJsonProvider(() => oversizedJson);
-
-        using var client = CreateHttpClient();
-        using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        Assert.DoesNotContain(new string('x', 128), body, StringComparison.Ordinal);
-        using var document = JsonDocument.Parse(body);
-        Assert.Equal("health_provider_invalid", document.RootElement.GetProperty("error").GetString());
+        using var oversizedResponse = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
+        Assert.Equal(HttpStatusCode.OK, oversizedResponse.StatusCode);
+        var oversizedBody = await oversizedResponse.Content.ReadAsStringAsync();
+        Assert.DoesNotContain(new string('x', 128), oversizedBody, StringComparison.Ordinal);
+        using var oversizedDocument = JsonDocument.Parse(oversizedBody);
+        Assert.Equal("health_provider_invalid", oversizedDocument.RootElement.GetProperty("error").GetString());
     }
 
     [Fact]
