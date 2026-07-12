@@ -2558,7 +2558,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_CountJson_DoesNotNeedChunksForReflectionClassification()
+    public void RunUnused_MissingChunksCountAndResultsShareFixture()
     {
         var (projectRoot, dbPath) = CreateReflectionUnusedFixtureDb();
         try
@@ -2581,36 +2581,17 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(2, json.GetProperty("count").GetInt32());
             Assert.Equal(1, json.GetProperty("files").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunUnused_WithJsonMissingChunks_DegradesReflectionClassificationWithoutCrashing()
-    {
-        var (projectRoot, dbPath) = CreateReflectionUnusedFixtureDb();
-        try
-        {
-            using (var db = new DbContext(dbPath))
-            using (var cmd = db.Connection.CreateCommand())
-            {
-                cmd.CommandText = "DROP TABLE chunks;";
-                cmd.ExecuteNonQuery();
-            }
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            var (resultsExitCode, resultsStdout, resultsStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
                 ["--db", dbPath, "--json", "--all", "--lang", "csharp"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var symbols = document.RootElement.GetProperty("symbols").EnumerateArray()
+            using var resultsDocument = ParseJsonOutput(resultsStdout);
+            var symbols = resultsDocument.RootElement.GetProperty("symbols").EnumerateArray()
                 .ToDictionary(symbol => symbol.GetProperty("name").GetString()!, StringComparer.Ordinal);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(CommandExitCodes.Success, resultsExitCode);
+            Assert.Equal(string.Empty, resultsStderr);
             Assert.Equal("public_or_exported_no_refs", symbols["FullName"].GetProperty("unused_bucket").GetString());
         }
         finally
