@@ -1206,6 +1206,25 @@ public class ProgramCliTests
     }
 
     [ProductionRuntimeFact]
+    public void Suggestions_ListJsonUsesSampledTitle_Issue4432()
+    {
+        using var fixture = SuggestionFixture.Create();
+        fixture.Add(
+            "output_format",
+            "csharp",
+            "A longer prose description that should not be exposed as the concise list title",
+            submitted: false,
+            sampledTitle: "Concise sampled title");
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(["suggestions", "list", "--db", fixture.DbPath, "--json"]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        Assert.Equal("Concise sampled title", doc.RootElement.GetProperty("title").GetString());
+    }
+
+    [ProductionRuntimeFact]
     public void Suggestions_ExportJsonSupportsLimitAndOffset()
     {
         using var fixture = SuggestionFixture.Create();
