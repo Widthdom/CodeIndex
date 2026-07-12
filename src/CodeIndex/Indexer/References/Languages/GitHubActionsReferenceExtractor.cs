@@ -52,6 +52,15 @@ internal static class GitHubActionsReferenceExtractor
                 continue;
             }
 
+            if (jobsIndent >= 0 && indent <= jobsIndent)
+            {
+                jobsIndent = -1;
+                currentJob = null;
+                currentJobSymbol = null;
+                currentJobIndent = -1;
+                continue;
+            }
+
             if (jobsIndent >= 0 && indent > jobsIndent && (currentJob == null || indent <= currentJobIndent))
             {
                 currentJob = key;

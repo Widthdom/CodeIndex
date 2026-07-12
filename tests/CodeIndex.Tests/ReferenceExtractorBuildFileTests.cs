@@ -138,6 +138,9 @@ public partial class ReferenceExtractorTests
                   - run: |
                       ./scripts/test.sh
                       echo ignored.txt
+            deployment:
+              uses: actions/setup-node@fedcba9876543210
+              run: ./scripts/not-a-job.sh
             """;
 
         ReferenceExtractionCase.Extract("yaml", content)
@@ -145,7 +148,9 @@ public partial class ReferenceExtractorTests
             .ShouldContain("project_reference", "src/App/App.csproj", containerName: "jobs.build")
             .ShouldContain("call", "build", containerName: "jobs.test")
             .ShouldContain("project_reference", "scripts/test.sh", containerName: "jobs.test")
-            .ShouldNotContainSymbol("ignored.txt");
+            .ShouldNotContainSymbol("ignored.txt")
+            .ShouldNotContainSymbol("actions/setup-node")
+            .ShouldNotContainSymbol("scripts/not-a-job.sh");
         Assert.True(ReferenceExtractor.SupportsLanguage("yaml"));
     }
 
