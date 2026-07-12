@@ -118,32 +118,33 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
-    [InlineData("--")]
-    [InlineData("--query")]
-    public void RunSymbols_CompactLiteralQueryIsNotExpanded_Issue4317(string queryPrefix)
+    [Fact]
+    public void RunSymbols_CompactLiteralQueryFormsAreNotExpanded_Issue4317()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_compact_literal_issue4317");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var args = queryPrefix == "--"
-                ? new[] { "--", "--compact", "--db", dbPath, "--format", "count" }
-                : ["--query", "--compact", "--db", dbPath, "--format", "count"];
+            foreach (var args in new[]
+            {
+                new[] { "--", "--compact", "--db", dbPath, "--format", "count" },
+                new[] { "--query", "--compact", "--db", dbPath, "--format", "count" },
+            })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                    args,
+                    _jsonOptions));
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                args,
-                _jsonOptions));
+                Assert.True(exitCode == CommandExitCodes.Success, stderr);
+                Assert.Equal(string.Empty, stderr);
 
-            Assert.True(exitCode == CommandExitCodes.Success, stderr);
-            Assert.Equal(string.Empty, stderr);
+                using var document = ParseJsonOutput(stdout);
+                var root = document.RootElement;
 
-            using var document = ParseJsonOutput(stdout);
-            var root = document.RootElement;
-
-            Assert.Equal("--compact", root.GetProperty("query").GetString());
-            Assert.False(root.TryGetProperty("format", out _));
-            Assert.Equal(0, root.GetProperty("count").GetInt32());
+                Assert.Equal("--compact", root.GetProperty("query").GetString());
+                Assert.False(root.TryGetProperty("format", out _));
+                Assert.Equal(0, root.GetProperty("count").GetInt32());
+            }
         }
         finally
         {
