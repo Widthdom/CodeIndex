@@ -1241,7 +1241,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunCallers_JsonResults_StaleSqlGraphContractIncludesDegradedState()
+    public void RunCallersAndCallees_StaleSqlGraphResultsShareFixture()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callers_sql_graph_contract_results");
         try
@@ -1261,6 +1261,19 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("fn_Target", json.GetProperty("callee_name").GetString());
             Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
             Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
+
+            var (calleesExitCode, calleesStdout, calleesStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                ["dbo.usp_Caller", "--db", dbPath, "--json", "--lang", "sql"],
+                _jsonOptions));
+
+            using var calleesDocument = ParseJsonOutput(calleesStdout);
+            var calleesJson = calleesDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, calleesExitCode);
+            Assert.Equal(string.Empty, calleesStderr);
+            Assert.Equal("dbo.usp_Caller", calleesJson.GetProperty("caller_name").GetString());
+            Assert.False(calleesJson.GetProperty("sql_graph_contract_ready").GetBoolean());
+            Assert.Contains("sql_graph_contract_ready=false", calleesJson.GetProperty("sql_graph_contract_degraded_reason").GetString());
         }
         finally
         {
@@ -1403,34 +1416,6 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(2, json.GetProperty("count").GetInt32());
             Assert.Equal(2, json.GetProperty("files").GetInt32());
-            Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
-            Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunCallees_JsonResults_StaleSqlGraphContractIncludesDegradedState()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callees_sql_graph_contract_results");
-        try
-        {
-            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
-            DowngradeSqlGraphContractRows(dbPath);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
-                ["dbo.usp_Caller", "--db", dbPath, "--json", "--lang", "sql"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("dbo.usp_Caller", json.GetProperty("caller_name").GetString());
             Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
             Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
         }
