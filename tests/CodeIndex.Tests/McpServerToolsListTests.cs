@@ -98,6 +98,21 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsList_SuggestionCategorySchemaMatchesValidCategories_Issue4423()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tool = response["result"]!["tools"]!.AsArray()
+            .First(item => item!["name"]!.GetValue<string>() == "suggest_improvement")!;
+        var categories = tool["inputSchema"]!["properties"]!["category"]!["enum"]!.AsArray()
+            .Select(item => item!.GetValue<string>())
+            .ToArray();
+
+        Assert.Equal(SuggestionRecord.ValidCategories, categories);
+    }
+
+    [Fact]
     public void ToolsList_MetaAdvertisesFirstTimeAiDiscoveryCatalog()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;

@@ -1282,7 +1282,7 @@ The `suggest_improvement` MCP tool allows AI agents to report gaps or errors.
 
 ### What is sent (when GitHub token is configured)
 
-- Category (one of 8 fixed values: `symbol_extraction`, `reference_extraction`, `search_ranking`, `language_support`, `output_format`, `crash_report`, `unexpected_error`, `other`)
+- Category (one of 14 fixed values: `symbol_extraction`, `reference_extraction`, `search_ranking`, `language_support`, `output_format`, `crash_report`, `unexpected_error`, `security`, `performance`, `bug`, `cleanup`, `documentation`, `feature_request`, `other`)
 - Language name (e.g. `typescript`)
 - Description text (natural language, validated by SourceCodeDetector)
 - Context text (natural language, validated by SourceCodeDetector)
@@ -3729,7 +3729,7 @@ Unlist しても exact version restore は不可能になりません。これ�
 
 ### 送信されるデータ（GitHubトークン設定時）
 
-- カテゴリ（8つの固定値のいずれか: `symbol_extraction`, `reference_extraction`, `search_ranking`, `language_support`, `output_format`, `crash_report`, `unexpected_error`, `other`）
+- カテゴリ（14個の固定値のいずれか: `symbol_extraction`, `reference_extraction`, `search_ranking`, `language_support`, `output_format`, `crash_report`, `unexpected_error`, `security`, `performance`, `bug`, `cleanup`, `documentation`, `feature_request`, `other`）
 - 言語名（例: `typescript`）
 - 説明テキスト（自然言語、SourceCodeDetectorにより検証済み）
 - コンテキストテキスト（自然言語、SourceCodeDetectorにより検証済み）
