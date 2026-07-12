@@ -11,6 +11,40 @@ namespace CodeIndex.Tests;
 public partial class QueryCommandRunnerTests
 {
     [Fact]
+    public void SearchMatchClassifier_McpSchemaDescriptionHasDedicatedOrigin_Issue4416()
+    {
+        const string schemaLine = "[\"tokenBoundary\"] = new JsonObject { [\"description\"] = \"Use new HttpClient as an example.\" };";
+        const string runtimeLine = "var client = new HttpClient();";
+
+        var schema = SearchMatchClassifier.Classify(
+            "src/CodeIndex/Mcp/McpToolDefinitions.cs",
+            "csharp",
+            1,
+            schemaLine,
+            schemaLine.IndexOf("new HttpClient", StringComparison.Ordinal) + 1,
+            "new HttpClient".Length);
+        var siblingType = SearchMatchClassifier.Classify(
+            "src/CodeIndex/Mcp/McpToolDefinitions.cs",
+            "csharp",
+            1,
+            schemaLine,
+            schemaLine.IndexOf("JsonObject", StringComparison.Ordinal) + 1,
+            "JsonObject".Length);
+        var runtime = SearchMatchClassifier.Classify(
+            "src/CodeIndex/Network/ClientFactory.cs",
+            "csharp",
+            1,
+            runtimeLine,
+            runtimeLine.IndexOf("new HttpClient", StringComparison.Ordinal) + 1,
+            "new HttpClient".Length);
+
+        Assert.Equal(SearchMatchClassifier.SchemaDescription, schema.Origin);
+        Assert.Equal(SearchMatchClassifier.Code, siblingType.Origin);
+        Assert.Equal(SearchMatchClassifier.Code, runtime.Origin);
+        Assert.True(SearchMatchClassifier.IsStringLikeOrigin(schema.Origin));
+    }
+
+    [Fact]
     public void SearchMatchClassifier_MarkdownProseAndFencedCodeUseDistinctOrigins_Issue4428()
     {
         var heading = SearchMatchClassifier.Classify("USER_GUIDE.md", "markdown", 1, "# Batch usage", 3, 5, "heading");
@@ -1628,6 +1662,11 @@ public partial class QueryCommandRunnerTests
                 "src/CodeIndex/Cli/ConsoleUi.cs",
                 "csharp",
                 "public static class ConsoleUi { public const string Help = \"cdidx search --query File.ReadAllText --exact-substring\"; }\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CodeIndex/Mcp/McpToolDefinitions.cs",
+                "csharp",
+                "var schema = new JsonObject { [\"description\"] = \"Call File.ReadAllText only as an example.\" };\n");
 
             var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["File.ReadAllText", "--db", dbPath, "--source-only", "--exact-substring", "--count", "--json"],
@@ -1648,6 +1687,7 @@ public partial class QueryCommandRunnerTests
                 Assert.Equal(1, root.GetProperty("count").GetInt32());
                 Assert.Contains(SearchMatchClassifier.Comment, excludeOrigins);
                 Assert.Contains(SearchMatchClassifier.HelpText, excludeOrigins);
+                Assert.Contains(SearchMatchClassifier.SchemaDescription, excludeOrigins);
             }
 
             var (helpExitCode, helpStdout, helpStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(

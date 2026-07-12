@@ -7,6 +7,7 @@ internal static class SearchMatchClassifier
     public const string StringLiteral = "string_literal";
     public const string RegexLiteral = "regex_literal";
     public const string HelpText = "help_text";
+    public const string SchemaDescription = "schema_description";
     public const string Unknown = "unknown";
 
     public static SearchMatchFacet Classify(
@@ -36,7 +37,7 @@ internal static class SearchMatchClassifier
     }
 
     public static bool IsStringLikeOrigin(string origin)
-        => origin is StringLiteral or RegexLiteral or HelpText;
+        => origin is StringLiteral or RegexLiteral or HelpText or SchemaDescription;
 
     public static bool IsLikelyTestPath(string path)
     {
@@ -167,6 +168,8 @@ internal static class SearchMatchClassifier
                 {
                     if (LooksLikeRegexString(text))
                         return RegexLiteral;
+                    if (LooksLikeSchemaDescription(path, text, contentStart))
+                        return SchemaDescription;
                     return LooksLikeHelpText(path, text) ? HelpText : StringLiteral;
                 }
 
@@ -260,6 +263,30 @@ internal static class SearchMatchClassifier
         return fileName is "ConsoleUi.cs" or "ProgramRunner.cs" or "CliFlagSchema.cs" ||
                text.Contains("Usage:", StringComparison.Ordinal) ||
                text.Contains("--", StringComparison.Ordinal);
+    }
+
+    private static bool LooksLikeSchemaDescription(string path, string text, int contentStart)
+    {
+        if (!string.Equals(path.Replace('\\', '/'), "src/CodeIndex/Mcp/McpToolDefinitions.cs", StringComparison.Ordinal))
+            return false;
+
+        const string descriptionProperty = "[\"description\"]";
+        var propertyIndex = text.IndexOf(descriptionProperty, StringComparison.Ordinal);
+        if (propertyIndex >= 0)
+        {
+            var equalsIndex = text.IndexOf('=', propertyIndex + descriptionProperty.Length);
+            var valueQuoteIndex = equalsIndex < 0 ? -1 : text.IndexOf('"', equalsIndex + 1);
+            return valueQuoteIndex >= 0 && contentStart == valueQuoteIndex + 1;
+        }
+
+        const string appendCall = "AppendConstraintDescription(";
+        var callIndex = text.IndexOf(appendCall, StringComparison.Ordinal);
+        if (callIndex < 0)
+            return false;
+
+        var commaIndex = text.IndexOf(',', callIndex + appendCall.Length);
+        var argumentQuoteIndex = commaIndex < 0 ? -1 : text.IndexOf('"', commaIndex + 1);
+        return argumentQuoteIndex >= 0 && contentStart == argumentQuoteIndex + 1;
     }
 
     private static bool IsInsideGitHubActionsRunBlock(
