@@ -21,6 +21,20 @@ namespace CodeIndex.Tests;
 
 public partial class McpServerTests
 {
+    [Theory]
+    [InlineData("search", "{\"query\":\"App\"}")]
+    [InlineData("definition", "{\"query\":\"Run\"}")]
+    [InlineData("unused_symbols", "{}")]
+    public void ToolsCall_StructuredContentRootIncludesApiVersion_Issue4436(string tool, string argumentsJson)
+    {
+        var request = JsonNode.Parse(
+            $"{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"{tool}\",\"arguments\":{argumentsJson}}}}}")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(JsonOutputContract.ApiVersion, response["result"]!["structuredContent"]!["api_version"]!.GetValue<string>());
+    }
+
     [Fact]
     public void ToolsCall_SearchFormatCompactEmitsMatchLineAndNoTerminalCursor_Issues1642And4402()
     {
