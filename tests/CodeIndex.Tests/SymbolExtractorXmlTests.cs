@@ -15,6 +15,35 @@ namespace CodeIndex.Tests;
 public partial class SymbolExtractorTests
 {
     [Fact]
+    public void Extract_RunSettings_EmitsConfigurationSectionsAndValueSignatures_Issue4457()
+    {
+        const string content = """
+            <RunSettings>
+              <RunConfiguration>
+                <ResultsDirectory>./TestResults</ResultsDirectory>
+                <TestSessionTimeout>2700000</TestSessionTimeout>
+              </RunConfiguration>
+              <xUnit>
+                <LongRunningTestSeconds>60</LongRunningTestSeconds>
+              </xUnit>
+            </RunSettings>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+
+        Assert.Contains(symbols, symbol =>
+            symbol.Name == "RunSettings.RunConfiguration"
+            && symbol.Kind == "namespace"
+            && symbol.ContainerName == "RunSettings");
+        Assert.Contains(symbols, symbol =>
+            symbol.Name == "RunSettings.RunConfiguration.ResultsDirectory"
+            && symbol.Signature == "<ResultsDirectory>./TestResults</ResultsDirectory>");
+        Assert.Contains(symbols, symbol =>
+            symbol.Name == "RunSettings.xUnit.LongRunningTestSeconds"
+            && symbol.Signature == "<LongRunningTestSeconds>60</LongRunningTestSeconds>");
+    }
+
+    [Fact]
     public void Extract_GenericXml_EmitsBoundedElementAndAttributePaths_Issue4419()
     {
         const string content = """
