@@ -7678,11 +7678,8 @@ jobs:
         }
     }
 
-    [Theory]
-    [InlineData("tokio::spawn", "column qualifier")]
-    [InlineData("AND OR", "literal-safe search")]
-    [InlineData("foo\"bar", "literal-safe search")]
-    public void RunSearch_RawFtsQuerySyntaxErrorsReturnUsageError(string query, string expectedHint)
+    [Fact]
+    public void RunSearch_RawFtsFixtureCoversValidAndInvalidSyntax()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_error");
         try
@@ -7690,37 +7687,31 @@ jobs:
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } }");
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [query, "--db", dbPath, "--fts"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("Error [E006_FTS_QUERY_SYNTAX]: FTS5 query syntax:", stderr);
-            Assert.Contains(expectedHint, stderr);
-            Assert.DoesNotContain("database error:", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunSearch_RawFtsValidQueryStillWorks()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_success");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } }");
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            var (validExitCode, validStdout, validStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["spawn", "--db", dbPath, "--fts", "--count"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.NotEqual("0", stdout.Trim());
-            Assert.DoesNotContain("Error:", stderr);
+            Assert.Equal(CommandExitCodes.Success, validExitCode);
+            Assert.NotEqual("0", validStdout.Trim());
+            Assert.DoesNotContain("Error:", validStderr);
+
+            var invalidCases = new[]
+            {
+                (Query: "tokio::spawn", Hint: "column qualifier"),
+                (Query: "AND OR", Hint: "literal-safe search"),
+                (Query: "foo\"bar", Hint: "literal-safe search"),
+            };
+            foreach (var testCase in invalidCases)
+            {
+                var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    [testCase.Query, "--db", dbPath, "--fts"],
+                    _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Contains("Error [E006_FTS_QUERY_SYNTAX]: FTS5 query syntax:", stderr);
+                Assert.Contains(testCase.Hint, stderr);
+                Assert.DoesNotContain("database error:", stderr);
+            }
         }
         finally
         {
