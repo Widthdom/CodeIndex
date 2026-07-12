@@ -597,13 +597,6 @@ internal static class SearchAuditRecipes
                     ],
                     MatchOrigins = ["code"],
                     ExcludePaths = ["src/CodeIndex/Diagnostics/DiagnosticRedactor.cs"],
-                    GuardFilters =
-                    [
-                        new(SearchGuardRole.Reject, SearchGuardDirection.Before, "DiagnosticRedactor", SearchGuardScope.Window),
-                        new(SearchGuardRole.Reject, SearchGuardDirection.After, "DiagnosticRedactor", SearchGuardScope.Window),
-                        new(SearchGuardRole.Reject, SearchGuardDirection.Before, "FormatSanitizedException", SearchGuardScope.Window),
-                        new(SearchGuardRole.Reject, SearchGuardDirection.After, "FormatSanitizedException", SearchGuardScope.Window),
-                    ],
                     Classifiers = [DiagnosticRedactionClassifier],
                 },
                 new(
