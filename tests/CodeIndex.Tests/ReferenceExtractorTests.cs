@@ -15,6 +15,36 @@ namespace CodeIndex.Tests;
 /// </summary>
 public partial class ReferenceExtractorTests
 {
+    [Fact]
+    public void Extract_PythonKnownTypesUseInstantiateWhileFunctionsRemainCalls_Issue4449()
+    {
+        const string content = """
+            from pathlib import Path
+            import models
+            from models import User as Account
+            from helpers import FACTORY
+
+            class LocalType:
+                pass
+
+            Path("a")
+            models.User()
+            Account()
+            FACTORY()
+            LocalType()
+            helper()
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        AssertReferencesContain(references, "instantiate", null, "Path", "User", "LocalType");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Account");
+        Assert.Contains(references, reference => reference.SymbolName == "helper" && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "helper" && reference.ReferenceKind == "instantiate");
+        Assert.Contains(references, reference => reference.SymbolName == "FACTORY" && reference.ReferenceKind == "call");
+    }
+
     private static void AssertReferencesContain(
         IEnumerable<ReferenceRecord> references,
         string referenceKind,

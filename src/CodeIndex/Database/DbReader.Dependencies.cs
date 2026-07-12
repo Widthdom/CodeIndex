@@ -241,11 +241,21 @@ public partial class DbReader
         var targetFilterAlias = "dst";
         var targetLogicalSymbolNameExpr = BuildLogicalDependencySymbolNameExpr("dst", "s.name");
         var targetLogicalSymbolSegmentCountExpr = BuildLogicalDependencySymbolSegmentCountExpr("dst", "s.name");
+        var pythonImportMatchSignatureExpr = GetSymbolColumnSql("signature", "NULL", "py_import_match");
+        var pythonImportSignatureExpr = GetSymbolColumnSql("signature", "NULL", "py_import");
         var sqlDependencyTargetMatchExpr = @"(
                     (tf.target_lang != 'sql'
                      AND NOT (snc.source_lang IN ('msbuild', 'solution') AND snc.logical_reference_kind IN ('import', 'project_reference'))
                      AND NOT (snc.source_lang = 'markdown' AND snc.logical_reference_kind = 'reference')
                      AND tf.symbol_name = snc.symbol_name)
+                 OR (snc.source_lang = 'python'
+                     AND tf.target_lang = 'python'
+                     AND EXISTS (
+                         SELECT 1 FROM symbols py_import_match
+                         WHERE py_import_match.file_id = snc.source_file_id
+                           AND py_import_match.kind = 'import'
+                           AND python_import_target_name(snc.source_path, snc.symbol_name, snc.context, snc.column_number, " + pythonImportMatchSignatureExpr + @") = tf.symbol_name
+                     ))
                  OR (snc.source_lang = 'markdown'
                      AND snc.logical_reference_kind = 'import'
                      AND tf.target_path = markdown_resolve_path(snc.source_path, snc.symbol_name))
@@ -281,6 +291,7 @@ public partial class DbReader
                        r.container_name,
                        r.line,
                        r.column_number,
+                       r.reference_kind AS raw_reference_kind,
                        " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references r
                 JOIN files src ON r.file_id = src.id" + referenceLineJoin + @"
@@ -319,7 +330,7 @@ public partial class DbReader
         if (excludeTests)
             sql += $" AND NOT {DependencyTestPathCondition($"{sourceFilterAlias}.path")}";
         sql += @"
-                GROUP BY src.id, src.path, src.lang, r.symbol_name, " + contextSql + @", r.container_name, r.line, r.column_number, logical_reference_kind
+                GROUP BY src.id, src.path, src.lang, r.symbol_name, " + contextSql + @", r.container_name, r.line, r.column_number, r.reference_kind, logical_reference_kind
             ),
             logical_references AS (
                 SELECT source_file_id, source_path, source_lang,
@@ -327,7 +338,7 @@ public partial class DbReader
                        " + BuildLogicalReferenceSegmentCountExpr("source_lang", "symbol_name", "context", "container_name", "column_number") + @" AS symbol_segment_count,
                        " + BuildLogicalReferenceLeafFallbackAllowedExpr("source_lang", "symbol_name", "context", "container_name", "column_number") + @" AS allow_leaf_fallback,
                        symbol_name AS raw_symbol_name,
-                       line, column_number, logical_reference_kind,
+                       context, line, column_number, raw_reference_kind, logical_reference_kind,
                        0 AS is_attribute_alias,
                        CASE WHEN logical_reference_kind IN ('attribute', 'annotation') THEN 1 ELSE 0 END AS is_metadata
                 FROM logical_references_primary
@@ -347,7 +358,7 @@ public partial class DbReader
                        1 AS symbol_segment_count,
                        0 AS allow_leaf_fallback,
                        symbol_name || 'Attribute' AS raw_symbol_name,
-                       line, column_number, logical_reference_kind,
+                       context, line, column_number, raw_reference_kind, logical_reference_kind,
                        1 AS is_attribute_alias,
                        1 AS is_metadata
                 FROM logical_references_primary
@@ -371,12 +382,15 @@ public partial class DbReader
                        symbol_segment_count,
                        allow_leaf_fallback,
                        raw_symbol_name,
+                       context,
+                       column_number,
+                       raw_reference_kind,
                        logical_reference_kind,
                        is_attribute_alias,
                        is_metadata,
                        COUNT(*) AS ref_count
                 FROM logical_references
-                GROUP BY source_file_id, source_path, source_lang, symbol_name, symbol_segment_count, allow_leaf_fallback, raw_symbol_name, logical_reference_kind, is_attribute_alias, is_metadata
+                GROUP BY source_file_id, source_path, source_lang, symbol_name, symbol_segment_count, allow_leaf_fallback, raw_symbol_name, context, column_number, raw_reference_kind, logical_reference_kind, is_attribute_alias, is_metadata
             ),
             target_files AS (
                 -- Collapse per-symbol rows to one per (target_path, target_lang, symbol_name)
@@ -546,6 +560,20 @@ public partial class DbReader
                   -- (multiple same-name attribute / annotation classes) are dropped.
                   -- metadata エッジは同名 class 系 target が 1 つだけのときのみ残す。
                   AND (snc.is_metadata = 0 OR COALESCE(ta.class_like_target_count, 0) <= 1)
+                  -- Python names are file-local bindings. A cross-file edge is valid only
+                  -- when an import in the source file names the referenced symbol/module
+                  -- and that module owns the target path. This prevents ubiquitous names
+                  -- such as Path, main, json, and dataclass from joining every definition.
+                  -- Python の名前はファイルローカルな binding である。cross-file edge は
+                  -- source file の import が参照名/module を束縛し、その module が target
+                  -- path を所有する場合だけ残し、Path/main/json/dataclass の誤結合を防ぐ。
+                  AND (snc.source_lang != 'python' OR EXISTS (
+                        SELECT 1
+                        FROM symbols py_import
+                        WHERE py_import.file_id = snc.source_file_id
+                          AND py_import.kind = 'import'
+                          AND python_import_resolves(snc.source_path, tf.target_path, snc.symbol_name, snc.raw_reference_kind, snc.context, snc.column_number, " + pythonImportSignatureExpr + @")
+                  ))
                 UNION ALL
                 SELECT snc.source_path,
                        ptf.target_path,

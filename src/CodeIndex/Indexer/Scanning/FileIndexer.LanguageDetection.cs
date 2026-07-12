@@ -78,6 +78,8 @@ public partial class FileIndexer
         [".yaml"] = "yaml",
         [".yml"] = "yaml",
         [".json"] = "json",
+        [".jsonl"] = "jsonl",
+        [".ndjson"] = "jsonl",
         [".toml"] = "toml",
         [".config"] = "xml",
         [".runsettings"] = "xml",
