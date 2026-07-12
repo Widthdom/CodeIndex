@@ -37,7 +37,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunDeps_JsonSummaryOnly_OmitsEdgesAndEmitsProgress_Issue4112()
+    public void RunDeps_JsonSummaryModesShareGraphFixture_Issues4112And4353()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_summary_only");
         try
@@ -59,6 +59,15 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("Progress: deps", stderr);
             Assert.Contains("phase=read_edges", stderr);
             Assert.Contains("phase=write_output", stderr);
+
+            var (graphExitCode, graphStdout, graphStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--format", "json-graph", "--summary-only", "--limit", "80", "--lang", "sql"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, graphExitCode);
+            Assert.Equal(string.Empty, graphStdout);
+            Assert.Contains("summary-only is not supported with --format json-graph", graphStderr);
+            Assert.DoesNotContain("Progress: deps", graphStderr);
         }
         finally
         {
@@ -93,29 +102,6 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("deps JSON output is", graphStderr);
             Assert.Contains("exceeds --max-json-bytes 1", graphStderr);
             Assert.Contains("Usage: cdidx deps", graphStderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunDeps_JsonGraphSummaryOnly_FailsBeforeGraphMaterialization_Issue4353()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_json_graph_summary_only");
-        try
-        {
-            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--format", "json-graph", "--summary-only", "--limit", "80", "--lang", "sql"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("summary-only is not supported with --format json-graph", stderr);
-            Assert.DoesNotContain("Progress: deps", stderr);
         }
         finally
         {
