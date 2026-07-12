@@ -4000,10 +4000,10 @@ public partial class QueryCommandRunnerTests
                 [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
             var (staticExitCode, staticStdout, staticStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "StaticScript", "--exact-name"],
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "field", "--name", "StaticScript", "--exact-name"],
                 _jsonOptions));
             var (constExitCode, constStdout, constStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "ConstScript", "--exact-name"],
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "field", "--name", "ConstScript", "--exact-name"],
                 _jsonOptions));
             var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
                 ["src/fixture.cs", "--db", dbPath, "--json"],
@@ -4033,8 +4033,10 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("ConstScript = \"\"\"", constSignature);
             Assert.Contains("\"\"\";", constSignature);
             Assert.Contains("StaticScript = \"\"\"", outlineStatic.GetProperty("signature").GetString());
+            Assert.Equal("field", outlineStatic.GetProperty("kind").GetString());
             Assert.Contains("\"\"\";", outlineStatic.GetProperty("signature").GetString());
             Assert.Contains("ConstScript = \"\"\"", outlineConst.GetProperty("signature").GetString());
+            Assert.Equal("field", outlineConst.GetProperty("kind").GetString());
             Assert.Contains("\"\"\";", outlineConst.GetProperty("signature").GetString());
         }
         finally
