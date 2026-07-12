@@ -30,6 +30,17 @@ public class DiagnosticRedactorTests
     }
 
     [Theory]
+    [InlineData("PersistSuggestionsAtomically writes 12 records")]
+    [InlineData("Recipe risky-code/environment-secret-source; representative result count 3")]
+    public void RedactSuggestionText_DoesNotBorrowEntropySignalsFromLaterText_Issue4403(string text)
+    {
+        var redacted = DiagnosticRedactor.RedactSuggestionText(text, out var redactedTypes);
+
+        Assert.Equal(text, redacted);
+        Assert.Empty(redactedTypes);
+    }
+
+    [Theory]
     [InlineData("--github-token")]
     [InlineData("github_token")]
     [InlineData("bearer")]
