@@ -1198,7 +1198,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunReferences_ExactJson_StaleSqlGraphContractIncludesDegradedState()
+    public void RunReferences_StaleSqlGraphCountAndResultsShareFixture()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_sql_graph_contract");
         try
@@ -1220,34 +1220,19 @@ public partial class QueryCommandRunnerTests
             Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
             Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("degraded_reason").GetString());
             Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunReferences_JsonResults_StaleSqlGraphContractIncludesDegradedState()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_sql_graph_contract_results");
-        try
-        {
-            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
-            DowngradeSqlGraphContractRows(dbPath);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+            var (resultsExitCode, resultsStdout, resultsStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
                 ["dbo.fn_Target", "--db", dbPath, "--json", "--lang", "sql"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+            using var resultsDocument = ParseJsonOutput(resultsStdout);
+            var resultsJson = resultsDocument.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("fn_Target", json.GetProperty("symbol_name").GetString());
-            Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
-            Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
+            Assert.Equal(CommandExitCodes.Success, resultsExitCode);
+            Assert.Equal(string.Empty, resultsStderr);
+            Assert.Equal("fn_Target", resultsJson.GetProperty("symbol_name").GetString());
+            Assert.False(resultsJson.GetProperty("sql_graph_contract_ready").GetBoolean());
+            Assert.Contains("sql_graph_contract_ready=false", resultsJson.GetProperty("sql_graph_contract_degraded_reason").GetString());
         }
         finally
         {
