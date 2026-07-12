@@ -241,6 +241,8 @@ public partial class DbReader
         var targetFilterAlias = "dst";
         var targetLogicalSymbolNameExpr = BuildLogicalDependencySymbolNameExpr("dst", "s.name");
         var targetLogicalSymbolSegmentCountExpr = BuildLogicalDependencySymbolSegmentCountExpr("dst", "s.name");
+        var pythonImportMatchSignatureExpr = GetSymbolColumnSql("signature", "NULL", "py_import_match");
+        var pythonImportSignatureExpr = GetSymbolColumnSql("signature", "NULL", "py_import");
         var sqlDependencyTargetMatchExpr = @"(
                     (tf.target_lang != 'sql'
                      AND NOT (snc.source_lang IN ('msbuild', 'solution') AND snc.logical_reference_kind IN ('import', 'project_reference'))
@@ -252,7 +254,7 @@ public partial class DbReader
                          SELECT 1 FROM symbols py_import_match
                          WHERE py_import_match.file_id = snc.source_file_id
                            AND py_import_match.kind = 'import'
-                           AND python_import_target_name(snc.source_path, snc.symbol_name, snc.context, snc.column_number, py_import_match.signature) = tf.symbol_name
+                           AND python_import_target_name(snc.source_path, snc.symbol_name, snc.context, snc.column_number, " + pythonImportMatchSignatureExpr + @") = tf.symbol_name
                      ))
                  OR (snc.source_lang = 'markdown'
                      AND snc.logical_reference_kind = 'import'
@@ -570,7 +572,7 @@ public partial class DbReader
                         FROM symbols py_import
                         WHERE py_import.file_id = snc.source_file_id
                           AND py_import.kind = 'import'
-                          AND python_import_resolves(snc.source_path, tf.target_path, snc.symbol_name, snc.raw_reference_kind, snc.context, snc.column_number, py_import.signature)
+                          AND python_import_resolves(snc.source_path, tf.target_path, snc.symbol_name, snc.raw_reference_kind, snc.context, snc.column_number, " + pythonImportSignatureExpr + @")
                   ))
                 UNION ALL
                 SELECT snc.source_path,
