@@ -106,8 +106,13 @@ internal static class ConsoleCompletionRenderer
         sb.Append("        --log-format) COMPREPLY=($(compgen -W \"text json\" -- \"$cur\")) ;;\n");
         sb.Append($"        --lang) COMPREPLY=($(compgen -W \"{langs}\" -- \"$cur\")) ;;\n");
         sb.Append($"        --kind) COMPREPLY=($(compgen -W \"{kinds}\" -- \"$cur\")) ;;\n");
-        foreach (var (flag, values) in GetEnumValueCompletions())
+        foreach (var (flag, values) in GetEnumValueCompletions().Where(item => item.Flag != "--format"))
             sb.Append($"        {flag}) COMPREPLY=($(compgen -W \"{string.Join(' ', values)}\" -- \"$cur\")) ;;\n");
+        sb.Append("        --format)\n");
+        sb.Append("            case \"$cmd\" in\n");
+        foreach (var (command, values) in GetFormatValueCompletions())
+            sb.Append($"                {command}) COMPREPLY=($(compgen -W \"{string.Join(' ', values)}\" -- \"$cur\")) ;;\n");
+        sb.Append("            esac ;;\n");
         sb.Append("        *)\n");
         for (var i = 0; i < EnumeratedCompletionCommands.Length; i++)
         {
@@ -415,8 +420,12 @@ internal static class ConsoleCompletionRenderer
         sb.AppendLine("    $palettes = @('basic', '256', 'truecolor')");
         sb.AppendLine("    $logFormats = @('text', 'json')");
         sb.AppendLine("    $enumValues = @{");
-        foreach (var (flag, values) in GetEnumValueCompletions())
+        foreach (var (flag, values) in GetEnumValueCompletions().Where(item => item.Flag != "--format"))
             sb.AppendLine($"        '{EscapePowerShellSingleQuoted(flag)}' = @({FormatPowerShellArray(values)})");
+        sb.AppendLine("    }");
+        sb.AppendLine("    $formatValues = @{");
+        foreach (var (command, values) in GetFormatValueCompletions())
+            sb.AppendLine($"        '{EscapePowerShellSingleQuoted(command)}' = @({FormatPowerShellArray(values)})");
         sb.AppendLine("    }");
         sb.AppendLine($"    $topLevelFlags = @({topLevelFlags})");
         sb.AppendLine("    $subcommands = @{");
@@ -442,6 +451,7 @@ internal static class ConsoleCompletionRenderer
         sb.AppendLine("        '--log-format' { $logFormats | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
         sb.AppendLine("        '--lang' { $langs | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
         sb.AppendLine("        '--kind' { $kinds | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
+        sb.AppendLine("        '--format' { if ($formatValues.ContainsKey($subcmd)) { $formatValues[$subcmd] | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ } }; return }");
         sb.AppendLine("        { $enumValues.ContainsKey($_) } { $enumValues[$_] | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
         sb.AppendLine("    }");
         sb.AppendLine("    if (-not $subcmd -or ($tokens.Count -le 2 -and -not ([string]::IsNullOrEmpty($wordToComplete)) -and -not $afterLastToken)) {");
@@ -535,4 +545,20 @@ internal static class ConsoleCompletionRenderer
             .Where(item => item.Values is not null)
             .GroupBy(item => item.Flag, StringComparer.Ordinal)
             .Select(group => (group.Key, group.SelectMany(item => item.Values!).Distinct(StringComparer.Ordinal).ToArray()));
+
+    private static IEnumerable<(string Command, string[] Values)> GetFormatValueCompletions()
+    {
+        yield return ("search", ["text", "json", "count", "compact", "csv", "tsv", "lsp", "qf", "sarif", "issue-drafts"]);
+        yield return ("recipes", ["text", "json", "issue-drafts"]);
+        yield return ("audit", ["text", "json", "count", "issue-drafts"]);
+        foreach (var command in new[] { "definition", "references", "callers", "callees", "find", "validate" })
+            yield return (command, ["text", "json", "lsp", "qf", "sarif"]);
+        foreach (var command in new[] { "symbols", "files" })
+            yield return (command, ["text", "json", "count", "compact", "csv", "tsv"]);
+        yield return ("map", ["text", "json", "compact", "markdown"]);
+        yield return ("inspect", ["text", "json", "compact"]);
+        yield return ("deps", ["text", "json"]);
+        yield return ("suggestions", ["json", "markdown", "issue-drafts"]);
+        yield return ("languages", ["text", "json", "markdown"]);
+    }
 }

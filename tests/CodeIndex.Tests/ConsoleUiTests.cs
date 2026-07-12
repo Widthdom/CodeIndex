@@ -41,6 +41,24 @@ public class ConsoleUiTests
         }
     }
 
+    [Fact]
+    public void CompletionRenderer_FormatValuesAreCommandScoped_Issue4426()
+    {
+        var bash = ConsoleCompletionRenderer.GetCompletionScript("bash");
+        var formatCase = ExtractBetween(bash, "--format)", "esac ;;");
+        var search = ExtractBetween(formatCase, "search)", "recipes)");
+        var deps = ExtractBetween(formatCase, "deps)", "suggestions)");
+        Assert.Contains("issue-drafts", search);
+        Assert.Contains("sarif", search);
+        Assert.DoesNotContain("issue-drafts", deps);
+        Assert.DoesNotContain("sarif", deps);
+
+        var powershell = ConsoleCompletionRenderer.GetCompletionScript("powershell");
+        var formatValues = ExtractBetween(powershell, "$formatValues = @{", "    }");
+        Assert.Contains("'search' = @('text', 'json', 'count', 'compact', 'csv', 'tsv', 'lsp', 'qf', 'sarif', 'issue-drafts')", formatValues);
+        Assert.Contains("'deps' = @('text', 'json')", formatValues);
+    }
+
 
     private static readonly Dictionary<short, OpCode> SingleByteOpCodes = typeof(OpCodes)
         .GetFields(BindingFlags.Public | BindingFlags.Static)
