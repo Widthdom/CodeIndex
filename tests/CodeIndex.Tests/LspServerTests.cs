@@ -492,7 +492,23 @@ public class LspServerTests
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             var sourcePath = Path.Combine(projectRoot, "app.cs");
-            var source = "public class App\n{\n    outsideValue = 1;\n    insideValue = 2;\n    endValue = 3;\n    public int Count() => 1;\n}\n";
+            var sourceBuilder = new StringBuilder();
+            var symbols = new List<SymbolRecord>();
+            for (var index = 0; index < 1003; index++)
+            {
+                var name = $"value{index:D4}";
+                sourceBuilder.Append("    ").Append(name).Append(" = ").Append(index).AppendLine(";");
+                symbols.Add(new SymbolRecord
+                {
+                    Kind = "field",
+                    Name = name,
+                    Line = index + 1,
+                    StartLine = index + 1,
+                    EndLine = index + 1,
+                    ReturnType = "int",
+                });
+            }
+            var source = sourceBuilder.ToString();
             File.WriteAllText(sourcePath, source);
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
             using (var fixtureDb = new DbContext(dbPath))
@@ -501,22 +517,20 @@ public class LspServerTests
                 fileIdCommand.CommandText = "SELECT id FROM files WHERE path = 'app.cs'";
                 var fileId = Convert.ToInt64(fileIdCommand.ExecuteScalar(), CultureInfo.InvariantCulture);
                 var writer = new DbWriter(fixtureDb.Connection);
-                writer.InsertSymbols([
-                    new SymbolRecord { FileId = fileId, Kind = "field", Name = "outsideValue", Line = 3, StartLine = 3, EndLine = 3, ReturnType = "int" },
-                    new SymbolRecord { FileId = fileId, Kind = "field", Name = "insideValue", Line = 4, StartLine = 4, EndLine = 4, ReturnType = "int" },
-                    new SymbolRecord { FileId = fileId, Kind = "field", Name = "endValue", Line = 5, StartLine = 5, EndLine = 5, ReturnType = "int" },
-                ]);
+                foreach (var symbol in symbols)
+                    symbol.FileId = fileId;
+                writer.InsertSymbols(symbols);
             }
             using var db = new DbContext(dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
 
-            var response = server.HandleMessage(CreateInlayHintRequest(sourcePath, 4418, 3, 0, 4, 0));
+            var response = server.HandleMessage(CreateInlayHintRequest(sourcePath, 4418, 1001, 0, 1002, 0));
 
             Assert.NotNull(response);
             Assert.True(response!["error"] is null, response["error"]?.ToJsonString());
             var hint = Assert.Single(response!["result"]!.AsArray());
-            Assert.Equal(3, hint!["position"]!["line"]!.GetValue<int>());
-            Assert.Equal(15, hint["position"]!["character"]!.GetValue<int>());
+            Assert.Equal(1001, hint!["position"]!["line"]!.GetValue<int>());
+            Assert.Equal(13, hint["position"]!["character"]!.GetValue<int>());
             Assert.Equal(": int", hint["label"]!.GetValue<string>());
         }
         finally

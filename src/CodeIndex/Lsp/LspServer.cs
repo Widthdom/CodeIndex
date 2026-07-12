@@ -713,7 +713,12 @@ internal sealed class LspServer : IDisposable
 
         var array = new JsonArray();
         var lineCache = new Dictionary<int, string?>();
-        foreach (var symbol in GetDocumentSymbols(document.IndexedPath, MaxDocumentSymbols)
+        var hasRange = TryReadInlayHintRange(root, out var startLine, out _, out var endLine, out _);
+        foreach (var symbol in GetDocumentSymbols(
+                document.IndexedPath,
+                MaxDocumentSymbols,
+                hasRange ? startLine + 1 : null,
+                hasRange ? endLine + 1 : null)
             .Where(symbol => !string.IsNullOrWhiteSpace(symbol.ReturnType))
             .Where(symbol => IsInlayHintInRequestedRange(root, document, symbol, lineCache))
             .Where(symbol => !HasExplicitTypeBeforeSymbol(document, symbol, lineCache))
@@ -730,13 +735,8 @@ internal sealed class LspServer : IDisposable
         SymbolResult symbol,
         Dictionary<int, string?> lineCache)
     {
-        if (!root.TryGetProperty("params", out var paramsElement) ||
-            !paramsElement.TryGetProperty("range", out var range) ||
-            !TryReadLspPosition(range, "start", out var startLine, out var startCharacter) ||
-            !TryReadLspPosition(range, "end", out var endLine, out var endCharacter))
-        {
+        if (!TryReadInlayHintRange(root, out var startLine, out var startCharacter, out var endLine, out var endCharacter))
             return true;
-        }
 
         var line = Math.Max(symbol.Line, 1) - 1;
         var character = FindSymbolStartCharacter(document, symbol, lineCache) + symbol.Name.Length;
@@ -781,6 +781,23 @@ internal sealed class LspServer : IDisposable
                position.TryGetProperty("character", out var characterElement) &&
                characterElement.TryGetInt32(out character) &&
                character >= 0;
+    }
+
+    private static bool TryReadInlayHintRange(
+        JsonElement root,
+        out int startLine,
+        out int startCharacter,
+        out int endLine,
+        out int endCharacter)
+    {
+        startLine = 0;
+        startCharacter = 0;
+        endLine = 0;
+        endCharacter = 0;
+        return root.TryGetProperty("params", out var paramsElement) &&
+               paramsElement.TryGetProperty("range", out var range) &&
+               TryReadLspPosition(range, "start", out startLine, out startCharacter) &&
+               TryReadLspPosition(range, "end", out endLine, out endCharacter);
     }
 
     private static bool IsPositionInRange(
@@ -1261,8 +1278,8 @@ internal sealed class LspServer : IDisposable
         return true;
     }
 
-    private List<SymbolResult> GetDocumentSymbols(string indexedPath, int limit)
-        => _reader.SearchSymbols((string?)null, limit, pathPatterns: [indexedPath])
+    private List<SymbolResult> GetDocumentSymbols(string indexedPath, int limit, int? startLine = null, int? endLine = null)
+        => _reader.SearchSymbols((string?)null, limit, pathPatterns: [indexedPath], startLine: startLine, endLine: endLine)
             .OrderBy(s => s.StartLine)
             .ThenByDescending(s => s.EndLine)
             .ThenBy(s => s.ContainerName == null ? 0 : 1)
