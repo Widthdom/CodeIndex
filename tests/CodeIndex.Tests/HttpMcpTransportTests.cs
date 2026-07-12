@@ -1171,20 +1171,23 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_BearerToken_AcceptsMatchingHeader()
+    public async Task HttpTransport_BearerToken_AcceptsCaseInsensitiveSchemes()
     {
         const string token = "s3cret-token";
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
 
         using var client = CreateHttpClient();
-        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+        foreach (var scheme in new[] { "Bearer", "bearer" })
         {
-            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
-        };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        using var response = await client.SendAsync(request);
+            using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+            {
+                Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue(scheme, token);
+            using var response = await client.SendAsync(request);
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
     }
 
     [Fact]
@@ -1347,26 +1350,6 @@ public class HttpMcpTransportTests : IDisposable
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
         Assert.Equal("wrong-token", record.AuthOutcome);
-    }
-
-    [Fact]
-    public async Task HttpTransport_BearerToken_AcceptsLowerCaseScheme()
-    {
-        // RFC 6750 §2.1: auth-scheme tokens are case-insensitive. Clients that send
-        // `authorization: bearer ...` (lowercase) must still authenticate successfully.
-        // RFC 6750 §2.1 により auth-scheme は case-insensitive なので、`bearer ...` 表記でも認証成功。
-        const string token = "s3cret-token";
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
-
-        using var client = CreateHttpClient();
-        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
-        {
-            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
-        };
-        request.Headers.TryAddWithoutValidation("Authorization", $"bearer {token}");
-        using var response = await client.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]
