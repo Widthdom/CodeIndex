@@ -82,6 +82,8 @@ cdidx suggestions add --category output_format --description "Record a local dog
 cdidx validate
 ```
 
+When `search --json=ndjson` stops at `--max-json-bytes`, its terminal record reports `interruption_reason`, `max_json_bytes`, `first_omitted_result_bytes`, `omitted_count`, and `recovery_guidance`. This distinguishes byte-budget truncation from cancellation or an internal failure, including when the first result does not fit.
+
 Use it with AI tools or editors:
 
 ```bash
@@ -290,6 +292,8 @@ cdidx search --named-query todo=TODO --named-query fixme=FIXME --format count --
 cdidx suggestions add --category output_format --description "ローカル dogfood finding を記録する" --evidence-path src/CodeIndex/Cli/SuggestionsCommandRunner.cs --json
 cdidx validate
 ```
+
+`search --json=ndjson` が `--max-json-bytes` で停止した場合、終端レコードは `interruption_reason`、`max_json_bytes`、`first_omitted_result_bytes`、`omitted_count`、`recovery_guidance` を返します。最初の結果さえ収まらない場合も含め、byte budget による切り詰めをキャンセルや内部エラーと区別できます。
 
 AI tool や editor から使います。
 
