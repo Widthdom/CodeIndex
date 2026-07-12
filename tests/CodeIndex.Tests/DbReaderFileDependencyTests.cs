@@ -1747,6 +1747,84 @@ public partial class DbReaderTests
     }
 
     [Fact]
+    public void GetFileDependencies_CSharpPrivateFieldReceiver_DoesNotMatchUnrelatedContainer_Issue4414()
+    {
+        InsertIndexedFile("src/Service.cs", "csharp",
+            """
+            class Service
+            {
+                private readonly Reader _reader;
+                void Run()
+                {
+                    _reader.Read();
+                }
+            }
+
+            class Reader { public void Read() { } }
+            """);
+        InsertIndexedFile("tests/Fixture.cs", "csharp",
+            """
+            class Fixture
+            {
+                private readonly object _reader;
+            }
+            """);
+
+        var dependencies = _reader.GetFileDependencies(limit: 20, lang: "csharp");
+
+        Assert.DoesNotContain(dependencies, dependency =>
+            dependency.SourcePath == "src/Service.cs" && dependency.TargetPath == "tests/Fixture.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpPublicPropertyReference_RemainsResolvable_Issue4414()
+    {
+        InsertIndexedFile("src/Model.cs", "csharp",
+            """
+            public class Model
+            {
+                public string Name { get; set; } = "";
+            }
+            """);
+        InsertIndexedFile("src/Consumer.cs", "csharp",
+            """
+            public class Consumer
+            {
+                public string Read(Model model) => model.Name;
+            }
+            """);
+
+        var dependencies = _reader.GetFileDependencies(limit: 20, lang: "csharp");
+
+        Assert.Contains(dependencies, dependency =>
+            dependency.SourcePath == "src/Consumer.cs" && dependency.TargetPath == "src/Model.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpPublicPropertyReceiverAcrossPartialClass_RemainsResolvable_Issue4414()
+    {
+        InsertIndexedFile("src/Service.State.cs", "csharp",
+            """
+            public partial class Service
+            {
+                public string Name { get; set; } = "";
+            }
+            """);
+        InsertIndexedFile("src/Service.Use.cs", "csharp",
+            """
+            public partial class Service
+            {
+                public string Normalize() => Name.Trim();
+            }
+            """);
+
+        var dependencies = _reader.GetFileDependencies(limit: 20, lang: "csharp");
+
+        Assert.Contains(dependencies, dependency =>
+            dependency.SourcePath == "src/Service.Use.cs" && dependency.TargetPath == "src/Service.State.cs");
+    }
+
+    [Fact]
     public void GetFileDependencies_CSharpNestedGenericNoArgAttribute_ResolvesToAttributeClass()
     {
         // issue #293 round-16: the no-arg C# attribute regex must handle

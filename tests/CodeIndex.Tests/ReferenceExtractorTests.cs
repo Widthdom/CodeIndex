@@ -13120,7 +13120,7 @@ public partial class ReferenceExtractorTests
         Assert.All(pointRefs, r => Assert.Equal("Match", r.ContainerName));
         Assert.All(shapeRefs, r => Assert.Equal("Match", r.ContainerName));
         Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
     }
 
     [Fact]
@@ -13392,7 +13392,7 @@ public partial class ReferenceExtractorTests
         var csharpSymbols = SymbolExtractor.Extract(1, "csharp", csharp);
         var csharpReferences = ReferenceExtractor.Extract(1, "csharp", csharp, csharpSymbols);
 
-        Assert.DoesNotContain(csharpReferences, r => r.SymbolName == "Console" && r.ReferenceKind == "type_reference");
+        Assert.Contains(csharpReferences, r => r.SymbolName == "Console" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(csharpReferences, r => r.SymbolName == "service" && r.ReferenceKind == "type_reference");
         Assert.Contains(csharpReferences, r => r.SymbolName == "Service" && r.ReferenceKind == "type_reference");
 
@@ -14998,4 +14998,52 @@ public partial class ReferenceExtractorTests
             BodyStartLine = startLine,
             BodyEndLine = endLine,
         };
+
+    [Fact]
+    public void Extract_CSharpStaticTypeQualifier_EmitsSingleTypeReference_Issue4404()
+    {
+        const string content = """
+            class LspServer
+            {
+                static string PathToUri(string path) => path;
+            }
+
+            class Caller
+            {
+                string Run(string path) => LspServer.PathToUri(path);
+            }
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("csharp", content);
+        var qualifierReferences = references
+            .Where(reference => reference.SymbolName == "LspServer"
+                && reference.Context.Contains("LspServer.PathToUri", StringComparison.Ordinal))
+            .ToList();
+
+        var qualifier = Assert.Single(qualifierReferences);
+        Assert.Equal("type_reference", qualifier.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CSharpFieldReceiver_UsesQualifiedReferenceIdentity_Issue4414()
+    {
+        const string content = """
+            class Service
+            {
+                private readonly Reader _reader;
+                void Run()
+                {
+                    _reader.Read();
+                }
+            }
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("csharp", content);
+        var receiver = Assert.Single(references.Where(reference =>
+            reference.SymbolName.EndsWith("Service._reader", StringComparison.Ordinal)));
+
+        Assert.Equal("reference", receiver.ReferenceKind);
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "_reader" && reference.ReferenceKind == "call");
+    }
 }

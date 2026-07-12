@@ -9299,7 +9299,7 @@ public partial class ReferenceExtractorTests
 
         Assert.Contains(references, reference =>
             reference.SymbolName == "ProgramRunner"
-            && reference.ReferenceKind == "call"
+            && reference.ReferenceKind == "type_reference"
             && reference.ContainerName == "Main");
     }
 
@@ -9321,7 +9321,7 @@ public partial class ReferenceExtractorTests
 
         Assert.Contains(references, reference =>
             reference.SymbolName == "ProgramRunner"
-            && reference.ReferenceKind == "call"
+            && reference.ReferenceKind == "type_reference"
             && reference.ContainerName == "Main");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "global::ProgramRunner"
@@ -9349,11 +9349,11 @@ public partial class ReferenceExtractorTests
 
         Assert.Contains(references, reference =>
             reference.SymbolName == "FileFactory"
-            && reference.ReferenceKind == "call"
+            && reference.ReferenceKind == "type_reference"
             && reference.ContainerName == "Run");
         Assert.Contains(references, reference =>
             reference.SymbolName == "ResourceFactory"
-            && reference.ReferenceKind == "call"
+            && reference.ReferenceKind == "type_reference"
             && reference.ContainerName == "Run");
     }
 
@@ -9372,7 +9372,7 @@ public partial class ReferenceExtractorTests
 
         Assert.Contains(references, reference =>
             reference.SymbolName == "Options"
-            && reference.ReferenceKind == "call"
+            && reference.ReferenceKind == "type_reference"
             && reference.ContainerName == "Read");
     }
 
@@ -9420,7 +9420,7 @@ public partial class ReferenceExtractorTests
 
         Assert.Contains(references, reference =>
             reference.SymbolName == "Console"
-            && reference.ReferenceKind == "call"
+            && reference.ReferenceKind == "type_reference"
             && reference.ContainerName == "Run");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "System"

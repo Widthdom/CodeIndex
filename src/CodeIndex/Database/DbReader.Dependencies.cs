@@ -144,8 +144,20 @@ public partial class DbReader
     // leaf-only matching at join time when the source site itself is unqualified.
     // SQL の依存 target key は qualified 名 (`dbo.fn_X`) に正規化し、他言語は保存名のまま。
     // SQL の source 側が unqualified (`fn_X`) の場合だけ join 時に leaf fallback を許可する。
-    private static string BuildLogicalDependencySymbolNameExpr(string fileAlias, string symbolNameExpr)
-        => $"CASE WHEN {fileAlias}.lang = 'sql' THEN sql_normalize_name({symbolNameExpr}) ELSE {symbolNameExpr} END";
+    private string BuildLogicalDependencySymbolNameExpr(string fileAlias, string symbolNameExpr)
+    {
+        var containerQualifiedName = GetSymbolColumnSql("container_qualified_name");
+        var visibility = GetSymbolColumnSql("visibility", "''");
+        return $@"CASE
+                WHEN {fileAlias}.lang = 'sql' THEN sql_normalize_name({symbolNameExpr})
+                WHEN {fileAlias}.lang = 'csharp'
+                 AND s.kind = 'property'
+                 AND lower({visibility}) = 'private'
+                 AND {containerQualifiedName} IS NOT NULL
+                    THEN {containerQualifiedName} || '.' || {symbolNameExpr}
+                ELSE {symbolNameExpr}
+            END";
+    }
 
     private static string BuildLogicalDependencySymbolSegmentCountExpr(string fileAlias, string symbolNameExpr)
         => $"CASE WHEN {fileAlias}.lang = 'sql' THEN sql_segment_count({symbolNameExpr}) ELSE 1 END";
