@@ -28,8 +28,10 @@ public partial class DbReaderTests
         Assert.Equal("src/App/App.csproj", dependency.Symbols);
 
         var impact = _reader.AnalyzeImpact("App", maxDepth: 1, limit: 10, lang: "solution");
-        Assert.NotNull(impact.Cycles);
-        Assert.NotEmpty(impact.Cycles);
+        var caller = Assert.Single(impact.Callers);
+        Assert.Equal("Repo.sln", caller.CallerName);
+        Assert.Equal("src/App/App.csproj", caller.CalleeName);
+        Assert.True(impact.Cycles is null or { Count: 0 });
     }
 
     [Fact]
