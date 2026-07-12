@@ -72,6 +72,18 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_GenericXml_CapsManyAttributesDuringReaderTraversal_Issue4419()
+    {
+        var attributes = string.Join(' ', Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 1).Select(index => $"a{index}=\"v\""));
+        var symbols = SymbolExtractor.Extract(1, "xml", $"<configuration {attributes} />");
+
+        Assert.True(symbols.Count <= SymbolExtractor.StructuredDataMaxSymbols + 1);
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "extraction_diagnostic"
+            && symbol.Name == "structured_data_xml_symbol_budget_exceeded");
+    }
+
+    [Fact]
     public void Extract_XmlBroadXaml_EmitsStructuredDataTruncationDiagnostic_Issue3765()
     {
         var elements = string.Join('\n', Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 1).Select(index => $"""  <Button x:Name="Button{index}" />"""));

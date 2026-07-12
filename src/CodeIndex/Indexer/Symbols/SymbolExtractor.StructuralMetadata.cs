@@ -41,6 +41,8 @@ public static partial class SymbolExtractor
     {
         List<SymbolRecord>? symbols = null;
         var elementPaths = new Stack<string>();
+        var truncated = false;
+        var elementCount = 0;
 
         try
         {
@@ -57,12 +59,32 @@ public static partial class SymbolExtractor
                 if (reader.NodeType != XmlNodeType.Element)
                     continue;
 
+                elementCount++;
+
                 var elementName = reader.LocalName;
                 var parentPath = elementPaths.Count == 0 ? null : elementPaths.Peek();
                 var elementPath = parentPath == null ? elementName : $"{parentPath}.{elementName}";
                 var lineNumber = reader is IXmlLineInfo lineInfo && lineInfo.HasLineInfo()
                     ? lineInfo.LineNumber
                     : 1;
+
+                if (elementCount > XmlExtractionMaxElements || reader.Depth + 1 > XmlExtractionMaxDepth)
+                {
+                    AddStructuredDataDiagnosticSymbol(symbols ??= [], fileId, "structured_data_traversal_budget_exceeded", lineNumber, lines, "Application-manifest traversal exceeded the XML structure limit; remaining symbols were truncated.", ref truncated);
+                    return symbols;
+                }
+
+                if (elementPath.Length > StructuredDataMaxPathLength)
+                {
+                    AddStructuredDataDiagnosticSymbol(symbols ??= [], fileId, "structured_data_traversal_budget_exceeded", lineNumber, lines, "XML element path exceeded the structured-data path limit; remaining symbols were truncated.", ref truncated);
+                    return symbols;
+                }
+
+                if ((symbols?.Count ?? 0) >= StructuredDataMaxSymbols)
+                {
+                    AddStructuredDataDiagnosticSymbol(symbols ??= [], fileId, "structured_data_xml_symbol_budget_exceeded", lineNumber, lines, "XML symbol extraction exceeded the per-file symbol budget; remaining symbols were truncated.", ref truncated);
+                    return symbols;
+                }
 
                 (symbols ??= []).Add(CreateManifestSymbol(
                     fileId,
@@ -110,10 +132,10 @@ public static partial class SymbolExtractor
         }
         catch (XmlException)
         {
-            return symbols ?? [];
+            return TrimStructuredDataSymbols(symbols ?? [], fileId, "structured_data_xml_symbol_budget_exceeded", lines);
         }
 
-        return symbols ?? [];
+        return TrimStructuredDataSymbols(symbols ?? [], fileId, "structured_data_xml_symbol_budget_exceeded", lines);
     }
 
     private static List<SymbolRecord> ExtractGenericXmlSymbols(long fileId, string content, string[] lines)
@@ -124,6 +146,7 @@ public static partial class SymbolExtractor
         var symbols = CreateSymbolListForLines(lines.Length);
         var elementPaths = new Stack<string>();
         var elementSymbolIndexes = new Stack<int>();
+        var truncated = false;
 
         try
         {
@@ -135,10 +158,17 @@ public static partial class SymbolExtractor
                     var parentPath = elementPaths.Count == 0 ? null : elementPaths.Peek();
                     var path = parentPath == null ? reader.LocalName : $"{parentPath}.{reader.LocalName}";
                     var lineNumber = reader is IXmlLineInfo lineInfo && lineInfo.HasLineInfo() ? lineInfo.LineNumber : 1;
-                    var symbol = CreateXmlPathSymbol(fileId, "namespace", path, lineNumber, lines, parentPath);
+                    if (path.Length > StructuredDataMaxPathLength)
+                    {
+                        AddStructuredDataDiagnosticSymbol(symbols, fileId, "structured_data_traversal_budget_exceeded", lineNumber, lines, "XML element path exceeded the structured-data path limit; remaining symbols were truncated.", ref truncated);
+                        return symbols;
+                    }
+                    if (!TryAddStructuredDataSymbol(fileId, "namespace", path, lineNumber, lines, parentPath, symbols, "structured_data_xml_symbol_budget_exceeded", ref truncated))
+                        return symbols;
+
+                    var symbol = symbols[^1];
                     symbol.BodyStartLine = lineNumber;
                     symbol.BodyEndLine = lineNumber;
-                    symbols.Add(symbol);
                     var elementSymbolIndex = symbols.Count - 1;
 
                     if (reader.HasAttributes && reader.MoveToFirstAttribute())
@@ -148,13 +178,14 @@ public static partial class SymbolExtractor
                             if (reader.NamespaceURI == XmlNamespaceDeclarationUri)
                                 continue;
 
-                            symbols.Add(CreateXmlPathSymbol(
-                                fileId,
-                                "property",
-                                $"{path}.@{reader.LocalName}",
-                                lineNumber,
-                                lines,
-                                path));
+                            var attributePath = $"{path}.@{reader.LocalName}";
+                            if (attributePath.Length > StructuredDataMaxPathLength)
+                            {
+                                AddStructuredDataDiagnosticSymbol(symbols, fileId, "structured_data_traversal_budget_exceeded", lineNumber, lines, "XML attribute path exceeded the structured-data path limit; remaining symbols were truncated.", ref truncated);
+                                return symbols;
+                            }
+                            if (!TryAddStructuredDataSymbol(fileId, "property", attributePath, lineNumber, lines, path, symbols, "structured_data_xml_symbol_budget_exceeded", ref truncated))
+                                return symbols;
                         }
                         while (reader.MoveToNextAttribute());
                         reader.MoveToElement();
@@ -182,30 +213,6 @@ public static partial class SymbolExtractor
         }
 
         return TrimStructuredDataSymbols(symbols, fileId, "structured_data_xml_symbol_budget_exceeded", lines);
-    }
-
-    private static SymbolRecord CreateXmlPathSymbol(
-        long fileId,
-        string kind,
-        string path,
-        int lineNumber,
-        string[] lines,
-        string? parentPath)
-    {
-        var line = GetLineOrEmpty(lines, lineNumber).Trim();
-        return new SymbolRecord
-        {
-            FileId = fileId,
-            Kind = kind,
-            Name = path,
-            Line = lineNumber,
-            StartLine = lineNumber,
-            EndLine = lineNumber,
-            Signature = string.IsNullOrEmpty(line) ? null : line,
-            ContainerKind = parentPath == null ? null : "namespace",
-            ContainerName = parentPath,
-            ContainerQualifiedName = parentPath,
-        };
     }
 
     private static void AddManifestAssemblyIdentitySymbols(
@@ -269,7 +276,7 @@ public static partial class SymbolExtractor
             Line = lineNumber,
             StartLine = lineNumber,
             EndLine = lineNumber,
-            Signature = string.IsNullOrEmpty(line) ? null : line,
+            Signature = string.IsNullOrEmpty(line) ? null : LimitStructuredDataSignature(line),
             ContainerKind = parentName == null ? null : "namespace",
             ContainerName = parentName,
             ContainerQualifiedName = parentName,
