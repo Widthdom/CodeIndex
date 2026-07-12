@@ -126,6 +126,13 @@ internal static partial class ProgramRunner
 
     private static bool TryRunSubcommandHelp(string[] args, CommandRunContext context, out int exitCode)
     {
+        if (args.Length > 2 && args[0] == "suggestions" && args[1] == "add" && ArgHelper.WantsHelp(args.AsSpan(2)))
+        {
+            SuggestionsCommandRunner.PrintAddHelp();
+            exitCode = CommandExitCodes.Success;
+            return true;
+        }
+
         if (args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
         {
             var helpCommand = ResolveSubcommandHelpName(args);
