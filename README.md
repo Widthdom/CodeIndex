@@ -84,6 +84,8 @@ cdidx validate
 
 When `search --json=ndjson` stops at `--max-json-bytes`, its terminal record reports `interruption_reason`, `max_json_bytes`, `first_omitted_result_bytes`, `omitted_count`, and `recovery_guidance`. This distinguishes byte-budget truncation from cancellation or an internal failure, including when the first result does not fit.
 
+`--max-json-bytes` overflow behavior is command-specific and is stated in command help: `symbols` truncates rows with omission metadata; `search --json=ndjson` truncates at row boundaries; `search --json=array`, `inspect`, and `map` reject the whole response when it cannot fit. Check `cdidx <command> --help` before relying on partial output.
+
 Use it with AI tools or editors:
 
 ```bash
@@ -294,6 +296,8 @@ cdidx validate
 ```
 
 `search --json=ndjson` が `--max-json-bytes` で停止した場合、終端レコードは `interruption_reason`、`max_json_bytes`、`first_omitted_result_bytes`、`omitted_count`、`recovery_guidance` を返します。最初の結果さえ収まらない場合も含め、byte budget による切り詰めをキャンセルや内部エラーと区別できます。
+
+`--max-json-bytes` の overflow 挙動はコマンドごとに異なり、各コマンドの help に明記されます。`symbols` は省略 metadata 付きで行を切り詰め、`search --json=ndjson` は行境界で切り詰めます。一方、`search --json=array`、`inspect`、`map` は応答全体が収まらない場合にエラーにします。部分出力へ依存する前に `cdidx <command> --help` を確認してください。
 
 AI tool や editor から使います。
 
