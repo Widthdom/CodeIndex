@@ -10,6 +10,22 @@ namespace CodeIndex.Tests;
 public partial class DbReaderTests
 {
     [Fact]
+    public void GetFileDependencies_MsBuildUsesRelativeProjectReferencesInsteadOfSharedPackages_Issue4407()
+    {
+        InsertIndexedFile("src/App/App.csproj", "msbuild",
+            "<Project><ItemGroup><PackageReference Include=\"Shared.Package\" /></ItemGroup></Project>");
+        InsertIndexedFile("tests/App.Tests/App.Tests.csproj", "msbuild",
+            "<Project><ItemGroup><ProjectReference Include=\"..\\..\\src\\App\\App.csproj\" /><PackageReference Include=\"Shared.Package\" /></ItemGroup></Project>");
+
+        var dependencies = _reader.GetFileDependencies(limit: 10, lang: "msbuild");
+
+        var dependency = Assert.Single(dependencies);
+        Assert.Equal("tests/App.Tests/App.Tests.csproj", dependency.SourcePath);
+        Assert.Equal("src/App/App.csproj", dependency.TargetPath);
+        Assert.Equal("..\\..\\src\\App\\App.csproj", dependency.Symbols);
+    }
+
+    [Fact]
     public void GetFileDependencies_MarkdownScopesLocalAnchorsAndResolvesExplicitPaths_Issue4400()
     {
         InsertIndexedFile("docs/a/source.md", "markdown", "# Source\n\n[local](#shared) [target](target.md#shared) [parent](../target.md#shared)\n\n## Shared\n");

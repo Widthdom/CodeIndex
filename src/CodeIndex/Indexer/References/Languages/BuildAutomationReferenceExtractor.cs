@@ -201,7 +201,12 @@ internal static class BuildAutomationReferenceExtractor
                         ? -1
                         : valueIndex + valueGroup.Value.IndexOf(trimmed, StringComparison.Ordinal);
                     if (tokenIndex >= 0)
-                        AddReference(references, seen, fileId, new BuildToken(trimmed, tokenIndex), "import", context, lineNumber, container, "msbuild");
+                    {
+                        var referenceKind = elementName.Equals("ProjectReference", StringComparison.OrdinalIgnoreCase)
+                            ? "project_reference"
+                            : "import";
+                        AddReference(references, seen, fileId, new BuildToken(trimmed, tokenIndex), referenceKind, context, lineNumber, container, "msbuild");
+                    }
                 }
             }
         }
