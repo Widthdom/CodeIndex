@@ -5,7 +5,7 @@ public partial class FileIndexer
     // Directories to skip (case-insensitive for cross-platform) / スキップするディレクトリ（クロスプラットフォーム対応で大文字小文字を区別しない）
     private static readonly string[] SkipDirNames =
     [
-        ".git", ".svn", ".hg", ".cdidx",
+        ".git", ".svn", ".hg",
         "node_modules", ".pnpm-store", ".yarn", ".turbo", ".parcel-cache", ".svelte-kit", ".nx",
         "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".nox", ".eggs", "htmlcov",
         "venv", ".venv", "env",
@@ -63,6 +63,18 @@ public partial class FileIndexer
         if (string.IsNullOrEmpty(fileName))
             return false;
         return IsDefaultExcludedFileName(fileName.AsSpan());
+    }
+
+    internal static bool IsBuiltInSuggestionStorePath(string path)
+    {
+        var fileName = Path.GetFileName(path.AsSpan());
+        if (!fileName.StartsWith("suggestions-".AsSpan(), StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var parent = Path.GetDirectoryName(path);
+        return parent != null
+            && Path.GetFileName(Path.TrimEndingDirectorySeparator(parent.AsSpan()))
+                .Equals(".cdidx".AsSpan(), StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsDefaultExcludedFileName(ReadOnlySpan<char> fileName)

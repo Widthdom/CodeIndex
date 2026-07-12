@@ -192,7 +192,7 @@ public partial class FileIndexer
             return CreatePathFilterResult(PathFilterKind.ExcludedByDefaultDirectory, errors);
 
         var fileName = Path.GetFileName(fullPath.AsSpan());
-        if (IsDefaultExcludedFileName(fileName))
+        if (IsDefaultExcludedFileName(fileName) || IsBuiltInSuggestionStorePath(fullPath))
             return CreatePathFilterResult(PathFilterKind.ExcludedByDefaultFile, errors);
 
         return activeIgnoreRules.IsIgnored(fullPath, isDirectory: false)

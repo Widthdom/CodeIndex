@@ -42,7 +42,7 @@ public partial class FileIndexer
         var fileName = Path.GetFileName(file.AsSpan());
 
         // Skip excluded file names / 除外ファイル名をスキップ
-        if (IsDefaultExcludedFileName(fileName))
+        if (IsDefaultExcludedFileName(fileName) || IsBuiltInSuggestionStorePath(file))
             return false;
 
         if (activeIgnoreRules.IsIgnored(file, isDirectory: false))
