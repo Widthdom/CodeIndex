@@ -306,7 +306,8 @@ DTOs carry `api_version`, and DOM-built `JsonObject` payloads may add only
 sanitized, bounded fields. Add `api_version` when introducing or auditing a
 public top-level CLI JSON DTO. MCP JSON-RPC uses `McpServer`'s camelCase options for the
 protocol envelope while tool structured content keeps its documented
-machine-readable keys; sanitize/redact values before mutating `JsonObject` /
+machine-readable keys. Every object-shaped tool `structuredContent` envelope carries
+root-level `api_version`, injected by `CreateToolResult`; sanitize/redact values before mutating `JsonObject` /
 `JsonNode` instances. LSP, quickfix, and SARIF outputs follow their external
 schemas rather than the CLI snake_case contract. GitHub/report helpers and
 worker/private storage paths use their own bounded serializers because they are
@@ -2739,7 +2740,8 @@ snake_case、null は省略、audit 済みの公開 top-level event/result DTO �
 DOM で組み立てる `JsonObject` payload は sanitized / bounded 済み field だけを追加します。
 公開 top-level CLI JSON DTO を追加または audit するときは `api_version` を追加してください。MCP JSON-RPC は
 protocol envelope に `McpServer` の camelCase option を使い、tool structured content は文書化済みの
-machine-readable key を保ちます。`JsonObject` / `JsonNode` を mutate する前に値を sanitize /
+machine-readable key を保ちます。object 形式のすべての tool `structuredContent` envelope は
+`CreateToolResult` が追加する root-level `api_version` を持ちます。`JsonObject` / `JsonNode` を mutate する前に値を sanitize /
 redact してください。LSP、quickfix、SARIF 出力は CLI snake_case contract ではなく外部 schema に
 従います。GitHub/report helper と worker/private storage path は API client、永続化ローカル状態、
 process-internal protocol のいずれかなので、それぞれの bounded serializer を使います。
