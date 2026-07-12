@@ -261,15 +261,15 @@ public class LspServerTests
             var capabilities = response!["result"]!["capabilities"]!;
             Assert.True(capabilities["definitionProvider"]!.GetValue<bool>());
             Assert.True(capabilities["declarationProvider"]!.GetValue<bool>());
-            Assert.True(capabilities["typeDefinitionProvider"]!.GetValue<bool>());
-            Assert.True(capabilities["implementationProvider"]!.GetValue<bool>());
+            Assert.Null(capabilities["typeDefinitionProvider"]);
+            Assert.Null(capabilities["implementationProvider"]);
             Assert.True(capabilities["documentSymbolProvider"]!.GetValue<bool>());
             Assert.True(capabilities["hoverProvider"]!.GetValue<bool>());
             Assert.True(capabilities["documentHighlightProvider"]!.GetValue<bool>());
             Assert.Equal(1, capabilities["textDocumentSync"]!["change"]!.GetValue<int>());
             Assert.True(capabilities["textDocumentSync"]!["openClose"]!.GetValue<bool>());
             Assert.False(capabilities["completionProvider"]!["resolveProvider"]!.GetValue<bool>());
-            Assert.False(capabilities["codeLensProvider"]!["resolveProvider"]!.GetValue<bool>());
+            Assert.Null(capabilities["codeLensProvider"]);
             Assert.False(capabilities["inlayHintProvider"]!["resolveProvider"]!.GetValue<bool>());
             Assert.Null(capabilities["renameProvider"]);
             Assert.Null(capabilities["foldingRangeProvider"]);
@@ -401,12 +401,15 @@ public class LspServerTests
     }
 
     [Theory]
+    [InlineData("textDocument/typeDefinition")]
+    [InlineData("textDocument/implementation")]
+    [InlineData("textDocument/codeLens")]
     [InlineData("textDocument/prepareRename")]
     [InlineData("textDocument/rename")]
     [InlineData("textDocument/foldingRange")]
     [InlineData("textDocument/selectionRange")]
     [InlineData("textDocument/signatureHelp")]
-    public void HandleMessage_UnsupportedOptionalMethods_ReturnMethodNotFound_Issue4360(string method)
+    public void HandleMessage_UnsupportedOptionalMethods_ReturnMethodNotFound_Issues4360And4420And4465(string method)
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_optional_methods");
         try
@@ -468,10 +471,6 @@ public class LspServerTests
             var semanticTokens = server.HandleMessage(CreateTextDocumentRequest("textDocument/semanticTokens/full", sourcePath, 35365));
             Assert.NotNull(semanticTokens);
             Assert.NotEmpty(semanticTokens!["result"]!["data"]!.AsArray());
-
-            var codeLens = server.HandleMessage(CreateTextDocumentRequest("textDocument/codeLens", sourcePath, 35366));
-            Assert.NotNull(codeLens);
-            Assert.NotEmpty(codeLens!["result"]!.AsArray());
 
             var inlayHints = server.HandleMessage(CreateTextDocumentRequest("textDocument/inlayHint", sourcePath, 35367));
             Assert.NotNull(inlayHints);
@@ -1505,11 +1504,8 @@ public class LspServerTests
         }
     }
 
-    [Theory]
-    [InlineData("textDocument/declaration")]
-    [InlineData("textDocument/typeDefinition")]
-    [InlineData("textDocument/implementation")]
-    public void HandleMessage_DefinitionAliasMethods_ReturnLocations_Issue3537(string method)
+    [Fact]
+    public void HandleMessage_Declaration_ReturnsDefinitionLocation_Issues3537And4420()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_alias");
         try
@@ -1522,7 +1518,7 @@ public class LspServerTests
             using var db = new DbContext(dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = CreatePositionRequest(
-                method,
+                "textDocument/declaration",
                 sourcePath,
                 3537,
                 0,
