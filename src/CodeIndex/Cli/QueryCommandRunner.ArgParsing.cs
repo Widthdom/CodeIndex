@@ -2056,7 +2056,7 @@ public static partial class QueryCommandRunner
         {
             if (!TryNormalizeSearchMatchOrigin(rawOrigin, out var origin))
             {
-                addParseError($"Error: unsupported {optionName} value '{ConsoleUi.FormatBoundedValue(rawOrigin)}'. Use code, comment, string_literal, regex_literal, help_text, or unknown.");
+                addParseError($"Error: unsupported {optionName} value '{ConsoleUi.FormatBoundedValue(rawOrigin)}'. Use code, comment, string_literal, regex_literal, help_text, schema_description, or unknown.");
                 continue;
             }
             if (!origins.Contains(origin, StringComparer.Ordinal))
