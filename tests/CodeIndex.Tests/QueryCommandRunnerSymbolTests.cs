@@ -1509,7 +1509,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_DefaultJsonSuppressesLowConfidenceContractDomains_Issue4120()
+    public void RunUnused_DefaultJsonRowsAndCountsShareSuppressionFixture_Issue4120()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
         try
@@ -1538,6 +1538,41 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(7, json.GetProperty("summary").GetProperty("suppressed").GetProperty("suppressed_count").GetInt32());
             Assert.Contains("--all", suppression.GetProperty("include_suppressed_hint").GetString());
             Assert.True(json.GetProperty("query_context").GetProperty("default_suppression").GetBoolean());
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--count"],
+                _jsonOptions));
+
+            using var countDocument = ParseJsonOutput(countStdout);
+            var countJson = countDocument.RootElement;
+            var countSuppression = countJson.GetProperty("default_suppression");
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            Assert.Equal(2, countJson.GetProperty("count").GetInt32());
+            Assert.Equal(1, countJson.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
+            Assert.Equal(1, countJson.GetProperty("returned_bucket_counts").GetProperty("maybe_unused_nonpublic").GetInt32());
+            Assert.False(countJson.GetProperty("returned_bucket_counts").TryGetProperty("public_or_exported_no_refs", out _));
+            Assert.False(countJson.GetProperty("returned_contract_domain_counts").TryGetProperty("public_api_surface", out _));
+            Assert.True(countSuppression.GetProperty("applied").GetBoolean());
+            Assert.Equal(7, countSuppression.GetProperty("suppressed_count").GetInt32());
+            Assert.Equal(3, countSuppression.GetProperty("suppressed_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(4, countSuppression.GetProperty("suppressed_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
+            Assert.Equal(7, countSuppression.GetProperty("suppressed_confidence_counts").GetProperty("low").GetInt32());
+            Assert.Equal(7, countJson.GetProperty("summary").GetProperty("suppressed").GetProperty("suppressed_count").GetInt32());
+            Assert.True(countJson.GetProperty("query_context").GetProperty("default_suppression").GetBoolean());
+
+            var (allCountExitCode, allCountStdout, allCountStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--all", "--lang", "csharp", "--count"],
+                _jsonOptions));
+            using var allCountDocument = ParseJsonOutput(allCountStdout);
+            var allCountJson = allCountDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, allCountExitCode);
+            Assert.Equal(string.Empty, allCountStderr);
+            Assert.Equal(9, allCountJson.GetProperty("count").GetInt32());
+            Assert.False(allCountJson.TryGetProperty("default_suppression", out _));
+            Assert.True(allCountJson.GetProperty("query_context").GetProperty("all").GetBoolean());
         }
         finally
         {
@@ -1586,53 +1621,6 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(11, suppression.GetProperty("suppressed_count").GetInt32());
             Assert.Equal(7, suppression.GetProperty("suppressed_contract_domain_counts").GetProperty("public_api_surface").GetInt32());
             Assert.Equal(11, json.GetProperty("summary").GetProperty("suppressed").GetProperty("suppressed_count").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunUnused_DefaultJsonCountSuppressesLowConfidenceContractDomains_Issue4120()
-    {
-        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
-        try
-        {
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--count"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var suppression = json.GetProperty("default_suppression");
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(2, json.GetProperty("count").GetInt32());
-            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
-            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("maybe_unused_nonpublic").GetInt32());
-            Assert.False(json.GetProperty("returned_bucket_counts").TryGetProperty("public_or_exported_no_refs", out _));
-            Assert.False(json.GetProperty("returned_contract_domain_counts").TryGetProperty("public_api_surface", out _));
-            Assert.True(suppression.GetProperty("applied").GetBoolean());
-            Assert.Equal(7, suppression.GetProperty("suppressed_count").GetInt32());
-            Assert.Equal(3, suppression.GetProperty("suppressed_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
-            Assert.Equal(4, suppression.GetProperty("suppressed_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
-            Assert.Equal(7, suppression.GetProperty("suppressed_confidence_counts").GetProperty("low").GetInt32());
-            Assert.Equal(7, json.GetProperty("summary").GetProperty("suppressed").GetProperty("suppressed_count").GetInt32());
-            Assert.True(json.GetProperty("query_context").GetProperty("default_suppression").GetBoolean());
-
-            var (allExitCode, allStdout, allStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--json", "--all", "--lang", "csharp", "--count"],
-                _jsonOptions));
-            using var allDocument = ParseJsonOutput(allStdout);
-            var allJson = allDocument.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, allExitCode);
-            Assert.Equal(string.Empty, allStderr);
-            Assert.Equal(9, allJson.GetProperty("count").GetInt32());
-            Assert.False(allJson.TryGetProperty("default_suppression", out _));
-            Assert.True(allJson.GetProperty("query_context").GetProperty("all").GetBoolean());
         }
         finally
         {
