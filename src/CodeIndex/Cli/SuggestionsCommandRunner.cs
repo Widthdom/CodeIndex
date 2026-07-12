@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using CodeIndex.Database;
 using CodeIndex.Models;
@@ -105,7 +106,7 @@ internal static class SuggestionsCommandRunner
 
         return verb switch
         {
-            "list" => RunList(outputRecords, options, jsonOptions),
+            "list" => RunList(outputRecords, records.Count, options, jsonOptions),
             "show" => RunShow(records, options, jsonOptions),
             "export" => RunExport(outputRecords, options, jsonOptions, cancellationToken),
             _ => WriteUsageError($"Unknown suggestions subcommand: {verb}", options.Json, jsonOptions)
@@ -171,22 +172,27 @@ internal static class SuggestionsCommandRunner
         return CommandExitCodes.Success;
     }
 
-    private static int RunList(List<SuggestionRecord> records, Options options, JsonSerializerOptions jsonOptions)
+    private static int RunList(List<SuggestionRecord> records, int totalCount, Options options, JsonSerializerOptions jsonOptions)
     {
         if (options.Json)
         {
-            if (records.Count == 0)
+            var offset = Math.Min(options.Offset, totalCount);
+            var returnedCount = records.Count;
+            var hasMore = offset + returnedCount < totalCount;
+            var results = JsonSerializer.SerializeToNode(
+                records.Select(ToListItem).ToArray(),
+                CliJsonSerializerContextFactory.Create(jsonOptions).SuggestionListItemJsonResultArray);
+            var page = new JsonObject
             {
-                CommandOutputWriter.WriteRawJson("[]");
-                return CommandExitCodes.Success;
-            }
-
-            foreach (var item in records.Select(ToListItem))
-            {
-                CommandOutputWriter.WriteJson(
-                    item,
-                    CliJsonSerializerContextFactory.Create(jsonOptions).SuggestionListItemJsonResult);
-            }
+                ["api_version"] = JsonOutputContract.ApiVersion,
+                ["total_count"] = totalCount,
+                ["returned_count"] = returnedCount,
+                ["offset"] = offset,
+                ["has_more"] = hasMore,
+                ["next_offset"] = hasMore ? offset + returnedCount : null,
+                ["results"] = results,
+            };
+            CommandOutputWriter.WriteRawJson(page.ToJsonString(jsonOptions));
             return CommandExitCodes.Success;
         }
 

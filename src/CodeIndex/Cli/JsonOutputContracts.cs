@@ -432,6 +432,8 @@ internal sealed record JsonStreamDoneResult(
     [property: JsonPropertyName("done")] bool Done,
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("interrupted")] bool Interrupted,
+    [property: JsonPropertyName("truncated")] bool Truncated,
+    [property: JsonPropertyName("has_more")] bool HasMore,
     [property: JsonPropertyName("read_only_fallback")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? ReadOnlyFallback = null,
     [property: JsonPropertyName("wal_checkpoint_attempted")]
@@ -923,6 +925,7 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(SuggestionIssueDraftSourceJsonResult))]
 [JsonSerializable(typeof(SuggestionAddJsonResult))]
 [JsonSerializable(typeof(SuggestionListItemJsonResult))]
+[JsonSerializable(typeof(SuggestionListItemJsonResult[]))]
 [JsonSerializable(typeof(SymbolAnalysisResult))]
 [JsonSerializable(typeof(SymbolHotspotJsonResult))]
 [JsonSerializable(typeof(SymbolResult))]
