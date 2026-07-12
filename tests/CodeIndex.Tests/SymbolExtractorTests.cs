@@ -904,6 +904,24 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Yaml_PreservesBareDashSequenceIdentity_Issue4411()
+    {
+        const string content = """
+            steps:
+              -
+                name: Build
+              -
+                name: Test
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "yaml", content);
+
+        Assert.Contains(symbols, symbol => symbol.Name == "steps[0].name");
+        Assert.Contains(symbols, symbol => symbol.Name == "steps[1].name");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "steps.name");
+    }
+
+    [Fact]
     public void Extract_Yaml_CapsBroadMappings_Issue3808()
     {
         var content = string.Join('\n', Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 1)

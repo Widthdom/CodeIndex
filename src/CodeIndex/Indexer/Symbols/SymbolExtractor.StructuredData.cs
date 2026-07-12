@@ -262,6 +262,19 @@ public static partial class SymbolExtractor
                 continue;
             }
 
+            if (trimmed.SequenceEqual("-"))
+            {
+                while (stack != null && stack.Count > 0 && indent <= stack[^1].Indent)
+                    stack.RemoveAt(stack.Count - 1);
+                var sequenceParent = stack == null || stack.Count == 0 ? null : stack[^1].Path;
+                var sequenceKey = $"{indent}:{sequenceParent}";
+                sequenceIndexes ??= new Dictionary<string, int>(StringComparer.Ordinal);
+                sequenceIndexes.TryGetValue(sequenceKey, out var sequenceIndex);
+                sequenceIndexes[sequenceKey] = sequenceIndex + 1;
+                (stack ??= []).Add(new YamlPathFrame(indent, $"{sequenceParent}[{sequenceIndex}]"));
+                continue;
+            }
+
             if (line.IndexOf(':') < 0)
                 continue;
 
