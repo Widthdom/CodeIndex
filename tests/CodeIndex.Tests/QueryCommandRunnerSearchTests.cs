@@ -9281,7 +9281,7 @@ jobs:
     }
 
     [Fact]
-    public void SearchAndFind_ExactTreatCSharpVerbatimQualifiedNamesAsCanonical()
+    public void ExactCanonicalFixtureCoversCSharpVerbatimAndKotlinBackticks()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_csharp_verbatim");
         try
@@ -9295,6 +9295,13 @@ jobs:
                 namespace Demo;
 
                 using @Foo.@Bar;
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.kt",
+                "kotlin",
+                """
+                fun `when`() {}
                 """);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
@@ -9320,6 +9327,17 @@ jobs:
             Assert.Equal(1, findJson.GetProperty("count").GetInt32());
             Assert.Equal(1, findJson.GetProperty("files").GetInt32());
             Assert.Equal(1, findJson.GetProperty("file_count").GetInt32());
+
+            var (kotlinExitCode, kotlinStdout, kotlinStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["when", "--db", dbPath, "--path", "src/App.kt", "--json", "--exact-substring", "--count"],
+                _jsonOptions));
+
+            using var kotlinDocument = ParseJsonOutput(kotlinStdout);
+            var kotlinJson = kotlinDocument.RootElement;
+            Assert.Equal(CommandExitCodes.Success, kotlinExitCode);
+            Assert.Equal(string.Empty, kotlinStderr);
+            Assert.Equal(1, kotlinJson.GetProperty("count").GetInt32());
+            Assert.Equal(1, kotlinJson.GetProperty("files").GetInt32());
         }
         finally
         {
@@ -9369,39 +9387,6 @@ jobs:
             Assert.Equal(1, findJson.GetProperty("count").GetInt32());
             Assert.Equal(1, findJson.GetProperty("files").GetInt32());
             Assert.Equal(1, findJson.GetProperty("file_count").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunSearch_ExactSubstringTreatsKotlinBacktickedIdentifiersAsCanonical()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_kotlin_backticks");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/App.kt",
-                "kotlin",
-                """
-                fun `when`() {}
-                """);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["when", "--db", dbPath, "--path", "src/App.kt", "--json", "--exact-substring", "--count"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.Equal(1, json.GetProperty("files").GetInt32());
         }
         finally
         {
