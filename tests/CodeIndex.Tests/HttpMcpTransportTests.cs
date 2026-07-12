@@ -65,22 +65,17 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_DisposeAsync_DisposesOwnedSemaphoreGates_Issue3985()
+    public async Task HttpTransport_DisposeAsync_ReleasesOwnedResourcesForConcurrentCallers_Issues3985And4176()
     {
-        var harness = await McpHttpHarness.StartAsync(_dbPath);
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
 
         using var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":1,"method":"ping"}""");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
-        await harness.DisposeAsync();
-
-        Assert.True(harness.OwnedSemaphoreGatesDisposed);
-    }
-
-    [Fact]
-    public async Task HttpTransport_DisposeAsync_IsIdempotentForConcurrentCallers_Issue4176()
-    {
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+        await WaitUntilAsync(() => harness.HasEventStreams, "the event stream to be registered before disposal");
 
         var disposeTasks = new Task[8];
         for (var i = 0; i < disposeTasks.Length; i++)
@@ -89,21 +84,6 @@ public class HttpMcpTransportTests : IDisposable
         await Task.WhenAll(disposeTasks).WaitAsync(TimeSpan.FromSeconds(10));
         await harness.DisposeTransportAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
         await harness.WaitForServerLoopAsync();
-
-        Assert.True(harness.OwnedSemaphoreGatesDisposed);
-    }
-
-    [Fact]
-    public async Task HttpTransport_DisposeAsync_CancelsOpenEventStreams_Issue4176()
-    {
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
-
-        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
-        using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
-        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
-        await WaitUntilAsync(() => harness.HasEventStreams, "the event stream to be registered before disposal");
-
-        await harness.DisposeTransportAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
         await WaitUntilAsync(() => !harness.HasEventStreams, "disposal to remove the event stream");
 
         Assert.True(harness.OwnedSemaphoreGatesDisposed);
