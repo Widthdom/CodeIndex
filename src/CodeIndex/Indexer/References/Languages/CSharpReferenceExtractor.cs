@@ -374,10 +374,11 @@ internal static partial class CSharpReferenceExtractor
                 fileId,
                 simpleName,
                 simpleNameIndex,
-                "call",
+                "type_reference",
                 context,
                 lineNumber,
-                resolveContainerForCall(simpleNameIndex));
+                resolveContainerForCall(simpleNameIndex),
+                "csharp");
         }
     }
 

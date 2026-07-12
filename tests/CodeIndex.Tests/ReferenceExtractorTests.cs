@@ -14998,4 +14998,29 @@ public partial class ReferenceExtractorTests
             BodyStartLine = startLine,
             BodyEndLine = endLine,
         };
+
+    [Fact]
+    public void Extract_CSharpStaticTypeQualifier_EmitsSingleTypeReference_Issue4404()
+    {
+        const string content = """
+            class LspServer
+            {
+                static string PathToUri(string path) => path;
+            }
+
+            class Caller
+            {
+                string Run(string path) => LspServer.PathToUri(path);
+            }
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("csharp", content);
+        var qualifierReferences = references
+            .Where(reference => reference.SymbolName == "LspServer"
+                && reference.Context.Contains("LspServer.PathToUri", StringComparison.Ordinal))
+            .ToList();
+
+        var qualifier = Assert.Single(qualifierReferences);
+        Assert.Equal("type_reference", qualifier.ReferenceKind);
+    }
 }
