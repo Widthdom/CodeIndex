@@ -983,7 +983,7 @@ public static partial class SymbolExtractor
 
     private static bool CanRestartCSharpSameLineSiblingScan(string kind)
     {
-        return kind is "function" or "property" or "event" or "delegate" or "enum";
+        return kind is "function" or "property" or "field" or "event" or "delegate" or "enum";
     }
 
     private static int FindCSharpSameLineBraceEndColumn(string line, int startColumn)
@@ -1284,7 +1284,8 @@ public static partial class SymbolExtractor
 
         var isPropertyHeaderPrefix = CSharpPropertyHeaderPrefixRegex.IsMatch(matchLine);
         var isMethodHeaderPrefix = !isPropertyHeaderPrefix
-            && CSharpMethodHeaderPrefixRegex.IsMatch(matchLine);
+            && (CSharpMethodHeaderPrefixRegex.IsMatch(matchLine)
+                || CSharpMultilineTupleReturnPrefixRegex.IsMatch(matchLine));
         if (!isPropertyHeaderPrefix
             && isMethodHeaderPrefix
             && matchLine.IndexOf('(') >= 0
@@ -3171,6 +3172,9 @@ public static partial class SymbolExtractor
     private static readonly Regex CSharpMethodHeaderPrefixRegex = new(
         $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|volatile|unsafe|extern|async|file|ref(?:\s+readonly)?)\s+)*(?!{CSharpNonTypeKeywordPattern})(?:{CSharpTypePattern})\s+(?:{CSharpExplicitInterfaceQualifierPattern}\s*\.\s*)?(?:{CSharpIdentifierPattern})\s*(?:<[^{{}};=]*|{CSharpMethodTypeParameterListPattern}\([^){{}};]*)\s*$",
         RegexOptions.Compiled);
+    private static readonly Regex CSharpMultilineTupleReturnPrefixRegex = new(
+        $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|partial|readonly|unsafe|extern|async|file|ref(?:\s+readonly)?)\s+)*\(\s*$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     // Limit only the lightweight confirmation phase. Once a candidate looks like a real
     // declaration (`name =`, or a named member header before `{`), BuildCSharpPropertyMatchLine
     // switches to a linear terminator/accessor scan so long raw strings / initializers are not

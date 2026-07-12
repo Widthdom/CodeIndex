@@ -2974,9 +2974,9 @@ public partial class SymbolExtractorTests
         var content = "public class Config\n{\n    public const string Version = \"1.0\";\n    private const int MaxRetries = 3;\n    internal static readonly Dictionary<string, string> Map = new();\n    public string MutableField;\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Version" && s.ReturnType == "string");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MaxRetries" && s.ReturnType == "int");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Map");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "Version" && s.ReturnType == "string");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "MaxRetries" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "Map");
         // Regular mutable fields are now extracted as `property` / 通常のフィールドも `property` として抽出される
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "MutableField" && s.ReturnType == "string");
     }
@@ -2986,10 +2986,10 @@ public partial class SymbolExtractorTests
     {
         // Closes #355: C# allows modifiers to appear in any order, so `readonly static`,
         // `readonly new static`, and `new readonly static` must all be captured as the
-        // kind `function` row (static readonly field), not fall through to the plain-field
+        // kind `field` result (static readonly field), not fall through to the plain-field
         // (kind `property`) row.
         // Closes #355: C# の修飾子は任意順で書けるため、`readonly static` /
-        // `readonly new static` / `new readonly static` も kind `function`（static readonly
+        // `readonly new static` / `new readonly static` も kind `field`（static readonly
         // フィールド）として取り扱い、通常フィールド（kind `property`）に流れ落ちないこと。
         var content = """
             public class Svc
@@ -3005,13 +3005,13 @@ public partial class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ReturnType == "int");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ReturnType == "int");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "C" && s.ReturnType == "int");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "D" && s.ReturnType == "int");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "D2" && s.ReturnType == "int");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "E" && s.ReturnType == "int");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "F" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "A" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "B" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "C" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "D" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "D2" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "E" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "F" && s.ReturnType == "int");
         // Each static readonly declaration must be captured exactly once — no duplicate `property` row
         // from the plain-field regex.
         // それぞれの static readonly 宣言は1回だけ捕捉する — 通常フィールド regex からの重複 `property`
@@ -3180,9 +3180,9 @@ public partial class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "BaseConst" && s.Visibility == "public" && s.ReturnType == "int");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "HiddenConst" && s.Visibility == "public" && s.ReturnType == "int");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "HiddenConst2" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "BaseConst" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "HiddenConst" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "HiddenConst2" && s.Visibility == "public" && s.ReturnType == "int");
     }
 
     [Fact]
@@ -3220,12 +3220,12 @@ public partial class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Pair" && s.Visibility == "public" && s.ReturnType == "(int, int)");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "NamedPair" && s.Visibility == "public" && s.ReturnType == "(int a, int b)");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MaybePair" && s.Visibility == "public" && s.ReturnType == "(int, int)?");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "PairArray" && s.Visibility == "public" && s.ReturnType == "(int, int)[]");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Qualified" && s.Visibility == "public" && s.ReturnType == "global::System.Int32");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Plain" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "Pair" && s.Visibility == "public" && s.ReturnType == "(int, int)");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "NamedPair" && s.Visibility == "public" && s.ReturnType == "(int a, int b)");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "MaybePair" && s.Visibility == "public" && s.ReturnType == "(int, int)?");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "PairArray" && s.Visibility == "public" && s.ReturnType == "(int, int)[]");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "Qualified" && s.Visibility == "public" && s.ReturnType == "global::System.Int32");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "Plain" && s.Visibility == "public" && s.ReturnType == "int");
 
         // The method row must not emit a phantom `function const` row for any of the tuple
         // shapes above. `const` itself as a name would only appear via the post-#349 backtrack
@@ -3272,7 +3272,7 @@ public partial class SymbolExtractorTests
         // `new public static` は static readonly / const 系の行で kind `function` に昇格する。
         Assert.Contains(symbols, s => s.Name == "Z" && s.Visibility == "public" && s.ReturnType == "int");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Map" && s.Visibility == "public" && s.ReturnType != null && s.ReturnType.Contains("Dictionary"));
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "C" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "C" && s.Visibility == "public" && s.ReturnType == "int");
     }
 
     [Fact]
@@ -5772,7 +5772,7 @@ public partial class SymbolExtractorTests
             ]);
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        var script = Assert.Single(symbols.Where(s => s.Kind == "function"
+        var script = Assert.Single(symbols.Where(s => s.Kind == "field"
             && s.Name == "Script"
             && s.Visibility == "private"
             && s.ReturnType == "string"));
@@ -5802,7 +5802,7 @@ public partial class SymbolExtractorTests
             ]);
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        var constScript = Assert.Single(symbols.Where(s => s.Kind == "function"
+        var constScript = Assert.Single(symbols.Where(s => s.Kind == "field"
             && s.Name == "ConstScript"
             && s.Visibility == "private"
             && s.ReturnType == "string"));
