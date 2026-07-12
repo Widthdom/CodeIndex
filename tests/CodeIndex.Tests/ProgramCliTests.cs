@@ -1409,6 +1409,31 @@ public class ProgramCliTests
     }
 
     [ProductionRuntimeFact]
+    public void Suggestions_ExportIssueDraftsUsesAvailableGitHubTitleCapacity_Issue4462()
+    {
+        using var fixture = SuggestionFixture.Create();
+        var sampledTitle = "Target StringBuilder materialization operations instead of building intermediate collections when exporting issue draft candidates";
+        fixture.Add(
+            "search_ranking",
+            "csharp",
+            "Issue draft title should retain the differentiating end of the sampled title",
+            submitted: false,
+            sampledTitle: sampledTitle);
+        var openIssuesPath = fixture.WriteOpenIssuesJson("[]");
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "issue-drafts", "--open-issues", openIssuesPath
+        ]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        var title = doc.RootElement.GetProperty("drafts")[0].GetProperty("title").GetString();
+        Assert.Equal($"[AI Suggestion] search_ranking: {sampledTitle}", title);
+        Assert.True(title!.Length <= GitHubIssueReporter.MaxGitHubIssueTitleLength);
+    }
+
+    [ProductionRuntimeFact]
     public void Suggestions_ExportIssueDraftsDuplicateThresholdFiltersMatches_Issue3827()
     {
         using var fixture = SuggestionFixture.Create();
