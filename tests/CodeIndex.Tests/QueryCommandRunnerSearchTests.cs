@@ -8948,42 +8948,28 @@ jobs:
         }
     }
 
-    [Theory]
-    [InlineData("--exact", "--exact-substring")]
-    [InlineData("--exact", "--exact-name")]
-    [InlineData("--exact-substring", "--exact-name")]
-    public void RunSearch_RejectsCombinedExactFlags(string first, string second)
+    [Fact]
+    public void RunSearch_RejectsCombinedExactFlagSets()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_combined_exact");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["needle", "--db", dbPath, first, second],
-                _jsonOptions));
+            var flagSets = new[]
+            {
+                new[] { "--exact", "--exact-substring" },
+                new[] { "--exact", "--exact-name" },
+                new[] { "--exact-substring", "--exact-name" },
+                new[] { "--exact", "--exact-substring", "--exact-name" },
+            };
+            foreach (var flags in flagSets)
+            {
+                var args = new[] { "needle", "--db", dbPath }.Concat(flags).ToArray();
+                var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(args, _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("pass only one of --exact, --exact-substring, --token-boundary, --exact-name", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunSearch_RejectsAllThreeExactFlagsTogether()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_triple_exact");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["needle", "--db", dbPath, "--exact", "--exact-substring", "--exact-name"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("pass only one of --exact, --exact-substring, --token-boundary, --exact-name", stderr);
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Contains("pass only one of --exact, --exact-substring, --token-boundary, --exact-name", stderr);
+            }
         }
         finally
         {
