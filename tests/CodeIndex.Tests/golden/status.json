@@ -101,6 +101,7 @@
     "vb",
     "vue",
     "xml",
+    "yaml",
     "zig"
   ],
   "extractors": {

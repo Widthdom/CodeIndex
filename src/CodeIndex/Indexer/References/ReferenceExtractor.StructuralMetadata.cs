@@ -18,7 +18,7 @@ public static partial class ReferenceExtractor
         out List<ReferenceRecord> references)
     {
         references = null!;
-        if (language is not ("solution" or "dependency_manifest" or "dependency_lock"))
+        if (language is not ("solution" or "dependency_manifest" or "dependency_lock" or "yaml"))
             return false;
 
         if (!TryPrepareStructuralMetadataReferenceContent(
@@ -34,9 +34,12 @@ public static partial class ReferenceExtractor
         }
         cancellationToken.ThrowIfCancellationRequested();
 
-        references = language == "solution"
-            ? ExtractSolutionReferences(fileId, lines, maxReferenceCount)
-            : DependencyPackageExtractor.ExtractReferences(fileId, normalizedContent, lines, symbols, path, language, maxReferenceCount);
+        references = language switch
+        {
+            "solution" => ExtractSolutionReferences(fileId, lines, maxReferenceCount),
+            "yaml" => GitHubActionsReferenceExtractor.Extract(fileId, lines, symbols, maxReferenceCount),
+            _ => DependencyPackageExtractor.ExtractReferences(fileId, normalizedContent, lines, symbols, path, language, maxReferenceCount),
+        };
         return true;
     }
 
