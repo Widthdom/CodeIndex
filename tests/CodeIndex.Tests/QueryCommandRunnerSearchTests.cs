@@ -1383,6 +1383,45 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("lsp")]
+    [InlineData("qf")]
+    [InlineData("sarif")]
+    public void RunSearch_EditorFormatsApplyLimitAfterOccurrenceExpansion_Issue4437(string format)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_editor_limit");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public class App { void Run() { Marker(); Marker(); Marker(); } }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Marker", "--db", dbPath, "--exact-substring", "--format", format, "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            if (format == "qf")
+                Assert.Single(stdout.Trim().Split(Environment.NewLine));
+            else
+            {
+                using var document = ParseJsonOutput(stdout);
+                var results = format == "sarif"
+                    ? document.RootElement.GetProperty("runs")[0].GetProperty("results")
+                    : document.RootElement;
+                Assert.Equal(1, results.GetArrayLength());
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void RunSearch_FormatSarifEmitsResultsArray()
     {
@@ -4879,6 +4918,64 @@ public partial class QueryCommandRunnerTests
             Assert.False(zeroDone.GetProperty("done").GetBoolean());
             Assert.True(zeroDone.GetProperty("interrupted").GetBoolean());
             Assert.Equal(0, zeroDone.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_NdjsonDoneReportsLimitTruncation_Issue4447()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_ndjson_truncation");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/a.cs", "csharp", "class A { void Marker() { } }");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/b.cs", "csharp", "class B { void Marker() { } }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Marker", "--db", dbPath, "--json", "--format", "json", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var lines = stdout.Trim().Split(Environment.NewLine);
+            Assert.Equal(2, lines.Length);
+            using var doneDocument = JsonDocument.Parse(lines[1]);
+            var done = doneDocument.RootElement;
+            Assert.True(done.GetProperty("done").GetBoolean());
+            Assert.Equal(1, done.GetProperty("count").GetInt32());
+            Assert.True(done.GetProperty("truncated").GetBoolean());
+            Assert.True(done.GetProperty("has_more").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_NdjsonDoneDoesNotTreatSamplingAsMoreResults_Issue4447()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_ndjson_sample");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/a.cs", "csharp", "class A { void Marker() { } }");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/b.cs", "csharp", "class B { void Marker() { } }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Marker", "--db", dbPath, "--json", "--format", "json", "--sample", "1", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var lines = stdout.Trim().Split(Environment.NewLine);
+            using var doneDocument = JsonDocument.Parse(lines[^1]);
+            Assert.False(doneDocument.RootElement.GetProperty("truncated").GetBoolean());
+            Assert.False(doneDocument.RootElement.GetProperty("has_more").GetBoolean());
         }
         finally
         {

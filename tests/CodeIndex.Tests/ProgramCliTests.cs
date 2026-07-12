@@ -991,11 +991,15 @@ public class ProgramCliTests
 
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, stderr);
-        var lines = stdout.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
-        Assert.Single(lines);
-        using var doc = JsonDocument.Parse(lines[0]);
-        Assert.Equal(middle.Hash, doc.RootElement.GetProperty("id").GetString());
-        Assert.Equal("Middle suggestion", doc.RootElement.GetProperty("title").GetString());
+        using var doc = JsonDocument.Parse(stdout);
+        var root = doc.RootElement;
+        Assert.Equal(3, root.GetProperty("total_count").GetInt32());
+        Assert.Equal(1, root.GetProperty("returned_count").GetInt32());
+        Assert.True(root.GetProperty("has_more").GetBoolean());
+        Assert.Equal(2, root.GetProperty("next_offset").GetInt32());
+        var item = Assert.Single(root.GetProperty("results").EnumerateArray());
+        Assert.Equal(middle.Hash, item.GetProperty("id").GetString());
+        Assert.Equal("Middle suggestion", item.GetProperty("title").GetString());
     }
 
     [ProductionRuntimeFact]
@@ -1012,11 +1016,10 @@ public class ProgramCliTests
 
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, stderr);
-        var lines = stdout.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
-        Assert.Single(lines);
-        using var doc = JsonDocument.Parse(lines[0]);
-        Assert.Equal(middle.Hash, doc.RootElement.GetProperty("id").GetString());
-        Assert.Equal("Middle suggestion", doc.RootElement.GetProperty("title").GetString());
+        using var doc = JsonDocument.Parse(stdout);
+        var item = Assert.Single(doc.RootElement.GetProperty("results").EnumerateArray());
+        Assert.Equal(middle.Hash, item.GetProperty("id").GetString());
+        Assert.Equal("Middle suggestion", item.GetProperty("title").GetString());
     }
 
     [ProductionRuntimeFact]
@@ -1031,8 +1034,10 @@ public class ProgramCliTests
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, stderr);
         using var doc = JsonDocument.Parse(stdout);
-        Assert.Equal(JsonValueKind.Array, doc.RootElement.ValueKind);
-        Assert.Equal(0, doc.RootElement.GetArrayLength());
+        Assert.Equal(0, doc.RootElement.GetProperty("total_count").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("returned_count").GetInt32());
+        Assert.False(doc.RootElement.GetProperty("has_more").GetBoolean());
+        Assert.Equal(0, doc.RootElement.GetProperty("results").GetArrayLength());
     }
 
     [ProductionRuntimeFact]
@@ -1047,8 +1052,8 @@ public class ProgramCliTests
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, stderr);
         using var doc = JsonDocument.Parse(stdout);
-        Assert.Equal(JsonValueKind.Array, doc.RootElement.ValueKind);
-        Assert.Equal(0, doc.RootElement.GetArrayLength());
+        Assert.Equal(0, doc.RootElement.GetProperty("total_count").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("results").GetArrayLength());
     }
 
     [ProductionRuntimeFact]
@@ -1067,7 +1072,7 @@ public class ProgramCliTests
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, stderr);
         using var doc = JsonDocument.Parse(stdout);
-        Assert.Equal(record.Hash, doc.RootElement.GetProperty("id").GetString());
+        Assert.Equal(record.Hash, doc.RootElement.GetProperty("results")[0].GetProperty("id").GetString());
     }
 
     [ProductionRuntimeFact]
@@ -1166,7 +1171,7 @@ public class ProgramCliTests
         Assert.Equal("Observed while triaging local audit output.", suggestion.GetProperty("context").GetString());
         Assert.Equal("Local dogfood finding store", suggestion.GetProperty("sampled_title").GetString());
         Assert.Equal("src/CodeIndex/Cli/SuggestionsCommandRunner.cs", suggestion.GetProperty("evidence_paths")[0].GetString());
-        Assert.Equal(suggestion.GetProperty("id").GetString(), listDoc.RootElement.GetProperty("id").GetString());
+        Assert.Equal(suggestion.GetProperty("id").GetString(), listDoc.RootElement.GetProperty("results")[0].GetProperty("id").GetString());
     }
 
     [ProductionRuntimeFact]
@@ -1179,6 +1184,78 @@ public class ProgramCliTests
         Assert.Contains("cdidx suggestions add <description>", stdout);
         Assert.Contains("--description <text>", stdout);
         Assert.Contains("--evidence-path <path>", stdout);
+    }
+
+    [ProductionRuntimeFact]
+    public void Suggestions_UpdateCorrectsDraftAndReplacesDedupIdentity_Issue4441()
+    {
+        using var fixture = SuggestionFixture.Create();
+        var record = fixture.Add("bug", "csharp", "Malformed draft description", submitted: false, context: "bad context", sampledTitle: "Stale title");
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+            "suggestions", "update", record.Hash[..12], "--db", fixture.DbPath, "--json",
+            "--description", "Corrected draft description", "--context", "correct context", "--title", "Corrected title",
+            "--evidence-path", "src/CodeIndex/Cli/SuggestionsCommandRunner.cs"
+        ]);
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        var suggestion = doc.RootElement.GetProperty("suggestion");
+        Assert.Equal("updated", doc.RootElement.GetProperty("action").GetString());
+        Assert.Equal("Corrected draft description", suggestion.GetProperty("description").GetString());
+        Assert.Equal("correct context", suggestion.GetProperty("context").GetString());
+        Assert.Equal("Corrected title", suggestion.GetProperty("sampled_title").GetString());
+        Assert.Equal("src/CodeIndex/Cli/SuggestionsCommandRunner.cs", suggestion.GetProperty("evidence_paths")[0].GetString());
+        Assert.NotEqual(record.Hash, suggestion.GetProperty("id").GetString());
+        Assert.Equal(record.CreatedAt, suggestion.GetProperty("created_at").GetDateTime());
+    }
+
+    [ProductionRuntimeFact]
+    public void Suggestions_DeleteRemovesDraft_Issue4441()
+    {
+        using var fixture = SuggestionFixture.Create();
+        var record = fixture.Add("bug", "csharp", "Draft to remove", submitted: false);
+
+        var (deleteExitCode, deleteStdout, deleteStderr) = RunCliInSubprocess([
+            "suggestions", "delete", record.Hash[..12], "--db", fixture.DbPath, "--json"
+        ]);
+        var (showExitCode, _, _) = RunCliInSubprocess([
+            "suggestions", "show", record.Hash[..12], "--db", fixture.DbPath, "--json"
+        ]);
+
+        Assert.Equal(CommandExitCodes.Success, deleteExitCode);
+        Assert.Equal(string.Empty, deleteStderr);
+        using var doc = JsonDocument.Parse(deleteStdout);
+        Assert.Equal("deleted", doc.RootElement.GetProperty("action").GetString());
+        Assert.Equal(record.Hash, doc.RootElement.GetProperty("suggestion").GetProperty("id").GetString());
+        Assert.Equal(CommandExitCodes.NotFound, showExitCode);
+    }
+
+    [ProductionRuntimeFact]
+    public void Suggestions_MutationsRejectSubmittedRecords_Issue4441()
+    {
+        using var fixture = SuggestionFixture.Create();
+        var record = fixture.Add("bug", "csharp", "Submitted suggestion", submitted: true);
+
+        var (updateExitCode, updateStdout, updateStderr) = RunCliInSubprocess([
+            "suggestions", "update", record.Hash[..12], "--db", fixture.DbPath, "--description", "Changed"
+        ]);
+        var (deleteExitCode, deleteStdout, deleteStderr) = RunCliInSubprocess([
+            "suggestions", "delete", record.Hash[..12], "--db", fixture.DbPath
+        ]);
+        var (showExitCode, showStdout, _) = RunCliInSubprocess([
+            "suggestions", "show", record.Hash[..12], "--db", fixture.DbPath, "--json"
+        ]);
+
+        Assert.Equal(CommandExitCodes.UsageError, updateExitCode);
+        Assert.Equal(CommandExitCodes.UsageError, deleteExitCode);
+        Assert.Equal(string.Empty, updateStdout);
+        Assert.Equal(string.Empty, deleteStdout);
+        Assert.Contains("not an editable draft", updateStderr);
+        Assert.Contains("not an editable draft", deleteStderr);
+        Assert.Equal(CommandExitCodes.Success, showExitCode);
+        Assert.Contains(record.Hash, showStdout);
     }
 
     [ProductionRuntimeFact]
@@ -1200,9 +1277,10 @@ public class ProgramCliTests
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, stderr);
         using var doc = JsonDocument.Parse(stdout);
-        Assert.Equal(2, doc.RootElement.GetProperty("submit_attempt_count").GetInt32());
-        Assert.Equal(attemptedAt, doc.RootElement.GetProperty("last_submit_attempt").GetDateTime());
-        Assert.Equal("API 422: validation failed", doc.RootElement.GetProperty("last_submit_error").GetString());
+        var item = doc.RootElement.GetProperty("results")[0];
+        Assert.Equal(2, item.GetProperty("submit_attempt_count").GetInt32());
+        Assert.Equal(attemptedAt, item.GetProperty("last_submit_attempt").GetDateTime());
+        Assert.Equal("API 422: validation failed", item.GetProperty("last_submit_error").GetString());
     }
 
     [ProductionRuntimeFact]
@@ -1221,7 +1299,7 @@ public class ProgramCliTests
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, stderr);
         using var doc = JsonDocument.Parse(stdout);
-        Assert.Equal("Concise sampled title", doc.RootElement.GetProperty("title").GetString());
+        Assert.Equal("Concise sampled title", doc.RootElement.GetProperty("results")[0].GetProperty("title").GetString());
     }
 
     [ProductionRuntimeFact]

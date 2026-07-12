@@ -566,6 +566,7 @@ public static partial class QueryCommandRunner
         var ndjsonOptions = options.JsonOutputFormat == JsonOutputFormatNdjson ? GetCompactJsonOptions(jsonOptions) : jsonOptions;
         int? jsonDoneCount = null;
         var jsonDoneInterrupted = false;
+        var jsonDoneTruncated = false;
         DbReader? jsonDoneReader = null;
         return WithDb(options, jsonOptions, reader =>
         {
@@ -638,6 +639,7 @@ public static partial class QueryCommandRunner
             var ftsQueryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
             var displayRows = ReadSearchDisplayRows(reader, options, exactSearch);
             var selection = ApplySearchOutputSelection(displayRows, options);
+            jsonDoneTruncated = selection.LimitTruncated;
             displayRows = selection.Rows;
             if (displayRows.Count == 0)
             {
@@ -733,22 +735,22 @@ public static partial class QueryCommandRunner
                 }
                 if (TryWriteFormattedLocations(
                     options,
-                    displayRows.SelectMany(row => ToSearchFormattedLocations(row, options.Query, exactSearch)),
+                    displayRows.SelectMany(row => ToSearchFormattedLocations(row, options.Query, exactSearch)).Take(options.Limit),
                     jsonOptions))
                     return CommandExitCodes.Success;
                 if (options.OutputFormat == OutputFormatLsp)
                 {
-                    WriteLspLocations(displayRows.SelectMany(row => ToSearchLspLocations(row, exactSearch)), jsonOptions);
+                    WriteLspLocations(displayRows.SelectMany(row => ToSearchLspLocations(row, exactSearch)).Take(options.Limit), jsonOptions);
                     return CommandExitCodes.Success;
                 }
                 if (options.OutputFormat == OutputFormatQf)
                 {
-                    WriteQuickfix(displayRows.SelectMany(row => ToSearchQuickfixItems(row, options.Query, exactSearch)));
+                    WriteQuickfix(displayRows.SelectMany(row => ToSearchQuickfixItems(row, options.Query, exactSearch)).Take(options.Limit));
                     return CommandExitCodes.Success;
                 }
                 if (options.OutputFormat == OutputFormatSarif)
                 {
-                    WriteSarif(displayRows.SelectMany(row => ToSearchSarifItems(row, options.Query, exactSearch)), jsonOptions);
+                    WriteSarif(displayRows.SelectMany(row => ToSearchSarifItems(row, options.Query, exactSearch)).Take(options.Limit), jsonOptions);
                     return CommandExitCodes.Success;
                 }
                 if (options.JsonOutputFormat == JsonOutputFormatArray)
@@ -797,7 +799,7 @@ public static partial class QueryCommandRunner
         }, exitCode =>
         {
             if (options.Json && options.JsonOutputFormat == JsonOutputFormatNdjson && jsonDoneCount.HasValue && !options.ResultsOnly)
-                WriteJsonStreamDone(jsonDoneCount.Value, ndjsonOptions, jsonDoneInterrupted, jsonDoneReader, options.MaxJsonBytes, jsonDoneFirstOmittedResultBytes, jsonDoneTotalCount - jsonDoneCount);
+                WriteJsonStreamDone(jsonDoneCount.Value, ndjsonOptions, jsonDoneInterrupted, jsonDoneTruncated, jsonDoneReader, options.MaxJsonBytes, jsonDoneFirstOmittedResultBytes, jsonDoneTotalCount - jsonDoneCount);
         });
     }
 }

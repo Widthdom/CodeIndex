@@ -1947,17 +1947,18 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   `serverInfo.name`, `serverInfo.version` (read via
   `ConsoleUi.LoadVersion()` — the same `version.json` source), and the
   long `instructions` string that guides AI clients on tool selection.
-  After that response is written, the server emits one compatibility
-  `notifications/initialized` ready signal per session so clients that wait for
-  a server-side ready signal can proceed without optimistic polling (#1780).
-  MCP also defines `notifications/initialized` as a client-to-server
-  notification; cdidx still accepts that direction as a no-op, and the
-  compatibility signal is the only server-origin emission for non-HTTP
-  transports. HTTP sessions can also receive opt-in keep-alive notifications
+  The client then sends `notifications/initialized`; cdidx accepts that
+  client-to-server notification as a no-op and does not synthesize a
+  server-origin copy (#4433). HTTP sessions can receive opt-in keep-alive notifications
   on `/events` when `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` is configured.
   On HTTP transport, out-of-band notifications are delivered only to connected
   `/events` SSE streams; POST-only clients receive the initialize response but
   no separate notification frame.
+- Every request frame must carry an exact `"jsonrpc":"2.0"` member. Except for
+  `initialize`, responded methods are rejected until initialization succeeds
+  (#4468). When a finite stdio input reaches EOF, already accepted requests are
+  drained to completion rather than cancelled after a fixed grace period
+  (#4434), and cancellation diagnostics count only unfinished tasks (#4435).
 - The advertised capability surface includes `tools`, `resources`, and
   `prompts`. `resources/list` pages indexed files as `cdidx://file/<path>`
   URIs and `resources/read` reconstructs file text from indexed chunks.
@@ -2021,7 +2022,8 @@ is:
 
 - `Task<string?> ReadFrameAsync(CancellationToken)` returns one
   request-frame string, or `null` to signal end-of-stream (closed stdin,
-  cancelled HTTP listener, etc.). The MCP loop exits cleanly on `null`.
+  cancelled HTTP listener, etc.). On clean stdio EOF, the MCP loop drains all
+  accepted requests before exiting.
 - `Task WriteFrameAsync(string?, CancellationToken)` writes one response
   frame. `null` means "this was a notification" — stdio drops it; HTTP
   closes the in-flight request with `204 No Content`.
@@ -4189,7 +4191,8 @@ sequenceDiagram
 
 - `McpServer` が stdin/stdout を持ち、JSON-RPC 2.0 フレームを解析する。
 - レスポンス構築は `JsonSerializer.Serialize<T>(...)` ではなく、`System.Text.Json.Nodes.JsonObject` / `JsonArray` を**手組み**する。これが、トリミング済みバイナリでリフレクションベースのシリアライズが無効でも MCP パスが動き続ける理由。
-- `initialize` レスポンスは `protocolVersion`、`capabilities`、`serverInfo.name`、`serverInfo.version`（`ConsoleUi.LoadVersion()` — `version.json` が源）、および AI クライアントにツール選択を案内する長い `instructions` 文字列を返す。レスポンスを書き終えた後、サーバーはセッションごとに 1 回だけ互換性用の `notifications/initialized` ready signal を送るため、サーバー側の ready signal を待つクライアントも optimistic polling なしで進める（#1780）。MCP は `notifications/initialized` を client-to-server 通知としても定義しており、cdidx はその方向も no-op として受理する。非 HTTP transport では、この互換性 signal が唯一の server-origin emission です。HTTP session は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` を設定した場合、opt-in の keep-alive notification も `/events` で受け取れる。HTTP transport では out-of-band 通知は接続済みの `/events` SSE stream にだけ配送され、POST のみのクライアントは initialize response だけを受け取り、別通知 frame は受け取らない。
+- `initialize` レスポンスは `protocolVersion`、`capabilities`、`serverInfo.name`、`serverInfo.version`（`ConsoleUi.LoadVersion()` — `version.json` が源）、および AI クライアントにツール選択を案内する長い `instructions` 文字列を返す。その後 client が `notifications/initialized` を送信し、cdidx は client-to-server 通知として no-op で受理するが、server 側から同じ通知を生成しない（#4433）。HTTP session は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` を設定した場合、opt-in の keep-alive notification を `/events` で受け取れる。HTTP transport では out-of-band 通知は接続済みの `/events` SSE stream にだけ配送され、POST のみのクライアントは initialize response だけを受け取り、別通知 frame は受け取らない。
+- すべての request frame は厳密な `"jsonrpc":"2.0"` member を持つ必要があり、`initialize` 以外の応答対象 method は初期化成功まで拒否される（#4468）。有限の stdio input が EOF に達した場合、受理済み request は固定 grace period 後に cancel せず完了まで drain し（#4434）、cancellation diagnostic は未完了 task だけを数える（#4435）。
 - advertised capability には `tools`、`resources`、`prompts`、`logging` が含まれる。`logging` は MCP `notifications/message` を示し、`logging/setLevel` は `debug`、`info`、`notice`、`warning`、`error`、`critical`、`alert`、`emergency` を受け付ける。
 - `protocolVersion` は**ハードコードではなく交渉**で決まる（#1554）。サーバーは `McpServer.SupportedProtocolVersions`（新しい順: `2025-03-26`, `2024-11-05`）を保持し、`initialize` パラメータからクライアント要求バージョンを読み取って、対応集合にあればそれを返し（合意）、未指定／非文字列なら既定の最新バージョンに fallback し、対応外なら `error.data` に `requestedVersion` と `supportedVersions` を入れた JSON-RPC `-32602` で拒否する。これにより将来 MCP 仕様が改訂されても、wire format が黙ってずれるのではなく actionable な handshake 失敗として表面化する。配列を新バージョンで更新する際は `ProtocolVersion` を先頭エントリと揃えて意図的に bump する。
 - **認証ミドルウェア**（#1559）。`McpServer` はパース済み JSON-RPC リクエストごとに、メソッド抽出 *後*・dispatch *前* で `IMcpAuthenticator` を呼ぶ。既定の `LocalStdioAuthenticator` は permissive で（従来の stdio 動作を維持し、呼び出し元を `stdio` / `local` でタグ付けする）、stdio では `CDIDX_MCP_AUTH_TOKEN` を設定すると `TokenMcpAuthenticator` に切り替わる。未設定または空文字の token だけが permissive で、空白のみ・空白文字入り・制御文字入り・4096 文字超の token は設定値として拒否する。`TokenMcpAuthenticator` は応答が必要な全リクエストに対し、`params.auth.token` が一致することを要求し、比較は `CryptographicOperations.FixedTimeEquals` による定数時間比較で行う。HTTP はこの body token ゲートを重ねず、`ProgramRunner` が `CDIDX_MCP_HTTP_TOKEN` を優先し、未設定なら `CDIDX_MCP_AUTH_TOKEN` を fallback として bearer secret に解決して、`Authorization: Bearer ...` の transport check に一本化する（#3156）。HTTP bearer 値は `Bearer ` の後ろを trim せず完全一致で扱い、空白文字・制御文字・4096 文字超は hash 前に拒否する。JSON-RPC body token ゲートの失敗は統一された JSON-RPC `-32001 "Unauthorized"` を返し（#1530 の sanitization 方針に従い、ワイヤでは未提示と不一致を区別しない）、`BuildAuthFailureLog` が詳細を stderr に書き出す。通知（`notifications/initialized`、`notifications/cancelled`）は応答もエラーコードも持たないため、ゲート *より前* で short-circuit する。このミドルウェアが将来 transport の差し替え seam になる — ネットワーク listener は別の `IMcpAuthenticator` を提供しつつ、`McpCallerIdentity`（`Source` + `Subject`）の形を保ち、監査ログ（#1562）から再利用できる。
@@ -4200,7 +4203,7 @@ MCP は独立したシリアライズ戦略（オブジェクトを JSON など�
 
 `McpServer.RunAsync` は 2 つに分かれている。public な stdio エントリポイント（`StdioMcpTransport` と legacy な stdin/stdout のペアを構築する）と、JSON-RPC ループ本体を持つ internal な `RunAsync(IMcpTransport, CancellationToken)` で、後者はトランスポート非依存。`IMcpTransport` 契約は以下のとおり:
 
-- `Task<string?> ReadFrameAsync(CancellationToken)` はリクエストフレームを 1 つ文字列で返すか、ストリーム終端を示す `null` を返す（stdin クローズ、HTTP listener キャンセル等）。MCP ループは `null` を見たら正常終了する。
+- `Task<string?> ReadFrameAsync(CancellationToken)` はリクエストフレームを 1 つ文字列で返すか、ストリーム終端を示す `null` を返す（stdin クローズ、HTTP listener キャンセル等）。正常な stdio EOF では、MCP ループは受理済み request をすべて drain してから終了する。
 - `Task WriteFrameAsync(string?, CancellationToken)` は応答フレームを 1 件書く。`null` は「これは通知だった」を意味し、stdio は何も書かず、HTTP は処理中のリクエストを `204 No Content` でクローズする。
 - 契約は厳密に「1 read → 1 write」。再入は明示的に拒否し、サーバーの他部分が依存している request/response 順序不変条件をシーム部で強制する。
 - `IAsyncDisposable` により、各トランスポートが自身のカーネル側リソース（ファイルハンドル、listener プレフィックス）を `McpServer` と結合せずに解放できる。

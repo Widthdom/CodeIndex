@@ -432,6 +432,8 @@ internal sealed record JsonStreamDoneResult(
     [property: JsonPropertyName("done")] bool Done,
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("interrupted")] bool Interrupted,
+    [property: JsonPropertyName("truncated")] bool Truncated,
+    [property: JsonPropertyName("has_more")] bool HasMore,
     [property: JsonPropertyName("interruption_reason")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? InterruptionReason = null,
     [property: JsonPropertyName("max_json_bytes")]
@@ -932,7 +934,9 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(SuggestionIssueDraftPreflightSummaryJsonResult))]
 [JsonSerializable(typeof(SuggestionIssueDraftSourceJsonResult))]
 [JsonSerializable(typeof(SuggestionAddJsonResult))]
+[JsonSerializable(typeof(SuggestionMutationJsonResult))]
 [JsonSerializable(typeof(SuggestionListItemJsonResult))]
+[JsonSerializable(typeof(SuggestionListItemJsonResult[]))]
 [JsonSerializable(typeof(SymbolAnalysisResult))]
 [JsonSerializable(typeof(SymbolHotspotJsonResult))]
 [JsonSerializable(typeof(SymbolResult))]
