@@ -11,6 +11,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.37.1] - 2026-07-12
+
+#### Changed
+
+- **Unchanged-file reuse now recognizes solution paths without allocating an extension string** — large scans avoid a transient allocation for every checksum/stat reuse candidate while preserving case-insensitive `.sln` handling.
+- **Checksum-based unchanged-file reuse now stops extraction-cap probes at the configured limit** — large symbol and reference sets no longer need to be counted in full before an unchanged file can be reused or rejected.
+- **Stat reuse stops scanning rows once per-file caps are exceeded** - unchanged-file eligibility now uses bounded SQLite existence probes for symbol and reference caps instead of counting every row. Pathological generated files and dense multi-language outputs can therefore fail reuse after reading only the configured cap plus one row.
+- **Large indexes reuse prepared SQLite bulk-insert shapes** - chunk, symbol, reference, and reference-line writers now cache SQL text and typed parameter schemas by batch row count, then update only parameter values for later files. This reduces SQLite command construction, parameter allocation, and garbage collection across every indexed language while preserving bounded cache eviction and existing transaction boundaries.
+- **Full-scan diagnostic path collections now materialize as exact-size arrays** — large non-indexable, unknown-extension, directory, repository, and dangling-link result sets no longer retain an additional list wrapper and spare capacity.
+- **C# and SQL extraction avoid no-op scan buffers** - plain C# lexer lines and SQL body-scan lines now reuse their source text, C# generic column maps are allocated only when whitespace actually changes, and C# member confirmation avoids redundant property/method regex passes. Large source files therefore spend less CPU and allocation on unchanged scanner text.
+- **Full scans format worker phase diagnostics only when observed** - parallel extraction workers now publish allocation-free `(path, phase)` slots and create human-readable strings only for heartbeat or stall diagnostics. Normal indexing no longer allocates a new phase string at every read, chunk, symbol, reference, and validation transition across indexed languages.
+- **Full scans now allocate hardlink identity tracking only when a multiply-linked file is encountered** — ordinary repositories avoid an otherwise unused per-scan hash set while preserving duplicate hardlink detection.
+- **Large C# workspaces probe static-interface contracts in parallel** - CLI full scans and file-scoped updates now apply configured index parallelism to the read/filter/extract portion of the C# static-interface prepass. Database reuse decisions remain serialized, results are merged in deterministic file order, and MCP retains its documented serial indexing behavior.
+- **Incremental full scans extract changed files in parallel** - full-workspace incremental indexing now sends changed files through the same bounded parallel extraction pipeline as fresh and rebuilt indexes. Worker counts are capped to the actual changed-file workload, the result queue is limited to two completed payloads per worker, fixed worker slots replace a contended dictionary for phase tracking, and isolated symbol-worker clients are created only on extraction paths that use them. This bounds source, chunk, symbol, and reference memory and reduces synchronization and setup overhead. The existing pre-check still avoids loading unchanged files, while post-extraction hooks or symbol-kind filters retain their required sequential path across every indexed language.
+- **C# static-interface prepass collections now use known target and result sizes** — large scans avoid repeated growth of candidate, pending-path, and symbol buffers, and empty candidate sets skip parallel-loop setup.
+- **Fresh full scans now reuse their completed-directory set as checkpoint output** — the common no-resume path no longer copies every scanned directory into a second hash set after traversal finishes.
+- **Incremental full scans size discovery collections from the existing index** - the CLI now passes the prior indexed-file count as a bounded capacity hint for the scan file list and language map. Large stable workspaces avoid repeatedly growing and copying those collections from the 256-file default, while rebuilds and untrusted oversized hints retain safe defaults and caps.
+- **Incremental file-count hints now pre-size full-scan directory tracking** — large repositories avoid repeated growth of listed, fully-scanned, and visited-directory sets while retaining a bounded allocation ceiling.
+- **Large multi-language indexes retain more shared static extraction regexes** - bounded extraction now keeps a cache sized for the shared pattern set, reducing repeated pattern construction, allocation pressure, and garbage collection when indexing large repositories.
+- **Full-scan language counters now update through one dictionary lookup per accepted file** — large mixed-language repositories avoid the previous lookup-plus-assignment pair in the file acceptance hot path.
+- **Successful raw-byte prepass probes no longer restat the source file** — once a C# contract candidate is found, indexing proceeds directly to the guarded content read instead of issuing an unnecessary metadata syscall.
+- **Extraction-only C# contract prepasses no longer allocate existing-symbol path tracking** — callers that explicitly exclude database symbols avoid a target-sized hash set that cannot affect their result.
+- **Large-index purge scans retain only deletion candidates** - disk-stale, authoritative full-scan, and partial-authority purge paths now evaluate SQLite file rows as they are read instead of first materializing a second complete `(id, path)` list. Peak managed memory therefore scales with stale candidates rather than every indexed language file.
+- **Focused test workflows avoid repeated dependency setup** — the license-policy lane now caches NuGet packages and performs one locked framework-specific restore before running tests with `--no-restore`, while the C# CodeQL lane reuses a lock-file-keyed package cache.
+- **Build lanes tolerate transient SDK download failures** — the shared .NET SDK setup is retried once when the initial setup action fails, while a repeated failure still stops the job.
+
 ### [1.37.0] - 2026-07-10
 
 #### Added
@@ -5747,6 +5773,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.37.1] - 2026-07-12
+
+#### 変更
+
+- **未変更ファイル再利用で extension 文字列を確保せず solution path を判定します** — `.sln` の大文字小文字を区別しない挙動を維持しつつ、大規模 scan の checksum / stat 再利用候補ごとの一時 allocation を避けます。
+- **checksum ベースの未変更ファイル再利用で抽出上限の確認を設定値までに制限しました** — 未変更ファイルを再利用または除外する前に、大量の symbol / reference を全件集計する必要がなくなりました。
+- **stat reuse が file ごとの上限超過時点で行走査を打ち切るようにしました** - 未変更 file の再利用可否は、全 symbol / reference 行を COUNT せず、bounded SQLite existence probe で上限を確認します。病的な generated file や高密度な複数言語出力は、設定上限+1行だけを読んで再利用不可を判定できます。
+- **大規模 index で SQLite bulk-insert の prepared shape を再利用するようにしました** - chunk、symbol、reference、reference-line writer は batch row count ごとに SQL text と型付き parameter schema を cache し、後続 file では parameter value だけを更新します。bounded cache eviction と既存 transaction boundary を維持しながら、全 indexed language で SQLite command 構築、parameter allocation、GC を削減します。
+- **full-scan の診断 path collection を正確なサイズの配列として確定します** — 大量の non-indexable / unknown-extension / directory / repository / dangling-link 結果で、追加の List wrapper と余剰容量を保持しなくなりました。
+- **C# と SQL の extraction で変更を伴わない scan buffer を省略するようにしました** - plain な C# lexer 行と SQL body-scan 行は元の text を再利用し、C# generic column map は空白が実際に変化するときだけ確保し、C# member 確認では property / method regex の重複実行を避けます。これにより大きな source file で未変更の scanner text に使う CPU と allocation を削減します。
+- **full scan の worker phase diagnostic を観測時だけ整形するようにしました** - parallel extraction worker は allocation-free な `(path, phase)` slot を公開し、heartbeat または stall diagnostic が必要な場合だけ人間向け文字列を生成します。通常 indexing では、全 indexed language の read / chunk / symbol / reference / validation 遷移ごとの phase 文字列確保が不要になります。
+- **フルスキャンでは複数リンクを持つファイルを検出した場合だけ hardlink identity 追跡を確保します** — hardlink 重複検出を維持しつつ、通常のリポジトリで未使用の scan 単位 HashSet を避けます。
+- **巨大な C# workspace の static-interface contract probe を並列化しました** - CLI full scan と file-scoped update は、C# static-interface prepass の read / filter / extract 部分に設定済み index parallelism を適用します。database reuse 判定は直列のまま維持し、結果は決定的な file 順で統合し、MCP は文書化済みの serial indexing 動作を維持します。
+- **incremental full scan で変更ファイルを並列抽出するようにしました** - ワークスペース全体の incremental indexing は、変更ファイルを fresh / rebuild index と同じ bounded parallel extraction pipeline に送るようになりました。worker 数は実際の変更ファイル数を上限とし、result queue は worker ごとに完了 payload 2 件までに制限し、phase 追跡の競合 dictionary を固定 worker slot に置き換え、isolated symbol-worker client は実際に使う抽出経路でのみ生成します。これにより source / chunk / symbol / reference のメモリと同期・setup overhead を抑えます。既存の事前判定は引き続き未変更ファイルの読み込みを避け、post-extraction hook と symbol-kind filter は全 indexed language で必要な直列経路を維持します。
+- **C# static-interface prepass のコレクションを既知の対象件数と結果件数で確保します** — 大規模 scan で candidate / pending path / symbol buffer の再拡張を避け、候補が空なら parallel loop の準備も省略します。
+- **新規 full scan では完了済み directory set を checkpoint 出力として再利用します** — resume なしの一般的な経路で、走査完了後に全 directory を2つ目の HashSet へコピーしなくなりました。
+- **incremental full scan の discovery collection を既存 index 件数で初期化するようにしました** - CLI は以前の indexed-file 数を bounded capacity hint として scan file list と language map に渡します。巨大で安定した workspace は256 file の既定値から collection を繰り返し拡張・コピーせずに済み、rebuild と信頼できない過大 hint は安全な既定値・上限を維持します。
+- **incremental の file-count hint を full-scan の directory 追跡容量にも利用します** — 上限付きの確保を維持しながら、大規模リポジトリで listed / fully-scanned / visited directory set の再拡張を避けます。
+- **大規模な複数言語 index で共有 static extraction regex をより多く保持するようにしました** - bounded extraction は共有 pattern 群に対応する容量の cache を保持することで、大規模 repository の indexing 時に繰り返される pattern 構築、allocation 負荷、GC を削減します。
+- **full-scan の言語カウンターを対象ファイルごとに1回の dictionary lookup で更新します** — 多言語の大規模リポジトリで file acceptance hot path の lookup と代入の二重探索を避けます。
+- **raw-byte prepass が一致した場合の source file 再 stat を省略します** — C# contract 候補が見つかった後は不要な metadata syscall を行わず、保護された content read へ直接進みます。
+- **抽出専用の C# contract prepass では既存 symbol の path 追跡を確保しません** — database symbol を明示的に除外する呼び出しで、結果に影響しない対象件数分の HashSet を避けます。
+- **巨大 index の purge scan で削除候補だけを保持するようにしました** - disk-stale、authoritative full-scan、partial-authority purge は、完全な `(id, path)` 一覧を複製してから判定せず、SQLite の file 行を読みながら評価します。これにより managed memory のピークは全 indexed language file 数ではなく stale 候補数に応じて増えるようになります。
+- **focused test workflow で依存関係の重複 setup を回避しました** — license-policy lane は NuGet package をキャッシュし、framework を限定した locked restore を 1 回行った後、`--no-restore` でテストを実行します。C# CodeQL lane でも lock file キーの package cache を再利用します。
+- **build lane が一時的な SDK download 失敗に耐えられるようになりました** — 共通の .NET SDK setup は最初の action が失敗した場合に 1 回だけ再試行し、再度失敗した場合は従来どおり job を停止します。
+
 ### [1.37.0] - 2026-07-10
 
 #### 追加
@@ -11465,7 +11517,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.37.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.37.1...HEAD
+[1.37.1]: https://github.com/Widthdom/CodeIndex/compare/v1.37.0...v1.37.1
 [1.37.0]: https://github.com/Widthdom/CodeIndex/compare/v1.36.3...v1.37.0
 [1.36.3]: https://github.com/Widthdom/CodeIndex/compare/v1.36.2...v1.36.3
 [1.36.2]: https://github.com/Widthdom/CodeIndex/compare/v1.36.1...v1.36.2
