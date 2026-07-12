@@ -146,7 +146,7 @@ public partial class ReferenceExtractorTests
         ReferenceExtractionCase.Extract("yaml", content)
             .ShouldContain("import", "actions/checkout", containerName: "jobs.build")
             .ShouldContain("project_reference", "src/App/App.csproj", containerName: "jobs.build")
-            .ShouldContain("call", "build", containerName: "jobs.test")
+            .ShouldContain("call", "jobs.build", containerName: "jobs.test")
             .ShouldContain("project_reference", "scripts/test.sh", containerName: "jobs.test")
             .ShouldNotContainSymbol("ignored.txt")
             .ShouldNotContainSymbol("actions/setup-node")

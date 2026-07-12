@@ -78,7 +78,7 @@ internal static class GitHubActionsReferenceExtractor
                 {
                     var target = need.Trim('\'', '"');
                     if (target.Length > 0)
-                        Add(fileId, target, line.IndexOf(target, StringComparison.Ordinal), "call", line, index + 1, currentJobSymbol, references, seen);
+                        Add(fileId, $"jobs.{target}", line.IndexOf(target, StringComparison.Ordinal), "call", line, index + 1, currentJobSymbol, references, seen);
                 }
             }
             else if (key == "uses")
