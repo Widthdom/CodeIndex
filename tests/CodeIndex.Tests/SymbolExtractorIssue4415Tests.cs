@@ -26,6 +26,9 @@ public class SymbolExtractorIssue4415Tests
         AssertSymbol(symbols, "array", "items[1].tags", "items[1]");
         AssertSymbol(symbols, "value", "items[1].tags[0]", "items[1].tags");
         AssertSymbol(symbols, "value", "items[1].tags[1]", "items[1].tags");
+        Assert.Equal(3, Assert.Single(symbols, symbol => symbol.Name == "items[0]").Line);
+        Assert.Equal(4, Assert.Single(symbols, symbol => symbol.Name == "items[1]").Line);
+        Assert.Equal(4, Assert.Single(symbols, symbol => symbol.Name == "items[1].tags[0]").Line);
     }
 
     private static void AssertSymbol(

@@ -225,7 +225,8 @@ public static partial class SymbolExtractor
                 JsonValueKind.Array => "array",
                 _ => "value",
             };
-            if (!TryAddStructuredDataSymbol(fileId, kind, itemPath, arrayLine, lines, arrayPath, symbols, "structured_data_symbol_budget_exceeded", ref truncated))
+            var itemLine = FindJsonElementLine(content, lines, ref lineStarts, item, arrayLine, ref searchOffset);
+            if (!TryAddStructuredDataSymbol(fileId, kind, itemPath, itemLine, lines, arrayPath, symbols, "structured_data_symbol_budget_exceeded", ref truncated))
                 return;
 
             if (item.ValueKind == JsonValueKind.Object)
@@ -234,13 +235,35 @@ public static partial class SymbolExtractor
             }
             else if (item.ValueKind == JsonValueKind.Array)
             {
-                ExtractJsonArraySymbols(fileId, content, lines, ref lineStarts, item, itemPath, arrayLine, ref searchOffset, symbols, propertyLines, depth + 1, ref traversalNodes, ref truncated);
+                ExtractJsonArraySymbols(fileId, content, lines, ref lineStarts, item, itemPath, itemLine, ref searchOffset, symbols, propertyLines, depth + 1, ref traversalNodes, ref truncated);
             }
 
             if (truncated)
                 return;
             index++;
         }
+    }
+
+    private static int FindJsonElementLine(
+        string content,
+        string[] lines,
+        ref int[]? lineStarts,
+        JsonElement element,
+        int fallbackLine,
+        ref int searchOffset)
+    {
+        if (lines.Length <= 1)
+            return fallbackLine;
+
+        var rawText = element.GetRawText();
+        var offset = content.IndexOf(rawText, searchOffset, StringComparison.Ordinal);
+        if (offset < 0 && searchOffset > 0)
+            offset = content.IndexOf(rawText, StringComparison.Ordinal);
+        if (offset < 0)
+            return fallbackLine;
+
+        searchOffset = offset + 1;
+        return FindLineNumberForOffset(lineStarts ??= BuildLineStarts(lines), offset);
     }
 
     private static void DrainJsonPropertyLines(JsonElement element, Dictionary<string, Queue<int>>? propertyLines)
