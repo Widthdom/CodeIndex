@@ -3591,7 +3591,7 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsCall_Definition_DoesNotReportSqlGraphContractDegraded()
+    public void ToolsCall_DefinitionAndGraphToolsShareStaleContractFixture()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_definition_sql_graph_contract");
         try
@@ -3615,30 +3615,14 @@ public partial class McpServerTests
 
             Assert.False(callersStructured["sql_graph_contract_ready"]!.GetValue<bool>());
             Assert.NotNull(callersStructured["sql_graph_contract_degraded_reason"]);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void ToolsCall_ImpactAnalysis_StaleSqlGraphContractIncludesDegradedState()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_impact_sql_graph_contract");
-        try
-        {
-            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
-            DowngradeSqlGraphContractRows(dbPath);
-            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var impactRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"fn_Target","lang":"sql"}}}""")!;
+            var impactResponse = server.HandleMessage(impactRequest)!;
+            var impactStructured = impactResponse["result"]!["structuredContent"]!;
 
-            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"fn_Target","lang":"sql"}}}""")!;
-            var response = server.HandleMessage(request)!;
-            var structured = response["result"]!["structuredContent"]!;
-
-            Assert.Equal(1, structured["count"]!.GetValue<int>());
-            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
-            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
+            Assert.Equal(1, impactStructured["count"]!.GetValue<int>());
+            Assert.False(impactStructured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.Contains("sql_graph_contract_ready=false", impactStructured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
         }
         finally
         {
