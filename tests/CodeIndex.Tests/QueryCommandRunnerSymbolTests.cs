@@ -1451,7 +1451,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_WithJsonIncludesConfidenceBuckets()
+    public void RunUnused_JsonAndHumanConfidenceBucketsShareFixture()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
         try
@@ -1501,6 +1501,21 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("UseIOptions", symbols[8].GetProperty("name").GetString());
             Assert.Equal("reflection_or_config_suspect", symbols[8].GetProperty("unused_bucket").GetString());
             Assert.Contains(symbols[8].GetProperty("unused_reason_tags").EnumerateArray(), tag => tag.GetString() == "config_or_metadata_surface");
+
+            var (humanExitCode, humanStdout, humanStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--all", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("Likely unused private (1)", humanStdout);
+            Assert.Contains("Maybe unused non-public (1)", humanStdout);
+            Assert.Contains("Public/exported with no refs (3)", humanStdout);
+            Assert.Contains("Intentional-surface suspects (4)", humanStdout);
+            Assert.Contains("confidence=medium", humanStdout);
+            Assert.Contains("confidence=low", humanStdout);
+            Assert.Contains("domain=private_or_file_local", humanStdout);
+            Assert.Contains("domain=configuration_contract", humanStdout);
+            Assert.Contains("returned potentially unused symbols; returned buckets:", humanStderr);
         }
         finally
         {
@@ -4626,33 +4641,6 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(2500, json.GetProperty("count").GetInt32());
             Assert.Equal(2500, json.GetProperty("symbols").GetArrayLength());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunUnused_HumanOutputGroupsByConfidenceBucket()
-    {
-        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
-        try
-        {
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--all", "--lang", "csharp"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Contains("Likely unused private (1)", stdout);
-            Assert.Contains("Maybe unused non-public (1)", stdout);
-            Assert.Contains("Public/exported with no refs (3)", stdout);
-            Assert.Contains("Intentional-surface suspects (4)", stdout);
-            Assert.Contains("confidence=medium", stdout);
-            Assert.Contains("confidence=low", stdout);
-            Assert.Contains("domain=private_or_file_local", stdout);
-            Assert.Contains("domain=configuration_contract", stdout);
-            Assert.Contains("returned potentially unused symbols; returned buckets:", stderr);
         }
         finally
         {
