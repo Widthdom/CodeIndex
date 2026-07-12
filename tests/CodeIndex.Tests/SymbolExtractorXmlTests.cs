@@ -15,6 +15,34 @@ namespace CodeIndex.Tests;
 public partial class SymbolExtractorTests
 {
     [Fact]
+    public void Extract_GenericXml_EmitsBoundedElementAndAttributePaths_Issue4419()
+    {
+        const string content = """
+            <configuration xmlns="urn:sample" mode="strict">
+              <packageSources>
+                <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+              </packageSources>
+            </configuration>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+
+        var root = Assert.Single(symbols, symbol => symbol.Name == "configuration");
+        Assert.Equal("namespace", root.Kind);
+        Assert.Equal(1, root.StartLine);
+        Assert.Equal(5, root.EndLine);
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "namespace"
+            && symbol.Name == "configuration.packageSources.add"
+            && symbol.ContainerName == "configuration.packageSources");
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "property"
+            && symbol.Name == "configuration.packageSources.add.@key"
+            && symbol.ContainerName == "configuration.packageSources.add");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name.Contains("xmlns", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_XmlBroadXaml_EmitsStructuredDataTruncationDiagnostic_Issue3765()
     {
         var elements = string.Join('\n', Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 1).Select(index => $"""  <Button x:Name="Button{index}" />"""));

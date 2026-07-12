@@ -5,6 +5,8 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
+    private const string XmlNamespaceDeclarationUri = "http://www.w3.org/2000/xmlns/";
+
     private static readonly string[] ManifestAssemblyIdentityAttributes =
     [
         "version",
@@ -101,6 +103,98 @@ public static partial class SymbolExtractor
         }
 
         return symbols ?? [];
+    }
+
+    private static List<SymbolRecord> ExtractGenericXmlSymbols(long fileId, string content, string[] lines)
+    {
+        if (TryGetXmlStructureIssue(content, out _))
+            return [];
+
+        var symbols = CreateSymbolListForLines(lines.Length);
+        var elementPaths = new Stack<string>();
+        var elementSymbolIndexes = new Stack<int>();
+
+        try
+        {
+            using var reader = XmlReader.Create(new StringReader(content), CreateExtractionXmlReaderSettings(DtdProcessing.Prohibit));
+            while (reader.Read())
+            {
+                if (reader.NodeType == XmlNodeType.Element)
+                {
+                    var parentPath = elementPaths.Count == 0 ? null : elementPaths.Peek();
+                    var path = parentPath == null ? reader.LocalName : $"{parentPath}.{reader.LocalName}";
+                    var lineNumber = reader is IXmlLineInfo lineInfo && lineInfo.HasLineInfo() ? lineInfo.LineNumber : 1;
+                    var symbol = CreateXmlPathSymbol(fileId, "namespace", path, lineNumber, lines, parentPath);
+                    symbol.BodyStartLine = lineNumber;
+                    symbol.BodyEndLine = lineNumber;
+                    symbols.Add(symbol);
+                    var elementSymbolIndex = symbols.Count - 1;
+
+                    if (reader.HasAttributes && reader.MoveToFirstAttribute())
+                    {
+                        do
+                        {
+                            if (reader.NamespaceURI == XmlNamespaceDeclarationUri)
+                                continue;
+
+                            symbols.Add(CreateXmlPathSymbol(
+                                fileId,
+                                "property",
+                                $"{path}.@{reader.LocalName}",
+                                lineNumber,
+                                lines,
+                                path));
+                        }
+                        while (reader.MoveToNextAttribute());
+                        reader.MoveToElement();
+                    }
+
+                    if (!reader.IsEmptyElement)
+                    {
+                        elementPaths.Push(path);
+                        elementSymbolIndexes.Push(elementSymbolIndex);
+                    }
+                }
+                else if (reader.NodeType == XmlNodeType.EndElement && elementPaths.Count > 0)
+                {
+                    elementPaths.Pop();
+                    var symbol = symbols[elementSymbolIndexes.Pop()];
+                    var endLine = reader is IXmlLineInfo lineInfo && lineInfo.HasLineInfo() ? lineInfo.LineNumber : symbol.Line;
+                    symbol.EndLine = endLine;
+                    symbol.BodyEndLine = endLine;
+                }
+            }
+        }
+        catch (XmlException)
+        {
+            return [];
+        }
+
+        return TrimStructuredDataSymbols(symbols, fileId, "structured_data_xml_symbol_budget_exceeded", lines);
+    }
+
+    private static SymbolRecord CreateXmlPathSymbol(
+        long fileId,
+        string kind,
+        string path,
+        int lineNumber,
+        string[] lines,
+        string? parentPath)
+    {
+        var line = GetLineOrEmpty(lines, lineNumber).Trim();
+        return new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = kind,
+            Name = path,
+            Line = lineNumber,
+            StartLine = lineNumber,
+            EndLine = lineNumber,
+            Signature = string.IsNullOrEmpty(line) ? null : line,
+            ContainerKind = parentPath == null ? null : "namespace",
+            ContainerName = parentPath,
+            ContainerQualifiedName = parentPath,
+        };
     }
 
     private static void AddManifestAssemblyIdentitySymbols(
