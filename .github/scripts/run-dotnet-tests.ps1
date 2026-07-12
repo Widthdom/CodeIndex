@@ -18,6 +18,7 @@ $testArgs = @(
   "--configuration", "Release",
   "--framework", $Framework,
   "--no-build",
+  "--no-restore",
   "--nologo",
   "--settings", "tests/CodeIndex.Tests/CodeIndex.Tests.runsettings",
   "--blame-crash",

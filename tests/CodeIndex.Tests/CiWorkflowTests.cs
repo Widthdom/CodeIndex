@@ -71,6 +71,8 @@ public class CiWorkflowTests
             "$firstExitCode = Invoke-TestRun -LogPath $firstLogPath -IncludeCoverage $collectCoverage",
             "Skipping XPlat Code Coverage on the flaky-classification retry.",
             "$retryExitCode = Invoke-TestRun -LogPath $retryLogPath -IncludeCoverage $false",
+            "\"--no-build\"",
+            "\"--no-restore\"",
             "--blame-crash",
             "--blame-hang",
             "--blame-hang-timeout\", \"5m",
@@ -90,7 +92,6 @@ public class CiWorkflowTests
             "flaky-retry.txt");
         AssertDoesNotContainAny(
             testScript,
-            "\"--no-restore\"",
             "New-Item -ItemType Directory -Force -Path ./TestResults",
             "Tee-Object",
             "steps.lane.outputs.primary_lane",
