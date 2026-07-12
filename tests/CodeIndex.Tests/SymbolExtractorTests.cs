@@ -5542,6 +5542,28 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Markdown_ReferenceSignaturesUseOnlyLinkSpan_Issue4448()
+    {
+        const string content = """
+            # Guide
+
+            A long prose prefix that does not belong in the symbol signature [Details](#details) and trailing prose.
+            [details-link]: #details "optional title"
+            See [the details][details-link] after another prose prefix.
+            """;
+
+        var references = SymbolExtractor.Extract(1, "markdown", content)
+            .Where(symbol => symbol.Kind == "reference")
+            .ToList();
+
+        Assert.Equal(3, references.Count);
+        Assert.Contains(references, symbol => symbol.Signature == "[Details](#details)");
+        Assert.Contains(references, symbol => symbol.Signature == "[details-link]: #details");
+        Assert.Contains(references, symbol => symbol.Signature == "[the details][details-link]");
+        Assert.All(references, symbol => Assert.DoesNotContain("prose prefix", symbol.Signature));
+    }
+
+    [Fact]
     public void Extract_Markdown_DetectsFencedCodeBlockSymbols()
     {
         const string content = """

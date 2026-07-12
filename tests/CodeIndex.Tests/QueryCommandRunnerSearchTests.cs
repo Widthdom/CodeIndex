@@ -11,6 +11,18 @@ namespace CodeIndex.Tests;
 public partial class QueryCommandRunnerTests
 {
     [Fact]
+    public void SearchMatchClassifier_MarkdownProseAndFencedCodeUseDistinctOrigins_Issue4428()
+    {
+        var heading = SearchMatchClassifier.Classify("USER_GUIDE.md", "markdown", 1, "# Batch usage", 3, 5, "heading");
+        var prose = SearchMatchClassifier.Classify("USER_GUIDE.md", "markdown", 3, "Run a batch to process files.", 7, 5);
+        var fencedCode = SearchMatchClassifier.Classify("USER_GUIDE.md", "markdown", 6, "cdidx batch requests.jsonl", 7, 5, "code");
+
+        Assert.Equal(SearchMatchClassifier.HelpText, heading.Origin);
+        Assert.Equal(SearchMatchClassifier.HelpText, prose.Origin);
+        Assert.Equal(SearchMatchClassifier.Code, fencedCode.Origin);
+    }
+
+    [Fact]
     public void FetchLimitForSearchEnvelope_ClampsHugeInternalLimit_Issue3964()
     {
         Assert.Equal(1, QueryCommandRunner.FetchLimitForSearchEnvelopeForTests(0));
@@ -5213,8 +5225,8 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal("all", allDocument.RootElement.GetProperty("scope").GetProperty("name").GetString());
             Assert.Contains("src/CodeIndex/Cli/SearchAuditRecipes.cs", allPaths);
-            Assert.Contains("docs/audit.md", allPaths);
-            Assert.Contains("CHANGELOG.md", allPaths);
+            Assert.DoesNotContain("docs/audit.md", allPaths);
+            Assert.DoesNotContain("CHANGELOG.md", allPaths);
             Assert.Contains("tests/AppTests.cs", allPaths);
         }
         finally

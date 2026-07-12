@@ -19,7 +19,7 @@ internal static class SearchMatchClassifier
         string? enclosingSymbolKind = null,
         IReadOnlyDictionary<int, string>? lineContext = null)
     {
-        var origin = ClassifyOrigin(path, lang, line, text, column, lineContext);
+        var origin = ClassifyOrigin(path, lang, line, text, column, enclosingSymbolKind, lineContext);
         var testFile = IsLikelyTestPath(path);
         var testSymbol = string.Equals(enclosingSymbolKind, "test.method", StringComparison.OrdinalIgnoreCase);
         var testFixture = (testFile || testSymbol) && IsStringLikeOrigin(origin);
@@ -98,6 +98,7 @@ internal static class SearchMatchClassifier
         int line,
         string text,
         int column,
+        string? enclosingSymbolKind,
         IReadOnlyDictionary<int, string>? lineContext)
     {
         if (text.Length == 0)
@@ -107,6 +108,13 @@ internal static class SearchMatchClassifier
         var normalizedLang = lang?.ToLowerInvariant();
         if (string.Equals(normalizedLang, "csharp", StringComparison.Ordinal))
             return ClassifyCSharp(path, text, index);
+
+        if (string.Equals(normalizedLang, "markdown", StringComparison.Ordinal))
+        {
+            return string.Equals(enclosingSymbolKind, "code", StringComparison.OrdinalIgnoreCase)
+                ? Code
+                : HelpText;
+        }
 
         if (IsInsideGitHubActionsRunBlock(path, normalizedLang, line, text, lineContext))
             return Code;

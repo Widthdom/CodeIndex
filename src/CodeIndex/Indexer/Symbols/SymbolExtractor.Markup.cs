@@ -563,13 +563,13 @@ public static partial class SymbolExtractor
         if (line.Contains("](", StringComparison.Ordinal))
         {
             foreach (Match match in MarkdownLocalAnchorLinkRegex.Matches(line))
-                AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, line, lineNumber, ref symbols);
+                AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, match.Value, lineNumber, ref symbols);
         }
 
         if (line.Contains("]:", StringComparison.Ordinal))
         {
             foreach (Match match in MarkdownLocalAnchorReferenceRegex.Matches(line))
-                AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, line, lineNumber, ref symbols);
+                AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, match.Value, lineNumber, ref symbols);
         }
 
         if (!line.Contains("][", StringComparison.Ordinal))
@@ -583,11 +583,11 @@ public static partial class SymbolExtractor
 
             referenceTargets ??= BuildMarkdownReferenceDefinitionTargets(allLines);
             if (referenceTargets.TryGetValue(label, out var target) && target.TrimStart().StartsWith("#", StringComparison.Ordinal))
-                AddMarkdownReferenceSymbol(fileId, target, line, lineNumber, ref symbols);
+                AddMarkdownReferenceSymbol(fileId, target, match.Value, lineNumber, ref symbols);
         }
     }
 
-    private static void AddMarkdownReferenceSymbol(long fileId, string target, string line, int lineNumber, ref List<SymbolRecord>? symbols)
+    private static void AddMarkdownReferenceSymbol(long fileId, string target, string signature, int lineNumber, ref List<SymbolRecord>? symbols)
     {
         var normalizedTarget = NormalizeMarkdownAnchorTarget(target);
         if (normalizedTarget.Length == 0)
@@ -601,7 +601,7 @@ public static partial class SymbolExtractor
             Line = lineNumber,
             StartLine = lineNumber,
             EndLine = lineNumber,
-            Signature = line.Trim(),
+            Signature = signature.Trim(),
         });
     }
 

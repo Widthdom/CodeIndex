@@ -945,6 +945,9 @@ public class DbContext : IDisposable
             => value is null || value < int.MinValue || value > int.MaxValue ? null : (int)value.Value;
 
         connection.CreateFunction(
+            "markdown_resolve_path",
+            (string? sourcePath, string? targetPath) => DbReader.ResolveMarkdownDependencyPath(sourcePath, targetPath));
+        connection.CreateFunction(
             "sql_leaf_name",
             (string? name) => string.IsNullOrWhiteSpace(name) ? null : SqlNameResolver.GetLeafName(name));
         connection.CreateFunction(

@@ -651,7 +651,7 @@ public partial class McpServerTests
         Assert.Null(allStructured["path"]);
         Assert.False(allStructured["excludeTests"]!.GetValue<bool>());
         Assert.Contains("src/json.cs", allPaths);
-        Assert.Contains("docs/json.md", allPaths);
+        Assert.DoesNotContain("docs/json.md", allPaths);
         Assert.Contains("tests/JsonTests.cs", allPaths);
     }
 
