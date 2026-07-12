@@ -141,6 +141,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - `HttpMcpTransportTests.cs`
   HTTP MCP transport behavior, including authentication responses, warm server reuse, concurrent requests, and request logging. Request-log assertions must validate recorded contents without assuming callback order between independently handled HTTP requests.
   Event-stream lifecycle coverage uses one harness to verify response headers, concurrent POST handling, oversized server-side closure, and client disposal in sequence, with a short test-owned keep-alive instead of the production heartbeat interval.
+  No-stream initialize coverage reuses one default harness for explicit protocol negotiation and default handshake behavior; event-stream notification delivery keeps an isolated session.
 - `GitHelperTests.cs`, `GitProcessRunnerTests.cs`
   Git-specific behavior, including worktrees, commit-based updates, direct git process runner diagnostics, and cancellation of git subprocesses. Tests that create real repositories or launch real/fake git subprocesses use `ExternalProcessFactAttribute` / `ExternalProcessTheoryAttribute` and run only on the `net8.0` test target; keep pure `.git` metadata parsing and trusted-candidate enumeration cross-target. Timeout and cancellation wall-clock assertions should stay below the fake git scripts' natural completion while leaving room for macOS CI scheduling and process-cleanup overhead. Fake git scripts that run after commit-ref validation should echo the verified commit argument for `rev-parse --verify <ref>^{commit}` so timeout tests reach the intended git command.
 - `WorkspaceMetadataEnricherTests.cs`
@@ -478,6 +479,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `HttpMcpTransportTests.cs`
   HTTP MCP transport の挙動。認証レスポンス、warm server reuse、並行リクエスト、リクエストログを含みます。リクエストログの assertion は、独立に処理される HTTP リクエスト間の callback 順序を仮定せず、記録内容を検証してください。
   event-stream lifecycle coverage は1つの harness で response header、並行POST処理、oversized server-side closure、client disposal を順に検証し、production heartbeat interval ではなく短い test-owned keep-alive を使ってください。
+  event streamなしのinitialize coverageは1つのdefault harnessでexplicit protocol negotiationとdefault handshakeを検証し、event-stream notification deliveryは独立sessionを維持してください。
 - `GitHelperTests.cs`、`GitProcessRunnerTests.cs`
   worktree や commit ベース更新、direct git process runner diagnostics、git subprocess の cancellation を含む Git まわりのテスト。実 repo を作る、または real/fake git subprocess を起動するテストは `ExternalProcessFactAttribute` / `ExternalProcessTheoryAttribute` を使い、`net8.0` test target だけで実行します。純粋な `.git` metadata parsing と trusted-candidate enumeration は cross-target のままにしてください。Timeout と cancellation の wall-clock assertion は fake git script の自然完了より短く保ちつつ、macOS CI の scheduling や process cleanup の遅れを許容する余裕を持たせます。commit-ref validation 後に使う fake git script は `rev-parse --verify <ref>^{commit}` の検証対象 commit 引数を返し、timeout テストが意図した git command まで到達するようにします。
 - `WorkspaceMetadataEnricherTests.cs`

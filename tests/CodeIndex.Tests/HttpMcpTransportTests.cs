@@ -178,34 +178,28 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_PostInitialize_ReturnsHandshakeResult()
+    public async Task HttpTransport_PostInitialize_CoversExplicitAndDefaultHandshakeResults()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
 
-        var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}""");
+        using (var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}"""))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal("application/json", response.Content.Headers.ContentType!.MediaType);
+            var body = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            Assert.Equal("2.0", root.GetProperty("jsonrpc").GetString());
+            Assert.Equal(1, root.GetProperty("id").GetInt32());
+            Assert.Equal("2025-03-26", root.GetProperty("result").GetProperty("protocolVersion").GetString());
+        }
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal("application/json", response.Content.Headers.ContentType!.MediaType);
-        var body = await response.Content.ReadAsStringAsync();
-        using var doc = JsonDocument.Parse(body);
-        var root = doc.RootElement;
-        Assert.Equal("2.0", root.GetProperty("jsonrpc").GetString());
-        Assert.Equal(1, root.GetProperty("id").GetInt32());
-        Assert.Equal("2025-03-26", root.GetProperty("result").GetProperty("protocolVersion").GetString());
-    }
-
-    [Fact]
-    public async Task HttpTransport_PostInitializeWithoutEventsStream_ReturnsOnlyHandshakeResult()
-    {
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
-
-        var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""");
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        Assert.DoesNotContain("notifications/initialized", body, StringComparison.Ordinal);
-        using var doc = JsonDocument.Parse(body);
-        Assert.Equal(1, doc.RootElement.GetProperty("id").GetInt32());
+        using var defaultResponse = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":2,"method":"initialize","params":{}}""");
+        Assert.Equal(HttpStatusCode.OK, defaultResponse.StatusCode);
+        var defaultBody = await defaultResponse.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("notifications/initialized", defaultBody, StringComparison.Ordinal);
+        using var defaultDoc = JsonDocument.Parse(defaultBody);
+        Assert.Equal(2, defaultDoc.RootElement.GetProperty("id").GetInt32());
     }
 
     [Fact]
