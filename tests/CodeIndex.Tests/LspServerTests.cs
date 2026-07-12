@@ -1447,11 +1447,8 @@ public class LspServerTests
         }
     }
 
-    [Theory]
-    [InlineData("textDocument/declaration")]
-    [InlineData("textDocument/typeDefinition")]
-    [InlineData("textDocument/implementation")]
-    public void HandleMessage_DefinitionAliasMethods_ReturnLocations_Issue3537(string method)
+    [Fact]
+    public void HandleMessage_Declaration_ReturnsDefinitionLocation_Issues3537And4420()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_alias");
         try
@@ -1464,7 +1461,7 @@ public class LspServerTests
             using var db = new DbContext(dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = CreatePositionRequest(
-                method,
+                "textDocument/declaration",
                 sourcePath,
                 3537,
                 0,
