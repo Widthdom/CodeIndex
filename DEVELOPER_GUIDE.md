@@ -1061,6 +1061,8 @@ Supported symbol kinds by language:
 | VB.NET | subs/functions, classes/modules, structures, interfaces, enums, properties, events | namespaces/imports, `AddressOf`, `Handles` | yes |
 | Zig / PowerShell / CSS-SCSS / Batch / Assembly / HTML | language-specific functions, labels, selectors, stages, Web Components, properties, imports | language-specific references where implemented | mixed |
 
+Shell and PowerShell files also expose a synthetic `<script>` function symbol spanning the file. Top-level call references use this scope as their graph container, while references inside declared functions retain the declared function container.
+
 Type aliases are indexed as `import` symbols in Rust, TypeScript, Swift, Go, F# and Scala. In F#, record declarations map to `struct`, discriminated unions map to `enum`, and constructor-style `type` declarations remain `class`.
 
 For C#, the `Graph = yes` column covers callable references, event subscriptions, type-position dependencies, XML-doc `cref`, enum-member references, generic constructor/method calls, pattern heads, and verbatim identifiers. `unused` still has a narrower C# enum-member limitation and reports degraded scopes where that matters.
@@ -3504,6 +3506,8 @@ SQL 固有の symbol extraction:
 | Lua / R / Haskell / F# | 言語別の function / type / module / signature | import / require / open など対応済み surface | mixed |
 | VB.NET | Sub/Function、Class/Module、Structure、Interface、Enum、Property、Event | Namespace、Imports、`AddressOf`、`Handles` | yes |
 | Zig / PowerShell / CSS-SCSS / Batch / Assembly / HTML | 言語別 function、label、selector、stage、Web Component、property、import | 実装済みの言語別 reference | mixed |
+
+Shell と PowerShell のファイルには、ファイル全体を覆う合成 `<script>` 関数シンボルも作成される。トップレベルの call reference はこのスコープを graph container として使い、宣言済み関数内の reference はその関数 container を維持する。
 
 Rust / TypeScript / Swift / Go / F# / Scala の type alias は `import` シンボルとして index される。F# では record は `struct`、discriminated union は `enum`、constructor 形式の `type` は `class` として扱う。
 
