@@ -287,29 +287,7 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_Healthz_ReportsResponseCleanupFailures_Issue3452()
-    {
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
-        harness.RecordResponseCleanupFailure("abort", "test abort cleanup", new IOException("abort cleanup failed"));
-        harness.RecordResponseCleanupFailure("close", "test close cleanup", new InvalidOperationException("close cleanup failed"));
-
-        using var client = CreateHttpClient();
-        using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        using var document = JsonDocument.Parse(body);
-        var root = document.RootElement;
-        Assert.Equal("degraded", root.GetProperty("status").GetString());
-        Assert.True(root.GetProperty("http_response_cleanup_degraded").GetBoolean());
-        Assert.Equal(1, root.GetProperty("http_response_abort_cleanup_failure_count").GetInt64());
-        Assert.Equal(1, root.GetProperty("http_response_close_cleanup_failure_count").GetInt64());
-        Assert.Equal("test abort cleanup:io_error:IOException", root.GetProperty("http_response_abort_cleanup_last_error").GetString());
-        Assert.Equal("test close cleanup:invalid_operation:InvalidOperationException", root.GetProperty("http_response_close_cleanup_last_error").GetString());
-    }
-
-    [Fact]
-    public async Task HttpTransport_Healthz_ReportsEventStreamDropReasons_Issue3966()
+    public async Task HttpTransport_Healthz_ReportsEventDropsThenResponseCleanupFailures_Issues3452And3966()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
         harness.SetKeepAlive(
@@ -321,16 +299,31 @@ public class HttpMcpTransportTests : IDisposable
         Assert.Equal(HttpStatusCode.OK, events.StatusCode);
         await WaitUntilAsync(() => harness.EventStreamDropCount > 0, "event stream drop counter");
 
-        using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
+        using (var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz")))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var body = await response.Content.ReadAsStringAsync();
+            using var document = JsonDocument.Parse(body);
+            var root = document.RootElement;
+            Assert.Equal("ok", root.GetProperty("status").GetString());
+            Assert.Equal(1, root.GetProperty("http_event_stream_drop_count").GetInt64());
+            Assert.Equal(1, root.GetProperty("http_event_stream_write_failure_drop_count").GetInt64());
+            Assert.Equal("write_failure:exception_message_redacted:InvalidDataException", root.GetProperty("http_event_stream_last_drop_reason").GetString());
+        }
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        using var document = JsonDocument.Parse(body);
-        var root = document.RootElement;
-        Assert.Equal("ok", root.GetProperty("status").GetString());
-        Assert.Equal(1, root.GetProperty("http_event_stream_drop_count").GetInt64());
-        Assert.Equal(1, root.GetProperty("http_event_stream_write_failure_drop_count").GetInt64());
-        Assert.Equal("write_failure:exception_message_redacted:InvalidDataException", root.GetProperty("http_event_stream_last_drop_reason").GetString());
+        harness.RecordResponseCleanupFailure("abort", "test abort cleanup", new IOException("abort cleanup failed"));
+        harness.RecordResponseCleanupFailure("close", "test close cleanup", new InvalidOperationException("close cleanup failed"));
+        using var degradedResponse = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
+        Assert.Equal(HttpStatusCode.OK, degradedResponse.StatusCode);
+        var degradedBody = await degradedResponse.Content.ReadAsStringAsync();
+        using var degradedDocument = JsonDocument.Parse(degradedBody);
+        var degradedRoot = degradedDocument.RootElement;
+        Assert.Equal("degraded", degradedRoot.GetProperty("status").GetString());
+        Assert.True(degradedRoot.GetProperty("http_response_cleanup_degraded").GetBoolean());
+        Assert.Equal(1, degradedRoot.GetProperty("http_response_abort_cleanup_failure_count").GetInt64());
+        Assert.Equal(1, degradedRoot.GetProperty("http_response_close_cleanup_failure_count").GetInt64());
+        Assert.Equal("test abort cleanup:io_error:IOException", degradedRoot.GetProperty("http_response_abort_cleanup_last_error").GetString());
+        Assert.Equal("test close cleanup:invalid_operation:InvalidOperationException", degradedRoot.GetProperty("http_response_close_cleanup_last_error").GetString());
     }
 
     [Fact]
