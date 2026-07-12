@@ -755,7 +755,7 @@ public static partial class SymbolExtractor
     private static List<SymbolRecord> ExtractXmlSymbols(long fileId, string rawText, string[] lines)
     {
         if (!XamlReferenceExtractor.IsXaml(lines))
-            return [];
+            return ExtractGenericXmlSymbols(fileId, rawText, lines);
         if (!MayContainXamlSymbolMarkers(lines))
             return [];
 

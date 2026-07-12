@@ -594,7 +594,7 @@ public static partial class SymbolExtractor
             Line = line,
             StartLine = line,
             EndLine = line,
-            Signature = lines.Length == 0 ? null : LimitStructuredDataSignature(lines[signatureIndex].Trim()),
+            Signature = lines.Length == 0 ? null : LimitStructuredDataLineSignature(lines[signatureIndex]),
             ContainerKind = parentPath == null ? null : "namespace",
             ContainerName = parentPath,
             ContainerQualifiedName = parentPath,
@@ -605,6 +605,14 @@ public static partial class SymbolExtractor
         signature.Length <= StructuredDataMaxSignatureLength
             ? signature
             : signature[..StructuredDataMaxSignatureLength];
+
+    private static string LimitStructuredDataLineSignature(string line)
+    {
+        var trimmed = line.AsSpan().Trim();
+        if (trimmed.Length > StructuredDataMaxSignatureLength)
+            trimmed = trimmed[..StructuredDataMaxSignatureLength];
+        return trimmed.ToString();
+    }
 
     private static Dictionary<string, Queue<int>> BuildJsonPropertyLineQueues(string content)
     {
