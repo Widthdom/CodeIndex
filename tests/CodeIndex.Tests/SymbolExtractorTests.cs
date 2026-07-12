@@ -723,7 +723,7 @@ public partial class SymbolExtractorTests
 
         var symbols = SymbolExtractor.Extract(1, "json", content);
 
-        Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == "scripts" && symbol.Line == 2);
+        Assert.Contains(symbols, symbol => symbol.Kind == "object" && symbol.Name == "scripts" && symbol.Line == 2);
         Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "scripts.build" && symbol.ContainerName == "scripts");
         Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "scripts.test" && symbol.ContainerName == "scripts");
         Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "dependencies.xunit" && symbol.ContainerName == "dependencies");
