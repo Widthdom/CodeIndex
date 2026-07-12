@@ -1282,7 +1282,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunCallers_ExactJson_MixedRepoStaleSqlGraphContractDoesNotDegradePureCSharpQuery()
+    public void RunCallers_MixedRepoPureCSharpResultsAndCountShareFixture()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callers_mixed_sql_graph_contract_results");
         try
@@ -1302,35 +1302,20 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("N", json.GetProperty("callee_name").GetString());
             Assert.False(json.TryGetProperty("sql_graph_contract_ready", out _));
             Assert.False(json.TryGetProperty("sql_graph_contract_degraded_reason", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunCallers_ExactCountJson_MixedRepoStaleSqlGraphContractDoesNotDegradePureCSharpQuery()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callers_mixed_sql_graph_contract_count_pure_csharp");
-        try
-        {
-            var dbPath = CreateMixedSqlGraphContractFixtureDb(projectRoot);
-            DowngradeSqlGraphContractRows(dbPath);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
                 ["N", "--db", dbPath, "--json", "--exact", "--count"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+            using var countDocument = ParseJsonOutput(countStdout);
+            var countJson = countDocument.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.Equal(1, json.GetProperty("files").GetInt32());
-            Assert.False(json.TryGetProperty("sql_graph_contract_ready", out _));
-            Assert.False(json.TryGetProperty("sql_graph_contract_degraded_reason", out _));
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            Assert.Equal(1, countJson.GetProperty("count").GetInt32());
+            Assert.Equal(1, countJson.GetProperty("files").GetInt32());
+            Assert.False(countJson.TryGetProperty("sql_graph_contract_ready", out _));
+            Assert.False(countJson.TryGetProperty("sql_graph_contract_degraded_reason", out _));
         }
         finally
         {
