@@ -9,16 +9,8 @@ namespace CodeIndex.Tests;
 
 public partial class QueryCommandRunnerTests
 {
-    [Theory]
-    [InlineData(3, "Current", "property", 3, 3)]
-    [InlineData(4, "Run", "function", 4, 7)]
-    [InlineData(6, "Run", "function", 4, 7)]
-    public void RunInspect_PathLineJson_ReturnsExactOrEnclosingSymbol_Issue3915(
-        int line,
-        string expectedName,
-        string expectedKind,
-        int expectedStartLine,
-        int expectedEndLine)
+    [Fact]
+    public void RunInspect_PathLineJson_ReturnsExactAndEnclosingSymbols_Issue3915()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_path_line_symbol");
         try
@@ -40,23 +32,33 @@ public partial class QueryCommandRunnerTests
                 }
                 """);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["--path", "src/InspectTarget.cs", "--line", line.ToString(CultureInfo.InvariantCulture), "--db", dbPath, "--json", "--limit", "3"],
-                _jsonOptions));
+            var cases = new[]
+            {
+                (Line: 3, Name: "Current", Kind: "property", StartLine: 3, EndLine: 3),
+                (Line: 4, Name: "Run", Kind: "function", StartLine: 4, EndLine: 7),
+                (Line: 6, Name: "Run", Kind: "function", StartLine: 4, EndLine: 7),
+            };
 
-            using var document = ParseJsonOutput(stdout);
-            var root = document.RootElement;
-            var definition = root.GetProperty("definitions").EnumerateArray().First();
+            foreach (var testCase in cases)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                    ["--path", "src/InspectTarget.cs", "--line", testCase.Line.ToString(CultureInfo.InvariantCulture), "--db", dbPath, "--json", "--limit", "3"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal($"src/InspectTarget.cs:{line.ToString(CultureInfo.InvariantCulture)}", root.GetProperty("query").GetString());
-            Assert.Equal(expectedName, definition.GetProperty("name").GetString());
-            Assert.Equal(expectedKind, definition.GetProperty("kind").GetString());
-            Assert.Equal(expectedStartLine, definition.GetProperty("start_line").GetInt32());
-            Assert.Equal(expectedEndLine, definition.GetProperty("end_line").GetInt32());
-            Assert.NotEmpty(root.GetProperty("nearby_symbols").EnumerateArray());
-            Assert.Equal(line, root.GetProperty("source_excerpt").GetProperty("requested_start_line").GetInt32());
+                using var document = ParseJsonOutput(stdout);
+                var root = document.RootElement;
+                var definition = root.GetProperty("definitions").EnumerateArray().First();
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal($"src/InspectTarget.cs:{testCase.Line.ToString(CultureInfo.InvariantCulture)}", root.GetProperty("query").GetString());
+                Assert.Equal(testCase.Name, definition.GetProperty("name").GetString());
+                Assert.Equal(testCase.Kind, definition.GetProperty("kind").GetString());
+                Assert.Equal(testCase.StartLine, definition.GetProperty("start_line").GetInt32());
+                Assert.Equal(testCase.EndLine, definition.GetProperty("end_line").GetInt32());
+                Assert.NotEmpty(root.GetProperty("nearby_symbols").EnumerateArray());
+                Assert.Equal(testCase.Line, root.GetProperty("source_excerpt").GetProperty("requested_start_line").GetInt32());
+            }
         }
         finally
         {
