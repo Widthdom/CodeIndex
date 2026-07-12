@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# @generated from canonical sources in install_modules/; DO NOT EDIT install.sh directly.
 # install.sh — One-liner installer for cdidx (CodeIndex)
 # cdidxワンライナーインストーラー
 #
