@@ -31,6 +31,26 @@ public class SymbolExtractorIssue4415Tests
         Assert.Equal(4, Assert.Single(symbols, symbol => symbol.Name == "items[1].tags[0]").Line);
     }
 
+    [Fact]
+    public void Extract_JsonArrays_RepeatedEarlierValuesDoNotStealElementLines_Issue4415()
+    {
+        const string content = """
+            {
+              "prior": 1,
+              "priorObject": { "same": true },
+              "items": [
+                1,
+                { "same": true }
+              ]
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "json", content);
+
+        Assert.Equal(5, Assert.Single(symbols, symbol => symbol.Name == "items[0]").Line);
+        Assert.Equal(6, Assert.Single(symbols, symbol => symbol.Name == "items[1]").Line);
+    }
+
     private static void AssertSymbol(
         IReadOnlyList<CodeIndex.Models.SymbolRecord> symbols,
         string kind,

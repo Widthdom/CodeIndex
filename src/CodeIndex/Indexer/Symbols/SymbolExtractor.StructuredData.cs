@@ -136,11 +136,11 @@ public static partial class SymbolExtractor
             var name = string.IsNullOrEmpty(parentPath)
                 ? propertyName
                 : parentPath + "." + propertyName;
-            var line = propertyLines == null
-                ? 1
-                : TryDequeueJsonPropertyLine(propertyLines, propertyName, out var mappedLine)
+            var propertyOffset = FindJsonPropertyOffset(content, propertyName, ref searchOffset);
+            var line = propertyLines != null
+                && TryDequeueJsonPropertyLine(propertyLines, propertyName, out var mappedLine)
                     ? mappedLine
-                    : FindLineNumberForOffset(lineStarts ??= BuildLineStarts(lines), FindJsonPropertyOffset(content, propertyName, ref searchOffset));
+                    : FindLineNumberForOffset(lineStarts ??= BuildLineStarts(lines), propertyOffset);
 
             var kind = property.Value.ValueKind switch
             {
