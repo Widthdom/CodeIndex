@@ -1197,6 +1197,14 @@ public static partial class SymbolExtractor
                         if (lang == "python" && pattern.Kind is "function" or "class")
                             signature = BuildPythonLogicalHeaderSignature(lines, i, absoluteStartColumn);
 
+                        if (kind == "function"
+                            && lang == "csharp"
+                            && pattern.BodyStyle == BodyStyle.None
+                            && IsCSharpConstOrStaticReadonlyField(signature))
+                        {
+                            kind = "field";
+                        }
+
                         List<string>? fortranProcedureNames = null;
                         if (lang == "fortran"
                             && pattern.Kind == "function"

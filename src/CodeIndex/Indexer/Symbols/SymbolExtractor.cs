@@ -1061,11 +1061,11 @@ public static partial class SymbolExtractor
             // Modifier order is free: `static` and `readonly` may appear in any order, and `new`
             // (member hiding) may appear anywhere in the modifier sequence. Visibility is also
             // accepted anywhere, not just at the front, so legacy orderings like
-            // `readonly public static` / `static public readonly` still classify as kind `function`
+            // `readonly public static` / `static public readonly` still classify as fields
             // instead of falling through to the plain-field (kind `property`) row. Closes #355.
             // static/readonly の順序は自由で、`new`（メンバー隠蔽）も任意位置に置ける。visibility も
             // 先頭以外の位置に現れることを許容し、`readonly public static` や `static public readonly`
-            // のような旧来の並びでも kind `function` で取り扱う。通常フィールド（kind `property`）の
+            // のような旧来の並びでも kind `field` で取り扱う。通常フィールド（kind `property`）の
             // 正規表現に流れ落ちないようにする。Closes #355.
             new("function",  new Regex(
                 $@"^\s*"

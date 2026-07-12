@@ -79,6 +79,12 @@ public static partial class SymbolExtractor
     private static readonly Regex CSharpTestMethodAttributeRegex = new(
         @"(?:^|,)\s*(?:(?:\w+\.)*)?(?:(?:\w*Fact|\w*Theory)|Test|TestCase|TestCaseSource|TestMethod|DataTestMethod)(?:Attribute)?\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpConstOrStaticReadonlyFieldRegex = new(
+        @"(?:\bconst\b|\bstatic\b[^=;]*\breadonly\b|\breadonly\b[^=;]*\bstatic\b)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static bool IsCSharpConstOrStaticReadonlyField(string signature)
+        => CSharpConstOrStaticReadonlyFieldRegex.IsMatch(signature);
     // `delegate` is a non-type keyword only when it is NOT followed by `*` — `delegate*<...>` is a valid return type.
     // `delegate` は `*` を伴わないときだけ非型キーワード扱い。`delegate*<...>` は戻り値型として有効。
     private const string CSharpNonTypeKeywordPattern = @"(?:(?:public|private|protected|internal|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|required|ref)\b|delegate\b(?!\s*\*))";

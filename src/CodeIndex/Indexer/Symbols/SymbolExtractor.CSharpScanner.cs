@@ -983,7 +983,7 @@ public static partial class SymbolExtractor
 
     private static bool CanRestartCSharpSameLineSiblingScan(string kind)
     {
-        return kind is "function" or "property" or "event" or "delegate" or "enum";
+        return kind is "function" or "property" or "field" or "event" or "delegate" or "enum";
     }
 
     private static int FindCSharpSameLineBraceEndColumn(string line, int startColumn)
