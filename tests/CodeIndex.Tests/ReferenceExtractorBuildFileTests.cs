@@ -92,7 +92,6 @@ public partial class ReferenceExtractorTests
             .ShouldContain("call", "build", containerName: "all")
             .ShouldContain("call", "build", containerName: "deploy")
             .ShouldContain("call", "all", containerName: "install")
-            .ShouldNotContainSymbol("metadata")
             .ShouldNotContainSymbol("OPTIONAL");
     }
 

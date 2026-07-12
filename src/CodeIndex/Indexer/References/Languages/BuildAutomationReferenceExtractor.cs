@@ -185,7 +185,7 @@ internal static class BuildAutomationReferenceExtractor
         var targetName = targetMatch.Groups["name"].Value;
         var targetContainer = new SymbolRecord
         {
-            Kind = targetName == ".PHONY" ? "metadata" : "function",
+            Kind = targetName == ".PHONY" ? "rule" : "function",
             Name = targetName,
         };
         var deps = targetMatch.Groups["deps"];

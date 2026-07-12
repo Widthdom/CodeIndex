@@ -11864,7 +11864,7 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "clean");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "install");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "%.o");
-        Assert.Contains(symbols, s => s.Kind == "metadata" && s.Name == ".PHONY");
+        Assert.Contains(symbols, s => s.Kind == "rule" && s.Name == ".PHONY");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == ".PHONY");
 
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "CC");
