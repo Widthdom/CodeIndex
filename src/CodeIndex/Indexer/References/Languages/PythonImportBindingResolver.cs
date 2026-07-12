@@ -4,7 +4,7 @@ namespace CodeIndex.Indexer;
 
 internal static class PythonImportBindingResolver
 {
-    public static bool ResolvesDependency(string? sourcePath, string? targetPath, string? referenceName, string? context, long? columnNumber, string? signature)
+    public static bool ResolvesDependency(string? sourcePath, string? targetPath, string? referenceName, string? referenceKind, string? context, long? columnNumber, string? signature)
     {
         if (string.IsNullOrWhiteSpace(sourcePath) || string.IsNullOrWhiteSpace(targetPath)
             || string.IsNullOrWhiteSpace(referenceName) || string.IsNullOrWhiteSpace(signature))
@@ -15,7 +15,7 @@ internal static class PythonImportBindingResolver
         foreach (var binding in Parse(signature, sourcePath))
         {
             if (referenceName == binding.LocalName
-                || referenceName == binding.ImportedName
+                || (referenceKind == "instantiate" && referenceName == binding.ImportedName)
                 || referenceName.StartsWith(binding.LocalName + ".", StringComparison.Ordinal))
             {
                 if (ModuleMatches(targetModule, binding.Module))

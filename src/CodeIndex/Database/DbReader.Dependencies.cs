@@ -289,6 +289,7 @@ public partial class DbReader
                        r.container_name,
                        r.line,
                        r.column_number,
+                       r.reference_kind AS raw_reference_kind,
                        " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references r
                 JOIN files src ON r.file_id = src.id" + referenceLineJoin + @"
@@ -327,7 +328,7 @@ public partial class DbReader
         if (excludeTests)
             sql += $" AND NOT {DependencyTestPathCondition($"{sourceFilterAlias}.path")}";
         sql += @"
-                GROUP BY src.id, src.path, src.lang, r.symbol_name, " + contextSql + @", r.container_name, r.line, r.column_number, logical_reference_kind
+                GROUP BY src.id, src.path, src.lang, r.symbol_name, " + contextSql + @", r.container_name, r.line, r.column_number, r.reference_kind, logical_reference_kind
             ),
             logical_references AS (
                 SELECT source_file_id, source_path, source_lang,
@@ -335,7 +336,7 @@ public partial class DbReader
                        " + BuildLogicalReferenceSegmentCountExpr("source_lang", "symbol_name", "context", "container_name", "column_number") + @" AS symbol_segment_count,
                        " + BuildLogicalReferenceLeafFallbackAllowedExpr("source_lang", "symbol_name", "context", "container_name", "column_number") + @" AS allow_leaf_fallback,
                        symbol_name AS raw_symbol_name,
-                       context, line, column_number, logical_reference_kind,
+                       context, line, column_number, raw_reference_kind, logical_reference_kind,
                        0 AS is_attribute_alias,
                        CASE WHEN logical_reference_kind IN ('attribute', 'annotation') THEN 1 ELSE 0 END AS is_metadata
                 FROM logical_references_primary
@@ -355,7 +356,7 @@ public partial class DbReader
                        1 AS symbol_segment_count,
                        0 AS allow_leaf_fallback,
                        symbol_name || 'Attribute' AS raw_symbol_name,
-                       context, line, column_number, logical_reference_kind,
+                       context, line, column_number, raw_reference_kind, logical_reference_kind,
                        1 AS is_attribute_alias,
                        1 AS is_metadata
                 FROM logical_references_primary
@@ -381,12 +382,13 @@ public partial class DbReader
                        raw_symbol_name,
                        context,
                        column_number,
+                       raw_reference_kind,
                        logical_reference_kind,
                        is_attribute_alias,
                        is_metadata,
                        COUNT(*) AS ref_count
                 FROM logical_references
-                GROUP BY source_file_id, source_path, source_lang, symbol_name, symbol_segment_count, allow_leaf_fallback, raw_symbol_name, context, column_number, logical_reference_kind, is_attribute_alias, is_metadata
+                GROUP BY source_file_id, source_path, source_lang, symbol_name, symbol_segment_count, allow_leaf_fallback, raw_symbol_name, context, column_number, raw_reference_kind, logical_reference_kind, is_attribute_alias, is_metadata
             ),
             target_files AS (
                 -- Collapse per-symbol rows to one per (target_path, target_lang, symbol_name)
@@ -568,7 +570,7 @@ public partial class DbReader
                         FROM symbols py_import
                         WHERE py_import.file_id = snc.source_file_id
                           AND py_import.kind = 'import'
-                          AND python_import_resolves(snc.source_path, tf.target_path, snc.symbol_name, snc.context, snc.column_number, py_import.signature)
+                          AND python_import_resolves(snc.source_path, tf.target_path, snc.symbol_name, snc.raw_reference_kind, snc.context, snc.column_number, py_import.signature)
                   ))
                 UNION ALL
                 SELECT snc.source_path,

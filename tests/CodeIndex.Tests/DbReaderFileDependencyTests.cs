@@ -29,11 +29,13 @@ public partial class DbReaderTests
     public void GetFileDependencies_PythonResolvesAliasesRelativeImportsAndPackageInitializers_Issue4412()
     {
         Assert.True(PythonImportBindingResolver.ResolvesDependency(
-            "pkg/caller.py", "pkg/relative.py", "Relative", null, null, "from .relative import Relative"));
+            "pkg/caller.py", "pkg/relative.py", "Relative", "call", null, null, "from .relative import Relative"));
         InsertIndexedFile("pkg/models.py", "python", "class User:\n    pass\n");
         InsertIndexedFile("pkg/tools/__init__.py", "python", "class Tool:\n    pass\n");
         InsertIndexedFile("pkg/caller.py", "python",
             "import pkg.models as m\nfrom pkg.models import User as Account\nfrom pkg.tools import Tool\n\ndef run():\n    m.User()\n    Account()\n    Tool()\n");
+        InsertIndexedFile("pkg/invalid_alias_caller.py", "python",
+            "from pkg.models import User as Account\n\ndef run():\n    User()\n");
 
         var dependencies = _reader.GetFileDependencies(limit: 20, lang: "python")
             .Where(edge => edge.SourcePath == "pkg/caller.py")
@@ -43,6 +45,8 @@ public partial class DbReaderTests
         Assert.Contains("pkg/models.py", dependencies);
         Assert.Contains("pkg/tools/__init__.py", dependencies);
         Assert.Equal(2, dependencies.Count);
+        Assert.DoesNotContain(_reader.GetFileDependencies(limit: 20, lang: "python"),
+            edge => edge.SourcePath == "pkg/invalid_alias_caller.py" && edge.TargetPath == "pkg/models.py");
     }
 
     [Fact]

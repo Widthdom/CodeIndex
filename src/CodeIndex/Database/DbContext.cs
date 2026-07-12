@@ -949,8 +949,8 @@ public class DbContext : IDisposable
             (string? sourcePath, string? targetPath) => DbReader.ResolveMarkdownDependencyPath(sourcePath, targetPath));
         connection.CreateFunction(
             "python_import_resolves",
-            (string? sourcePath, string? targetPath, string? referenceName, string? context, long? columnNumber, string? signature) =>
-                PythonImportBindingResolver.ResolvesDependency(sourcePath, targetPath, referenceName, context, columnNumber, signature));
+            (string? sourcePath, string? targetPath, string? referenceName, string? referenceKind, string? context, long? columnNumber, string? signature) =>
+                PythonImportBindingResolver.ResolvesDependency(sourcePath, targetPath, referenceName, referenceKind, context, columnNumber, signature));
         connection.CreateFunction(
             "python_import_target_name",
             (string? sourcePath, string? referenceName, string? context, long? columnNumber, string? signature) =>
