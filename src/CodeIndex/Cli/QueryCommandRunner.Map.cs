@@ -30,6 +30,10 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("map", options))
             return CommandExitCodes.UsageError;
+        if (options.OpenIssuesPath != null && options.OutputFormat != OutputFormatIssueDrafts)
+            return CommandErrorWriter.Write("--open-issues can only be used with `cdidx map --format issue-drafts`.", CommandExitCodes.UsageError, usage: ConsoleUi.GetUsageLine("map"));
+        if (options.OpenIssuesRepository != null && !IssueDuplicatePreflight.IsGitHubOpenIssuesSource(options.OpenIssuesPath))
+            return CommandErrorWriter.Write("--repo can only be used with `--open-issues github`.", CommandExitCodes.UsageError, usage: ConsoleUi.GetUsageLine("map"));
         if (options.MapSections?.Contains("list", StringComparer.Ordinal) == true)
             return WriteRepoMapSectionsList(options, jsonOptions);
         if (options.MapSummaryOnly && options.MapSections != null)
@@ -63,7 +67,10 @@ public static partial class QueryCommandRunner
                 || options.ExcludeTests || options.Lang != null;
             if (options.OutputFormat == OutputFormatIssueDrafts)
             {
-                var issueDraftsJson = BuildRepoMapIssueDraftsPayload(map, options, jsonOptions);
+                var preflightResult = IssueDuplicatePreflight.TryLoadAsync(options.OpenIssuesPath, options.OpenIssuesRepository, issueState: options.IssueState).GetAwaiter().GetResult();
+                if (!preflightResult.Loaded)
+                    return CommandErrorWriter.Write(preflightResult.Error!, CommandExitCodes.UsageError, usage: ConsoleUi.GetUsageLine("map"));
+                var issueDraftsJson = BuildRepoMapIssueDraftsPayload(map, options, jsonOptions, preflightResult.Preflight);
                 var issueDraftsExitCode = WriteJsonObjectWithOptionalByteLimit(
                     issueDraftsJson,
                     options,
@@ -298,11 +305,11 @@ public static partial class QueryCommandRunner
             AddReplayValueOption(args, "--max-json-bytes", options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture));
     }
 
-    private static string BuildRepoMapIssueDraftsPayload(RepoMapResult map, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    private static string BuildRepoMapIssueDraftsPayload(RepoMapResult map, QueryCommandOptions options, JsonSerializerOptions jsonOptions, IssueDuplicatePreflight preflight)
     {
         var candidates = map.LargestFiles
             .Where(IsRepoMapOversizedFileCandidate)
-            .Select(BuildRepoMapIssueDraftJson)
+            .Select(file => BuildRepoMapIssueDraftJson(file, preflight))
             .ToArray();
         var summaryOnly = options.MapSummaryOnly || options.SummaryOnly;
         var sourceLimit = options.Compact ? GetCompactSourceLimit(GetCompactSectionLimit(options)) : options.Limit;
@@ -334,6 +341,12 @@ public static partial class QueryCommandRunner
                 },
             },
             ["query_context"] = BuildQueryContextJson(options, jsonOptions),
+            ["duplicate_preflight"] = new JsonObject
+            {
+                ["checked"] = preflight.Checked,
+                ["source"] = preflight.Source,
+                ["open_issue_count"] = preflight.OpenIssueCount,
+            },
         };
         if (summaryOnly)
         {
@@ -389,7 +402,7 @@ public static partial class QueryCommandRunner
     private static bool IsRepoMapOversizedFileCandidate(RepoFileSummaryResult file)
         => file.Lines >= MapIssueDraftLineThreshold || file.Size >= MapIssueDraftByteThreshold;
 
-    private static JsonObject BuildRepoMapIssueDraftJson(RepoFileSummaryResult file)
+    private static JsonObject BuildRepoMapIssueDraftJson(RepoFileSummaryResult file, IssueDuplicatePreflight preflight)
     {
         var reasonTags = new JsonArray();
         if (file.Lines >= MapIssueDraftLineThreshold)
@@ -397,12 +410,16 @@ public static partial class QueryCommandRunner
         if (file.Size >= MapIssueDraftByteThreshold)
             reasonTags.Add("byte_threshold_exceeded");
 
+        var title = $"Split oversized file: {file.Path}";
+        var labels = new[] { "maintenance", "refactor" };
+        var matches = preflight.FindMatches(title, labels, [file.Path], null);
         return new JsonObject
         {
             ["kind"] = "oversized_file",
-            ["title"] = $"Split oversized file: {file.Path}",
+            ["title"] = title,
             ["body"] = BuildRepoMapIssueDraftBody(file, reasonTags),
             ["labels"] = new JsonArray("maintenance", "refactor"),
+            ["duplicate_preflight"] = JsonSerializer.SerializeToNode(new SuggestionIssueDraftDuplicatePreflightJsonResult(preflight.Checked, matches.Count, matches)),
             ["candidate"] = new JsonObject
             {
                 ["path"] = file.Path,
