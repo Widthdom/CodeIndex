@@ -47,6 +47,19 @@ public class SymbolExtractorIssue4458Tests
         AssertSymbol(symbols, "property", "[1].ok.value", 2, "[1].ok");
     }
 
+    [Fact]
+    public void Extract_JsonLines_TotalFileMayExceedSingleDocumentLimit_Issue4458()
+    {
+        var blankLineCount = (SymbolExtractor.StructuredDataMaxJsonParseChars / 1024) + 1;
+        var content = string.Join('\n', Enumerable.Repeat(new string(' ', 1024), blankLineCount))
+            + "\n{\"ok\":true}";
+
+        var symbols = SymbolExtractor.Extract(1, "jsonl", content);
+
+        AssertSymbol(symbols, "record", "[0]", blankLineCount + 1, null);
+        AssertSymbol(symbols, "property", "[0].ok", blankLineCount + 1, "[0]");
+    }
+
     private static void AssertSymbol(
         IReadOnlyList<CodeIndex.Models.SymbolRecord> symbols,
         string kind,

@@ -324,9 +324,6 @@ public static partial class SymbolExtractor
 
     private static List<SymbolRecord> ExtractJsonLinesSymbols(long fileId, string content, string[] lines)
     {
-        if (content.Length > StructuredDataMaxJsonParseChars)
-            return [];
-
         var symbols = CreateSymbolListForLines(lines.Length);
         var recordIndex = 0;
         var truncated = false;
