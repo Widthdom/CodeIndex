@@ -16,6 +16,38 @@ internal static class SuggestionsCommandRunner
     internal const int MaxSuggestionIssueDraftBodyLength = 24 * 1024;
     private const string SuggestionOutputTruncationMarker = "\n[truncated]";
 
+    private static string AddHelp => $$"""
+        Usage: cdidx suggestions add <description> [options]
+               cdidx suggestions add --description <text> [options]
+
+        Required:
+          <description> or --description <text>   Local audit finding to store (choose one form)
+
+        Options:
+          --category <value>       Category; default: other
+          --language <lang>        Optional affected language (--lang is accepted as a hidden alias)
+          --context <text>         Optional supporting context
+          --title <text>           Optional sampled title
+          --evidence-path <path>   Optional evidence path; repeatable
+          --agent <name>           Creator name; default: cdidx-cli
+          --db <path>              Suggestion database path
+          --json                   Emit a structured add result
+
+        Category values:
+          {{string.Join(", ", SuggestionRecord.ValidCategories)}}
+
+        Limits and deduplication:
+          Text fields are capped at {{MaxSuggestionExportTextFieldLength}} characters when exported.
+          Records are deduplicated by normalized category, language, and description; adding a duplicate succeeds without creating another record.
+          --duplicate-confidence and --duplicate-threshold apply only to `suggestions export --format issue-drafts`.
+
+        Examples:
+          cdidx suggestions add "Missing record extraction" --category symbol_extraction --language csharp
+          cdidx suggestions add --description "Improve macro handling" --category language_support --evidence-path src/parser.rs --json
+        """;
+
+    internal static void PrintAddHelp() => Console.WriteLine(AddHelp);
+
     public static int Run(
         string[] args,
         JsonSerializerOptions jsonOptions,
@@ -25,6 +57,12 @@ internal static class SuggestionsCommandRunner
         {
             Console.WriteLine(Usage);
             return args.Length == 0 ? CommandExitCodes.UsageError : CommandExitCodes.Success;
+        }
+
+        if (args[0] == "add" && args.Length > 1 && args[1] is "--help" or "-h")
+        {
+            PrintAddHelp();
+            return CommandExitCodes.Success;
         }
 
         var verb = args[0].StartsWith("-", StringComparison.Ordinal) ? "list" : args[0];
@@ -413,7 +451,7 @@ internal static class SuggestionsCommandRunner
         record.ClientVersion,
         record.McpClientName,
         record.McpClientVersion,
-        FormatTitle(record.Description, 120),
+        FormatTitle(record.SampledTitle ?? record.Description, 120),
         IsSubmitted(record),
         record.UpstreamUrl,
         record.UpstreamIssueNumber,

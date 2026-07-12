@@ -9186,6 +9186,40 @@ jobs:
     }
 
     [Fact]
+    public void RefocusSearchResultAfterDedup_RebuildsSnippetAroundRemainingMatch_Issue4429()
+    {
+        var content = string.Join('\n', Enumerable.Range(141, 80).Select(line => line is 149 or 164 ? "var Skip = true;" : $"// filler {line}"));
+        var result = new SearchResult
+        {
+            Path = "tests/PerformanceTests.cs",
+            Lang = "csharp",
+            StartLine = 141,
+            EndLine = 220,
+            Content = content,
+        };
+        var options = new QueryCommandOptions { Query = "Skip =", SnippetLines = 8 };
+        var previousCompact = SearchSnippetFormatter.ToCompactResult(result, options.Query, maxLines: 8, caseSensitive: true);
+        previousCompact.ResultKinds = ["code", "identifier"];
+        previousCompact.RiskEvidence = ["dedup evidence"];
+
+        var compact = QueryCommandRunner.RefocusSearchResultAfterDedup(
+            result,
+            previousCompact,
+            SearchSnippetFormatter.PrepareQueryContext(options.Query),
+            options,
+            exact: true,
+            rawFts: false,
+            keptLines: [164]);
+
+        Assert.Equal([164], compact.MatchLines);
+        Assert.Equal(164, compact.FocusLine);
+        Assert.Contains(compact.Highlights, highlight => highlight.Line == 164);
+        Assert.InRange(164, compact.SnippetStartLine, compact.SnippetEndLine);
+        Assert.Equal(["code", "identifier"], compact.ResultKinds);
+        Assert.Equal(["dedup evidence"], compact.RiskEvidence);
+    }
+
+    [Fact]
     public void RunSearch_QuotedPhrasePreservesFtsPhraseSemantics_Issue2999()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_quoted_phrase_2999");

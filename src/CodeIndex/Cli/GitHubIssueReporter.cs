@@ -679,7 +679,7 @@ internal static class GitHubIssueReporter
 
         var scrubbedForTitle = SanitizeIssueTitleText(ScrubInlineCode(description));
         var maxDescriptionLength = MaxGitHubIssueTitleLength - prefix.Length;
-        var shortDesc = TruncateWithEllipsis(scrubbedForTitle, Math.Min(63, maxDescriptionLength));
+        var shortDesc = TruncateWithEllipsis(scrubbedForTitle, maxDescriptionLength);
         var title = prefix + shortDesc;
         return title.Length <= MaxGitHubIssueTitleLength
             ? title
@@ -688,7 +688,7 @@ internal static class GitHubIssueReporter
 
     internal static string[] BuildIssueLabels(SuggestionRecord record)
     {
-        return record.Category is "crash_report" or "unexpected_error"
+        return record.Category is "crash_report" or "unexpected_error" or "bug"
             ? ["bug"]
             : ["enhancement"];
     }

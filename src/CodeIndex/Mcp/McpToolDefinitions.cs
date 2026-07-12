@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Models;
 
 namespace CodeIndex.Mcp;
 
@@ -580,8 +581,8 @@ public partial class McpServer
                         ["category"] = new JsonObject
                         {
                             ["type"] = "string",
-                            ["description"] = "Suggestion category: symbol_extraction, reference_extraction, search_ranking, language_support, output_format, crash_report, unexpected_error, or other",
-                            ["enum"] = new JsonArray { "symbol_extraction", "reference_extraction", "search_ranking", "language_support", "output_format", "crash_report", "unexpected_error", "other" }
+                            ["description"] = "Suggestion category: symbol_extraction, reference_extraction, search_ranking, language_support, output_format, crash_report, unexpected_error, security, performance, bug, cleanup, documentation, feature_request, or other",
+                            ["enum"] = new JsonArray(SuggestionRecord.ValidCategories.Select(category => (JsonNode?)category).ToArray())
                         },
                         ["language"] = new JsonObject { ["type"] = "string", ["description"] = "Programming language this applies to (optional)" },
                         ["description"] = new JsonObject { ["type"] = "string", ["description"] = "What gap or improvement you observed, or what error occurred (NOT source code)" },
