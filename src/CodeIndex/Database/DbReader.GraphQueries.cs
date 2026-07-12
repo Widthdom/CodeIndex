@@ -77,8 +77,7 @@ public partial class DbReader
                        r.reference_kind AS raw_reference_kind,
                        COUNT(*) AS reference_count,
                        " + ReferenceWeightedScoreSql("r.reference_kind") + @" AS weighted_score,
-                       r.line,
-                       r.column_number,
+                       (CAST(r.line AS INTEGER) * 4294967296 + r.column_number) AS location_key,
                        MAX(" + selfReferenceSql + @") AS is_self_reference,
                        MAX(" + mutualRecursionSql + @") AS is_mutual_recursion
                 FROM symbol_references r
@@ -88,7 +87,10 @@ public partial class DbReader
                   AND " + supportedLangPredicate
             : @"
             SELECT f.path, f.lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, r.symbol_name,
-                   r.reference_kind, MIN(r.line) AS first_line, MIN(r.column_number) AS first_column, COUNT(*) AS reference_count,
+                   r.reference_kind,
+                   (MIN(CAST(r.line AS INTEGER) * 4294967296 + r.column_number) / 4294967296) AS first_line,
+                   (MIN(CAST(r.line AS INTEGER) * 4294967296 + r.column_number) % 4294967296) AS first_column,
+                   COUNT(*) AS reference_count,
                    GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds,
                    r.reference_kind || ':' || COUNT(*) AS reference_kind_counts,
                    " + ReferenceWeightedScoreSql("r.reference_kind") + @" AS weighted_score,
@@ -170,7 +172,9 @@ public partial class DbReader
             )
             SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, symbol_name,
                    " + (rawKinds ? GetGroupedCallerReferenceKindSql("r.reference_kind") : "MIN(r.reference_kind)") + @" AS reference_kind,
-                   MIN(line) AS first_line, MIN(column_number) AS first_column, SUM(r.reference_count) AS reference_count,
+                   (MIN(location_key) / 4294967296) AS first_line,
+                   (MIN(location_key) % 4294967296) AS first_column,
+                   SUM(r.reference_count) AS reference_count,
                    GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds,
                    GROUP_CONCAT(r.raw_reference_kind || ':' || r.reference_count) AS reference_kind_counts,
                    SUM(r.weighted_score) AS weighted_score,
