@@ -18,6 +18,10 @@ internal static class BuildAutomationReferenceExtractor
         @"^(?<name>[A-Za-z_][\w.-]*)(?:\s+[^:#\r\n]+)?\s*:(?![:=])(?<deps>.*)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private static readonly Regex MakeTargetRegex = new(
+        @"^(?<name>[\w.%-]+)\s*:(?![=:])(?<deps>.*)$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     private static readonly Regex MsBuildElementRegex = new(
         @"<\s*(?<element>[A-Za-z_][\w.-]*)(?<attrs>[^<>]*)>",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -66,6 +70,9 @@ internal static class BuildAutomationReferenceExtractor
                 break;
             case "justfile":
                 EmitJustfileReferences(preparedLine, context, lineNumber, references, seen, fileId, container);
+                break;
+            case "makefile":
+                EmitMakefileReferences(preparedLine, context, lineNumber, references, seen, fileId, container);
                 break;
             case "msbuild":
                 EmitMsBuildReferences(preparedLine, context, lineNumber, references, seen, fileId, container);
@@ -156,6 +163,38 @@ internal static class BuildAutomationReferenceExtractor
                 continue;
 
             AddReference(references, seen, fileId, token, "call", context, lineNumber, recipeContainer, "justfile");
+        }
+    }
+
+    private static void EmitMakefileReferences(
+        string line,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        SymbolRecord? container)
+    {
+        if (line.IndexOf(':') < 0)
+            return;
+
+        var targetMatch = MakeTargetRegex.Match(line);
+        if (!targetMatch.Success)
+            return;
+
+        var targetName = targetMatch.Groups["name"].Value;
+        var targetContainer = new SymbolRecord
+        {
+            Kind = targetName == ".PHONY" ? "metadata" : "function",
+            Name = targetName,
+        };
+        var deps = targetMatch.Groups["deps"];
+        foreach (var token in TokenizeBuildArguments(StripMakeComment(deps.Value), deps.Index))
+        {
+            if (!IsMakeTargetIdentifier(token.Text))
+                continue;
+
+            AddReference(references, seen, fileId, token, "call", context, lineNumber, targetContainer, "makefile");
         }
     }
 
@@ -295,8 +334,19 @@ internal static class BuildAutomationReferenceExtractor
         return commentIndex >= 0 ? value[..commentIndex] : value;
     }
 
+    private static string StripMakeComment(string value)
+    {
+        var commentIndex = value.IndexOf('#', StringComparison.Ordinal);
+        return commentIndex >= 0 ? value[..commentIndex] : value;
+    }
+
     private static bool IsBuildIdentifier(string value)
         => value.Length > 0 && (char.IsLetter(value[0]) || value[0] == '_');
+
+    private static bool IsMakeTargetIdentifier(string value)
+        => value.Length > 0
+           && value[0] is not '$' and not '-'
+           && value.All(character => char.IsLetterOrDigit(character) || character is '_' or '.' or '%' or '-');
 
     private static void AddReference(
         List<ReferenceRecord> references,

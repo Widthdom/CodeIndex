@@ -75,6 +75,26 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Makefile_TargetDependenciesAndPhonyMetadataReferences_Issue4406()
+    {
+        const string content = """
+            .PHONY: clean install # metadata lists declared targets
+            all: build $(OPTIONAL)
+            build:
+            clean:
+            install: all
+            """;
+
+        ReferenceExtractionCase.Extract("makefile", content)
+            .ShouldContain("call", "clean", containerName: ".PHONY")
+            .ShouldContain("call", "install", containerName: ".PHONY")
+            .ShouldContain("call", "build", containerName: "all")
+            .ShouldContain("call", "all", containerName: "install")
+            .ShouldNotContainSymbol("metadata")
+            .ShouldNotContainSymbol("OPTIONAL");
+    }
+
+    [Fact]
     public void Extract_MsBuild_BuildAutomationReferences()
     {
         const string content = """

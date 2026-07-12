@@ -1943,7 +1943,8 @@ public static partial class SymbolExtractor
         ["makefile"] =
         [
             new("property", new Regex(@"^(?<name>[\w.-]+)\s*(?::=|::=|=|\?=|\+=)", RegexOptions.Compiled), BodyStyle.None),  // Makefile variable assignments / Makefile変数代入
-            new("function", new Regex(@"^(?<name>[\w.%-]+)\s*:(?!=|:=)", RegexOptions.Compiled), BodyStyle.None),  // Makefile targets / Makefileターゲット
+            new("metadata", new Regex(@"^(?<name>\.PHONY)\s*:(?!=|:=)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),  // Makefile special-target metadata / Makefile特殊ターゲットメタデータ
+            new("function", new Regex(@"^(?!\.PHONY\s*:)(?<name>[\w.%-]+)\s*:(?!=|:=)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),  // Makefile targets / Makefileターゲット
         ],
         ["cmake"] =
         [
