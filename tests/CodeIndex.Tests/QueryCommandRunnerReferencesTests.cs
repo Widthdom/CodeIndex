@@ -9854,10 +9854,8 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [ProductionRuntimeTheory]
-    [InlineData("Point { X: < 0 } => 1,")]
-    [InlineData("Point { X: > 0 } => 1,")]
-    public void RunReferences_ExactJson_CSharpSwitchExpressionLaterArmAfterRelationalPatternStaysVisible(string previousArm)
+    [ProductionRuntimeFact]
+    public void RunReferences_ExactJson_CSharpSwitchExpressionLaterArmsAfterRelationalPatternsStayVisible()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_switch_expression_later_arm_after_relational");
         try
@@ -9865,7 +9863,7 @@ public partial class QueryCommandRunnerTests
             Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
             File.WriteAllText(
                 Path.Combine(projectRoot, "src", "cases.cs"),
-                $$"""
+                """
                 namespace Probe;
 
                 class Point { public int X { get; init; } }
@@ -9873,9 +9871,16 @@ public partial class QueryCommandRunnerTests
 
                 class Demo
                 {
-                    int Match(object value) => value switch
+                    int MatchLess(object value) => value switch
                     {
-                        {{previousArm}}
+                        Point { X: < 0 } => 1,
+                        Shape => 2,
+                        _ => 0,
+                    };
+
+                    int MatchGreater(object value) => value switch
+                    {
+                        Point { X: > 0 } => 1,
                         Shape => 2,
                         _ => 0,
                     };
@@ -9885,15 +9890,19 @@ public partial class QueryCommandRunnerTests
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
             var (exitCode, stdout, stderr) = RunReferencesInProcess("Shape", dbPath, "csharp");
-            var row = Assert.Single(ParseJsonLines(stdout)).RootElement;
+            var rows = ParseJsonLines(stdout).Select(document => document.RootElement).ToList();
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("Shape", row.GetProperty("symbol_name").GetString());
-            Assert.Equal("type_reference", row.GetProperty("reference_kind").GetString());
-            Assert.Contains("Shape => 2", row.GetProperty("context").GetString(), StringComparison.Ordinal);
+            Assert.Equal(2, rows.Count);
+            Assert.All(rows, row =>
+            {
+                Assert.Equal("Shape", row.GetProperty("symbol_name").GetString());
+                Assert.Equal("type_reference", row.GetProperty("reference_kind").GetString());
+                Assert.Contains("Shape => 2", row.GetProperty("context").GetString(), StringComparison.Ordinal);
+            });
         }
         finally
         {
