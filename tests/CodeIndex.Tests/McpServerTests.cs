@@ -163,6 +163,27 @@ public partial class McpServerTests : IDisposable
         Assert.Contains("In-flight request ended before EOF drain (InvalidOperationException)", stderr.ToString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task DrainInFlightTasksAsync_CleanEofWaitsForLegitimateRequest_Issue4434()
+    {
+        var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tasks = new List<Task> { pending.Task };
+        var drain = _server.DrainInFlightTasksAsync(
+            tasks,
+            TimeSpan.Zero,
+            TimeSpan.Zero,
+            CancellationToken.None,
+            drainToCompletion: true);
+
+        Assert.False(drain.IsCompleted);
+        Assert.False(_server.ShutdownRequestedForTests);
+
+        pending.SetResult();
+        await drain.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(_server.ShutdownRequestedForTests);
+    }
+
     private static bool MethodCallsType(MethodInfo method, Type declaringType)
     {
         var body = method.GetMethodBody()?.GetILAsByteArray();

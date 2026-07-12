@@ -744,7 +744,7 @@ public partial class McpServer : IDisposable
             await requestTaskStarted.Task.ConfigureAwait(false);
         }
 
-        await DrainInFlightTasksAsync(tasks, DefaultEofDrainTimeout, DefaultEofPostCancelDrainTimeout, loopToken).ConfigureAwait(false);
+        await DrainInFlightTasksAsync(tasks, DefaultEofDrainTimeout, DefaultEofPostCancelDrainTimeout, loopToken, drainToCompletion: true).ConfigureAwait(false);
         if (tasks.All(static task => task.IsCompleted))
         {
             writeGate.Dispose();
@@ -798,13 +798,19 @@ public partial class McpServer : IDisposable
         List<Task> tasks,
         TimeSpan gracePeriod,
         TimeSpan postCancelGracePeriod,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool drainToCompletion = false)
     {
         tasks.RemoveAll(task => task.IsCompleted);
         if (tasks.Count == 0)
             return;
 
         var allTasks = Task.WhenAll(tasks);
+        if (drainToCompletion && !cancellationToken.IsCancellationRequested)
+        {
+            await ObserveInFlightTasksAsync(allTasks).ConfigureAwait(false);
+            return;
+        }
         var graceDelay = Task.Delay(gracePeriod, cancellationToken);
         var completed = await Task.WhenAny(allTasks, graceDelay).ConfigureAwait(false);
         if (completed == allTasks)
