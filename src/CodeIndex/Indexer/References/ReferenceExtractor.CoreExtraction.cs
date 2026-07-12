@@ -2311,9 +2311,9 @@ public static partial class ReferenceExtractor
                     AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer, language);
                     return true;
                 }
-                if (language == "python" && IsKnownPythonTypeCall(normalizedName))
+                if (language == "python" && TryGetKnownPythonTypeCall(normalizedName, out var pythonTypeName))
                 {
-                    AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer, language);
+                    AddReference(references, seen, fileId, pythonTypeName, callIndex, "instantiate", context, lineNumber, callContainer, language);
                     return true;
                 }
                 if (language == "csharp"
@@ -2372,8 +2372,9 @@ public static partial class ReferenceExtractor
                 AddReference(references, seen, fileId, normalizedName, callIndex, "call", context, lineNumber, callContainer);
                 return true;
 
-                bool IsKnownPythonTypeCall(string candidate)
+                bool TryGetKnownPythonTypeCall(string candidate, out string canonicalName)
                 {
+                    canonicalName = candidate;
                     var separator = candidate.LastIndexOf('.');
                     var leaf = separator >= 0 ? candidate[(separator + 1)..] : candidate;
                     if (leaf.Length == 0 || !char.IsUpper(leaf, 0))
@@ -2385,26 +2386,7 @@ public static partial class ReferenceExtractor
                         return true;
                     }
 
-                    var root = separator >= 0 ? candidate[..candidate.IndexOf('.')] : candidate;
-                    if (symbols.Any(symbol => symbol.Kind == "import"
-                        && (symbol.Name == candidate
-                            || symbol.Name == root
-                            || symbol.Name.EndsWith($".{leaf}", StringComparison.Ordinal))))
-                    {
-                        return true;
-                    }
-
-                    if (callIndex > 1 && preparedLine[callIndex - 1] == '.')
-                    {
-                        var receiverEnd = callIndex - 1;
-                        var receiverStart = receiverEnd;
-                        while (receiverStart > 0 && (char.IsLetterOrDigit(preparedLine[receiverStart - 1]) || preparedLine[receiverStart - 1] == '_'))
-                            receiverStart--;
-                        var receiver = preparedLine[receiverStart..receiverEnd];
-                        return symbols.Any(symbol => symbol.Kind == "import" && symbol.Name == receiver);
-                    }
-
-                    return false;
+                    return PythonImportBindingResolver.TryResolveImportedTypeCall(candidate, preparedLine, callIndex, symbols, out canonicalName);
                 }
             }
 
