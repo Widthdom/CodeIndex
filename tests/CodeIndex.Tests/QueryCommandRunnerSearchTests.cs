@@ -9198,9 +9198,13 @@ jobs:
             Content = content,
         };
         var options = new QueryCommandOptions { Query = "Skip =", SnippetLines = 8 };
+        var previousCompact = SearchSnippetFormatter.ToCompactResult(result, options.Query, maxLines: 8, caseSensitive: true);
+        previousCompact.ResultKinds = ["code", "identifier"];
+        previousCompact.RiskEvidence = ["dedup evidence"];
 
         var compact = QueryCommandRunner.RefocusSearchResultAfterDedup(
             result,
+            previousCompact,
             SearchSnippetFormatter.PrepareQueryContext(options.Query),
             options,
             exact: true,
@@ -9211,6 +9215,8 @@ jobs:
         Assert.Equal(164, compact.FocusLine);
         Assert.Contains(compact.Highlights, highlight => highlight.Line == 164);
         Assert.InRange(164, compact.SnippetStartLine, compact.SnippetEndLine);
+        Assert.Equal(["code", "identifier"], compact.ResultKinds);
+        Assert.Equal(["dedup evidence"], compact.RiskEvidence);
     }
 
     [Fact]

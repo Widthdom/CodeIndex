@@ -830,7 +830,7 @@ public static partial class QueryCommandRunner
                     continue;
 
                 if (keptLines.Count != compact.MatchLines.Count)
-                    compact = RefocusSearchResultAfterDedup(result, queryContext, options, exact, rawFts, keptLines);
+                    compact = RefocusSearchResultAfterDedup(result, compact, queryContext, options, exact, rawFts, keptLines);
             }
 
             rows.Add(new SearchDisplayRow(result, compact));
@@ -841,6 +841,7 @@ public static partial class QueryCommandRunner
 
     internal static CompactSearchResult RefocusSearchResultAfterDedup(
         SearchResult result,
+        CompactSearchResult previousCompact,
         SearchSnippetQueryContext queryContext,
         QueryCommandOptions options,
         bool exact,
@@ -861,6 +862,8 @@ public static partial class QueryCommandRunner
         SearchSnippetFormatter.ApplyOutputMetadata(compact, options.SnippetLines, options.MaxLineWidth, exact, rawFts);
         compact.MatchLines = compact.MatchLines.Where(keptSet.Contains).ToList();
         compact.Highlights = compact.Highlights.Where(highlight => keptSet.Contains(highlight.Line)).ToList();
+        compact.ResultKinds = previousCompact.ResultKinds;
+        compact.RiskEvidence = previousCompact.RiskEvidence;
         return compact;
     }
 
