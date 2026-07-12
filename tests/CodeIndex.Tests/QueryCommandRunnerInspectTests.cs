@@ -1303,7 +1303,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunOutline_Json_SortKindPrioritizesKindBeforeSourceOrder_Issue4117()
+    public void RunOutline_KindAndSourceSortsShareProjectionFixture_Issue4117()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_sort_kind_4117");
         try
@@ -1324,37 +1324,23 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("class", symbol.GetProperty("kind").GetString());
             Assert.Equal("Giant", symbol.GetProperty("name").GetString());
             Assert.Equal("kind", symbol.GetProperty("sort_mode").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunOutline_Json_OutlineFieldsProjectDerivedMetadataWithoutSort_Issue4117()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_fields_derived_4117");
-        try
-        {
-            var dbPath = CreateOutlineSortFixtureDb(projectRoot);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+            var (sourceExitCode, sourceStdout, sourceStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
                 ["src/Giant.cs", "--db", dbPath, "--json", "--kind", "function", "--outline-fields", "name,size,sort_mode", "--limit", "1"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var symbol = Assert.Single(json.GetProperty("symbols").EnumerateArray());
+            using var sourceDocument = ParseJsonOutput(sourceStdout);
+            var sourceJson = sourceDocument.RootElement;
+            var sourceSymbol = Assert.Single(sourceJson.GetProperty("symbols").EnumerateArray());
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.False(json.TryGetProperty("sort", out _));
-            Assert.Equal("SmallHot", symbol.GetProperty("name").GetString());
-            Assert.Equal(1, symbol.GetProperty("size_lines").GetInt32());
-            Assert.Equal("source", symbol.GetProperty("sort_mode").GetString());
-            Assert.Equal(new[] { "name", "size_lines", "sort_mode" }, json.GetProperty("selected_fields").EnumerateArray().Select(item => item.GetString()).ToArray());
-            Assert.Equal(new[] { "name", "size_lines", "sort_mode" }, symbol.EnumerateObject().Select(property => property.Name).ToArray());
+            Assert.Equal(CommandExitCodes.Success, sourceExitCode);
+            Assert.Equal(string.Empty, sourceStderr);
+            Assert.False(sourceJson.TryGetProperty("sort", out _));
+            Assert.Equal("SmallHot", sourceSymbol.GetProperty("name").GetString());
+            Assert.Equal(1, sourceSymbol.GetProperty("size_lines").GetInt32());
+            Assert.Equal("source", sourceSymbol.GetProperty("sort_mode").GetString());
+            Assert.Equal(new[] { "name", "size_lines", "sort_mode" }, sourceJson.GetProperty("selected_fields").EnumerateArray().Select(item => item.GetString()).ToArray());
+            Assert.Equal(new[] { "name", "size_lines", "sort_mode" }, sourceSymbol.EnumerateObject().Select(property => property.Name).ToArray());
         }
         finally
         {
