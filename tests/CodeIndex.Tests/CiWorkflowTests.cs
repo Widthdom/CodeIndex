@@ -111,7 +111,7 @@ public class CiWorkflowTests
         AssertContainsAll(
             workflow,
             "- name: Upload test results\n        if: always() && (steps.test.outputs.summarize == 'true' || failure())",
-            "- name: Publish\n        if: matrix.primary_lane",
+            "- name: Publish\n        if: matrix.primary_lane\n        run: dotnet publish src/CodeIndex/CodeIndex.csproj --configuration Release --no-build --no-restore --output publish",
             "- name: Upload build artifact\n        if: matrix.primary_lane");
         AssertDoesNotContainAny(
             workflow,
