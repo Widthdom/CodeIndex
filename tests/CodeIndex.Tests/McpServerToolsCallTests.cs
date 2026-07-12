@@ -3777,7 +3777,7 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsCall_UnusedSymbols_ZeroResultStaysCleanWhenSqlSymbolsCannotMatchKind()
+    public void ToolsCall_UnusedAndHotspotsShareCleanZeroResultFixture()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_unused_zero_sql_graph_contract");
         try
@@ -3794,30 +3794,14 @@ public partial class McpServerTests
             Assert.Null(structured["sql_graph_contract_ready"]);
             Assert.Null(structured["sql_graph_contract_degraded_reason"]);
             Assert.Null(structured["degraded"]);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void ToolsCall_SymbolHotspots_ZeroResultStaysCleanWhenSqlSymbolsCannotMatchKind()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_hotspots_zero_sql_graph_contract");
-        try
-        {
-            var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
-            DowngradeSqlGraphContractVersion(dbPath);
-            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var hotspotsRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"kind":"class"}}}""")!;
+            var hotspotsResponse = server.HandleMessage(hotspotsRequest)!;
+            var hotspotsStructured = hotspotsResponse["result"]!["structuredContent"]!;
 
-            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"kind":"class"}}}""")!;
-            var response = server.HandleMessage(request)!;
-            var structured = response["result"]!["structuredContent"]!;
-
-            Assert.Equal(0, structured["count"]!.GetValue<int>());
-            Assert.Null(structured["sql_graph_contract_ready"]);
-            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
+            Assert.Equal(0, hotspotsStructured["count"]!.GetValue<int>());
+            Assert.Null(hotspotsStructured["sql_graph_contract_ready"]);
+            Assert.Null(hotspotsStructured["sql_graph_contract_degraded_reason"]);
         }
         finally
         {
