@@ -91,5 +91,7 @@
 {
   "done": true,
   "count": 1,
-  "interrupted": false
+  "interrupted": false,
+  "truncated": false,
+  "has_more": false
 }
