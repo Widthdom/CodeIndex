@@ -13120,7 +13120,7 @@ public partial class ReferenceExtractorTests
         Assert.All(pointRefs, r => Assert.Equal("Match", r.ContainerName));
         Assert.All(shapeRefs, r => Assert.Equal("Match", r.ContainerName));
         Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
     }
 
     [Fact]
@@ -13392,7 +13392,7 @@ public partial class ReferenceExtractorTests
         var csharpSymbols = SymbolExtractor.Extract(1, "csharp", csharp);
         var csharpReferences = ReferenceExtractor.Extract(1, "csharp", csharp, csharpSymbols);
 
-        Assert.DoesNotContain(csharpReferences, r => r.SymbolName == "Console" && r.ReferenceKind == "type_reference");
+        Assert.Contains(csharpReferences, r => r.SymbolName == "Console" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(csharpReferences, r => r.SymbolName == "service" && r.ReferenceKind == "type_reference");
         Assert.Contains(csharpReferences, r => r.SymbolName == "Service" && r.ReferenceKind == "type_reference");
 

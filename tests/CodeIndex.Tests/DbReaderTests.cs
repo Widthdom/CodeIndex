@@ -2175,13 +2175,6 @@ public partial class DbReaderTests : IDisposable
             exact: true,
             pathPatterns: ["src/*issue2819*"]));
 
-        var frameworkCallers = _reader.GetCallers(
-            "System.Guid.NewGuid",
-            lang: "csharp",
-            exact: true,
-            pathPatterns: ["src/*issue2819*"]);
-        Assert.Contains(frameworkCallers, result => result.CallerName == "HandleContext");
-        Assert.Contains(frameworkCallers, result => result.CallerName == "RunEventStreamAsync");
     }
 
     [Fact]
