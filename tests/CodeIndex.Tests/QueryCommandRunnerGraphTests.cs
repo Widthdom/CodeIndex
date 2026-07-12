@@ -150,7 +150,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunDeps_JsonMaxBytes_AppliesToMissingGraphZeroPayload_Issue4112()
+    public void RunDeps_MissingGraphJsonModesShareZeroPayloadFixture_Issue4112()
     {
         var (projectRoot, readOnlyUri) = CreateReadOnlyMissingGraphTableDb("cdidx_deps_missing_graph_max_json_bytes");
         try
@@ -164,31 +164,19 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("deps JSON output is", stderr);
             Assert.Contains("exceeds --max-json-bytes 1", stderr);
             Assert.Contains("Usage: cdidx deps", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunDeps_JsonSummaryOnly_OmitsEdgesForMissingGraphZeroPayload_Issue4112()
-    {
-        var (projectRoot, readOnlyUri) = CreateReadOnlyMissingGraphTableDb("cdidx_deps_missing_graph_summary_only");
-        try
-        {
-            var (exitCode, stdout, _) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            var (summaryExitCode, summaryStdout, _) = CaptureConsole(() => QueryCommandRunner.RunDeps(
                 ["--db", readOnlyUri, "--json", "--summary-only"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+            using var summaryDocument = ParseJsonOutput(summaryStdout);
+            var summaryJson = summaryDocument.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.True(json.GetProperty("summary_only").GetBoolean());
-            Assert.True(json.GetProperty("degraded").GetBoolean());
-            Assert.False(json.TryGetProperty("edges", out _));
+            Assert.Equal(CommandExitCodes.Success, summaryExitCode);
+            Assert.Equal(0, summaryJson.GetProperty("count").GetInt32());
+            Assert.True(summaryJson.GetProperty("summary_only").GetBoolean());
+            Assert.True(summaryJson.GetProperty("degraded").GetBoolean());
+            Assert.False(summaryJson.TryGetProperty("edges", out _));
         }
         finally
         {
