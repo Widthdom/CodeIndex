@@ -134,6 +134,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - `McpServer*Tests.cs`
   MCP JSON-RPC behavior and tool outputs. Large server coverage is split into focused partial suites for tool calls, tool listing, protocol/session handling, and error handling while the root `McpServerTests` part keeps shared seeded fixture state. Request-timeout tests use signal-gated delay hooks instead of fixed sleeps: start the request, confirm the hook has begun, then await the timeout response with a bounded wait so they pay only the configured timeout while still proving in-flight actions drain after the timeout response.
   Stdio response-order tests use the same signal-gated pattern: make the synthetic transport signal the parse-error path instead of sleeping in the response serializer.
+  Rate-limit-disabled coverage uses the lightweight `languages` tool for repeated successful calls; do not pay repeated `status` database aggregation cost when the assertion only concerns limiter bypass.
 - `HttpMcpTransportTests.cs`
   HTTP MCP transport behavior, including authentication responses, warm server reuse, concurrent requests, and request logging. Request-log assertions must validate recorded contents without assuming callback order between independently handled HTTP requests.
   Event-stream disconnect tests that only need stream removal should use a short test-owned keep-alive or another explicit write trigger instead of waiting for the production heartbeat interval.
@@ -466,6 +467,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `McpServer*Tests.cs`
   MCP の JSON-RPC 挙動とツール出力のテスト。大きな server coverage は tool call、tool listing、protocol/session handling、error handling ごとの focused partial suite に分割し、共有の seed 済み fixture 状態は root 側の `McpServerTests` に残します。request-timeout test は固定 sleep ではなく signal-gated delay hook を使います。request を開始し、hook が始まったことを確認してから timeout response を bounded wait で待つことで、timeout response 後に in-flight action が drain されることは保ったまま、設定した timeout 分だけを待つようにします。
   stdio response-order test も同じ signal-gated pattern を使い、response serializer で sleep する代わりに synthetic transport が parse-error path を signal するようにします。
+  rate-limit-disabled coverage の繰り返し成功 call には軽量な `languages` tool を使い、limiter bypass だけの assertion で `status` の database aggregation cost を繰り返し支払わないでください。
 - `HttpMcpTransportTests.cs`
   HTTP MCP transport の挙動。認証レスポンス、warm server reuse、並行リクエスト、リクエストログを含みます。リクエストログの assertion は、独立に処理される HTTP リクエスト間の callback 順序を仮定せず、記録内容を検証してください。
   stream removal だけを必要とする event-stream disconnect test は、production heartbeat interval を待たず、短い test-owned keep-alive または別の明示的な write trigger を使ってください。

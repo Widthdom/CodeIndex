@@ -9404,7 +9404,7 @@ public partial class McpServerTests
         // 既定（環境変数なし）では #1560 以前と同じ挙動で、stdio 単一ユーザーは影響を受けない。
         for (var i = 0; i < 5; i++)
         {
-            var request = JsonNode.Parse($"{{\"jsonrpc\":\"2.0\",\"id\":{i},\"method\":\"tools/call\",\"params\":{{\"name\":\"status\"}}}}")!;
+            var request = JsonNode.Parse($"{{\"jsonrpc\":\"2.0\",\"id\":{i},\"method\":\"tools/call\",\"params\":{{\"name\":\"languages\"}}}}")!;
             var response = _server.HandleMessage(request)!;
             Assert.Null(response["error"]);
         }
