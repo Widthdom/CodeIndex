@@ -13,10 +13,13 @@ public static partial class QueryCommandRunner
     }
 
     private static (string Path, int Line, int Column, string Message) ToSymbolQuickfixItem(SymbolResult result)
-        => (result.Path, GetSymbolDisplayLine(result), 1, FormatSymbolLocationLabel(result));
+        => (result.Path, GetSymbolDisplayLine(result), GetSymbolDisplayColumn(result), FormatSymbolLocationLabel(result));
 
     private static (string Path, int Line, int Column, string Message, string RuleId) ToSymbolSarifItem(SymbolResult result)
-        => (result.Path, GetSymbolDisplayLine(result), 1, FormatSymbolLocationLabel(result), string.IsNullOrWhiteSpace(result.Kind) ? "symbol" : $"symbol.{result.Kind}");
+        => (result.Path, GetSymbolDisplayLine(result), GetSymbolDisplayColumn(result), FormatSymbolLocationLabel(result), string.IsNullOrWhiteSpace(result.Kind) ? "symbol" : $"symbol.{result.Kind}");
+
+    private static int GetSymbolDisplayColumn(SymbolResult result)
+        => result.StartColumn.HasValue ? result.StartColumn.Value + 1 : 1;
 
     private static int GetSymbolDisplayLine(SymbolResult result)
         => Math.Max(1, result.Line > 0 ? result.Line : result.StartLine);

@@ -556,7 +556,7 @@ internal sealed class LspServer : IDisposable
         var definitions = ResolveLspDefinitions(context);
         var array = new JsonArray();
         foreach (var definition in definitions)
-            array.Add((JsonNode)ToLocation(definition.Path, definition.StartLine, 1, definition.EndLine, 1, GetLocationWorkspaceRoot(definition.Path, context)));
+            array.Add((JsonNode)ToSymbolLocation(definition, context));
         return array;
     }
 
@@ -575,7 +575,7 @@ internal sealed class LspServer : IDisposable
         if (includeDeclaration)
         {
             foreach (var definition in ResolveLspDefinitions(context))
-                AddLocation(array, seenLocations, definition.Path, definition.StartLine, 1, definition.EndLine, 1, context);
+                AddSymbolLocation(array, seenLocations, definition, context);
         }
 
         foreach (var reference in analysis.References)
@@ -644,7 +644,11 @@ internal sealed class LspServer : IDisposable
         var array = new JsonArray();
         var seenRanges = new HashSet<string>(StringComparer.Ordinal);
         foreach (var definition in ResolveLspDefinitions(context).Where(definition => string.Equals(definition.Path, context.IndexedPath, StringComparison.Ordinal)))
-            AddDocumentHighlight(array, seenRanges, definition.StartLine, 1, definition.EndLine, 1);
+        {
+            var line = definition.Line > 0 ? definition.Line : definition.StartLine;
+            var column = definition.StartColumn.HasValue ? definition.StartColumn.Value + 1 : 1;
+            AddDocumentHighlight(array, seenRanges, line, column, line, column + Math.Max(definition.Name.Length, 1));
+        }
 
         foreach (var reference in ResolveLspReferences(context).References.Where(reference => string.Equals(reference.Path, context.IndexedPath, StringComparison.Ordinal)))
         {
@@ -855,6 +859,8 @@ internal sealed class LspServer : IDisposable
 
     private int FindSymbolStartCharacter(IndexedDocumentContext document, SymbolResult symbol, Dictionary<int, string?>? lineCache = null)
     {
+        if (symbol.StartColumn.HasValue)
+            return Math.Max(0, symbol.StartColumn.Value);
         var line = Math.Max(symbol.Line, symbol.StartLine);
         if (line <= 0 || string.IsNullOrWhiteSpace(symbol.Name))
             return 0;
@@ -875,6 +881,26 @@ internal sealed class LspServer : IDisposable
         "function" or "test.method" => 13,
         _ => 8,
     };
+
+    private JsonObject ToSymbolLocation(SymbolResult symbol, PositionTokenContext context)
+    {
+        var line = symbol.Line > 0 ? symbol.Line : Math.Max(1, symbol.StartLine);
+        var column = symbol.StartColumn.HasValue ? symbol.StartColumn.Value + 1 : 1;
+        return ToLocation(
+            symbol.Path,
+            line,
+            column,
+            line,
+            column + Math.Max(symbol.Name.Length, 1),
+            GetLocationWorkspaceRoot(symbol.Path, context));
+    }
+
+    private void AddSymbolLocation(JsonArray array, HashSet<string> seenLocations, SymbolResult symbol, PositionTokenContext context)
+    {
+        var line = symbol.Line > 0 ? symbol.Line : Math.Max(1, symbol.StartLine);
+        var column = symbol.StartColumn.HasValue ? symbol.StartColumn.Value + 1 : 1;
+        AddLocation(array, seenLocations, symbol.Path, line, column, line, column + Math.Max(symbol.Name.Length, 1), context);
+    }
 
     private void AddLocation(
         JsonArray array,

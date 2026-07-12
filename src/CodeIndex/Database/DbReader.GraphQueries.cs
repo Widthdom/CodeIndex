@@ -78,6 +78,7 @@ public partial class DbReader
                        COUNT(*) AS reference_count,
                        " + ReferenceWeightedScoreSql("r.reference_kind") + @" AS weighted_score,
                        r.line,
+                       r.column_number,
                        MAX(" + selfReferenceSql + @") AS is_self_reference,
                        MAX(" + mutualRecursionSql + @") AS is_mutual_recursion
                 FROM symbol_references r
@@ -87,7 +88,7 @@ public partial class DbReader
                   AND " + supportedLangPredicate
             : @"
             SELECT f.path, f.lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, r.symbol_name,
-                   r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count,
+                   r.reference_kind, MIN(r.line) AS first_line, MIN(r.column_number) AS first_column, COUNT(*) AS reference_count,
                    GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds,
                    r.reference_kind || ':' || COUNT(*) AS reference_kind_counts,
                    " + ReferenceWeightedScoreSql("r.reference_kind") + @" AS weighted_score,
@@ -169,7 +170,7 @@ public partial class DbReader
             )
             SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, symbol_name,
                    " + (rawKinds ? GetGroupedCallerReferenceKindSql("r.reference_kind") : "MIN(r.reference_kind)") + @" AS reference_kind,
-                   MIN(line) AS first_line, SUM(r.reference_count) AS reference_count,
+                   MIN(line) AS first_line, MIN(column_number) AS first_column, SUM(r.reference_count) AS reference_count,
                    GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds,
                    GROUP_CONCAT(r.raw_reference_kind || ':' || r.reference_count) AS reference_kind_counts,
                    SUM(r.weighted_score) AS weighted_score,
@@ -219,10 +220,10 @@ public partial class DbReader
         while (reader.TrackedRead())
         {
             var primaryKind = reader.GetString(5);
-            var kindAggregate = TruncateReferenceKindAggregate(GetNullableString(reader, 8), out var kindsTruncated);
-            var countAggregate = TruncateReferenceKindAggregate(GetNullableString(reader, 9), out var countsTruncated);
+            var kindAggregate = TruncateReferenceKindAggregate(GetNullableString(reader, 9), out var kindsTruncated);
+            var countAggregate = TruncateReferenceKindAggregate(GetNullableString(reader, 10), out var countsTruncated);
             var kinds = ParseDistinctReferenceKinds(kindAggregate, primaryKind);
-            var counts = ParseReferenceKindCounts(countAggregate, primaryKind, reader.GetInt32(7));
+            var counts = ParseReferenceKindCounts(countAggregate, primaryKind, reader.GetInt32(8));
             results.Add(new CallerResult
             {
                 Path = reader.GetString(0),
@@ -235,11 +236,12 @@ public partial class DbReader
                 HasMixedReferenceKinds = kinds.Count > 1,
                 ReferenceKindCounts = counts,
                 AggregateTruncated = kindsTruncated || countsTruncated,
-                ReferenceWeightScore = reader.GetDouble(10),
+                ReferenceWeightScore = reader.GetDouble(11),
                 FirstLine = reader.GetInt32(6),
-                ReferenceCount = reader.GetInt32(7),
-                HasSelfReference = reader.GetInt32(11) != 0,
-                HasMutualRecursion = reader.GetInt32(12) != 0,
+                FirstColumn = reader.GetInt32(7),
+                ReferenceCount = reader.GetInt32(8),
+                HasSelfReference = reader.GetInt32(12) != 0,
+                HasMutualRecursion = reader.GetInt32(13) != 0,
             });
         }
         return results;

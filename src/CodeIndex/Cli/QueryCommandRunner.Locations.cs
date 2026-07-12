@@ -12,7 +12,7 @@ public static partial class QueryCommandRunner
     {
         foreach (var result in results)
         {
-            var location = BuildLspLocation(result.Path, result.StartLine, 1, result.EndLine + 1, 1);
+            var location = ToLspLocation(result);
             result.Uri = location.Uri;
             result.Range = location.Range;
         }
@@ -56,7 +56,7 @@ public static partial class QueryCommandRunner
     }
 
     private static LspLocation ToLspLocation(DefinitionResult result)
-        => BuildLspLocation(result.Path, result.StartLine, 1, result.EndLine + 1, 1);
+        => BuildSymbolLspLocation(result);
 
     private static LspLocation ToLspLocation(ReferenceResult result)
         => BuildLspLocation(result.Path, result.Line, result.Column, result.Line, result.Column + Math.Max(1, result.SymbolName.Length));
@@ -79,14 +79,17 @@ public static partial class QueryCommandRunner
     }
 
     private static LspLocation ToLspLocation(SymbolResult result)
+        => BuildSymbolLspLocation(result);
+
+    private static LspLocation BuildSymbolLspLocation(SymbolResult result)
     {
-        var startLine = result.StartLine > 0 ? result.StartLine : result.Line;
-        var endLine = result.EndLine >= startLine ? result.EndLine : startLine;
-        return BuildLspLocation(result.Path, startLine, 1, endLine + 1, 1);
+        var line = result.Line > 0 ? result.Line : Math.Max(1, result.StartLine);
+        var column = result.StartColumn.HasValue ? result.StartColumn.Value + 1 : 1;
+        return BuildLspLocation(result.Path, line, column, line, column + Math.Max(1, result.Name.Length));
     }
 
     private static LspLocation ToLspLocation(CallerResult result)
-        => BuildLspLocation(result.Path, result.FirstLine, 1, result.FirstLine, 1);
+        => BuildLspLocation(result.Path, result.FirstLine, Math.Max(1, result.FirstColumn), result.FirstLine, Math.Max(1, result.FirstColumn) + Math.Max(1, result.CalleeName.Length));
 
     private static LspLocation ToLspLocation(CalleeResult result)
         => BuildLspLocation(result.Path, result.FirstLine, 1, result.FirstLine, 1);

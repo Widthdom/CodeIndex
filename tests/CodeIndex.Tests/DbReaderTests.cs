@@ -1459,6 +1459,7 @@ public partial class DbReaderTests : IDisposable
         Assert.Equal("src/session.py", caller.Path);
         Assert.Equal("login", caller.CallerName);
         Assert.Equal("authenticate", caller.CalleeName);
+        Assert.Equal(12, caller.FirstColumn);
         Assert.Equal(1, caller.ReferenceCount);
     }
 

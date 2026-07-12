@@ -143,7 +143,7 @@ public static partial class QueryCommandRunner
             {
                 if (TryWriteFormattedLocations(
                     options,
-                    results.Select(r => new FormattedLocation(r.Path, r.StartLine, null, $"{r.Kind} {r.Name}")),
+                    results.Select(r => new FormattedLocation(r.Path, GetSymbolDisplayLine(r), GetSymbolDisplayColumn(r), $"{r.Kind} {r.Name}")),
                     jsonOptions))
                     return CommandExitCodes.Success;
                 if (options.OutputFormat == OutputFormatLsp)
@@ -158,7 +158,7 @@ public static partial class QueryCommandRunner
                 }
                 if (options.OutputFormat == OutputFormatSarif)
                 {
-                    WriteSarif(results.Select(r => (r.Path, r.StartLine, 1, $"{r.Kind} {r.Name}", "definition")), jsonOptions);
+                    WriteSarif(results.Select(r => (r.Path, GetSymbolDisplayLine(r), GetSymbolDisplayColumn(r), $"{r.Kind} {r.Name}", "definition")), jsonOptions);
                     return CommandExitCodes.Success;
                 }
                 foreach (var r in results)

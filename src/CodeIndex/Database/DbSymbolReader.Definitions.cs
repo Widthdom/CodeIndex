@@ -122,6 +122,7 @@ public partial class DbReader
             Name = symbol.Name,
             Line = symbol.Line,
             StartLine = symbol.StartLine,
+            StartColumn = symbol.StartColumn,
             EndLine = symbol.EndLine,
             BodyStartLine = symbol.BodyStartLine,
             BodyEndLine = symbol.BodyEndLine,
