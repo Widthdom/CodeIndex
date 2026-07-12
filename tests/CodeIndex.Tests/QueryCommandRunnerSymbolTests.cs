@@ -1937,7 +1937,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_BucketAndConfidenceFiltersShareFixture()
+    public void RunUnused_BucketConfidenceAndActionableFiltersShareFixture_Issue3977()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
         try
@@ -1971,6 +1971,24 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("Hidden", confidenceJson.GetProperty("symbols")[0].GetProperty("name").GetString());
             Assert.Equal(1, confidenceJson.GetProperty("summary").GetProperty("by_confidence").GetProperty("medium").GetInt32());
             Assert.False(confidenceJson.GetProperty("summary").GetProperty("by_confidence").TryGetProperty("low", out _));
+
+            var (actionableExitCode, actionableStdout, actionableStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--actionable", "--confidence", "medium"],
+                _jsonOptions));
+
+            using var actionableDocument = ParseJsonOutput(actionableStdout);
+            var actionableJson = actionableDocument.RootElement;
+            var actionableQuery = actionableJson.GetProperty("query_context");
+
+            Assert.Equal(CommandExitCodes.Success, actionableExitCode);
+            Assert.Equal(string.Empty, actionableStderr);
+            Assert.Equal(1, actionableJson.GetProperty("count").GetInt32());
+            Assert.Equal("Hidden", actionableJson.GetProperty("symbols")[0].GetProperty("name").GetString());
+            Assert.Equal("likely_unused_private", actionableQuery.GetProperty("bucket").GetString());
+            Assert.Equal("medium", actionableQuery.GetProperty("min_confidence").GetString());
+            Assert.True(actionableQuery.GetProperty("actionable").GetBoolean());
+            Assert.True(actionableQuery.GetProperty("exclude_tests").GetBoolean());
+            Assert.Equal("private", actionableQuery.GetProperty("visibility")[0].GetString());
         }
         finally
         {
@@ -2019,36 +2037,6 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(3, filteredJson.GetProperty("summary").GetProperty("by_bucket").GetProperty("public_or_exported_no_refs").GetInt32());
             Assert.Equal("public_or_exported_no_refs", query.GetProperty("bucket").GetString());
             Assert.Equal("low", query.GetProperty("min_confidence").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunUnused_ActionableUsesConfidenceAliasForPrivateCandidates_Issue3977()
-    {
-        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
-        try
-        {
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--actionable", "--confidence", "medium"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var query = json.GetProperty("query_context");
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.Equal("Hidden", json.GetProperty("symbols")[0].GetProperty("name").GetString());
-            Assert.Equal("likely_unused_private", query.GetProperty("bucket").GetString());
-            Assert.Equal("medium", query.GetProperty("min_confidence").GetString());
-            Assert.True(query.GetProperty("actionable").GetBoolean());
-            Assert.True(query.GetProperty("exclude_tests").GetBoolean());
-            Assert.Equal("private", query.GetProperty("visibility")[0].GetString());
         }
         finally
         {
