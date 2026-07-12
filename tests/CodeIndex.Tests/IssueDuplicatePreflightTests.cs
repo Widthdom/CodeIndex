@@ -8,6 +8,17 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public sealed class IssueDuplicatePreflightTests : IDisposable
 {
+    [Fact]
+    public void FindMatches_ClosedIssueClassifiesPossibleRegression_Issue4430()
+    {
+        var path = WriteOpenIssuesJson("""[{"number":4430,"title":"Duplicate history","state":"closed","labels":["bug"]}]""");
+        Assert.True(IssueDuplicatePreflight.TryLoad(path, out var preflight, out var error), error);
+
+        var match = Assert.Single(preflight.FindMatches("Duplicate history", ["bug"]));
+        Assert.Equal("closed", match.State);
+        Assert.Equal("possible_regression", match.Classification);
+    }
+
     private readonly string _tempDir;
     private readonly EnvironmentVariableScope _env = EnvironmentVariableScope.Capture(
         "CDIDX_GITHUB_TOKEN",

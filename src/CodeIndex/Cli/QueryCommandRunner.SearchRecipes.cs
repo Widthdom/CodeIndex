@@ -940,7 +940,8 @@ public static partial class QueryCommandRunner
         var preflightResult = IssueDuplicatePreflight.TryLoadAsync(
                 options.OpenIssuesPath,
                 options.OpenIssuesRepository,
-                cancellationToken)
+                cancellationToken,
+                options.IssueState)
             .GetAwaiter()
             .GetResult();
         if (!preflightResult.Loaded)
@@ -1076,7 +1077,8 @@ public static partial class QueryCommandRunner
         var preflightResult = IssueDuplicatePreflight.TryLoadAsync(
                 options.OpenIssuesPath,
                 options.OpenIssuesRepository,
-                cancellationToken)
+                cancellationToken,
+                options.IssueState)
             .GetAwaiter()
             .GetResult();
         if (!preflightResult.Loaded)
@@ -2482,6 +2484,8 @@ public static partial class QueryCommandRunner
             AddReplayValueOption(args, "--open-issues", options.OpenIssuesPath);
         if (!string.IsNullOrWhiteSpace(options.OpenIssuesRepository))
             AddReplayValueOption(args, "--repo", options.OpenIssuesRepository);
+        if (options.IssueState != IssueDuplicatePreflight.DefaultIssueState)
+            AddReplayValueOption(args, "--issue-state", options.IssueState);
         if (options.DuplicatePreflightTuningExplicit)
         {
             if (string.Equals(options.DuplicateConfidence, IssueDuplicatePreflight.CustomDuplicateConfidence, StringComparison.Ordinal))
@@ -2683,6 +2687,8 @@ public static partial class QueryCommandRunner
             AddReplayValueOption(args, "--open-issues", options.OpenIssuesPath);
         if (!string.IsNullOrWhiteSpace(options.OpenIssuesRepository))
             AddReplayValueOption(args, "--repo", options.OpenIssuesRepository);
+        if (options.IssueState != IssueDuplicatePreflight.DefaultIssueState)
+            AddReplayValueOption(args, "--issue-state", options.IssueState);
         if (options.DuplicatePreflightTuningExplicit)
         {
             if (string.Equals(options.DuplicateConfidence, IssueDuplicatePreflight.CustomDuplicateConfidence, StringComparison.Ordinal))

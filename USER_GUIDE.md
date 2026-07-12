@@ -1034,6 +1034,7 @@ cdidx search "TODO" --first-per-file --sample 25 --json=ndjson --max-json-bytes 
 cdidx search "ExecuteReader" --next-steps                  # print inspect/excerpt follow-up commands for top hits
 cdidx search --recipe risky-code --format issue-drafts --open-issues open-issues.json  # issue draft JSON with duplicate preflight
 cdidx search --recipe risky-code --format issue-drafts --open-issues github --repo Widthdom/CodeIndex  # preflight against live open GitHub issues
+cdidx map --format issue-drafts --open-issues github --repo Widthdom/CodeIndex --issue-state all  # preflight map drafts against open and closed history
 cdidx search --recipe risky-code --format issue-drafts --snippet-lines 0 --max-json-bytes 20000  # path/line-only issue drafts
 cdidx search "Thread.Yield" --format issue-drafts --issue-title "Thread.Yield audit" --issue-label audit  # ad hoc issue draft JSON
 cdidx search "--open-reports" --path README.md --count  # quoted literal that starts with --
@@ -3856,6 +3857,7 @@ cdidx search "TODO" --first-per-file --sample 25 --json=ndjson --max-json-bytes 
 cdidx search "ExecuteReader" --next-steps                  # 上位 hit の inspect / excerpt follow-up command を表示
 cdidx search --recipe risky-code --format issue-drafts --open-issues open-issues.json  # duplicate preflight 付き issue draft JSON
 cdidx search --recipe risky-code --format issue-drafts --open-issues github --repo Widthdom/CodeIndex  # GitHub の live open issue と照合
+cdidx map --format issue-drafts --open-issues github --repo Widthdom/CodeIndex --issue-state all  # map draft を open / closed 履歴と照合
 cdidx search --recipe risky-code --format issue-drafts --snippet-lines 0 --max-json-bytes 20000  # path / line のみの issue draft
 cdidx search "Thread.Yield" --format issue-drafts --issue-title "Thread.Yield audit" --issue-label audit  # ad hoc issue draft JSON
 cdidx search "--open-reports" --path README.md --count  # `--` で始まる引用済みリテラル

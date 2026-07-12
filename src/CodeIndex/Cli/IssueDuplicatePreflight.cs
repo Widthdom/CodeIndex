@@ -31,6 +31,7 @@ internal sealed class IssueDuplicatePreflight
     internal const string DefaultDuplicateConfidence = "medium";
     internal const string HighDuplicateConfidence = "high";
     internal const string CustomDuplicateConfidence = "custom";
+    internal const string DefaultIssueState = "open";
     private const int GitHubOpenIssuesPerPage = 100;
     private const int MaxGitHubOpenIssuePages = (MaxOpenIssueCount / GitHubOpenIssuesPerPage) + 1;
     private const int GitHubLabelsPerPage = 100;
@@ -144,7 +145,8 @@ internal sealed class IssueDuplicatePreflight
     internal static async Task<IssueDuplicatePreflightLoadResult> TryLoadAsync(
         string? source,
         string? repository,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string issueState = DefaultIssueState)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!IsGitHubOpenIssuesSource(source))
@@ -161,7 +163,9 @@ internal sealed class IssueDuplicatePreflight
         if (!TryNormalizeGitHubRepository(requestedRepository, out var normalizedRepository, out var error))
             return IssueDuplicatePreflightLoadResult.Failure(error!);
 
-        return await TryLoadFromGitHubAsync(normalizedRepository, cancellationToken).ConfigureAwait(false);
+        if (issueState is not ("open" or "closed" or "all"))
+            return IssueDuplicatePreflightLoadResult.Failure("--issue-state must be one of open, closed, or all.");
+        return await TryLoadFromGitHubAsync(normalizedRepository, issueState, cancellationToken).ConfigureAwait(false);
     }
 
     public static bool TryNormalizeDuplicateConfidence(string value, out string confidence)
@@ -294,7 +298,9 @@ internal sealed class IssueDuplicatePreflight
                 reason,
                 roundedScore,
                 ClassifyConfidence(roundedScore),
-                signals.Distinct(StringComparer.OrdinalIgnoreCase).ToList()));
+                signals.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+                issue.State,
+                issue.State == "closed" ? "possible_regression" : "possible_duplicate"));
         }
 
         return matches
@@ -330,7 +336,8 @@ internal sealed class IssueDuplicatePreflight
                 title,
                 TryReadString(item?["html_url"], MaxOpenIssueUrlLength) ?? TryReadString(item?["url"], MaxOpenIssueUrlLength),
                 ReadLabels(item?["labels"]),
-                TryReadString(item?["body"], MaxOpenIssueBodyLength)));
+                TryReadString(item?["body"], MaxOpenIssueBodyLength),
+                TryReadString(item?["state"], 16)?.ToLowerInvariant() ?? "open"));
         }
 
         return issues;
@@ -409,6 +416,7 @@ internal sealed class IssueDuplicatePreflight
 
     private static async Task<IssueDuplicatePreflightLoadResult> TryLoadFromGitHubAsync(
         string repository,
+        string issueState,
         CancellationToken cancellationToken)
     {
         var issues = new List<OpenIssue>();
@@ -416,7 +424,7 @@ internal sealed class IssueDuplicatePreflight
         {
             for (var page = 1; page <= MaxGitHubOpenIssuePages && issues.Count < MaxOpenIssueCount; page++)
             {
-                var pageResult = await FetchGitHubOpenIssuePageAsync(repository, page, cancellationToken)
+                var pageResult = await FetchGitHubOpenIssuePageAsync(repository, issueState, page, cancellationToken)
                     .ConfigureAwait(false);
                 issues.AddRange(pageResult.Issues);
                 if (pageResult.RawEntryCount == 0 || pageResult.RawEntryCount < GitHubOpenIssuesPerPage)
@@ -469,13 +477,14 @@ internal sealed class IssueDuplicatePreflight
 
     private static async Task<GitHubOpenIssuePageResult> FetchGitHubOpenIssuePageAsync(
         string repository,
+        string issueState,
         int page,
         CancellationToken cancellationToken)
     {
         var slash = repository.IndexOf('/');
         var owner = repository[..slash];
         var name = repository[(slash + 1)..];
-        var url = $"{GitHubApiBase}/repos/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(name)}/issues?state=open&per_page={GitHubOpenIssuesPerPage.ToString(CultureInfo.InvariantCulture)}&page={page.ToString(CultureInfo.InvariantCulture)}";
+        var url = $"{GitHubApiBase}/repos/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(name)}/issues?state={issueState}&per_page={GitHubOpenIssuesPerPage.ToString(CultureInfo.InvariantCulture)}&page={page.ToString(CultureInfo.InvariantCulture)}";
         var timeout = GitHubIssueReporter.ResolveSubmitTimeout();
         using var requestCancellation = GitHubHttpClientFactory.CreateRequestCancellationScope(timeout, cancellationToken);
         var token = CdidxEnvironment.GetProcessEnvironmentVariable(GitHubTokenEnvironmentVariable);
@@ -899,7 +908,7 @@ internal sealed class IssueDuplicatePreflight
 
     private sealed record GitHubRepositoryLabelPageResult(List<string> Labels, int RawEntryCount);
 
-    private sealed record OpenIssue(int? Number, string Title, string? Url, List<string> Labels, string? Body);
+    private sealed record OpenIssue(int? Number, string Title, string? Url, List<string> Labels, string? Body, string State);
 
     private sealed class InvalidOpenIssuesFileException(string message) : Exception(message);
 
