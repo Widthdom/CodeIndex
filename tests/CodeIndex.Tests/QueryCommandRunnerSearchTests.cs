@@ -8051,25 +8051,26 @@ jobs:
         }
     }
 
-    [Theory]
-    [InlineData("--path")]
-    [InlineData("--exclude-path")]
-    public void RunSearch_InvalidPathGlobReturnsUsageErrorBeforeQuery_Issue2073(string optionName)
+    [Fact]
+    public void RunSearch_InvalidPathGlobsReturnUsageErrorBeforeQuery_Issue2073()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2073_invalid_glob");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["QueryCommandRunner", "--db", dbPath, optionName, "[*-z]"],
-                _jsonOptions));
+            foreach (var optionName in new[] { "--path", "--exclude-path" })
+            {
+                var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    ["QueryCommandRunner", "--db", dbPath, optionName, "[*-z]"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains($"Error: {optionName} '[*-z]' is not a valid glob", stderr);
-            Assert.Contains("character classes are not supported", stderr);
-            Assert.Contains("Hint: fix the invalid or missing option value", stderr);
-            Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("search")}", stderr);
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Contains($"Error: {optionName} '[*-z]' is not a valid glob", stderr);
+                Assert.Contains("character classes are not supported", stderr);
+                Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+                Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("search")}", stderr);
+            }
         }
         finally
         {
