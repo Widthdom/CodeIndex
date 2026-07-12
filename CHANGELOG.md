@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.37.2] - 2026-07-12
+
+#### Fixed
+
+- **Concurrent test start gates no longer report a timeout after every worker is ready** — the shared test helper now recognizes the boundary race where the final worker reaches the gate immediately after the timed wait expires, preventing spurious release-pipeline failures under load.
+
 ### [1.37.1] - 2026-07-12
 
 #### Changed
@@ -5773,6 +5779,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.37.2] - 2026-07-12
+
+#### 修正
+
+- **全ワーカーの準備完了後に並行テストの開始ゲートがタイムアウトを誤報しないよう修正しました** — 最後のワーカーが時間制限付き待機の終了直後にゲートへ到達する境界競合を共通テストヘルパーが認識するようにし、高負荷時のリリースパイプラインの偽失敗を防ぎます。
+
 ### [1.37.1] - 2026-07-12
 
 #### 変更
@@ -11517,7 +11529,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.37.1...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.37.2...HEAD
+[1.37.2]: https://github.com/Widthdom/CodeIndex/compare/v1.37.1...v1.37.2
 [1.37.1]: https://github.com/Widthdom/CodeIndex/compare/v1.37.0...v1.37.1
 [1.37.0]: https://github.com/Widthdom/CodeIndex/compare/v1.36.3...v1.37.0
 [1.36.3]: https://github.com/Widthdom/CodeIndex/compare/v1.36.2...v1.36.3
