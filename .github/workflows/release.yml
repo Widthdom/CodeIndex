@@ -133,7 +133,7 @@ jobs:
 
       - name: Test
         if: ${{ !matrix.cross_compile }}
-        run: dotnet test CodeIndex.sln --configuration Release --no-build --nologo
+        run: dotnet test CodeIndex.sln --configuration Release --no-build --no-restore --nologo
 
       # Generate a CycloneDX SBOM once per release on the linux-x64 lane.
       # SBOM content is RID-independent (it lists NuGet package dependencies

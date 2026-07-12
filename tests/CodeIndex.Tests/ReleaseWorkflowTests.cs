@@ -10,6 +10,18 @@ namespace CodeIndex.Tests;
 public partial class ReleaseWorkflowTests
 {
     [Fact]
+    public void ReleaseWorkflow_ReusesLockedRestoreForTests()
+    {
+        var workflow = ReadReleaseWorkflow();
+
+        AssertContainsAll(
+            workflow,
+            "dotnet restore CodeIndex.sln --locked-mode",
+            "dotnet build CodeIndex.sln --configuration Release --no-restore",
+            "dotnet test CodeIndex.sln --configuration Release --no-build --no-restore --nologo");
+    }
+
+    [Fact]
     public void ReleaseWorkflow_PublishesTrimmedSelfContainedBinariesAndVerifiesCliJson()
     {
         var workflow = ReadReleaseWorkflow();
