@@ -105,6 +105,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Deps missing-graph byte-limit and summary-only zero payloads share one read-only fixture.
   Deps JSON-only control rejection across non-JSON formats uses one data-driven theory.
   Unused missing-chunks count and degraded reflection results share one mutated fixture.
+  Unused missing-graph JSON schema and human count warning share one empty database fixture.
   Razor directive kind-filter queries share one indexed component fixture and iterate route, implements, attribute, and layout expectations in one fact.
   Symbols literal-query coverage shares one empty database for double-dash and explicit `--query` forms when proving compact-looking text is not expanded.
   Symbols hotspot, references, size, and path ranking queries share one symbol-sort fixture because all are read-only views of the same ranking signals.
@@ -507,6 +508,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   deps missing-graphのbyte-limitとsummary-only zero payloadは1つのread-only fixtureを共有してください。
   depsのJSON-only controlをnon-JSON formatで拒否する検証は1つのdata-driven theoryにしてください。
   unusedのmissing-chunks countとdegraded reflection resultは1つのmutated fixtureを共有してください。
+  unusedのmissing-graph JSON schemaとhuman count warningは1つのempty database fixtureを共有してください。
   Razor directive kind-filter query は1つの indexed component fixture を共有し、route、implements、attribute、layout の期待値を1つの fact 内で反復してください。
   symbols literal-query coverage は、compact風のtextが展開されないことを確認するdouble-dash形式と明示的`--query`形式で1つの空databaseを共有してください。
   symbols の hotspot、references、size、path ranking query は同じranking signalのread-only viewなので、1つのsymbol-sort fixtureを共有してください。

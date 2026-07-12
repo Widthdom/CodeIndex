@@ -2526,7 +2526,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_WithJsonMissingGraphTable_UsesUnusedSchema()
+    public void RunUnused_MissingGraphJsonAndHumanCountShareFixture()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_missing_graph_json");
         try
@@ -2550,6 +2550,15 @@ public partial class QueryCommandRunnerTests
             Assert.True(json.TryGetProperty("returned_bucket_counts", out var bucketCounts));
             Assert.Empty(bucketCounts.EnumerateObject());
             Assert.False(json.TryGetProperty("unused", out _));
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--lang", "csharp", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal("0", countStdout.Trim());
+            Assert.Contains("degraded", countStderr);
+            Assert.Contains("symbol_references table missing", countStderr);
         }
         finally
         {
@@ -2593,29 +2602,6 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, resultsExitCode);
             Assert.Equal(string.Empty, resultsStderr);
             Assert.Equal("public_or_exported_no_refs", symbols["FullName"].GetProperty("unused_bucket").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunUnused_CountHumanMissingGraphTable_WarnsDegradedZero()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_missing_graph_count_human");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--lang", "csharp", "--count"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("0", stdout.Trim());
-            Assert.Contains("degraded", stderr);
-            Assert.Contains("symbol_references table missing", stderr);
         }
         finally
         {
