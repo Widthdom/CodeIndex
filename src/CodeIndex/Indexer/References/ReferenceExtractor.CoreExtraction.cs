@@ -2311,6 +2311,11 @@ public static partial class ReferenceExtractor
                     AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer, language);
                     return true;
                 }
+                if (language == "python" && TryGetKnownPythonTypeCall(normalizedName, out var pythonTypeName))
+                {
+                    AddReference(references, seen, fileId, pythonTypeName, callIndex, "instantiate", context, lineNumber, callContainer, language);
+                    return true;
+                }
                 if (language == "csharp"
                     && CSharpReferenceExtractor.ShouldSuppressQualifiedCommonMemberCall(preparedLine, normalizedName, callIndex))
                 {
@@ -2366,6 +2371,23 @@ public static partial class ReferenceExtractor
 
                 AddReference(references, seen, fileId, normalizedName, callIndex, "call", context, lineNumber, callContainer);
                 return true;
+
+                bool TryGetKnownPythonTypeCall(string candidate, out string canonicalName)
+                {
+                    canonicalName = candidate;
+                    var separator = candidate.LastIndexOf('.');
+                    var leaf = separator >= 0 ? candidate[(separator + 1)..] : candidate;
+                    if (leaf.Length == 0 || !char.IsUpper(leaf, 0))
+                        return false;
+
+                    if (symbols.Any(symbol => symbol.Kind == "class"
+                        && (symbol.Name == candidate || symbol.Name == leaf)))
+                    {
+                        return true;
+                    }
+
+                    return PythonImportBindingResolver.TryResolveImportedTypeCall(candidate, preparedLine, callIndex, symbols, out canonicalName);
+                }
             }
 
             if (language is "batch")
