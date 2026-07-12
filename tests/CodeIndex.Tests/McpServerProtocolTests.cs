@@ -22,13 +22,14 @@ namespace CodeIndex.Tests;
 public partial class McpServerTests
 {
     [Fact]
-    public void RequestBeforeInitialize_IsRejected_Issue4468()
+    public async Task RequestBeforeInitialize_IsRejected_Issue4468()
     {
         using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"ping"}""")!;
+        var transport = new QueueMcpTransport("""{"jsonrpc":"2.0","id":1,"method":"ping"}""");
 
-        var response = server.HandleMessage(request)!;
+        await server.RunAsync(transport, CancellationToken.None);
 
+        var response = JsonNode.Parse(Assert.Single(transport.WrittenFrames))!;
         Assert.Equal(-32002, response["error"]!["code"]!.GetValue<int>());
         Assert.Equal("Server not initialized", response["error"]!["message"]!.GetValue<string>());
     }

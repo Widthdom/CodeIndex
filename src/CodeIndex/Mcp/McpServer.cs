@@ -81,6 +81,7 @@ public partial class McpServer : IDisposable
     private static readonly AsyncLocal<RequestCorrelationContext?> CurrentCorrelationContext = new();
     private volatile bool _running = true;
     private volatile bool _initialized;
+    private volatile bool _enforceInitializationLifecycle;
     private long _timedOutIsolatedActionDrainingCount;
     private long _timedOutIsolatedActionDrainedCount;
     private RequestTimeoutDrainDiagnostic? _lastRequestTimeoutDrainDiagnostic;
@@ -472,6 +473,7 @@ public partial class McpServer : IDisposable
     internal async Task RunAsync(IMcpTransport transport, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(transport);
+        _enforceInitializationLifecycle = true;
 
         // Link the caller-supplied token (Ctrl+C / HTTP listener stop) with the server-internal
         // shutdown signal so `notifications/shutdown` also wakes any pending `ReadFrameAsync`.
@@ -1476,7 +1478,7 @@ public partial class McpServer : IDisposable
                 retrySafe: false);
         }
 
-        if (!_initialized && method != "initialize")
+        if (_enforceInitializationLifecycle && !_initialized && method != "initialize")
         {
             return CreateErrorResponse(hasId: true, id: id, code: -32002, message: "Server not initialized",
                 category: McpErrorEnvelope.CategoryInvalidRequest,

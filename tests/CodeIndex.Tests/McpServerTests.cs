@@ -107,7 +107,6 @@ public partial class McpServerTests : IDisposable
         }]);
 
         _server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
-        _server.HandleMessage(JsonNode.Parse("""{"jsonrpc":"2.0","id":"fixture-initialize","method":"initialize","params":{}}""")!);
     }
 
 
