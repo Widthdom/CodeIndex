@@ -1255,7 +1255,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunOutline_Json_SortReferencesProjectsTriageFields_Issue4117()
+    public void RunOutline_ReferenceAndComplexitySortsShareFixture_Issue4117()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_sort_refs_4117");
         try
@@ -1280,35 +1280,21 @@ public partial class QueryCommandRunnerTests
             Assert.True(symbol.GetProperty("complexity_score").GetDouble() > symbol.GetProperty("reference_count").GetInt32());
             Assert.Equal(new[] { "name", "reference_count", "size_lines", "complexity_score", "sort_mode" }, json.GetProperty("selected_fields").EnumerateArray().Select(item => item.GetString()).ToArray());
             Assert.Equal(new[] { "name", "reference_count", "size_lines", "complexity_score", "sort_mode" }, symbol.EnumerateObject().Select(property => property.Name).ToArray());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunOutline_Json_SortComplexityPrioritizesComplexFunctions_Issue4117()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_sort_complexity_4117");
-        try
-        {
-            var dbPath = CreateOutlineSortFixtureDb(projectRoot);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+            var (complexityExitCode, complexityStdout, complexityStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
                 ["src/Giant.cs", "--db", dbPath, "--json", "--kind", "function", "--sort", "complexity", "--limit", "1", "--outline-fields", "name,size,complexity,sort_mode"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var symbol = Assert.Single(json.GetProperty("symbols").EnumerateArray());
+            using var complexityDocument = ParseJsonOutput(complexityStdout);
+            var complexityJson = complexityDocument.RootElement;
+            var complexitySymbol = Assert.Single(complexityJson.GetProperty("symbols").EnumerateArray());
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("complexity", json.GetProperty("sort").GetString());
-            Assert.Equal("BigAudit", symbol.GetProperty("name").GetString());
-            Assert.Equal("complexity", symbol.GetProperty("sort_mode").GetString());
-            Assert.True(symbol.GetProperty("complexity_score").GetDouble() > 100);
+            Assert.Equal(CommandExitCodes.Success, complexityExitCode);
+            Assert.Equal(string.Empty, complexityStderr);
+            Assert.Equal("complexity", complexityJson.GetProperty("sort").GetString());
+            Assert.Equal("BigAudit", complexitySymbol.GetProperty("name").GetString());
+            Assert.Equal("complexity", complexitySymbol.GetProperty("sort_mode").GetString());
+            Assert.True(complexitySymbol.GetProperty("complexity_score").GetDouble() > 100);
         }
         finally
         {
