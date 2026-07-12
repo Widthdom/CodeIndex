@@ -222,6 +222,13 @@ public class DependencyPackageExtractorTests
                 "node_modules/repeat-string": {
                   "version": "1.6.1"
                 }
+              },
+              "dependencies": {
+                "left-pad": {
+                  "requires": {
+                    "repeat-string": "1.6.1"
+                  }
+                }
               }
             }
             """;
@@ -259,9 +266,10 @@ public class DependencyPackageExtractorTests
             content,
             symbols,
             path: "package-lock.json",
-            maxReferenceCount: 1);
+            maxReferenceCount: null);
 
-        var reference = Assert.Single(references);
+        Assert.Equal(2, references.Count);
+        var reference = Assert.Single(references, reference => reference.SymbolName == "repeat-string");
         Assert.Equal("repeat-string", reference.SymbolName);
         Assert.Equal("dependency", reference.ReferenceKind);
         Assert.Equal("package", reference.ContainerKind);

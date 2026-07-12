@@ -246,6 +246,8 @@ internal static class DependencyPackageExtractor
                 if (!AddPackageDependencyReferences(fileId, dependencies, parentName, lines, references))
                     return;
             }
+
+            return;
         }
 
         if (root.TryGetProperty("dependencies", out var legacyDependencies)
