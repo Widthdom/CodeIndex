@@ -355,6 +355,10 @@ internal sealed record QueryCountFilesJsonResult(
     [property: JsonPropertyName("query")] string Query,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion);
 
+internal sealed record StatusLogPathJsonResult(
+    [property: JsonPropertyName("log_path")] string LogPath,
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion);
+
 internal sealed record SearchGroupedCountJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
     [property: JsonPropertyName("query")] string Query,
@@ -898,6 +902,7 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(EnvironmentVariableInventorySummaryJsonResult))]
 [JsonSerializable(typeof(EnvironmentVariableInventorySummaryBucketJsonResult))]
 [JsonSerializable(typeof(StatusResult))]
+[JsonSerializable(typeof(StatusLogPathJsonResult))]
 [JsonSerializable(typeof(StatusHeadFreshness))]
 [JsonSerializable(typeof(StatusSqliteConnectionPolicy))]
 [JsonSerializable(typeof(StatusFailedOrPartialIndexRun))]

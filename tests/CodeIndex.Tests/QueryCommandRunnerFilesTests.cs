@@ -1546,6 +1546,7 @@ public partial class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
+            Assert.Equal("1", document.RootElement.GetProperty("api_version").GetString());
             Assert.Equal(Path.Combine(cacheHome, "cdidx", "logs"), document.RootElement.GetProperty("log_path").GetString());
         }
         finally
