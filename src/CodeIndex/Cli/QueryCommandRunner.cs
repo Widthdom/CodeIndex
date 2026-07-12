@@ -178,6 +178,7 @@ public sealed class QueryCommandOptions
     public string AuditScope { get; init; } = SearchAuditRecipes.DefaultAuditScope;
     public bool AuditScopeExplicit { get; init; }
     public string? OpenIssuesRepository { get; init; }
+    public string IssueState { get; init; } = IssueDuplicatePreflight.DefaultIssueState;
     public string DuplicateConfidence { get; init; } = IssueDuplicatePreflight.DefaultDuplicateConfidence;
     public double DuplicateThreshold { get; init; } = IssueDuplicatePreflight.DefaultDuplicateThreshold;
     public bool DuplicatePreflightTuningExplicit { get; init; }

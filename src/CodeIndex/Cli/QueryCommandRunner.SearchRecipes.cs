@@ -940,7 +940,8 @@ public static partial class QueryCommandRunner
         var preflightResult = IssueDuplicatePreflight.TryLoadAsync(
                 options.OpenIssuesPath,
                 options.OpenIssuesRepository,
-                cancellationToken)
+                cancellationToken,
+                options.IssueState)
             .GetAwaiter()
             .GetResult();
         if (!preflightResult.Loaded)
