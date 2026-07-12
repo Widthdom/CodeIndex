@@ -688,7 +688,7 @@ internal static class GitHubIssueReporter
 
     internal static string[] BuildIssueLabels(SuggestionRecord record)
     {
-        return record.Category is "crash_report" or "unexpected_error"
+        return record.Category is "crash_report" or "unexpected_error" or "bug"
             ? ["bug"]
             : ["enhancement"];
     }
