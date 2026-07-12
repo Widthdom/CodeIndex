@@ -525,31 +525,25 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_TwoSequentialRequests_ShareWarmServer()
+    public async Task HttpTransport_WarmServer_HandlesSequentialConcurrentAndEmptyBodyRequests()
     {
         // Issue #1558: AI clients should be able to keep a single MCP server warm across
         // multiple JSON-RPC requests instead of paying subprocess-spawn cost per call.
         // Issue #1558: AI クライアントが MCP サーバーを温めた状態で複数 JSON-RPC を扱えること。
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
 
-        var first = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""");
+        using var first = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""");
         Assert.Equal(HttpStatusCode.OK, first.StatusCode);
 
-        var second = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":2,"method":"tools/list"}""");
+        using var second = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":2,"method":"tools/list"}""");
         Assert.Equal(HttpStatusCode.OK, second.StatusCode);
-        var body = await second.Content.ReadAsStringAsync();
-        using var doc = JsonDocument.Parse(body);
-        Assert.True(doc.RootElement.GetProperty("result").GetProperty("tools").GetArrayLength() > 0);
-    }
+        var listBody = await second.Content.ReadAsStringAsync();
+        using var listDoc = JsonDocument.Parse(listBody);
+        Assert.True(listDoc.RootElement.GetProperty("result").GetProperty("tools").GetArrayLength() > 0);
 
-    [Fact]
-    public async Task HttpTransport_ConcurrentPosts_AreAcceptedAndCorrelatedToResponses()
-    {
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
-
-        var first = harness.PostJsonAsync("""{"jsonrpc":"2.0","id":21,"method":"ping"}""");
-        var second = harness.PostJsonAsync("""{"jsonrpc":"2.0","id":22,"method":"ping"}""");
-        var responses = await Task.WhenAll(first, second);
+        var concurrentFirst = harness.PostJsonAsync("""{"jsonrpc":"2.0","id":21,"method":"ping"}""");
+        var concurrentSecond = harness.PostJsonAsync("""{"jsonrpc":"2.0","id":22,"method":"ping"}""");
+        var responses = await Task.WhenAll(concurrentFirst, concurrentSecond);
 
         Assert.All(responses, response => Assert.Equal(HttpStatusCode.OK, response.StatusCode));
         var ids = new List<int>();
@@ -558,25 +552,20 @@ public class HttpMcpTransportTests : IDisposable
             var body = await response.Content.ReadAsStringAsync();
             using var doc = JsonDocument.Parse(body);
             ids.Add(doc.RootElement.GetProperty("id").GetInt32());
+            response.Dispose();
         }
 
         Assert.Contains(21, ids);
         Assert.Contains(22, ids);
-    }
 
-    [Fact]
-    public async Task HttpTransport_EmptyBody_Returns204AndDoesNotKillServer()
-    {
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
-
-        var empty = await harness.PostJsonAsync(string.Empty);
+        using var empty = await harness.PostJsonAsync(string.Empty);
         Assert.Equal(HttpStatusCode.NoContent, empty.StatusCode);
 
-        var follow = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":7,"method":"ping"}""");
+        using var follow = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":7,"method":"ping"}""");
         Assert.Equal(HttpStatusCode.OK, follow.StatusCode);
-        var body = await follow.Content.ReadAsStringAsync();
-        using var doc = JsonDocument.Parse(body);
-        Assert.Equal(7, doc.RootElement.GetProperty("id").GetInt32());
+        var followBody = await follow.Content.ReadAsStringAsync();
+        using var followDoc = JsonDocument.Parse(followBody);
+        Assert.Equal(7, followDoc.RootElement.GetProperty("id").GetInt32());
     }
 
     [Fact]
