@@ -6756,12 +6756,8 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
-    [InlineData("route", "/products/{id:int}")]
-    [InlineData("implements", "IDisposable")]
-    [InlineData("attribute", "Authorize")]
-    [InlineData("layout", "MainLayout")]
-    public void RunSymbols_AcceptsRazorDirectiveKindFilters(string kind, string expectedName)
+    [Fact]
+    public void RunSymbols_AcceptsRazorDirectiveKindFilters()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_razor_kind_filter");
         try
@@ -6778,17 +6774,28 @@ public partial class QueryCommandRunnerTests
                 @layout MainLayout
                 """);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--kind", kind, "--json"],
-                _jsonOptions));
+            var cases = new[]
+            {
+                (Kind: "route", Name: "/products/{id:int}"),
+                (Kind: "implements", Name: "IDisposable"),
+                (Kind: "attribute", Name: "Authorize"),
+                (Kind: "layout", Name: "MainLayout"),
+            };
 
-            var rows = ParseJsonLines(stdout).Select(document => document.RootElement).ToList();
+            foreach (var testCase in cases)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                    ["--db", dbPath, "--kind", testCase.Kind, "--json"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Single(rows);
-            Assert.Equal(kind, rows[0].GetProperty("kind").GetString());
-            Assert.Equal(expectedName, rows[0].GetProperty("name").GetString());
+                var rows = ParseJsonLines(stdout).Select(document => document.RootElement).ToList();
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Single(rows);
+                Assert.Equal(testCase.Kind, rows[0].GetProperty("kind").GetString());
+                Assert.Equal(testCase.Name, rows[0].GetProperty("name").GetString());
+            }
         }
         finally
         {
