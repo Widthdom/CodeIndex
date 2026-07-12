@@ -179,6 +179,7 @@ public class SuggestionStore
         Success,
         NotFound,
         Duplicate,
+        NotDraft,
     }
 
     /// <summary>
@@ -196,6 +197,8 @@ public class SuggestionStore
             var index = records.FindIndex(record => string.Equals(record.Hash, hash, StringComparison.Ordinal));
             if (index < 0)
                 return MutationResult.NotFound;
+            if (HasUpstreamSubmission(records[index]))
+                return MutationResult.NotDraft;
 
             replacement = RedactRecordForPersistence(replacement);
             var otherRecords = records.Where((_, candidateIndex) => candidateIndex != index).ToList();
@@ -224,6 +227,8 @@ public class SuggestionStore
             var index = records.FindIndex(record => string.Equals(record.Hash, hash, StringComparison.Ordinal));
             if (index < 0)
                 return MutationResult.NotFound;
+            if (HasUpstreamSubmission(records[index]))
+                return MutationResult.NotDraft;
 
             result = records[index];
             records.RemoveAt(index);
@@ -871,6 +876,7 @@ public class SuggestionStore
     private static bool HasUpstreamSubmission(SuggestionRecord record) =>
         record.Status != SuggestionStatus.Draft
         || record.SubmittedToGitHub == true
+        || record.UpstreamIssueNumber != null
         || !string.IsNullOrWhiteSpace(record.UpstreamUrl)
         || !string.IsNullOrWhiteSpace(record.GitHubIssueUrl);
 

@@ -1228,6 +1228,32 @@ public class ProgramCliTests
     }
 
     [ProductionRuntimeFact]
+    public void Suggestions_MutationsRejectSubmittedRecords_Issue4441()
+    {
+        using var fixture = SuggestionFixture.Create();
+        var record = fixture.Add("bug", "csharp", "Submitted suggestion", submitted: true);
+
+        var (updateExitCode, updateStdout, updateStderr) = RunCliInSubprocess([
+            "suggestions", "update", record.Hash[..12], "--db", fixture.DbPath, "--description", "Changed"
+        ]);
+        var (deleteExitCode, deleteStdout, deleteStderr) = RunCliInSubprocess([
+            "suggestions", "delete", record.Hash[..12], "--db", fixture.DbPath
+        ]);
+        var (showExitCode, showStdout, _) = RunCliInSubprocess([
+            "suggestions", "show", record.Hash[..12], "--db", fixture.DbPath, "--json"
+        ]);
+
+        Assert.Equal(CommandExitCodes.UsageError, updateExitCode);
+        Assert.Equal(CommandExitCodes.UsageError, deleteExitCode);
+        Assert.Equal(string.Empty, updateStdout);
+        Assert.Equal(string.Empty, deleteStdout);
+        Assert.Contains("not an editable draft", updateStderr);
+        Assert.Contains("not an editable draft", deleteStderr);
+        Assert.Equal(CommandExitCodes.Success, showExitCode);
+        Assert.Contains(record.Hash, showStdout);
+    }
+
+    [ProductionRuntimeFact]
     public void Suggestions_ListJsonIncludesSubmitDiagnostics()
     {
         using var fixture = SuggestionFixture.Create();

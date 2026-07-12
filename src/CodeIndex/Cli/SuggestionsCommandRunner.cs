@@ -128,6 +128,8 @@ internal static class SuggestionsCommandRunner
         var record = ResolveById(records, options.Id);
         if (record == null)
             return WriteMutationNotFound(options, jsonOptions);
+        if (!IsMutableDraft(record))
+            return WriteMutationNotDraft(options, jsonOptions);
         var originalHash = record.Hash;
 
         if (options.DescriptionSpecified)
@@ -159,6 +161,8 @@ internal static class SuggestionsCommandRunner
         var result = store.TryUpdate(originalHash, record, out var updated);
         if (result == SuggestionStore.MutationResult.Duplicate)
             return CommandErrorWriter.WriteJsonOrHuman(options.Json, jsonOptions, "Updated suggestion would duplicate another stored suggestion.", CommandExitCodes.UsageError);
+        if (result == SuggestionStore.MutationResult.NotDraft)
+            return WriteMutationNotDraft(options, jsonOptions);
         if (result == SuggestionStore.MutationResult.NotFound || updated == null)
             return WriteMutationNotFound(options, jsonOptions);
 
@@ -175,7 +179,11 @@ internal static class SuggestionsCommandRunner
         var record = ResolveById(records, options.Id);
         if (record == null)
             return WriteMutationNotFound(options, jsonOptions);
+        if (!IsMutableDraft(record))
+            return WriteMutationNotDraft(options, jsonOptions);
         var result = store.TryDelete(record.Hash, out var deleted);
+        if (result == SuggestionStore.MutationResult.NotDraft)
+            return WriteMutationNotDraft(options, jsonOptions);
         if (result == SuggestionStore.MutationResult.NotFound || deleted == null)
             return WriteMutationNotFound(options, jsonOptions);
         return WriteMutationSuccess("deleted", deleted, options, jsonOptions);
@@ -192,6 +200,15 @@ internal static class SuggestionsCommandRunner
 
     private static int WriteMutationNotFound(Options options, JsonSerializerOptions jsonOptions)
         => CommandErrorWriter.WriteJsonOrHuman(options.Json, jsonOptions, $"Suggestion not found: {options.Id}", CommandExitCodes.NotFound, "run `cdidx suggestions list --json` to inspect available suggestion ids.");
+
+    private static int WriteMutationNotDraft(Options options, JsonSerializerOptions jsonOptions)
+        => CommandErrorWriter.WriteJsonOrHuman(options.Json, jsonOptions, $"Suggestion is not an editable draft: {options.Id}", CommandExitCodes.UsageError, "Only unsubmitted local drafts can be updated or deleted.");
+
+    private static bool IsMutableDraft(SuggestionRecord record)
+        => record.Status == SuggestionStatus.Draft
+            && !IsSubmitted(record)
+            && record.UpstreamIssueNumber == null
+            && string.IsNullOrWhiteSpace(record.UpstreamUrl);
 
     private static int RunAdd(SuggestionStore store, Options options, JsonSerializerOptions jsonOptions)
     {
