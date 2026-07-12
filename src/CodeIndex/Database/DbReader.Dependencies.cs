@@ -546,6 +546,35 @@ public partial class DbReader
                   -- (multiple same-name attribute / annotation classes) are dropped.
                   -- metadata エッジは同名 class 系 target が 1 つだけのときのみ残す。
                   AND (snc.is_metadata = 0 OR COALESCE(ta.class_like_target_count, 0) <= 1)
+                  -- Python names are file-local bindings. A cross-file edge is valid only
+                  -- when an import in the source file names the referenced symbol/module
+                  -- and that module owns the target path. This prevents ubiquitous names
+                  -- such as Path, main, json, and dataclass from joining every definition.
+                  -- Python の名前はファイルローカルな binding である。cross-file edge は
+                  -- source file の import が参照名/module を束縛し、その module が target
+                  -- path を所有する場合だけ残し、Path/main/json/dataclass の誤結合を防ぐ。
+                  AND (snc.source_lang != 'python' OR EXISTS (
+                        SELECT 1
+                        FROM symbols py_import
+                        WHERE py_import.file_id = snc.source_file_id
+                          AND py_import.kind = 'import'
+                          AND (
+                                py_import.name = snc.symbol_name
+                             OR py_import.name LIKE '%.' || snc.symbol_name
+                             OR snc.symbol_name LIKE py_import.name || '.%'
+                          )
+                          AND (
+                                replace(substr(tf.target_path, 1, length(tf.target_path) - 3), '/', '.') =
+                                    substr(py_import.name, 1, length(py_import.name) - length(snc.symbol_name) - 1)
+                             OR replace(substr(tf.target_path, 1, length(tf.target_path) - 3), '/', '.') LIKE
+                                    '%.' || substr(py_import.name, 1, length(py_import.name) - length(snc.symbol_name) - 1)
+                             OR snc.symbol_name LIKE py_import.name || '.%'
+                                AND (
+                                    replace(substr(tf.target_path, 1, length(tf.target_path) - 3), '/', '.') = py_import.name
+                                    OR replace(substr(tf.target_path, 1, length(tf.target_path) - 3), '/', '.') LIKE '%.' || py_import.name
+                                )
+                          )
+                  ))
                 UNION ALL
                 SELECT snc.source_path,
                        ptf.target_path,

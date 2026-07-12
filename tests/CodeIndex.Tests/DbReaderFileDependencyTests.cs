@@ -10,6 +10,22 @@ namespace CodeIndex.Tests;
 public partial class DbReaderTests
 {
     [Fact]
+    public void GetFileDependencies_PythonUsesFileLocalImportsAndModuleOwnership_Issue4412()
+    {
+        InsertIndexedFile("src/models/user.py", "python", "class User:\n    pass\n");
+        InsertIndexedFile("src/unrelated.py", "python", "class User:\n    pass\nclass Path:\n    pass\n");
+        InsertIndexedFile("src/caller.py", "python",
+            "from models.user import User\nfrom pathlib import Path\n\ndef run():\n    User()\n    Path('x')\n");
+
+        var dependencies = _reader.GetFileDependencies(limit: 20, lang: "python");
+
+        var dependency = Assert.Single(dependencies, edge => edge.SourcePath == "src/caller.py");
+        Assert.Equal("src/models/user.py", dependency.TargetPath);
+        Assert.Contains("User", dependency.Symbols);
+        Assert.DoesNotContain(dependencies, edge => edge.TargetPath == "src/unrelated.py");
+    }
+
+    [Fact]
     public void GetFileDependencies_SolutionResolvesProjectNamesToProjectPaths_Issue4452()
     {
         InsertIndexedFile("Repo.sln", "solution",
