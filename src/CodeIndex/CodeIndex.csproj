@@ -56,7 +56,6 @@
     <NuGetReadmeOutputPath>$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', 'obj', 'NuGet', 'NUGET_README.md'))</NuGetReadmeOutputPath>
     <PackageReleaseNotes>See https://github.com/Widthdom/CodeIndex/blob/$(NuGetReleaseRef)/CHANGELOG.md for release notes.</PackageReleaseNotes>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
-    <PackageIcon>cdidx-icon.png</PackageIcon>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
@@ -165,7 +164,6 @@
 
   <ItemGroup>
     <None Include="$(NuGetReadmeOutputPath)" Pack="true" PackagePath="\" />
-    <None Include="..\..\docs\cdidx-icon.png" Pack="true" PackagePath="\" />
     <None Include="..\..\LICENSE" Pack="true" PackagePath="\" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\COMMERCIAL_LICENSE.md" Pack="true" PackagePath="\" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\INTEGRATION_POLICY.md" Pack="true" PackagePath="\" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
