@@ -19,7 +19,8 @@ modules=(
 )
 
 : > "$tmp_path"
-for module in "${modules[@]}"; do
+for module_index in "${!modules[@]}"; do
+  module="${modules[$module_index]}"
   module_path="${repo_root}/install_modules/${module}"
   if [ ! -f "$module_path" ]; then
     echo "Missing install module: ${module_path}" >&2
@@ -27,7 +28,12 @@ for module in "${modules[@]}"; do
     exit 1
   fi
 
-  cat "$module_path" >> "$tmp_path"
+  if [ "$module_index" -eq 0 ]; then
+    awk 'NR == 1 { print; print "# @generated from canonical sources in install_modules/; DO NOT EDIT install.sh directly."; next } { print }' \
+      "$module_path" >> "$tmp_path"
+  else
+    cat "$module_path" >> "$tmp_path"
+  fi
 done
 
 chmod +x "$tmp_path"

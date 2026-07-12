@@ -135,6 +135,10 @@ dotnet run --project tools/CodeIndex.PackageNormalize -- --dry-run --json --cont
 ```
 
 `install.sh` is generated from focused fragments under `install_modules/`.
+The generated bundle carries an `@generated` provenance marker whose canonical
+sources are those fragments. Keep the marker in generated output so default
+definition and graph queries do not double-count the copied implementations;
+use `--include-generated` only when the bundled copy itself must be audited.
 After editing installer, doctor, self-test, reinstall, uninstall, or dispatch
 logic, regenerate the checked-in one-file installer before testing:
 
@@ -2516,6 +2520,10 @@ dotnet run --project tools/CodeIndex.PackageNormalize -- --dry-run --json --cont
 ```
 
 `install.sh` は `install_modules/` 配下の focused fragment から生成されます。
+生成された bundle には、それらの fragment を canonical source とする
+`@generated` provenance marker が付与されます。コピーされた実装が既定の definition / graph
+query で二重計上されないよう、生成出力ではこの marker を維持してください。bundle 側の
+コピー自体を監査する場合だけ `--include-generated` を使用します。
 installer、doctor、self-test、reinstall、uninstall、dispatch logic を変更した場合は、
 テスト前に checked-in の単一ファイル installer を再生成してください:
 

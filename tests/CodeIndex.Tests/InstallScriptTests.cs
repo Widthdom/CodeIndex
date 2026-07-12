@@ -3,6 +3,7 @@ using System.Formats.Tar;
 using System.IO.Compression;
 using System.Runtime.Versioning;
 using System.Text;
+using CodeIndex.Indexer;
 
 namespace CodeIndex.Tests;
 
@@ -485,8 +486,26 @@ public sealed class InstallScriptTests : IDisposable
         var script = File.ReadAllText(Path.Combine(root, "install.sh"));
         var generated = string.Concat(InstallModuleFiles.Select(module =>
             File.ReadAllText(Path.Combine(root, "install_modules", module))));
+        var firstNewline = generated.IndexOf('\n');
+        generated = generated.Insert(
+            firstNewline + 1,
+            "# @generated from canonical sources in install_modules/; DO NOT EDIT install.sh directly.\n");
 
         Assert.Equal(NormalizeNewlines(generated), NormalizeNewlines(script));
+    }
+
+    [ProductionCliFact]
+    public void InstallScript_GeneratedBundleKeepsModulesCanonical_Issue4408()
+    {
+        var root = GetRepositoryRoot();
+        var script = File.ReadAllText(Path.Combine(root, "install.sh"));
+
+        Assert.True(FileIndexer.IsGeneratedCodeFile("install.sh", script));
+        Assert.All(InstallModuleFiles, module =>
+        {
+            var moduleText = File.ReadAllText(Path.Combine(root, "install_modules", module));
+            Assert.False(FileIndexer.IsGeneratedCodeFile($"install_modules/{module}", moduleText));
+        });
     }
 
     [ProductionCliTheory]
