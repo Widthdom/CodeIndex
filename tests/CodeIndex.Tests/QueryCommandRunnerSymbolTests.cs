@@ -264,40 +264,21 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSymbols_JsonArrayReturnsSingleArray_Issue3935()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_json_array_issue3935");
-        try
-        {
-            var dbPath = CreateSymbolsEditorFormatFixtureDb(projectRoot);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["Run", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var rows = document.RootElement.EnumerateArray().ToList();
-            var row = Assert.Single(rows);
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("Run", row.GetProperty("name").GetString());
-            Assert.Equal("src/App.cs", row.GetProperty("path").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunSymbols_EditorAndDiagnosticFormatsReturnLocations_Issue3935()
+    public void RunSymbols_ArrayEditorAndDiagnosticFormatsReuseLocations_Issue3935()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_editor_formats_issue3935");
         try
         {
             var dbPath = CreateSymbolsEditorFormatFixtureDb(projectRoot);
             string[] baseArgs = ["Run", "--db", dbPath, "--exact-name", "--lang", "csharp", "--kind", "function"];
+
+            var (arrayExitCode, arrayStdout, arrayStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols([.. baseArgs, "--json=array"], _jsonOptions));
+            using var arrayDocument = ParseJsonOutput(arrayStdout);
+            var arrayRow = Assert.Single(arrayDocument.RootElement.EnumerateArray().ToList());
+            Assert.Equal(CommandExitCodes.Success, arrayExitCode);
+            Assert.Equal(string.Empty, arrayStderr);
+            Assert.Equal("Run", arrayRow.GetProperty("name").GetString());
+            Assert.Equal("src/App.cs", arrayRow.GetProperty("path").GetString());
 
             var (lspExitCode, lspStdout, lspStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols([.. baseArgs, "--format", "lsp"], _jsonOptions));
             using var lspDocument = ParseJsonOutput(lspStdout);
