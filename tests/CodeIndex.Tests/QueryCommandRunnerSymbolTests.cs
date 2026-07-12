@@ -1669,7 +1669,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_DefaultJsonCursorPaginatesVisibleResultsAfterSuppression_Issue4120()
+    public void RunUnused_DefaultAndAllJsonCursorsSharePaginationFixture_Issues3691And4120()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
         try
@@ -1700,49 +1700,37 @@ public partial class QueryCommandRunnerTests
             Assert.Single(secondSymbols);
             Assert.Equal("InternalOnly", secondSymbols[0].GetProperty("name").GetString());
             Assert.False(secondJson.TryGetProperty("next_cursor", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunUnused_JsonPaginatesWithUnusedCursor_Issue3691()
-    {
-        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
-        try
-        {
-            var (firstExitCode, firstStdout, firstStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            var (allFirstExitCode, allFirstStdout, allFirstStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
                 ["--db", dbPath, "--json", "--all", "--lang", "csharp", "--limit", "2"],
                 _jsonOptions));
-            using var firstDocument = ParseJsonOutput(firstStdout);
-            var firstJson = firstDocument.RootElement;
-            var firstSymbols = firstJson.GetProperty("symbols");
+            using var allFirstDocument = ParseJsonOutput(allFirstStdout);
+            var allFirstJson = allFirstDocument.RootElement;
+            var allFirstSymbols = allFirstJson.GetProperty("symbols");
 
-            Assert.Equal(CommandExitCodes.Success, firstExitCode);
-            Assert.Equal(string.Empty, firstStderr);
-            Assert.Equal(2, firstJson.GetProperty("count").GetInt32());
-            Assert.Equal("unused:2", firstJson.GetProperty("next_cursor").GetString());
-            Assert.Equal("Hidden", firstSymbols[0].GetProperty("name").GetString());
-            Assert.Equal("InternalOnly", firstSymbols[1].GetProperty("name").GetString());
+            Assert.Equal(CommandExitCodes.Success, allFirstExitCode);
+            Assert.Equal(string.Empty, allFirstStderr);
+            Assert.Equal(2, allFirstJson.GetProperty("count").GetInt32());
+            Assert.Equal("unused:2", allFirstJson.GetProperty("next_cursor").GetString());
+            Assert.Equal("Hidden", allFirstSymbols[0].GetProperty("name").GetString());
+            Assert.Equal("InternalOnly", allFirstSymbols[1].GetProperty("name").GetString());
 
-            var (secondExitCode, secondStdout, secondStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            var (allSecondExitCode, allSecondStdout, allSecondStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
                 ["--db", dbPath, "--json", "--all", "--lang", "csharp", "--limit", "2", "--cursor", "unused:2"],
                 _jsonOptions));
-            using var secondDocument = ParseJsonOutput(secondStdout);
-            var secondJson = secondDocument.RootElement;
-            var secondSymbols = secondJson.GetProperty("symbols");
-            var secondQuery = secondJson.GetProperty("query_context");
+            using var allSecondDocument = ParseJsonOutput(allSecondStdout);
+            var allSecondJson = allSecondDocument.RootElement;
+            var allSecondSymbols = allSecondJson.GetProperty("symbols");
+            var allSecondQuery = allSecondJson.GetProperty("query_context");
 
-            Assert.Equal(CommandExitCodes.Success, secondExitCode);
-            Assert.Equal(string.Empty, secondStderr);
-            Assert.Equal(2, secondJson.GetProperty("count").GetInt32());
-            Assert.Equal("unused:4", secondJson.GetProperty("next_cursor").GetString());
-            Assert.Equal("unused:2", secondQuery.GetProperty("cursor").GetString());
-            Assert.Equal(2, secondQuery.GetProperty("offset").GetInt32());
-            Assert.Equal("PathResolver", secondSymbols[0].GetProperty("name").GetString());
-            Assert.Equal("ConnectionString", secondSymbols[1].GetProperty("name").GetString());
+            Assert.Equal(CommandExitCodes.Success, allSecondExitCode);
+            Assert.Equal(string.Empty, allSecondStderr);
+            Assert.Equal(2, allSecondJson.GetProperty("count").GetInt32());
+            Assert.Equal("unused:4", allSecondJson.GetProperty("next_cursor").GetString());
+            Assert.Equal("unused:2", allSecondQuery.GetProperty("cursor").GetString());
+            Assert.Equal(2, allSecondQuery.GetProperty("offset").GetInt32());
+            Assert.Equal("PathResolver", allSecondSymbols[0].GetProperty("name").GetString());
+            Assert.Equal("ConnectionString", allSecondSymbols[1].GetProperty("name").GetString());
         }
         finally
         {

@@ -86,6 +86,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Symbols compact flag/alias and summary-only JSON envelopes share one editor-format fixture.
   Symbols JSON array, LSP, quickfix, and SARIF location formats share one editor-format fixture.
   Unused default-suppression row, JSON count, summary-only, and text count envelopes, including the `--all` count control, share one unused-symbol fixture.
+  Unused default-suppressed and `--all` JSON cursor pagination share one unused-symbol fixture.
   Razor directive kind-filter queries share one indexed component fixture and iterate route, implements, attribute, and layout expectations in one fact.
   Symbols literal-query coverage shares one empty database for double-dash and explicit `--query` forms when proving compact-looking text is not expanded.
   Symbols hotspot, references, size, and path ranking queries share one symbol-sort fixture because all are read-only views of the same ranking signals.
@@ -469,6 +470,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   symbols compact flag/aliasとsummary-only JSON envelopeは1つのeditor-format fixtureを共有してください。
   symbols JSON array、LSP、quickfix、SARIF location formatは1つのeditor-format fixtureを共有してください。
   unused default-suppressionのrow、JSON count、summary-only、text count envelopeは、`--all` count controlも含めて1つのunused-symbol fixtureを共有してください。
+  unusedのdefault-suppressed JSON cursor paginationと`--all` JSON cursor paginationは1つのunused-symbol fixtureを共有してください。
   Razor directive kind-filter query は1つの indexed component fixture を共有し、route、implements、attribute、layout の期待値を1つの fact 内で反復してください。
   symbols literal-query coverage は、compact風のtextが展開されないことを確認するdouble-dash形式と明示的`--query`形式で1つの空databaseを共有してください。
   symbols の hotspot、references、size、path ranking query は同じranking signalのread-only viewなので、1つのsymbol-sort fixtureを共有してください。
