@@ -8883,7 +8883,7 @@ jobs:
     }
 
     [Fact]
-    public void RunFind_JsonClampsLongSingleLineSnippet()
+    public void RunFind_JsonCoversClampedAndUnclampedLongSingleLineSnippets()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_long_line");
         try
@@ -8913,35 +8913,19 @@ jobs:
             Assert.True(charCount.GetInt32() > 0);
             Assert.Equal(charCount.GetInt32(), truncationContext.GetProperty("total_chars").GetInt32());
             Assert.Equal("line_width", truncationContext.GetProperty("reason").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunFind_JsonTreatsZeroMaxLineWidthAsUnclamped()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_long_line_zero_width");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var longLine = new string('a', 320) + "target" + new string('b', 320);
-            TestProjectHelper.InsertIndexedFile(dbPath, "dist/search.txt", "text", longLine);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            var (unclampedExitCode, unclampedStdout, unclampedStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
                 ["target", "--db", dbPath, "--path", "dist/search.txt", "--json", "--max-line-width", "0"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+            using var unclampedDocument = ParseJsonOutput(unclampedStdout);
+            var unclampedJson = unclampedDocument.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.False(json.GetProperty("snippet_truncated").GetBoolean());
-            Assert.Contains("target", json.GetProperty("snippet").GetString());
-            Assert.True(json.GetProperty("snippet").GetString()!.Length > 512);
+            Assert.Equal(CommandExitCodes.Success, unclampedExitCode);
+            Assert.Equal(string.Empty, unclampedStderr);
+            Assert.False(unclampedJson.GetProperty("snippet_truncated").GetBoolean());
+            Assert.Contains("target", unclampedJson.GetProperty("snippet").GetString());
+            Assert.True(unclampedJson.GetProperty("snippet").GetString()!.Length > 512);
         }
         finally
         {
