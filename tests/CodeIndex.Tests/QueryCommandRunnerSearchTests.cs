@@ -1383,6 +1383,9 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("search", result.GetProperty("ruleId").GetString());
             Assert.Equal("warning", result.GetProperty("level").GetString());
             Assert.Equal("src/app.cs", result.GetProperty("locations")[0].GetProperty("physicalLocation").GetProperty("artifactLocation").GetProperty("uri").GetString());
+            var region = result.GetProperty("locations")[0].GetProperty("physicalLocation").GetProperty("region");
+            Assert.Equal(33, region.GetProperty("startColumn").GetInt32());
+            Assert.Equal(45, region.GetProperty("endColumn").GetInt32());
         }
         finally
         {

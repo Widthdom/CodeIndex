@@ -127,7 +127,7 @@ public static partial class QueryCommandRunner
             return true;
         if (options.OutputFormat == OutputFormatSarif)
         {
-            WriteSarif([], jsonOptions);
+            WriteSarif(Array.Empty<(string Path, int Line, int Column, string Message, string RuleId)>(), jsonOptions);
             return true;
         }
         return false;
