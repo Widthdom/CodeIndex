@@ -23,6 +23,13 @@ public partial class QueryCommandRunnerTests
             schemaLine,
             schemaLine.IndexOf("new HttpClient", StringComparison.Ordinal) + 1,
             "new HttpClient".Length);
+        var siblingType = SearchMatchClassifier.Classify(
+            "src/CodeIndex/Mcp/McpToolDefinitions.cs",
+            "csharp",
+            1,
+            schemaLine,
+            schemaLine.IndexOf("JsonObject", StringComparison.Ordinal) + 1,
+            "JsonObject".Length);
         var runtime = SearchMatchClassifier.Classify(
             "src/CodeIndex/Network/ClientFactory.cs",
             "csharp",
@@ -32,6 +39,7 @@ public partial class QueryCommandRunnerTests
             "new HttpClient".Length);
 
         Assert.Equal(SearchMatchClassifier.SchemaDescription, schema.Origin);
+        Assert.Equal(SearchMatchClassifier.Code, siblingType.Origin);
         Assert.Equal(SearchMatchClassifier.Code, runtime.Origin);
         Assert.True(SearchMatchClassifier.IsStringLikeOrigin(schema.Origin));
     }

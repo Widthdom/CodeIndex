@@ -168,7 +168,7 @@ internal static class SearchMatchClassifier
                 {
                     if (LooksLikeRegexString(text))
                         return RegexLiteral;
-                    if (LooksLikeSchemaDescription(path, text))
+                    if (LooksLikeSchemaDescription(path, text, contentStart))
                         return SchemaDescription;
                     return LooksLikeHelpText(path, text) ? HelpText : StringLiteral;
                 }
@@ -265,13 +265,28 @@ internal static class SearchMatchClassifier
                text.Contains("--", StringComparison.Ordinal);
     }
 
-    private static bool LooksLikeSchemaDescription(string path, string text)
+    private static bool LooksLikeSchemaDescription(string path, string text, int contentStart)
     {
-        if (!string.Equals(Path.GetFileName(path), "McpToolDefinitions.cs", StringComparison.Ordinal))
+        if (!string.Equals(path.Replace('\\', '/'), "src/CodeIndex/Mcp/McpToolDefinitions.cs", StringComparison.Ordinal))
             return false;
 
-        return text.Contains("[\"description\"]", StringComparison.Ordinal) ||
-               text.Contains("AppendConstraintDescription(", StringComparison.Ordinal);
+        const string descriptionProperty = "[\"description\"]";
+        var propertyIndex = text.IndexOf(descriptionProperty, StringComparison.Ordinal);
+        if (propertyIndex >= 0)
+        {
+            var equalsIndex = text.IndexOf('=', propertyIndex + descriptionProperty.Length);
+            var valueQuoteIndex = equalsIndex < 0 ? -1 : text.IndexOf('"', equalsIndex + 1);
+            return valueQuoteIndex >= 0 && contentStart == valueQuoteIndex + 1;
+        }
+
+        const string appendCall = "AppendConstraintDescription(";
+        var callIndex = text.IndexOf(appendCall, StringComparison.Ordinal);
+        if (callIndex < 0)
+            return false;
+
+        var commaIndex = text.IndexOf(',', callIndex + appendCall.Length);
+        var argumentQuoteIndex = commaIndex < 0 ? -1 : text.IndexOf('"', commaIndex + 1);
+        return argumentQuoteIndex >= 0 && contentStart == argumentQuoteIndex + 1;
     }
 
     private static bool IsInsideGitHubActionsRunBlock(
