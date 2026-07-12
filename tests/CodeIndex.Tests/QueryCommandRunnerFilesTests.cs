@@ -2340,6 +2340,45 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatus_CheckJson_IgnoresSuggestionSidecarInInternalDataDirectory()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_check_suggestion_sidecar");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "class App {}\n");
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--db", dbPath, "--json", "--quiet"],
+                _jsonOptions));
+            File.WriteAllText(
+                Path.Combine(projectRoot, ".cdidx", "suggestions-codeindex.json"),
+                "[]\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--check", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var check = document.RootElement.GetProperty("workspace_check");
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(document.RootElement.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.Equal("matched", check.GetProperty("reason").GetString());
+            Assert.Equal(1, check.GetProperty("workspace_file_count").GetInt32());
+            Assert.Equal(0, check.GetProperty("unindexed_file_count").GetInt32());
+            Assert.Empty(check.GetProperty("unindexed_files").EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunStatus_ReadOnlyUriForExplicitDb_UsesPersistedProjectRootMetadata()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_uri");

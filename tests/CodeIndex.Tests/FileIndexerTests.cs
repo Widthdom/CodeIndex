@@ -1942,6 +1942,9 @@ public partial class FileIndexerTests
         var nodeModules = Path.Combine(tempDir, "node_modules");
         Directory.CreateDirectory(nodeModules);
         File.WriteAllText(Path.Combine(nodeModules, "dep.js"), "module.exports = {}");
+        var internalDataDirectory = Path.Combine(tempDir, ".cdidx");
+        Directory.CreateDirectory(internalDataDirectory);
+        File.WriteAllText(Path.Combine(internalDataDirectory, "suggestions-codeindex.json"), "[]");
 
         var indexer = new FileIndexer(tempDir);
         var files = indexer.ScanFiles();
