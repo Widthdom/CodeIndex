@@ -5443,18 +5443,10 @@ public partial class QueryCommandRunnerTests
 
 
 
-    [Theory]
-    [InlineData("definition")]
-    [InlineData("references")]
-    [InlineData("callers")]
-    [InlineData("callees")]
-    [InlineData("symbols")]
-    [InlineData("files")]
-    [InlineData("inspect")]
-    [InlineData("impact")]
-    public void QueryCommands_AcceptNamedQueryEscapeForOptionLookingLiterals_Issue923(string command)
+    [Fact]
+    public void QueryCommands_AcceptNamedQueryEscapeForOptionLookingLiterals_Issue923()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_issue923_named_query_{command}");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue923_named_query");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
@@ -5464,12 +5456,15 @@ public partial class QueryCommandRunnerTests
                 "csharp",
                 "namespace Issue923; public class Probe { public void Run() { } } // --path\n");
 
-            var args = new[] { "--query", "--path", "--db", dbPath, "--limit", "1" };
-            var (exitCode, _, stderr) = CaptureConsole(() => RunIssue923NamedQueryCommand(command, args));
+            foreach (var command in new[] { "definition", "references", "callers", "callees", "symbols", "files", "inspect", "impact" })
+            {
+                var args = new[] { "--query", "--path", "--db", dbPath, "--limit", "1" };
+                var (exitCode, _, stderr) = CaptureConsole(() => RunIssue923NamedQueryCommand(command, args));
 
-            Assert.NotEqual(CommandExitCodes.UsageError, exitCode);
-            Assert.DoesNotContain("requires a value", stderr);
-            Assert.DoesNotContain("is not supported", stderr);
+                Assert.NotEqual(CommandExitCodes.UsageError, exitCode);
+                Assert.DoesNotContain("requires a value", stderr);
+                Assert.DoesNotContain("is not supported", stderr);
+            }
         }
         finally
         {
