@@ -51,6 +51,16 @@ public class SymbolExtractorIssue4415Tests
         Assert.Equal(6, Assert.Single(symbols, symbol => symbol.Name == "items[1]").Line);
     }
 
+    [Fact]
+    public void Extract_JsonStatusGolden_HandlesNestedArrays_Issue4415()
+    {
+        var content = RepositoryTestPaths.ReadText("tests/CodeIndex.Tests/golden/status.json");
+
+        var symbols = SymbolExtractor.Extract(1, "json", content);
+
+        Assert.NotEmpty(symbols);
+    }
+
     private static void AssertSymbol(
         IReadOnlyList<CodeIndex.Models.SymbolRecord> symbols,
         string kind,
