@@ -2198,7 +2198,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_WithJsonUsesReturnedBucketCountsForCurrentPage()
+    public void RunUnused_ReturnedCountsAndDiversificationShareFixture()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
         try
@@ -2222,34 +2222,22 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, json.GetProperty("returned_contract_domain_counts").GetProperty("private_or_file_local").GetInt32());
             Assert.Equal(1, json.GetProperty("returned_contract_domain_counts").GetProperty("nonpublic_internal").GetInt32());
             Assert.False(json.GetProperty("returned_contract_domain_counts").TryGetProperty("public_api_surface", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunUnused_WithJsonDiversifiesBucketsBeforeLimit()
-    {
-        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
-        try
-        {
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            var (diverseExitCode, diverseStdout, diverseStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
                 ["--db", dbPath, "--json", "--all", "--lang", "csharp", "--limit", "4"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var symbols = json.GetProperty("symbols");
+            using var diverseDocument = ParseJsonOutput(diverseStdout);
+            var diverseJson = diverseDocument.RootElement;
+            var diverseSymbols = diverseJson.GetProperty("symbols");
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(["Hidden", "InternalOnly", "PathResolver", "ConnectionString"], symbols.EnumerateArray().Select(symbol => symbol.GetProperty("name").GetString()).ToArray());
-            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
-            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("maybe_unused_nonpublic").GetInt32());
-            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
-            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
+            Assert.Equal(CommandExitCodes.Success, diverseExitCode);
+            Assert.Equal(string.Empty, diverseStderr);
+            Assert.Equal(["Hidden", "InternalOnly", "PathResolver", "ConnectionString"], diverseSymbols.EnumerateArray().Select(symbol => symbol.GetProperty("name").GetString()).ToArray());
+            Assert.Equal(1, diverseJson.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
+            Assert.Equal(1, diverseJson.GetProperty("returned_bucket_counts").GetProperty("maybe_unused_nonpublic").GetInt32());
+            Assert.Equal(1, diverseJson.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(1, diverseJson.GetProperty("returned_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
         }
         finally
         {
