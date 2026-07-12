@@ -821,6 +821,7 @@ public partial class McpServer : IDisposable
         if (graceDelay.IsCanceled)
             return;
 
+        PruneCompletedRequestTasks(tasks);
         CommandErrorWriter.WriteStderr($"[cdidx-mcp] EOF reached with {tasks.Count} in-flight request(s); cancelling after {gracePeriod.TotalMilliseconds:0}ms grace period.");
         try
         {

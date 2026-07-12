@@ -184,6 +184,33 @@ public partial class McpServerTests : IDisposable
         Assert.False(_server.ShutdownRequestedForTests);
     }
 
+    [Fact]
+    public async Task DrainInFlightTasksAsync_DiagnosticCountsOnlyUnfinishedRequests_Issue4435()
+    {
+        var completedDuringGrace = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var unfinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tasks = new List<Task> { Task.CompletedTask, completedDuringGrace.Task, unfinished.Task };
+        var previousError = Console.Error;
+        using var stderr = new StringWriter();
+        Console.SetError(stderr);
+
+        try
+        {
+            var drain = _server.DrainInFlightTasksAsync(
+                tasks,
+                TimeSpan.FromMilliseconds(100),
+                TimeSpan.Zero);
+            completedDuringGrace.SetResult();
+            await drain.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
+
+        Assert.Contains("EOF reached with 1 in-flight request(s)", stderr.ToString(), StringComparison.Ordinal);
+    }
+
     private static bool MethodCallsType(MethodInfo method, Type declaringType)
     {
         var body = method.GetMethodBody()?.GetILAsByteArray();
