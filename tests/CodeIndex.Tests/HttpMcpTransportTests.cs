@@ -223,36 +223,23 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_PostNotification_Returns204NoContent()
+    public async Task HttpTransport_BasicEndpoints_CoverNotificationMethodAndStructuredHealth()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
 
-        var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","method":"notifications/initialized"}""");
-
-        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task HttpTransport_GetRequest_Returns405()
-    {
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+        using var notificationResponse = await harness.PostJsonAsync("""{"jsonrpc":"2.0","method":"notifications/initialized"}""");
+        Assert.Equal(HttpStatusCode.NoContent, notificationResponse.StatusCode);
 
         using var client = CreateHttpClient();
-        using var response = await client.GetAsync(harness.Endpoint);
+        using (var methodResponse = await client.GetAsync(harness.Endpoint))
+        {
+            Assert.Equal(HttpStatusCode.MethodNotAllowed, methodResponse.StatusCode);
+            // RFC 9110 §15.5.6: 405 responses must advertise the supported methods so generic
+            // clients can react without parsing the body.
+            // RFC 9110 §15.5.6 により 405 はサポートメソッドを `Allow` で示す必要がある。
+            Assert.Contains("POST", methodResponse.Content.Headers.Allow);
+        }
 
-        Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
-        // RFC 9110 §15.5.6: 405 responses must advertise the supported methods so generic
-        // clients can react without parsing the body.
-        // RFC 9110 §15.5.6 により 405 はサポートメソッドを `Allow` で示す必要がある。
-        Assert.Contains("POST", response.Content.Headers.Allow);
-    }
-
-    [Fact]
-    public async Task HttpTransport_Healthz_ReturnsStructuredHealth()
-    {
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
-
-        using var client = CreateHttpClient();
         using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
