@@ -211,29 +211,25 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
-    public void RunDeps_SummaryOnlyWithDotFormat_IsRejected_Issue4112()
+    [Theory]
+    [InlineData("dot", "--summary-only", null, "--summary-only is only supported with deps JSON output")]
+    [InlineData("graphml", "--max-json-bytes", "1024", "--max-json-bytes is only supported with deps JSON output")]
+    public void RunDeps_JsonOnlyControlsRejectNonJsonFormats_Issue4112(
+        string format,
+        string option,
+        string? value,
+        string expectedError)
     {
+        var args = value is null
+            ? new[] { "--json", "--format", format, option }
+            : new[] { "--json", "--format", format, option, value };
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-            ["--json", "--format", "dot", "--summary-only"],
+            args,
             _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Equal(string.Empty, stdout);
-        Assert.Contains("--summary-only is only supported with deps JSON output", stderr);
-        Assert.Contains("Usage: cdidx deps", stderr);
-    }
-
-    [Fact]
-    public void RunDeps_MaxJsonBytesWithGraphMlFormat_IsRejected_Issue4112()
-    {
-        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-            ["--json", "--format", "graphml", "--max-json-bytes", "1024"],
-            _jsonOptions));
-
-        Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Equal(string.Empty, stdout);
-        Assert.Contains("--max-json-bytes is only supported with deps JSON output", stderr);
+        Assert.Contains(expectedError, stderr);
         Assert.Contains("Usage: cdidx deps", stderr);
     }
 
