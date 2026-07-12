@@ -80,6 +80,7 @@ public partial class McpServer : IDisposable
     private readonly AsyncLocal<List<Action>?> _deferredFrameLogs = new();
     private static readonly AsyncLocal<RequestCorrelationContext?> CurrentCorrelationContext = new();
     private volatile bool _running = true;
+    private volatile bool _initialized;
     private long _timedOutIsolatedActionDrainingCount;
     private long _timedOutIsolatedActionDrainedCount;
     private RequestTimeoutDrainDiagnostic? _lastRequestTimeoutDrainDiagnostic;
@@ -1387,6 +1388,12 @@ public partial class McpServer : IDisposable
                 retrySafe: false,
                 extraData: BuildInvalidRequestIdData(idError));
 
+        if (TryGetStringMember(obj, "jsonrpc") != "2.0")
+            return CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: jsonrpc must be exactly \"2.0\"",
+                category: McpErrorEnvelope.CategoryInvalidRequest,
+                suggestion: "Set the top-level `jsonrpc` member to the string `2.0`.",
+                retrySafe: false);
+
         using var correlationScope = hasId && CurrentCorrelationContext.Value is null ? BeginRequestCorrelation(id) : null;
 
         if (method == "$/cancelRequest" || method == "notifications/cancelled")
@@ -1467,6 +1474,14 @@ public partial class McpServer : IDisposable
                 category: McpErrorEnvelope.CategoryInvalidRequest,
                 suggestion: "JSON-RPC 2.0 requires a string `method` field.",
                 retrySafe: false);
+        }
+
+        if (!_initialized && method != "initialize")
+        {
+            return CreateErrorResponse(hasId: true, id: id, code: -32002, message: "Server not initialized",
+                category: McpErrorEnvelope.CategoryInvalidRequest,
+                suggestion: "Send a successful `initialize` request before calling other MCP methods.",
+                retrySafe: true);
         }
 
         return await DispatchWithRequestCancellationAsync(id, isolateRequestDb, () => method switch
@@ -2077,6 +2092,7 @@ public partial class McpServer : IDisposable
             // サーバー指示 — AIクライアント向けツール選択ガイダンス
             ["instructions"] = BuildInstructions()
         };
+        _initialized = true;
         return CreateSuccessResponse(true, id, result);
     }
 
