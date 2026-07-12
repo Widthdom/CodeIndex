@@ -783,7 +783,7 @@ internal sealed class LspServer : IDisposable
                character >= 0;
     }
 
-    internal static bool IsPositionInRange(
+    private static bool IsPositionInRange(
         int line,
         int character,
         int startLine,

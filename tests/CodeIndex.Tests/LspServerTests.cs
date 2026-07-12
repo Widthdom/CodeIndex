@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Lsp;
+using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
@@ -491,20 +492,32 @@ public class LspServerTests
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             var sourcePath = Path.Combine(projectRoot, "app.cs");
-            var source = "public class App\n{\n    public int Count() => 1;\n    public string Name { get; } = \"app\";\n}\n";
+            var source = "public class App\n{\n    outsideValue = 1;\n    insideValue = 2;\n    endValue = 3;\n    public int Count() => 1;\n}\n";
             File.WriteAllText(sourcePath, source);
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
+            using (var fixtureDb = new DbContext(dbPath))
+            {
+                using var fileIdCommand = fixtureDb.Connection.CreateCommand();
+                fileIdCommand.CommandText = "SELECT id FROM files WHERE path = 'app.cs'";
+                var fileId = Convert.ToInt64(fileIdCommand.ExecuteScalar(), CultureInfo.InvariantCulture);
+                var writer = new DbWriter(fixtureDb.Connection);
+                writer.InsertSymbols([
+                    new SymbolRecord { FileId = fileId, Kind = "field", Name = "outsideValue", Line = 3, StartLine = 3, EndLine = 3, ReturnType = "int" },
+                    new SymbolRecord { FileId = fileId, Kind = "field", Name = "insideValue", Line = 4, StartLine = 4, EndLine = 4, ReturnType = "int" },
+                    new SymbolRecord { FileId = fileId, Kind = "field", Name = "endValue", Line = 5, StartLine = 5, EndLine = 5, ReturnType = "int" },
+                ]);
+            }
             using var db = new DbContext(dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
 
-            var response = server.HandleMessage(CreateInlayHintRequest(sourcePath, 4418, 2, 0, 3, 0));
+            var response = server.HandleMessage(CreateInlayHintRequest(sourcePath, 4418, 3, 0, 4, 0));
 
             Assert.NotNull(response);
             Assert.True(response!["error"] is null, response["error"]?.ToJsonString());
-            Assert.Empty(response!["result"]!.AsArray());
-            Assert.True(LspServer.IsPositionInRange(2, 20, 2, 0, 3, 0));
-            Assert.False(LspServer.IsPositionInRange(1, 20, 2, 0, 3, 0));
-            Assert.False(LspServer.IsPositionInRange(3, 0, 2, 0, 3, 0));
+            var hint = Assert.Single(response!["result"]!.AsArray());
+            Assert.Equal(3, hint!["position"]!["line"]!.GetValue<int>());
+            Assert.Equal(15, hint["position"]!["character"]!.GetValue<int>());
+            Assert.Equal(": int", hint["label"]!.GetValue<string>());
         }
         finally
         {
