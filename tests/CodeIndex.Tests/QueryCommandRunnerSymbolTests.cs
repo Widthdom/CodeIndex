@@ -4895,42 +4895,31 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
-    [InlineData("--exact", "--exact-name")]
-    [InlineData("--exact", "--exact-substring")]
-    [InlineData("--exact-substring", "--exact-name")]
-    public void RunDefinition_RejectsCombinedExactFlags(string first, string second)
+    [Fact]
+    public void SymbolCommands_RejectCombinedExactFlags()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_combined_exact");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
-                ["Run", "--db", dbPath, first, second],
-                _jsonOptions));
+            var cases = new[]
+            {
+                (Command: "definition", First: "--exact", Second: "--exact-name"),
+                (Command: "definition", First: "--exact", Second: "--exact-substring"),
+                (Command: "definition", First: "--exact-substring", Second: "--exact-name"),
+                (Command: "symbols", First: "--exact", Second: "--exact-name"),
+            };
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("pass only one of --exact, --exact-substring, --token-boundary, --exact-name", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
+            foreach (var testCase in cases)
+            {
+                var args = new[] { "Run", "--db", dbPath, testCase.First, testCase.Second };
+                var (exitCode, _, stderr) = CaptureConsole(() => testCase.Command == "definition"
+                    ? QueryCommandRunner.RunDefinition(args, _jsonOptions)
+                    : QueryCommandRunner.RunSymbols(args, _jsonOptions));
 
-    [Fact]
-    public void RunSymbols_RejectsCombinedExactAndExactName()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_combined_exact_name");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["Run", "--db", dbPath, "--exact", "--exact-name"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("pass only one of --exact, --exact-substring, --token-boundary, --exact-name", stderr);
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Contains("pass only one of --exact, --exact-substring, --token-boundary, --exact-name", stderr);
+            }
         }
         finally
         {
