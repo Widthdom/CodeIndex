@@ -41,6 +41,9 @@ internal static class SuggestionsCommandRunner
             return WriteUsageError("--open-issues can only be used with `suggestions export --format issue-drafts`.", options.Json, jsonOptions);
         if (options.OpenIssuesRepository != null && (verb != "export" || options.ExportFormat != "issue-drafts"))
             return WriteUsageError("--repo can only be used with `suggestions export --format issue-drafts --open-issues github`.", options.Json, jsonOptions);
+        if (options.IssueState != IssueDuplicatePreflight.DefaultIssueState
+            && (verb != "export" || options.ExportFormat != "issue-drafts" || !IssueDuplicatePreflight.IsGitHubOpenIssuesSource(options.OpenIssuesPath)))
+            return WriteUsageError("--issue-state can only be used with `suggestions export --format issue-drafts --open-issues github`.", options.Json, jsonOptions);
         if (verb == "show" && options.HasPagination)
             return WriteUsageError("--limit and --offset can only be used with `suggestions list` or `suggestions export`.", options.Json, jsonOptions);
         if (verb == "export" && options.Json && options.ExportFormat == "markdown")

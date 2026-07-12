@@ -34,6 +34,8 @@ public static partial class QueryCommandRunner
             return CommandErrorWriter.Write("--open-issues can only be used with `cdidx map --format issue-drafts`.", CommandExitCodes.UsageError, usage: ConsoleUi.GetUsageLine("map"));
         if (options.OpenIssuesRepository != null && !IssueDuplicatePreflight.IsGitHubOpenIssuesSource(options.OpenIssuesPath))
             return CommandErrorWriter.Write("--repo can only be used with `--open-issues github`.", CommandExitCodes.UsageError, usage: ConsoleUi.GetUsageLine("map"));
+        if (options.IssueState != IssueDuplicatePreflight.DefaultIssueState && !IssueDuplicatePreflight.IsGitHubOpenIssuesSource(options.OpenIssuesPath))
+            return CommandErrorWriter.Write("--issue-state can only be used with `--open-issues github`.", CommandExitCodes.UsageError, usage: ConsoleUi.GetUsageLine("map"));
         if (options.MapSections?.Contains("list", StringComparer.Ordinal) == true)
             return WriteRepoMapSectionsList(options, jsonOptions);
         if (options.MapSummaryOnly && options.MapSections != null)
