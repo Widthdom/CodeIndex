@@ -140,6 +140,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Rate-limit-disabled coverage uses the lightweight `languages` tool for repeated successful calls; do not pay repeated `status` database aggregation cost when the assertion only concerns limiter bypass.
 - `HttpMcpTransportTests.cs`
   HTTP MCP transport behavior, including authentication responses, warm server reuse, concurrent requests, and request logging. Request-log assertions must validate recorded contents without assuming callback order between independently handled HTTP requests.
+  Request-log metadata bounds for long paths, long JSON-RPC IDs, and over-depth IDs share one sequential logger harness and select records by content rather than callback order.
   Event-stream lifecycle coverage uses one harness to verify response headers, concurrent POST handling, oversized server-side closure, and client disposal in sequence, with a short test-owned keep-alive instead of the production heartbeat interval.
   No-stream initialize coverage reuses one default harness for explicit protocol negotiation and default handshake behavior; event-stream notification delivery keeps an isolated session.
   Basic HTTP endpoint coverage reuses one default harness for notification 204, root-method 405/Allow, and structured healthy `/healthz` responses.
@@ -483,6 +484,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   rate-limit-disabled coverage の繰り返し成功 call には軽量な `languages` tool を使い、limiter bypass だけの assertion で `status` の database aggregation cost を繰り返し支払わないでください。
 - `HttpMcpTransportTests.cs`
   HTTP MCP transport の挙動。認証レスポンス、warm server reuse、並行リクエスト、リクエストログを含みます。リクエストログの assertion は、独立に処理される HTTP リクエスト間の callback 順序を仮定せず、記録内容を検証してください。
+  request-log metadata の long path、long JSON-RPC ID、over-depth ID 境界は1つの sequential logger harness を共有し、callback 順序ではなく record 内容で対象を選んでください。
   event-stream lifecycle coverage は1つの harness で response header、並行POST処理、oversized server-side closure、client disposal を順に検証し、production heartbeat interval ではなく短い test-owned keep-alive を使ってください。
   event streamなしのinitialize coverageは1つのdefault harnessでexplicit protocol negotiationとdefault handshakeを検証し、event-stream notification deliveryは独立sessionを維持してください。
   basic HTTP endpoint coverageは1つのdefault harnessでnotification 204、root methodの405/Allow、structured healthy `/healthz` responseを検証してください。

@@ -476,52 +476,40 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_RequestLogger_CapsLongPathBeforeLogging()
+    public async Task HttpTransport_RequestLogger_BoundsPathAndJsonRpcIdMetadata_Issue3014()
     {
         var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, requestLogger: records.Enqueue);
 
         using var client = CreateHttpClient();
         var longPath = string.Join('/', Enumerable.Repeat("segment", 50));
-        using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), longPath));
+        using var pathResponse = await client.GetAsync(new Uri(new Uri(harness.Endpoint), longPath));
 
-        Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
-        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
-        Assert.Equal(HttpMcpTransport.MaxRequestLogFieldCharacters, record.Path.Length);
-        Assert.EndsWith(HttpMcpTransport.RequestLogTruncationMarker, record.Path, StringComparison.Ordinal);
-    }
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, pathResponse.StatusCode);
+        var pathRecord = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
+        Assert.Equal(HttpMcpTransport.MaxRequestLogFieldCharacters, pathRecord.Path.Length);
+        Assert.EndsWith(HttpMcpTransport.RequestLogTruncationMarker, pathRecord.Path, StringComparison.Ordinal);
 
-    [Fact]
-    public async Task HttpTransport_RequestLogger_CapsLongJsonRpcIdBeforeLogging()
-    {
-        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath, requestLogger: records.Enqueue);
         var oversizedId = new string('i', HttpMcpTransport.MaxRequestLogFieldCharacters + 100);
         var body = """{"jsonrpc":"2.0","id":"""
             + JsonSerializer.Serialize(oversizedId)
             + ""","method":"ping"}""";
 
-        using var response = await harness.PostJsonAsync(body);
+        using var oversizedIdResponse = await harness.PostJsonAsync(body);
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
-        Assert.NotNull(record.RequestId);
-        Assert.Equal(HttpMcpTransport.MaxRequestLogFieldCharacters, record.RequestId.Length);
-        Assert.EndsWith(HttpMcpTransport.RequestLogTruncationMarker, record.RequestId, StringComparison.Ordinal);
-    }
+        Assert.Equal(HttpStatusCode.OK, oversizedIdResponse.StatusCode);
+        var oversizedIdRecords = await WaitForRequestLogRecordsAsync(records, 2);
+        var oversizedIdRecord = Assert.Single(oversizedIdRecords, record => record.Method == "POST");
+        Assert.NotNull(oversizedIdRecord.RequestId);
+        Assert.Equal(HttpMcpTransport.MaxRequestLogFieldCharacters, oversizedIdRecord.RequestId.Length);
+        Assert.EndsWith(HttpMcpTransport.RequestLogTruncationMarker, oversizedIdRecord.RequestId, StringComparison.Ordinal);
 
-    [Fact]
-    public async Task HttpTransport_RequestLogger_TooDeepJsonRpcIdReturnsNull_Issue3014()
-    {
-        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath, requestLogger: records.Enqueue);
+        using var deepIdResponse = await harness.PostJsonAsync(BuildNestedJsonRpcRequest(McpServer.MaxJsonDepth + 1));
 
-        using var response = await harness.PostJsonAsync(BuildNestedJsonRpcRequest(McpServer.MaxJsonDepth + 1));
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var snapshot = await WaitForRequestLogRecordsAsync(records, 1);
-        var record = Assert.Single(snapshot, record => record.Method == "POST");
-        Assert.Null(record.RequestId);
+        Assert.Equal(HttpStatusCode.OK, deepIdResponse.StatusCode);
+        var deepIdRecords = await WaitForRequestLogRecordsAsync(records, 3);
+        var deepIdRecord = Assert.Single(deepIdRecords, record => record.Method == "POST" && record.RequestId is null);
+        Assert.Null(deepIdRecord.RequestId);
     }
 
     [Fact]
