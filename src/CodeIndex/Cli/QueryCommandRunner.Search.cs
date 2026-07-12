@@ -559,6 +559,7 @@ public static partial class QueryCommandRunner
         var ndjsonOptions = options.JsonOutputFormat == JsonOutputFormatNdjson ? GetCompactJsonOptions(jsonOptions) : jsonOptions;
         int? jsonDoneCount = null;
         var jsonDoneInterrupted = false;
+        var jsonDoneTruncated = false;
         DbReader? jsonDoneReader = null;
         return WithDb(options, jsonOptions, reader =>
         {
@@ -631,6 +632,7 @@ public static partial class QueryCommandRunner
             var ftsQueryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
             var displayRows = ReadSearchDisplayRows(reader, options, exactSearch);
             var selection = ApplySearchOutputSelection(displayRows, options);
+            jsonDoneTruncated = selection.Truncated;
             displayRows = selection.Rows;
             if (displayRows.Count == 0)
             {
@@ -786,7 +788,7 @@ public static partial class QueryCommandRunner
         }, exitCode =>
         {
             if (options.Json && options.JsonOutputFormat == JsonOutputFormatNdjson && jsonDoneCount.HasValue && !options.ResultsOnly)
-                WriteJsonStreamDone(jsonDoneCount.Value, ndjsonOptions, jsonDoneInterrupted, jsonDoneReader);
+                WriteJsonStreamDone(jsonDoneCount.Value, ndjsonOptions, jsonDoneInterrupted, jsonDoneTruncated, jsonDoneReader);
         });
     }
 }

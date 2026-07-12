@@ -982,9 +982,9 @@ public static partial class QueryCommandRunner
     {
         var requested = Math.Max(1, options.Limit);
         if (!options.FirstPerFile && !options.SampleSize.HasValue)
-            return requested;
+            return requested == int.MaxValue ? requested : requested + 1;
         var sampleTarget = Math.Max(requested, options.SampleSize ?? requested);
-        return Math.Min(SearchOriginFilterMaxCandidates, Math.Max(requested, sampleTarget * SearchOriginFilterOverFetchFactor));
+        return Math.Min(SearchOriginFilterMaxCandidates, Math.Max(requested + 1, sampleTarget * SearchOriginFilterOverFetchFactor));
     }
 
     private static List<SearchResult> ReadSearchResults(DbReader reader, QueryCommandOptions options, bool exact, int limit, SearchCursor? cursor = null, int? guardRequestedLimit = null)
@@ -1318,7 +1318,7 @@ public static partial class QueryCommandRunner
             first.ExactSubstringHint = hint;
     }
 
-    private static void WriteJsonStreamDone(int count, JsonSerializerOptions jsonOptions, bool interrupted = false, DbReader? reader = null)
+    private static void WriteJsonStreamDone(int count, JsonSerializerOptions jsonOptions, bool interrupted = false, bool truncated = false, DbReader? reader = null)
     {
         var includeDiagnostics = HasReadOnlyFallbackDiagnostics(reader);
         Console.WriteLine(JsonSerializer.Serialize(
@@ -1326,6 +1326,8 @@ public static partial class QueryCommandRunner
                 Done: !interrupted,
                 Count: count,
                 Interrupted: interrupted,
+                Truncated: truncated,
+                HasMore: truncated,
                 ReadOnlyFallback: includeDiagnostics ? reader!.ReadOnlyFallback : null,
                 WalCheckpointAttempted: includeDiagnostics ? reader!.WalCheckpointAttempted : null,
                 WalCheckpointSucceeded: includeDiagnostics ? reader!.WalCheckpointSucceeded : null,

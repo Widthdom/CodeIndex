@@ -432,6 +432,8 @@ internal sealed record JsonStreamDoneResult(
     [property: JsonPropertyName("done")] bool Done,
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("interrupted")] bool Interrupted,
+    [property: JsonPropertyName("truncated")] bool Truncated,
+    [property: JsonPropertyName("has_more")] bool HasMore,
     [property: JsonPropertyName("read_only_fallback")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? ReadOnlyFallback = null,
     [property: JsonPropertyName("wal_checkpoint_attempted")]
