@@ -157,7 +157,7 @@ public class DependencyPackageExtractorTests
     }
 
     [Fact]
-    public void Extract_DependencyLock_EmitsResolvedPackageSymbolsAndReferences_Issue3899()
+    public void Extract_DependencyLock_EmitsResolvedSymbolsAndParentPackageReferences_Issues3899And4409()
     {
         var content =
             """
@@ -168,7 +168,10 @@ public class DependencyPackageExtractorTests
                   "Newtonsoft.Json": {
                     "type": "Direct",
                     "requested": "[13.0.3, )",
-                    "resolved": "13.0.3"
+                    "resolved": "13.0.3",
+                    "dependencies": {
+                      "Serilog": "3.1.1"
+                    }
                   },
                   "Serilog": {
                     "type": "Transitive",
@@ -196,22 +199,38 @@ public class DependencyPackageExtractorTests
             && symbol.Name == "Serilog"
             && symbol.Signature?.Contains("role=transitive", StringComparison.Ordinal) == true);
         Assert.Contains(references, reference =>
-            reference.SymbolName == "Newtonsoft.Json"
-            && reference.ReferenceKind == "dependency"
-            && reference.ContainerName == "net8.0"
-            && reference.Context.Contains("Newtonsoft.Json", StringComparison.Ordinal));
-        Assert.Contains(references, reference =>
             reference.SymbolName == "Serilog"
-            && reference.ReferenceKind == "dependency");
+            && reference.ReferenceKind == "dependency"
+            && reference.ContainerKind == "package"
+            && reference.ContainerName == "Newtonsoft.Json"
+            && reference.Context.Contains("Serilog", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Newtonsoft.Json");
     }
 
     [Fact]
-    public void Extract_DependencyLock_ReferencesReusePackageSymbolsWithoutReparsing()
+    public void Extract_DependencyLock_ReferencesModelNpmParentPackageEdges_Issue4409()
     {
         var content = """
             {
               "packages": {
+                "node_modules/repeat-string": {
+                  "version": "1.6.1"
+                },
                 "node_modules/left-pad": {
+                  "dependencies": {
+                    "repeat-string": "1.6.1",
+                    "is-number": "7.0.0"
+                  }
+                }
+              },
+              "dependencies": {
+                "left-pad": {
+                  "requires": {
+                    "repeat-string": "1.6.1"
+                  }
+                }
+              }
+            }
             """;
         var symbols = new[]
         {
@@ -219,7 +238,7 @@ public class DependencyPackageExtractorTests
             {
                 FileId = 11,
                 Kind = "package",
-                Name = "left-pad",
+                Name = "repeat-string",
                 Line = 3,
                 StartLine = 3,
                 StartColumn = 5,
@@ -231,7 +250,7 @@ public class DependencyPackageExtractorTests
             {
                 FileId = 11,
                 Kind = "package",
-                Name = "unused",
+                Name = "is-number",
                 Line = 4,
                 StartLine = 4,
                 StartColumn = 9,
@@ -247,15 +266,14 @@ public class DependencyPackageExtractorTests
             content,
             symbols,
             path: "package-lock.json",
-            maxReferenceCount: 1);
+            maxReferenceCount: null);
 
-        var reference = Assert.Single(references);
-        Assert.Equal("left-pad", reference.SymbolName);
+        Assert.Equal(2, references.Count);
+        var reference = Assert.Single(references, reference => reference.SymbolName == "repeat-string");
+        Assert.Equal("repeat-string", reference.SymbolName);
         Assert.Equal("dependency", reference.ReferenceKind);
-        Assert.Equal(3, reference.Line);
-        Assert.Equal(6, reference.Column);
-        Assert.Equal("\"node_modules/left-pad\": {", reference.Context);
-        Assert.Equal("project", reference.ContainerKind);
-        Assert.Equal("npm", reference.ContainerName);
+        Assert.Equal("package", reference.ContainerKind);
+        Assert.Equal("left-pad", reference.ContainerName);
+        Assert.Equal("\"repeat-string\": \"1.6.1\",", reference.Context);
     }
 }

@@ -78,6 +78,9 @@ internal static class DependencyPackageExtractor
 
     public static List<ReferenceRecord> ExtractReferences(long fileId, string content, string[] lines, string? path, string language)
     {
+        if (language == "dependency_lock")
+            return ExtractLockDependencyReferences(fileId, content, lines, path, maxReferenceCount: null);
+
         var packages = ExtractPackages(content, lines, path, language);
         return CreateReferencesFromPackages(fileId, lines, packages, maxReferenceCount: null);
     }
@@ -121,6 +124,9 @@ internal static class DependencyPackageExtractor
         string language,
         int? maxReferenceCount)
     {
+        if (language == "dependency_lock")
+            return ExtractLockDependencyReferences(fileId, content, lines, path, maxReferenceCount);
+
         var references = ExtractReferencesFromPackageSymbols(fileId, lines, symbols, maxReferenceCount);
         if (references.Count > 0)
             return references;
@@ -158,6 +164,157 @@ internal static class DependencyPackageExtractor
         }
 
         return references;
+    }
+
+    private static List<ReferenceRecord> ExtractLockDependencyReferences(
+        long fileId,
+        string content,
+        string[] lines,
+        string? path,
+        int? maxReferenceCount)
+    {
+        var references = ReferenceExtractor.CreateReferenceList(maxReferenceCount);
+        JsonDocument document;
+        try
+        {
+            document = BoundedJson.ParseDocument(content, MaxJsonLockParseBytes, MaxJsonLockParseDepth);
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
+        {
+            return references;
+        }
+
+        using (document)
+        {
+            var fileName = Path.GetFileName(path ?? string.Empty);
+            if (string.Equals(fileName, "packages.lock.json", StringComparison.OrdinalIgnoreCase))
+                ExtractNuGetLockDependencyReferences(fileId, document.RootElement, lines, references);
+            else if (string.Equals(fileName, "package-lock.json", StringComparison.OrdinalIgnoreCase)
+                     || string.Equals(fileName, "npm-shrinkwrap.json", StringComparison.OrdinalIgnoreCase))
+                ExtractNpmLockDependencyReferences(fileId, document.RootElement, lines, references);
+        }
+
+        return references;
+    }
+
+    private static void ExtractNuGetLockDependencyReferences(
+        long fileId,
+        JsonElement root,
+        string[] lines,
+        List<ReferenceRecord> references)
+    {
+        if (!root.TryGetProperty("dependencies", out var frameworks) || frameworks.ValueKind != JsonValueKind.Object)
+            return;
+
+        foreach (var framework in frameworks.EnumerateObject())
+        {
+            if (framework.Value.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var packageSearchLine = FindJsonProperty(lines, framework.Name).Line;
+            foreach (var package in framework.Value.EnumerateObject())
+            {
+                if (package.Value.ValueKind != JsonValueKind.Object
+                    || !package.Value.TryGetProperty("dependencies", out var dependencies)
+                    || dependencies.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                var packageLocation = FindJsonProperty(lines, package.Name, packageSearchLine);
+                packageSearchLine = packageLocation.Line + 1;
+                if (!AddPackageDependencyReferences(fileId, dependencies, package.Name, packageLocation.Line, lines, references))
+                    return;
+            }
+        }
+    }
+
+    private static void ExtractNpmLockDependencyReferences(
+        long fileId,
+        JsonElement root,
+        string[] lines,
+        List<ReferenceRecord> references)
+    {
+        if (root.TryGetProperty("packages", out var packages) && packages.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var package in packages.EnumerateObject())
+            {
+                if (string.IsNullOrEmpty(package.Name) || package.Value.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                var parentName = GetNpmPackageName(package.Name);
+                if (string.IsNullOrWhiteSpace(parentName)
+                    || !package.Value.TryGetProperty("dependencies", out var dependencies)
+                    || dependencies.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                var packageLocation = FindJsonProperty(lines, package.Name);
+                if (!AddPackageDependencyReferences(fileId, dependencies, parentName, packageLocation.Line, lines, references))
+                    return;
+            }
+
+            return;
+        }
+
+        if (root.TryGetProperty("dependencies", out var legacyDependencies)
+            && legacyDependencies.ValueKind == JsonValueKind.Object)
+            ExtractLegacyNpmDependencyReferences(fileId, legacyDependencies, lines, references);
+    }
+
+    private static bool AddPackageDependencyReferences(
+        long fileId,
+        JsonElement dependencies,
+        string parentName,
+        int parentLine,
+        string[] lines,
+        List<ReferenceRecord> references)
+    {
+        var dependencySearchLine = parentLine;
+        foreach (var dependency in dependencies.EnumerateObject())
+        {
+            var location = FindJsonProperty(lines, dependency.Name, dependencySearchLine);
+            dependencySearchLine = location.Line + 1;
+            if (!ReferenceExtractor.TryAddReference(
+                    references,
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = dependency.Name,
+                        ReferenceKind = "dependency",
+                        Line = location.Line,
+                        Column = location.Column,
+                        Context = GetContext(lines, location.Line),
+                        ContainerKind = "package",
+                        ContainerName = parentName,
+                    }))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static void ExtractLegacyNpmDependencyReferences(
+        long fileId,
+        JsonElement dependencies,
+        string[] lines,
+        List<ReferenceRecord> references)
+    {
+        foreach (var package in dependencies.EnumerateObject())
+        {
+            if (package.Value.ValueKind != JsonValueKind.Object)
+                continue;
+
+            if (package.Value.TryGetProperty("requires", out var requires) && requires.ValueKind == JsonValueKind.Object
+                && !AddPackageDependencyReferences(
+                    fileId,
+                    requires,
+                    package.Name,
+                    FindJsonProperty(lines, package.Name).Line,
+                    lines,
+                    references))
+                return;
+
+            if (package.Value.TryGetProperty("dependencies", out var nested) && nested.ValueKind == JsonValueKind.Object)
+                ExtractLegacyNpmDependencyReferences(fileId, nested, lines, references);
+        }
     }
 
     internal static List<DependencyPackageInfo> ExtractPackages(string content, string[] lines, string? path, string language)
@@ -640,9 +797,12 @@ internal static class DependencyPackageExtractor
     }
 
     private static (int Line, int Column) FindJsonProperty(string[] lines, string propertyName)
+        => FindJsonProperty(lines, propertyName, startLine: 1);
+
+    private static (int Line, int Column) FindJsonProperty(string[] lines, string propertyName, int startLine)
     {
         var quoted = JsonSerializer.Serialize(propertyName);
-        for (var i = 0; i < lines.Length; i++)
+        for (var i = Math.Max(0, startLine - 1); i < lines.Length; i++)
         {
             var index = lines[i].IndexOf(quoted, StringComparison.Ordinal);
             if (index >= 0)
@@ -679,6 +839,13 @@ internal static class DependencyPackageExtractor
     {
         var trimmed = name.AsSpan().Trim();
         return trimmed.IsEmpty ? string.Empty : NormalizeLowerInvariantKey(name, trimmed);
+    }
+
+    private static string GetNpmPackageName(string packagePath)
+    {
+        const string marker = "node_modules/";
+        var markerIndex = packagePath.LastIndexOf(marker, StringComparison.Ordinal);
+        return markerIndex >= 0 ? packagePath[(markerIndex + marker.Length)..] : packagePath;
     }
 
     private static string? NormalizeEmpty(string? value)
