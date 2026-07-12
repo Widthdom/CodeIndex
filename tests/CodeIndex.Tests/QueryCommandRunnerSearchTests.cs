@@ -432,26 +432,33 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
-    [InlineData("javascript", "run(); // InlineMarkerNeedle\n", "//")]
-    [InlineData("python", "run()  # InlineMarkerNeedle\n", "#")]
-    [InlineData("javascript", "run(); /* InlineMarkerNeedle */\n", "/*")]
-    public void RunSearch_ExcludeCommentsSuppressesInlineCommentMarkers_Issue3423(string lang, string content, string query)
+    [Fact]
+    public void RunSearch_ExcludeCommentsSuppressesInlineCommentMarkers_Issue3423()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_exclude_inline_comment_markers");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, $"src/comment.{lang}", lang, content);
+            var cases = new[]
+            {
+                (Path: "src/line.js", Lang: "javascript", Content: "run(); // InlineMarkerNeedle\n", Query: "//"),
+                (Path: "src/line.py", Lang: "python", Content: "run()  # InlineMarkerNeedle\n", Query: "#"),
+                (Path: "src/block.js", Lang: "javascript", Content: "run(); /* InlineMarkerNeedle */\n", Query: "/*"),
+            };
+            foreach (var testCase in cases)
+                TestProjectHelper.InsertIndexedFile(dbPath, testCase.Path, testCase.Lang, testCase.Content);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [query, "--db", dbPath, "--exact-substring", "--json=array", "--exclude-comments"],
-                _jsonOptions));
+            foreach (var testCase in cases)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    [testCase.Query, "--db", dbPath, "--exact-substring", "--json=array", "--exclude-comments"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            Assert.Empty(document.RootElement.EnumerateArray());
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                using var document = ParseJsonOutput(stdout);
+                Assert.Empty(document.RootElement.EnumerateArray());
+            }
         }
         finally
         {
