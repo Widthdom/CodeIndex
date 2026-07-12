@@ -299,6 +299,72 @@ public static partial class SymbolExtractor
         return symbols ?? [];
     }
 
+    private static List<SymbolRecord> ExtractJsonLinesSymbols(long fileId, string content, string[] lines)
+    {
+        if (content.Length > StructuredDataMaxJsonParseChars)
+            return [];
+
+        var symbols = CreateSymbolListForLines(lines.Length);
+        var recordIndex = 0;
+        var truncated = false;
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        {
+            var recordText = lines[lineIndex];
+            if (string.IsNullOrWhiteSpace(recordText))
+                continue;
+
+            var recordPath = $"[{recordIndex}]";
+            try
+            {
+                using var document = BoundedJson.ParseDocument(
+                    recordText,
+                    StructuredDataMaxJsonParseUtf8Bytes,
+                    StructuredDataMaxJsonDepth + 2,
+                    JsonCommentHandling.Skip,
+                    allowTrailingCommas: true);
+                if (document.RootElement.ValueKind != JsonValueKind.Object)
+                {
+                    recordIndex++;
+                    continue;
+                }
+
+                if (!TryAddStructuredDataSymbol(fileId, "record", recordPath, lineIndex + 1, lines, null, symbols, "structured_data_symbol_budget_exceeded", ref truncated))
+                    break;
+
+                var recordSymbols = ExtractJsonSymbols(fileId, recordText, [recordText]);
+                foreach (var symbol in recordSymbols)
+                {
+                    if (symbol.Kind == "extraction_diagnostic")
+                        continue;
+                    if (symbols.Count >= StructuredDataMaxSymbols)
+                    {
+                        AddStructuredDataDiagnosticSymbol(symbols, fileId, "structured_data_symbol_budget_exceeded", lineIndex + 1, lines, "Structured data symbol extraction exceeded the per-file symbol budget; remaining symbols were truncated.", ref truncated);
+                        return symbols;
+                    }
+
+                    symbol.Name = recordPath + "." + symbol.Name;
+                    symbol.Line = lineIndex + 1;
+                    symbol.StartLine = lineIndex + 1;
+                    symbol.EndLine = lineIndex + 1;
+                    symbol.Signature = LimitStructuredDataSignature(recordText.Trim());
+                    symbol.ContainerName = symbol.ContainerName == null
+                        ? recordPath
+                        : recordPath + "." + symbol.ContainerName;
+                    symbol.ContainerQualifiedName = symbol.ContainerName;
+                    symbols.Add(symbol);
+                }
+            }
+            catch (Exception ex) when (ex is JsonException or InvalidDataException)
+            {
+                // A malformed JSONL record must not flatten keys from other records.
+            }
+
+            recordIndex++;
+        }
+
+        return symbols;
+    }
+
     private static List<SymbolRecord> ExtractYamlSymbols(long fileId, string[] lines)
     {
         List<SymbolRecord>? symbols = null;
