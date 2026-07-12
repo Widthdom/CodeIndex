@@ -5225,8 +5225,8 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal("all", allDocument.RootElement.GetProperty("scope").GetProperty("name").GetString());
             Assert.Contains("src/CodeIndex/Cli/SearchAuditRecipes.cs", allPaths);
-            Assert.Contains("docs/audit.md", allPaths);
-            Assert.Contains("CHANGELOG.md", allPaths);
+            Assert.DoesNotContain("docs/audit.md", allPaths);
+            Assert.DoesNotContain("CHANGELOG.md", allPaths);
             Assert.Contains("tests/AppTests.cs", allPaths);
         }
         finally
