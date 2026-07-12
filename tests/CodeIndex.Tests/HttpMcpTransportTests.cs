@@ -1171,60 +1171,6 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_BearerToken_RejectsMissingHeader()
-    {
-        const string token = "s3cret-token";
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
-
-        using var client = CreateHttpClient();
-        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
-        {
-            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
-        };
-        using var response = await client.SendAsync(request);
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task HttpTransport_BearerToken_RejectsDuplicateAuthorizationHeaders_Issue3756()
-    {
-        const string token = "s3cret-token";
-        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token, requestLogger: records.Enqueue);
-
-        using var client = CreateHttpClient();
-        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
-        {
-            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
-        };
-        request.Headers.TryAddWithoutValidation("Authorization", new[] { $"Bearer {token}", $"Bearer {token}" });
-        using var response = await client.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        Assert.DoesNotContain(token, body, StringComparison.Ordinal);
-        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
-        Assert.Equal("unauthorized", record.AuthOutcome);
-    }
-
-    [Fact]
-    public async Task HttpTransport_BearerToken_RejectsCommaJoinedAuthorizationHeader_Issue3756()
-    {
-        const string token = "s3cret-token";
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
-
-        using var client = CreateHttpClient();
-        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
-        {
-            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
-        };
-        request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {token}, Bearer {token}");
-        using var response = await client.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
-    [Fact]
     public async Task HttpTransport_BearerToken_AcceptsMatchingHeader()
     {
         const string token = "s3cret-token";
@@ -1247,6 +1193,7 @@ public class HttpMcpTransportTests : IDisposable
         const string token = "s3cret-token";
         const string wrongToken = "wrong-token";
         var oversizedToken = new string('x', McpAuthenticationLimits.MaxTokenCharacters + 1);
+        Assert.Equal(token.Length, "wrongTokenAa".Length);
         var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token, requestLogger: records.Enqueue);
         using var client = CreateHttpClient();
@@ -1256,8 +1203,10 @@ public class HttpMcpTransportTests : IDisposable
             ("missing", static _ => { }),
             ("wrong scheme", request => request.Headers.TryAddWithoutValidation("Authorization", "Basic " + token)),
             ("wrong token", request => request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", wrongToken)),
+            ("same-length wrong token", request => request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "wrongTokenAa")),
             ("multiple values", request => request.Headers.TryAddWithoutValidation("Authorization", new[] { "Bearer " + token, "Bearer " + token })),
             ("comma-separated values", request => request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + token + ", Bearer " + token)),
+            ("whitespace-padded token", request => request.Headers.TryAddWithoutValidation("Authorization", "Bearer  " + token)),
             ("oversized token", request => request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + oversizedToken)),
         };
 
@@ -1299,67 +1248,6 @@ public class HttpMcpTransportTests : IDisposable
         using var response = await client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task HttpTransport_BearerToken_RejectsWrongToken()
-    {
-        // Verifies the rejection path covers the actual constant-time compare, not just the
-        // "missing header" branch — a regression where the comparison short-circuited on the
-        // first matching byte would still pass the missing-header test but fail this one.
-        // 不一致トークンの拒否経路も検証する（ヘッダー欠落だけでなく定数時間比較が機能していることを担保）。
-        const string token = "s3cret-token";
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
-
-        using var client = CreateHttpClient();
-        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
-        {
-            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
-        };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "wrong-token");
-        using var response = await client.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-        Assert.Contains(response.Headers.WwwAuthenticate, h => h.Scheme.Equals("Bearer", StringComparison.OrdinalIgnoreCase));
-    }
-
-    [Fact]
-    public async Task HttpTransport_BearerToken_RejectsWhitespacePaddedHeader_Issue3505()
-    {
-        const string token = "s3cret-token";
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
-
-        using var client = CreateHttpClient();
-        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
-        {
-            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
-        };
-        request.Headers.TryAddWithoutValidation("Authorization", "Bearer  " + token);
-        using var response = await client.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task HttpTransport_BearerToken_RejectsOversizedHeaderBeforeHashing()
-    {
-        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: "token", requestLogger: records.Enqueue);
-
-        using var client = CreateHttpClient();
-        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
-        {
-            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
-        };
-        request.Headers.TryAddWithoutValidation(
-            "Authorization",
-            "Bearer " + new string('x', McpAuthenticationLimits.MaxTokenCharacters + 1));
-
-        using var response = await client.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
-        Assert.Equal("unauthorized", record.AuthOutcome);
     }
 
     [Fact]
@@ -1459,30 +1347,6 @@ public class HttpMcpTransportTests : IDisposable
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
         Assert.Equal("wrong-token", record.AuthOutcome);
-    }
-
-    [Fact]
-    public async Task HttpTransport_BearerToken_RejectsSameLengthWrongToken()
-    {
-        // Same-length wrong token: covers the constant-time-compare branch *after* the SHA-256
-        // hashing seam, since an early length-mismatch return would still allow this to pass on
-        // pre-fix code. The behavior change is observable as "401, not 200" — the timing
-        // invariant itself cannot be asserted from a unit test.
-        // 同じ長さの不一致トークン: SHA-256 経由の定数時間比較分岐をカバーする。
-        // 旧実装の length-mismatch 早期 return が消えていることを 401/200 で観察する。
-        const string token = "s3cret-token";
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
-
-        using var client = CreateHttpClient();
-        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
-        {
-            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
-        };
-        Assert.Equal(token.Length, "wrongTokenAa".Length);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "wrongTokenAa");
-        using var response = await client.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]
