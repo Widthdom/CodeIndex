@@ -8457,23 +8457,24 @@ jobs:
     // UsageError と対応する validation message で fail-close する。以前のテストは値欠如
     // （今は TryParsePositiveInt 前に短絡する）しかカバーしていなかったため、
     // これらのオプション固有の数値契約を明示的にロックする。
-    [Theory]
-    [InlineData("0")]
-    [InlineData("abc")]
-    public void RunExcerpt_RejectsInvalidFocusColumnValue(string invalidValue)
+    [Fact]
+    public void RunExcerpt_RejectsInvalidFocusColumnValues()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_excerpt_invalid_focus_column_{invalidValue}");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_invalid_focus_column");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "sample");
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
-                ["README.md", "--db", dbPath, "--start", "1", "--focus-column", invalidValue, "--json"],
-                _jsonOptions));
+            foreach (var invalidValue in new[] { "0", "abc" })
+            {
+                var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                    ["README.md", "--db", dbPath, "--start", "1", "--focus-column", invalidValue, "--json"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--focus-column requires an integer between 1 and 100000", stderr);
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Contains("--focus-column requires an integer between 1 and 100000", stderr);
+            }
         }
         finally
         {
