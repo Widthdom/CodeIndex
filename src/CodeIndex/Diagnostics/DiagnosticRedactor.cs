@@ -63,7 +63,7 @@ internal static class DiagnosticRedactor
         RegexTimeout);
 
     private static readonly Regex HighEntropyTokenPattern = new(
-        @"\b(?=[A-Za-z0-9._~+/=-]{32,}\b)(?=.*[A-Z])(?=.*[a-z])(?=.*\d)[A-Za-z0-9._~+/=-]+\b",
+        @"\b(?=[A-Za-z0-9._~+/=-]{32,}\b)(?=[A-Za-z0-9._~+/=-]*[A-Z])(?=[A-Za-z0-9._~+/=-]*[a-z])(?=[A-Za-z0-9._~+/=-]*\d)[A-Za-z0-9._~+/=-]+\b",
         RegexOptions.CultureInvariant | RegexOptions.Compiled,
         RegexTimeout);
 
