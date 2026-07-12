@@ -1801,6 +1801,30 @@ public partial class DbReaderTests
     }
 
     [Fact]
+    public void GetFileDependencies_CSharpPublicPropertyReceiverAcrossPartialClass_RemainsResolvable_Issue4414()
+    {
+        InsertIndexedFile("src/Service.State.cs", "csharp",
+            """
+            public partial class Service
+            {
+                public string Name { get; set; } = "";
+            }
+            """);
+        InsertIndexedFile("src/Service.Use.cs", "csharp",
+            """
+            public partial class Service
+            {
+                public string Normalize() => Name.Trim();
+            }
+            """);
+
+        var dependencies = _reader.GetFileDependencies(limit: 20, lang: "csharp");
+
+        Assert.Contains(dependencies, dependency =>
+            dependency.SourcePath == "src/Service.Use.cs" && dependency.TargetPath == "src/Service.State.cs");
+    }
+
+    [Fact]
     public void GetFileDependencies_CSharpNestedGenericNoArgAttribute_ResolvesToAttributeClass()
     {
         // issue #293 round-16: the no-arg C# attribute regex must handle

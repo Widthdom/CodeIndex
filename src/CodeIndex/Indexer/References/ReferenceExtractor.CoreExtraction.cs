@@ -2271,7 +2271,12 @@ public static partial class ReferenceExtractor
                         var containingType = GetContainingTypeQualifiedName(callContainer);
                         if (containingType != null
                             && receiverLookups.ByContainingType.TryGetValue(containingType, out var receiverNames)
-                            && (receiverNames.InstanceNames.Contains(normalizedName) || receiverNames.StaticNames.Contains(normalizedName)))
+                            && (receiverNames.InstanceNames.Contains(normalizedName) || receiverNames.StaticNames.Contains(normalizedName))
+                            && symbols.Any(symbol =>
+                                symbol.Kind == "property"
+                                && symbol.Name == normalizedName
+                                && symbol.ContainerQualifiedName == containingType
+                                && string.Equals(symbol.Visibility, "private", StringComparison.OrdinalIgnoreCase)))
                         {
                             references.RemoveAll(reference =>
                                 reference.FileId == fileId
@@ -3302,7 +3307,8 @@ public static partial class ReferenceExtractor
                 if (containingType == null || !symbols.Any(symbol =>
                         symbol.Kind == "property"
                         && symbol.Name == reference.SymbolName
-                        && symbol.ContainerQualifiedName == containingType))
+                        && symbol.ContainerQualifiedName == containingType
+                        && string.Equals(symbol.Visibility, "private", StringComparison.OrdinalIgnoreCase)))
                 {
                     continue;
                 }
