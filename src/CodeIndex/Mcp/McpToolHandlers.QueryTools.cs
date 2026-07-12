@@ -1737,6 +1737,12 @@ public partial class McpServer
             ["chunks"] = status.Chunks,
             ["symbols"] = status.Symbols,
             ["references"] = status.References,
+            ["symbol_kinds"] = JsonSerializer.SerializeToNode(status.SymbolKinds),
+            ["symbol_kind_limit"] = status.SymbolKindLimit,
+            ["symbol_kind_name_limit"] = status.SymbolKindNameLimit,
+            ["symbol_kind_total_count"] = status.SymbolKindTotalCount,
+            ["symbol_kind_omitted_count"] = status.SymbolKindOmittedCount,
+            ["symbol_kind_names_truncated"] = status.SymbolKindNamesTruncated,
             ["language_count"] = status.Languages.Count,
             ["top_languages"] = new JsonArray(status.Languages
                 .OrderByDescending(kv => kv.Value)

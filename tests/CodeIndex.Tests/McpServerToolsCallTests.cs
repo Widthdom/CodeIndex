@@ -4457,6 +4457,7 @@ public partial class McpServerTests
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal("compact", structured["format"]!.GetValue<string>());
         Assert.Contains("1 files, 2 symbols, 0 refs", structured["summary"]!.GetValue<string>());
+        Assert.Equal(1, structured["symbol_kinds"]!["function"]!.GetValue<long>());
         Assert.Equal(60, structured["stale_after_seconds"]!.GetValue<long>());
         Assert.NotNull(structured["workspace_check"]);
         Assert.Empty(structured["failed_checks"]!.AsArray());
