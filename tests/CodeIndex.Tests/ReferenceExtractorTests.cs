@@ -785,6 +785,26 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Markdown_NormalizesAnchorsAndPreservesExplicitFileTargets_Issue4400()
+    {
+        const string content = """
+            # Deep Details
+
+            See [local](#Deep-Details) and [guide](USER_GUIDE.md#Error-Codes).
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "markdown", content);
+        var references = ReferenceExtractor.Extract(1, "markdown", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "reference"
+            && reference.SymbolName == "deep-details");
+        Assert.Contains(references, reference =>
+            reference.ReferenceKind == "import"
+            && reference.SymbolName == "USER_GUIDE.md#Error-Codes");
+    }
+
+    [Fact]
     public void Extract_Go_EmitsGoroutineAndChannelReferences()
     {
         const string content = """

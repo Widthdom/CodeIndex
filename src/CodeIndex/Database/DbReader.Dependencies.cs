@@ -153,6 +153,8 @@ public partial class DbReader
     private static string BuildLogicalReferenceNameExpr(string langExpr, string symbolNameExpr, string contextExpr, string containerNameExpr, string columnNumberExpr)
         => $@"CASE
                 WHEN {langExpr} = 'sql' THEN sql_resolve_reference_name_at({symbolNameExpr}, {contextExpr}, {containerNameExpr}, {columnNumberExpr})
+                WHEN {langExpr} = 'markdown' AND instr({symbolNameExpr}, '#') > 0
+                    THEN substr({symbolNameExpr}, 1, instr({symbolNameExpr}, '#') - 1)
                 ELSE {symbolNameExpr}
             END";
 
@@ -195,7 +197,12 @@ public partial class DbReader
         var targetLogicalSymbolNameExpr = BuildLogicalDependencySymbolNameExpr("dst", "s.name");
         var targetLogicalSymbolSegmentCountExpr = BuildLogicalDependencySymbolSegmentCountExpr("dst", "s.name");
         var sqlDependencyTargetMatchExpr = @"(
-                    (tf.target_lang != 'sql' AND tf.symbol_name = snc.symbol_name)
+                    (tf.target_lang != 'sql'
+                     AND NOT (snc.source_lang = 'markdown' AND snc.logical_reference_kind = 'reference')
+                     AND tf.symbol_name = snc.symbol_name)
+                 OR (snc.source_lang = 'markdown'
+                     AND snc.logical_reference_kind = 'import'
+                     AND (tf.target_path = snc.symbol_name OR tf.target_path LIKE '%/' || snc.symbol_name))
                  OR (tf.target_lang = 'sql' AND (
                         (tf.symbol_segment_count = snc.symbol_segment_count AND tf.symbol_name = snc.symbol_name COLLATE NOCASE)
                      OR (sql_segment_count(snc.raw_symbol_name) = 1
@@ -318,11 +325,12 @@ public partial class DbReader
                        symbol_segment_count,
                        allow_leaf_fallback,
                        raw_symbol_name,
+                       logical_reference_kind,
                        is_attribute_alias,
                        is_metadata,
                        COUNT(*) AS ref_count
                 FROM logical_references
-                GROUP BY source_file_id, source_path, source_lang, symbol_name, symbol_segment_count, allow_leaf_fallback, raw_symbol_name, is_attribute_alias, is_metadata
+                GROUP BY source_file_id, source_path, source_lang, symbol_name, symbol_segment_count, allow_leaf_fallback, raw_symbol_name, logical_reference_kind, is_attribute_alias, is_metadata
             ),
             target_files AS (
                 -- Collapse per-symbol rows to one per (target_path, target_lang, symbol_name)

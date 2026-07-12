@@ -10,6 +10,23 @@ namespace CodeIndex.Tests;
 public partial class DbReaderTests
 {
     [Fact]
+    public void GetFileDependencies_MarkdownScopesLocalAnchorsAndResolvesExplicitPaths_Issue4400()
+    {
+        InsertIndexedFile("docs/source.md", "markdown", "# Source\n\n[local](#shared) [target](target.md#shared)\n\n## Shared\n");
+        InsertIndexedFile("docs/target.md", "markdown", "# Target\n\n## Shared\n");
+        InsertIndexedFile("docs/unrelated.md", "markdown", "# Unrelated\n\n## Shared\n");
+
+        var dependencies = _reader.GetFileDependencies(limit: 20, lang: "markdown");
+
+        Assert.Contains(dependencies, dependency =>
+            dependency.SourcePath == "docs/source.md"
+            && dependency.TargetPath == "docs/target.md");
+        Assert.DoesNotContain(dependencies, dependency =>
+            dependency.SourcePath == "docs/source.md"
+            && dependency.TargetPath == "docs/unrelated.md");
+    }
+
+    [Fact]
     public void GetFileDependencies_CapsDenseSymbolSample_Issue3155()
     {
         var sourceFileId = InsertSyntheticDependencyFile("src/DenseCaller.cs");
