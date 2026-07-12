@@ -9228,7 +9228,7 @@ jobs:
     }
 
     [Fact]
-    public void RunSearch_WithTypeScriptLangAliasesFiltersTypeScriptFiles()
+    public void RunSearch_LanguageAliasesFilterTypeScriptAndJavaFiles()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_typescript_lang_alias");
         try
@@ -9243,31 +9243,6 @@ jobs:
                     return "TypeScript";
                 }
                 """);
-
-            foreach (var langAlias in new[] { "ts", "tsx", "cts", "mts" })
-            {
-                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                    ["TypeScript", "--db", dbPath, "--lang", langAlias, "--count"],
-                    _jsonOptions));
-
-                Assert.Equal(CommandExitCodes.Success, exitCode);
-                Assert.Equal("1", stdout.Trim());
-                Assert.Equal(string.Empty, stderr);
-            }
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunSearch_WithJavaLangAliasFiltersJavaFiles()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_java_lang_alias");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
                 "src/App.java",
@@ -9280,13 +9255,24 @@ jobs:
                 }
                 """);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            foreach (var langAlias in new[] { "ts", "tsx", "cts", "mts" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    ["TypeScript", "--db", dbPath, "--lang", langAlias, "--count"],
+                    _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("1", stdout.Trim());
+                Assert.Equal(string.Empty, stderr);
+            }
+
+            var (javaExitCode, javaStdout, javaStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["Java", "--db", dbPath, "--lang", "jav", "--count"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("1", stdout.Trim());
-            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(CommandExitCodes.Success, javaExitCode);
+            Assert.Equal("1", javaStdout.Trim());
+            Assert.Equal(string.Empty, javaStderr);
         }
         finally
         {
