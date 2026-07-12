@@ -213,6 +213,36 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunMap_FormatIssueDrafts_AppliesDuplicatePreflight_Issue4425()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_map_duplicate_preflight");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var content = string.Join('\n', Enumerable.Range(1, QueryCommandRunner.MapIssueDraftLineThreshold + 1).Select(line => $"// {line}"));
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Large.cs", "csharp", content);
+            var issuesPath = Path.Combine(projectRoot, "issues.json");
+            File.WriteAllText(issuesPath, """[{"number":4425,"title":"Split oversized file: src/Large.cs","state":"open","labels":["maintenance"],"html_url":"https://example.invalid/4425"}]""");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--format", "issue-drafts", "--open-issues", issuesPath], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            Assert.True(root.GetProperty("duplicate_preflight").GetProperty("checked").GetBoolean());
+            var draft = Assert.Single(root.GetProperty("issue_drafts").EnumerateArray());
+            var match = Assert.Single(draft.GetProperty("duplicate_preflight").GetProperty("matches").EnumerateArray());
+            Assert.Equal(4425, match.GetProperty("number").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunMap_FormatIssueDraftsSummaryOnly_OmitsRowsButKeepsGroups_Issue4317()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_issue_drafts_summary");

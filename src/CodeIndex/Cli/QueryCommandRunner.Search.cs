@@ -50,6 +50,11 @@ public static partial class QueryCommandRunner
                 "Use `--open-issues github --repo owner/name` to fetch open issues directly from GitHub.");
             return CommandExitCodes.UsageError;
         }
+        if (options.IssueState != IssueDuplicatePreflight.DefaultIssueState && !IssueDuplicatePreflight.IsGitHubOpenIssuesSource(options.OpenIssuesPath))
+        {
+            WriteUsageError("--issue-state can only be used with `--open-issues github`.", GetUsageLineOrThrow("search"), "Use `--open-issues github --repo owner/name --issue-state all`.");
+            return CommandExitCodes.UsageError;
+        }
         if (options.DuplicatePreflightTuningExplicit && options.OutputFormat != OutputFormatIssueDrafts)
         {
             WriteUsageError(

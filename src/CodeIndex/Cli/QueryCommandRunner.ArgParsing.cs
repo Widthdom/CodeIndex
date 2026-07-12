@@ -174,6 +174,7 @@ public static partial class QueryCommandRunner
         string auditScope = SearchAuditRecipes.DefaultAuditScope;
         bool auditScopeExplicit = false;
         string? openIssuesRepository = null;
+        string issueState = IssueDuplicatePreflight.DefaultIssueState;
         string duplicateConfidence = IssueDuplicatePreflight.DefaultDuplicateConfidence;
         double duplicateThreshold = IssueDuplicatePreflight.DefaultDuplicateThreshold;
         bool duplicateConfidenceExplicit = false;
@@ -635,6 +636,12 @@ public static partial class QueryCommandRunner
                     }
                     else
                         AddParseError(repoError!);
+                    break;
+                case "--issue-state":
+                    if (TryReadStringOptionValue(args, ref i, "--issue-state", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var issueStateValue, out var issueStateError))
+                        issueState = issueStateValue!.ToLowerInvariant();
+                    else
+                        AddParseError(issueStateError!);
                     break;
                 case "--duplicate-confidence":
                     if (TryReadStringOptionValue(args, ref i, "--duplicate-confidence", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var duplicateConfidenceValue, out var duplicateConfidenceError))
@@ -1676,6 +1683,7 @@ public static partial class QueryCommandRunner
             AuditScope = auditScope,
             AuditScopeExplicit = auditScopeExplicit,
             OpenIssuesRepository = openIssuesRepository,
+            IssueState = issueState,
             DuplicateConfidence = duplicateThresholdExplicit ? IssueDuplicatePreflight.CustomDuplicateConfidence : duplicateConfidence,
             DuplicateThreshold = duplicateThreshold,
             DuplicatePreflightTuningExplicit = duplicateConfidenceExplicit || duplicateThresholdExplicit,
