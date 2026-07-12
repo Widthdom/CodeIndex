@@ -7549,12 +7549,8 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
-    [InlineData("cjs")]
-    [InlineData("mjs")]
-    [InlineData("CJS")]
-    [InlineData("MJS")]
-    public void RunSearch_NormalizesJavascriptExtensionStyleLangAliases(string lang)
+    [Fact]
+    public void RunSearch_NormalizesJavascriptExtensionStyleLangAliases()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_javascript_extension_lang_alias");
         try
@@ -7567,13 +7563,16 @@ public partial class QueryCommandRunnerTests
                 "javascript",
                 $@"const marker = ""{queryToken}"";");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [queryToken, "--db", dbPath, "--lang", lang, "--count"],
-                _jsonOptions));
+            foreach (var lang in new[] { "cjs", "mjs", "CJS", "MJS" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    [queryToken, "--db", dbPath, "--lang", lang, "--count"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("1", stdout.Trim());
-            Assert.Equal(string.Empty, stderr);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("1", stdout.Trim());
+                Assert.Equal(string.Empty, stderr);
+            }
         }
         finally
         {
@@ -7581,10 +7580,8 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
-    [InlineData("yml")]
-    [InlineData("YML")]
-    public void RunSearch_NormalizesYamlLangAlias(string input)
+    [Fact]
+    public void RunSearch_NormalizesYamlLangAliases()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_yaml_lang_alias");
         try
@@ -7602,13 +7599,16 @@ jobs:
     steps:
       - run: echo ""{queryToken}""");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [queryToken, "--db", dbPath, "--lang", input, "--count"],
-                _jsonOptions));
+            foreach (var input in new[] { "yml", "YML" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    [queryToken, "--db", dbPath, "--lang", input, "--count"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("1", stdout.Trim());
-            Assert.Equal(string.Empty, stderr);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("1", stdout.Trim());
+                Assert.Equal(string.Empty, stderr);
+            }
         }
         finally
         {
@@ -7616,10 +7616,8 @@ jobs:
         }
     }
 
-    [Theory]
-    [InlineData("bat")]
-    [InlineData("cmd")]
-    public void RunSearch_NormalizesBatchLangAliases(string input)
+    [Fact]
+    public void RunSearch_NormalizesBatchLangAliases()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_batch_lang_alias");
         try
@@ -7632,13 +7630,16 @@ jobs:
                 "batch",
                 $"echo {queryToken}\r\n");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [queryToken, "--db", dbPath, "--lang", input, "--count"],
-                _jsonOptions));
+            foreach (var input in new[] { "bat", "cmd" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    [queryToken, "--db", dbPath, "--lang", input, "--count"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("1", stdout.Trim());
-            Assert.Equal(string.Empty, stderr);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("1", stdout.Trim());
+                Assert.Equal(string.Empty, stderr);
+            }
         }
         finally
         {
@@ -7646,11 +7647,8 @@ jobs:
         }
     }
 
-    [Theory]
-    [InlineData("T-SQL")]
-    [InlineData("transact-sql")]
-    [InlineData("transact sql")]
-    public void RunSearch_NormalizesSqlDialectLangAliases(string input)
+    [Fact]
+    public void RunSearch_NormalizesSqlDialectLangAliases()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_lang_alias");
         try
@@ -7663,13 +7661,16 @@ jobs:
                 "sql",
                 $"SELECT '{queryToken}';");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [queryToken, "--db", dbPath, "--lang", input, "--count"],
-                _jsonOptions));
+            foreach (var input in new[] { "T-SQL", "transact-sql", "transact sql" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    [queryToken, "--db", dbPath, "--lang", input, "--count"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("1", stdout.Trim());
-            Assert.Equal(string.Empty, stderr);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("1", stdout.Trim());
+                Assert.Equal(string.Empty, stderr);
+            }
         }
         finally
         {
