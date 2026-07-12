@@ -18,10 +18,8 @@ public class CiWorkflowTests
 
         AssertContainsAll(
             testScript,
-            "--settings\", \"tests/CodeIndex.Tests/CodeIndex.Tests.runsettings");
-        AssertDoesNotContainAny(
-            testScript,
-            "--results-directory\", \"./TestResults");
+            "--settings\", \"tests/CodeIndex.Tests/CodeIndex.Tests.runsettings",
+            "--results-directory\", $resultsDirectory");
         AssertContainsAll(
             workflow,
             "include:\n" +
@@ -66,6 +64,7 @@ public class CiWorkflowTests
         AssertContainsAll(
             testScript,
             "$includeCoverage = $CollectCoverage -eq \"true\"",
+            "if ($includeCoverage)",
             "[ValidateSet(\"true\", \"false\")]",
             "Skipping XPlat Code Coverage outside ubuntu-24.04/net8.0",
             "$firstExitCode = Invoke-TestRun -LogPath $firstLogPath -IncludeCoverage $includeCoverage",

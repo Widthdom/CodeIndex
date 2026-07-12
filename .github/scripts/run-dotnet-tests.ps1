@@ -21,6 +21,7 @@ $testArgs = @(
   "--no-restore",
   "--nologo",
   "--settings", "tests/CodeIndex.Tests/CodeIndex.Tests.runsettings",
+  "--results-directory", $resultsDirectory,
   "--blame-crash",
   "--blame-hang",
   "--blame-hang-timeout", "5m",
@@ -91,7 +92,7 @@ if (Select-String -Path $firstLogPath -SimpleMatch "test run timeout" -Quiet) {
 }
 
 Write-Warning "Initial test run failed with exit code $firstExitCode. Rerunning once to classify possible flakiness."
-if ($collectCoverage) {
+if ($includeCoverage) {
   Write-Host "Skipping XPlat Code Coverage on the flaky-classification retry."
 }
 $retryLogPath = Join-Path $resultsDirectory "test-output-retry.txt"
