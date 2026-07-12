@@ -187,6 +187,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Cap issue lifecycle tests should reuse one indexed fixture across full-scan and update transitions when they assert the issue after each low/high boundary change.
 - Unreadable-directory full-scan coverage keeps JSON and human diagnostics, purge protection, checkpoint creation, and successful retry in one fixture so the shared partial scan setup is not rebuilt.
 - Checkpoint write/delete failure coverage transitions one unreadable-directory fixture from an injected save failure through a successful save to an injected delete failure.
+- HEAD freshness coverage uses one two-commit fixture to prove a `--files` refresh remains stale before a `--commits HEAD` refresh marks the current head matched.
 - When a test locks a long table of equivalent key/value expectations, keep the table as data and route the repeated lookup/assertion shape through one helper so duplicate rows are visible.
 - When extractor tests repeat the same `SymbolName` / `ReferenceKind` predicate shape across positive and negative reference assertions, use a semantic assertion helper so each call site names only the behavioral differences such as container name/kind, context, line, column, or the excluded symbol set.
 - When a production comment or error string is bilingual, preserve that expectation in tests where it matters.
@@ -518,6 +519,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - cap issue lifecycle test は low/high boundary の変更ごとに issue を assertion する場合、full-scan と update の遷移で 1 つの indexed fixture を再利用してください。
 - unreadable-directory の full-scan coverage は JSON/human diagnostics、purge protection、checkpoint 作成、successful retry を 1 fixture に保ち、共通の partial scan setup を再構築しないでください。
 - checkpoint write/delete failure coverage は 1 つの unreadable-directory fixture を、注入した save failure から successful save、注入した delete failure へ遷移させてください。
+- HEAD freshness coverage は 1 つの two-commit fixture で、`--files` refresh 後は stale のまま、`--commits HEAD` refresh 後は current head が matched になることを検証してください。
 - 同種の key/value 期待値を長い表で固定するテストでは、期待値をデータとして残し、繰り返しの lookup/assertion 形は helper に通してください。重複行を見つけやすくするためです。
 - extractor テストで `SymbolName` / `ReferenceKind` の同じ predicate 形を positive / negative reference assertion の両方に繰り返す場合は、semantic assertion helper を使い、各 call site には container name/kind、context、line、column、除外 symbol set など挙動差分だけを残してください。
 - 境界を証明するテストでは、その境界をまたぐ最小の fixture を使う。1 ページ、1 chunk、1 cache、1 offset overflow で十分なら、それ以上に synthetic data を増やさない。ただし、より大きいサイズ自体が契約の一部なら例外です。

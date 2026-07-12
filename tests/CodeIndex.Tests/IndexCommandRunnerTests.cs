@@ -6264,7 +6264,7 @@ public sealed class Caller
     }
 
     [Fact]
-    public void RunStatusCheck_AfterCommitScopedRefreshAtHead_DoesNotReportHeadChanged()
+    public void RunStatusCheck_FilesRefreshStaysStaleUntilCommitScopedRefreshAtHead()
     {
         var projectRoot = CreateTempProject();
         try
@@ -6280,12 +6280,22 @@ public sealed class Caller
             File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
             RunGit(projectRoot, "add", ".");
             RunGit(projectRoot, "commit", "-m", "add run");
-            var currentHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
-
-            var (refreshExitCode, _) = RunAndCaptureJson([projectRoot, "--commits", "HEAD", "--json"]);
-            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
-
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (filesRefreshExitCode, _) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, filesRefreshExitCode);
+
+            var (staleStatusExitCode, staleStatusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
+            Assert.Equal(CommandExitCodes.UsageError, staleStatusExitCode);
+
+            var staleCheck = staleStatusJson.GetProperty("workspace_check");
+            Assert.True(staleCheck.GetProperty("head_changed").GetBoolean());
+            Assert.False(staleCheck.GetProperty("matches_workspace").GetBoolean());
+            Assert.Equal("head_changed", staleCheck.GetProperty("reason").GetString());
+
+            var currentHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+            var (commitRefreshExitCode, _) = RunAndCaptureJson([projectRoot, "--commits", "HEAD", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, commitRefreshExitCode);
+
             var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
 
@@ -6360,43 +6370,6 @@ public sealed class Caller
             var (postDotStatusExitCode, postDotStatusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
             Assert.Equal(CommandExitCodes.Success, postDotStatusExitCode);
             Assert.True(postDotStatusJson.GetProperty("workspace_check").GetProperty("matches_workspace").GetBoolean());
-        }
-        finally
-        {
-            SqliteConnection.ClearAllPools();
-            DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunStatusCheck_AfterFilesRefreshAtHead_StillReportsHeadChanged()
-    {
-        var projectRoot = CreateTempProject();
-        try
-        {
-            RunGit(projectRoot, "init");
-            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
-            RunGit(projectRoot, "add", ".");
-            RunGit(projectRoot, "commit", "-m", "init");
-
-            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
-            Assert.Equal(CommandExitCodes.Success, initialExitCode);
-
-            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
-            RunGit(projectRoot, "add", ".");
-            RunGit(projectRoot, "commit", "-m", "add run");
-
-            var (refreshExitCode, _) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
-            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
-
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
-            Assert.Equal(CommandExitCodes.UsageError, statusExitCode);
-
-            var check = statusJson.GetProperty("workspace_check");
-            Assert.True(check.GetProperty("head_changed").GetBoolean());
-            Assert.False(check.GetProperty("matches_workspace").GetBoolean());
-            Assert.Equal("head_changed", check.GetProperty("reason").GetString());
         }
         finally
         {
