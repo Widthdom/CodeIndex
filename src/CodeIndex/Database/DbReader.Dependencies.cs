@@ -170,6 +170,39 @@ public partial class DbReader
                 ELSE 0
             END";
 
+    internal static string? ResolveMarkdownDependencyPath(string? sourcePath, string? targetPath)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePath) || string.IsNullOrWhiteSpace(targetPath))
+            return null;
+
+        var target = targetPath.Replace('\\', '/').Trim();
+        if (target.Length == 0 || target.Contains("://", StringComparison.Ordinal) || target.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var segments = new List<string>();
+        if (!target.StartsWith("/", StringComparison.Ordinal))
+        {
+            var sourceSegments = sourcePath.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+            segments.AddRange(sourceSegments.Take(Math.Max(0, sourceSegments.Length - 1)));
+        }
+
+        foreach (var segment in target.TrimStart('/').Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (segment == ".")
+                continue;
+            if (segment == "..")
+            {
+                if (segments.Count == 0)
+                    return null;
+                segments.RemoveAt(segments.Count - 1);
+                continue;
+            }
+            segments.Add(segment);
+        }
+
+        return segments.Count == 0 ? null : string.Join('/', segments);
+    }
+
     /// <summary>
     /// Compute file-level dependency edges: which files reference symbols defined in which other files.
     /// ファイル間の依存関係エッジを算出: どのファイルがどのファイルで定義されたシンボルを参照しているか。
@@ -202,7 +235,7 @@ public partial class DbReader
                      AND tf.symbol_name = snc.symbol_name)
                  OR (snc.source_lang = 'markdown'
                      AND snc.logical_reference_kind = 'import'
-                     AND (tf.target_path = snc.symbol_name OR tf.target_path LIKE '%/' || snc.symbol_name))
+                     AND tf.target_path = markdown_resolve_path(snc.source_path, snc.symbol_name))
                  OR (tf.target_lang = 'sql' AND (
                         (tf.symbol_segment_count = snc.symbol_segment_count AND tf.symbol_name = snc.symbol_name COLLATE NOCASE)
                      OR (sql_segment_count(snc.raw_symbol_name) = 1
