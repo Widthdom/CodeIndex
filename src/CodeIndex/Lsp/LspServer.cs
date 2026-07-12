@@ -1136,7 +1136,7 @@ internal sealed class LspServer : IDisposable
     {
         var localDefinitions = _reader.GetDefinitions(context.Token, DefaultLimit, exact: true, pathPatterns: [context.IndexedPath]);
         if (localDefinitions.Count > 0)
-            return localDefinitions;
+            return PreferDefinitionAtPosition(localDefinitions, context);
 
         var workspaceDefinitions = _reader.GetDefinitions(context.Token, DefaultLimit, exact: true);
         return workspaceDefinitions;
@@ -1146,13 +1146,36 @@ internal sealed class LspServer : IDisposable
     {
         var localDefinitions = _reader.GetDefinitions(context.Token, DefaultLimit, exact: true, pathPatterns: [context.IndexedPath]);
         if (localDefinitions.Count > 0)
-            return _reader.AnalyzeSymbol(context.Token, DefaultLimit, pathPatterns: [context.IndexedPath], exact: true);
+        {
+            var positionDefinitions = PreferDefinitionAtPosition(localDefinitions, context);
+            var anchoredKind = positionDefinitions.Count == 1 ? positionDefinitions[0].Kind : null;
+            return _reader.AnalyzeSymbol(context.Token, DefaultLimit, pathPatterns: [context.IndexedPath], exact: true, kind: anchoredKind);
+        }
 
         var workspaceDefinitions = _reader.GetDefinitions(context.Token, DefaultLimit, exact: true);
         if (workspaceDefinitions.Count == 0 || !HasSingleLspDefinitionTarget(workspaceDefinitions))
             return _reader.AnalyzeSymbol(context.Token, DefaultLimit, pathPatterns: [context.IndexedPath], exact: true);
 
         return _reader.AnalyzeSymbol(context.Token, DefaultLimit, exact: true);
+    }
+
+    private static List<DefinitionResult> PreferDefinitionAtPosition(
+        List<DefinitionResult> definitions,
+        PositionTokenContext context)
+    {
+        var sourceLine = context.Line + 1;
+        var positioned = definitions.Where(definition =>
+        {
+            var definitionLine = definition.Line > 0 ? definition.Line : definition.StartLine;
+            if (definitionLine != sourceLine || definition.StartColumn == null)
+                return false;
+
+            var definitionStart = definition.StartColumn.Value;
+            var definitionEnd = definitionStart + Math.Max(definition.Name.Length, 1);
+            return context.StartCharacter < definitionEnd && context.EndCharacter > definitionStart;
+        }).ToList();
+
+        return positioned.Count > 0 ? positioned : definitions;
     }
 
     private static bool HasSingleLspDefinitionTarget(IReadOnlyList<DefinitionResult> definitions)
