@@ -22,6 +22,40 @@ namespace CodeIndex.Tests;
 public partial class McpServerTests
 {
     [Fact]
+    public async Task RequestBeforeInitialize_IsRejected_Issue4468()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        var transport = new QueueMcpTransport(prependInitialize: false, """{"jsonrpc":"2.0","id":1,"method":"ping"}""");
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        var response = JsonNode.Parse(Assert.Single(transport.WrittenFrames))!;
+        Assert.Equal(-32002, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("Server not initialized", response["error"]!["message"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("1.0")]
+    [InlineData(null)]
+    public void RequestWithoutExactJsonRpc20_IsInvalidRequest_Issue4468(string? version)
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        var request = new JsonObject
+        {
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject(),
+        };
+        if (version is not null)
+            request["jsonrpc"] = version;
+
+        var response = server.HandleMessage(request)!;
+
+        Assert.Equal(-32600, response["error"]!["code"]!.GetValue<int>());
+        Assert.Null(response["id"]);
+    }
+
+    [Fact]
     public void PingHealth_UsesInjectedTimeProvider_Issue3963()
     {
         var clock = new ManualTimeProvider(ManualTimeProvider.FixtureUtcNow);

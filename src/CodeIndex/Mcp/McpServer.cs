@@ -80,11 +80,11 @@ public partial class McpServer : IDisposable
     private readonly AsyncLocal<List<Action>?> _deferredFrameLogs = new();
     private static readonly AsyncLocal<RequestCorrelationContext?> CurrentCorrelationContext = new();
     private volatile bool _running = true;
+    private volatile bool _initialized;
+    private volatile bool _enforceInitializationLifecycle;
     private long _timedOutIsolatedActionDrainingCount;
     private long _timedOutIsolatedActionDrainedCount;
     private RequestTimeoutDrainDiagnostic? _lastRequestTimeoutDrainDiagnostic;
-    private bool _initializedNotificationPending;
-    private bool _initializedNotificationSent;
     private bool _clientRootsStale = true;
     // Per-session DbContext reused across MCP tool calls. Holding the connection open
     // avoids reopening SQLite, reapplying pragmas, and re-registering every SQL function
@@ -473,6 +473,7 @@ public partial class McpServer : IDisposable
     internal async Task RunAsync(IMcpTransport transport, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(transport);
+        _enforceInitializationLifecycle = true;
 
         // Link the caller-supplied token (Ctrl+C / HTTP listener stop) with the server-internal
         // shutdown signal so `notifications/shutdown` also wakes any pending `ReadFrameAsync`.
@@ -551,7 +552,6 @@ public partial class McpServer : IDisposable
                     }
 
                     await WriteFrameSafelyAsync(transport, response, loopToken).ConfigureAwait(false);
-                    await EmitInitializedNotificationIfPendingAsync(transport, loopToken).ConfigureAwait(false);
                     FlushDeferredFrameLogs();
 
                     // `notifications/shutdown` flips `_running` inside `HandleMessage`; exit the loop
@@ -731,7 +731,6 @@ public partial class McpServer : IDisposable
                     try
                     {
                         await WriteFrameSafelyAsync(transport, response, loopToken).ConfigureAwait(false);
-                        await EmitInitializedNotificationIfPendingAsync(transport, loopToken).ConfigureAwait(false);
                         FlushDeferredFrameLogs();
                     }
                     finally
@@ -748,7 +747,7 @@ public partial class McpServer : IDisposable
             await requestTaskStarted.Task.ConfigureAwait(false);
         }
 
-        await DrainInFlightTasksAsync(tasks, DefaultEofDrainTimeout, DefaultEofPostCancelDrainTimeout, loopToken).ConfigureAwait(false);
+        await DrainInFlightTasksAsync(tasks, DefaultEofDrainTimeout, DefaultEofPostCancelDrainTimeout, loopToken, drainToCompletion: true).ConfigureAwait(false);
         if (tasks.All(static task => task.IsCompleted))
         {
             writeGate.Dispose();
@@ -802,13 +801,19 @@ public partial class McpServer : IDisposable
         List<Task> tasks,
         TimeSpan gracePeriod,
         TimeSpan postCancelGracePeriod,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool drainToCompletion = false)
     {
         tasks.RemoveAll(task => task.IsCompleted);
         if (tasks.Count == 0)
             return;
 
         var allTasks = Task.WhenAll(tasks);
+        if (drainToCompletion && !cancellationToken.IsCancellationRequested)
+        {
+            await ObserveInFlightTasksAsync(allTasks).ConfigureAwait(false);
+            return;
+        }
         var graceDelay = Task.Delay(gracePeriod, cancellationToken);
         var completed = await Task.WhenAny(allTasks, graceDelay).ConfigureAwait(false);
         if (completed == allTasks)
@@ -819,6 +824,7 @@ public partial class McpServer : IDisposable
         if (graceDelay.IsCanceled)
             return;
 
+        PruneCompletedRequestTasks(tasks);
         CommandErrorWriter.WriteStderr($"[cdidx-mcp] EOF reached with {tasks.Count} in-flight request(s); cancelling after {gracePeriod.TotalMilliseconds:0}ms grace period.");
         try
         {
@@ -881,7 +887,6 @@ public partial class McpServer : IDisposable
                 try
                 {
                     await WriteJsonLineAsync(writer, response).ConfigureAwait(false);
-                    await EmitInitializedNotificationIfPendingAsync(writer).ConfigureAwait(false);
                     FlushDeferredFrameLogs();
                 }
                 finally
@@ -918,44 +923,6 @@ public partial class McpServer : IDisposable
         {
             WriteMcpLogLine(BuildResponseWriteErrorLog(DiagnosticRedactor.FormatExceptionMessage(ex)));
         }
-    }
-
-    private async Task EmitInitializedNotificationIfPendingAsync(IMcpTransport transport, CancellationToken cancellationToken)
-    {
-        var notification = ConsumeInitializedNotification();
-        if (notification is null)
-            return;
-        if (transport is IOutOfBandMcpTransport outOfBandTransport)
-        {
-            await outOfBandTransport.WriteOutOfBandFrameAsync(notification, cancellationToken).ConfigureAwait(false);
-            return;
-        }
-        await WriteFrameSafelyAsync(transport, notification, cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task EmitInitializedNotificationIfPendingAsync(TextWriter writer)
-    {
-        var notification = ConsumeInitializedNotification();
-        if (notification is null)
-            return;
-        await WriteJsonLineAsync(writer, notification).ConfigureAwait(false);
-    }
-
-    private string? ConsumeInitializedNotification()
-    {
-        if (!_initializedNotificationPending)
-            return null;
-        _initializedNotificationPending = false;
-        if (_initializedNotificationSent)
-            return null;
-        _initializedNotificationSent = true;
-        var notification = new JsonObject
-        {
-            ["jsonrpc"] = "2.0",
-            ["method"] = "notifications/initialized",
-            ["params"] = new JsonObject()
-        };
-        return notification.ToJsonString(_jsonOptions);
     }
 
     private static bool IsServerResponseFrame(string frame)
@@ -1423,6 +1390,12 @@ public partial class McpServer : IDisposable
                 retrySafe: false,
                 extraData: BuildInvalidRequestIdData(idError));
 
+        if (TryGetStringMember(obj, "jsonrpc") != "2.0")
+            return CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: jsonrpc must be exactly \"2.0\"",
+                category: McpErrorEnvelope.CategoryInvalidRequest,
+                suggestion: "Set the top-level `jsonrpc` member to the string `2.0`.",
+                retrySafe: false);
+
         using var correlationScope = hasId && CurrentCorrelationContext.Value is null ? BeginRequestCorrelation(id) : null;
 
         if (method == "$/cancelRequest" || method == "notifications/cancelled")
@@ -1503,6 +1476,14 @@ public partial class McpServer : IDisposable
                 category: McpErrorEnvelope.CategoryInvalidRequest,
                 suggestion: "JSON-RPC 2.0 requires a string `method` field.",
                 retrySafe: false);
+        }
+
+        if (_enforceInitializationLifecycle && !_initialized && method != "initialize")
+        {
+            return CreateErrorResponse(hasId: true, id: id, code: -32002, message: "Server not initialized",
+                category: McpErrorEnvelope.CategoryInvalidRequest,
+                suggestion: "Send a successful `initialize` request before calling other MCP methods.",
+                retrySafe: true);
         }
 
         return await DispatchWithRequestCancellationAsync(id, isolateRequestDb, () => method switch
@@ -2113,8 +2094,7 @@ public partial class McpServer : IDisposable
             // サーバー指示 — AIクライアント向けツール選択ガイダンス
             ["instructions"] = BuildInstructions()
         };
-        if (!_initializedNotificationSent)
-            _initializedNotificationPending = true;
+        _initialized = true;
         return CreateSuccessResponse(true, id, result);
     }
 

@@ -163,6 +163,54 @@ public partial class McpServerTests : IDisposable
         Assert.Contains("In-flight request ended before EOF drain (InvalidOperationException)", stderr.ToString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task DrainInFlightTasksAsync_CleanEofWaitsForLegitimateRequest_Issue4434()
+    {
+        var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tasks = new List<Task> { pending.Task };
+        var drain = _server.DrainInFlightTasksAsync(
+            tasks,
+            TimeSpan.Zero,
+            TimeSpan.Zero,
+            CancellationToken.None,
+            drainToCompletion: true);
+
+        Assert.False(drain.IsCompleted);
+        Assert.False(_server.ShutdownRequestedForTests);
+
+        pending.SetResult();
+        await drain.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(_server.ShutdownRequestedForTests);
+    }
+
+    [Fact]
+    public async Task DrainInFlightTasksAsync_DiagnosticCountsOnlyUnfinishedRequests_Issue4435()
+    {
+        var completedDuringGrace = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var unfinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tasks = new List<Task> { Task.CompletedTask, completedDuringGrace.Task, unfinished.Task };
+        var previousError = Console.Error;
+        using var stderr = new StringWriter();
+        Console.SetError(stderr);
+
+        try
+        {
+            var drain = _server.DrainInFlightTasksAsync(
+                tasks,
+                TimeSpan.FromMilliseconds(100),
+                TimeSpan.Zero);
+            completedDuringGrace.SetResult();
+            await drain.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
+
+        Assert.Contains("EOF reached with 1 in-flight request(s)", stderr.ToString(), StringComparison.Ordinal);
+    }
+
     private static bool MethodCallsType(MethodInfo method, Type declaringType)
     {
         var body = method.GetMethodBody()?.GetILAsByteArray();
@@ -779,7 +827,7 @@ public sealed class Caller
 
 
     [Fact]
-    public async Task RunAsync_InitializeEmitsInitializedNotificationAfterResponseOnlyOnce()
+    public async Task RunAsync_InitializeDoesNotEmitClientInitializedNotification_Issue4433()
     {
         var transport = new QueueMcpTransport(
             """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"test-client","version":"1.0"}}}""",
@@ -787,10 +835,9 @@ public sealed class Caller
 
         await _server.RunAsync(transport, CancellationToken.None);
 
-        Assert.Equal(3, transport.WrittenFrames.Count);
+        Assert.Equal(2, transport.WrittenFrames.Count);
         Assert.Equal(1, JsonNode.Parse(transport.WrittenFrames[0])!["id"]!.GetValue<int>());
-        Assert.Equal("notifications/initialized", JsonNode.Parse(transport.WrittenFrames[1])!["method"]!.GetValue<string>());
-        Assert.Equal(2, JsonNode.Parse(transport.WrittenFrames[2])!["id"]!.GetValue<int>());
+        Assert.Equal(2, JsonNode.Parse(transport.WrittenFrames[1])!["id"]!.GetValue<int>());
     }
 
     [Fact]
@@ -2610,7 +2657,9 @@ public sealed class Caller
     [Fact]
     public async Task RunAsync_StdioKeepsLifecycleDiagnosticsOffStdout_Issue4355()
     {
-        await using var input = new MemoryStream(Encoding.UTF8.GetBytes("""{"jsonrpc":"2.0","id":1,"method":"ping"}""" + "\n"));
+        var inputText = """{"jsonrpc":"2.0","id":"lifecycle-init","method":"initialize","params":{}}""" + "\n"
+            + """{"jsonrpc":"2.0","id":1,"method":"ping"}""" + "\n";
+        await using var input = new MemoryStream(Encoding.UTF8.GetBytes(inputText));
         await using var output = new MemoryStream();
         await using var transport = new StdioMcpTransport(input, output, bufferSize: 1024);
         using var server = new McpServer(_dbPath, "test");
@@ -2637,7 +2686,8 @@ public sealed class Caller
 
         var stdout = Encoding.UTF8.GetString(output.ToArray());
         Assert.DoesNotContain("[cdidx-mcp]", stdout, StringComparison.Ordinal);
-        var line = Assert.Single(stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+        var line = Assert.Single(stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries),
+            candidate => candidate.Contains("\"id\":1", StringComparison.Ordinal));
         using var response = JsonDocument.Parse(line);
         Assert.Equal(1, response.RootElement.GetProperty("id").GetInt32());
         Assert.Equal("ok", response.RootElement.GetProperty("result").GetProperty("status").GetString());
@@ -3033,6 +3083,7 @@ public sealed class Caller
     /// </summary>
     private sealed class ShutdownProbeTransport : IMcpTransport
     {
+        private const string TestInitializeId = "__test_initialize__";
         private readonly Queue<string?> _frames;
         private readonly string _name;
         private readonly Action<string?>? _onWrite;
@@ -3046,7 +3097,11 @@ public sealed class Caller
         {
             _name = name;
             _onWrite = onWrite;
-            _frames = new Queue<string?>(frames);
+            var scriptedFrames = frames.ToList();
+            if (scriptedFrames.Count > 0
+                && scriptedFrames[0]?.Contains("\"method\":\"initialize\"", StringComparison.Ordinal) != true)
+                scriptedFrames.Insert(0, "{\"jsonrpc\":\"2.0\",\"id\":\"" + TestInitializeId + "\",\"method\":\"initialize\",\"params\":{}}");
+            _frames = new Queue<string?>(scriptedFrames);
             // Append EOS so the loop terminates if shutdown never fires for some reason.
             // shutdown が来なかった場合のフェイルセーフとして末尾に EOS を積む。
             _frames.Enqueue(null);
@@ -3066,6 +3121,8 @@ public sealed class Caller
 
         public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
         {
+            if (frame?.Contains(TestInitializeId, StringComparison.Ordinal) == true)
+                return Task.CompletedTask;
             WriteCount++;
             LastWritten = frame;
             WrittenFrames.Add(frame);
@@ -6128,11 +6185,16 @@ public sealed class Caller
 
     private sealed class QueuedFrameTransport : IMcpTransport
     {
+        private const string TestInitializeId = "__test_initialize__";
         private readonly Queue<string?> _frames;
 
         public QueuedFrameTransport(params string[] frames)
         {
-            _frames = new Queue<string?>(frames.Cast<string?>().Append(null));
+            var scriptedFrames = frames.Cast<string?>().ToList();
+            if (scriptedFrames.Count > 0
+                && scriptedFrames[0]?.Contains("\"method\":\"initialize\"", StringComparison.Ordinal) != true)
+                scriptedFrames.Insert(0, "{\"jsonrpc\":\"2.0\",\"id\":\"" + TestInitializeId + "\",\"method\":\"initialize\",\"params\":{}}");
+            _frames = new Queue<string?>(scriptedFrames.Append(null));
         }
 
         public string Name => "stdio";
@@ -6144,6 +6206,8 @@ public sealed class Caller
 
         public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
         {
+            if (frame?.Contains(TestInitializeId, StringComparison.Ordinal) == true)
+                return Task.CompletedTask;
             WrittenFrames.Add(frame);
             return Task.CompletedTask;
         }
@@ -6198,11 +6262,22 @@ public sealed class Caller
 
     private sealed class QueueMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     {
+        private const string TestInitializeId = "__test_initialize__";
         private readonly Queue<string> _frames;
 
         public QueueMcpTransport(params string[] frames)
+            : this(prependInitialize: true, frames)
         {
-            _frames = new Queue<string>(frames);
+        }
+
+        public QueueMcpTransport(bool prependInitialize, params string[] frames)
+        {
+            var scriptedFrames = frames.ToList();
+            if (prependInitialize
+                && scriptedFrames.Count > 0
+                && !scriptedFrames[0].Contains("\"method\":\"initialize\"", StringComparison.Ordinal))
+                scriptedFrames.Insert(0, "{\"jsonrpc\":\"2.0\",\"id\":\"" + TestInitializeId + "\",\"method\":\"initialize\",\"params\":{}}");
+            _frames = new Queue<string>(scriptedFrames);
         }
 
         public string Name => "memory";
@@ -6214,6 +6289,8 @@ public sealed class Caller
 
         public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
         {
+            if (frame?.Contains(TestInitializeId, StringComparison.Ordinal) == true)
+                return Task.CompletedTask;
             if (frame is not null)
                 WrittenFrames.Add(frame);
             return Task.CompletedTask;

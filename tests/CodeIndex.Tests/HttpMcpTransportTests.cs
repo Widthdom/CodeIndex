@@ -183,7 +183,7 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_PostInitializeWithEventsStream_EmitsInitializedNotification()
+    public async Task HttpTransport_PostInitializeWithEventsStream_DoesNotEmitClientInitializedNotification_Issue4433()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
 
@@ -198,8 +198,8 @@ public class HttpMcpTransportTests : IDisposable
         var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var initializedFrame = await initializedTask.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Contains("\"method\":\"notifications/initialized\"", initializedFrame, StringComparison.Ordinal);
+        await Assert.ThrowsAsync<TimeoutException>(
+            () => initializedTask.WaitAsync(TimeSpan.FromMilliseconds(250)));
     }
 
     [Fact]
@@ -627,7 +627,7 @@ public class HttpMcpTransportTests : IDisposable
         var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, requestLogger: records.Enqueue, maxResponseBodyBytes: 1024);
 
-        using var oversized = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""");
+        using var oversized = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""");
 
         Assert.Equal(HttpStatusCode.InternalServerError, oversized.StatusCode);
         var rejectedBody = await oversized.Content.ReadAsStringAsync();
@@ -1029,6 +1029,9 @@ public class HttpMcpTransportTests : IDisposable
             Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
             await using var harness = await McpHttpHarness.StartAsync(dbPath);
 
+            using (var initialize = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":"http-progress-init","method":"initialize","params":{}}"""))
+                Assert.Equal(HttpStatusCode.OK, initialize.StatusCode);
+
             using var client = CreateHttpClient();
             using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
             Assert.Equal(HttpStatusCode.OK, events.StatusCode);
@@ -1069,6 +1072,9 @@ public class HttpMcpTransportTests : IDisposable
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
             await using var harness = await McpHttpHarness.StartAsync(dbPath);
+
+            using (var initialize = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":"http-progress-multi-init","method":"initialize","params":{}}"""))
+                Assert.Equal(HttpStatusCode.OK, initialize.StatusCode);
 
             using var client = CreateHttpClient();
             using var firstEvents = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
