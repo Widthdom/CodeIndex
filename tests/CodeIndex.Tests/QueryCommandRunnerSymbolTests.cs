@@ -1979,7 +1979,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_CountJsonIncludesBucketSummary_Issue3944()
+    public void RunUnused_CountJsonSummaryAndBucketFilterShareFixture_Issue3944()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
         try
@@ -2002,33 +2002,21 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(3, json.GetProperty("summary").GetProperty("by_bucket").GetProperty("public_or_exported_no_refs").GetInt32());
             Assert.Equal(8, json.GetProperty("summary").GetProperty("by_confidence").GetProperty("low").GetInt32());
             Assert.Equal(4, json.GetProperty("summary").GetProperty("by_contract_domain").GetProperty("configuration_contract").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunUnused_CountJsonWithBucketFilterCountsFilteredSymbols()
-    {
-        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
-        try
-        {
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            var (filteredExitCode, filteredStdout, filteredStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
                 ["--db", dbPath, "--json", "--lang", "csharp", "--bucket", "public_or_exported_no_refs", "--min-confidence", "low", "--count"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var query = json.GetProperty("query_context");
+            using var filteredDocument = ParseJsonOutput(filteredStdout);
+            var filteredJson = filteredDocument.RootElement;
+            var query = filteredJson.GetProperty("query_context");
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(3, json.GetProperty("count").GetInt32());
-            Assert.Equal(1, json.GetProperty("files").GetInt32());
-            Assert.Equal(3, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
-            Assert.Equal(3, json.GetProperty("summary").GetProperty("by_bucket").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(CommandExitCodes.Success, filteredExitCode);
+            Assert.Equal(string.Empty, filteredStderr);
+            Assert.Equal(3, filteredJson.GetProperty("count").GetInt32());
+            Assert.Equal(1, filteredJson.GetProperty("files").GetInt32());
+            Assert.Equal(3, filteredJson.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(3, filteredJson.GetProperty("summary").GetProperty("by_bucket").GetProperty("public_or_exported_no_refs").GetInt32());
             Assert.Equal("public_or_exported_no_refs", query.GetProperty("bucket").GetString());
             Assert.Equal("low", query.GetProperty("min_confidence").GetString());
         }
