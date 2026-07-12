@@ -1176,7 +1176,7 @@ public class ProgramCliTests
 
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, stderr);
-        Assert.Contains("cdidx suggestions [list|show|export|add]", stdout);
+        Assert.Contains("cdidx suggestions add <description>", stdout);
         Assert.Contains("--description <text>", stdout);
         Assert.Contains("--evidence-path <path>", stdout);
     }
