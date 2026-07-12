@@ -52,7 +52,9 @@ internal static class ConsoleCompletionRenderer
     // generic catch-all となるよう揃える。テストもこの並びを前提にしている。
     private static readonly string[] EnumeratedCompletionCommands =
     [
-        "find", "excerpt", "references", "inspect", "hotspots", "status", "validate-config", "db", "report", "suggestions", "search",
+        "find", "excerpt", "references", "inspect", "hotspots", "status", "validate-config", "db", "report", "suggestions",
+        .. CliCommandCatalog.Commands.Except(["find", "excerpt", "references", "inspect", "hotspots", "status", "validate-config", "db", "report", "suggestions", "search"]),
+        "search",
     ];
 
     // Generic-branch representative set: union of completion flags from these commands populates
@@ -104,6 +106,13 @@ internal static class ConsoleCompletionRenderer
         sb.Append("        --log-format) COMPREPLY=($(compgen -W \"text json\" -- \"$cur\")) ;;\n");
         sb.Append($"        --lang) COMPREPLY=($(compgen -W \"{langs}\" -- \"$cur\")) ;;\n");
         sb.Append($"        --kind) COMPREPLY=($(compgen -W \"{kinds}\" -- \"$cur\")) ;;\n");
+        foreach (var (flag, values) in GetEnumValueCompletions().Where(item => item.Flag != "--format"))
+            sb.Append($"        {flag}) COMPREPLY=($(compgen -W \"{string.Join(' ', values)}\" -- \"$cur\")) ;;\n");
+        sb.Append("        --format)\n");
+        sb.Append("            case \"$cmd\" in\n");
+        foreach (var (command, values) in GetFormatValueCompletions())
+            sb.Append($"                {command}) COMPREPLY=($(compgen -W \"{string.Join(' ', values)}\" -- \"$cur\")) ;;\n");
+        sb.Append("            esac ;;\n");
         sb.Append("        *)\n");
         for (var i = 0; i < EnumeratedCompletionCommands.Length; i++)
         {
@@ -229,7 +238,7 @@ internal static class ConsoleCompletionRenderer
     {
         var args = new List<string>();
         foreach (var flag in CliFlagSchema.GetCompletionFlagsForCommand(command))
-            args.AddRange(FormatZshArguments(flag, langs, kinds));
+            args.AddRange(FormatZshArguments(flag, langs, kinds, command));
         // Append a trailing positional placeholder so zsh suggests path/query completion after
         // the flags - but only for commands that actually accept a positional argument. `status`,
         // `db`, `hotspots`, etc. would reject anything typed there, so emitting no placeholder
@@ -275,14 +284,14 @@ internal static class ConsoleCompletionRenderer
         return args;
     }
 
-    private static IEnumerable<string> FormatZshArguments(CliFlag flag, string langs, string kinds)
+    private static IEnumerable<string> FormatZshArguments(CliFlag flag, string langs, string kinds, string? command = null)
     {
-        yield return FormatZshArgument(flag.Name, flag, langs, kinds);
+        yield return FormatZshArgument(flag.Name, flag, langs, kinds, command);
         if (flag.ShortName is not null)
-            yield return FormatZshArgument(flag.ShortName, flag, langs, kinds);
+            yield return FormatZshArgument(flag.ShortName, flag, langs, kinds, command);
     }
 
-    private static string FormatZshArgument(string name, CliFlag flag, string langs, string kinds)
+    private static string FormatZshArgument(string name, CliFlag flag, string langs, string kinds, string? command)
     {
         var desc = flag.Description.Replace("'", "''");
         if (!flag.IsValueBearing)
@@ -305,6 +314,8 @@ internal static class ConsoleCompletionRenderer
             "<name>" => "name",
             "<host:port>" => "address",
             "<stdio|http>" => "transport:(stdio http)",
+            _ when flag.Name == "--format" && command is not null && GetFormatValues(command) is { } formats => $"value:({string.Join(' ', formats)})",
+            _ when GetEnumValues(flag) is { } values => $"value:({string.Join(' ', values)})",
             _ => "value",
         };
         return $"'{name}[{desc}]:{valueSpec}'";
@@ -347,6 +358,7 @@ internal static class ConsoleCompletionRenderer
                 "<auto|always|never>" => " -a 'auto always never'",
                 "<basic|256|truecolor>" => " -a 'basic 256 truecolor'",
                 "<text|json>" => " -a 'text json'",
+                _ when GetEnumValues(flag) is { } values => $" -a '{string.Join(' ', values)}'",
                 _ => "",
             };
             var description = flag.Description.Replace("'", "\\'");
@@ -363,6 +375,15 @@ internal static class ConsoleCompletionRenderer
         {
             if (flag.Commands.Count == 0)
                 continue;
+            if (flag.Name == "--format")
+            {
+                foreach (var command in flag.Commands.OrderBy(c => Array.IndexOf(Commands, c)))
+                {
+                    var values = GetFormatValues(command) ?? [];
+                    lines.Add($"complete -c cdidx -n '__fish_seen_subcommand_from {command}' -l format -r -a '{string.Join(' ', values)}' -d '{flag.Description.Replace("'", "\\'")}'");
+                }
+                continue;
+            }
             var commands = string.Join(' ', flag.Commands.OrderBy(c => Array.IndexOf(Commands, c)));
             var name = flag.Name.TrimStart('-');
             // Token order is `-l name (-r)? (-a 'values')? -d 'description'` - matches the
@@ -382,6 +403,7 @@ internal static class ConsoleCompletionRenderer
                 "<lang>" => $" -a '{langs}'",
                 "<kind>" => $" -a '{kinds}'",
                 "<stdio|http>" => " -a 'stdio http'",
+                _ when GetEnumValues(flag) is { } values => $" -a '{string.Join(' ', values)}'",
                 _ => "",
             };
             description = description.Replace("'", "\\'");
@@ -407,6 +429,14 @@ internal static class ConsoleCompletionRenderer
         sb.AppendLine("    $colorModes = @('auto', 'always', 'never')");
         sb.AppendLine("    $palettes = @('basic', '256', 'truecolor')");
         sb.AppendLine("    $logFormats = @('text', 'json')");
+        sb.AppendLine("    $enumValues = @{");
+        foreach (var (flag, values) in GetEnumValueCompletions().Where(item => item.Flag != "--format"))
+            sb.AppendLine($"        '{EscapePowerShellSingleQuoted(flag)}' = @({FormatPowerShellArray(values)})");
+        sb.AppendLine("    }");
+        sb.AppendLine("    $formatValues = @{");
+        foreach (var (command, values) in GetFormatValueCompletions())
+            sb.AppendLine($"        '{EscapePowerShellSingleQuoted(command)}' = @({FormatPowerShellArray(values)})");
+        sb.AppendLine("    }");
         sb.AppendLine($"    $topLevelFlags = @({topLevelFlags})");
         sb.AppendLine("    $subcommands = @{");
         foreach (var (command, subcommands) in CommandSubcommands)
@@ -431,6 +461,8 @@ internal static class ConsoleCompletionRenderer
         sb.AppendLine("        '--log-format' { $logFormats | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
         sb.AppendLine("        '--lang' { $langs | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
         sb.AppendLine("        '--kind' { $kinds | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
+        sb.AppendLine("        '--format' { if ($formatValues.ContainsKey($subcmd)) { $formatValues[$subcmd] | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ } }; return }");
+        sb.AppendLine("        { $enumValues.ContainsKey($_) } { $enumValues[$_] | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
         sb.AppendLine("    }");
         sb.AppendLine("    if (-not $subcmd -or ($tokens.Count -le 2 -and -not ([string]::IsNullOrEmpty($wordToComplete)) -and -not $afterLastToken)) {");
         sb.AppendLine("        $commands + @('--help', '--version', '--license') + $topLevelFlags | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ 'ParameterName' }");
@@ -508,4 +540,38 @@ internal static class ConsoleCompletionRenderer
 
     private static string EscapePowerShellSingleQuoted(string value) =>
         value.Replace("'", "''", StringComparison.Ordinal);
+
+    private static string[]? GetEnumValues(CliFlag flag)
+    {
+        var placeholder = flag.ValuePlaceholder;
+        if (placeholder is null || placeholder.Length < 3 || placeholder[0] != '<' || placeholder[^1] != '>' || !placeholder.Contains('|'))
+            return null;
+        return placeholder[1..^1].Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
+    private static IEnumerable<(string Flag, string[] Values)> GetEnumValueCompletions() =>
+        CliFlagSchema.All
+            .Select(flag => (Flag: flag.Name, Values: GetEnumValues(flag)))
+            .Where(item => item.Values is not null)
+            .GroupBy(item => item.Flag, StringComparer.Ordinal)
+            .Select(group => (group.Key, group.SelectMany(item => item.Values!).Distinct(StringComparer.Ordinal).ToArray()));
+
+    private static IEnumerable<(string Command, string[] Values)> GetFormatValueCompletions()
+    {
+        yield return ("search", ["text", "json", "count", "compact", "csv", "tsv", "lsp", "qf", "sarif", "issue-drafts"]);
+        yield return ("recipes", ["text", "json", "issue-drafts"]);
+        yield return ("audit", ["text", "json", "count", "issue-drafts"]);
+        foreach (var command in new[] { "definition", "references", "callers", "callees", "find", "validate" })
+            yield return (command, ["text", "json", "lsp", "qf", "sarif"]);
+        foreach (var command in new[] { "symbols", "files" })
+            yield return (command, ["text", "json", "count", "compact", "csv", "tsv"]);
+        yield return ("map", ["text", "json", "compact", "markdown"]);
+        yield return ("inspect", ["text", "json", "compact"]);
+        yield return ("deps", ["text", "json"]);
+        yield return ("suggestions", ["json", "markdown", "issue-drafts"]);
+        yield return ("languages", ["text", "json", "markdown"]);
+    }
+
+    private static string[]? GetFormatValues(string command) =>
+        GetFormatValueCompletions().FirstOrDefault(item => item.Command == command).Values;
 }

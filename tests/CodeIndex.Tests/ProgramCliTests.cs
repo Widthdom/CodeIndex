@@ -963,6 +963,21 @@ public class ProgramCliTests
     }
 
     [ProductionRuntimeFact]
+    public void Suggestions_AddHelpDocumentsWriteContract_Issue4422()
+    {
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(["suggestions", "add", "--help"]);
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("Usage: cdidx suggestions add", stdout);
+        Assert.Contains("symbol_extraction", stdout);
+        Assert.Contains("default: other", stdout);
+        Assert.Contains("deduplicated by normalized category, language, and description", stdout);
+        Assert.Contains("apply only to `suggestions export --format issue-drafts`", stdout);
+        Assert.Contains("Examples:", stdout);
+    }
+
+    [ProductionRuntimeFact]
     public void Suggestions_ListJsonSupportsLimitAndOffset()
     {
         using var fixture = SuggestionFixture.Create();
@@ -1161,7 +1176,7 @@ public class ProgramCliTests
 
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, stderr);
-        Assert.Contains("cdidx suggestions [list|show|export|add]", stdout);
+        Assert.Contains("cdidx suggestions add <description>", stdout);
         Assert.Contains("--description <text>", stdout);
         Assert.Contains("--evidence-path <path>", stdout);
     }

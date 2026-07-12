@@ -14,6 +14,52 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public class ConsoleUiTests
 {
+    [Fact]
+    public void CompletionRenderer_EnumValuesMatchAcrossShells_Issue4426()
+    {
+        foreach (var shell in new[] { "bash", "zsh", "fish", "powershell" })
+        {
+            var script = ConsoleCompletionRenderer.GetCompletionScript(shell);
+            Assert.Contains("stable", script);
+            Assert.Contains("prerelease", script);
+            Assert.Contains("issue-drafts", script);
+            Assert.Contains("submitted_pending_triage", script);
+            Assert.Contains("osc9", script);
+        }
+    }
+
+    [Fact]
+    public void CompletionRenderer_UtilityCommandsExcludeQueryFlags_Issue4427()
+    {
+        foreach (var command in new[] { "completions", "license", "export", "import", "batch", "mcp", "lsp" })
+        {
+            var expected = CliFlagSchema.GetCompletionFlagsForCommand(command).Select(flag => flag.Name).ToHashSet(StringComparer.Ordinal);
+            Assert.DoesNotContain("--body", expected);
+            Assert.DoesNotContain("--exact", expected);
+            Assert.DoesNotContain("--kind", expected);
+            Assert.DoesNotContain("--lang", expected);
+        }
+    }
+
+    [Fact]
+    public void CompletionRenderer_FormatValuesAreCommandScoped_Issue4426()
+    {
+        var bash = ConsoleCompletionRenderer.GetCompletionScript("bash");
+        var formatCase = ExtractBetween(bash, "--format)", "esac ;;");
+        var search = ExtractBetween(formatCase, "search)", "recipes)");
+        var deps = ExtractBetween(formatCase, "deps)", "suggestions)");
+        Assert.Contains("issue-drafts", search);
+        Assert.Contains("sarif", search);
+        Assert.DoesNotContain("issue-drafts", deps);
+        Assert.DoesNotContain("sarif", deps);
+
+        var powershell = ConsoleCompletionRenderer.GetCompletionScript("powershell");
+        var formatValues = ExtractBetween(powershell, "$formatValues = @{", "    }");
+        Assert.Contains("'search' = @('text', 'json', 'count', 'compact', 'csv', 'tsv', 'lsp', 'qf', 'sarif', 'issue-drafts')", formatValues);
+        Assert.Contains("'deps' = @('text', 'json')", formatValues);
+    }
+
+
     private static readonly Dictionary<short, OpCode> SingleByteOpCodes = typeof(OpCodes)
         .GetFields(BindingFlags.Public | BindingFlags.Static)
         .Where(field => field.GetValue(null) is OpCode opCode && opCode.Size == 1)
