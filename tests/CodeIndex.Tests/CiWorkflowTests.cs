@@ -65,10 +65,10 @@ public class CiWorkflowTests
             "- name: Verify formatting");
         AssertContainsAll(
             testScript,
-            "$collectCoverage = $CollectCoverage -eq \"true\"",
+            "$includeCoverage = $CollectCoverage -eq \"true\"",
             "[ValidateSet(\"true\", \"false\")]",
             "Skipping XPlat Code Coverage outside ubuntu-24.04/net8.0",
-            "$firstExitCode = Invoke-TestRun -LogPath $firstLogPath -IncludeCoverage $collectCoverage",
+            "$firstExitCode = Invoke-TestRun -LogPath $firstLogPath -IncludeCoverage $includeCoverage",
             "Skipping XPlat Code Coverage on the flaky-classification retry.",
             "$retryExitCode = Invoke-TestRun -LogPath $retryLogPath -IncludeCoverage $false",
             "\"--no-build\"",

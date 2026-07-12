@@ -27,8 +27,8 @@ $testArgs = @(
   "--logger", "trx;LogFileName=test_results.trx"
 )
 
-$collectCoverage = $CollectCoverage -eq "true"
-if (-not $collectCoverage) {
+$includeCoverage = $CollectCoverage -eq "true"
+if (-not $includeCoverage) {
   Write-Host "Skipping XPlat Code Coverage outside ubuntu-24.04/net8.0 so platform/framework matrix lanes run only the test suite."
 }
 
@@ -78,7 +78,7 @@ function Invoke-TestRun {
 }
 
 $firstLogPath = Join-Path $resultsDirectory "test-output-first.txt"
-$firstExitCode = Invoke-TestRun -LogPath $firstLogPath -IncludeCoverage $collectCoverage
+$firstExitCode = Invoke-TestRun -LogPath $firstLogPath -IncludeCoverage $includeCoverage
 if ($firstExitCode -eq 0) {
   exit 0
 }
