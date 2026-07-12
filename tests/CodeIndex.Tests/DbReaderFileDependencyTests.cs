@@ -26,6 +26,26 @@ public partial class DbReaderTests
     }
 
     [Fact]
+    public void GetFileDependencies_PythonResolvesAliasesRelativeImportsAndPackageInitializers_Issue4412()
+    {
+        Assert.True(PythonImportBindingResolver.ResolvesDependency(
+            "pkg/caller.py", "pkg/relative.py", "Relative", null, null, "from .relative import Relative"));
+        InsertIndexedFile("pkg/models.py", "python", "class User:\n    pass\n");
+        InsertIndexedFile("pkg/tools/__init__.py", "python", "class Tool:\n    pass\n");
+        InsertIndexedFile("pkg/caller.py", "python",
+            "import pkg.models as m\nfrom pkg.models import User as Account\nfrom pkg.tools import Tool\n\ndef run():\n    m.User()\n    Account()\n    Tool()\n");
+
+        var dependencies = _reader.GetFileDependencies(limit: 20, lang: "python")
+            .Where(edge => edge.SourcePath == "pkg/caller.py")
+            .Select(edge => edge.TargetPath)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.Contains("pkg/models.py", dependencies);
+        Assert.Contains("pkg/tools/__init__.py", dependencies);
+        Assert.Equal(2, dependencies.Count);
+    }
+
+    [Fact]
     public void GetFileDependencies_SolutionResolvesProjectNamesToProjectPaths_Issue4452()
     {
         InsertIndexedFile("Repo.sln", "solution",

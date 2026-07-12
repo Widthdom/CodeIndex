@@ -246,6 +246,14 @@ public partial class DbReader
                      AND NOT (snc.source_lang IN ('msbuild', 'solution') AND snc.logical_reference_kind IN ('import', 'project_reference'))
                      AND NOT (snc.source_lang = 'markdown' AND snc.logical_reference_kind = 'reference')
                      AND tf.symbol_name = snc.symbol_name)
+                 OR (snc.source_lang = 'python'
+                     AND tf.target_lang = 'python'
+                     AND EXISTS (
+                         SELECT 1 FROM symbols py_import_match
+                         WHERE py_import_match.file_id = snc.source_file_id
+                           AND py_import_match.kind = 'import'
+                           AND python_import_target_name(snc.source_path, snc.symbol_name, snc.context, snc.column_number, py_import_match.signature) = tf.symbol_name
+                     ))
                  OR (snc.source_lang = 'markdown'
                      AND snc.logical_reference_kind = 'import'
                      AND tf.target_path = markdown_resolve_path(snc.source_path, snc.symbol_name))
@@ -327,7 +335,7 @@ public partial class DbReader
                        " + BuildLogicalReferenceSegmentCountExpr("source_lang", "symbol_name", "context", "container_name", "column_number") + @" AS symbol_segment_count,
                        " + BuildLogicalReferenceLeafFallbackAllowedExpr("source_lang", "symbol_name", "context", "container_name", "column_number") + @" AS allow_leaf_fallback,
                        symbol_name AS raw_symbol_name,
-                       line, column_number, logical_reference_kind,
+                       context, line, column_number, logical_reference_kind,
                        0 AS is_attribute_alias,
                        CASE WHEN logical_reference_kind IN ('attribute', 'annotation') THEN 1 ELSE 0 END AS is_metadata
                 FROM logical_references_primary
@@ -347,7 +355,7 @@ public partial class DbReader
                        1 AS symbol_segment_count,
                        0 AS allow_leaf_fallback,
                        symbol_name || 'Attribute' AS raw_symbol_name,
-                       line, column_number, logical_reference_kind,
+                       context, line, column_number, logical_reference_kind,
                        1 AS is_attribute_alias,
                        1 AS is_metadata
                 FROM logical_references_primary
@@ -371,12 +379,14 @@ public partial class DbReader
                        symbol_segment_count,
                        allow_leaf_fallback,
                        raw_symbol_name,
+                       context,
+                       column_number,
                        logical_reference_kind,
                        is_attribute_alias,
                        is_metadata,
                        COUNT(*) AS ref_count
                 FROM logical_references
-                GROUP BY source_file_id, source_path, source_lang, symbol_name, symbol_segment_count, allow_leaf_fallback, raw_symbol_name, logical_reference_kind, is_attribute_alias, is_metadata
+                GROUP BY source_file_id, source_path, source_lang, symbol_name, symbol_segment_count, allow_leaf_fallback, raw_symbol_name, context, column_number, logical_reference_kind, is_attribute_alias, is_metadata
             ),
             target_files AS (
                 -- Collapse per-symbol rows to one per (target_path, target_lang, symbol_name)
@@ -558,22 +568,7 @@ public partial class DbReader
                         FROM symbols py_import
                         WHERE py_import.file_id = snc.source_file_id
                           AND py_import.kind = 'import'
-                          AND (
-                                py_import.name = snc.symbol_name
-                             OR py_import.name LIKE '%.' || snc.symbol_name
-                             OR snc.symbol_name LIKE py_import.name || '.%'
-                          )
-                          AND (
-                                replace(substr(tf.target_path, 1, length(tf.target_path) - 3), '/', '.') =
-                                    substr(py_import.name, 1, length(py_import.name) - length(snc.symbol_name) - 1)
-                             OR replace(substr(tf.target_path, 1, length(tf.target_path) - 3), '/', '.') LIKE
-                                    '%.' || substr(py_import.name, 1, length(py_import.name) - length(snc.symbol_name) - 1)
-                             OR snc.symbol_name LIKE py_import.name || '.%'
-                                AND (
-                                    replace(substr(tf.target_path, 1, length(tf.target_path) - 3), '/', '.') = py_import.name
-                                    OR replace(substr(tf.target_path, 1, length(tf.target_path) - 3), '/', '.') LIKE '%.' || py_import.name
-                                )
-                          )
+                          AND python_import_resolves(snc.source_path, tf.target_path, snc.symbol_name, snc.context, snc.column_number, py_import.signature)
                   ))
                 UNION ALL
                 SELECT snc.source_path,

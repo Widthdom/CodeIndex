@@ -948,6 +948,14 @@ public class DbContext : IDisposable
             "markdown_resolve_path",
             (string? sourcePath, string? targetPath) => DbReader.ResolveMarkdownDependencyPath(sourcePath, targetPath));
         connection.CreateFunction(
+            "python_import_resolves",
+            (string? sourcePath, string? targetPath, string? referenceName, string? context, long? columnNumber, string? signature) =>
+                PythonImportBindingResolver.ResolvesDependency(sourcePath, targetPath, referenceName, context, columnNumber, signature));
+        connection.CreateFunction(
+            "python_import_target_name",
+            (string? sourcePath, string? referenceName, string? context, long? columnNumber, string? signature) =>
+                PythonImportBindingResolver.ResolveTargetName(sourcePath, referenceName, context, columnNumber, signature));
+        connection.CreateFunction(
             "sql_leaf_name",
             (string? name) => string.IsNullOrWhiteSpace(name) ? null : SqlNameResolver.GetLeafName(name));
         connection.CreateFunction(
