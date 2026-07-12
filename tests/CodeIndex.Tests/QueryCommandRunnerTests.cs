@@ -790,6 +790,7 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(string.Empty, stderr);
         using var document = ParseJsonOutput(stdout);
         var root = document.RootElement;
+        Assert.Equal("1", root.GetProperty("api_version").GetString());
         Assert.Equal("ok", root.GetProperty("status").GetString());
         Assert.False(root.GetProperty("dry_run").GetBoolean());
         var timingNote = root.GetProperty("wal_checkpoint_timing_note").GetString();
@@ -4943,6 +4944,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(25, json.GetProperty("count").GetInt32());
+            Assert.Equal("1", json.GetProperty("api_version").GetString());
             Assert.False(json.GetProperty("degraded").GetBoolean());
             Assert.True(json.GetProperty("authoritative_count").GetBoolean());
             Assert.True(json.GetProperty("freshness_available").GetBoolean());

@@ -896,6 +896,7 @@ public class ReportCommandRunnerTests
             Assert.True(JsonArrayContains(json.GetProperty("recommended_extensions"), ".tgz"));
             Assert.True(JsonArrayContains(json.GetProperty("recommended_extensions"), ".tar.gz"));
             Assert.True(json.GetProperty("json_metadata_stdout_only").GetBoolean());
+            Assert.Equal("1", json.GetProperty("api_version").GetString());
             Assert.Equal(0, json.GetProperty("warnings").GetArrayLength());
             Assert.True(json.GetProperty("files").GetInt32() >= 4);
             Assert.False(json.GetProperty("log_included").GetBoolean());

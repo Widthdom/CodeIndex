@@ -58,7 +58,9 @@ public static partial class QueryCommandRunner
 
             var logPath = GlobalToolLog.ResolveLogDirectoryForStatus();
             if (options.Json)
-                Console.WriteLine(JsonSerializer.Serialize(new Dictionary<string, string> { ["log_path"] = logPath }, jsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(
+                    new StatusLogPathJsonResult(logPath),
+                    CliJsonSerializerContextFactory.Create(jsonOptions).StatusLogPathJsonResult));
             else
                 Console.WriteLine(logPath);
             return CommandExitCodes.Success;
