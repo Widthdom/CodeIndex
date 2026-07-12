@@ -713,14 +713,88 @@ internal sealed class LspServer : IDisposable
 
         var array = new JsonArray();
         var lineCache = new Dictionary<int, string?>();
-        foreach (var symbol in GetDocumentSymbols(document.IndexedPath, MaxInlayHintItems)
+        foreach (var symbol in GetDocumentSymbols(document.IndexedPath, MaxDocumentSymbols)
             .Where(symbol => !string.IsNullOrWhiteSpace(symbol.ReturnType))
+            .Where(symbol => IsInlayHintInRequestedRange(root, document, symbol, lineCache))
+            .Where(symbol => !HasExplicitTypeBeforeSymbol(document, symbol, lineCache))
             .Take(MaxInlayHintItems))
         {
             array.Add((JsonNode)ToInlayHint(document, symbol, lineCache));
         }
         return array;
     }
+
+    private bool IsInlayHintInRequestedRange(
+        JsonElement root,
+        IndexedDocumentContext document,
+        SymbolResult symbol,
+        Dictionary<int, string?> lineCache)
+    {
+        if (!root.TryGetProperty("params", out var paramsElement) ||
+            !paramsElement.TryGetProperty("range", out var range) ||
+            !TryReadLspPosition(range, "start", out var startLine, out var startCharacter) ||
+            !TryReadLspPosition(range, "end", out var endLine, out var endCharacter))
+        {
+            return true;
+        }
+
+        var line = Math.Max(symbol.Line, 1) - 1;
+        var character = FindSymbolStartCharacter(document, symbol, lineCache) + symbol.Name.Length;
+        return IsPositionInRange(line, character, startLine, startCharacter, endLine, endCharacter);
+    }
+
+    private bool HasExplicitTypeBeforeSymbol(
+        IndexedDocumentContext document,
+        SymbolResult symbol,
+        Dictionary<int, string?> lineCache)
+    {
+        var line = Math.Max(symbol.Line, symbol.StartLine);
+        if (string.IsNullOrWhiteSpace(symbol.ReturnType) ||
+            line <= 0 ||
+            !TryReadPositionLineCached(document.ResolvedPath, line - 1, lineCache, out var sourceLine))
+        {
+            return false;
+        }
+
+        var symbolStart = FindSymbolStartCharacter(document, symbol, lineCache);
+        if (symbolStart <= 0 || sourceLine.Length == 0)
+            return false;
+
+        var typeStart = sourceLine.LastIndexOf(symbol.ReturnType, symbolStart - 1, StringComparison.Ordinal);
+        if (typeStart < 0)
+            return false;
+
+        var typeEnd = typeStart + symbol.ReturnType.Length;
+        return typeEnd <= symbolStart && sourceLine.AsSpan(typeEnd, symbolStart - typeEnd).Trim().IsEmpty;
+    }
+
+    private static bool TryReadLspPosition(JsonElement range, string propertyName, out int line, out int character)
+    {
+        line = 0;
+        character = 0;
+        return range.ValueKind == JsonValueKind.Object &&
+               range.TryGetProperty(propertyName, out var position) &&
+               position.ValueKind == JsonValueKind.Object &&
+               position.TryGetProperty("line", out var lineElement) &&
+               lineElement.TryGetInt32(out line) &&
+               line >= 0 &&
+               position.TryGetProperty("character", out var characterElement) &&
+               characterElement.TryGetInt32(out character) &&
+               character >= 0;
+    }
+
+    internal static bool IsPositionInRange(
+        int line,
+        int character,
+        int startLine,
+        int startCharacter,
+        int endLine,
+        int endCharacter)
+        => ComparePosition(line, character, startLine, startCharacter) >= 0 &&
+           ComparePosition(line, character, endLine, endCharacter) < 0;
+
+    private static int ComparePosition(int leftLine, int leftCharacter, int rightLine, int rightCharacter)
+        => leftLine != rightLine ? leftLine.CompareTo(rightLine) : leftCharacter.CompareTo(rightCharacter);
 
     private static JsonObject CompletionList(JsonArray items) => new()
     {

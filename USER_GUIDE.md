@@ -2427,6 +2427,10 @@ but do not speak MCP. It also advertises full `textDocument` sync and
 conservative `hover`, `completion`, `documentHighlight`, `semanticTokens/full`,
 `codeLens`, and `inlayHint` providers backed by indexed symbols and references
 where available.
+`textDocument/inlayHint` honors the requested LSP range (including its exclusive
+end position) and omits type labels when the indexed return type is already
+written immediately before the symbol name, so explicit field, property, and
+method types are not repeated as hints.
 Optional LSP methods that are not implemented are also not advertised. In the
 current support matrix, `textDocument/prepareRename`, `textDocument/rename`,
 `textDocument/foldingRange`, `textDocument/selectionRange`, and
@@ -5211,6 +5215,9 @@ MCP stdio は line protocol です。LF 区切りの各行に compact な UTF-8 
 indexed symbols / references で答えられる範囲に限定した `hover`、`completion`、
 `documentHighlight`、`semanticTokens/full`、`codeLens`、`inlayHint` provider を
 advertise します。
+`textDocument/inlayHint` は end position を含まない requested LSP range を尊重し、
+indexed return type が symbol name の直前にすでに明記されている場合は type label を
+省略するため、field / property / method の明示型を hint として重複表示しません。
 未実装の optional LSP method は advertise しません。現在の support matrix では
 `textDocument/prepareRename`、`textDocument/rename`、`textDocument/foldingRange`、
 `textDocument/selectionRange`、`textDocument/signatureHelp` は JSON-RPC `-32601`

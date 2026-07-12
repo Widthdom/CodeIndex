@@ -474,7 +474,37 @@ public class LspServerTests
 
             var inlayHints = server.HandleMessage(CreateTextDocumentRequest("textDocument/inlayHint", sourcePath, 35367));
             Assert.NotNull(inlayHints);
-            Assert.NotEmpty(inlayHints!["result"]!.AsArray());
+            Assert.True(inlayHints!["error"] is null, inlayHints["error"]?.ToJsonString());
+            Assert.Empty(inlayHints!["result"]!.AsArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_InlayHint_HonorsRangeAndSuppressesExplicitTypes_Issue4418()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_inlay_hint_range");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            var source = "public class App\n{\n    public int Count() => 1;\n    public string Name { get; } = \"app\";\n}\n";
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+
+            var response = server.HandleMessage(CreateInlayHintRequest(sourcePath, 4418, 2, 0, 3, 0));
+
+            Assert.NotNull(response);
+            Assert.True(response!["error"] is null, response["error"]?.ToJsonString());
+            Assert.Empty(response!["result"]!.AsArray());
+            Assert.True(LspServer.IsPositionInRange(2, 20, 2, 0, 3, 0));
+            Assert.False(LspServer.IsPositionInRange(1, 20, 2, 0, 3, 0));
+            Assert.False(LspServer.IsPositionInRange(3, 0, 2, 0, 3, 0));
         }
         finally
         {
@@ -2275,6 +2305,29 @@ public class LspServerTests
             @params = new
             {
                 textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
+            },
+        });
+
+    private static string CreateInlayHintRequest(
+        string sourcePath,
+        int id,
+        int startLine,
+        int startCharacter,
+        int endLine,
+        int endCharacter) =>
+        JsonSerializer.Serialize(new
+        {
+            jsonrpc = "2.0",
+            id,
+            method = "textDocument/inlayHint",
+            @params = new
+            {
+                textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
+                range = new
+                {
+                    start = new { line = startLine, character = startCharacter },
+                    end = new { line = endLine, character = endCharacter },
+                },
             },
         });
 
