@@ -260,8 +260,8 @@ public class LspServerTests
             var capabilities = response!["result"]!["capabilities"]!;
             Assert.True(capabilities["definitionProvider"]!.GetValue<bool>());
             Assert.True(capabilities["declarationProvider"]!.GetValue<bool>());
-            Assert.True(capabilities["typeDefinitionProvider"]!.GetValue<bool>());
-            Assert.True(capabilities["implementationProvider"]!.GetValue<bool>());
+            Assert.Null(capabilities["typeDefinitionProvider"]);
+            Assert.Null(capabilities["implementationProvider"]);
             Assert.True(capabilities["documentSymbolProvider"]!.GetValue<bool>());
             Assert.True(capabilities["hoverProvider"]!.GetValue<bool>());
             Assert.True(capabilities["documentHighlightProvider"]!.GetValue<bool>());
@@ -400,12 +400,14 @@ public class LspServerTests
     }
 
     [Theory]
+    [InlineData("textDocument/typeDefinition")]
+    [InlineData("textDocument/implementation")]
     [InlineData("textDocument/prepareRename")]
     [InlineData("textDocument/rename")]
     [InlineData("textDocument/foldingRange")]
     [InlineData("textDocument/selectionRange")]
     [InlineData("textDocument/signatureHelp")]
-    public void HandleMessage_UnsupportedOptionalMethods_ReturnMethodNotFound_Issue4360(string method)
+    public void HandleMessage_UnsupportedOptionalMethods_ReturnMethodNotFound_Issues4360And4420(string method)
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_optional_methods");
         try

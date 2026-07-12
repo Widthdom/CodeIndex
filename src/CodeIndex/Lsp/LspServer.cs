@@ -242,8 +242,6 @@ internal sealed class LspServer : IDisposable
                     "textDocument/documentSymbol" => Result(id, DocumentSymbol(root)),
                     "textDocument/definition" => Result(id, Definition(root, "textDocument/definition")),
                     "textDocument/declaration" => Result(id, Definition(root, "textDocument/declaration")),
-                    "textDocument/typeDefinition" => Result(id, Definition(root, "textDocument/typeDefinition")),
-                    "textDocument/implementation" => Result(id, Definition(root, "textDocument/implementation")),
                     "textDocument/references" => Result(id, References(root, "textDocument/references")),
                     "textDocument/hover" => Result(id, Hover(root, "textDocument/hover")),
                     "textDocument/completion" => Result(id, Completion(root, "textDocument/completion")),
@@ -425,8 +423,6 @@ internal sealed class LspServer : IDisposable
         {
             ["definitionProvider"] = true,
             ["declarationProvider"] = true,
-            ["typeDefinitionProvider"] = true,
-            ["implementationProvider"] = true,
             ["referencesProvider"] = true,
             ["documentSymbolProvider"] = true,
             ["workspaceSymbolProvider"] = true,
