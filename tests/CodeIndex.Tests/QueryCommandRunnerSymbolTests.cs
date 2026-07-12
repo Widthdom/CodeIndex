@@ -1573,6 +1573,34 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(9, allCountJson.GetProperty("count").GetInt32());
             Assert.False(allCountJson.TryGetProperty("default_suppression", out _));
             Assert.True(allCountJson.GetProperty("query_context").GetProperty("all").GetBoolean());
+
+            var (summaryExitCode, summaryStdout, summaryStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--summary-only", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.True(summaryExitCode == CommandExitCodes.Success, $"stdout: {summaryStdout}\nstderr: {summaryStderr}");
+            Assert.Equal(string.Empty, summaryStderr);
+            using var summaryDocument = ParseJsonOutput(summaryStdout);
+            var summaryJson = summaryDocument.RootElement;
+            var omittedSections = summaryJson.GetProperty("omitted_sections").EnumerateArray().Select(value => value.GetString()).ToArray();
+
+            Assert.Equal(2, summaryJson.GetProperty("count").GetInt32());
+            Assert.True(summaryJson.GetProperty("summary_only").GetBoolean());
+            Assert.True(summaryJson.GetProperty("compact").GetBoolean());
+            Assert.Contains("bucket_taxonomy", omittedSections);
+            Assert.False(summaryJson.TryGetProperty("bucket_taxonomy", out _));
+            Assert.False(summaryJson.TryGetProperty("symbols", out _));
+
+            var (textCountExitCode, textCountStdout, textCountStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--lang", "csharp", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, textCountExitCode);
+            Assert.Equal("2", textCountStdout.Trim());
+            Assert.Contains("7 low-confidence contract-domain candidates suppressed by default", textCountStderr);
+            Assert.Contains("use --all to include them", textCountStderr);
+            Assert.Contains("public_api_surface: 3", textCountStderr);
+            Assert.Contains("configuration_contract: 4", textCountStderr);
         }
         finally
         {
@@ -1629,35 +1657,6 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_SummaryOnlyJsonUsesCompactCountEnvelope_Issue4344()
-    {
-        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
-        try
-        {
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--json", "--summary-only", "--lang", "csharp"],
-                _jsonOptions));
-
-            Assert.True(exitCode == CommandExitCodes.Success, $"stdout: {stdout}\nstderr: {stderr}");
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var omittedSections = json.GetProperty("omitted_sections").EnumerateArray().Select(value => value.GetString()).ToArray();
-
-            Assert.Equal(2, json.GetProperty("count").GetInt32());
-            Assert.True(json.GetProperty("summary_only").GetBoolean());
-            Assert.True(json.GetProperty("compact").GetBoolean());
-            Assert.Contains("bucket_taxonomy", omittedSections);
-            Assert.False(json.TryGetProperty("bucket_taxonomy", out _));
-            Assert.False(json.TryGetProperty("symbols", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
     public void RunUnused_SummaryOnlyWithoutJsonReturnsUsageError_Issue4344()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
@@ -1667,29 +1666,6 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Equal(string.Empty, stdout);
         Assert.Contains("unused --summary-only is only supported with JSON output", stderr);
-    }
-
-    [Fact]
-    public void RunUnused_DefaultTextCountReportsSuppressionHint_Issue4120()
-    {
-        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
-        try
-        {
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--lang", "csharp", "--count"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("2", stdout.Trim());
-            Assert.Contains("7 low-confidence contract-domain candidates suppressed by default", stderr);
-            Assert.Contains("use --all to include them", stderr);
-            Assert.Contains("public_api_surface: 3", stderr);
-            Assert.Contains("configuration_contract: 4", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
     }
 
     [Fact]
