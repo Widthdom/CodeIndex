@@ -7627,17 +7627,15 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
-    [InlineData("!=")]
-    [InlineData("==")]
-    public void RunReferences_ExactJson_CSharpQueryRangeVariableGenericAsNullComparisonDoesNotLeakEnumReference(string comparisonOperator)
+    [Fact]
+    public void RunReferences_ExactJson_CSharpQueryRangeVariableGenericNullComparisonsDoNotLeakEnumReferences()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_query_runner_enum_member_query_generic_as_null_{comparisonOperator switch { "!=" => "not_equal", "==" => "equal_equal", _ => "unknown" }}");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_query_generic_as_null");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
-                $$"""
+                """
                 using System.Collections.Generic;
                 using System.Linq;
 
@@ -7655,10 +7653,16 @@ public partial class QueryCommandRunnerTests
 
                 public sealed class Uses
                 {
-                    public int Read(IEnumerable<Holder> items)
+                    public int ReadNotEqual(IEnumerable<Holder> items)
                     {
                         return (from Status in items
-                                select Status as Dictionary<int, int> {{comparisonOperator}} null ? Status.Ready : 0).First();
+                                select Status as Dictionary<int, int> != null ? Status.Ready : 0).First();
+                    }
+
+                    public int ReadEqual(IEnumerable<Holder> items)
+                    {
+                        return (from Status in items
+                                select Status as Dictionary<int, int> == null ? Status.Ready : 0).First();
                     }
                 }
                 """);
