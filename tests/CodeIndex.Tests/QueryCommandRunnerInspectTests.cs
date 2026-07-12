@@ -1202,7 +1202,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunOutline_CompactJson_SortSizePrioritizesLargeFunctions_Issue4117()
+    public void RunOutline_SizeAndSpanSortsShareRankingFixture_Issue4117()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_sort_size_4117");
         try
@@ -1232,6 +1232,21 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("size", first.GetProperty("sort_mode").GetString());
             Assert.True(first.GetProperty("size_lines").GetInt32() > 5);
             Assert.True(first.GetProperty("complexity_score").GetDouble() > 0);
+
+            var (spanExitCode, spanStdout, spanStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/Giant.cs", "--db", dbPath, "--json", "--kind", "function", "--sort", "span", "--limit", "1", "--outline-fields", "name,size,sort_mode"],
+                _jsonOptions));
+
+            using var spanDocument = ParseJsonOutput(spanStdout);
+            var spanJson = spanDocument.RootElement;
+            var spanSymbol = Assert.Single(spanJson.GetProperty("symbols").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, spanExitCode);
+            Assert.Equal(string.Empty, spanStderr);
+            Assert.Equal("size", spanJson.GetProperty("sort").GetString());
+            Assert.Equal("BigAudit", spanSymbol.GetProperty("name").GetString());
+            Assert.Equal("size", spanSymbol.GetProperty("sort_mode").GetString());
+            Assert.True(spanSymbol.GetProperty("size_lines").GetInt32() > 5);
         }
         finally
         {
@@ -1323,35 +1338,6 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("class", symbol.GetProperty("kind").GetString());
             Assert.Equal("Giant", symbol.GetProperty("name").GetString());
             Assert.Equal("kind", symbol.GetProperty("sort_mode").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunOutline_Json_SortSpanAliasUsesSizeRanking_Issue4117()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_sort_span_alias_4117");
-        try
-        {
-            var dbPath = CreateOutlineSortFixtureDb(projectRoot);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
-                ["src/Giant.cs", "--db", dbPath, "--json", "--kind", "function", "--sort", "span", "--limit", "1", "--outline-fields", "name,size,sort_mode"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var symbol = Assert.Single(json.GetProperty("symbols").EnumerateArray());
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("size", json.GetProperty("sort").GetString());
-            Assert.Equal("BigAudit", symbol.GetProperty("name").GetString());
-            Assert.Equal("size", symbol.GetProperty("sort_mode").GetString());
-            Assert.True(symbol.GetProperty("size_lines").GetInt32() > 5);
         }
         finally
         {

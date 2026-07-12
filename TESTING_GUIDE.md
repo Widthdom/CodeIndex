@@ -92,6 +92,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Unused full-summary and bucket-filtered JSON counts share one taxonomy fixture.
   Unused limited-page returned counts and bucket diversification share one taxonomy fixture.
   Unused indexed-path and unsupported-language zero-result schemas share one indexed fixture.
+  Outline `size` sorting and its `span` alias share one ranking fixture.
   Razor directive kind-filter queries share one indexed component fixture and iterate route, implements, attribute, and layout expectations in one fact.
   Symbols literal-query coverage shares one empty database for double-dash and explicit `--query` forms when proving compact-looking text is not expanded.
   Symbols hotspot, references, size, and path ranking queries share one symbol-sort fixture because all are read-only views of the same ranking signals.
@@ -481,6 +482,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   unusedのfull-summary JSON countとbucket-filtered JSON countは1つのtaxonomy fixtureを共有してください。
   unusedのlimited-page returned countとbucket diversificationは1つのtaxonomy fixtureを共有してください。
   unusedのindexed-pathとunsupported-languageのzero-result schemaは1つのindexed fixtureを共有してください。
+  outlineの`size` sortとその`span` aliasは1つのranking fixtureを共有してください。
   Razor directive kind-filter query は1つの indexed component fixture を共有し、route、implements、attribute、layout の期待値を1つの fact 内で反復してください。
   symbols literal-query coverage は、compact風のtextが展開されないことを確認するdouble-dash形式と明示的`--query`形式で1つの空databaseを共有してください。
   symbols の hotspot、references、size、path ranking query は同じranking signalのread-only viewなので、1つのsymbol-sort fixtureを共有してください。
