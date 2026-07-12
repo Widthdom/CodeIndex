@@ -2054,6 +2054,8 @@ public static partial class SymbolExtractor
         if (IsRazorLanguage(originalLang) || IsRazorFilePath(filePath))
             ExtractRazorDirectiveSymbols(fileId, lines, symbols);
         AssignContainers(symbols, lines, getCSharpLineStartStates);
+        if (lang is "shell" or "powershell")
+            AddScriptScopeSymbol(fileId, lines, symbols);
         if (lang == "csharp")
             NormalizeCSharpImplicitPartialConstructorReturnTypes(symbols);
         if (lang == "go")
@@ -2070,6 +2072,30 @@ public static partial class SymbolExtractor
             ExpandShellAliasSymbols(fileId, lines, symbols, extractionState);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
+    }
+
+    private static void AddScriptScopeSymbol(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        if (lines.Length == 0)
+            return;
+
+        // Add this after AssignContainers so the synthetic file-wide scope can own top-level
+        // references without making every declared function appear nested under `<script>`.
+        // AssignContainers の後で追加し、top-level reference の帰属先だけを提供する。
+        // 宣言済み関数の親を `<script>` に変えないことで既存の symbol contract を維持する。
+        symbols.Add(new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "function",
+            SubKind = "script_scope",
+            Name = "<script>",
+            Line = 1,
+            StartLine = 1,
+            EndLine = lines.Length,
+            BodyStartLine = 1,
+            BodyEndLine = lines.Length,
+            Signature = "<script>",
+        });
     }
 
 

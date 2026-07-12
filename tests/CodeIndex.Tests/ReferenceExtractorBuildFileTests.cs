@@ -122,6 +122,44 @@ public partial class ReferenceExtractorTests
             .ShouldContain("call", "Publish", containerName: "Generate");
     }
 
+    [Theory]
+    [InlineData("shell", "helper() { :; }\nhelper\n", "helper", 3)]
+    [InlineData("powershell", "function Invoke-Task { }\nJoin-Path . child\nWrite-Host done\n", "Join-Path", 4)]
+    public void Extract_ScriptLanguages_TopLevelCallsUseSyntheticScriptScope_Issue4421(
+        string language,
+        string content,
+        string calledSymbol,
+        int expectedEndLine)
+    {
+        var symbols = SymbolExtractor.Extract(1, language, content);
+        var scriptScope = Assert.Single(symbols, symbol =>
+            symbol.Kind == "function"
+            && symbol.SubKind == "script_scope"
+            && symbol.Name == "<script>");
+        Assert.Equal(1, scriptScope.StartLine);
+        Assert.Equal(expectedEndLine, scriptScope.EndLine);
+
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
+        var topLevelCall = Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == calledSymbol);
+        Assert.Equal("function", topLevelCall.ContainerKind);
+        Assert.Equal("<script>", topLevelCall.ContainerName);
+    }
+
+    [Theory]
+    [InlineData("shell", "helper() { nested; }\nnested() { :; }\n", "helper", "nested")]
+    [InlineData("powershell", "function Invoke-Task { Write-Host done }\n", "Invoke-Task", "Write-Host")]
+    public void Extract_ScriptLanguages_FunctionCallsKeepDeclaredFunctionContainer_Issue4421(
+        string language,
+        string content,
+        string containerName,
+        string calledSymbol)
+    {
+        ReferenceExtractionCase.Extract(language, content)
+            .ShouldContain("call", calledSymbol, containerName: containerName);
+    }
+
     [Fact]
     public void Extract_Yaml_GitHubActionsReferences_Issue4410()
     {
