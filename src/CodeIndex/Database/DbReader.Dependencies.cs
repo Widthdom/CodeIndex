@@ -243,7 +243,7 @@ public partial class DbReader
         var targetLogicalSymbolSegmentCountExpr = BuildLogicalDependencySymbolSegmentCountExpr("dst", "s.name");
         var sqlDependencyTargetMatchExpr = @"(
                     (tf.target_lang != 'sql'
-                     AND NOT (snc.source_lang = 'msbuild' AND snc.logical_reference_kind IN ('import', 'project_reference'))
+                     AND NOT (snc.source_lang IN ('msbuild', 'solution') AND snc.logical_reference_kind IN ('import', 'project_reference'))
                      AND NOT (snc.source_lang = 'markdown' AND snc.logical_reference_kind = 'reference')
                      AND tf.symbol_name = snc.symbol_name)
                  OR (snc.source_lang = 'markdown'
@@ -414,7 +414,7 @@ public partial class DbReader
                 WHERE 1 = 1";
         sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "dst", "depsTargetLang")}";
         AppendDependencyGeneratedFilter(ref sql, targetFilterAlias);
-        if (lang != null)
+        if (lang != null && !lang.Equals("solution", StringComparison.Ordinal))
             sql += " AND dst.lang = @lang";
         if (reverse && pathPatterns is { Count: > 0 })
         {
@@ -553,9 +553,8 @@ public partial class DbReader
                        snc.ref_count
                 FROM source_name_counts snc
                 JOIN path_target_files ptf
-                  ON ptf.target_lang = snc.source_lang
-                 AND ptf.target_path = markdown_resolve_path(snc.source_path, snc.symbol_name)
-                WHERE snc.source_lang = 'msbuild'
+                  ON ptf.target_path = markdown_resolve_path(snc.source_path, snc.symbol_name)
+                WHERE snc.source_lang IN ('msbuild', 'solution')
                   AND snc.logical_reference_kind IN ('import', 'project_reference')
                   AND snc.source_path != ptf.target_path
             ),
