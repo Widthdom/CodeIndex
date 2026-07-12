@@ -10,6 +10,47 @@ namespace CodeIndex.Tests;
 public partial class DbReaderTests
 {
     [Fact]
+    public void GetFileDependencies_SolutionResolvesProjectNamesToProjectPaths_Issue4452()
+    {
+        InsertIndexedFile("Repo.sln", "solution",
+            """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            """);
+        InsertIndexedFile("src/App/App.csproj", "msbuild", "<Project><PropertyGroup><AssemblyName>App</AssemblyName></PropertyGroup></Project>");
+
+        var dependencies = _reader.GetFileDependencies(limit: 10, lang: "solution");
+
+        var dependency = Assert.Single(dependencies);
+        Assert.Equal("Repo.sln", dependency.SourcePath);
+        Assert.Equal("src/App/App.csproj", dependency.TargetPath);
+        Assert.Equal("src/App/App.csproj", dependency.Symbols);
+
+        var impact = _reader.AnalyzeImpact("App", maxDepth: 1, limit: 10, lang: "solution");
+        var caller = Assert.Single(impact.Callers);
+        Assert.Equal("Repo.sln", caller.CallerName);
+        Assert.Equal("src/App/App.csproj", caller.CalleeName);
+        Assert.True(impact.Cycles is null or { Count: 0 });
+    }
+
+    [Fact]
+    public void GetFileDependencies_MsBuildUsesRelativeProjectReferencesInsteadOfSharedPackages_Issue4407()
+    {
+        InsertIndexedFile("src/App/App.csproj", "msbuild",
+            "<Project><ItemGroup><PackageReference Include=\"Shared.Package\" /></ItemGroup></Project>");
+        InsertIndexedFile("tests/App.Tests/App.Tests.csproj", "msbuild",
+            "<Project><ItemGroup><ProjectReference Include=\"..\\..\\src\\App\\App.csproj\" /><PackageReference Include=\"Shared.Package\" /></ItemGroup></Project>");
+
+        var dependencies = _reader.GetFileDependencies(limit: 10, lang: "msbuild");
+
+        var dependency = Assert.Single(dependencies);
+        Assert.Equal("tests/App.Tests/App.Tests.csproj", dependency.SourcePath);
+        Assert.Equal("src/App/App.csproj", dependency.TargetPath);
+        Assert.Equal("..\\..\\src\\App\\App.csproj", dependency.Symbols);
+    }
+
+    [Fact]
     public void GetFileDependencies_MarkdownScopesLocalAnchorsAndResolvesExplicitPaths_Issue4400()
     {
         InsertIndexedFile("docs/a/source.md", "markdown", "# Source\n\n[local](#shared) [target](target.md#shared) [parent](../target.md#shared)\n\n## Shared\n");

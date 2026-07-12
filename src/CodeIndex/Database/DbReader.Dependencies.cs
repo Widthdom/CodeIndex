@@ -243,6 +243,7 @@ public partial class DbReader
         var targetLogicalSymbolSegmentCountExpr = BuildLogicalDependencySymbolSegmentCountExpr("dst", "s.name");
         var sqlDependencyTargetMatchExpr = @"(
                     (tf.target_lang != 'sql'
+                     AND NOT (snc.source_lang IN ('msbuild', 'solution') AND snc.logical_reference_kind IN ('import', 'project_reference'))
                      AND NOT (snc.source_lang = 'markdown' AND snc.logical_reference_kind = 'reference')
                      AND tf.symbol_name = snc.symbol_name)
                  OR (snc.source_lang = 'markdown'
@@ -413,7 +414,7 @@ public partial class DbReader
                 WHERE 1 = 1";
         sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "dst", "depsTargetLang")}";
         AppendDependencyGeneratedFilter(ref sql, targetFilterAlias);
-        if (lang != null)
+        if (lang != null && !lang.Equals("solution", StringComparison.Ordinal))
             sql += " AND dst.lang = @lang";
         if (reverse && pathPatterns is { Count: > 0 })
         {
@@ -431,6 +432,10 @@ public partial class DbReader
             sql += $" AND NOT {DependencyTestPathCondition($"{targetFilterAlias}.path")}";
         sql += @"
                 GROUP BY dst.path, dst.lang, " + targetLogicalSymbolNameExpr + @", " + targetLogicalSymbolSegmentCountExpr + @"
+            ),
+            path_target_files AS (
+                SELECT DISTINCT target_path, target_lang
+                FROM target_files
             ),
             metadata_raw_suppression AS (
                 -- When a raw C# attribute reference '[Foo]' (stored as symbol_name='Foo',
@@ -541,6 +546,17 @@ public partial class DbReader
                   -- (multiple same-name attribute / annotation classes) are dropped.
                   -- metadata エッジは同名 class 系 target が 1 つだけのときのみ残す。
                   AND (snc.is_metadata = 0 OR COALESCE(ta.class_like_target_count, 0) <= 1)
+                UNION ALL
+                SELECT snc.source_path,
+                       ptf.target_path,
+                       snc.symbol_name,
+                       snc.ref_count
+                FROM source_name_counts snc
+                JOIN path_target_files ptf
+                  ON ptf.target_path = markdown_resolve_path(snc.source_path, snc.symbol_name)
+                WHERE snc.source_lang IN ('msbuild', 'solution')
+                  AND snc.logical_reference_kind IN ('import', 'project_reference')
+                  AND snc.source_path != ptf.target_path
             ),
             edge_totals AS (
                 SELECT source_path,

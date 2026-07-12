@@ -113,7 +113,7 @@ public partial class ReferenceExtractorTests
 
         ReferenceExtractionCase.Extract("msbuild", content)
             .ShouldContain("import", "build/common.props")
-            .ShouldContain("import", "src/App/App.csproj")
+            .ShouldContain("project_reference", "src/App/App.csproj")
             .ShouldContain("import", "xunit")
             .ShouldContain("call", "Restore", containerName: "Generate")
             .ShouldContain("call", "Compile", containerName: "Generate")

@@ -990,14 +990,14 @@ public partial class DbReader
         var nameCondition = _foldReady
             ? allowSqlLeafFallback
                 ? @"
-              AND (r.symbol_name_folded = @symbolNameFolded OR (f.lang = 'sql' AND r.symbol_name_folded = @symbolNameLeafFolded)" + polymorphicNameCondition + ")"
+              AND (r.symbol_name_folded = @symbolNameFolded OR (f.lang = 'sql' AND r.symbol_name_folded = @symbolNameLeafFolded)" + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))"
                 : @"
-              AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @symbolNameFolded) OR " + BuildCSharpQualifiedContextFallbackSql(BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: false)) + " OR " + BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true) + polymorphicNameCondition + ")"
+              AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @symbolNameFolded) OR " + BuildCSharpQualifiedContextFallbackSql(BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: false)) + " OR " + BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true) + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))"
             : allowSqlLeafFallback
                 ? @"
-              AND (r.symbol_name = @symbolName COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@symbolName) COLLATE NOCASE)" + polymorphicNameCondition + ")"
+              AND (r.symbol_name = @symbolName COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@symbolName) COLLATE NOCASE)" + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))"
                 : @"
-              AND (((f.lang = 'sql') AND sql_context_has_name_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @symbolName COLLATE NOCASE) OR " + BuildCSharpQualifiedContextFallbackSql(BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: false)) + " OR " + BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false) + polymorphicNameCondition + ")";
+              AND (((f.lang = 'sql') AND sql_context_has_name_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @symbolName COLLATE NOCASE) OR " + BuildCSharpQualifiedContextFallbackSql(BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: false)) + " OR " + BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false) + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))";
 
         // impact BFS must share the call-graph contract with `callers`/`callees`/`hotspots`,
         // so event subscriptions (`Click += OnClick`) also participate in the transitive
@@ -1025,7 +1025,10 @@ public partial class DbReader
         sql += @"
                 GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind, r.file_id, r.line, r.column_number
             )
-            SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, symbol_name,
+            SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind,
+                   CASE WHEN lang = 'solution' AND reference_kind = 'project_reference' THEN path
+                        ELSE " + BuildCallerNameProjectionSql("r") + @" END AS container_name,
+                   symbol_name,
                    reference_kind, MIN(line) AS first_line, COUNT(*) AS reference_count,
                    MAX(is_self_reference) AS is_self_reference,
                    MAX(is_mutual_recursion) AS is_mutual_recursion
