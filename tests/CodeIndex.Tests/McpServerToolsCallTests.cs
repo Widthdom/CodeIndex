@@ -1895,8 +1895,6 @@ public partial class McpServerTests
 
             Assert.Equal(1, structured["count"]!.GetValue<int>());
             Assert.Null(structured["sql_graph_contract_ready"]);
-            Assert.Null(structured["sql_graph_contract_ready"]);
-            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
             Assert.Null(structured["sql_graph_contract_degraded_reason"]);
         }
         finally
@@ -3786,8 +3784,6 @@ public partial class McpServerTests
 
             Assert.Equal(0, structured["count"]!.GetValue<int>());
             Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
-            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
-            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
             Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
         }
         finally
@@ -3837,8 +3833,6 @@ public partial class McpServerTests
 
             Assert.Equal(0, structured["count"]!.GetValue<int>());
             Assert.Null(structured["sql_graph_contract_ready"]);
-            Assert.Null(structured["sql_graph_contract_ready"]);
-            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
             Assert.Null(structured["sql_graph_contract_degraded_reason"]);
         }
         finally
