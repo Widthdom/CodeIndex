@@ -9281,7 +9281,7 @@ jobs:
     }
 
     [Fact]
-    public void ExactCanonicalFixtureCoversCSharpVerbatimAndKotlinBackticks()
+    public void ExactCanonicalFixtureCoversCSharpJavaAndKotlinForms()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_csharp_verbatim");
         try
@@ -9302,6 +9302,16 @@ jobs:
                 "kotlin",
                 """
                 fun `when`() {}
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.java",
+                "java",
+                """
+                public class \u0046oo
+                {
+                    void match() {}
+                }
                 """);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
@@ -9338,55 +9348,31 @@ jobs:
             Assert.Equal(string.Empty, kotlinStderr);
             Assert.Equal(1, kotlinJson.GetProperty("count").GetInt32());
             Assert.Equal(1, kotlinJson.GetProperty("files").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void SearchAndFind_ExactTreatJavaUnicodeEscapesAsCanonical()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_java_unicode");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/App.java",
-                "java",
-                """
-                public class \u0046oo
-                {
-                    void match() {}
-                }
-                """);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            var (javaExitCode, javaStdout, javaStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["Foo", "--db", dbPath, "--path", "src/App.java", "--json", "--exact-substring", "--count"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+            using var javaDocument = ParseJsonOutput(javaStdout);
+            var javaJson = javaDocument.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.Equal(1, json.GetProperty("files").GetInt32());
+            Assert.Equal(CommandExitCodes.Success, javaExitCode);
+            Assert.Equal(string.Empty, javaStderr);
+            Assert.Equal(1, javaJson.GetProperty("count").GetInt32());
+            Assert.Equal(1, javaJson.GetProperty("files").GetInt32());
 
-            var (findExitCode, findStdout, findStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            var (javaFindExitCode, javaFindStdout, javaFindStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
                 ["Foo", "--db", dbPath, "--path", "src/App.java", "--json", "--exact", "--count"],
                 _jsonOptions));
 
-            using var findDocument = ParseJsonOutput(findStdout);
-            var findJson = findDocument.RootElement;
+            using var javaFindDocument = ParseJsonOutput(javaFindStdout);
+            var javaFindJson = javaFindDocument.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, findExitCode);
-            Assert.Equal(string.Empty, findStderr);
-            Assert.Equal(1, findJson.GetProperty("count").GetInt32());
-            Assert.Equal(1, findJson.GetProperty("files").GetInt32());
-            Assert.Equal(1, findJson.GetProperty("file_count").GetInt32());
+            Assert.Equal(CommandExitCodes.Success, javaFindExitCode);
+            Assert.Equal(string.Empty, javaFindStderr);
+            Assert.Equal(1, javaFindJson.GetProperty("count").GetInt32());
+            Assert.Equal(1, javaFindJson.GetProperty("files").GetInt32());
+            Assert.Equal(1, javaFindJson.GetProperty("file_count").GetInt32());
         }
         finally
         {
