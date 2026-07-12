@@ -147,10 +147,12 @@ public partial class DbReader
     private string BuildLogicalDependencySymbolNameExpr(string fileAlias, string symbolNameExpr)
     {
         var containerQualifiedName = GetSymbolColumnSql("container_qualified_name");
+        var visibility = GetSymbolColumnSql("visibility", "''");
         return $@"CASE
                 WHEN {fileAlias}.lang = 'sql' THEN sql_normalize_name({symbolNameExpr})
                 WHEN {fileAlias}.lang = 'csharp'
                  AND s.kind = 'property'
+                 AND lower({visibility}) = 'private'
                  AND {containerQualifiedName} IS NOT NULL
                     THEN {containerQualifiedName} || '.' || {symbolNameExpr}
                 ELSE {symbolNameExpr}
