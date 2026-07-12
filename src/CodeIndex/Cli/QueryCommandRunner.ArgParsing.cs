@@ -1537,6 +1537,7 @@ public static partial class QueryCommandRunner
             AddDistinct(excludePaths, SearchAuditRecipes.DefaultSourceExcludePaths);
             AddSourceOnlyDefaultExcludeOrigin(excludeOrigins, matchOrigins, SearchMatchClassifier.Comment);
             AddSourceOnlyDefaultExcludeOrigin(excludeOrigins, matchOrigins, SearchMatchClassifier.HelpText);
+            AddSourceOnlyDefaultExcludeOrigin(excludeOrigins, matchOrigins, SearchMatchClassifier.SchemaDescription);
             excludeTests = true;
         }
 
@@ -2093,6 +2094,10 @@ public static partial class QueryCommandRunner
             case SearchMatchClassifier.HelpText:
                 origin = SearchMatchClassifier.HelpText;
                 return true;
+            case "schema":
+            case SearchMatchClassifier.SchemaDescription:
+                origin = SearchMatchClassifier.SchemaDescription;
+                return true;
             case SearchMatchClassifier.Unknown:
                 origin = SearchMatchClassifier.Unknown;
                 return true;
@@ -2110,7 +2115,7 @@ public static partial class QueryCommandRunner
         {
             if (!TryNormalizeSearchResultKind(rawKind, out var kind))
             {
-                addParseError($"Error: unsupported --result-kind value '{ConsoleUi.FormatBoundedValue(rawKind)}'. Use call_site, declaration, identifier, code, comment, string_literal, regex_literal, help_text, or unknown.");
+                addParseError($"Error: unsupported --result-kind value '{ConsoleUi.FormatBoundedValue(rawKind)}'. Use call_site, declaration, identifier, code, comment, string_literal, regex_literal, help_text, schema_description, or unknown.");
                 continue;
             }
             if (!resultKinds.Contains(kind, StringComparer.Ordinal))
@@ -2152,6 +2157,10 @@ public static partial class QueryCommandRunner
             case "help":
             case SearchMatchClassifier.HelpText:
                 kind = SearchMatchClassifier.HelpText;
+                return true;
+            case "schema":
+            case SearchMatchClassifier.SchemaDescription:
+                kind = SearchMatchClassifier.SchemaDescription;
                 return true;
             case SearchMatchClassifier.Unknown:
                 kind = SearchMatchClassifier.Unknown;

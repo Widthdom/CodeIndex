@@ -48,7 +48,8 @@ internal static class SearchAuditRecipes
         ".codex/**",
         ".github/**"
     ];
-    private static readonly string[] DefaultExecutableExcludeOriginsValue = [SearchMatchClassifier.HelpText];
+    private static readonly string[] DefaultExecutableExcludeOriginsValue =
+        [SearchMatchClassifier.HelpText, SearchMatchClassifier.SchemaDescription];
     private static readonly SearchRecipeBroadCatchTaxonomyJsonResult BroadExceptionCatchTaxonomy = new(
         [
             new(
@@ -537,6 +538,8 @@ internal static class SearchAuditRecipes
                         "risk: DOM parsing can materialize an entire payload and should have an upstream byte or depth bound.",
                         "positive: generated payloads, fixed literals, and callers with explicit byte caps are usually lower risk."
                     ],
+                    MatchOrigins = ["code"],
+                    ExcludePaths = ["src/CodeIndex/Diagnostics/BoundedJson.cs"],
                 },
                 new(
                     "full-materialization",
@@ -562,7 +565,11 @@ internal static class SearchAuditRecipes
                     "File.ReadAllBytes",
                     "Find whole-file byte reads that may need size caps, sharing policy, or streaming alternatives.",
                     ["audit", "performance"],
-                    "False positives include bounded test fixtures and small files guarded by explicit size checks."),
+                    "False positives include bounded test fixtures and small files guarded by explicit size checks.")
+                {
+                    MatchOrigins = ["code"],
+                    ExcludePaths = ["src/CodeIndex/BoundedFile.cs"],
+                },
                 new(
                     "max-value-probe",
                     "int.MaxValue",
@@ -587,6 +594,15 @@ internal static class SearchAuditRecipes
                     [
                         "risk: raw exception messages can carry absolute paths, command lines, SQL, or secret-like values into user-visible output.",
                         "positive: DiagnosticRedactor, CommandErrorWriter.FormatSanitizedException, or a dedicated sanitizer nearby is strong safe evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                    ExcludePaths = ["src/CodeIndex/Diagnostics/DiagnosticRedactor.cs"],
+                    GuardFilters =
+                    [
+                        new(SearchGuardRole.Reject, SearchGuardDirection.Before, "DiagnosticRedactor", SearchGuardScope.Window),
+                        new(SearchGuardRole.Reject, SearchGuardDirection.After, "DiagnosticRedactor", SearchGuardScope.Window),
+                        new(SearchGuardRole.Reject, SearchGuardDirection.Before, "FormatSanitizedException", SearchGuardScope.Window),
+                        new(SearchGuardRole.Reject, SearchGuardDirection.After, "FormatSanitizedException", SearchGuardScope.Window),
                     ],
                     Classifiers = [DiagnosticRedactionClassifier],
                 },
@@ -815,7 +831,15 @@ internal static class SearchAuditRecipes
                     "GetEnvironmentVariable",
                     "Find environment-variable reads that may source tokens, secrets, credentials, or operational policy.",
                     ["audit", "security"],
-                    "False positives include non-secret feature flags and documented public configuration."),
+                    "False positives include non-secret feature flags and documented public configuration.")
+                {
+                    MatchOrigins = ["code"],
+                    ExcludePaths =
+                    [
+                        "src/CodeIndex/Diagnostics/SensitiveNameClassifier.cs",
+                        "src/CodeIndex/Processes/SubprocessEnvironmentPolicy.cs",
+                    ],
+                },
                 new(
                     "authorization-handling",
                     "Authorization",
@@ -854,7 +878,15 @@ internal static class SearchAuditRecipes
                     "Find credential-related code paths that may need source, persistence, and redaction boundary review.",
                     ["audit", "security"],
                     "False positives include natural-language documentation or non-secret credential-type names.",
-                    ExactSubstring: false),
+                    ExactSubstring: false)
+                {
+                    MatchOrigins = ["code"],
+                    ExcludePaths =
+                    [
+                        "src/CodeIndex/Diagnostics/DiagnosticRedactor.cs",
+                        "src/CodeIndex/Diagnostics/SensitiveNameClassifier.cs",
+                    ],
+                },
                 new(
                     "secret-term",
                     "secret",
@@ -2843,7 +2875,10 @@ internal static class SearchAuditRecipes
                     "FileSystemWatcher",
                     "Find filesystem watcher surfaces where path normalization, symlink policy, debounce, and rename/delete races need review.",
                     ["audit", "security"],
-                    "False positives include disabled watcher setup and tests."),
+                    "False positives include disabled watcher setup and tests.")
+                {
+                    MatchOrigins = ["code"],
+                },
                 new(
                     "posix-mode-boundary",
                     "UnixFileMode",

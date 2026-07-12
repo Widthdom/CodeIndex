@@ -7,6 +7,7 @@ internal static class SearchMatchClassifier
     public const string StringLiteral = "string_literal";
     public const string RegexLiteral = "regex_literal";
     public const string HelpText = "help_text";
+    public const string SchemaDescription = "schema_description";
     public const string Unknown = "unknown";
 
     public static SearchMatchFacet Classify(
@@ -36,7 +37,7 @@ internal static class SearchMatchClassifier
     }
 
     public static bool IsStringLikeOrigin(string origin)
-        => origin is StringLiteral or RegexLiteral or HelpText;
+        => origin is StringLiteral or RegexLiteral or HelpText or SchemaDescription;
 
     public static bool IsLikelyTestPath(string path)
     {
@@ -167,6 +168,8 @@ internal static class SearchMatchClassifier
                 {
                     if (LooksLikeRegexString(text))
                         return RegexLiteral;
+                    if (LooksLikeSchemaDescription(path, text))
+                        return SchemaDescription;
                     return LooksLikeHelpText(path, text) ? HelpText : StringLiteral;
                 }
 
@@ -260,6 +263,15 @@ internal static class SearchMatchClassifier
         return fileName is "ConsoleUi.cs" or "ProgramRunner.cs" or "CliFlagSchema.cs" ||
                text.Contains("Usage:", StringComparison.Ordinal) ||
                text.Contains("--", StringComparison.Ordinal);
+    }
+
+    private static bool LooksLikeSchemaDescription(string path, string text)
+    {
+        if (!string.Equals(Path.GetFileName(path), "McpToolDefinitions.cs", StringComparison.Ordinal))
+            return false;
+
+        return text.Contains("[\"description\"]", StringComparison.Ordinal) ||
+               text.Contains("AppendConstraintDescription(", StringComparison.Ordinal);
     }
 
     private static bool IsInsideGitHubActionsRunBlock(
