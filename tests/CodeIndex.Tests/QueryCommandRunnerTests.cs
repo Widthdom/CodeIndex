@@ -5861,11 +5861,9 @@ public partial class QueryCommandRunnerTests
             : [query, "--db", dbPath, "--json", "--exact", "--limit", limit.ToString()];
     }
 
-    private static void SeedGraphExactZeroFixture(string dbPath, string command)
+    private static void SeedGraphExactZeroFixture(string dbPath)
     {
-        var content = command switch
-        {
-            "references" or "callers" => """
+        const string content = """
                 public class App
                 {
                     public void TargetWork1() { }
@@ -5883,11 +5881,7 @@ public partial class QueryCommandRunnerTests
                     public void Caller5() { TargetWork5(); }
                     public void Caller6() { TargetWork6(); }
                     public void Caller7() { TargetWork7(); }
-                }
-                """,
-            "callees" => """
-                public class App
-                {
+
                     public void Called1() { }
                     public void Called2() { }
                     public void Called3() { }
@@ -5904,9 +5898,7 @@ public partial class QueryCommandRunnerTests
                     public void CallerWork6() { Called6(); }
                     public void CallerWork7() { Called7(); }
                 }
-                """,
-            _ => throw new ArgumentOutOfRangeException(nameof(command), command, "Unsupported graph command"),
-        };
+                """;
 
         TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", content);
         using var db = new DbContext(dbPath);

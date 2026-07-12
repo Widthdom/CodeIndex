@@ -830,30 +830,30 @@ public partial class QueryCommandRunnerTests
 
 
 
-    [Theory]
-    [InlineData("references")]
-    [InlineData("callers")]
-    [InlineData("callees")]
-    public void GraphCommands_ExactZeroJson_RespectRequestedLimitAndCapSamples(string command)
+    [Fact]
+    public void GraphCommands_ExactZeroJson_RespectRequestedLimitAndCapSamples()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_query_runner_{command}_exact_zero_limit");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_graph_exact_zero_limit");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            SeedGraphExactZeroFixture(dbPath, command);
+            SeedGraphExactZeroFixture(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => RunGraphCommand(command,
-                GetExactZeroArgs(command, dbPath, limit: 6, queryOverride: null, countOnly: true),
-                _jsonOptions));
+            foreach (var command in new[] { "references", "callers", "callees" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => RunGraphCommand(command,
+                    GetExactZeroArgs(command, dbPath, limit: 6, queryOverride: null, countOnly: true),
+                    _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+                using var document = ParseJsonOutput(stdout);
+                var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Equal(6, json.GetProperty("exact_zero_hint").GetProperty("relaxed_count").GetInt32());
-            Assert.Equal(5, json.GetProperty("exact_zero_hint").GetProperty("sample_names").GetArrayLength());
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(0, json.GetProperty("count").GetInt32());
+                Assert.Equal(6, json.GetProperty("exact_zero_hint").GetProperty("relaxed_count").GetInt32());
+                Assert.Equal(5, json.GetProperty("exact_zero_hint").GetProperty("sample_names").GetArrayLength());
+            }
         }
         finally
         {
@@ -861,29 +861,29 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
-    [InlineData("references")]
-    [InlineData("callers")]
-    [InlineData("callees")]
-    public void GraphCommands_ExactZeroJson_OmitHintWhenRelaxedQueryStillReturnsZero(string command)
+    [Fact]
+    public void GraphCommands_ExactZeroJson_OmitHintWhenRelaxedQueryStillReturnsZero()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_query_runner_{command}_exact_zero_miss");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_graph_exact_zero_miss");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            SeedGraphExactZeroFixture(dbPath, command);
+            SeedGraphExactZeroFixture(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => RunGraphCommand(command,
-                GetExactZeroArgs(command, dbPath, limit: 6, queryOverride: "DefinitelyMissing", countOnly: true),
-                _jsonOptions));
+            foreach (var command in new[] { "references", "callers", "callees" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => RunGraphCommand(command,
+                    GetExactZeroArgs(command, dbPath, limit: 6, queryOverride: "DefinitelyMissing", countOnly: true),
+                    _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+                using var document = ParseJsonOutput(stdout);
+                var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.False(json.TryGetProperty("exact_zero_hint", out _));
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(0, json.GetProperty("count").GetInt32());
+                Assert.False(json.TryGetProperty("exact_zero_hint", out _));
+            }
         }
         finally
         {
