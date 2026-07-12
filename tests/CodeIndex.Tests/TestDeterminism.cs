@@ -199,11 +199,21 @@ internal static class TestDeterminism
                 cancellationToken))
             .ToArray();
 
-        if (!ready.Wait(DefaultTimeout, cancellationToken) && !ready.IsSet)
+        if (!ready.Wait(DefaultTimeout, cancellationToken))
         {
+            // The final worker can signal immediately after Wait reports its timeout.
+            // Use the counter as the authoritative snapshot so that boundary race is
+            // not reported as a timeout with every worker already at the gate.
+            var observedReadyCount = Volatile.Read(ref readyCount);
+            if (observedReadyCount == workerArray.Length)
+            {
+                start.Set();
+                return await Task.WhenAll(tasks);
+            }
+
             start.Set();
             await Task.WhenAll(tasks);
-            Assert.Fail($"Timed out waiting for {workerArray.Length} workers to reach the start gate. Ready workers: {Volatile.Read(ref readyCount)}.");
+            Assert.Fail($"Timed out waiting for {workerArray.Length} workers to reach the start gate. Ready workers: {observedReadyCount}.");
         }
 
         start.Set();
