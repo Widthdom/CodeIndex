@@ -12007,10 +12007,12 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void GetContractVersion_DockerfileSpecificKinds_UsesDedicatedVersion()
+    public void GetContractVersion_LanguageSpecificKinds_UseDedicatedVersions()
     {
         Assert.Equal(SymbolExtractor.DockerfileContractVersion, SymbolExtractor.GetContractVersion("dockerfile"));
         Assert.True(SymbolExtractor.DockerfileContractVersion > SymbolExtractor.DefaultContractVersion);
+        Assert.Equal(SymbolExtractor.MakefileContractVersion, SymbolExtractor.GetContractVersion("makefile"));
+        Assert.True(SymbolExtractor.MakefileContractVersion > SymbolExtractor.DefaultContractVersion);
         Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("sass"));
         Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("stylus"));
         Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("xml"));

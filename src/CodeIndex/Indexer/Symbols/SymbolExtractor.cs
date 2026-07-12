@@ -17,6 +17,7 @@ public static partial class SymbolExtractor
     public const int ExpandedLanguageContractVersion = 2;
     public const int CSharpContractVersion = 2;
     public const int DockerfileContractVersion = 2;
+    public const int MakefileContractVersion = 2;
     public const int StyleAndXamlContractVersion = 2;
     public const int FunctionalLanguageContractVersion = 2;
     public const int DynamicLanguageContractVersion = 2;
@@ -71,6 +72,7 @@ public static partial class SymbolExtractor
             null or "" => DefaultContractVersion,
             "csharp" => CSharpContractVersion,
             "dockerfile" => DockerfileContractVersion,
+            "makefile" => MakefileContractVersion,
             "sass" or "stylus" or "xml" => StyleAndXamlContractVersion,
             "clojure" or "erlang" or "ocaml" or "raku" => FunctionalLanguageContractVersion,
             "crystal" or "groovy" or "julia" or "tcl" => DynamicLanguageContractVersion,
