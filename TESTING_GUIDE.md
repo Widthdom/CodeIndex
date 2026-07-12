@@ -47,6 +47,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 
 - `ChunkSplitterTests.cs`, `SymbolExtractorTests.cs`, `ReferenceExtractorTests.cs`, `SearchSnippetFormatterTests.cs`, `DbPathResolverTests.cs`, `ConsoleUiTests.cs`
   Pure or mostly pure behavior tests with in-memory inputs.
+  Console writer synchronization coverage yields between character writes instead of sleeping per character; use enough whole-line iterations to expose interleaving without adding wall-clock delay.
 - `SymbolExtractor*Tests.cs` and `ReferenceExtractor*Tests.cs`
   Extractor coverage is split by language or feature area with partial test classes, while shared helpers remain on the root `SymbolExtractorTests` / `ReferenceExtractorTests` parts.
   When moving repeated extractor scenarios out of a giant suite, keep the new partial file grouped by a readable domain such as language, build-file format, or protocol surface, and prefer small semantic assertion helpers over repeated raw substring or predicate assertions.
@@ -421,6 +422,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 
 - `ChunkSplitterTests.cs`、`SymbolExtractorTests.cs`、`ReferenceExtractorTests.cs`、`SearchSnippetFormatterTests.cs`、`DbPathResolverTests.cs`、`ConsoleUiTests.cs`
   インメモリ入力中心の、純粋またはほぼ純粋な振る舞いのテスト。
+  console writer synchronization coverageは文字writeごとのsleepではなくyieldを使い、wall-clock delayを追加せずinterleavingを露出できる十分なwhole-line iterationを維持してください。
 - `SymbolExtractor*Tests.cs` と `ReferenceExtractor*Tests.cs`
   extractor のカバレッジは言語または機能領域ごとの partial test class に分割し、共有 helper は root 側の `SymbolExtractorTests` / `ReferenceExtractorTests` に残します。
   巨大 suite から繰り返しの extractor シナリオを切り出す場合は、言語、build-file 形式、protocol surface など読みやすい領域ごとの partial file にまとめ、raw substring や predicate assertion の繰り返しより小さな semantic assertion helper を優先してください。
