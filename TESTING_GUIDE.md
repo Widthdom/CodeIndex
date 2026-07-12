@@ -50,6 +50,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - `SymbolExtractor*Tests.cs` and `ReferenceExtractor*Tests.cs`
   Extractor coverage is split by language or feature area with partial test classes, while shared helpers remain on the root `SymbolExtractorTests` / `ReferenceExtractorTests` parts.
   When moving repeated extractor scenarios out of a giant suite, keep the new partial file grouped by a readable domain such as language, build-file format, or protocol surface, and prefer small semantic assertion helpers over repeated raw substring or predicate assertions.
+  Pattern-config scalar-cap variants reuse one temporary root and overwrite one config file, resetting the global registry between iterations under a single console lock.
   Use `AssertSymbolsContain(...)` when a fixture only needs to verify several symbol names of the same kind across language-specific partials; keep direct predicates for metadata such as line, container, subtype, or return type.
   Likewise, use `AssertReferencesContain(...)` for repeated `(reference kind, container, symbol names)` checks, while retaining predicates for flags, context, line, and other edge-specific metadata.
   Use `AssertReferencesContainInContext(...)` when several reference names share the same kind and exact source context; keep direct predicates when context is only one part of a richer edge contract.
@@ -423,6 +424,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `SymbolExtractor*Tests.cs` と `ReferenceExtractor*Tests.cs`
   extractor のカバレッジは言語または機能領域ごとの partial test class に分割し、共有 helper は root 側の `SymbolExtractorTests` / `ReferenceExtractorTests` に残します。
   巨大 suite から繰り返しの extractor シナリオを切り出す場合は、言語、build-file 形式、protocol surface など読みやすい領域ごとの partial file にまとめ、raw substring や predicate assertion の繰り返しより小さな semantic assertion helper を優先してください。
+  pattern-config scalar-cap variantは1つのtemporary rootと上書きする1 config fileを再利用し、単一console lock内のiteration間でglobal registryをresetしてください。
   fixture が同じ kind の複数 symbol name だけを検証する場合は、言語別 partial をまたいで `AssertSymbolsContain(...)` を使ってください。line、container、subtype、return type などの metadata を検証する場合は直接 predicate を維持します。
   同様に `(reference kind, container, symbol names)` の繰り返し検証には `AssertReferencesContain(...)` を使い、flag、context、line など edge 固有 metadata の検証には predicate を維持します。
   複数の reference name が同じ kind と完全一致 source context を共有する場合は `AssertReferencesContainInContext(...)` を使い、context がより詳細な edge contract の一部にすぎない場合は直接 predicate を維持します。
