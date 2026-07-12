@@ -211,6 +211,7 @@ internal static class DependencyPackageExtractor
             if (framework.Value.ValueKind != JsonValueKind.Object)
                 continue;
 
+            var packageSearchLine = FindJsonProperty(lines, framework.Name).Line;
             foreach (var package in framework.Value.EnumerateObject())
             {
                 if (package.Value.ValueKind != JsonValueKind.Object
@@ -218,7 +219,9 @@ internal static class DependencyPackageExtractor
                     || dependencies.ValueKind != JsonValueKind.Object)
                     continue;
 
-                if (!AddPackageDependencyReferences(fileId, dependencies, package.Name, lines, references))
+                var packageLocation = FindJsonProperty(lines, package.Name, packageSearchLine);
+                packageSearchLine = packageLocation.Line + 1;
+                if (!AddPackageDependencyReferences(fileId, dependencies, package.Name, packageLocation.Line, lines, references))
                     return;
             }
         }
@@ -243,7 +246,8 @@ internal static class DependencyPackageExtractor
                     || dependencies.ValueKind != JsonValueKind.Object)
                     continue;
 
-                if (!AddPackageDependencyReferences(fileId, dependencies, parentName, lines, references))
+                var packageLocation = FindJsonProperty(lines, package.Name);
+                if (!AddPackageDependencyReferences(fileId, dependencies, parentName, packageLocation.Line, lines, references))
                     return;
             }
 
@@ -259,12 +263,15 @@ internal static class DependencyPackageExtractor
         long fileId,
         JsonElement dependencies,
         string parentName,
+        int parentLine,
         string[] lines,
         List<ReferenceRecord> references)
     {
+        var dependencySearchLine = parentLine;
         foreach (var dependency in dependencies.EnumerateObject())
         {
-            var location = FindJsonProperty(lines, dependency.Name);
+            var location = FindJsonProperty(lines, dependency.Name, dependencySearchLine);
+            dependencySearchLine = location.Line + 1;
             if (!ReferenceExtractor.TryAddReference(
                     references,
                     new ReferenceRecord
@@ -296,7 +303,13 @@ internal static class DependencyPackageExtractor
                 continue;
 
             if (package.Value.TryGetProperty("requires", out var requires) && requires.ValueKind == JsonValueKind.Object
-                && !AddPackageDependencyReferences(fileId, requires, package.Name, lines, references))
+                && !AddPackageDependencyReferences(
+                    fileId,
+                    requires,
+                    package.Name,
+                    FindJsonProperty(lines, package.Name).Line,
+                    lines,
+                    references))
                 return;
 
             if (package.Value.TryGetProperty("dependencies", out var nested) && nested.ValueKind == JsonValueKind.Object)
@@ -784,9 +797,12 @@ internal static class DependencyPackageExtractor
     }
 
     private static (int Line, int Column) FindJsonProperty(string[] lines, string propertyName)
+        => FindJsonProperty(lines, propertyName, startLine: 1);
+
+    private static (int Line, int Column) FindJsonProperty(string[] lines, string propertyName, int startLine)
     {
         var quoted = JsonSerializer.Serialize(propertyName);
-        for (var i = 0; i < lines.Length; i++)
+        for (var i = Math.Max(0, startLine - 1); i < lines.Length; i++)
         {
             var index = lines[i].IndexOf(quoted, StringComparison.Ordinal);
             if (index >= 0)

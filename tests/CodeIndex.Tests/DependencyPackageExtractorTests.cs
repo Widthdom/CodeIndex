@@ -213,14 +213,14 @@ public class DependencyPackageExtractorTests
         var content = """
             {
               "packages": {
+                "node_modules/repeat-string": {
+                  "version": "1.6.1"
+                },
                 "node_modules/left-pad": {
                   "dependencies": {
                     "repeat-string": "1.6.1",
                     "is-number": "7.0.0"
                   }
-                },
-                "node_modules/repeat-string": {
-                  "version": "1.6.1"
                 }
               },
               "dependencies": {
@@ -274,5 +274,6 @@ public class DependencyPackageExtractorTests
         Assert.Equal("dependency", reference.ReferenceKind);
         Assert.Equal("package", reference.ContainerKind);
         Assert.Equal("left-pad", reference.ContainerName);
+        Assert.Equal("\"repeat-string\": \"1.6.1\",", reference.Context);
     }
 }
