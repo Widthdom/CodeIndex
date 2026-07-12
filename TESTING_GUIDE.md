@@ -100,6 +100,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   References stale-SQL-contract count and result envelopes share one downgraded graph fixture.
   Callers and callees stale-SQL-contract result envelopes share one downgraded graph fixture.
   Assert each MCP SQL graph readiness field and degraded reason once per response.
+  MCP analyze-symbol and references stale-SQL-contract checks share one downgraded server fixture.
   Razor directive kind-filter queries share one indexed component fixture and iterate route, implements, attribute, and layout expectations in one fact.
   Symbols literal-query coverage shares one empty database for double-dash and explicit `--query` forms when proving compact-looking text is not expanded.
   Symbols hotspot, references, size, and path ranking queries share one symbol-sort fixture because all are read-only views of the same ranking signals.
@@ -497,6 +498,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   referencesのstale SQL contract count envelopeとresult envelopeは1つのdowngraded graph fixtureを共有してください。
   callersとcalleesのstale SQL contract result envelopeは1つのdowngraded graph fixtureを共有してください。
   MCP SQL graph readiness fieldとdegraded reasonはresponseごとに1回だけassertしてください。
+  MCP analyze-symbolとreferencesのstale SQL contract checkは1つのdowngraded server fixtureを共有してください。
   Razor directive kind-filter query は1つの indexed component fixture を共有し、route、implements、attribute、layout の期待値を1つの fact 内で反復してください。
   symbols literal-query coverage は、compact風のtextが展開されないことを確認するdouble-dash形式と明示的`--query`形式で1つの空databaseを共有してください。
   symbols の hotspot、references、size、path ranking query は同じranking signalのread-only viewなので、1つのsymbol-sort fixtureを共有してください。
