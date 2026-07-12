@@ -67,7 +67,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunDeps_JsonMaxBytes_FailsBeforeWritingPayload_Issue4112()
+    public void RunDeps_JsonFormatsShareMaxBytesFixture_Issue4112()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_max_json_bytes");
         try
@@ -83,6 +83,16 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("deps JSON output is", stderr);
             Assert.Contains("exceeds --max-json-bytes 1", stderr);
             Assert.Contains("Usage: cdidx deps", stderr);
+
+            var (graphExitCode, graphStdout, graphStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--format", "json-graph", "--max-json-bytes", "1", "--lang", "sql"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, graphExitCode);
+            Assert.Equal(string.Empty, graphStdout);
+            Assert.Contains("deps JSON output is", graphStderr);
+            Assert.Contains("exceeds --max-json-bytes 1", graphStderr);
+            Assert.Contains("Usage: cdidx deps", graphStderr);
         }
         finally
         {
@@ -146,30 +156,6 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stdout);
             Assert.Contains("too broad for this index", stderr);
             Assert.DoesNotContain("phase=read_edges", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunDeps_JsonGraphMaxBytes_FailsBeforeWritingPayload_Issue4112()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_json_graph_max_json_bytes");
-        try
-        {
-            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--format", "json-graph", "--max-json-bytes", "1", "--lang", "sql"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("deps JSON output is", stderr);
-            Assert.Contains("exceeds --max-json-bytes 1", stderr);
-            Assert.Contains("Usage: cdidx deps", stderr);
         }
         finally
         {
