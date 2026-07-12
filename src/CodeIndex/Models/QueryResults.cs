@@ -1588,7 +1588,8 @@ public sealed record VacuumResult(
     string AutoVacuumModeBeforeName,
     long AutoVacuumModeAfter,
     string AutoVacuumModeAfterName,
-    StatusMaintenanceGuidance MaintenanceGuidance);
+    StatusMaintenanceGuidance MaintenanceGuidance,
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion);
 
 public class PostExtractionHookStatus
 {

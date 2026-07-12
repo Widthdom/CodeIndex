@@ -454,6 +454,7 @@ public static partial class QueryCommandRunner
 
     private static void AddCountEnvelopeJsonFields(JsonObject payload, DbReader reader, JsonSerializerOptions jsonOptions, QueryCommandOptions? queryOptions, bool deferAuthority = false)
     {
+        payload["api_version"] = JsonOutputContract.ApiVersion;
         if (queryOptions != null)
             payload["query_context"] = BuildQueryContextJson(queryOptions, jsonOptions);
         AddFreshnessHint(payload, reader);

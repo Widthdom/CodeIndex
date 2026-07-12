@@ -43,6 +43,7 @@ public class CdidxConfigFileTests
             Assert.Empty(stderr);
             using var document = JsonDocument.Parse(stdout);
             var payload = document.RootElement;
+            Assert.Equal("1", payload.GetProperty("api_version").GetString());
             Assert.True(payload.GetProperty("valid").GetBoolean());
             Assert.Equal(JsonValueKind.Null, payload.GetProperty("path").ValueKind);
             Assert.Equal("not_found", payload.GetProperty("status").GetString());
