@@ -83,8 +83,6 @@ public partial class McpServer : IDisposable
     private long _timedOutIsolatedActionDrainingCount;
     private long _timedOutIsolatedActionDrainedCount;
     private RequestTimeoutDrainDiagnostic? _lastRequestTimeoutDrainDiagnostic;
-    private bool _initializedNotificationPending;
-    private bool _initializedNotificationSent;
     private bool _clientRootsStale = true;
     // Per-session DbContext reused across MCP tool calls. Holding the connection open
     // avoids reopening SQLite, reapplying pragmas, and re-registering every SQL function
@@ -551,7 +549,6 @@ public partial class McpServer : IDisposable
                     }
 
                     await WriteFrameSafelyAsync(transport, response, loopToken).ConfigureAwait(false);
-                    await EmitInitializedNotificationIfPendingAsync(transport, loopToken).ConfigureAwait(false);
                     FlushDeferredFrameLogs();
 
                     // `notifications/shutdown` flips `_running` inside `HandleMessage`; exit the loop
@@ -731,7 +728,6 @@ public partial class McpServer : IDisposable
                     try
                     {
                         await WriteFrameSafelyAsync(transport, response, loopToken).ConfigureAwait(false);
-                        await EmitInitializedNotificationIfPendingAsync(transport, loopToken).ConfigureAwait(false);
                         FlushDeferredFrameLogs();
                     }
                     finally
@@ -881,7 +877,6 @@ public partial class McpServer : IDisposable
                 try
                 {
                     await WriteJsonLineAsync(writer, response).ConfigureAwait(false);
-                    await EmitInitializedNotificationIfPendingAsync(writer).ConfigureAwait(false);
                     FlushDeferredFrameLogs();
                 }
                 finally
@@ -918,44 +913,6 @@ public partial class McpServer : IDisposable
         {
             WriteMcpLogLine(BuildResponseWriteErrorLog(DiagnosticRedactor.FormatExceptionMessage(ex)));
         }
-    }
-
-    private async Task EmitInitializedNotificationIfPendingAsync(IMcpTransport transport, CancellationToken cancellationToken)
-    {
-        var notification = ConsumeInitializedNotification();
-        if (notification is null)
-            return;
-        if (transport is IOutOfBandMcpTransport outOfBandTransport)
-        {
-            await outOfBandTransport.WriteOutOfBandFrameAsync(notification, cancellationToken).ConfigureAwait(false);
-            return;
-        }
-        await WriteFrameSafelyAsync(transport, notification, cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task EmitInitializedNotificationIfPendingAsync(TextWriter writer)
-    {
-        var notification = ConsumeInitializedNotification();
-        if (notification is null)
-            return;
-        await WriteJsonLineAsync(writer, notification).ConfigureAwait(false);
-    }
-
-    private string? ConsumeInitializedNotification()
-    {
-        if (!_initializedNotificationPending)
-            return null;
-        _initializedNotificationPending = false;
-        if (_initializedNotificationSent)
-            return null;
-        _initializedNotificationSent = true;
-        var notification = new JsonObject
-        {
-            ["jsonrpc"] = "2.0",
-            ["method"] = "notifications/initialized",
-            ["params"] = new JsonObject()
-        };
-        return notification.ToJsonString(_jsonOptions);
     }
 
     private static bool IsServerResponseFrame(string frame)
@@ -2113,8 +2070,6 @@ public partial class McpServer : IDisposable
             // サーバー指示 — AIクライアント向けツール選択ガイダンス
             ["instructions"] = BuildInstructions()
         };
-        if (!_initializedNotificationSent)
-            _initializedNotificationPending = true;
         return CreateSuccessResponse(true, id, result);
     }
 

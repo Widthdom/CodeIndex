@@ -779,7 +779,7 @@ public sealed class Caller
 
 
     [Fact]
-    public async Task RunAsync_InitializeEmitsInitializedNotificationAfterResponseOnlyOnce()
+    public async Task RunAsync_InitializeDoesNotEmitClientInitializedNotification_Issue4433()
     {
         var transport = new QueueMcpTransport(
             """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"test-client","version":"1.0"}}}""",
@@ -787,10 +787,9 @@ public sealed class Caller
 
         await _server.RunAsync(transport, CancellationToken.None);
 
-        Assert.Equal(3, transport.WrittenFrames.Count);
+        Assert.Equal(2, transport.WrittenFrames.Count);
         Assert.Equal(1, JsonNode.Parse(transport.WrittenFrames[0])!["id"]!.GetValue<int>());
-        Assert.Equal("notifications/initialized", JsonNode.Parse(transport.WrittenFrames[1])!["method"]!.GetValue<string>());
-        Assert.Equal(2, JsonNode.Parse(transport.WrittenFrames[2])!["id"]!.GetValue<int>());
+        Assert.Equal(2, JsonNode.Parse(transport.WrittenFrames[1])!["id"]!.GetValue<int>());
     }
 
     [Fact]
