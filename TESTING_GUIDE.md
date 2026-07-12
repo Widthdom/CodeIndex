@@ -83,7 +83,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Definition and symbols exact-mode conflict validation share one empty database and a cross-command flag-pair table.
   Razor directive kind-filter queries share one indexed component fixture and iterate route, implements, attribute, and layout expectations in one fact.
   Symbols literal-query coverage shares one empty database for double-dash and explicit `--query` forms when proving compact-looking text is not expanded.
-  Symbols hotspot and references ranking queries share one symbol-sort fixture because both are read-only views of the same ranking signals.
+  Symbols hotspot, references, size, and path ranking queries share one symbol-sort fixture because all are read-only views of the same ranking signals.
   Graph-command kind-semantics warnings reuse one graph-ready database across references, callers, and callees.
   Exact-zero graph hints use one combined Target/Caller fixture per scenario and iterate references, callers, and callees against it.
   C# query-range generic null-comparison regressions place equality and inequality forms in one indexed source when both assert the same absence of leaked enum references.
@@ -456,7 +456,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   definition と symbols の exact-mode conflict validation は1つの空databaseとcross-command flag-pair tableを共有してください。
   Razor directive kind-filter query は1つの indexed component fixture を共有し、route、implements、attribute、layout の期待値を1つの fact 内で反復してください。
   symbols literal-query coverage は、compact風のtextが展開されないことを確認するdouble-dash形式と明示的`--query`形式で1つの空databaseを共有してください。
-  symbols の hotspot と references ranking query は同じranking signalのread-only viewなので、1つのsymbol-sort fixtureを共有してください。
+  symbols の hotspot、references、size、path ranking query は同じranking signalのread-only viewなので、1つのsymbol-sort fixtureを共有してください。
   graph-command kind-semantics warning は references、callers、callees 全体で1つの graph-ready database を再利用してください。
   exact-zero graph hint はscenarioごとに1つのTarget/Caller統合fixtureを使い、references、callers、calleesを反復してください。
   C# query-range generic null-comparison regression は、どちらもenum reference漏えいがない同じ契約ならequalityとinequality形式を1つのindexed sourceに併置してください。

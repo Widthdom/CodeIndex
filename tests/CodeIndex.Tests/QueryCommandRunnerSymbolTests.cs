@@ -559,7 +559,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSymbols_ReferenceSignalSortsReuseRankingFixture_Issue3451()
+    public void RunSymbols_AuditSortModesReuseRankingFixture_Issue3451()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_sort_reference_signals");
         try
@@ -587,20 +587,6 @@ public partial class QueryCommandRunnerTests
                 Assert.True(rows[0].GetProperty("size_lines").GetInt32() > 0);
                 Assert.True(rows[0].GetProperty("complexity_score").GetDouble() > 0);
             }
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunSymbols_SortBySizeAndPathOrdersAuditRows_Issue3451()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_sort_size_path");
-        try
-        {
-            var dbPath = CreateSymbolSortFixtureDb(projectRoot);
 
             var (sizeExitCode, sizeStdout, sizeStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["--db", dbPath, "--json", "--kind", "function", "--lang", "csharp", "--path", "src/Beta.cs", "--sort", "size", "--limit", "1"],
