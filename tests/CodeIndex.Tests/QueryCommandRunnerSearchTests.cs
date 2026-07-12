@@ -7720,120 +7720,64 @@ jobs:
     }
 
     [Fact]
-    public void RunSearch_RawFtsTooLongQueryReturnsUsageError()
+    public void RunSearch_QueryComplexityLimitsReuseOneFixture()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_too_long");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } }");
-            var query = new string('a', QueryLimits.MaxQueryLength + 1);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } } // and or not near");
+            var longQuery = new string('a', QueryLimits.MaxQueryLength + 1);
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [query, "--db", dbPath, "--fts"],
+            var (rawLongExitCode, _, rawLongStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [longQuery, "--db", dbPath, "--fts"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains(QueryLimits.FormatQueryTooLongError(), stderr);
-            Assert.Contains("Usage:", stderr);
-            Assert.DoesNotContain("database error:", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
+            Assert.Equal(CommandExitCodes.UsageError, rawLongExitCode);
+            Assert.Contains(QueryLimits.FormatQueryTooLongError(), rawLongStderr);
+            Assert.Contains("Usage:", rawLongStderr);
+            Assert.DoesNotContain("database error:", rawLongStderr);
 
-    [Fact]
-    public void RunSearch_TooLongQueryReturnsUsageError_Issue1468()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_query_too_long");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var query = new string('a', QueryLimits.MaxQueryLength + 1);
-
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [query, "--db", dbPath],
+            var (literalLongExitCode, _, literalLongStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [longQuery, "--db", dbPath],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains(QueryLimits.FormatQueryTooLongError(), stderr);
-            Assert.Contains("Shorten the search text", stderr);
-            Assert.DoesNotContain("database error:", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
+            Assert.Equal(CommandExitCodes.UsageError, literalLongExitCode);
+            Assert.Contains(QueryLimits.FormatQueryTooLongError(), literalLongStderr);
+            Assert.Contains("Shorten the search text", literalLongStderr);
+            Assert.DoesNotContain("database error:", literalLongStderr);
 
-    [Fact]
-    public void RunSearch_LiteralTokenCountTooHighReturnsUsageError_Issue3081()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_literal_terms_too_many");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var query = string.Join(' ', Enumerable.Range(0, DbReader.MaxLiteralSearchTokenCount + 1).Select(i => $"t{i:D3}"));
+            var tokenQuery = string.Join(' ', Enumerable.Range(0, DbReader.MaxLiteralSearchTokenCount + 1).Select(i => $"t{i:D3}"));
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [query, "--db", dbPath],
+            var (tokenExitCode, _, tokenStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [tokenQuery, "--db", dbPath],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("literal search query has too many terms", stderr);
-            Assert.Contains("smaller literal queries", stderr);
-            Assert.DoesNotContain("database error:", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
+            Assert.Equal(CommandExitCodes.UsageError, tokenExitCode);
+            Assert.Contains("literal search query has too many terms", tokenStderr);
+            Assert.Contains("smaller literal queries", tokenStderr);
+            Assert.DoesNotContain("database error:", tokenStderr);
 
-    [Fact]
-    public void RunSearch_RawFtsTooManyNearOperatorsReturnsUsageError()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_too_many_near");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } }");
-            var query = TestProjectHelper.RepeatJoinedEntry("NEAR(spawn app, 5)", DbReader.MaxRawFtsNearOperators + 1, " OR ");
+            var nearQuery = TestProjectHelper.RepeatJoinedEntry("NEAR(spawn app, 5)", DbReader.MaxRawFtsNearOperators + 1, " OR ");
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [query, "--db", dbPath, "--fts", "--count"],
+            var (nearExitCode, _, nearStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [nearQuery, "--db", dbPath, "--fts", "--count"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("raw FTS5 query is too complex", stderr);
-            Assert.Contains("NEAR operators", stderr);
-            Assert.DoesNotContain("database error:", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
+            Assert.Equal(CommandExitCodes.UsageError, nearExitCode);
+            Assert.Contains("raw FTS5 query is too complex", nearStderr);
+            Assert.Contains("NEAR operators", nearStderr);
+            Assert.DoesNotContain("database error:", nearStderr);
 
-    [Fact]
-    public void RunSearch_RawFtsLowercaseOperatorWordsAreTerms()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_lowercase_terms");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "and or not near");
-            var query = TestProjectHelper.RepeatJoinedEntry("and", DbReader.MaxRawFtsBooleanOperators + 1, " ");
+            var lowercaseQuery = TestProjectHelper.RepeatJoinedEntry("and", DbReader.MaxRawFtsBooleanOperators + 1, " ");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [query, "--db", dbPath, "--fts", "--count"],
+            var (lowercaseExitCode, lowercaseStdout, lowercaseStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [lowercaseQuery, "--db", dbPath, "--fts", "--count"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("1", stdout.Trim());
-            Assert.DoesNotContain("too complex", stderr);
+            Assert.Equal(CommandExitCodes.Success, lowercaseExitCode);
+            Assert.Equal("1", lowercaseStdout.Trim());
+            Assert.DoesNotContain("too complex", lowercaseStderr);
         }
         finally
         {
