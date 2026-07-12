@@ -19,7 +19,7 @@ internal static class BuildAutomationReferenceExtractor
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex MakeTargetRegex = new(
-        @"^(?<name>[\w.%-]+)\s*:(?![=:])(?<deps>.*)$",
+        @"^(?<name>[\w.%-]+)\s*(?:::(?!=)|:(?!=|:))(?<deps>.*)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex MsBuildElementRegex = new(

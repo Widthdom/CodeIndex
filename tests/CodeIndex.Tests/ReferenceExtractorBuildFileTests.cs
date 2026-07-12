@@ -81,6 +81,7 @@ public partial class ReferenceExtractorTests
             .PHONY: clean install # metadata lists declared targets
             all: build $(OPTIONAL)
             build:
+            deploy:: build
             clean:
             install: all
             """;
@@ -89,6 +90,7 @@ public partial class ReferenceExtractorTests
             .ShouldContain("call", "clean", containerName: ".PHONY")
             .ShouldContain("call", "install", containerName: ".PHONY")
             .ShouldContain("call", "build", containerName: "all")
+            .ShouldContain("call", "build", containerName: "deploy")
             .ShouldContain("call", "all", containerName: "install")
             .ShouldNotContainSymbol("metadata")
             .ShouldNotContainSymbol("OPTIONAL");
