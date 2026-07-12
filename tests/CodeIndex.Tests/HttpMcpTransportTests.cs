@@ -1050,28 +1050,6 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_EventsStream_DoesNotBlockPostRequests()
-    {
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
-
-        using var client = CreateHttpClient();
-        using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
-
-        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
-        Assert.Equal("text/event-stream", events.Content.Headers.ContentType!.MediaType);
-        Assert.True(events.Headers.TryGetValues("X-Accel-Buffering", out var bufferingValues));
-        Assert.Contains("no", bufferingValues);
-        Assert.True(events.Headers.Contains("X-Cdidx-Mcp-Event-Stream-Id"));
-
-        var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":11,"method":"ping"}""");
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        using var doc = JsonDocument.Parse(body);
-        Assert.Equal(11, doc.RootElement.GetProperty("id").GetInt32());
-    }
-
-    [Fact]
     public async Task HttpTransport_EventsStreamLimit_Returns429()
     {
         var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
@@ -1114,17 +1092,27 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_EventsStream_RemovesServerAndClientDisconnectedStreams_Issue3815()
+    public async Task HttpTransport_EventsStream_AllowsPostsAndRemovesDisconnectedStreams_Issue3815()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
-        harness.SetKeepAlive(TimeSpan.FromMilliseconds(10), () => new string('x', HttpMcpTransport.MaxSseEventFrameBytes));
-
+        harness.SetKeepAlive(TimeSpan.FromSeconds(1), () => new string('x', HttpMcpTransport.MaxSseEventFrameBytes));
         using var client = CreateHttpClient();
         using var oversizedEvents = await client.GetAsync(
             new Uri(new Uri(harness.Endpoint), "events"),
             HttpCompletionOption.ResponseHeadersRead);
 
         Assert.Equal(HttpStatusCode.OK, oversizedEvents.StatusCode);
+        Assert.Equal("text/event-stream", oversizedEvents.Content.Headers.ContentType!.MediaType);
+        Assert.True(oversizedEvents.Headers.TryGetValues("X-Accel-Buffering", out var bufferingValues));
+        Assert.Contains("no", bufferingValues);
+        Assert.True(oversizedEvents.Headers.Contains("X-Cdidx-Mcp-Event-Stream-Id"));
+
+        using var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":11,"method":"ping"}""");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(body);
+        Assert.Equal(11, doc.RootElement.GetProperty("id").GetInt32());
+
         await WaitUntilAsync(() => harness.EventStreamCount == 0, "oversized keep-alive frame to close the event stream");
 
         harness.SetKeepAlive(
