@@ -10,7 +10,7 @@ namespace CodeIndex.Cli;
 
 internal static class SuggestionsCommandRunner
 {
-    private const string Usage = "Usage: cdidx suggestions [list|show|export|add] [id|description] [--db <path>] [--json] [--description <text>] [--context <text>] [--title <text>] [--evidence-path <path>] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>]";
+    private const string Usage = "Usage: cdidx suggestions [list|show|export|add] [id|description] [--db <path>] [--json] [--description <text>] [--context <text>] [--title <text>] [--evidence-path <path>] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--issue-state <open|closed|all>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>]";
     internal const int MaxOpenIssuesJsonBytes = IssueDuplicatePreflight.MaxOpenIssuesJsonBytes;
     internal const int MaxOpenIssuesJsonDepth = IssueDuplicatePreflight.MaxOpenIssuesJsonDepth;
     internal const int MaxSuggestionExportTextFieldLength = 4096;
@@ -80,6 +80,9 @@ internal static class SuggestionsCommandRunner
             return WriteUsageError("--open-issues can only be used with `suggestions export --format issue-drafts`.", options.Json, jsonOptions);
         if (options.OpenIssuesRepository != null && (verb != "export" || options.ExportFormat != "issue-drafts"))
             return WriteUsageError("--repo can only be used with `suggestions export --format issue-drafts --open-issues github`.", options.Json, jsonOptions);
+        if (options.IssueState != IssueDuplicatePreflight.DefaultIssueState
+            && (verb != "export" || options.ExportFormat != "issue-drafts" || !IssueDuplicatePreflight.IsGitHubOpenIssuesSource(options.OpenIssuesPath)))
+            return WriteUsageError("--issue-state can only be used with `suggestions export --format issue-drafts --open-issues github`.", options.Json, jsonOptions);
         if (verb == "show" && options.HasPagination)
             return WriteUsageError("--limit and --offset can only be used with `suggestions list` or `suggestions export`.", options.Json, jsonOptions);
         if (verb == "export" && options.Json && options.ExportFormat == "markdown")
@@ -303,7 +306,8 @@ internal static class SuggestionsCommandRunner
         var preflightResult = IssueDuplicatePreflight.TryLoadAsync(
                 options.OpenIssuesPath,
                 options.OpenIssuesRepository,
-                cancellationToken)
+                cancellationToken,
+                options.IssueState)
             .GetAwaiter()
             .GetResult();
         if (!preflightResult.Loaded)
@@ -945,6 +949,14 @@ internal static class SuggestionsCommandRunner
                     }
                     options.OpenIssuesRepository = repository;
                     break;
+                case "--issue-state":
+                    if (!TryReadSchemaValue("--issue-state", out var issueState, out var issueStateError))
+                    {
+                        options.Error = issueStateError;
+                        return options;
+                    }
+                    options.IssueState = issueState!.ToLowerInvariant();
+                    break;
                 case "--duplicate-confidence":
                     if (!TryReadSchemaValue("--duplicate-confidence", out var duplicateConfidence, out var duplicateConfidenceError))
                     {
@@ -1073,6 +1085,7 @@ internal static class SuggestionsCommandRunner
         public bool FormatSpecified { get; set; }
         public string? OpenIssuesPath { get; set; }
         public string? OpenIssuesRepository { get; set; }
+        public string IssueState { get; set; } = IssueDuplicatePreflight.DefaultIssueState;
         public string DuplicateConfidence { get; set; } = IssueDuplicatePreflight.DefaultDuplicateConfidence;
         public double DuplicateThreshold { get; set; } = IssueDuplicatePreflight.DefaultDuplicateThreshold;
         public bool DuplicateConfidenceSpecified { get; set; }
@@ -1196,4 +1209,6 @@ internal sealed record SuggestionIssueDraftDuplicateMatchJsonResult(
     [property: JsonPropertyName("reason")] string Reason,
     [property: JsonPropertyName("score")] double Score,
     [property: JsonPropertyName("confidence")] string Confidence,
-    [property: JsonPropertyName("signals")] List<string> Signals);
+    [property: JsonPropertyName("signals")] List<string> Signals,
+    [property: JsonPropertyName("state")] string State,
+    [property: JsonPropertyName("classification")] string Classification);

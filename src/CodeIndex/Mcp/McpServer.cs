@@ -4069,6 +4069,7 @@ public partial class McpServer : IDisposable
         };
         if (structuredContent is JsonObject structuredObject)
         {
+            structuredObject.TryAdd("api_version", JsonOutputContract.ApiVersion);
             AddProjectFilterRootDiagnostics(structuredObject);
             result["structuredContent"] = structuredContent;
         }
