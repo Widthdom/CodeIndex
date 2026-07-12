@@ -66,22 +66,23 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("[--count]", stderr);
     }
 
-    [Theory]
-    [InlineData("-1")]
-    [InlineData("abc")]
-    public void RunReferences_RejectsNegativeOrNonNumericMaxLineWidthValue(string invalidValue)
+    [Fact]
+    public void RunReferences_RejectsNegativeAndNonNumericMaxLineWidthValues()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_references_invalid_max_line_width_{invalidValue}");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_invalid_max_line_width");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["target", "--db", dbPath, "--max-line-width", invalidValue, "--json"],
-                _jsonOptions));
+            foreach (var invalidValue in new[] { "-1", "abc" })
+            {
+                var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                    ["target", "--db", dbPath, "--max-line-width", invalidValue, "--json"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--max-line-width requires an integer between 0 and 4096", stderr);
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Contains("--max-line-width requires an integer between 0 and 4096", stderr);
+            }
         }
         finally
         {
