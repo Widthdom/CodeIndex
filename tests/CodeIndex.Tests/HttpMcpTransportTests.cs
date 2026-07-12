@@ -1114,27 +1114,23 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_EventsStream_OversizedKeepAliveDisconnectsStream_Issue3815()
+    public async Task HttpTransport_EventsStream_RemovesServerAndClientDisconnectedStreams_Issue3815()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
         harness.SetKeepAlive(TimeSpan.FromMilliseconds(10), () => new string('x', HttpMcpTransport.MaxSseEventFrameBytes));
 
         using var client = CreateHttpClient();
-        using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
+        using var oversizedEvents = await client.GetAsync(
+            new Uri(new Uri(harness.Endpoint), "events"),
+            HttpCompletionOption.ResponseHeadersRead);
 
-        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, oversizedEvents.StatusCode);
         await WaitUntilAsync(() => harness.EventStreamCount == 0, "oversized keep-alive frame to close the event stream");
-    }
 
-    [Fact]
-    public async Task HttpTransport_EventsStream_RemovesDisconnectedStreams()
-    {
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
         harness.SetKeepAlive(
             TimeSpan.FromMilliseconds(10),
             () => """{"jsonrpc":"2.0","method":"notifications/test"}""");
 
-        using var client = CreateHttpClient();
         using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
         Assert.Equal(HttpStatusCode.OK, events.StatusCode);
         await WaitUntilAsync(() => harness.HasEventStreams, "the event stream to be registered");
