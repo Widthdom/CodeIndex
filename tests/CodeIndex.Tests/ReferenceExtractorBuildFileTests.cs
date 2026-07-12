@@ -122,6 +122,33 @@ public partial class ReferenceExtractorTests
             .ShouldContain("call", "Publish", containerName: "Generate");
     }
 
+    [Fact]
+    public void Extract_Yaml_GitHubActionsReferences_Issue4410()
+    {
+        const string content = """
+            name: CI
+            jobs:
+              build:
+                steps:
+                  - uses: actions/checkout@0123456789abcdef
+                  - run: dotnet build src/App/App.csproj
+              test:
+                needs: [build]
+                steps:
+                  - run: |
+                      ./scripts/test.sh
+                      echo ignored.txt
+            """;
+
+        ReferenceExtractionCase.Extract("yaml", content)
+            .ShouldContain("import", "actions/checkout", containerName: "jobs.build")
+            .ShouldContain("project_reference", "src/App/App.csproj", containerName: "jobs.build")
+            .ShouldContain("call", "build", containerName: "jobs.test")
+            .ShouldContain("project_reference", "scripts/test.sh", containerName: "jobs.test")
+            .ShouldNotContainSymbol("ignored.txt");
+        Assert.True(ReferenceExtractor.SupportsLanguage("yaml"));
+    }
+
     private sealed class ReferenceExtractionCase
     {
         private readonly IReadOnlyList<ReferenceRecord> references;
