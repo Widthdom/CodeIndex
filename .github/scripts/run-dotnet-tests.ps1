@@ -18,18 +18,17 @@ $testArgs = @(
   "--configuration", "Release",
   "--framework", $Framework,
   "--no-build",
+  "--no-restore",
   "--nologo",
   "--settings", "tests/CodeIndex.Tests/CodeIndex.Tests.runsettings",
+  "--results-directory", $resultsDirectory,
   "--blame-crash",
   "--blame-hang",
-  "--blame-hang-timeout", "5m",
-  "--logger", "trx;LogFileName=test_results.trx"
+  "--blame-hang-timeout", "5m"
 )
 
-$collectCoverage = $CollectCoverage -eq "true"
-if ($collectCoverage) {
-  $testArgs += @("--collect", "XPlat Code Coverage")
-} else {
+$includeCoverage = $CollectCoverage -eq "true"
+if (-not $includeCoverage) {
   Write-Host "Skipping XPlat Code Coverage outside ubuntu-24.04/net8.0 so platform/framework matrix lanes run only the test suite."
 }
 
@@ -50,11 +49,23 @@ function Write-StepOutput {
 function Invoke-TestRun {
   param(
     [Parameter(Mandatory = $true)]
-    [string]$LogPath
+    [string]$LogPath,
+
+    [Parameter(Mandatory = $true)]
+    [string]$ResultFileName,
+
+    [Parameter(Mandatory = $true)]
+    [bool]$IncludeCoverage
   )
 
+  $runArgs = @($testArgs)
+  $runArgs += @("--logger", "trx;LogFileName=$ResultFileName")
+  if ($IncludeCoverage) {
+    $runArgs += @("--collect", "XPlat Code Coverage")
+  }
+
   $capturedOutput = [System.Collections.Generic.List[string]]::new()
-  dotnet @testArgs 2>&1 | ForEach-Object {
+  dotnet @runArgs 2>&1 | ForEach-Object {
     $line = [string]$_
     $capturedOutput.Add($line)
     Write-Host $line
@@ -71,7 +82,7 @@ function Invoke-TestRun {
 }
 
 $firstLogPath = Join-Path $resultsDirectory "test-output-first.txt"
-$firstExitCode = Invoke-TestRun -LogPath $firstLogPath
+$firstExitCode = Invoke-TestRun -LogPath $firstLogPath -ResultFileName "test_results_first.trx" -IncludeCoverage $includeCoverage
 if ($firstExitCode -eq 0) {
   exit 0
 }
@@ -84,8 +95,11 @@ if (Select-String -Path $firstLogPath -SimpleMatch "test run timeout" -Quiet) {
 }
 
 Write-Warning "Initial test run failed with exit code $firstExitCode. Rerunning once to classify possible flakiness."
+if ($includeCoverage) {
+  Write-Host "Skipping XPlat Code Coverage on the flaky-classification retry."
+}
 $retryLogPath = Join-Path $resultsDirectory "test-output-retry.txt"
-$retryExitCode = Invoke-TestRun -LogPath $retryLogPath
+$retryExitCode = Invoke-TestRun -LogPath $retryLogPath -ResultFileName "test_results_retry.trx" -IncludeCoverage $false
 if ($retryExitCode -eq 0) {
   "Initial test run failed, but the single retry passed. Treat this run as flaky and inspect TRX/blame artifacts." |
     Set-Content -Encoding UTF8 -Path (Join-Path $resultsDirectory "flaky-retry.txt")

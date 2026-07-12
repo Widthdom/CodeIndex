@@ -28,8 +28,16 @@ Use the full suite by default. Use targeted filters only while iterating locally
 - Test parallelism: enabled by default across independent test classes. Tests that touch process-global state such as SQLite pool resets, environment variables, or current-directory overrides must use an explicit non-parallel collection, and tests that swap `Console.Out` / `Console.Error` must lock on `TestConsoleLock.Gate`.
 - CI runs the test project through `tests/CodeIndex.Tests/CodeIndex.Tests.runsettings`, enables VSTest blame crash and hang collection, applies a 45-minute session timeout plus 60-second xUnit long-running diagnostics, and reruns the suite once after an initial failure. If the retry passes, CI uploads `TestResults/flaky-retry.txt` with the TRX and blame artifacts so the run is treated as suspect instead of silently trusted. TRX telemetry summaries and test-result artifact uploads run only for failed or pass-on-retry lanes, not for clean first-pass success lanes; streamed test output is also written under `TestResults` only after a failed run needs upload/timeout inspection, and that failure-log directory is created only on the failure path. The telemetry summarizer runs with `--configuration Release` and may build its helper during failure diagnostics so every matrix lane can produce a TRX summary. XPlat Code Coverage collection is limited to the `ubuntu-24.04` / `net8.0` lane so every active CI lane still exercises the full suite without paying collector overhead. OS coverage runs on `net8.0`, the production CLI target, while `net9.0` compatibility coverage runs on `ubuntu-24.04` only. Test execution runs with `--no-build` after locked restore and Release build steps: the primary lane restores the full solution for audit and publish coverage, then builds `tests/CodeIndex.Tests/CodeIndex.Tests.csproj` for the matrix framework; non-primary lanes restore only that test project's matrix framework with `RestoreTargetFrameworks` before the same per-framework build. CI installs both the production `8.0.413` SDK and the pinned `9.0.301` SDK on every lane because `global.json` disables SDK roll-forward before target-framework-specific restore/build filtering can run. `CodeIndex.Tests.runsettings` is the single owner of the `TestResults` output directory; local `dev.sh coverage` follows that same ownership instead of passing a second results-directory argument. The `ubuntu-24.04` / `net8.0` lane no longer builds the test project's unused `net9.0` target; `net9.0` build coverage stays in the Ubuntu compatibility lane. It also uses `make lint` as the single formatting verifier. The NuGet cache key is based on `packages.lock.json` and `global.json` instead of every project file, with an OS-scoped restore key for partial cache reuse; locked restore still catches package-input drift, while test-only project edits no longer evict the package cache. The weekly mutation workflow also caches the pinned Stryker global tool and NuGet packages so scheduled mutation runs avoid reinstalling unchanged test tooling.
 - Keep the CI initial test run and its single retry routed through one workflow helper so logger, blame, and coverage arguments cannot drift. When a PowerShell helper returns the test exit code, keep streamed test output off the function success stream so assignments capture only the numeric exit code.
+- Coverage collection runs only on the initial primary-lane test attempt; the one flaky-classification retry reuses the same test arguments without rerunning the coverage collector.
+- Matrix test invocations use both `--no-build` and `--no-restore` because each lane completes its scoped locked restore and Release build before entering the shared test helper.
+- Primary-lane publish also uses `--no-build --no-restore`, reusing the production project output and dependency graph built through the Release test project.
+- Release workflow tests use `--no-build --no-restore` after the solution's locked restore and Release build so each runtime lane does not reevaluate dependencies.
+- Curated release-note generation caches the changelog tool lock file, performs one conditional locked restore, and runs the tool with `--no-restore`.
 - Keep package audit, primary-lane build/lint, coverage collection, coverage artifact upload, publish, and build artifact upload keyed to the matrix `primary_lane` value; define the lane set once with explicit matrix entries instead of recomputing or excluding combinations in later steps.
-- Workflow path filters do not repeat individual Markdown files already covered by `**.md`; keep equivalent push and pull-request filters aligned.
+- Workflow path filters do not repeat individual Markdown files already covered by `**.md`; keep equivalent push and pull-request filters aligned. Build/Test and CodeQL also ignore license text paths owned by the focused license-policy workflow.
+- Test workflows group pull-request runs by workflow and pull request, use a unique run ID otherwise, and cancel only superseded pull-request runs so push, schedule, and manual runs remain independent.
+- TRX telemetry summarization reuses the Release telemetry tool already built through the test project's direct reference and must not restore or build it again after the test step.
+- The changelog-fragments workflow caches packages from the changelog tool lock file, performs one locked restore, and validates with `dotnet run --no-restore`.
 - The focused license-policy workflow caches NuGet packages, performs a locked `net8.0`-only restore, and runs its filtered tests with `--no-restore` so dependency resolution is not repeated.
 - The C# CodeQL lane uses setup-dotnet's lock-file-keyed NuGet cache; the Actions-only lane skips both SDK setup and package caching.
 
@@ -40,9 +48,11 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 
 - `ChunkSplitterTests.cs`, `SymbolExtractorTests.cs`, `ReferenceExtractorTests.cs`, `SearchSnippetFormatterTests.cs`, `DbPathResolverTests.cs`, `ConsoleUiTests.cs`
   Pure or mostly pure behavior tests with in-memory inputs.
+  Console writer synchronization coverage yields between character writes instead of sleeping per character; use enough whole-line iterations to expose interleaving without adding wall-clock delay.
 - `SymbolExtractor*Tests.cs` and `ReferenceExtractor*Tests.cs`
   Extractor coverage is split by language or feature area with partial test classes, while shared helpers remain on the root `SymbolExtractorTests` / `ReferenceExtractorTests` parts.
   When moving repeated extractor scenarios out of a giant suite, keep the new partial file grouped by a readable domain such as language, build-file format, or protocol surface, and prefer small semantic assertion helpers over repeated raw substring or predicate assertions.
+  Pattern-config scalar-cap variants reuse one temporary root and overwrite one config file, resetting the global registry between iterations under a single console lock.
   Use `AssertSymbolsContain(...)` when a fixture only needs to verify several symbol names of the same kind across language-specific partials; keep direct predicates for metadata such as line, container, subtype, or return type.
   Likewise, use `AssertReferencesContain(...)` for repeated `(reference kind, container, symbol names)` checks, while retaining predicates for flags, context, line, and other edge-specific metadata.
   Use `AssertReferencesContainInContext(...)` when several reference names share the same kind and exact source context; keep direct predicates when context is only one part of a richer edge contract.
@@ -56,6 +66,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   SQLite schema, write paths, migrations, and query behavior. DbReader coverage is split by query family, including search, SQL qualified-name handling, file dependencies, impact, and symbol-query suites, while shared seeded fixture state remains on the root `DbReaderTests` part.
   `DbSchemaConstraintTests.cs` also locks schema constraints to `SymbolKindCatalog` and required file foreign keys so DB readiness checks fail when code enums and SQLite CHECK clauses drift.
   Hotspot ranking fixtures should use the smallest counts that cross each ranking threshold; for structural-rank tests, keep one side just above the raw-reference comparison and the other just above the symbol-count threshold instead of scaling both far beyond the boundary.
+  Checkpoint listing cap fixtures should exceed the checkpoint count cap once and exceed the inspected-file cap on only one checkpoint; multiplying both caps together adds filesystem work without increasing boundary coverage.
 - `ConcurrencyTests.cs`
   WAL snapshot and shared-writer stress tests. The concurrent reader/writer
   snapshot tests stop after enough reader and writer iterations are observed,
@@ -68,9 +79,68 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   End-to-end upgrade path: seeds a pre-column legacy DB, opens it through `TryMigrateForRead`, and exercises the read paths that touch nullable symbol ordinals (outline, symbol search, nearby, unused, analyze bundle) to lock in the real-world failure mode behind #58 / #49.
 - `IndexCommandRunner*Tests.cs`, `QueryCommandRunner*Tests.cs`, `ProgramCliTests.cs`, `InstallScriptTests.cs`
   CLI parsing, command execution, and installer behavior. Index command coverage is split by run mode or feature area, and query command coverage is split by command family with partial test classes so shared console and fixture helpers stay centralized. Keep repeated query-result fixtures, such as overlapping chunk content used by multiple search deduplication tests, in narrow class-level helpers instead of duplicating local builders. `ProgramCliTests.cs` covers top-level entrypoint behavior that must be exercised through a subprocess, while `InstallScriptTests.cs` runs focused bash snippets against `install.sh` in library mode to lock in release-installer regressions without performing real network installs.
+  Argument-validation variants that only differ by invalid scalar input share one database fixture and iterate within a fact when no per-case state or discovery identity is required.
+  Excerpt focus-column validation follows this rule for zero and non-numeric values, reusing one indexed Markdown fixture.
+  Inspect path-line exact/enclosing-symbol cases reuse one indexed source fixture and iterate read-only line queries within a fact.
+  Definition and symbols exact-mode conflict validation share one empty database and a cross-command flag-pair table.
+  Symbols compact flag/alias and summary-only JSON envelopes share one editor-format fixture.
+  Symbols JSON array, LSP, quickfix, and SARIF location formats share one editor-format fixture.
+  Unused default-suppression row, JSON count, summary-only, and text count envelopes, including the `--all` count control, share one unused-symbol fixture.
+  Unused default-suppressed and `--all` JSON cursor pagination share one unused-symbol fixture.
+  Unused full and compact `--by-bucket` JSON envelopes share one taxonomy fixture.
+  Unused bucket, minimum-confidence, and actionable confidence-alias JSON filters share one unused-symbol fixture.
+  Unused full-summary and bucket-filtered JSON counts share one taxonomy fixture.
+  Unused limited-page returned counts and bucket diversification share one taxonomy fixture.
+  Unused indexed-path and unsupported-language zero-result schemas share one indexed fixture.
+  Outline `size` sorting and its `span` alias share one ranking fixture.
+  Outline reference and complexity metric sorting share one derived-ranking fixture.
+  Outline kind sorting and default source-order field projection share one ranking fixture.
+  Deps JSON and json-graph byte-limit failures share one SQL graph fixture.
+  Deps JSON summary output and json-graph summary rejection share one SQL graph fixture.
+  References stale-SQL-contract count and result envelopes share one downgraded graph fixture.
+  Callers and callees stale-SQL-contract result envelopes share one downgraded graph fixture.
+  Assert each MCP SQL graph readiness field and degraded reason once per response.
+  MCP analyze-symbol and references stale-SQL-contract checks share one downgraded server fixture.
+  Keep MCP mixed and zero-result SQL graph metadata assertions single and non-duplicated.
+  MCP deps and symbol-hotspots degraded zero results share one downgraded server fixture.
+  MCP unused-symbols and symbol-hotspots kind-filtered clean zero results share one downgraded server fixture.
+  CLI unused kind-filtered zero-result and count JSON envelopes share one downgraded SQL fixture.
+  CLI hotspots unfiltered degraded and kind-filtered clean zero results share one downgraded SQL fixture.
+  Callers mixed-repository pure-C# result and count envelopes share one downgraded graph fixture.
+  MCP callers and analyze-symbol pure-C# checks share one mixed-repository downgraded server fixture.
+  MCP definition clean metadata and callers/impact degraded metadata share one stale-contract server fixture.
+  Deps missing-graph byte-limit and summary-only zero payloads share one read-only fixture.
+  Deps JSON-only control rejection across non-JSON formats uses one data-driven theory.
+  Unused missing-chunks count and degraded reflection results share one mutated fixture.
+  Unused missing-graph JSON schema and human count warning share one empty database fixture.
+  Unused JSON confidence taxonomy and human bucket grouping share one unused-symbol fixture.
+  Razor directive kind-filter queries share one indexed component fixture and iterate route, implements, attribute, and layout expectations in one fact.
+  Symbols literal-query coverage shares one empty database for double-dash and explicit `--query` forms when proving compact-looking text is not expanded.
+  Symbols hotspot, references, size, and path ranking queries share one symbol-sort fixture because all are read-only views of the same ranking signals.
+  Graph-command kind-semantics warnings reuse one graph-ready database across references, callers, and callees.
+  Exact-zero graph hints use one combined Target/Caller fixture per scenario and iterate references, callers, and callees against it.
+  C# query-range generic null-comparison regressions place equality and inequality forms in one indexed source when both assert the same absence of leaked enum references.
+  Apply the same combined null-comparison fixture to inspect reference-bundle coverage instead of indexing each operator separately.
+  Production-runtime switch relational-pattern coverage places less-than and greater-than methods in one source and pays one CLI indexing subprocess.
+  Generic switch-arm guard and relational predecessors likewise share one production-runtime fixture and run only on the production `net8.0` target.
+  Search language-alias coverage may place distinct language files in one database and iterate alias filters when each filter isolates one expected result.
+  Named-query escaping for option-looking literals reuses one indexed Probe fixture across definition, graph, symbols, files, inspect, and impact commands.
+  Search alias variants for JavaScript extensions, YAML, batch, and SQL dialects each reuse one language fixture and iterate casing/spelling forms in a fact.
+  Raw FTS syntax coverage reuses one indexed source for a valid control query and all invalid query/hint variants.
+  Literal and raw FTS complexity bounds reuse one indexed source across length, token-count, NEAR-count, and lowercase-operator controls.
+  XAML, Rust, common multi-language, and JavaScript alias sets each build their fixture once and iterate all accepted spellings and casing forms.
+  Inline comment-marker exclusion places JavaScript line/block and Python line comments in one index and iterates marker queries.
+  Search exact-mode conflict coverage shares one empty database for all pairwise and triple flag sets.
+  Search path and exclude-path invalid-glob guards share one empty database and iterate option names before query evaluation.
+  Find long-line JSON coverage reuses one text fixture for bounded and zero-width unclamped snippets.
+  Excerpt location parsing and focus dependency/range validation reuse one database containing the range and long-line fixtures.
+  Search and find canonicalization for C# verbatim qualified names and Java Unicode escapes share one indexed source per language.
+  TypeScript and Java language-alias filtering share one multi-language database because unique query markers isolate each language result.
+  Kotlin backtick and Java Unicode-escape canonicalization share the path-filtered C# verbatim canonical fixture rather than creating separate databases.
   `TrimmedCliTestHelper` owns trimmed publish setup and published CLI subprocess execution. Use its shared non-single-file publish for published CLI smoke coverage so a test process pays that publish cost once; keep single-file tests on an explicit per-test publish because they verify a distinct apphost shape. Published CLI smoke tests run only on the `net8.0` test target because the production CLI targets `net8.0`; focused in-process tests keep cross-target behavior covered without repeating the expensive publish on `net9.0`.
   Installer snippet and Docker entrypoint script coverage use `ProductionCliFactAttribute` / `ProductionCliTheoryAttribute` and run only on the `net8.0` test target because those shell scripts are target-framework independent and the production CLI targets `net8.0`.
   `RunBuiltCli` / `RunCliInSubprocess` subprocess coverage, including timeout-guarded subprocess probes, uses `ProductionRuntimeFactAttribute` / `ProductionRuntimeTheoryAttribute` and runs only on the `net8.0` test target when the subprocess resolves to the production `net8.0` CLI; keep direct in-process command-runner tests cross-target.
+  When a production-runtime test only needs the built CLI to create an indexed fixture, keep that subprocess boundary on the indexing step and run query assertions, including count/path/format variants, in-process through the command runner helpers unless the assertion depends on process-boundary behavior.
   `InstallScriptTests.RunInstallerSnippet` enforces a bounded timeout and kills the snippet process tree on timeout, so installer regressions fail with captured output instead of hanging the suite.
 - `CiWorkflowTests.cs`, `ReleaseWorkflowTests.cs`, `ReleaseWorkflowTests.PackageHelpers.cs`
   CI and release workflow contract tests. Keep repeated related workflow/script string contract assertions, including test-result artifact, retry-output, install, Homebrew, changelog, release-payload job splits, container image, SBOM, NuGet publish, secret scope, SDK pin, tool/action pin, and runner/cache policy contracts, in small grouped helpers so the tests emphasize the contract being checked; use the comparison-aware helpers when the contract intentionally requires ordinal matching. Release workflow package-normalization ZIP fixture helpers live in `ReleaseWorkflowTests.PackageHelpers.cs` so workflow assertions stay near the workflow contracts.
@@ -129,8 +199,20 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - `McpServer*Tests.cs`
   MCP JSON-RPC behavior and tool outputs. Large server coverage is split into focused partial suites for tool calls, tool listing, protocol/session handling, and error handling while the root `McpServerTests` part keeps shared seeded fixture state. Request-timeout tests use signal-gated delay hooks instead of fixed sleeps: start the request, confirm the hook has begun, then await the timeout response with a bounded wait so they pay only the configured timeout while still proving in-flight actions drain after the timeout response.
   Stdio response-order tests use the same signal-gated pattern: make the synthetic transport signal the parse-error path instead of sleeping in the response serializer.
+  Rate-limit-disabled coverage uses the lightweight `languages` tool for repeated successful calls; do not pay repeated `status` database aggregation cost when the assertion only concerns limiter bypass.
 - `HttpMcpTransportTests.cs`
   HTTP MCP transport behavior, including authentication responses, warm server reuse, concurrent requests, and request logging. Request-log assertions must validate recorded contents without assuming callback order between independently handled HTTP requests.
+  Request-log metadata bounds for long paths, long JSON-RPC IDs, and over-depth IDs share one sequential logger harness and select records by content rather than callback order.
+  Bearer-token denial variants share one table-driven harness that verifies the common wire response, challenge header, redaction, and request-log outcome; keep same-length mismatch in that table to exercise the hashed comparison path.
+  Matching canonical and lowercase bearer schemes share one authenticated harness because RFC auth-scheme casing does not require isolated server state.
+  Transport disposal coverage uses one live event-stream lifecycle to verify concurrent idempotent disposal, stream cancellation, server-loop completion, and owned semaphore release together.
+  Event-stream lifecycle coverage uses one harness to verify response headers, concurrent POST handling, oversized server-side closure, and client disposal in sequence, with a short test-owned keep-alive instead of the production heartbeat interval.
+  No-stream initialize coverage reuses one default harness for explicit protocol negotiation and default handshake behavior; event-stream notification delivery keeps an isolated session.
+  Basic HTTP endpoint coverage reuses one default harness for notification 204, root-method 405/Allow, and structured healthy `/healthz` responses.
+  Invalid and oversized health-provider JSON fallbacks run against one harness by replacing the provider between requests.
+  Health degradation coverage uses one harness to verify an event-stream drop remains healthy before injected response-cleanup failures transition the status to degraded.
+  Warm-server coverage reuses one harness for sequential initialize/list, concurrent correlated pings, an empty-body 204, and a successful follow-up request.
+  Malformed/deep cancellation and deep JSON-RPC response payloads share one direct transport and one queue/read/write assertion helper when proving they bypass out-of-band handling.
 - `GitHelperTests.cs`, `GitProcessRunnerTests.cs`
   Git-specific behavior, including worktrees, commit-based updates, direct git process runner diagnostics, and cancellation of git subprocesses. Tests that create real repositories or launch real/fake git subprocesses use `ExternalProcessFactAttribute` / `ExternalProcessTheoryAttribute` and run only on the `net8.0` test target; keep pure `.git` metadata parsing and trusted-candidate enumeration cross-target. Timeout and cancellation wall-clock assertions should stay below the fake git scripts' natural completion while leaving room for macOS CI scheduling and process-cleanup overhead. Fake git scripts that run after commit-ref validation should echo the verified commit argument for `rev-parse --verify <ref>^{commit}` so timeout tests reach the intended git command.
 - `WorkspaceMetadataEnricherTests.cs`
@@ -155,6 +237,10 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Bounded CI smoke coverage plus large-scale data benchmarks. `CiPerformanceSmoke_IndexAndSearchSmallFixture_StaysWithinBudget` and the allocation budget guards run in the default `net8.0` suite, so they are blocking PR/CI checks on the production target, but their broad budgets are intended to catch only severe indexing/search or allocation regressions rather than act as benchmarks. The 10K+ large-scale tests remain skip-by-default; run them manually with `--filter`.
 - `.github/scripts/run-dotnet-tests.ps1`
   The `dotnet.yml` matrix test step delegates test argument construction, coverage gating, `TestResults` path ownership for failure-log capture, TestSessionTimeout handling, and single flaky retry classification to this script. Keep workflow YAML limited to matrix/lane parameter wiring, and update `CiWorkflowTests` when changing either the script contract or artifact/summarize gating.
+  Keep the converted coverage boolean in a local whose name differs from the case-insensitive `CollectCoverage` string parameter; otherwise PowerShell coerces the boolean back to a string before invoking typed helpers.
+  Pass the repository-root `TestResults` directory explicitly to `dotnet test`; runsettings paths can otherwise resolve relative to the test project, separating TRX and coverage output from workflow telemetry and artifact paths.
+  Give the initial attempt and flaky-classification retry distinct TRX filenames so a passing retry cannot overwrite the failure evidence that triggered it.
+  Summarize TRX telemetry on successful and failed matrix lanes so optimization work has comparable slow-test evidence; keep result and dump artifact uploads failure-gated to avoid unnecessary transfer time.
 - `.github/scripts/configure-windows-test-host.ps1`
   The `dotnet.yml` and `release.yml` Windows lanes share TMP/TEMP pinning and Defender exclusion setup here so both workflows keep the same test-host performance assumptions. Update `CiWorkflowTests` when changing this script or its workflow call contract.
 - The `dotnet.yml` SDK setup has one conditional retry for transient SDK download failures. Keep the first attempt marked `continue-on-error` only while the retry is guarded by its failed outcome, so a second failure still fails the job.
@@ -175,6 +261,12 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Prefer small fixtures and explicit assertions over broad snapshot-style checks. The one narrow exception is the `--json` output contract harness (`JsonOutputSnapshotTests`), which pins the full field shape on purpose — see "JSON `--json` output snapshots" below.
 - For cross-language extractor budget tests, exceed the shared boundary by the smallest value that triggers truncation; do not add arbitrary padding independently per language.
 - When repeated expected-value construction obscures a boundary contract such as raw bytes vs canonical content, use a narrowly named local helper instead of duplicating the low-level expression at each assertion.
+- Batch independent file mutations into one `--files` update when a file-indexer test only needs to verify their normalized paths and outcomes after the same initial index.
+- Keep related index invalidation transitions in one fixture when every intermediate state is asserted; static-interface contract add, remove, restore, and delete coverage should not rebuild equivalent projects independently.
+- Cap issue lifecycle tests should reuse one indexed fixture across full-scan and update transitions when they assert the issue after each low/high boundary change.
+- Unreadable-directory full-scan coverage keeps JSON and human diagnostics, purge protection, checkpoint creation, and successful retry in one fixture so the shared partial scan setup is not rebuilt.
+- Checkpoint write/delete failure coverage transitions one unreadable-directory fixture from an injected save failure through a successful save to an injected delete failure.
+- HEAD freshness coverage uses one two-commit fixture to prove a `--files` refresh remains stale before a `--commits HEAD` refresh marks the current head matched.
 - When a test locks a long table of equivalent key/value expectations, keep the table as data and route the repeated lookup/assertion shape through one helper so duplicate rows are visible.
 - When extractor tests repeat the same `SymbolName` / `ReferenceKind` predicate shape across positive and negative reference assertions, use a semantic assertion helper so each call site names only the behavioral differences such as container name/kind, context, line, column, or the excluded symbol set.
 - When a production comment or error string is bilingual, preserve that expectation in tests where it matters.
@@ -352,8 +444,16 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - テスト並列実行: 独立したテストクラス間ではデフォルトで有効です。SQLite pool の解放、環境変数の変更、カレントディレクトリの上書きのような process-global 状態を触るテストは、明示的な non-parallel collection に入れてください。`Console.Out` / `Console.Error` を差し替えるテストは `TestConsoleLock.Gate` で lock してください。
 - CI は `tests/CodeIndex.Tests/CodeIndex.Tests.runsettings` 経由でテストプロジェクトを実行し、VSTest の blame crash / hang 収集、45分のセッションタイムアウト、60秒の xUnit long-running 診断を有効にします。初回失敗時は suite を1回だけ再実行し、再実行で成功した場合は TRX / blame artifact と一緒に `TestResults/flaky-retry.txt` を upload して、その実行を疑わしい flaky run として扱います。TRX telemetry summary と test-result artifact upload は失敗または retry 成功 lane だけで実行し、初回で clean に成功した lane では実行しません。stream された test output も、失敗後に upload / timeout inspection が必要な場合だけ `TestResults` 配下へ書き、failure log directory もその failure path でだけ作成します。telemetry summarizer は `--configuration Release` で実行し、failure diagnostics 中に必要なら helper を build するため、全 matrix lane で TRX summary を出せます。XPlat Code Coverage の収集は `ubuntu-24.04` / `net8.0` lane に限定し、すべての active CI lane で full suite を実行しつつ collector overhead を避けます。OS coverage は production CLI target の `net8.0` で実行し、`net9.0` compatibility coverage は `ubuntu-24.04` のみに絞ります。テスト実行は locked restore と Release build の後に `--no-build` で走らせます。primary lane は audit / publish coverage のため solution 全体を restore し、その後 `tests/CodeIndex.Tests/CodeIndex.Tests.csproj` を matrix framework 向けに build します。non-primary lane は同じ per-framework build の前に、`RestoreTargetFrameworks` でその test project の matrix framework だけを restore します。CI は production 用の `8.0.413` SDK と pinned `9.0.301` SDK を全 lane に入れます。`global.json` が SDK roll-forward を無効化しており、target framework 別の restore / build 絞り込みより前に SDK 解決が走るためです。`TestResults` 出力ディレクトリは `CodeIndex.Tests.runsettings` だけが管理します。ローカルの `dev.sh coverage` も同じ所有関係に従い、2 つ目の results-directory 引数は渡しません。`ubuntu-24.04` / `net8.0` lane では test project の未使用 `net9.0` target を build しません。`net9.0` build coverage は Ubuntu compatibility lane で維持します。また、formatting verifier は `make lint` だけを使います。NuGet cache key は全 project file ではなく `packages.lock.json` と `global.json` に基づき、OS 単位の restore key で partial cache reuse も許可します。package 入力の drift は locked restore で検出しつつ、テスト用 project だけの変更では package cache を失効させません。weekly mutation workflow も pinned Stryker global tool と NuGet package を cache し、変更のない test tooling を scheduled mutation run で再インストールしないようにします。
 - CI の初回テスト実行と1回だけの retry は同じ workflow helper 経由にし、logger、blame、coverage 引数が drift しないようにしてください。PowerShell helper がテストの exit code を返す場合は、stream されたテスト出力を関数の success stream に載せず、代入で数値の exit code だけを受け取れるようにします。
+- coverage collection は primary lane の初回 test attempt だけで実行し、flaky classification の1回だけの retry では同じ test 引数を再利用しつつ coverage collector を再実行しないでください。
+- matrix test invocation は shared test helper の前に各 lane の scoped locked restore と Release build が完了しているため、`--no-build` と `--no-restore` の両方を使ってください。
+- primary-lane publish も `--no-build --no-restore` を使い、Release test project 経由で build 済みの production project output と dependency graph を再利用してください。
+- release workflow の test も solution の locked restore と Release build 後に `--no-build --no-restore` を使い、runtime lane ごとの dependency 再評価を避けてください。
+- curated release-note生成はchangelog toolのlock fileをcacheし、conditional locked restoreを1回行ってからtoolを`--no-restore`で実行してください。
 - package audit、primary-lane build/lint、coverage の収集、coverage artifact upload、publish、build artifact upload は matrix の `primary_lane` 値に揃えてください。lane の組み合わせは明示的な matrix entry で一度だけ定義し、後続 step で再計算したり exclude したりしません。
-- workflow path filter では `**.md` がすでに対象とする個別 Markdown file を重複して列挙せず、同等の push / pull-request filter を同期させます。
+- workflow path filter では `**.md` がすでに対象とする個別 Markdown file を重複して列挙せず、同等の push / pull-request filter を同期させます。Build/Test と CodeQL は focused license-policy workflow が所有する license text path も無視します。
+- test workflow は pull-request run を workflow と pull request ごとに group 化し、それ以外は一意な run ID を使ってください。古い pull-request run だけを cancel し、push、schedule、manual run は独立させます。
+- TRX telemetry summary は test project の direct reference 経由で build 済みの Release telemetry tool を再利用し、test step 後に restore/build を繰り返さないでください。
+- changelog-fragments workflow は changelog tool の lock file を使って package を cache し、locked restore を1回行ってから `dotnet run --no-restore` で検証してください。
 - focused license-policy workflow は NuGet package を cache し、`net8.0` だけを locked restore した後、dependency resolution を繰り返さないよう filtered test を `--no-restore` で実行します。
 - C# CodeQL lane は setup-dotnet の lock-file-keyed NuGet cache を使い、Actions だけの lane は SDK setup と package cache の両方を skip します。
 
@@ -364,9 +464,11 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 
 - `ChunkSplitterTests.cs`、`SymbolExtractorTests.cs`、`ReferenceExtractorTests.cs`、`SearchSnippetFormatterTests.cs`、`DbPathResolverTests.cs`、`ConsoleUiTests.cs`
   インメモリ入力中心の、純粋またはほぼ純粋な振る舞いのテスト。
+  console writer synchronization coverageは文字writeごとのsleepではなくyieldを使い、wall-clock delayを追加せずinterleavingを露出できる十分なwhole-line iterationを維持してください。
 - `SymbolExtractor*Tests.cs` と `ReferenceExtractor*Tests.cs`
   extractor のカバレッジは言語または機能領域ごとの partial test class に分割し、共有 helper は root 側の `SymbolExtractorTests` / `ReferenceExtractorTests` に残します。
   巨大 suite から繰り返しの extractor シナリオを切り出す場合は、言語、build-file 形式、protocol surface など読みやすい領域ごとの partial file にまとめ、raw substring や predicate assertion の繰り返しより小さな semantic assertion helper を優先してください。
+  pattern-config scalar-cap variantは1つのtemporary rootと上書きする1 config fileを再利用し、単一console lock内のiteration間でglobal registryをresetしてください。
   fixture が同じ kind の複数 symbol name だけを検証する場合は、言語別 partial をまたいで `AssertSymbolsContain(...)` を使ってください。line、container、subtype、return type などの metadata を検証する場合は直接 predicate を維持します。
   同様に `(reference kind, container, symbol names)` の繰り返し検証には `AssertReferencesContain(...)` を使い、flag、context、line など edge 固有 metadata の検証には predicate を維持します。
   複数の reference name が同じ kind と完全一致 source context を共有する場合は `AssertReferencesContainInContext(...)` を使い、context がより詳細な edge contract の一部にすぎない場合は直接 predicate を維持します。
@@ -380,6 +482,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   SQLite スキーマ、書き込み経路、マイグレーション、クエリ挙動のテスト。DbReader のカバレッジは search、SQL qualified name、file dependency、impact、symbol query などの query family ごとの partial suite に分割し、共有の seed 済み fixture 状態は root 側の `DbReaderTests` に残します。
   `DbSchemaConstraintTests.cs` は DB readiness check が code enum と SQLite CHECK 句の drift を検出できるよう、schema constraint と `SymbolKindCatalog`、必須 file foreign key の同期も固定します。
   hotspot ranking fixture は各 ranking threshold を跨ぐ最小 count を使ってください。structural-rank test では、raw reference 比較をわずかに超える側と symbol-count threshold をわずかに超える側を用意し、境界から大きく離れた件数まで膨らませないでください。
+  checkpoint listing cap fixture は checkpoint count cap を 1 件だけ超え、inspected-file cap は 1 checkpoint だけで超えてください。両方の cap を掛け合わせても boundary coverage は増えず、filesystem work だけが増えます。
 - `ConcurrencyTests.cs`
   WAL snapshot と shared-writer の stress test。concurrent reader/writer snapshot
   テストは reader / writer の十分な反復を観測した時点で停止し、遅い host 用に
@@ -391,9 +494,68 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   エンドツーエンドのアップグレード経路: カラム追加前のレガシー DB を用意し、`TryMigrateForRead` 経由で開いてから NULL になりうるシンボル列を触る read path（outline、シンボル検索、近傍、unused、analyze バンドル）を一通り叩き、#58 / #49 の実機失敗モードを固定する。
 - `IndexCommandRunner*Tests.cs`、`QueryCommandRunner*Tests.cs`、`ProgramCliTests.cs`、`InstallScriptTests.cs`
   CLI の引数解析、コマンド実行、installer 挙動のテスト。Index command coverage は run mode または機能領域ごとの partial suite に分割し、Query command coverage は command family ごとの partial test class に分割して、共有 console / fixture helper は一箇所に保ちます。`ProgramCliTests.cs` はグローバル引数の解釈や完全な CLI 起動フローのように subprocess 経由で確認すべき Program エントリポイント挙動を扱い、`InstallScriptTests.cs` は `install.sh` を library mode で source した bash snippet を実行して、実ネットワーク install を行わずに release installer の回帰を固定する。
+  invalid scalar input だけが異なる argument-validation variant は、case ごとの state や discovery identity が不要なら1つの database fixture を共有し、fact 内で反復してください。
+  excerpt の focus-column validation も zero と non-numeric value にこの規則を適用し、1つの indexed Markdown fixture を再利用してください。
+  inspect path-line の exact/enclosing-symbol case は1つの indexed source fixture を再利用し、read-only line query を fact 内で反復してください。
+  definition と symbols の exact-mode conflict validation は1つの空databaseとcross-command flag-pair tableを共有してください。
+  symbols compact flag/aliasとsummary-only JSON envelopeは1つのeditor-format fixtureを共有してください。
+  symbols JSON array、LSP、quickfix、SARIF location formatは1つのeditor-format fixtureを共有してください。
+  unused default-suppressionのrow、JSON count、summary-only、text count envelopeは、`--all` count controlも含めて1つのunused-symbol fixtureを共有してください。
+  unusedのdefault-suppressed JSON cursor paginationと`--all` JSON cursor paginationは1つのunused-symbol fixtureを共有してください。
+  unusedのfull JSONとcompact `--by-bucket` JSON envelopeは1つのtaxonomy fixtureを共有してください。
+  unusedのbucket、minimum-confidence、actionable confidence-alias JSON filterは1つのunused-symbol fixtureを共有してください。
+  unusedのfull-summary JSON countとbucket-filtered JSON countは1つのtaxonomy fixtureを共有してください。
+  unusedのlimited-page returned countとbucket diversificationは1つのtaxonomy fixtureを共有してください。
+  unusedのindexed-pathとunsupported-languageのzero-result schemaは1つのindexed fixtureを共有してください。
+  outlineの`size` sortとその`span` aliasは1つのranking fixtureを共有してください。
+  outlineのreference metric sortとcomplexity metric sortは1つのderived-ranking fixtureを共有してください。
+  outlineのkind sortとdefault source-order field projectionは1つのranking fixtureを共有してください。
+  depsのJSONとjson-graphのbyte-limit failureは1つのSQL graph fixtureを共有してください。
+  depsのJSON summary outputとjson-graph summary rejectionは1つのSQL graph fixtureを共有してください。
+  referencesのstale SQL contract count envelopeとresult envelopeは1つのdowngraded graph fixtureを共有してください。
+  callersとcalleesのstale SQL contract result envelopeは1つのdowngraded graph fixtureを共有してください。
+  MCP SQL graph readiness fieldとdegraded reasonはresponseごとに1回だけassertしてください。
+  MCP analyze-symbolとreferencesのstale SQL contract checkは1つのdowngraded server fixtureを共有してください。
+  MCP mixed/zero-result SQL graph metadataのassertは重複させず1回にしてください。
+  MCP depsとsymbol-hotspotsのdegraded zero resultは1つのdowngraded server fixtureを共有してください。
+  MCP unused-symbolsとsymbol-hotspotsのkind-filtered clean zero resultは1つのdowngraded server fixtureを共有してください。
+  CLI unusedのkind-filtered zero-resultとcount JSON envelopeは1つのdowngraded SQL fixtureを共有してください。
+  CLI hotspotsのunfiltered degraded zero resultとkind-filtered clean zero resultは1つのdowngraded SQL fixtureを共有してください。
+  callersのmixed-repository pure-C# result envelopeとcount envelopeは1つのdowngraded graph fixtureを共有してください。
+  MCP callersとanalyze-symbolのpure-C# checkは1つのmixed-repository downgraded server fixtureを共有してください。
+  MCP definitionのclean metadataとcallers/impactのdegraded metadataは1つのstale-contract server fixtureを共有してください。
+  deps missing-graphのbyte-limitとsummary-only zero payloadは1つのread-only fixtureを共有してください。
+  depsのJSON-only controlをnon-JSON formatで拒否する検証は1つのdata-driven theoryにしてください。
+  unusedのmissing-chunks countとdegraded reflection resultは1つのmutated fixtureを共有してください。
+  unusedのmissing-graph JSON schemaとhuman count warningは1つのempty database fixtureを共有してください。
+  unusedのJSON confidence taxonomyとhuman bucket groupingは1つのunused-symbol fixtureを共有してください。
+  Razor directive kind-filter query は1つの indexed component fixture を共有し、route、implements、attribute、layout の期待値を1つの fact 内で反復してください。
+  symbols literal-query coverage は、compact風のtextが展開されないことを確認するdouble-dash形式と明示的`--query`形式で1つの空databaseを共有してください。
+  symbols の hotspot、references、size、path ranking query は同じranking signalのread-only viewなので、1つのsymbol-sort fixtureを共有してください。
+  graph-command kind-semantics warning は references、callers、callees 全体で1つの graph-ready database を再利用してください。
+  exact-zero graph hint はscenarioごとに1つのTarget/Caller統合fixtureを使い、references、callers、calleesを反復してください。
+  C# query-range generic null-comparison regression は、どちらもenum reference漏えいがない同じ契約ならequalityとinequality形式を1つのindexed sourceに併置してください。
+  inspect reference-bundle coverageにも同じnull-comparison統合fixtureを適用し、operatorごとの個別indexingを避けてください。
+  production-runtime switch relational-pattern coverage はless-thanとgreater-thanのmethodを1 sourceに置き、CLI indexing subprocessを1回だけ実行してください。
+  generic switch-arm のguardとrelational predecessorも同様に1つのproduction-runtime fixtureを共有し、production `net8.0` targetだけで実行してください。
+  search language-alias coverage は、各filterが期待結果を1件に分離できる場合、異なる言語fileを1 databaseに置いてalias filterを反復してください。
+  option風literalのnamed-query escapingは、definition、graph、symbols、files、inspect、impact command全体で1つのindexed Probe fixtureを再利用してください。
+  JavaScript extension、YAML、batch、SQL dialectのsearch alias variantは、それぞれ1つのlanguage fixtureを再利用し、casing/spelling形式をfact内で反復してください。
+  raw FTS syntax coverage はvalid control queryと全invalid query/hint variantで1つのindexed sourceを再利用してください。
+  literalとraw FTSのcomplexity boundはlength、token count、NEAR count、lowercase operator control全体で1つのindexed sourceを再利用してください。
+  XAML、Rust、common multi-language、JavaScriptのalias setはそれぞれfixtureを1回だけ構築し、全accepted spelling/casing形式を反復してください。
+  inline comment-marker exclusionはJavaScript line/block commentとPython line commentを1 indexに置き、marker queryを反復してください。
+  search exact-mode conflict coverageは全pairwise/triple flag setで1つの空databaseを共有してください。
+  search path/exclude-pathのinvalid-glob guardは1つの空databaseを共有し、query評価前にoption nameを反復してください。
+  find long-line JSON coverageはbounded snippetとzero-width unclamped snippetで1つのtext fixtureを再利用してください。
+  excerpt location parsingとfocus dependency/range validationは、range fixtureとlong-line fixtureを含む1 databaseを再利用してください。
+  C# verbatim qualified nameとJava Unicode escapeのsearch/find canonicalizationは、言語ごとに1つのindexed sourceを共有してください。
+  TypeScriptとJavaのlanguage-alias filteringは、固有query markerで各言語結果を分離できるため1つのmulti-language databaseを共有してください。
+  Kotlin backtickとJava Unicode-escape canonicalizationは別databaseを作らず、path-filtered C# verbatim canonical fixtureを共有してください。
   `TrimmedCliTestHelper` が trimmed publish setup と published CLI subprocess execution を所有します。published CLI smoke coverage は共有の non-single-file publish を使い、test process あたり 1 回の publish cost に抑えてください。single-file test は apphost shape が別なので、明示的な per-test publish のままにします。published CLI smoke test は production CLI が `net8.0` target であることに合わせて `net8.0` test target でのみ実行し、`net9.0` では高コストな publish を繰り返さず focused な in-process test で cross-target behavior を維持します。
   installer snippet と Docker entrypoint script coverage は `ProductionCliFactAttribute` / `ProductionCliTheoryAttribute` を使い、これらの shell script が target framework 非依存で production CLI が `net8.0` target であることに合わせて `net8.0` test target でのみ実行します。
   `RunBuiltCli` / `RunCliInSubprocess` subprocess coverage は、timeout guard 付きの subprocess probe も含め、subprocess が production `net8.0` CLI に解決される場合は `ProductionRuntimeFactAttribute` / `ProductionRuntimeTheoryAttribute` を使って `net8.0` test target でのみ実行し、direct in-process command-runner test は cross-target のままにします。
+  production-runtime test が built CLI を indexed fixture の作成にだけ必要とする場合は、subprocess boundary を indexing step に残し、count/path/format variant も含め、process boundary の挙動に依存する assertion を除いて query assertion を command runner helper 経由で in-process 実行してください。
   `InstallScriptTests.RunInstallerSnippet` は bounded timeout を強制し、timeout 時は snippet の process tree を kill するため、installer 回帰は suite を hang させずに captured output 付きで失敗します。
 - `CiWorkflowTests.cs`、`ReleaseWorkflowTests.cs`、`ReleaseWorkflowTests.PackageHelpers.cs`
   CI と release workflow の契約テスト。test-result artifact、retry-output、install、Homebrew、changelog、release-payload job split、container image、SBOM、NuGet publish、secret scope、SDK pin、tool/action pin、runner/cache policy の契約も含め、繰り返しの関連する workflow/script string contract assertion は小さな grouped helper に寄せ、テスト本文が確認している契約を読み取りやすくしてください。contract が ordinal matching を明示的に必要とする場合は comparison-aware helper を使います。Release workflow の package-normalization ZIP fixture helper は `ReleaseWorkflowTests.PackageHelpers.cs` に置き、workflow assertion が workflow 契約の近くに残るようにします。
@@ -450,8 +612,20 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `McpServer*Tests.cs`
   MCP の JSON-RPC 挙動とツール出力のテスト。大きな server coverage は tool call、tool listing、protocol/session handling、error handling ごとの focused partial suite に分割し、共有の seed 済み fixture 状態は root 側の `McpServerTests` に残します。request-timeout test は固定 sleep ではなく signal-gated delay hook を使います。request を開始し、hook が始まったことを確認してから timeout response を bounded wait で待つことで、timeout response 後に in-flight action が drain されることは保ったまま、設定した timeout 分だけを待つようにします。
   stdio response-order test も同じ signal-gated pattern を使い、response serializer で sleep する代わりに synthetic transport が parse-error path を signal するようにします。
+  rate-limit-disabled coverage の繰り返し成功 call には軽量な `languages` tool を使い、limiter bypass だけの assertion で `status` の database aggregation cost を繰り返し支払わないでください。
 - `HttpMcpTransportTests.cs`
   HTTP MCP transport の挙動。認証レスポンス、warm server reuse、並行リクエスト、リクエストログを含みます。リクエストログの assertion は、独立に処理される HTTP リクエスト間の callback 順序を仮定せず、記録内容を検証してください。
+  request-log metadata の long path、long JSON-RPC ID、over-depth ID 境界は1つの sequential logger harness を共有し、callback 順序ではなく record 内容で対象を選んでください。
+  bearer-token denial variant は、共通 wire response、challenge header、redaction、request-log outcome を検証する1つの table-driven harness を共有し、hash comparison 経路を通す同長 mismatch もその表に含めてください。
+  一致する canonical と lowercase の bearer scheme は、RFC auth-scheme casing に独立 server state が不要なため1つの authenticated harness を共有してください。
+  transport disposal coverage は1つのlive event-stream lifecycleで、concurrent idempotent disposal、stream cancellation、server-loop completion、owned semaphore releaseをまとめて検証してください。
+  event-stream lifecycle coverage は1つの harness で response header、並行POST処理、oversized server-side closure、client disposal を順に検証し、production heartbeat interval ではなく短い test-owned keep-alive を使ってください。
+  event streamなしのinitialize coverageは1つのdefault harnessでexplicit protocol negotiationとdefault handshakeを検証し、event-stream notification deliveryは独立sessionを維持してください。
+  basic HTTP endpoint coverageは1つのdefault harnessでnotification 204、root methodの405/Allow、structured healthy `/healthz` responseを検証してください。
+  invalid/oversized health-provider JSON fallbackはrequest間でproviderを差し替え、1つのharnessで検証してください。
+  health degradation coverageは1つのharnessでevent-stream drop後もhealthyであることを確認し、その後response-cleanup failureを注入してstatusがdegradedへ遷移することを検証してください。
+  warm-server coverageは1つのharnessでsequential initialize/list、並行correlated ping、empty-body 204、その後のsuccessful requestを検証してください。
+  malformed/deep cancellationとdeep JSON-RPC response payloadは、out-of-band handlingを迂回する契約の検証で1つのdirect transportとqueue/read/write assertion helperを共有してください。
 - `GitHelperTests.cs`、`GitProcessRunnerTests.cs`
   worktree や commit ベース更新、direct git process runner diagnostics、git subprocess の cancellation を含む Git まわりのテスト。実 repo を作る、または real/fake git subprocess を起動するテストは `ExternalProcessFactAttribute` / `ExternalProcessTheoryAttribute` を使い、`net8.0` test target だけで実行します。純粋な `.git` metadata parsing と trusted-candidate enumeration は cross-target のままにしてください。Timeout と cancellation の wall-clock assertion は fake git script の自然完了より短く保ちつつ、macOS CI の scheduling や process cleanup の遅れを許容する余裕を持たせます。commit-ref validation 後に使う fake git script は `rev-parse --verify <ref>^{commit}` の検証対象 commit 引数を返し、timeout テストが意図した git command まで到達するようにします。
 - `WorkspaceMetadataEnricherTests.cs`
@@ -476,6 +650,10 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   bounded な CI smoke と大規模データベンチマークを扱います。`CiPerformanceSmoke_IndexAndSearchSmallFixture_StaysWithinBudget` と allocation budget guard は通常の `net8.0` suite で実行されるため production target 上の PR / CI blocking check ですが、benchmark ではなく重大な indexing/search または allocation 退行だけを拾う広めの budget を使います。10K+ の大規模テストは引き続きデフォルト Skip で、`--filter` で手動実行します。
 - `.github/scripts/run-dotnet-tests.ps1`
   `dotnet.yml` の matrix test step は、test 引数構築、coverage gating、failure log capture 用の `TestResults` path ownership、TestSessionTimeout handling、1 回だけの flaky retry classification をこのスクリプトに委譲します。workflow YAML は matrix/lane parameter wiring に限定し、script contract や artifact/summarize gating を変更するときは `CiWorkflowTests` も更新してください。
+  変換後のcoverage booleanは、大文字小文字を区別しない`CollectCoverage` string parameterとは異なる名前のlocalに保持してください。同名だとPowerShellがtyped helper呼び出し前にbooleanをstringへ戻します。
+  repository rootの`TestResults` directoryを`dotnet test`へ明示的に渡してください。そうしないとrunsettingsのpathがtest project相対で解決され、TRX/coverage outputがworkflowのtelemetry/artifact pathから分離することがあります。
+  初回attemptとflaky classification retryには別々のTRX filenameを付け、成功したretryが、その契機となったfailure evidenceを上書きしないようにしてください。
+  最適化で比較可能なslow-test evidenceを得るため、成功・失敗どちらのmatrix laneでもTRX telemetryをsummaryしてください。不要な転送時間を避けるため、result/dump artifact uploadは失敗時限定のままにします。
 - `.github/scripts/configure-windows-test-host.ps1`
   `dotnet.yml` と `release.yml` の Windows lane は、TMP/TEMP 固定と Defender 除外 setup をこのスクリプトで共有します。両 workflow の test-host performance 前提を揃えるため、スクリプトまたは workflow からの呼び出し contract を変更するときは `CiWorkflowTests` も更新してください。
 - `DbRecoveryTests.cs`
@@ -494,6 +672,12 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - 本番コードが `TimeProvider` を受け取れる場合は `ManualTimeProvider` を使い、fixture data の時刻は wall clock ではなく明示的に進めてください。ランダム入力は `TestDeterminism.CreateRandom` を使い、同じ timeline とデータを再実行できるようにします。境界付きポーリング / 最終的な条件成立のアサーションには、ローカルの `Task.Delay` loop や固定 sleep ではなく `TestDeterminism.WaitUntilAsync` または同期版の `WaitUntil` を使い、短い不在・安定性の観測には `AssertConditionRemainsTrue` を使ってください。ワーカーを同じ gate から開始したい場合は `TestDeterminism.RunConcurrentlyAsync` を使ってください。
 - 広いスナップショット風の検証より、小さなフィクスチャと明示的な assertion を優先する。例外は `--json` 出力契約の harness (`JsonOutputSnapshotTests`) で、こちらは意図的にフィールド形状全体を固定します（下記「JSON `--json` 出力 snapshot」参照）。
 - raw bytes と canonical content のような境界契約で期待値生成が重複して読みづらくなる場合は、各 assertion に低レベル式を複製せず、契約名が分かる小さな local helper に寄せてください。
+- file-indexer テストが同じ初回 index 後の normalized path と結果だけを検証する場合は、独立した file mutation を 1 回の `--files` update にまとめてください。
+- 関連する index invalidation の各中間状態を assertion する場合は 1 fixture にまとめてください。static-interface contract の追加、除去、復元、削除を同等の project 再構築へ分割しないでください。
+- cap issue lifecycle test は low/high boundary の変更ごとに issue を assertion する場合、full-scan と update の遷移で 1 つの indexed fixture を再利用してください。
+- unreadable-directory の full-scan coverage は JSON/human diagnostics、purge protection、checkpoint 作成、successful retry を 1 fixture に保ち、共通の partial scan setup を再構築しないでください。
+- checkpoint write/delete failure coverage は 1 つの unreadable-directory fixture を、注入した save failure から successful save、注入した delete failure へ遷移させてください。
+- HEAD freshness coverage は 1 つの two-commit fixture で、`--files` refresh 後は stale のまま、`--commits HEAD` refresh 後は current head が matched になることを検証してください。
 - 同種の key/value 期待値を長い表で固定するテストでは、期待値をデータとして残し、繰り返しの lookup/assertion 形は helper に通してください。重複行を見つけやすくするためです。
 - extractor テストで `SymbolName` / `ReferenceKind` の同じ predicate 形を positive / negative reference assertion の両方に繰り返す場合は、semantic assertion helper を使い、各 call site には container name/kind、context、line、column、除外 symbol set など挙動差分だけを残してください。
 - 境界を証明するテストでは、その境界をまたぐ最小の fixture を使う。1 ページ、1 chunk、1 cache、1 offset overflow で十分なら、それ以上に synthetic data を増やさない。ただし、より大きいサイズ自体が契約の一部なら例外です。

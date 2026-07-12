@@ -9,16 +9,8 @@ namespace CodeIndex.Tests;
 
 public partial class QueryCommandRunnerTests
 {
-    [Theory]
-    [InlineData(3, "Current", "property", 3, 3)]
-    [InlineData(4, "Run", "function", 4, 7)]
-    [InlineData(6, "Run", "function", 4, 7)]
-    public void RunInspect_PathLineJson_ReturnsExactOrEnclosingSymbol_Issue3915(
-        int line,
-        string expectedName,
-        string expectedKind,
-        int expectedStartLine,
-        int expectedEndLine)
+    [Fact]
+    public void RunInspect_PathLineJson_ReturnsExactAndEnclosingSymbols_Issue3915()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_path_line_symbol");
         try
@@ -40,23 +32,33 @@ public partial class QueryCommandRunnerTests
                 }
                 """);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["--path", "src/InspectTarget.cs", "--line", line.ToString(CultureInfo.InvariantCulture), "--db", dbPath, "--json", "--limit", "3"],
-                _jsonOptions));
+            var cases = new[]
+            {
+                (Line: 3, Name: "Current", Kind: "property", StartLine: 3, EndLine: 3),
+                (Line: 4, Name: "Run", Kind: "function", StartLine: 4, EndLine: 7),
+                (Line: 6, Name: "Run", Kind: "function", StartLine: 4, EndLine: 7),
+            };
 
-            using var document = ParseJsonOutput(stdout);
-            var root = document.RootElement;
-            var definition = root.GetProperty("definitions").EnumerateArray().First();
+            foreach (var testCase in cases)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                    ["--path", "src/InspectTarget.cs", "--line", testCase.Line.ToString(CultureInfo.InvariantCulture), "--db", dbPath, "--json", "--limit", "3"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal($"src/InspectTarget.cs:{line.ToString(CultureInfo.InvariantCulture)}", root.GetProperty("query").GetString());
-            Assert.Equal(expectedName, definition.GetProperty("name").GetString());
-            Assert.Equal(expectedKind, definition.GetProperty("kind").GetString());
-            Assert.Equal(expectedStartLine, definition.GetProperty("start_line").GetInt32());
-            Assert.Equal(expectedEndLine, definition.GetProperty("end_line").GetInt32());
-            Assert.NotEmpty(root.GetProperty("nearby_symbols").EnumerateArray());
-            Assert.Equal(line, root.GetProperty("source_excerpt").GetProperty("requested_start_line").GetInt32());
+                using var document = ParseJsonOutput(stdout);
+                var root = document.RootElement;
+                var definition = root.GetProperty("definitions").EnumerateArray().First();
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal($"src/InspectTarget.cs:{testCase.Line.ToString(CultureInfo.InvariantCulture)}", root.GetProperty("query").GetString());
+                Assert.Equal(testCase.Name, definition.GetProperty("name").GetString());
+                Assert.Equal(testCase.Kind, definition.GetProperty("kind").GetString());
+                Assert.Equal(testCase.StartLine, definition.GetProperty("start_line").GetInt32());
+                Assert.Equal(testCase.EndLine, definition.GetProperty("end_line").GetInt32());
+                Assert.NotEmpty(root.GetProperty("nearby_symbols").EnumerateArray());
+                Assert.Equal(testCase.Line, root.GetProperty("source_excerpt").GetProperty("requested_start_line").GetInt32());
+            }
         }
         finally
         {
@@ -1200,7 +1202,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunOutline_CompactJson_SortSizePrioritizesLargeFunctions_Issue4117()
+    public void RunOutline_SizeAndSpanSortsShareRankingFixture_Issue4117()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_sort_size_4117");
         try
@@ -1230,6 +1232,21 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("size", first.GetProperty("sort_mode").GetString());
             Assert.True(first.GetProperty("size_lines").GetInt32() > 5);
             Assert.True(first.GetProperty("complexity_score").GetDouble() > 0);
+
+            var (spanExitCode, spanStdout, spanStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/Giant.cs", "--db", dbPath, "--json", "--kind", "function", "--sort", "span", "--limit", "1", "--outline-fields", "name,size,sort_mode"],
+                _jsonOptions));
+
+            using var spanDocument = ParseJsonOutput(spanStdout);
+            var spanJson = spanDocument.RootElement;
+            var spanSymbol = Assert.Single(spanJson.GetProperty("symbols").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, spanExitCode);
+            Assert.Equal(string.Empty, spanStderr);
+            Assert.Equal("size", spanJson.GetProperty("sort").GetString());
+            Assert.Equal("BigAudit", spanSymbol.GetProperty("name").GetString());
+            Assert.Equal("size", spanSymbol.GetProperty("sort_mode").GetString());
+            Assert.True(spanSymbol.GetProperty("size_lines").GetInt32() > 5);
         }
         finally
         {
@@ -1238,7 +1255,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunOutline_Json_SortReferencesProjectsTriageFields_Issue4117()
+    public void RunOutline_ReferenceAndComplexitySortsShareFixture_Issue4117()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_sort_refs_4117");
         try
@@ -1263,35 +1280,21 @@ public partial class QueryCommandRunnerTests
             Assert.True(symbol.GetProperty("complexity_score").GetDouble() > symbol.GetProperty("reference_count").GetInt32());
             Assert.Equal(new[] { "name", "reference_count", "size_lines", "complexity_score", "sort_mode" }, json.GetProperty("selected_fields").EnumerateArray().Select(item => item.GetString()).ToArray());
             Assert.Equal(new[] { "name", "reference_count", "size_lines", "complexity_score", "sort_mode" }, symbol.EnumerateObject().Select(property => property.Name).ToArray());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunOutline_Json_SortComplexityPrioritizesComplexFunctions_Issue4117()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_sort_complexity_4117");
-        try
-        {
-            var dbPath = CreateOutlineSortFixtureDb(projectRoot);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+            var (complexityExitCode, complexityStdout, complexityStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
                 ["src/Giant.cs", "--db", dbPath, "--json", "--kind", "function", "--sort", "complexity", "--limit", "1", "--outline-fields", "name,size,complexity,sort_mode"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var symbol = Assert.Single(json.GetProperty("symbols").EnumerateArray());
+            using var complexityDocument = ParseJsonOutput(complexityStdout);
+            var complexityJson = complexityDocument.RootElement;
+            var complexitySymbol = Assert.Single(complexityJson.GetProperty("symbols").EnumerateArray());
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("complexity", json.GetProperty("sort").GetString());
-            Assert.Equal("BigAudit", symbol.GetProperty("name").GetString());
-            Assert.Equal("complexity", symbol.GetProperty("sort_mode").GetString());
-            Assert.True(symbol.GetProperty("complexity_score").GetDouble() > 100);
+            Assert.Equal(CommandExitCodes.Success, complexityExitCode);
+            Assert.Equal(string.Empty, complexityStderr);
+            Assert.Equal("complexity", complexityJson.GetProperty("sort").GetString());
+            Assert.Equal("BigAudit", complexitySymbol.GetProperty("name").GetString());
+            Assert.Equal("complexity", complexitySymbol.GetProperty("sort_mode").GetString());
+            Assert.True(complexitySymbol.GetProperty("complexity_score").GetDouble() > 100);
         }
         finally
         {
@@ -1300,7 +1303,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunOutline_Json_SortKindPrioritizesKindBeforeSourceOrder_Issue4117()
+    public void RunOutline_KindAndSourceSortsShareProjectionFixture_Issue4117()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_sort_kind_4117");
         try
@@ -1321,66 +1324,23 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("class", symbol.GetProperty("kind").GetString());
             Assert.Equal("Giant", symbol.GetProperty("name").GetString());
             Assert.Equal("kind", symbol.GetProperty("sort_mode").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunOutline_Json_SortSpanAliasUsesSizeRanking_Issue4117()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_sort_span_alias_4117");
-        try
-        {
-            var dbPath = CreateOutlineSortFixtureDb(projectRoot);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
-                ["src/Giant.cs", "--db", dbPath, "--json", "--kind", "function", "--sort", "span", "--limit", "1", "--outline-fields", "name,size,sort_mode"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var symbol = Assert.Single(json.GetProperty("symbols").EnumerateArray());
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("size", json.GetProperty("sort").GetString());
-            Assert.Equal("BigAudit", symbol.GetProperty("name").GetString());
-            Assert.Equal("size", symbol.GetProperty("sort_mode").GetString());
-            Assert.True(symbol.GetProperty("size_lines").GetInt32() > 5);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunOutline_Json_OutlineFieldsProjectDerivedMetadataWithoutSort_Issue4117()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_fields_derived_4117");
-        try
-        {
-            var dbPath = CreateOutlineSortFixtureDb(projectRoot);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+            var (sourceExitCode, sourceStdout, sourceStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
                 ["src/Giant.cs", "--db", dbPath, "--json", "--kind", "function", "--outline-fields", "name,size,sort_mode", "--limit", "1"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var symbol = Assert.Single(json.GetProperty("symbols").EnumerateArray());
+            using var sourceDocument = ParseJsonOutput(sourceStdout);
+            var sourceJson = sourceDocument.RootElement;
+            var sourceSymbol = Assert.Single(sourceJson.GetProperty("symbols").EnumerateArray());
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.False(json.TryGetProperty("sort", out _));
-            Assert.Equal("SmallHot", symbol.GetProperty("name").GetString());
-            Assert.Equal(1, symbol.GetProperty("size_lines").GetInt32());
-            Assert.Equal("source", symbol.GetProperty("sort_mode").GetString());
-            Assert.Equal(new[] { "name", "size_lines", "sort_mode" }, json.GetProperty("selected_fields").EnumerateArray().Select(item => item.GetString()).ToArray());
-            Assert.Equal(new[] { "name", "size_lines", "sort_mode" }, symbol.EnumerateObject().Select(property => property.Name).ToArray());
+            Assert.Equal(CommandExitCodes.Success, sourceExitCode);
+            Assert.Equal(string.Empty, sourceStderr);
+            Assert.False(sourceJson.TryGetProperty("sort", out _));
+            Assert.Equal("SmallHot", sourceSymbol.GetProperty("name").GetString());
+            Assert.Equal(1, sourceSymbol.GetProperty("size_lines").GetInt32());
+            Assert.Equal("source", sourceSymbol.GetProperty("sort_mode").GetString());
+            Assert.Equal(new[] { "name", "size_lines", "sort_mode" }, sourceJson.GetProperty("selected_fields").EnumerateArray().Select(item => item.GetString()).ToArray());
+            Assert.Equal(new[] { "name", "size_lines", "sort_mode" }, sourceSymbol.EnumerateObject().Select(property => property.Name).ToArray());
         }
         finally
         {
@@ -5115,17 +5075,15 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
-    [InlineData("!=")]
-    [InlineData("==")]
-    public void RunInspect_ExactJson_CSharpQueryRangeVariableGenericAsNullComparisonDoesNotLeakEnumReferenceBundle(string comparisonOperator)
+    [Fact]
+    public void RunInspect_ExactJson_CSharpQueryRangeVariableGenericNullComparisonsDoNotLeakEnumReferenceBundle()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_query_runner_inspect_query_generic_as_null_{comparisonOperator switch { "!=" => "not_equal", "==" => "equal_equal", _ => "unknown" }}");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_query_generic_as_null");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
-                $$"""
+                """
                 using System.Collections.Generic;
                 using System.Linq;
 
@@ -5143,10 +5101,16 @@ public partial class QueryCommandRunnerTests
 
                 public sealed class Uses
                 {
-                    public int Read(IEnumerable<Holder> items)
+                    public int ReadNotEqual(IEnumerable<Holder> items)
                     {
                         return (from Status in items
-                                select Status as Dictionary<int, int> {{comparisonOperator}} null ? Status.Ready : 0).First();
+                                select Status as Dictionary<int, int> != null ? Status.Ready : 0).First();
+                    }
+
+                    public int ReadEqual(IEnumerable<Holder> items)
+                    {
+                        return (from Status in items
+                                select Status as Dictionary<int, int> == null ? Status.Ready : 0).First();
                     }
                 }
                 """);

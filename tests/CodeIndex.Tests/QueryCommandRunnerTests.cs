@@ -3753,16 +3753,16 @@ public partial class QueryCommandRunnerTests
 
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
         var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-        var (interfaceExitCode, interfaceStdout, interfaceStderr) = RunBuiltCli(
-            ["symbols", "StaticVirt", "--db", dbPath, "--json", "--kind", "event", "--exact-name", "--lang", "csharp"]);
-        var (structPropertyExitCode, structPropertyStdout, structPropertyStderr) = RunBuiltCli(
-            ["symbols", "P", "--db", dbPath, "--json", "--kind", "property", "--exact-name", "--lang", "csharp"]);
-        var (structEventExitCode, structEventStdout, structEventStderr) = RunBuiltCli(
-            ["symbols", "E", "--db", dbPath, "--json", "--kind", "event", "--exact-name", "--lang", "csharp"]);
-        var (outlineExitCode, outlineStdout, outlineStderr) = RunBuiltCli(
-            ["outline", "src/fixture.cs", "--db", dbPath, "--json"]);
-        var (inspectExitCode, inspectStdout, inspectStderr) = RunBuiltCli(
-            ["inspect", "StaticVirt", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"]);
+        var (interfaceExitCode, interfaceStdout, interfaceStderr) = RunSymbolsInProcess(
+            "StaticVirt", "--db", dbPath, "--json", "--kind", "event", "--exact-name", "--lang", "csharp");
+        var (structPropertyExitCode, structPropertyStdout, structPropertyStderr) = RunSymbolsInProcess(
+            "P", "--db", dbPath, "--json", "--kind", "property", "--exact-name", "--lang", "csharp");
+        var (structEventExitCode, structEventStdout, structEventStderr) = RunSymbolsInProcess(
+            "E", "--db", dbPath, "--json", "--kind", "event", "--exact-name", "--lang", "csharp");
+        var (outlineExitCode, outlineStdout, outlineStderr) = RunOutlineInProcess(
+            "src/fixture.cs", "--db", dbPath, "--json");
+        var (inspectExitCode, inspectStdout, inspectStderr) = RunInspectInProcess(
+            "StaticVirt", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp");
 
         var interfaceRow = Assert.Single(ParseJsonLines(interfaceStdout)).RootElement;
         var structPropertyRow = Assert.Single(ParseJsonLines(structPropertyStdout)).RootElement;
@@ -5100,11 +5100,14 @@ public partial class QueryCommandRunnerTests
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (referencesCountExitCode, referencesCountStdout, referencesCountStderr) = RunBuiltCli(["references", "$primary", "--db", dbPath, "--json", "--lang", "css", "--exact-name", "--count"]);
-            var (callersExitCode, callersStdout, callersStderr) = RunBuiltCli(["callers", "$primary", "--db", dbPath, "--json", "--lang", "css", "--exact-name"]);
-            var (callersCountExitCode, callersCountStdout, callersCountStderr) = RunBuiltCli(["callers", "$primary", "--db", dbPath, "--json", "--lang", "css", "--exact-name", "--count"]);
-            var (calleesExitCode, calleesStdout, calleesStderr) = RunBuiltCli(["callees", "$rounded", "--db", dbPath, "--json", "--lang", "css", "--exact-name"]);
-            var (calleesCountExitCode, calleesCountStdout, calleesCountStderr) = RunBuiltCli(["callees", "$rounded", "--db", dbPath, "--json", "--lang", "css", "--exact-name", "--count"]);
+            var (referencesCountExitCode, referencesCountStdout, referencesCountStderr) = RunReferencesInProcess(
+                "$primary", dbPath, "css", true, "--count");
+            var (callersExitCode, callersStdout, callersStderr) = RunCallersInProcess("$primary", dbPath, "css");
+            var (callersCountExitCode, callersCountStdout, callersCountStderr) = RunCallersInProcess(
+                "$primary", dbPath, "css", true, "--count");
+            var (calleesExitCode, calleesStdout, calleesStderr) = RunCalleesInProcess("$rounded", dbPath, "css");
+            var (calleesCountExitCode, calleesCountStdout, calleesCountStderr) = RunCalleesInProcess(
+                "$rounded", dbPath, "css", true, "--count");
 
             using var referencesCountDocument = ParseJsonOutput(referencesCountStdout);
             using var callersCountDocument = ParseJsonOutput(callersCountStdout);
@@ -5440,18 +5443,10 @@ public partial class QueryCommandRunnerTests
 
 
 
-    [Theory]
-    [InlineData("definition")]
-    [InlineData("references")]
-    [InlineData("callers")]
-    [InlineData("callees")]
-    [InlineData("symbols")]
-    [InlineData("files")]
-    [InlineData("inspect")]
-    [InlineData("impact")]
-    public void QueryCommands_AcceptNamedQueryEscapeForOptionLookingLiterals_Issue923(string command)
+    [Fact]
+    public void QueryCommands_AcceptNamedQueryEscapeForOptionLookingLiterals_Issue923()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_issue923_named_query_{command}");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue923_named_query");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
@@ -5461,12 +5456,15 @@ public partial class QueryCommandRunnerTests
                 "csharp",
                 "namespace Issue923; public class Probe { public void Run() { } } // --path\n");
 
-            var args = new[] { "--query", "--path", "--db", dbPath, "--limit", "1" };
-            var (exitCode, _, stderr) = CaptureConsole(() => RunIssue923NamedQueryCommand(command, args));
+            foreach (var command in new[] { "definition", "references", "callers", "callees", "symbols", "files", "inspect", "impact" })
+            {
+                var args = new[] { "--query", "--path", "--db", dbPath, "--limit", "1" };
+                var (exitCode, _, stderr) = CaptureConsole(() => RunIssue923NamedQueryCommand(command, args));
 
-            Assert.NotEqual(CommandExitCodes.UsageError, exitCode);
-            Assert.DoesNotContain("requires a value", stderr);
-            Assert.DoesNotContain("is not supported", stderr);
+                Assert.NotEqual(CommandExitCodes.UsageError, exitCode);
+                Assert.DoesNotContain("requires a value", stderr);
+                Assert.DoesNotContain("is not supported", stderr);
+            }
         }
         finally
         {
@@ -5858,11 +5856,9 @@ public partial class QueryCommandRunnerTests
             : [query, "--db", dbPath, "--json", "--exact", "--limit", limit.ToString()];
     }
 
-    private static void SeedGraphExactZeroFixture(string dbPath, string command)
+    private static void SeedGraphExactZeroFixture(string dbPath)
     {
-        var content = command switch
-        {
-            "references" or "callers" => """
+        const string content = """
                 public class App
                 {
                     public void TargetWork1() { }
@@ -5880,11 +5876,7 @@ public partial class QueryCommandRunnerTests
                     public void Caller5() { TargetWork5(); }
                     public void Caller6() { TargetWork6(); }
                     public void Caller7() { TargetWork7(); }
-                }
-                """,
-            "callees" => """
-                public class App
-                {
+
                     public void Called1() { }
                     public void Called2() { }
                     public void Called3() { }
@@ -5901,9 +5893,7 @@ public partial class QueryCommandRunnerTests
                     public void CallerWork6() { Called6(); }
                     public void CallerWork7() { Called7(); }
                 }
-                """,
-            _ => throw new ArgumentOutOfRangeException(nameof(command), command, "Unsupported graph command"),
-        };
+                """;
 
         TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", content);
         using var db = new DbContext(dbPath);
@@ -6096,6 +6086,55 @@ public partial class QueryCommandRunnerTests
         process.WaitForExit();
         return (process.ExitCode, stdOut, stdErr);
     }
+
+    private (int ExitCode, string StdOut, string StdErr) RunReferencesInProcess(
+        string query,
+        string dbPath,
+        string lang = "sql",
+        bool exactName = true,
+        params string[] extraArgs)
+        => RunNamedQueryInProcess(QueryCommandRunner.RunReferences, query, dbPath, lang, exactName, extraArgs);
+
+    private (int ExitCode, string StdOut, string StdErr) RunCallersInProcess(
+        string query,
+        string dbPath,
+        string lang = "csharp",
+        bool exactName = true,
+        params string[] extraArgs)
+        => RunNamedQueryInProcess(QueryCommandRunner.RunCallers, query, dbPath, lang, exactName, extraArgs);
+
+    private (int ExitCode, string StdOut, string StdErr) RunCalleesInProcess(
+        string query,
+        string dbPath,
+        string lang = "csharp",
+        bool exactName = true,
+        params string[] extraArgs)
+        => RunNamedQueryInProcess(QueryCommandRunner.RunCallees, query, dbPath, lang, exactName, extraArgs);
+
+    private (int ExitCode, string StdOut, string StdErr) RunNamedQueryInProcess(
+        Func<string[], JsonSerializerOptions, int> command,
+        string query,
+        string dbPath,
+        string lang,
+        bool exactName,
+        params string[] extraArgs)
+    {
+        var args = new List<string> { query, "--db", dbPath, "--json", "--lang", lang };
+        if (exactName)
+            args.Add("--exact-name");
+        args.AddRange(extraArgs);
+
+        return CaptureConsole(() => command([.. args], _jsonOptions));
+    }
+
+    private (int ExitCode, string StdOut, string StdErr) RunSymbolsInProcess(params string[] args)
+        => CaptureConsole(() => QueryCommandRunner.RunSymbols(args, _jsonOptions));
+
+    private (int ExitCode, string StdOut, string StdErr) RunOutlineInProcess(params string[] args)
+        => CaptureConsole(() => QueryCommandRunner.RunOutline(args, _jsonOptions));
+
+    private (int ExitCode, string StdOut, string StdErr) RunInspectInProcess(params string[] args)
+        => CaptureConsole(() => QueryCommandRunner.RunInspect(args, _jsonOptions));
 
     private static void InvokeWriteDatabaseOpenFailure(Exception exception)
     {

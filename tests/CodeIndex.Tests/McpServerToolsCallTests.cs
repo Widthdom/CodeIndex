@@ -1849,7 +1849,7 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsCall_AnalyzeSymbol_StaleSqlGraphContractIncludesDegradedState()
+    public void ToolsCall_AnalyzeAndReferencesShareStaleSqlGraphFixture()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_analyze_symbol_sql_graph_contract");
         try
@@ -1863,9 +1863,15 @@ public partial class McpServerTests
             var structured = response["result"]!["structuredContent"]!;
 
             Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
-            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
             Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
-            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
+
+            var referencesRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"references","arguments":{"query":"fn_Target","lang":"sql"}}}""")!;
+            var referencesResponse = server.HandleMessage(referencesRequest)!;
+            var referencesStructured = referencesResponse["result"]!["structuredContent"]!;
+
+            Assert.Equal(1, referencesStructured["count"]!.GetValue<int>());
+            Assert.False(referencesStructured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.Contains("sql_graph_contract_ready=false", referencesStructured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
         }
         finally
         {
@@ -1874,33 +1880,7 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsCall_References_StaleSqlGraphContractIncludesDegradedState()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_references_sql_graph_contract");
-        try
-        {
-            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
-            DowngradeSqlGraphContractRows(dbPath);
-            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
-
-            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"fn_Target","lang":"sql"}}}""")!;
-            var response = server.HandleMessage(request)!;
-            var structured = response["result"]!["structuredContent"]!;
-
-            Assert.Equal(1, structured["count"]!.GetValue<int>());
-            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
-            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
-            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
-            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void ToolsCall_Callers_MixedRepoStaleSqlGraphContractDoesNotDegradePureCSharpQuery()
+    public void ToolsCall_CallersAndAnalyzeShareMixedRepoCSharpFixture()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_callers_mixed_sql_graph_contract");
         try
@@ -1915,9 +1895,14 @@ public partial class McpServerTests
 
             Assert.Equal(1, structured["count"]!.GetValue<int>());
             Assert.Null(structured["sql_graph_contract_ready"]);
-            Assert.Null(structured["sql_graph_contract_ready"]);
             Assert.Null(structured["sql_graph_contract_degraded_reason"]);
-            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
+
+            var analyzeRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"N","exact":true}}}""")!;
+            var analyzeResponse = server.HandleMessage(analyzeRequest)!;
+            var analyzeStructured = analyzeResponse["result"]!["structuredContent"]!;
+
+            Assert.Null(analyzeStructured["sql_graph_contract_ready"]);
+            Assert.Null(analyzeStructured["sql_graph_contract_degraded_reason"]);
         }
         finally
         {
@@ -3611,7 +3596,7 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsCall_Definition_DoesNotReportSqlGraphContractDegraded()
+    public void ToolsCall_DefinitionAndGraphToolsShareStaleContractFixture()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_definition_sql_graph_contract");
         try
@@ -3626,9 +3611,7 @@ public partial class McpServerTests
 
             Assert.Equal(1, definitionStructured["count"]!.GetValue<int>());
             Assert.Null(definitionStructured["sql_graph_contract_ready"]);
-            Assert.Null(definitionStructured["sql_graph_contract_ready"]);
             Assert.Null(definitionStructured["degraded"]);
-            Assert.Null(definitionStructured["sql_graph_contract_degraded_reason"]);
             Assert.Null(definitionStructured["sql_graph_contract_degraded_reason"]);
 
             var callersRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"callers","arguments":{"query":"dbo.fn_Target","lang":"sql","exact":true}}}""")!;
@@ -3636,9 +3619,15 @@ public partial class McpServerTests
             var callersStructured = callersResponse["result"]!["structuredContent"]!;
 
             Assert.False(callersStructured["sql_graph_contract_ready"]!.GetValue<bool>());
-            Assert.False(callersStructured["sql_graph_contract_ready"]!.GetValue<bool>());
             Assert.NotNull(callersStructured["sql_graph_contract_degraded_reason"]);
-            Assert.NotNull(callersStructured["sql_graph_contract_degraded_reason"]);
+
+            var impactRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"fn_Target","lang":"sql"}}}""")!;
+            var impactResponse = server.HandleMessage(impactRequest)!;
+            var impactStructured = impactResponse["result"]!["structuredContent"]!;
+
+            Assert.Equal(1, impactStructured["count"]!.GetValue<int>());
+            Assert.False(impactStructured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.Contains("sql_graph_contract_ready=false", impactStructured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
         }
         finally
         {
@@ -3647,58 +3636,7 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsCall_ImpactAnalysis_StaleSqlGraphContractIncludesDegradedState()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_impact_sql_graph_contract");
-        try
-        {
-            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
-            DowngradeSqlGraphContractRows(dbPath);
-            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
-
-            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"fn_Target","lang":"sql"}}}""")!;
-            var response = server.HandleMessage(request)!;
-            var structured = response["result"]!["structuredContent"]!;
-
-            Assert.Equal(1, structured["count"]!.GetValue<int>());
-            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
-            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
-            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
-            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void ToolsCall_AnalyzeSymbol_MixedRepoStaleSqlGraphContractDoesNotDegradePureCSharpBundle()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_analyze_symbol_mixed_sql_graph_contract");
-        try
-        {
-            var dbPath = CreateMixedSqlGraphContractFixtureDb(projectRoot);
-            DowngradeSqlGraphContractRows(dbPath);
-            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
-
-            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"N","exact":true}}}""")!;
-            var response = server.HandleMessage(request)!;
-            var structured = response["result"]!["structuredContent"]!;
-
-            Assert.Null(structured["sql_graph_contract_ready"]);
-            Assert.Null(structured["sql_graph_contract_ready"]);
-            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
-            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void ToolsCall_Deps_ZeroResultSqlScopeStillIncludesDegradedState()
+    public void ToolsCall_DepsAndHotspotsShareDegradedZeroResultFixture()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_deps_zero_sql_graph_contract");
         try
@@ -3713,9 +3651,15 @@ public partial class McpServerTests
 
             Assert.Equal(0, structured["count"]!.GetValue<int>());
             Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
-            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
             Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
-            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
+
+            var hotspotsRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{}}}""")!;
+            var hotspotsResponse = server.HandleMessage(hotspotsRequest)!;
+            var hotspotsStructured = hotspotsResponse["result"]!["structuredContent"]!;
+
+            Assert.Equal(0, hotspotsStructured["count"]!.GetValue<int>());
+            Assert.False(hotspotsStructured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.Contains("sql_graph_contract_ready=false", hotspotsStructured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
         }
         finally
         {
@@ -3815,33 +3759,7 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsCall_Hotspots_ZeroResultSqlScopeStillIncludesDegradedState()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_hotspots_zero_sql_graph_contract");
-        try
-        {
-            var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
-            DowngradeSqlGraphContractVersion(dbPath);
-            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
-
-            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{}}}""")!;
-            var response = server.HandleMessage(request)!;
-            var structured = response["result"]!["structuredContent"]!;
-
-            Assert.Equal(0, structured["count"]!.GetValue<int>());
-            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
-            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
-            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
-            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void ToolsCall_UnusedSymbols_ZeroResultStaysCleanWhenSqlSymbolsCannotMatchKind()
+    public void ToolsCall_UnusedAndHotspotsShareCleanZeroResultFixture()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_unused_zero_sql_graph_contract");
         try
@@ -3856,36 +3774,16 @@ public partial class McpServerTests
 
             Assert.Equal(0, structured["count"]!.GetValue<int>());
             Assert.Null(structured["sql_graph_contract_ready"]);
-            Assert.Null(structured["sql_graph_contract_ready"]);
-            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
             Assert.Null(structured["sql_graph_contract_degraded_reason"]);
             Assert.Null(structured["degraded"]);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void ToolsCall_SymbolHotspots_ZeroResultStaysCleanWhenSqlSymbolsCannotMatchKind()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_hotspots_zero_sql_graph_contract");
-        try
-        {
-            var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
-            DowngradeSqlGraphContractVersion(dbPath);
-            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var hotspotsRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"kind":"class"}}}""")!;
+            var hotspotsResponse = server.HandleMessage(hotspotsRequest)!;
+            var hotspotsStructured = hotspotsResponse["result"]!["structuredContent"]!;
 
-            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"kind":"class"}}}""")!;
-            var response = server.HandleMessage(request)!;
-            var structured = response["result"]!["structuredContent"]!;
-
-            Assert.Equal(0, structured["count"]!.GetValue<int>());
-            Assert.Null(structured["sql_graph_contract_ready"]);
-            Assert.Null(structured["sql_graph_contract_ready"]);
-            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
-            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
+            Assert.Equal(0, hotspotsStructured["count"]!.GetValue<int>());
+            Assert.Null(hotspotsStructured["sql_graph_contract_ready"]);
+            Assert.Null(hotspotsStructured["sql_graph_contract_degraded_reason"]);
         }
         finally
         {
@@ -9404,7 +9302,7 @@ public partial class McpServerTests
         // 既定（環境変数なし）では #1560 以前と同じ挙動で、stdio 単一ユーザーは影響を受けない。
         for (var i = 0; i < 5; i++)
         {
-            var request = JsonNode.Parse($"{{\"jsonrpc\":\"2.0\",\"id\":{i},\"method\":\"tools/call\",\"params\":{{\"name\":\"status\"}}}}")!;
+            var request = JsonNode.Parse($"{{\"jsonrpc\":\"2.0\",\"id\":{i},\"method\":\"tools/call\",\"params\":{{\"name\":\"languages\"}}}}")!;
             var response = _server.HandleMessage(request)!;
             Assert.Null(response["error"]);
         }

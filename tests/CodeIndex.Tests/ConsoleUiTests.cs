@@ -553,11 +553,11 @@ public class ConsoleUiTests
     [Fact]
     public void EnsureConsoleWritersSynchronized_SerializesConcurrentWholeStringWrites()
     {
-        using var output = new SlowChunkingTextWriter();
+        using var output = new YieldingChunkingTextWriter();
         using var capture = ConsoleCapture.Start(output, error: null);
         ConsoleUi.EnsureConsoleWritersSynchronized();
 
-        const int iterations = 8;
+        const int iterations = 32;
         var left = new Thread(() =>
         {
             for (var i = 0; i < iterations; i++)
@@ -2306,7 +2306,7 @@ public class ConsoleUiTests
         }
     }
 
-    private sealed class SlowChunkingTextWriter : TextWriter
+    private sealed class YieldingChunkingTextWriter : TextWriter
     {
         private readonly StringBuilder builder = new();
 
@@ -2315,7 +2315,7 @@ public class ConsoleUiTests
         public override void Write(char value)
         {
             builder.Append(value);
-            Thread.Sleep(1);
+            Thread.Yield();
         }
 
         public override string ToString() => builder.ToString();

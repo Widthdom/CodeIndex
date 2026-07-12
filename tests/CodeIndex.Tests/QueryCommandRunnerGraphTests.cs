@@ -37,7 +37,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunDeps_JsonSummaryOnly_OmitsEdgesAndEmitsProgress_Issue4112()
+    public void RunDeps_JsonSummaryModesShareGraphFixture_Issues4112And4353()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_summary_only");
         try
@@ -59,6 +59,15 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("Progress: deps", stderr);
             Assert.Contains("phase=read_edges", stderr);
             Assert.Contains("phase=write_output", stderr);
+
+            var (graphExitCode, graphStdout, graphStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--format", "json-graph", "--summary-only", "--limit", "80", "--lang", "sql"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, graphExitCode);
+            Assert.Equal(string.Empty, graphStdout);
+            Assert.Contains("summary-only is not supported with --format json-graph", graphStderr);
+            Assert.DoesNotContain("Progress: deps", graphStderr);
         }
         finally
         {
@@ -67,7 +76,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunDeps_JsonMaxBytes_FailsBeforeWritingPayload_Issue4112()
+    public void RunDeps_JsonFormatsShareMaxBytesFixture_Issue4112()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_max_json_bytes");
         try
@@ -83,29 +92,16 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("deps JSON output is", stderr);
             Assert.Contains("exceeds --max-json-bytes 1", stderr);
             Assert.Contains("Usage: cdidx deps", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunDeps_JsonGraphSummaryOnly_FailsBeforeGraphMaterialization_Issue4353()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_json_graph_summary_only");
-        try
-        {
-            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--format", "json-graph", "--summary-only", "--limit", "80", "--lang", "sql"],
+            var (graphExitCode, graphStdout, graphStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--format", "json-graph", "--max-json-bytes", "1", "--lang", "sql"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("summary-only is not supported with --format json-graph", stderr);
-            Assert.DoesNotContain("Progress: deps", stderr);
+            Assert.Equal(CommandExitCodes.UsageError, graphExitCode);
+            Assert.Equal(string.Empty, graphStdout);
+            Assert.Contains("deps JSON output is", graphStderr);
+            Assert.Contains("exceeds --max-json-bytes 1", graphStderr);
+            Assert.Contains("Usage: cdidx deps", graphStderr);
         }
         finally
         {
@@ -154,31 +150,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunDeps_JsonGraphMaxBytes_FailsBeforeWritingPayload_Issue4112()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_json_graph_max_json_bytes");
-        try
-        {
-            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--format", "json-graph", "--max-json-bytes", "1", "--lang", "sql"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("deps JSON output is", stderr);
-            Assert.Contains("exceeds --max-json-bytes 1", stderr);
-            Assert.Contains("Usage: cdidx deps", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunDeps_JsonMaxBytes_AppliesToMissingGraphZeroPayload_Issue4112()
+    public void RunDeps_MissingGraphJsonModesShareZeroPayloadFixture_Issue4112()
     {
         var (projectRoot, readOnlyUri) = CreateReadOnlyMissingGraphTableDb("cdidx_deps_missing_graph_max_json_bytes");
         try
@@ -192,31 +164,19 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("deps JSON output is", stderr);
             Assert.Contains("exceeds --max-json-bytes 1", stderr);
             Assert.Contains("Usage: cdidx deps", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunDeps_JsonSummaryOnly_OmitsEdgesForMissingGraphZeroPayload_Issue4112()
-    {
-        var (projectRoot, readOnlyUri) = CreateReadOnlyMissingGraphTableDb("cdidx_deps_missing_graph_summary_only");
-        try
-        {
-            var (exitCode, stdout, _) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            var (summaryExitCode, summaryStdout, _) = CaptureConsole(() => QueryCommandRunner.RunDeps(
                 ["--db", readOnlyUri, "--json", "--summary-only"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+            using var summaryDocument = ParseJsonOutput(summaryStdout);
+            var summaryJson = summaryDocument.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.True(json.GetProperty("summary_only").GetBoolean());
-            Assert.True(json.GetProperty("degraded").GetBoolean());
-            Assert.False(json.TryGetProperty("edges", out _));
+            Assert.Equal(CommandExitCodes.Success, summaryExitCode);
+            Assert.Equal(0, summaryJson.GetProperty("count").GetInt32());
+            Assert.True(summaryJson.GetProperty("summary_only").GetBoolean());
+            Assert.True(summaryJson.GetProperty("degraded").GetBoolean());
+            Assert.False(summaryJson.TryGetProperty("edges", out _));
         }
         finally
         {
@@ -251,29 +211,25 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
-    public void RunDeps_SummaryOnlyWithDotFormat_IsRejected_Issue4112()
+    [Theory]
+    [InlineData("dot", "--summary-only", null, "--summary-only is only supported with deps JSON output")]
+    [InlineData("graphml", "--max-json-bytes", "1024", "--max-json-bytes is only supported with deps JSON output")]
+    public void RunDeps_JsonOnlyControlsRejectNonJsonFormats_Issue4112(
+        string format,
+        string option,
+        string? value,
+        string expectedError)
     {
+        var args = value is null
+            ? new[] { "--json", "--format", format, option }
+            : new[] { "--json", "--format", format, option, value };
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-            ["--json", "--format", "dot", "--summary-only"],
+            args,
             _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Equal(string.Empty, stdout);
-        Assert.Contains("--summary-only is only supported with deps JSON output", stderr);
-        Assert.Contains("Usage: cdidx deps", stderr);
-    }
-
-    [Fact]
-    public void RunDeps_MaxJsonBytesWithGraphMlFormat_IsRejected_Issue4112()
-    {
-        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-            ["--json", "--format", "graphml", "--max-json-bytes", "1024"],
-            _jsonOptions));
-
-        Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Equal(string.Empty, stdout);
-        Assert.Contains("--max-json-bytes is only supported with deps JSON output", stderr);
+        Assert.Contains(expectedError, stderr);
         Assert.Contains("Usage: cdidx deps", stderr);
     }
 
@@ -570,30 +526,30 @@ public partial class QueryCommandRunnerTests
 
 
 
-    [Theory]
-    [InlineData("references", "MissingSymbol")]
-    [InlineData("callers", "MissingSymbol")]
-    [InlineData("callees", "MissingSymbol")]
-    public void GraphCommands_SymbolKindArgumentWarnsAboutReferenceKindSemantics(string command, string query)
+    [Fact]
+    public void GraphCommands_SymbolKindArgumentWarnsAboutReferenceKindSemantics()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_{command}_kind_warning");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_graph_kind_warning");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             MarkGraphAndFoldReady(dbPath);
 
-            var (exitCode, _, stderr) = CaptureConsole(() => RunGraphCommand(
-                command,
-                [query, "--db", dbPath, "--kind", "class"],
-                _jsonOptions));
+            foreach (var command in new[] { "references", "callers", "callees" })
+            {
+                var (exitCode, _, stderr) = CaptureConsole(() => RunGraphCommand(
+                    command,
+                    ["MissingSymbol", "--db", dbPath, "--kind", "class"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Contains("symbol kind", stderr);
-            Assert.Contains("filters by reference kind", stderr);
-            Assert.Contains("call", stderr);
-            Assert.Contains("friend", stderr);
-            Assert.Contains("instantiate", stderr);
-            Assert.Contains("subscribe", stderr);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Contains("symbol kind", stderr);
+                Assert.Contains("filters by reference kind", stderr);
+                Assert.Contains("call", stderr);
+                Assert.Contains("friend", stderr);
+                Assert.Contains("instantiate", stderr);
+                Assert.Contains("subscribe", stderr);
+            }
         }
         finally
         {
@@ -830,30 +786,30 @@ public partial class QueryCommandRunnerTests
 
 
 
-    [Theory]
-    [InlineData("references")]
-    [InlineData("callers")]
-    [InlineData("callees")]
-    public void GraphCommands_ExactZeroJson_RespectRequestedLimitAndCapSamples(string command)
+    [Fact]
+    public void GraphCommands_ExactZeroJson_RespectRequestedLimitAndCapSamples()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_query_runner_{command}_exact_zero_limit");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_graph_exact_zero_limit");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            SeedGraphExactZeroFixture(dbPath, command);
+            SeedGraphExactZeroFixture(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => RunGraphCommand(command,
-                GetExactZeroArgs(command, dbPath, limit: 6, queryOverride: null, countOnly: true),
-                _jsonOptions));
+            foreach (var command in new[] { "references", "callers", "callees" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => RunGraphCommand(command,
+                    GetExactZeroArgs(command, dbPath, limit: 6, queryOverride: null, countOnly: true),
+                    _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+                using var document = ParseJsonOutput(stdout);
+                var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Equal(6, json.GetProperty("exact_zero_hint").GetProperty("relaxed_count").GetInt32());
-            Assert.Equal(5, json.GetProperty("exact_zero_hint").GetProperty("sample_names").GetArrayLength());
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(0, json.GetProperty("count").GetInt32());
+                Assert.Equal(6, json.GetProperty("exact_zero_hint").GetProperty("relaxed_count").GetInt32());
+                Assert.Equal(5, json.GetProperty("exact_zero_hint").GetProperty("sample_names").GetArrayLength());
+            }
         }
         finally
         {
@@ -861,29 +817,29 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
-    [InlineData("references")]
-    [InlineData("callers")]
-    [InlineData("callees")]
-    public void GraphCommands_ExactZeroJson_OmitHintWhenRelaxedQueryStillReturnsZero(string command)
+    [Fact]
+    public void GraphCommands_ExactZeroJson_OmitHintWhenRelaxedQueryStillReturnsZero()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_query_runner_{command}_exact_zero_miss");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_graph_exact_zero_miss");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            SeedGraphExactZeroFixture(dbPath, command);
+            SeedGraphExactZeroFixture(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => RunGraphCommand(command,
-                GetExactZeroArgs(command, dbPath, limit: 6, queryOverride: "DefinitelyMissing", countOnly: true),
-                _jsonOptions));
+            foreach (var command in new[] { "references", "callers", "callees" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => RunGraphCommand(command,
+                    GetExactZeroArgs(command, dbPath, limit: 6, queryOverride: "DefinitelyMissing", countOnly: true),
+                    _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+                using var document = ParseJsonOutput(stdout);
+                var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.False(json.TryGetProperty("exact_zero_hint", out _));
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(0, json.GetProperty("count").GetInt32());
+                Assert.False(json.TryGetProperty("exact_zero_hint", out _));
+            }
         }
         finally
         {

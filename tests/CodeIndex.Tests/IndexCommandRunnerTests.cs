@@ -1451,7 +1451,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FileAboveMaxReferencesPerFile_FullScanPersistsReferenceCountExceededIssueOnly_Issue3719()
+    public void Run_FileAboveMaxReferencesPerFile_FullScanAndUpdatePersistReferenceCountExceededIssueOnly_Issue3719()
     {
         var projectRoot = CreateTempProject();
         try
@@ -1485,45 +1485,21 @@ public partial class IndexCommandRunnerTests
             Assert.Equal("success", raisedJson.GetProperty("status").GetString());
             Assert.True(CountRows(dbPath, "symbol_references") > 0);
             Assert.Empty(reader.GetIssues("reference_count_exceeded"));
-        }
-        finally
-        {
-            SqliteConnection.ClearAllPools();
-            DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void Run_FileAboveMaxReferencesPerFile_UpdatePersistsReferenceCountExceededIssueOnly_Issue3719()
-    {
-        var projectRoot = CreateTempProject();
-        try
-        {
-            var filePath = Path.Combine(projectRoot, "DenseReferences.cs");
-            File.WriteAllText(filePath, BuildDenseReferenceCSharpSource(3));
+            var (updateExitCode, updateJson) = RunAndCaptureJson(
+                [projectRoot, "--files", filePath, "--max-references-per-file", "2", "--json"]);
 
-            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--max-references-per-file", "10", "--json"]);
-            Assert.Equal(CommandExitCodes.Success, initialExitCode);
-
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            Assert.True(CountRows(dbPath, "symbol_references") > 0);
-
-            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", filePath, "--max-references-per-file", "2", "--json"]);
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("success", json.GetProperty("status").GetString());
-            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("errors").GetInt32());
             Assert.Equal(1, CountRows(dbPath, "files"));
             Assert.True(CountRows(dbPath, "chunks") > 0);
             Assert.True(CountRows(dbPath, "symbols") > 0);
             Assert.Equal(0, CountRows(dbPath, "symbol_references"));
 
-            using var db = new DbContext(dbPath);
-            db.TryMigrateForRead();
-            var reader = new DbReader(db.Connection, db.IsReadOnly);
-            var issue = Assert.Single(reader.GetIssues("reference_count_exceeded"));
-            Assert.Equal("DenseReferences.cs", issue.Path);
-            Assert.Contains("--max-references-per-file", issue.Message);
+            var updateIssue = Assert.Single(reader.GetIssues("reference_count_exceeded"));
+            Assert.Equal("DenseReferences.cs", updateIssue.Path);
+            Assert.Contains("--max-references-per-file", updateIssue.Message);
         }
         finally
         {
@@ -6288,7 +6264,7 @@ public sealed class Caller
     }
 
     [Fact]
-    public void RunStatusCheck_AfterCommitScopedRefreshAtHead_DoesNotReportHeadChanged()
+    public void RunStatusCheck_FilesRefreshStaysStaleUntilCommitScopedRefreshAtHead()
     {
         var projectRoot = CreateTempProject();
         try
@@ -6304,12 +6280,22 @@ public sealed class Caller
             File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
             RunGit(projectRoot, "add", ".");
             RunGit(projectRoot, "commit", "-m", "add run");
-            var currentHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
-
-            var (refreshExitCode, _) = RunAndCaptureJson([projectRoot, "--commits", "HEAD", "--json"]);
-            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
-
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (filesRefreshExitCode, _) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, filesRefreshExitCode);
+
+            var (staleStatusExitCode, staleStatusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
+            Assert.Equal(CommandExitCodes.UsageError, staleStatusExitCode);
+
+            var staleCheck = staleStatusJson.GetProperty("workspace_check");
+            Assert.True(staleCheck.GetProperty("head_changed").GetBoolean());
+            Assert.False(staleCheck.GetProperty("matches_workspace").GetBoolean());
+            Assert.Equal("head_changed", staleCheck.GetProperty("reason").GetString());
+
+            var currentHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+            var (commitRefreshExitCode, _) = RunAndCaptureJson([projectRoot, "--commits", "HEAD", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, commitRefreshExitCode);
+
             var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
 
@@ -6384,43 +6370,6 @@ public sealed class Caller
             var (postDotStatusExitCode, postDotStatusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
             Assert.Equal(CommandExitCodes.Success, postDotStatusExitCode);
             Assert.True(postDotStatusJson.GetProperty("workspace_check").GetProperty("matches_workspace").GetBoolean());
-        }
-        finally
-        {
-            SqliteConnection.ClearAllPools();
-            DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunStatusCheck_AfterFilesRefreshAtHead_StillReportsHeadChanged()
-    {
-        var projectRoot = CreateTempProject();
-        try
-        {
-            RunGit(projectRoot, "init");
-            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
-            RunGit(projectRoot, "add", ".");
-            RunGit(projectRoot, "commit", "-m", "init");
-
-            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
-            Assert.Equal(CommandExitCodes.Success, initialExitCode);
-
-            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
-            RunGit(projectRoot, "add", ".");
-            RunGit(projectRoot, "commit", "-m", "add run");
-
-            var (refreshExitCode, _) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
-            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
-
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
-            Assert.Equal(CommandExitCodes.UsageError, statusExitCode);
-
-            var check = statusJson.GetProperty("workspace_check");
-            Assert.True(check.GetProperty("head_changed").GetBoolean());
-            Assert.False(check.GetProperty("matches_workspace").GetBoolean());
-            Assert.Equal("head_changed", check.GetProperty("reason").GetString());
         }
         finally
         {

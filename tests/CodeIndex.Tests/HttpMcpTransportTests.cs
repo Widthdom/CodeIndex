@@ -65,22 +65,17 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_DisposeAsync_DisposesOwnedSemaphoreGates_Issue3985()
+    public async Task HttpTransport_DisposeAsync_ReleasesOwnedResourcesForConcurrentCallers_Issues3985And4176()
     {
-        var harness = await McpHttpHarness.StartAsync(_dbPath);
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
 
         using var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":1,"method":"ping"}""");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
-        await harness.DisposeAsync();
-
-        Assert.True(harness.OwnedSemaphoreGatesDisposed);
-    }
-
-    [Fact]
-    public async Task HttpTransport_DisposeAsync_IsIdempotentForConcurrentCallers_Issue4176()
-    {
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+        await WaitUntilAsync(() => harness.HasEventStreams, "the event stream to be registered before disposal");
 
         var disposeTasks = new Task[8];
         for (var i = 0; i < disposeTasks.Length; i++)
@@ -89,21 +84,6 @@ public class HttpMcpTransportTests : IDisposable
         await Task.WhenAll(disposeTasks).WaitAsync(TimeSpan.FromSeconds(10));
         await harness.DisposeTransportAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
         await harness.WaitForServerLoopAsync();
-
-        Assert.True(harness.OwnedSemaphoreGatesDisposed);
-    }
-
-    [Fact]
-    public async Task HttpTransport_DisposeAsync_CancelsOpenEventStreams_Issue4176()
-    {
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
-
-        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
-        using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
-        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
-        await WaitUntilAsync(() => harness.HasEventStreams, "the event stream to be registered before disposal");
-
-        await harness.DisposeTransportAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
         await WaitUntilAsync(() => !harness.HasEventStreams, "disposal to remove the event stream");
 
         Assert.True(harness.OwnedSemaphoreGatesDisposed);
@@ -178,34 +158,28 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_PostInitialize_ReturnsHandshakeResult()
+    public async Task HttpTransport_PostInitialize_CoversExplicitAndDefaultHandshakeResults()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
 
-        var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}""");
+        using (var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}"""))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal("application/json", response.Content.Headers.ContentType!.MediaType);
+            var body = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            Assert.Equal("2.0", root.GetProperty("jsonrpc").GetString());
+            Assert.Equal(1, root.GetProperty("id").GetInt32());
+            Assert.Equal("2025-03-26", root.GetProperty("result").GetProperty("protocolVersion").GetString());
+        }
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal("application/json", response.Content.Headers.ContentType!.MediaType);
-        var body = await response.Content.ReadAsStringAsync();
-        using var doc = JsonDocument.Parse(body);
-        var root = doc.RootElement;
-        Assert.Equal("2.0", root.GetProperty("jsonrpc").GetString());
-        Assert.Equal(1, root.GetProperty("id").GetInt32());
-        Assert.Equal("2025-03-26", root.GetProperty("result").GetProperty("protocolVersion").GetString());
-    }
-
-    [Fact]
-    public async Task HttpTransport_PostInitializeWithoutEventsStream_ReturnsOnlyHandshakeResult()
-    {
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
-
-        var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""");
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        Assert.DoesNotContain("notifications/initialized", body, StringComparison.Ordinal);
-        using var doc = JsonDocument.Parse(body);
-        Assert.Equal(1, doc.RootElement.GetProperty("id").GetInt32());
+        using var defaultResponse = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":2,"method":"initialize","params":{}}""");
+        Assert.Equal(HttpStatusCode.OK, defaultResponse.StatusCode);
+        var defaultBody = await defaultResponse.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("notifications/initialized", defaultBody, StringComparison.Ordinal);
+        using var defaultDoc = JsonDocument.Parse(defaultBody);
+        Assert.Equal(2, defaultDoc.RootElement.GetProperty("id").GetInt32());
     }
 
     [Fact]
@@ -229,36 +203,23 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_PostNotification_Returns204NoContent()
+    public async Task HttpTransport_BasicEndpoints_CoverNotificationMethodAndStructuredHealth()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
 
-        var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","method":"notifications/initialized"}""");
-
-        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task HttpTransport_GetRequest_Returns405()
-    {
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+        using var notificationResponse = await harness.PostJsonAsync("""{"jsonrpc":"2.0","method":"notifications/initialized"}""");
+        Assert.Equal(HttpStatusCode.NoContent, notificationResponse.StatusCode);
 
         using var client = CreateHttpClient();
-        using var response = await client.GetAsync(harness.Endpoint);
+        using (var methodResponse = await client.GetAsync(harness.Endpoint))
+        {
+            Assert.Equal(HttpStatusCode.MethodNotAllowed, methodResponse.StatusCode);
+            // RFC 9110 §15.5.6: 405 responses must advertise the supported methods so generic
+            // clients can react without parsing the body.
+            // RFC 9110 §15.5.6 により 405 はサポートメソッドを `Allow` で示す必要がある。
+            Assert.Contains("POST", methodResponse.Content.Headers.Allow);
+        }
 
-        Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
-        // RFC 9110 §15.5.6: 405 responses must advertise the supported methods so generic
-        // clients can react without parsing the body.
-        // RFC 9110 §15.5.6 により 405 はサポートメソッドを `Allow` で示す必要がある。
-        Assert.Contains("POST", response.Content.Headers.Allow);
-    }
-
-    [Fact]
-    public async Task HttpTransport_Healthz_ReturnsStructuredHealth()
-    {
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
-
-        using var client = CreateHttpClient();
         using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -306,29 +267,7 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_Healthz_ReportsResponseCleanupFailures_Issue3452()
-    {
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
-        harness.RecordResponseCleanupFailure("abort", "test abort cleanup", new IOException("abort cleanup failed"));
-        harness.RecordResponseCleanupFailure("close", "test close cleanup", new InvalidOperationException("close cleanup failed"));
-
-        using var client = CreateHttpClient();
-        using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        using var document = JsonDocument.Parse(body);
-        var root = document.RootElement;
-        Assert.Equal("degraded", root.GetProperty("status").GetString());
-        Assert.True(root.GetProperty("http_response_cleanup_degraded").GetBoolean());
-        Assert.Equal(1, root.GetProperty("http_response_abort_cleanup_failure_count").GetInt64());
-        Assert.Equal(1, root.GetProperty("http_response_close_cleanup_failure_count").GetInt64());
-        Assert.Equal("test abort cleanup:io_error:IOException", root.GetProperty("http_response_abort_cleanup_last_error").GetString());
-        Assert.Equal("test close cleanup:invalid_operation:InvalidOperationException", root.GetProperty("http_response_close_cleanup_last_error").GetString());
-    }
-
-    [Fact]
-    public async Task HttpTransport_Healthz_ReportsEventStreamDropReasons_Issue3966()
+    public async Task HttpTransport_Healthz_ReportsEventDropsThenResponseCleanupFailures_Issues3452And3966()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
         harness.SetKeepAlive(
@@ -340,50 +279,58 @@ public class HttpMcpTransportTests : IDisposable
         Assert.Equal(HttpStatusCode.OK, events.StatusCode);
         await WaitUntilAsync(() => harness.EventStreamDropCount > 0, "event stream drop counter");
 
-        using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
+        using (var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz")))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var body = await response.Content.ReadAsStringAsync();
+            using var document = JsonDocument.Parse(body);
+            var root = document.RootElement;
+            Assert.Equal("ok", root.GetProperty("status").GetString());
+            Assert.Equal(1, root.GetProperty("http_event_stream_drop_count").GetInt64());
+            Assert.Equal(1, root.GetProperty("http_event_stream_write_failure_drop_count").GetInt64());
+            Assert.Equal("write_failure:exception_message_redacted:InvalidDataException", root.GetProperty("http_event_stream_last_drop_reason").GetString());
+        }
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        using var document = JsonDocument.Parse(body);
-        var root = document.RootElement;
-        Assert.Equal("ok", root.GetProperty("status").GetString());
-        Assert.Equal(1, root.GetProperty("http_event_stream_drop_count").GetInt64());
-        Assert.Equal(1, root.GetProperty("http_event_stream_write_failure_drop_count").GetInt64());
-        Assert.Equal("write_failure:exception_message_redacted:InvalidDataException", root.GetProperty("http_event_stream_last_drop_reason").GetString());
+        harness.RecordResponseCleanupFailure("abort", "test abort cleanup", new IOException("abort cleanup failed"));
+        harness.RecordResponseCleanupFailure("close", "test close cleanup", new InvalidOperationException("close cleanup failed"));
+        using var degradedResponse = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
+        Assert.Equal(HttpStatusCode.OK, degradedResponse.StatusCode);
+        var degradedBody = await degradedResponse.Content.ReadAsStringAsync();
+        using var degradedDocument = JsonDocument.Parse(degradedBody);
+        var degradedRoot = degradedDocument.RootElement;
+        Assert.Equal("degraded", degradedRoot.GetProperty("status").GetString());
+        Assert.True(degradedRoot.GetProperty("http_response_cleanup_degraded").GetBoolean());
+        Assert.Equal(1, degradedRoot.GetProperty("http_response_abort_cleanup_failure_count").GetInt64());
+        Assert.Equal(1, degradedRoot.GetProperty("http_response_close_cleanup_failure_count").GetInt64());
+        Assert.Equal("test abort cleanup:io_error:IOException", degradedRoot.GetProperty("http_response_abort_cleanup_last_error").GetString());
+        Assert.Equal("test close cleanup:invalid_operation:InvalidOperationException", degradedRoot.GetProperty("http_response_close_cleanup_last_error").GetString());
     }
 
     [Fact]
-    public async Task HttpTransport_Healthz_ReplacesInvalidProviderJson_Issue3815()
+    public async Task HttpTransport_Healthz_ReplacesInvalidAndOversizedProviderJson_Issue3815()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
         harness.SetHealthJsonProvider(() => "not-json");
 
         using var client = CreateHttpClient();
-        using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
+        using (var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz")))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var body = await response.Content.ReadAsStringAsync();
+            using var document = JsonDocument.Parse(body);
+            var root = document.RootElement;
+            Assert.Equal("degraded", root.GetProperty("status").GetString());
+            Assert.Equal("health_provider_invalid", root.GetProperty("error").GetString());
+        }
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        using var document = JsonDocument.Parse(body);
-        var root = document.RootElement;
-        Assert.Equal("degraded", root.GetProperty("status").GetString());
-        Assert.Equal("health_provider_invalid", root.GetProperty("error").GetString());
-    }
-
-    [Fact]
-    public async Task HttpTransport_Healthz_ReplacesOversizedProviderJson_Issue3815()
-    {
         var oversizedJson = $$"""{"status":"{{new string('x', HttpMcpTransport.MaxHealthJsonBytes)}}","db_open":true}""";
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
         harness.SetHealthJsonProvider(() => oversizedJson);
-
-        using var client = CreateHttpClient();
-        using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        Assert.DoesNotContain(new string('x', 128), body, StringComparison.Ordinal);
-        using var document = JsonDocument.Parse(body);
-        Assert.Equal("health_provider_invalid", document.RootElement.GetProperty("error").GetString());
+        using var oversizedResponse = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
+        Assert.Equal(HttpStatusCode.OK, oversizedResponse.StatusCode);
+        var oversizedBody = await oversizedResponse.Content.ReadAsStringAsync();
+        Assert.DoesNotContain(new string('x', 128), oversizedBody, StringComparison.Ordinal);
+        using var oversizedDocument = JsonDocument.Parse(oversizedBody);
+        Assert.Equal("health_provider_invalid", oversizedDocument.RootElement.GetProperty("error").GetString());
     }
 
     [Fact]
@@ -509,80 +456,62 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_RequestLogger_CapsLongPathBeforeLogging()
+    public async Task HttpTransport_RequestLogger_BoundsPathAndJsonRpcIdMetadata_Issue3014()
     {
         var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, requestLogger: records.Enqueue);
 
         using var client = CreateHttpClient();
         var longPath = string.Join('/', Enumerable.Repeat("segment", 50));
-        using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), longPath));
+        using var pathResponse = await client.GetAsync(new Uri(new Uri(harness.Endpoint), longPath));
 
-        Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
-        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
-        Assert.Equal(HttpMcpTransport.MaxRequestLogFieldCharacters, record.Path.Length);
-        Assert.EndsWith(HttpMcpTransport.RequestLogTruncationMarker, record.Path, StringComparison.Ordinal);
-    }
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, pathResponse.StatusCode);
+        var pathRecord = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
+        Assert.Equal(HttpMcpTransport.MaxRequestLogFieldCharacters, pathRecord.Path.Length);
+        Assert.EndsWith(HttpMcpTransport.RequestLogTruncationMarker, pathRecord.Path, StringComparison.Ordinal);
 
-    [Fact]
-    public async Task HttpTransport_RequestLogger_CapsLongJsonRpcIdBeforeLogging()
-    {
-        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath, requestLogger: records.Enqueue);
         var oversizedId = new string('i', HttpMcpTransport.MaxRequestLogFieldCharacters + 100);
         var body = """{"jsonrpc":"2.0","id":"""
             + JsonSerializer.Serialize(oversizedId)
             + ""","method":"ping"}""";
 
-        using var response = await harness.PostJsonAsync(body);
+        using var oversizedIdResponse = await harness.PostJsonAsync(body);
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
-        Assert.NotNull(record.RequestId);
-        Assert.Equal(HttpMcpTransport.MaxRequestLogFieldCharacters, record.RequestId.Length);
-        Assert.EndsWith(HttpMcpTransport.RequestLogTruncationMarker, record.RequestId, StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.OK, oversizedIdResponse.StatusCode);
+        var oversizedIdRecords = await WaitForRequestLogRecordsAsync(records, 2);
+        var oversizedIdRecord = Assert.Single(oversizedIdRecords, record => record.Method == "POST");
+        Assert.NotNull(oversizedIdRecord.RequestId);
+        Assert.Equal(HttpMcpTransport.MaxRequestLogFieldCharacters, oversizedIdRecord.RequestId.Length);
+        Assert.EndsWith(HttpMcpTransport.RequestLogTruncationMarker, oversizedIdRecord.RequestId, StringComparison.Ordinal);
+
+        using var deepIdResponse = await harness.PostJsonAsync(BuildNestedJsonRpcRequest(McpServer.MaxJsonDepth + 1));
+
+        Assert.Equal(HttpStatusCode.OK, deepIdResponse.StatusCode);
+        var deepIdRecords = await WaitForRequestLogRecordsAsync(records, 3);
+        var deepIdRecord = Assert.Single(deepIdRecords, record => record.Method == "POST" && record.RequestId is null);
+        Assert.Null(deepIdRecord.RequestId);
     }
 
     [Fact]
-    public async Task HttpTransport_RequestLogger_TooDeepJsonRpcIdReturnsNull_Issue3014()
-    {
-        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath, requestLogger: records.Enqueue);
-
-        using var response = await harness.PostJsonAsync(BuildNestedJsonRpcRequest(McpServer.MaxJsonDepth + 1));
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var snapshot = await WaitForRequestLogRecordsAsync(records, 1);
-        var record = Assert.Single(snapshot, record => record.Method == "POST");
-        Assert.Null(record.RequestId);
-    }
-
-    [Fact]
-    public async Task HttpTransport_TwoSequentialRequests_ShareWarmServer()
+    public async Task HttpTransport_WarmServer_HandlesSequentialConcurrentAndEmptyBodyRequests()
     {
         // Issue #1558: AI clients should be able to keep a single MCP server warm across
         // multiple JSON-RPC requests instead of paying subprocess-spawn cost per call.
         // Issue #1558: AI クライアントが MCP サーバーを温めた状態で複数 JSON-RPC を扱えること。
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
 
-        var first = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""");
+        using var first = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""");
         Assert.Equal(HttpStatusCode.OK, first.StatusCode);
 
-        var second = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":2,"method":"tools/list"}""");
+        using var second = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":2,"method":"tools/list"}""");
         Assert.Equal(HttpStatusCode.OK, second.StatusCode);
-        var body = await second.Content.ReadAsStringAsync();
-        using var doc = JsonDocument.Parse(body);
-        Assert.True(doc.RootElement.GetProperty("result").GetProperty("tools").GetArrayLength() > 0);
-    }
+        var listBody = await second.Content.ReadAsStringAsync();
+        using var listDoc = JsonDocument.Parse(listBody);
+        Assert.True(listDoc.RootElement.GetProperty("result").GetProperty("tools").GetArrayLength() > 0);
 
-    [Fact]
-    public async Task HttpTransport_ConcurrentPosts_AreAcceptedAndCorrelatedToResponses()
-    {
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
-
-        var first = harness.PostJsonAsync("""{"jsonrpc":"2.0","id":21,"method":"ping"}""");
-        var second = harness.PostJsonAsync("""{"jsonrpc":"2.0","id":22,"method":"ping"}""");
-        var responses = await Task.WhenAll(first, second);
+        var concurrentFirst = harness.PostJsonAsync("""{"jsonrpc":"2.0","id":21,"method":"ping"}""");
+        var concurrentSecond = harness.PostJsonAsync("""{"jsonrpc":"2.0","id":22,"method":"ping"}""");
+        var responses = await Task.WhenAll(concurrentFirst, concurrentSecond);
 
         Assert.All(responses, response => Assert.Equal(HttpStatusCode.OK, response.StatusCode));
         var ids = new List<int>();
@@ -591,29 +520,24 @@ public class HttpMcpTransportTests : IDisposable
             var body = await response.Content.ReadAsStringAsync();
             using var doc = JsonDocument.Parse(body);
             ids.Add(doc.RootElement.GetProperty("id").GetInt32());
+            response.Dispose();
         }
 
         Assert.Contains(21, ids);
         Assert.Contains(22, ids);
-    }
 
-    [Fact]
-    public async Task HttpTransport_EmptyBody_Returns204AndDoesNotKillServer()
-    {
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
-
-        var empty = await harness.PostJsonAsync(string.Empty);
+        using var empty = await harness.PostJsonAsync(string.Empty);
         Assert.Equal(HttpStatusCode.NoContent, empty.StatusCode);
 
-        var follow = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":7,"method":"ping"}""");
+        using var follow = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":7,"method":"ping"}""");
         Assert.Equal(HttpStatusCode.OK, follow.StatusCode);
-        var body = await follow.Content.ReadAsStringAsync();
-        using var doc = JsonDocument.Parse(body);
-        Assert.Equal(7, doc.RootElement.GetProperty("id").GetInt32());
+        var followBody = await follow.Content.ReadAsStringAsync();
+        using var followDoc = JsonDocument.Parse(followBody);
+        Assert.Equal(7, followDoc.RootElement.GetProperty("id").GetInt32());
     }
 
     [Fact]
-    public async Task HttpTransport_MalformedCancellationNotification_IsQueuedForNormalHandling_Issue3711()
+    public async Task HttpTransport_NonOutOfBandPayloads_AreQueuedForNormalHandling_Issue3711()
     {
         var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
         var outOfBandHandlerCalls = 0;
@@ -629,92 +553,32 @@ public class HttpMcpTransportTests : IDisposable
         };
 
         using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
-        const string body = """{"jsonrpc":"2.0","method":"notifications/cancelled","params":""";
-        var post = client.PostAsync(
-            listen.Prefix,
-            new StringContent(body, Encoding.UTF8, "application/json"));
+        async Task AssertQueuedNormallyAsync(string body, string reply, string description)
+        {
+            var post = client.PostAsync(
+                listen.Prefix,
+                new StringContent(body, Encoding.UTF8, "application/json"));
+            await WaitUntilAsync(() => transport.QueuedRequestCount == 1, description);
+            Assert.Equal(0, Volatile.Read(ref outOfBandHandlerCalls));
+            var frame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(body, frame);
+            await transport.WriteFrameAsync(reply, CancellationToken.None);
+            using var response = await post.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
 
-        await WaitUntilAsync(
-            () => transport.QueuedRequestCount == 1,
+        await AssertQueuedNormallyAsync(
+            """{"jsonrpc":"2.0","method":"notifications/cancelled","params":""",
+            """{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}""",
             "malformed cancellation notification to stay in the normal HTTP MCP queue");
-
-        Assert.Equal(0, Volatile.Read(ref outOfBandHandlerCalls));
-        var frame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(body, frame);
-
-        await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}""", CancellationToken.None);
-        using var response = await post.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task HttpTransport_CancellationNotificationBeyondJsonDepth_IsQueuedForNormalHandling()
-    {
-        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
-        var outOfBandHandlerCalls = 0;
-        await using var transport = new HttpMcpTransport(
-            listen.Prefix,
-            listen.Host,
-            listen.Port,
-            bearerToken: null);
-        transport.OutOfBandFrameHandler = (_, _) =>
-        {
-            Interlocked.Increment(ref outOfBandHandlerCalls);
-            return Task.FromResult<string?>(null);
-        };
-
-        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
-        var body = BuildNestedCancellationNotification(McpServer.MaxJsonDepth + 1);
-        var post = client.PostAsync(
-            listen.Prefix,
-            new StringContent(body, Encoding.UTF8, "application/json"));
-
-        await WaitUntilAsync(
-            () => transport.QueuedRequestCount == 1,
+        await AssertQueuedNormallyAsync(
+            BuildNestedCancellationNotification(McpServer.MaxJsonDepth + 1),
+            """{"jsonrpc":"2.0","id":null,"result":{}}""",
             "deep cancellation notification to stay in the normal HTTP MCP queue");
-
-        Assert.Equal(0, Volatile.Read(ref outOfBandHandlerCalls));
-        var frame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(body, frame);
-
-        await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":null,"result":{}}""", CancellationToken.None);
-        using var response = await post.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task HttpTransport_JsonRpcResponseBeyondJsonDepth_IsQueuedForNormalHandling()
-    {
-        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
-        var outOfBandHandlerCalls = 0;
-        await using var transport = new HttpMcpTransport(
-            listen.Prefix,
-            listen.Host,
-            listen.Port,
-            bearerToken: null);
-        transport.OutOfBandFrameHandler = (_, _) =>
-        {
-            Interlocked.Increment(ref outOfBandHandlerCalls);
-            return Task.FromResult<string?>(null);
-        };
-
-        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
-        var body = BuildNestedJsonRpcResponse(McpServer.MaxJsonDepth + 1);
-        var post = client.PostAsync(
-            listen.Prefix,
-            new StringContent(body, Encoding.UTF8, "application/json"));
-
-        await WaitUntilAsync(
-            () => transport.QueuedRequestCount == 1,
+        await AssertQueuedNormallyAsync(
+            BuildNestedJsonRpcResponse(McpServer.MaxJsonDepth + 1),
+            """{"jsonrpc":"2.0","id":null,"result":{}}""",
             "deep JSON-RPC response to stay in the normal HTTP MCP queue");
-
-        Assert.Equal(0, Volatile.Read(ref outOfBandHandlerCalls));
-        var frame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(body, frame);
-
-        await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":null,"result":{}}""", CancellationToken.None);
-        using var response = await post.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]
@@ -1050,28 +914,6 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_EventsStream_DoesNotBlockPostRequests()
-    {
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
-
-        using var client = CreateHttpClient();
-        using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
-
-        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
-        Assert.Equal("text/event-stream", events.Content.Headers.ContentType!.MediaType);
-        Assert.True(events.Headers.TryGetValues("X-Accel-Buffering", out var bufferingValues));
-        Assert.Contains("no", bufferingValues);
-        Assert.True(events.Headers.Contains("X-Cdidx-Mcp-Event-Stream-Id"));
-
-        var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":11,"method":"ping"}""");
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        using var doc = JsonDocument.Parse(body);
-        Assert.Equal(11, doc.RootElement.GetProperty("id").GetInt32());
-    }
-
-    [Fact]
     public async Task HttpTransport_EventsStreamLimit_Returns429()
     {
         var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
@@ -1114,24 +956,33 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_EventsStream_OversizedKeepAliveDisconnectsStream_Issue3815()
+    public async Task HttpTransport_EventsStream_AllowsPostsAndRemovesDisconnectedStreams_Issue3815()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
-        harness.SetKeepAlive(TimeSpan.FromMilliseconds(10), () => new string('x', HttpMcpTransport.MaxSseEventFrameBytes));
-
+        harness.SetKeepAlive(TimeSpan.FromSeconds(1), () => new string('x', HttpMcpTransport.MaxSseEventFrameBytes));
         using var client = CreateHttpClient();
-        using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
+        using var oversizedEvents = await client.GetAsync(
+            new Uri(new Uri(harness.Endpoint), "events"),
+            HttpCompletionOption.ResponseHeadersRead);
 
-        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, oversizedEvents.StatusCode);
+        Assert.Equal("text/event-stream", oversizedEvents.Content.Headers.ContentType!.MediaType);
+        Assert.True(oversizedEvents.Headers.TryGetValues("X-Accel-Buffering", out var bufferingValues));
+        Assert.Contains("no", bufferingValues);
+        Assert.True(oversizedEvents.Headers.Contains("X-Cdidx-Mcp-Event-Stream-Id"));
+
+        using var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":11,"method":"ping"}""");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(body);
+        Assert.Equal(11, doc.RootElement.GetProperty("id").GetInt32());
+
         await WaitUntilAsync(() => harness.EventStreamCount == 0, "oversized keep-alive frame to close the event stream");
-    }
 
-    [Fact]
-    public async Task HttpTransport_EventsStream_RemovesDisconnectedStreams()
-    {
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+        harness.SetKeepAlive(
+            TimeSpan.FromMilliseconds(10),
+            () => """{"jsonrpc":"2.0","method":"notifications/test"}""");
 
-        using var client = CreateHttpClient();
         using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
         Assert.Equal(HttpStatusCode.OK, events.StatusCode);
         await WaitUntilAsync(() => harness.HasEventStreams, "the event stream to be registered");
@@ -1300,74 +1151,23 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_BearerToken_RejectsMissingHeader()
+    public async Task HttpTransport_BearerToken_AcceptsCaseInsensitiveSchemes()
     {
         const string token = "s3cret-token";
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
 
         using var client = CreateHttpClient();
-        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+        foreach (var scheme in new[] { "Bearer", "bearer" })
         {
-            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
-        };
-        using var response = await client.SendAsync(request);
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
+            using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+            {
+                Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue(scheme, token);
+            using var response = await client.SendAsync(request);
 
-    [Fact]
-    public async Task HttpTransport_BearerToken_RejectsDuplicateAuthorizationHeaders_Issue3756()
-    {
-        const string token = "s3cret-token";
-        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token, requestLogger: records.Enqueue);
-
-        using var client = CreateHttpClient();
-        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
-        {
-            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
-        };
-        request.Headers.TryAddWithoutValidation("Authorization", new[] { $"Bearer {token}", $"Bearer {token}" });
-        using var response = await client.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        Assert.DoesNotContain(token, body, StringComparison.Ordinal);
-        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
-        Assert.Equal("unauthorized", record.AuthOutcome);
-    }
-
-    [Fact]
-    public async Task HttpTransport_BearerToken_RejectsCommaJoinedAuthorizationHeader_Issue3756()
-    {
-        const string token = "s3cret-token";
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
-
-        using var client = CreateHttpClient();
-        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
-        {
-            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
-        };
-        request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {token}, Bearer {token}");
-        using var response = await client.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task HttpTransport_BearerToken_AcceptsMatchingHeader()
-    {
-        const string token = "s3cret-token";
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
-
-        using var client = CreateHttpClient();
-        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
-        {
-            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
-        };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        using var response = await client.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
     }
 
     [Fact]
@@ -1376,6 +1176,7 @@ public class HttpMcpTransportTests : IDisposable
         const string token = "s3cret-token";
         const string wrongToken = "wrong-token";
         var oversizedToken = new string('x', McpAuthenticationLimits.MaxTokenCharacters + 1);
+        Assert.Equal(token.Length, "wrongTokenAa".Length);
         var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token, requestLogger: records.Enqueue);
         using var client = CreateHttpClient();
@@ -1385,8 +1186,10 @@ public class HttpMcpTransportTests : IDisposable
             ("missing", static _ => { }),
             ("wrong scheme", request => request.Headers.TryAddWithoutValidation("Authorization", "Basic " + token)),
             ("wrong token", request => request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", wrongToken)),
+            ("same-length wrong token", request => request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "wrongTokenAa")),
             ("multiple values", request => request.Headers.TryAddWithoutValidation("Authorization", new[] { "Bearer " + token, "Bearer " + token })),
             ("comma-separated values", request => request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + token + ", Bearer " + token)),
+            ("whitespace-padded token", request => request.Headers.TryAddWithoutValidation("Authorization", "Bearer  " + token)),
             ("oversized token", request => request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + oversizedToken)),
         };
 
@@ -1428,67 +1231,6 @@ public class HttpMcpTransportTests : IDisposable
         using var response = await client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task HttpTransport_BearerToken_RejectsWrongToken()
-    {
-        // Verifies the rejection path covers the actual constant-time compare, not just the
-        // "missing header" branch — a regression where the comparison short-circuited on the
-        // first matching byte would still pass the missing-header test but fail this one.
-        // 不一致トークンの拒否経路も検証する（ヘッダー欠落だけでなく定数時間比較が機能していることを担保）。
-        const string token = "s3cret-token";
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
-
-        using var client = CreateHttpClient();
-        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
-        {
-            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
-        };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "wrong-token");
-        using var response = await client.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-        Assert.Contains(response.Headers.WwwAuthenticate, h => h.Scheme.Equals("Bearer", StringComparison.OrdinalIgnoreCase));
-    }
-
-    [Fact]
-    public async Task HttpTransport_BearerToken_RejectsWhitespacePaddedHeader_Issue3505()
-    {
-        const string token = "s3cret-token";
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
-
-        using var client = CreateHttpClient();
-        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
-        {
-            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
-        };
-        request.Headers.TryAddWithoutValidation("Authorization", "Bearer  " + token);
-        using var response = await client.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task HttpTransport_BearerToken_RejectsOversizedHeaderBeforeHashing()
-    {
-        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: "token", requestLogger: records.Enqueue);
-
-        using var client = CreateHttpClient();
-        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
-        {
-            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
-        };
-        request.Headers.TryAddWithoutValidation(
-            "Authorization",
-            "Bearer " + new string('x', McpAuthenticationLimits.MaxTokenCharacters + 1));
-
-        using var response = await client.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
-        Assert.Equal("unauthorized", record.AuthOutcome);
     }
 
     [Fact]
@@ -1588,50 +1330,6 @@ public class HttpMcpTransportTests : IDisposable
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
         Assert.Equal("wrong-token", record.AuthOutcome);
-    }
-
-    [Fact]
-    public async Task HttpTransport_BearerToken_RejectsSameLengthWrongToken()
-    {
-        // Same-length wrong token: covers the constant-time-compare branch *after* the SHA-256
-        // hashing seam, since an early length-mismatch return would still allow this to pass on
-        // pre-fix code. The behavior change is observable as "401, not 200" — the timing
-        // invariant itself cannot be asserted from a unit test.
-        // 同じ長さの不一致トークン: SHA-256 経由の定数時間比較分岐をカバーする。
-        // 旧実装の length-mismatch 早期 return が消えていることを 401/200 で観察する。
-        const string token = "s3cret-token";
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
-
-        using var client = CreateHttpClient();
-        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
-        {
-            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
-        };
-        Assert.Equal(token.Length, "wrongTokenAa".Length);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "wrongTokenAa");
-        using var response = await client.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task HttpTransport_BearerToken_AcceptsLowerCaseScheme()
-    {
-        // RFC 6750 §2.1: auth-scheme tokens are case-insensitive. Clients that send
-        // `authorization: bearer ...` (lowercase) must still authenticate successfully.
-        // RFC 6750 §2.1 により auth-scheme は case-insensitive なので、`bearer ...` 表記でも認証成功。
-        const string token = "s3cret-token";
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
-
-        using var client = CreateHttpClient();
-        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
-        {
-            Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
-        };
-        request.Headers.TryAddWithoutValidation("Authorization", $"bearer {token}");
-        using var response = await client.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]

@@ -7,13 +7,19 @@ on:
     paths-ignore:
       - '**.md'
       - 'LICENSE'
+      - 'LICENSES/**'
   pull_request:
     branches:
       - main
     paths-ignore:
       - '**.md'
       - 'LICENSE'
+      - 'LICENSES/**'
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -127,8 +133,8 @@ jobs:
             -CollectCoverage "${{ matrix.primary_lane }}"
 
       - name: Summarize TRX telemetry
-        if: always() && (steps.test.outputs.summarize == 'true' || failure())
-        run: dotnet run --project tools/CodeIndex.TestTelemetry --configuration Release -- summarize --results-directory ./TestResults --top 10
+        if: always()
+        run: dotnet run --project tools/CodeIndex.TestTelemetry --configuration Release --no-build --no-restore -- summarize --results-directory ./TestResults --top 10
 
       - name: Upload test results
         if: always() && (steps.test.outputs.summarize == 'true' || failure())
@@ -169,7 +175,7 @@ jobs:
 
       - name: Publish
         if: matrix.primary_lane
-        run: dotnet publish src/CodeIndex/CodeIndex.csproj --configuration Release --no-build --output publish
+        run: dotnet publish src/CodeIndex/CodeIndex.csproj --configuration Release --no-build --no-restore --output publish
 
       - name: Upload build artifact
         if: matrix.primary_lane

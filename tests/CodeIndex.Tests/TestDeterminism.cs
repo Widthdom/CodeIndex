@@ -199,7 +199,7 @@ internal static class TestDeterminism
                 cancellationToken))
             .ToArray();
 
-        if (!ready.Wait(DefaultTimeout, cancellationToken))
+        if (!ready.Wait(DefaultTimeout, cancellationToken) && !ready.IsSet)
         {
             start.Set();
             await Task.WhenAll(tasks);

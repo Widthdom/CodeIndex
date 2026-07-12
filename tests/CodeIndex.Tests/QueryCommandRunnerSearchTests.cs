@@ -432,26 +432,33 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
-    [InlineData("javascript", "run(); // InlineMarkerNeedle\n", "//")]
-    [InlineData("python", "run()  # InlineMarkerNeedle\n", "#")]
-    [InlineData("javascript", "run(); /* InlineMarkerNeedle */\n", "/*")]
-    public void RunSearch_ExcludeCommentsSuppressesInlineCommentMarkers_Issue3423(string lang, string content, string query)
+    [Fact]
+    public void RunSearch_ExcludeCommentsSuppressesInlineCommentMarkers_Issue3423()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_exclude_inline_comment_markers");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, $"src/comment.{lang}", lang, content);
+            var cases = new[]
+            {
+                (Path: "src/line.js", Lang: "javascript", Content: "run(); // InlineMarkerNeedle\n", Query: "//"),
+                (Path: "src/line.py", Lang: "python", Content: "run()  # InlineMarkerNeedle\n", Query: "#"),
+                (Path: "src/block.js", Lang: "javascript", Content: "run(); /* InlineMarkerNeedle */\n", Query: "/*"),
+            };
+            foreach (var testCase in cases)
+                TestProjectHelper.InsertIndexedFile(dbPath, testCase.Path, testCase.Lang, testCase.Content);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [query, "--db", dbPath, "--exact-substring", "--json=array", "--exclude-comments"],
-                _jsonOptions));
+            foreach (var testCase in cases)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    [testCase.Query, "--db", dbPath, "--exact-substring", "--json=array", "--exclude-comments"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            Assert.Empty(document.RootElement.EnumerateArray());
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                using var document = ParseJsonOutput(stdout);
+                Assert.Empty(document.RootElement.EnumerateArray());
+            }
         }
         finally
         {
@@ -7375,10 +7382,8 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
-    [InlineData("xaml")]
-    [InlineData("axaml")]
-    public void RunSearch_RecognizesXamlLanguageAliases(string lang)
+    [Fact]
+    public void RunSearch_RecognizesXamlLanguageAliases()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_xaml_lang_alias");
         try
@@ -7398,13 +7403,16 @@ public partial class QueryCommandRunnerTests
                 </Window>
                 """);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [queryToken, "--db", dbPath, "--lang", lang, "--count"],
-                _jsonOptions));
+            foreach (var lang in new[] { "xaml", "axaml" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    [queryToken, "--db", dbPath, "--lang", lang, "--count"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("1", stdout.Trim());
-            Assert.Equal(string.Empty, stderr);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("1", stdout.Trim());
+                Assert.Equal(string.Empty, stderr);
+            }
         }
         finally
         {
@@ -7412,11 +7420,8 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
-    [InlineData("rs")]
-    [InlineData("r-s")]
-    [InlineData("r s")]
-    public void RunSearch_RecognizesRustLanguageAlias(string lang)
+    [Fact]
+    public void RunSearch_RecognizesRustLanguageAliases()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_rust_lang_alias");
         try
@@ -7433,13 +7438,16 @@ public partial class QueryCommandRunnerTests
                 }
                 """);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [queryToken, "--db", dbPath, "--lang", lang, "--count"],
-                _jsonOptions));
+            foreach (var lang in new[] { "rs", "r-s", "r s" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    [queryToken, "--db", dbPath, "--lang", lang, "--count"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("1", stdout.Trim());
-            Assert.Equal(string.Empty, stderr);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("1", stdout.Trim());
+                Assert.Equal(string.Empty, stderr);
+            }
         }
         finally
         {
@@ -7447,19 +7455,8 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
-    [InlineData("c#")]
-    [InlineData("cs")]
-    [InlineData("cshtml")]
-    [InlineData("js")]
-    [InlineData("JSX")]
-    [InlineData("cjs")]
-    [InlineData("MJS")]
-    [InlineData("Java")]
-    [InlineData("kt")]
-    [InlineData("kts")]
-    [InlineData("razor")]
-    public void RunSearch_NormalizesCommonLanguageAliases(string input)
+    [Fact]
+    public void RunSearch_NormalizesCommonLanguageAliases()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_lang_alias");
         try
@@ -7503,13 +7500,16 @@ public partial class QueryCommandRunnerTests
     const marker = ""{queryToken}"";
 }}");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [queryToken, "--db", dbPath, "--lang", input, "--count"],
-                _jsonOptions));
+            foreach (var input in new[] { "c#", "cs", "cshtml", "js", "JSX", "cjs", "MJS", "Java", "kt", "kts", "razor" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    [queryToken, "--db", dbPath, "--lang", input, "--count"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("1", stdout.Trim());
-            Assert.Equal(string.Empty, stderr);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("1", stdout.Trim());
+                Assert.Equal(string.Empty, stderr);
+            }
         }
         finally
         {
@@ -7517,12 +7517,8 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
-    [InlineData("js")]
-    [InlineData("jsx")]
-    [InlineData("JS")]
-    [InlineData("JSX")]
-    public void RunSearch_NormalizesJavascriptLangAliases(string lang)
+    [Fact]
+    public void RunSearch_NormalizesJavascriptLangAliases()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_javascript_lang_alias");
         try
@@ -7535,13 +7531,16 @@ public partial class QueryCommandRunnerTests
                 "javascript",
                 $@"const marker = ""{queryToken}"";");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [queryToken, "--db", dbPath, "--lang", lang, "--count"],
-                _jsonOptions));
+            foreach (var lang in new[] { "js", "jsx", "JS", "JSX" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    [queryToken, "--db", dbPath, "--lang", lang, "--count"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("1", stdout.Trim());
-            Assert.Equal(string.Empty, stderr);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("1", stdout.Trim());
+                Assert.Equal(string.Empty, stderr);
+            }
         }
         finally
         {
@@ -7549,12 +7548,8 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
-    [InlineData("cjs")]
-    [InlineData("mjs")]
-    [InlineData("CJS")]
-    [InlineData("MJS")]
-    public void RunSearch_NormalizesJavascriptExtensionStyleLangAliases(string lang)
+    [Fact]
+    public void RunSearch_NormalizesJavascriptExtensionStyleLangAliases()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_javascript_extension_lang_alias");
         try
@@ -7567,13 +7562,16 @@ public partial class QueryCommandRunnerTests
                 "javascript",
                 $@"const marker = ""{queryToken}"";");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [queryToken, "--db", dbPath, "--lang", lang, "--count"],
-                _jsonOptions));
+            foreach (var lang in new[] { "cjs", "mjs", "CJS", "MJS" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    [queryToken, "--db", dbPath, "--lang", lang, "--count"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("1", stdout.Trim());
-            Assert.Equal(string.Empty, stderr);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("1", stdout.Trim());
+                Assert.Equal(string.Empty, stderr);
+            }
         }
         finally
         {
@@ -7581,10 +7579,8 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
-    [InlineData("yml")]
-    [InlineData("YML")]
-    public void RunSearch_NormalizesYamlLangAlias(string input)
+    [Fact]
+    public void RunSearch_NormalizesYamlLangAliases()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_yaml_lang_alias");
         try
@@ -7602,13 +7598,16 @@ jobs:
     steps:
       - run: echo ""{queryToken}""");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [queryToken, "--db", dbPath, "--lang", input, "--count"],
-                _jsonOptions));
+            foreach (var input in new[] { "yml", "YML" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    [queryToken, "--db", dbPath, "--lang", input, "--count"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("1", stdout.Trim());
-            Assert.Equal(string.Empty, stderr);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("1", stdout.Trim());
+                Assert.Equal(string.Empty, stderr);
+            }
         }
         finally
         {
@@ -7616,10 +7615,8 @@ jobs:
         }
     }
 
-    [Theory]
-    [InlineData("bat")]
-    [InlineData("cmd")]
-    public void RunSearch_NormalizesBatchLangAliases(string input)
+    [Fact]
+    public void RunSearch_NormalizesBatchLangAliases()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_batch_lang_alias");
         try
@@ -7632,13 +7629,16 @@ jobs:
                 "batch",
                 $"echo {queryToken}\r\n");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [queryToken, "--db", dbPath, "--lang", input, "--count"],
-                _jsonOptions));
+            foreach (var input in new[] { "bat", "cmd" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    [queryToken, "--db", dbPath, "--lang", input, "--count"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("1", stdout.Trim());
-            Assert.Equal(string.Empty, stderr);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("1", stdout.Trim());
+                Assert.Equal(string.Empty, stderr);
+            }
         }
         finally
         {
@@ -7646,11 +7646,8 @@ jobs:
         }
     }
 
-    [Theory]
-    [InlineData("T-SQL")]
-    [InlineData("transact-sql")]
-    [InlineData("transact sql")]
-    public void RunSearch_NormalizesSqlDialectLangAliases(string input)
+    [Fact]
+    public void RunSearch_NormalizesSqlDialectLangAliases()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_lang_alias");
         try
@@ -7663,13 +7660,16 @@ jobs:
                 "sql",
                 $"SELECT '{queryToken}';");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [queryToken, "--db", dbPath, "--lang", input, "--count"],
-                _jsonOptions));
+            foreach (var input in new[] { "T-SQL", "transact-sql", "transact sql" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    [queryToken, "--db", dbPath, "--lang", input, "--count"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("1", stdout.Trim());
-            Assert.Equal(string.Empty, stderr);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("1", stdout.Trim());
+                Assert.Equal(string.Empty, stderr);
+            }
         }
         finally
         {
@@ -7677,11 +7677,8 @@ jobs:
         }
     }
 
-    [Theory]
-    [InlineData("tokio::spawn", "column qualifier")]
-    [InlineData("AND OR", "literal-safe search")]
-    [InlineData("foo\"bar", "literal-safe search")]
-    public void RunSearch_RawFtsQuerySyntaxErrorsReturnUsageError(string query, string expectedHint)
+    [Fact]
+    public void RunSearch_RawFtsFixtureCoversValidAndInvalidSyntax()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_error");
         try
@@ -7689,37 +7686,31 @@ jobs:
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } }");
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [query, "--db", dbPath, "--fts"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("Error [E006_FTS_QUERY_SYNTAX]: FTS5 query syntax:", stderr);
-            Assert.Contains(expectedHint, stderr);
-            Assert.DoesNotContain("database error:", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunSearch_RawFtsValidQueryStillWorks()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_success");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } }");
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            var (validExitCode, validStdout, validStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["spawn", "--db", dbPath, "--fts", "--count"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.NotEqual("0", stdout.Trim());
-            Assert.DoesNotContain("Error:", stderr);
+            Assert.Equal(CommandExitCodes.Success, validExitCode);
+            Assert.NotEqual("0", validStdout.Trim());
+            Assert.DoesNotContain("Error:", validStderr);
+
+            var invalidCases = new[]
+            {
+                (Query: "tokio::spawn", Hint: "column qualifier"),
+                (Query: "AND OR", Hint: "literal-safe search"),
+                (Query: "foo\"bar", Hint: "literal-safe search"),
+            };
+            foreach (var testCase in invalidCases)
+            {
+                var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    [testCase.Query, "--db", dbPath, "--fts"],
+                    _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Contains("Error [E006_FTS_QUERY_SYNTAX]: FTS5 query syntax:", stderr);
+                Assert.Contains(testCase.Hint, stderr);
+                Assert.DoesNotContain("database error:", stderr);
+            }
         }
         finally
         {
@@ -7728,120 +7719,64 @@ jobs:
     }
 
     [Fact]
-    public void RunSearch_RawFtsTooLongQueryReturnsUsageError()
+    public void RunSearch_QueryComplexityLimitsReuseOneFixture()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_too_long");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } }");
-            var query = new string('a', QueryLimits.MaxQueryLength + 1);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } } // and or not near");
+            var longQuery = new string('a', QueryLimits.MaxQueryLength + 1);
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [query, "--db", dbPath, "--fts"],
+            var (rawLongExitCode, _, rawLongStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [longQuery, "--db", dbPath, "--fts"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains(QueryLimits.FormatQueryTooLongError(), stderr);
-            Assert.Contains("Usage:", stderr);
-            Assert.DoesNotContain("database error:", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
+            Assert.Equal(CommandExitCodes.UsageError, rawLongExitCode);
+            Assert.Contains(QueryLimits.FormatQueryTooLongError(), rawLongStderr);
+            Assert.Contains("Usage:", rawLongStderr);
+            Assert.DoesNotContain("database error:", rawLongStderr);
 
-    [Fact]
-    public void RunSearch_TooLongQueryReturnsUsageError_Issue1468()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_query_too_long");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var query = new string('a', QueryLimits.MaxQueryLength + 1);
-
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [query, "--db", dbPath],
+            var (literalLongExitCode, _, literalLongStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [longQuery, "--db", dbPath],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains(QueryLimits.FormatQueryTooLongError(), stderr);
-            Assert.Contains("Shorten the search text", stderr);
-            Assert.DoesNotContain("database error:", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
+            Assert.Equal(CommandExitCodes.UsageError, literalLongExitCode);
+            Assert.Contains(QueryLimits.FormatQueryTooLongError(), literalLongStderr);
+            Assert.Contains("Shorten the search text", literalLongStderr);
+            Assert.DoesNotContain("database error:", literalLongStderr);
 
-    [Fact]
-    public void RunSearch_LiteralTokenCountTooHighReturnsUsageError_Issue3081()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_literal_terms_too_many");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var query = string.Join(' ', Enumerable.Range(0, DbReader.MaxLiteralSearchTokenCount + 1).Select(i => $"t{i:D3}"));
+            var tokenQuery = string.Join(' ', Enumerable.Range(0, DbReader.MaxLiteralSearchTokenCount + 1).Select(i => $"t{i:D3}"));
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [query, "--db", dbPath],
+            var (tokenExitCode, _, tokenStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [tokenQuery, "--db", dbPath],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("literal search query has too many terms", stderr);
-            Assert.Contains("smaller literal queries", stderr);
-            Assert.DoesNotContain("database error:", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
+            Assert.Equal(CommandExitCodes.UsageError, tokenExitCode);
+            Assert.Contains("literal search query has too many terms", tokenStderr);
+            Assert.Contains("smaller literal queries", tokenStderr);
+            Assert.DoesNotContain("database error:", tokenStderr);
 
-    [Fact]
-    public void RunSearch_RawFtsTooManyNearOperatorsReturnsUsageError()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_too_many_near");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } }");
-            var query = TestProjectHelper.RepeatJoinedEntry("NEAR(spawn app, 5)", DbReader.MaxRawFtsNearOperators + 1, " OR ");
+            var nearQuery = TestProjectHelper.RepeatJoinedEntry("NEAR(spawn app, 5)", DbReader.MaxRawFtsNearOperators + 1, " OR ");
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [query, "--db", dbPath, "--fts", "--count"],
+            var (nearExitCode, _, nearStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [nearQuery, "--db", dbPath, "--fts", "--count"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("raw FTS5 query is too complex", stderr);
-            Assert.Contains("NEAR operators", stderr);
-            Assert.DoesNotContain("database error:", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
+            Assert.Equal(CommandExitCodes.UsageError, nearExitCode);
+            Assert.Contains("raw FTS5 query is too complex", nearStderr);
+            Assert.Contains("NEAR operators", nearStderr);
+            Assert.DoesNotContain("database error:", nearStderr);
 
-    [Fact]
-    public void RunSearch_RawFtsLowercaseOperatorWordsAreTerms()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_lowercase_terms");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "and or not near");
-            var query = TestProjectHelper.RepeatJoinedEntry("and", DbReader.MaxRawFtsBooleanOperators + 1, " ");
+            var lowercaseQuery = TestProjectHelper.RepeatJoinedEntry("and", DbReader.MaxRawFtsBooleanOperators + 1, " ");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [query, "--db", dbPath, "--fts", "--count"],
+            var (lowercaseExitCode, lowercaseStdout, lowercaseStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [lowercaseQuery, "--db", dbPath, "--fts", "--count"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("1", stdout.Trim());
-            Assert.DoesNotContain("too complex", stderr);
+            Assert.Equal(CommandExitCodes.Success, lowercaseExitCode);
+            Assert.Equal("1", lowercaseStdout.Trim());
+            Assert.DoesNotContain("too complex", lowercaseStderr);
         }
         finally
         {
@@ -7881,30 +7816,31 @@ jobs:
         }
     }
 
-    [Theory]
-    [InlineData("rb", "ruby", "package/example.rb")]
-    [InlineData("fs", "fsharp", "Module.fs")]
-    public void RunSearch_AcceptsRubyAndFsharpLangAliases(string alias, string canonicalLang, string filePath)
+    [Fact]
+    public void RunSearch_AcceptsRubyAndFsharpLangAliases()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_{canonicalLang}_{alias}_lang_alias");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_ruby_fsharp_lang_aliases");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                filePath,
-                canonicalLang,
-                """
-                public_api
-                """);
+            var cases = new[]
+            {
+                (Alias: "rb", CanonicalLang: "ruby", FilePath: "package/example.rb"),
+                (Alias: "fs", CanonicalLang: "fsharp", FilePath: "Module.fs"),
+            };
+            foreach (var testCase in cases)
+                TestProjectHelper.InsertIndexedFile(dbPath, testCase.FilePath, testCase.CanonicalLang, "public_api\n");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["public_api", "--db", dbPath, "--lang", alias, "--exact", "--count"],
-                _jsonOptions));
+            foreach (var testCase in cases)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    ["public_api", "--db", dbPath, "--lang", testCase.Alias, "--exact", "--count"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("1", stdout.Trim());
-            Assert.Equal(string.Empty, stderr);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("1", stdout.Trim());
+                Assert.Equal(string.Empty, stderr);
+            }
         }
         finally
         {
@@ -8115,25 +8051,26 @@ jobs:
         }
     }
 
-    [Theory]
-    [InlineData("--path")]
-    [InlineData("--exclude-path")]
-    public void RunSearch_InvalidPathGlobReturnsUsageErrorBeforeQuery_Issue2073(string optionName)
+    [Fact]
+    public void RunSearch_InvalidPathGlobsReturnUsageErrorBeforeQuery_Issue2073()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2073_invalid_glob");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["QueryCommandRunner", "--db", dbPath, optionName, "[*-z]"],
-                _jsonOptions));
+            foreach (var optionName in new[] { "--path", "--exclude-path" })
+            {
+                var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    ["QueryCommandRunner", "--db", dbPath, optionName, "[*-z]"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains($"Error: {optionName} '[*-z]' is not a valid glob", stderr);
-            Assert.Contains("character classes are not supported", stderr);
-            Assert.Contains("Hint: fix the invalid or missing option value", stderr);
-            Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("search")}", stderr);
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Contains($"Error: {optionName} '[*-z]' is not a valid glob", stderr);
+                Assert.Contains("character classes are not supported", stderr);
+                Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+                Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("search")}", stderr);
+            }
         }
         finally
         {
@@ -8457,23 +8394,24 @@ jobs:
     // UsageError と対応する validation message で fail-close する。以前のテストは値欠如
     // （今は TryParsePositiveInt 前に短絡する）しかカバーしていなかったため、
     // これらのオプション固有の数値契約を明示的にロックする。
-    [Theory]
-    [InlineData("0")]
-    [InlineData("abc")]
-    public void RunExcerpt_RejectsInvalidFocusColumnValue(string invalidValue)
+    [Fact]
+    public void RunExcerpt_RejectsInvalidFocusColumnValues()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_excerpt_invalid_focus_column_{invalidValue}");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_invalid_focus_column");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "sample");
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
-                ["README.md", "--db", dbPath, "--start", "1", "--focus-column", invalidValue, "--json"],
-                _jsonOptions));
+            foreach (var invalidValue in new[] { "0", "abc" })
+            {
+                var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                    ["README.md", "--db", dbPath, "--start", "1", "--focus-column", invalidValue, "--json"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--focus-column requires an integer between 1 and 100000", stderr);
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Contains("--focus-column requires an integer between 1 and 100000", stderr);
+            }
         }
         finally
         {
@@ -8839,104 +8777,58 @@ jobs:
     }
 
     [Fact]
-    public void RunExcerpt_FocusLineWithoutFocusColumnReturnsUsageError()
+    public void RunExcerpt_LocationAndFocusValidationReuseOneFixture_Issue3916()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_focus_dep");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "dist/data.txt", "text", new string('a', 320) + "TARGET" + new string('b', 320));
+            TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "line one\nline two\nline three\n");
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+            var (focusDependencyExitCode, _, focusDependencyStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
                 ["dist/data.txt", "--db", dbPath, "--start", "1", "--end", "1", "--json", "--max-line-width", "96", "--focus-line", "1"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--focus-line requires --focus-column", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
+            Assert.Equal(CommandExitCodes.UsageError, focusDependencyExitCode);
+            Assert.Contains("--focus-line requires --focus-column", focusDependencyStderr);
 
-    [Fact]
-    public void RunExcerpt_FocusLengthWithoutFocusColumnReturnsSpecificUsageError_Issue3916()
-    {
-        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
-            ["dist/data.txt", "--start", "1", "--focus-length", "6"],
-            _jsonOptions));
+            var (focusLengthExitCode, _, focusLengthStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["dist/data.txt", "--start", "1", "--focus-length", "6"],
+                _jsonOptions));
 
-        Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains("--focus-length requires --focus-column", stderr);
-    }
+            Assert.Equal(CommandExitCodes.UsageError, focusLengthExitCode);
+            Assert.Contains("--focus-length requires --focus-column", focusLengthStderr);
 
-    [Fact]
-    public void RunExcerpt_AcceptsPathStartEndLocationArgument_Issue3916()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_location_range");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "line one\nline two\nline three\n");
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+            var (locationExitCode, locationStdout, locationStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
                 ["README.md:2-3", "--db", dbPath, "--json"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            var root = document.RootElement;
-            Assert.Equal("README.md", root.GetProperty("path").GetString());
-            Assert.Equal(2, root.GetProperty("start_line").GetInt32());
-            Assert.Equal(3, root.GetProperty("end_line").GetInt32());
-            Assert.Contains("line two", root.GetProperty("content").GetString(), StringComparison.Ordinal);
-            Assert.Contains("line three", root.GetProperty("content").GetString(), StringComparison.Ordinal);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
+            Assert.Equal(CommandExitCodes.Success, locationExitCode);
+            Assert.Equal(string.Empty, locationStderr);
+            using (var locationDocument = ParseJsonOutput(locationStdout))
+            {
+                var root = locationDocument.RootElement;
+                Assert.Equal("README.md", root.GetProperty("path").GetString());
+                Assert.Equal(2, root.GetProperty("start_line").GetInt32());
+                Assert.Equal(3, root.GetProperty("end_line").GetInt32());
+                Assert.Contains("line two", root.GetProperty("content").GetString(), StringComparison.Ordinal);
+                Assert.Contains("line three", root.GetProperty("content").GetString(), StringComparison.Ordinal);
+            }
 
-    [Fact]
-    public void RunExcerpt_FocusLineOutsideReturnedRangeReturnsUsageError()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_focus_range");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "line one\nline two\nline three");
-
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+            var (focusLineExitCode, _, focusLineStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
                 ["README.md", "--db", dbPath, "--start", "2", "--end", "2", "--focus-line", "999", "--focus-column", "1", "--json"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--focus-line (999) must be within the returned excerpt range", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
+            Assert.Equal(CommandExitCodes.UsageError, focusLineExitCode);
+            Assert.Contains("--focus-line (999) must be within the returned excerpt range", focusLineStderr);
 
-    [Fact]
-    public void RunExcerpt_FocusColumnOutsideFocusedLineReturnsUsageError()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_focus_column_range");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "dist/data.txt", "text", new string('a', 320) + "TARGET" + new string('b', 320));
-
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+            var (focusColumnExitCode, _, focusColumnStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
                 ["dist/data.txt", "--db", dbPath, "--start", "1", "--end", "1", "--focus-column", "9999", "--max-line-width", "40", "--json"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--focus-column (9999) must be within the focused line length", stderr);
+            Assert.Equal(CommandExitCodes.UsageError, focusColumnExitCode);
+            Assert.Contains("--focus-column (9999) must be within the focused line length", focusColumnStderr);
         }
         finally
         {
@@ -8945,7 +8837,7 @@ jobs:
     }
 
     [Fact]
-    public void RunFind_JsonClampsLongSingleLineSnippet()
+    public void RunFind_JsonCoversClampedAndUnclampedLongSingleLineSnippets()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_long_line");
         try
@@ -8975,6 +8867,19 @@ jobs:
             Assert.True(charCount.GetInt32() > 0);
             Assert.Equal(charCount.GetInt32(), truncationContext.GetProperty("total_chars").GetInt32());
             Assert.Equal("line_width", truncationContext.GetProperty("reason").GetString());
+
+            var (unclampedExitCode, unclampedStdout, unclampedStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["target", "--db", dbPath, "--path", "dist/search.txt", "--json", "--max-line-width", "0"],
+                _jsonOptions));
+
+            using var unclampedDocument = ParseJsonOutput(unclampedStdout);
+            var unclampedJson = unclampedDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, unclampedExitCode);
+            Assert.Equal(string.Empty, unclampedStderr);
+            Assert.False(unclampedJson.GetProperty("snippet_truncated").GetBoolean());
+            Assert.Contains("target", unclampedJson.GetProperty("snippet").GetString());
+            Assert.True(unclampedJson.GetProperty("snippet").GetString()!.Length > 512);
         }
         finally
         {
@@ -8983,70 +8888,27 @@ jobs:
     }
 
     [Fact]
-    public void RunFind_JsonTreatsZeroMaxLineWidthAsUnclamped()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_long_line_zero_width");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var longLine = new string('a', 320) + "target" + new string('b', 320);
-            TestProjectHelper.InsertIndexedFile(dbPath, "dist/search.txt", "text", longLine);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
-                ["target", "--db", dbPath, "--path", "dist/search.txt", "--json", "--max-line-width", "0"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.False(json.GetProperty("snippet_truncated").GetBoolean());
-            Assert.Contains("target", json.GetProperty("snippet").GetString());
-            Assert.True(json.GetProperty("snippet").GetString()!.Length > 512);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Theory]
-    [InlineData("--exact", "--exact-substring")]
-    [InlineData("--exact", "--exact-name")]
-    [InlineData("--exact-substring", "--exact-name")]
-    public void RunSearch_RejectsCombinedExactFlags(string first, string second)
+    public void RunSearch_RejectsCombinedExactFlagSets()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_combined_exact");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["needle", "--db", dbPath, first, second],
-                _jsonOptions));
+            var flagSets = new[]
+            {
+                new[] { "--exact", "--exact-substring" },
+                new[] { "--exact", "--exact-name" },
+                new[] { "--exact-substring", "--exact-name" },
+                new[] { "--exact", "--exact-substring", "--exact-name" },
+            };
+            foreach (var flags in flagSets)
+            {
+                var args = new[] { "needle", "--db", dbPath }.Concat(flags).ToArray();
+                var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(args, _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("pass only one of --exact, --exact-substring, --token-boundary, --exact-name", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunSearch_RejectsAllThreeExactFlagsTogether()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_triple_exact");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["needle", "--db", dbPath, "--exact", "--exact-substring", "--exact-name"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("pass only one of --exact, --exact-substring, --token-boundary, --exact-name", stderr);
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Contains("pass only one of --exact, --exact-substring, --token-boundary, --exact-name", stderr);
+            }
         }
         finally
         {
@@ -9366,7 +9228,7 @@ jobs:
     }
 
     [Fact]
-    public void RunSearch_WithTypeScriptLangAliasesFiltersTypeScriptFiles()
+    public void RunSearch_LanguageAliasesFilterTypeScriptAndJavaFiles()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_typescript_lang_alias");
         try
@@ -9381,31 +9243,6 @@ jobs:
                     return "TypeScript";
                 }
                 """);
-
-            foreach (var langAlias in new[] { "ts", "tsx", "cts", "mts" })
-            {
-                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                    ["TypeScript", "--db", dbPath, "--lang", langAlias, "--count"],
-                    _jsonOptions));
-
-                Assert.Equal(CommandExitCodes.Success, exitCode);
-                Assert.Equal("1", stdout.Trim());
-                Assert.Equal(string.Empty, stderr);
-            }
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunSearch_WithJavaLangAliasFiltersJavaFiles()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_java_lang_alias");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
                 "src/App.java",
@@ -9418,13 +9255,24 @@ jobs:
                 }
                 """);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            foreach (var langAlias in new[] { "ts", "tsx", "cts", "mts" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    ["TypeScript", "--db", dbPath, "--lang", langAlias, "--count"],
+                    _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("1", stdout.Trim());
+                Assert.Equal(string.Empty, stderr);
+            }
+
+            var (javaExitCode, javaStdout, javaStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["Java", "--db", dbPath, "--lang", "jav", "--count"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("1", stdout.Trim());
-            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(CommandExitCodes.Success, javaExitCode);
+            Assert.Equal("1", javaStdout.Trim());
+            Assert.Equal(string.Empty, javaStderr);
         }
         finally
         {
@@ -9433,7 +9281,7 @@ jobs:
     }
 
     [Fact]
-    public void RunSearch_ExactSubstringTreatsCSharpVerbatimQualifiedNamesAsCanonical()
+    public void ExactCanonicalFixtureCoversCSharpJavaAndKotlinForms()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_csharp_verbatim");
         try
@@ -9448,6 +9296,23 @@ jobs:
 
                 using @Foo.@Bar;
                 """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.kt",
+                "kotlin",
+                """
+                fun `when`() {}
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.java",
+                "java",
+                """
+                public class \u0046oo
+                {
+                    void match() {}
+                }
+                """);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["Foo.Bar", "--db", dbPath, "--path", "src/app.cs", "--json", "--exact-substring", "--count"],
@@ -9460,148 +9325,54 @@ jobs:
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(1, json.GetProperty("count").GetInt32());
             Assert.Equal(1, json.GetProperty("files").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunSearch_ExactSubstringTreatsJavaUnicodeEscapesAsCanonical()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_java_unicode");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/App.java",
-                "java",
-                """
-                public class \u0046oo
-                {
-                    void match() {}
-                }
-                """);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["Foo", "--db", dbPath, "--path", "src/App.java", "--json", "--exact-substring", "--count"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.Equal(1, json.GetProperty("files").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunFind_ExactTreatsJavaUnicodeEscapesAsCanonical()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_exact_java_unicode");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/App.java",
-                "java",
-                """
-                public class \u0046oo
-                {
-                    void match() {}
-                }
-                """);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
-                ["Foo", "--db", dbPath, "--path", "src/App.java", "--json", "--exact", "--count"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.Equal(1, json.GetProperty("files").GetInt32());
-            Assert.Equal(1, json.GetProperty("file_count").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunSearch_ExactSubstringTreatsKotlinBacktickedIdentifiersAsCanonical()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_kotlin_backticks");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/App.kt",
-                "kotlin",
-                """
-                fun `when`() {}
-                """);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["when", "--db", dbPath, "--path", "src/App.kt", "--json", "--exact-substring", "--count"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.Equal(1, json.GetProperty("files").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunFind_ExactTreatsCSharpVerbatimQualifiedNamesAsCanonical()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_exact_csharp_verbatim");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/app.cs",
-                "csharp",
-                """
-                namespace Demo;
-
-                using @Foo.@Bar;
-                """);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            var (findExitCode, findStdout, findStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
                 ["Foo.Bar", "--db", dbPath, "--path", "src/app.cs", "--json", "--exact", "--count"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+            using var findDocument = ParseJsonOutput(findStdout);
+            var findJson = findDocument.RootElement;
+            Assert.Equal(CommandExitCodes.Success, findExitCode);
+            Assert.Equal(string.Empty, findStderr);
+            Assert.Equal(1, findJson.GetProperty("count").GetInt32());
+            Assert.Equal(1, findJson.GetProperty("files").GetInt32());
+            Assert.Equal(1, findJson.GetProperty("file_count").GetInt32());
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.Equal(1, json.GetProperty("files").GetInt32());
-            Assert.Equal(1, json.GetProperty("file_count").GetInt32());
+            var (kotlinExitCode, kotlinStdout, kotlinStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["when", "--db", dbPath, "--path", "src/App.kt", "--json", "--exact-substring", "--count"],
+                _jsonOptions));
+
+            using var kotlinDocument = ParseJsonOutput(kotlinStdout);
+            var kotlinJson = kotlinDocument.RootElement;
+            Assert.Equal(CommandExitCodes.Success, kotlinExitCode);
+            Assert.Equal(string.Empty, kotlinStderr);
+            Assert.Equal(1, kotlinJson.GetProperty("count").GetInt32());
+            Assert.Equal(1, kotlinJson.GetProperty("files").GetInt32());
+
+            var (javaExitCode, javaStdout, javaStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Foo", "--db", dbPath, "--path", "src/App.java", "--json", "--exact-substring", "--count"],
+                _jsonOptions));
+
+            using var javaDocument = ParseJsonOutput(javaStdout);
+            var javaJson = javaDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, javaExitCode);
+            Assert.Equal(string.Empty, javaStderr);
+            Assert.Equal(1, javaJson.GetProperty("count").GetInt32());
+            Assert.Equal(1, javaJson.GetProperty("files").GetInt32());
+
+            var (javaFindExitCode, javaFindStdout, javaFindStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["Foo", "--db", dbPath, "--path", "src/App.java", "--json", "--exact", "--count"],
+                _jsonOptions));
+
+            using var javaFindDocument = ParseJsonOutput(javaFindStdout);
+            var javaFindJson = javaFindDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, javaFindExitCode);
+            Assert.Equal(string.Empty, javaFindStderr);
+            Assert.Equal(1, javaFindJson.GetProperty("count").GetInt32());
+            Assert.Equal(1, javaFindJson.GetProperty("files").GetInt32());
+            Assert.Equal(1, javaFindJson.GetProperty("file_count").GetInt32());
         }
         finally
         {

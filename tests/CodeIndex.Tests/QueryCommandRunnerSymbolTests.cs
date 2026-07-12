@@ -47,7 +47,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSymbols_FormatCompact_ReturnsBoundedRows_Issue4165()
+    public void RunSymbols_CompactAndSummaryModesReuseEditorFixture_Issues4165And4317()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_compact_issue4165");
         try
@@ -81,6 +81,42 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, row.GetProperty("definition_sites").GetInt32());
             Assert.False(row.TryGetProperty("signature", out _));
             Assert.True(root.TryGetProperty("query_context", out _));
+
+            var (aliasExitCode, aliasStdout, aliasStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Run", "--db", dbPath, "--compact", "--exact-name", "--sort", "hotspot", "--lang", "csharp", "--kind", "function", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.True(aliasExitCode == CommandExitCodes.Success, aliasStderr);
+            Assert.Equal(string.Empty, aliasStderr);
+
+            using var aliasDocument = ParseJsonOutput(aliasStdout);
+            var aliasRoot = aliasDocument.RootElement;
+            var aliasRow = Assert.Single(aliasRoot.GetProperty("symbols").EnumerateArray().ToList());
+
+            Assert.Equal("compact", aliasRoot.GetProperty("format").GetString());
+            Assert.Equal(1, aliasRoot.GetProperty("emitted_count").GetInt32());
+            Assert.Equal("Run", aliasRow.GetProperty("name").GetString());
+            Assert.Equal("src/App.cs", aliasRow.GetProperty("path").GetString());
+
+            var (summaryExitCode, summaryStdout, summaryStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Run", "--db", dbPath, "--json", "--summary-only", "--exact-name", "--lang", "csharp", "--kind", "function", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.True(summaryExitCode == CommandExitCodes.Success, summaryStderr);
+            Assert.Equal(string.Empty, summaryStderr);
+
+            using var summaryDocument = ParseJsonOutput(summaryStdout);
+            var summaryRoot = summaryDocument.RootElement;
+
+            Assert.Equal(1, summaryRoot.GetProperty("count").GetInt32());
+            Assert.Equal(0, summaryRoot.GetProperty("emitted_count").GetInt32());
+            Assert.Equal(1, summaryRoot.GetProperty("omitted_count").GetInt32());
+            Assert.True(summaryRoot.GetProperty("summary_only").GetBoolean());
+            Assert.False(summaryRoot.GetProperty("truncated").GetBoolean());
+            Assert.Equal(1, summaryRoot.GetProperty("summary_only_omitted_count").GetInt32());
+            Assert.False(summaryRoot.TryGetProperty("row_limit_reached", out _));
+            Assert.False(summaryRoot.TryGetProperty("symbols", out _));
+            Assert.Equal("summary_only", Assert.Single(summaryRoot.GetProperty("omitted_by").EnumerateArray().ToList()).GetString());
         }
         finally
         {
@@ -89,95 +125,29 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSymbols_CompactAliasReturnsBoundedRows_Issue4317()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_compact_alias_issue4317");
-        try
-        {
-            var dbPath = CreateSymbolsEditorFormatFixtureDb(projectRoot);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["Run", "--db", dbPath, "--compact", "--exact-name", "--sort", "hotspot", "--lang", "csharp", "--kind", "function", "--limit", "1"],
-                _jsonOptions));
-
-            Assert.True(exitCode == CommandExitCodes.Success, stderr);
-            Assert.Equal(string.Empty, stderr);
-
-            using var document = ParseJsonOutput(stdout);
-            var root = document.RootElement;
-            var row = Assert.Single(root.GetProperty("symbols").EnumerateArray().ToList());
-
-            Assert.Equal("compact", root.GetProperty("format").GetString());
-            Assert.Equal(1, root.GetProperty("emitted_count").GetInt32());
-            Assert.Equal("Run", row.GetProperty("name").GetString());
-            Assert.Equal("src/App.cs", row.GetProperty("path").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Theory]
-    [InlineData("--")]
-    [InlineData("--query")]
-    public void RunSymbols_CompactLiteralQueryIsNotExpanded_Issue4317(string queryPrefix)
+    public void RunSymbols_CompactLiteralQueryFormsAreNotExpanded_Issue4317()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_compact_literal_issue4317");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var args = queryPrefix == "--"
-                ? new[] { "--", "--compact", "--db", dbPath, "--format", "count" }
-                : ["--query", "--compact", "--db", dbPath, "--format", "count"];
+            foreach (var args in new[]
+            {
+                new[] { "--", "--compact", "--db", dbPath, "--format", "count" },
+                new[] { "--query", "--compact", "--db", dbPath, "--format", "count" },
+            })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(args, _jsonOptions));
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                args,
-                _jsonOptions));
+                Assert.True(exitCode == CommandExitCodes.Success, stderr);
+                Assert.Equal(string.Empty, stderr);
 
-            Assert.True(exitCode == CommandExitCodes.Success, stderr);
-            Assert.Equal(string.Empty, stderr);
-
-            using var document = ParseJsonOutput(stdout);
-            var root = document.RootElement;
-
-            Assert.Equal("--compact", root.GetProperty("query").GetString());
-            Assert.False(root.TryGetProperty("format", out _));
-            Assert.Equal(0, root.GetProperty("count").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunSymbols_SummaryOnlyJsonOmitsRowsWithMetadata_Issue4165()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_summary_only_issue4165");
-        try
-        {
-            var dbPath = CreateSymbolsEditorFormatFixtureDb(projectRoot);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["Run", "--db", dbPath, "--json", "--summary-only", "--exact-name", "--lang", "csharp", "--kind", "function", "--limit", "1"],
-                _jsonOptions));
-
-            Assert.True(exitCode == CommandExitCodes.Success, stderr);
-            Assert.Equal(string.Empty, stderr);
-
-            using var document = ParseJsonOutput(stdout);
-            var root = document.RootElement;
-
-            Assert.Equal(1, root.GetProperty("count").GetInt32());
-            Assert.Equal(0, root.GetProperty("emitted_count").GetInt32());
-            Assert.Equal(1, root.GetProperty("omitted_count").GetInt32());
-            Assert.True(root.GetProperty("summary_only").GetBoolean());
-            Assert.False(root.GetProperty("truncated").GetBoolean());
-            Assert.Equal(1, root.GetProperty("summary_only_omitted_count").GetInt32());
-            Assert.False(root.TryGetProperty("row_limit_reached", out _));
-            Assert.False(root.TryGetProperty("symbols", out _));
-            Assert.Equal("summary_only", Assert.Single(root.GetProperty("omitted_by").EnumerateArray().ToList()).GetString());
+                using var document = ParseJsonOutput(stdout);
+                var root = document.RootElement;
+                Assert.Equal("--compact", root.GetProperty("query").GetString());
+                Assert.False(root.TryGetProperty("format", out _));
+                Assert.Equal(0, root.GetProperty("count").GetInt32());
+            }
         }
         finally
         {
@@ -294,40 +264,21 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSymbols_JsonArrayReturnsSingleArray_Issue3935()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_json_array_issue3935");
-        try
-        {
-            var dbPath = CreateSymbolsEditorFormatFixtureDb(projectRoot);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["Run", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var rows = document.RootElement.EnumerateArray().ToList();
-            var row = Assert.Single(rows);
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("Run", row.GetProperty("name").GetString());
-            Assert.Equal("src/App.cs", row.GetProperty("path").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunSymbols_EditorAndDiagnosticFormatsReturnLocations_Issue3935()
+    public void RunSymbols_ArrayEditorAndDiagnosticFormatsReuseLocations_Issue3935()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_editor_formats_issue3935");
         try
         {
             var dbPath = CreateSymbolsEditorFormatFixtureDb(projectRoot);
             string[] baseArgs = ["Run", "--db", dbPath, "--exact-name", "--lang", "csharp", "--kind", "function"];
+
+            var (arrayExitCode, arrayStdout, arrayStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols([.. baseArgs, "--json=array"], _jsonOptions));
+            using var arrayDocument = ParseJsonOutput(arrayStdout);
+            var arrayRow = Assert.Single(arrayDocument.RootElement.EnumerateArray().ToList());
+            Assert.Equal(CommandExitCodes.Success, arrayExitCode);
+            Assert.Equal(string.Empty, arrayStderr);
+            Assert.Equal("Run", arrayRow.GetProperty("name").GetString());
+            Assert.Equal("src/App.cs", arrayRow.GetProperty("path").GetString());
 
             var (lspExitCode, lspStdout, lspStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols([.. baseArgs, "--format", "lsp"], _jsonOptions));
             using var lspDocument = ParseJsonOutput(lspStdout);
@@ -557,48 +508,35 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
-    [InlineData("hotspot")]
-    [InlineData("references")]
-    public void RunSymbols_SortByReferenceSignalsAddsRankingMetadata_Issue3451(string sortMode)
+    [Fact]
+    public void RunSymbols_AuditSortModesReuseRankingFixture_Issue3451()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_sort_reference_signals");
         try
         {
             var dbPath = CreateSymbolSortFixtureDb(projectRoot);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--kind", "function", "--lang", "csharp", "--path", "src/Beta.cs", "--sort", sortMode, "--limit", "4"],
-                _jsonOptions));
+            foreach (var sortMode in new[] { "hotspot", "references" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                    ["--db", dbPath, "--json", "--kind", "function", "--lang", "csharp", "--path", "src/Beta.cs", "--sort", sortMode, "--limit", "4"],
+                    _jsonOptions));
 
-            Assert.True(exitCode == CommandExitCodes.Success, $"exit={exitCode}; stderr={stderr}; stdout={stdout}");
-            Assert.Equal(string.Empty, stderr);
-            var rows = ParseJsonLines(stdout).Select(document => document.RootElement).ToList();
-            Assert.Equal("ShortHot", rows[0].GetProperty("name").GetString());
-            Assert.Equal(sortMode, rows[0].GetProperty("sort_mode").GetString());
-            Assert.True(rows[0].GetProperty("reference_count").GetInt32() >= 2);
-            Assert.True(rows[0].GetProperty("hotspot_score").GetDouble() > 0);
-            Assert.True(rows[0].GetProperty("ranking_reference_score").GetDouble() > 0);
-            Assert.True(rows[0].GetProperty("ranking_hotspot_score").GetDouble() > 0);
-            Assert.True(rows[0].GetProperty("generic_name_penalty").GetDouble() > 0);
-            Assert.True(rows[0].GetProperty("structural_rank_penalty").GetDouble() > 0);
-            Assert.True(rows[0].GetProperty("definition_sites").GetInt32() > 0);
-            Assert.True(rows[0].GetProperty("size_lines").GetInt32() > 0);
-            Assert.True(rows[0].GetProperty("complexity_score").GetDouble() > 0);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunSymbols_SortBySizeAndPathOrdersAuditRows_Issue3451()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_sort_size_path");
-        try
-        {
-            var dbPath = CreateSymbolSortFixtureDb(projectRoot);
+                Assert.True(exitCode == CommandExitCodes.Success, $"exit={exitCode}; stderr={stderr}; stdout={stdout}");
+                Assert.Equal(string.Empty, stderr);
+                var rows = ParseJsonLines(stdout).Select(document => document.RootElement).ToList();
+                Assert.Equal("ShortHot", rows[0].GetProperty("name").GetString());
+                Assert.Equal(sortMode, rows[0].GetProperty("sort_mode").GetString());
+                Assert.True(rows[0].GetProperty("reference_count").GetInt32() >= 2);
+                Assert.True(rows[0].GetProperty("hotspot_score").GetDouble() > 0);
+                Assert.True(rows[0].GetProperty("ranking_reference_score").GetDouble() > 0);
+                Assert.True(rows[0].GetProperty("ranking_hotspot_score").GetDouble() > 0);
+                Assert.True(rows[0].GetProperty("generic_name_penalty").GetDouble() > 0);
+                Assert.True(rows[0].GetProperty("structural_rank_penalty").GetDouble() > 0);
+                Assert.True(rows[0].GetProperty("definition_sites").GetInt32() > 0);
+                Assert.True(rows[0].GetProperty("size_lines").GetInt32() > 0);
+                Assert.True(rows[0].GetProperty("complexity_score").GetDouble() > 0);
+            }
 
             var (sizeExitCode, sizeStdout, sizeStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["--db", dbPath, "--json", "--kind", "function", "--lang", "csharp", "--path", "src/Beta.cs", "--sort", "size", "--limit", "1"],
@@ -1513,7 +1451,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_WithJsonIncludesConfidenceBuckets()
+    public void RunUnused_JsonAndHumanConfidenceBucketsShareFixture()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
         try
@@ -1563,6 +1501,21 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("UseIOptions", symbols[8].GetProperty("name").GetString());
             Assert.Equal("reflection_or_config_suspect", symbols[8].GetProperty("unused_bucket").GetString());
             Assert.Contains(symbols[8].GetProperty("unused_reason_tags").EnumerateArray(), tag => tag.GetString() == "config_or_metadata_surface");
+
+            var (humanExitCode, humanStdout, humanStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--all", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("Likely unused private (1)", humanStdout);
+            Assert.Contains("Maybe unused non-public (1)", humanStdout);
+            Assert.Contains("Public/exported with no refs (3)", humanStdout);
+            Assert.Contains("Intentional-surface suspects (4)", humanStdout);
+            Assert.Contains("confidence=medium", humanStdout);
+            Assert.Contains("confidence=low", humanStdout);
+            Assert.Contains("domain=private_or_file_local", humanStdout);
+            Assert.Contains("domain=configuration_contract", humanStdout);
+            Assert.Contains("returned potentially unused symbols; returned buckets:", humanStderr);
         }
         finally
         {
@@ -1571,7 +1524,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_DefaultJsonSuppressesLowConfidenceContractDomains_Issue4120()
+    public void RunUnused_DefaultJsonRowsAndCountsShareSuppressionFixture_Issue4120()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
         try
@@ -1600,6 +1553,69 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(7, json.GetProperty("summary").GetProperty("suppressed").GetProperty("suppressed_count").GetInt32());
             Assert.Contains("--all", suppression.GetProperty("include_suppressed_hint").GetString());
             Assert.True(json.GetProperty("query_context").GetProperty("default_suppression").GetBoolean());
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--count"],
+                _jsonOptions));
+
+            using var countDocument = ParseJsonOutput(countStdout);
+            var countJson = countDocument.RootElement;
+            var countSuppression = countJson.GetProperty("default_suppression");
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            Assert.Equal(2, countJson.GetProperty("count").GetInt32());
+            Assert.Equal(1, countJson.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
+            Assert.Equal(1, countJson.GetProperty("returned_bucket_counts").GetProperty("maybe_unused_nonpublic").GetInt32());
+            Assert.False(countJson.GetProperty("returned_bucket_counts").TryGetProperty("public_or_exported_no_refs", out _));
+            Assert.False(countJson.GetProperty("returned_contract_domain_counts").TryGetProperty("public_api_surface", out _));
+            Assert.True(countSuppression.GetProperty("applied").GetBoolean());
+            Assert.Equal(7, countSuppression.GetProperty("suppressed_count").GetInt32());
+            Assert.Equal(3, countSuppression.GetProperty("suppressed_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(4, countSuppression.GetProperty("suppressed_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
+            Assert.Equal(7, countSuppression.GetProperty("suppressed_confidence_counts").GetProperty("low").GetInt32());
+            Assert.Equal(7, countJson.GetProperty("summary").GetProperty("suppressed").GetProperty("suppressed_count").GetInt32());
+            Assert.True(countJson.GetProperty("query_context").GetProperty("default_suppression").GetBoolean());
+
+            var (allCountExitCode, allCountStdout, allCountStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--all", "--lang", "csharp", "--count"],
+                _jsonOptions));
+            using var allCountDocument = ParseJsonOutput(allCountStdout);
+            var allCountJson = allCountDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, allCountExitCode);
+            Assert.Equal(string.Empty, allCountStderr);
+            Assert.Equal(9, allCountJson.GetProperty("count").GetInt32());
+            Assert.False(allCountJson.TryGetProperty("default_suppression", out _));
+            Assert.True(allCountJson.GetProperty("query_context").GetProperty("all").GetBoolean());
+
+            var (summaryExitCode, summaryStdout, summaryStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--summary-only", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.True(summaryExitCode == CommandExitCodes.Success, $"stdout: {summaryStdout}\nstderr: {summaryStderr}");
+            Assert.Equal(string.Empty, summaryStderr);
+            using var summaryDocument = ParseJsonOutput(summaryStdout);
+            var summaryJson = summaryDocument.RootElement;
+            var omittedSections = summaryJson.GetProperty("omitted_sections").EnumerateArray().Select(value => value.GetString()).ToArray();
+
+            Assert.Equal(2, summaryJson.GetProperty("count").GetInt32());
+            Assert.True(summaryJson.GetProperty("summary_only").GetBoolean());
+            Assert.True(summaryJson.GetProperty("compact").GetBoolean());
+            Assert.Contains("bucket_taxonomy", omittedSections);
+            Assert.False(summaryJson.TryGetProperty("bucket_taxonomy", out _));
+            Assert.False(summaryJson.TryGetProperty("symbols", out _));
+
+            var (textCountExitCode, textCountStdout, textCountStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--lang", "csharp", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, textCountExitCode);
+            Assert.Equal("2", textCountStdout.Trim());
+            Assert.Contains("7 low-confidence contract-domain candidates suppressed by default", textCountStderr);
+            Assert.Contains("use --all to include them", textCountStderr);
+            Assert.Contains("public_api_surface: 3", textCountStderr);
+            Assert.Contains("configuration_contract: 4", textCountStderr);
         }
         finally
         {
@@ -1656,82 +1672,6 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_DefaultJsonCountSuppressesLowConfidenceContractDomains_Issue4120()
-    {
-        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
-        try
-        {
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--count"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var suppression = json.GetProperty("default_suppression");
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(2, json.GetProperty("count").GetInt32());
-            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
-            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("maybe_unused_nonpublic").GetInt32());
-            Assert.False(json.GetProperty("returned_bucket_counts").TryGetProperty("public_or_exported_no_refs", out _));
-            Assert.False(json.GetProperty("returned_contract_domain_counts").TryGetProperty("public_api_surface", out _));
-            Assert.True(suppression.GetProperty("applied").GetBoolean());
-            Assert.Equal(7, suppression.GetProperty("suppressed_count").GetInt32());
-            Assert.Equal(3, suppression.GetProperty("suppressed_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
-            Assert.Equal(4, suppression.GetProperty("suppressed_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
-            Assert.Equal(7, suppression.GetProperty("suppressed_confidence_counts").GetProperty("low").GetInt32());
-            Assert.Equal(7, json.GetProperty("summary").GetProperty("suppressed").GetProperty("suppressed_count").GetInt32());
-            Assert.True(json.GetProperty("query_context").GetProperty("default_suppression").GetBoolean());
-
-            var (allExitCode, allStdout, allStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--json", "--all", "--lang", "csharp", "--count"],
-                _jsonOptions));
-            using var allDocument = ParseJsonOutput(allStdout);
-            var allJson = allDocument.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, allExitCode);
-            Assert.Equal(string.Empty, allStderr);
-            Assert.Equal(9, allJson.GetProperty("count").GetInt32());
-            Assert.False(allJson.TryGetProperty("default_suppression", out _));
-            Assert.True(allJson.GetProperty("query_context").GetProperty("all").GetBoolean());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunUnused_SummaryOnlyJsonUsesCompactCountEnvelope_Issue4344()
-    {
-        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
-        try
-        {
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--json", "--summary-only", "--lang", "csharp"],
-                _jsonOptions));
-
-            Assert.True(exitCode == CommandExitCodes.Success, $"stdout: {stdout}\nstderr: {stderr}");
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var omittedSections = json.GetProperty("omitted_sections").EnumerateArray().Select(value => value.GetString()).ToArray();
-
-            Assert.Equal(2, json.GetProperty("count").GetInt32());
-            Assert.True(json.GetProperty("summary_only").GetBoolean());
-            Assert.True(json.GetProperty("compact").GetBoolean());
-            Assert.Contains("bucket_taxonomy", omittedSections);
-            Assert.False(json.TryGetProperty("bucket_taxonomy", out _));
-            Assert.False(json.TryGetProperty("symbols", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
     public void RunUnused_SummaryOnlyWithoutJsonReturnsUsageError_Issue4344()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
@@ -1744,30 +1684,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_DefaultTextCountReportsSuppressionHint_Issue4120()
-    {
-        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
-        try
-        {
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--lang", "csharp", "--count"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("2", stdout.Trim());
-            Assert.Contains("7 low-confidence contract-domain candidates suppressed by default", stderr);
-            Assert.Contains("use --all to include them", stderr);
-            Assert.Contains("public_api_surface: 3", stderr);
-            Assert.Contains("configuration_contract: 4", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunUnused_DefaultJsonCursorPaginatesVisibleResultsAfterSuppression_Issue4120()
+    public void RunUnused_DefaultAndAllJsonCursorsSharePaginationFixture_Issues3691And4120()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
         try
@@ -1798,49 +1715,37 @@ public partial class QueryCommandRunnerTests
             Assert.Single(secondSymbols);
             Assert.Equal("InternalOnly", secondSymbols[0].GetProperty("name").GetString());
             Assert.False(secondJson.TryGetProperty("next_cursor", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunUnused_JsonPaginatesWithUnusedCursor_Issue3691()
-    {
-        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
-        try
-        {
-            var (firstExitCode, firstStdout, firstStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            var (allFirstExitCode, allFirstStdout, allFirstStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
                 ["--db", dbPath, "--json", "--all", "--lang", "csharp", "--limit", "2"],
                 _jsonOptions));
-            using var firstDocument = ParseJsonOutput(firstStdout);
-            var firstJson = firstDocument.RootElement;
-            var firstSymbols = firstJson.GetProperty("symbols");
+            using var allFirstDocument = ParseJsonOutput(allFirstStdout);
+            var allFirstJson = allFirstDocument.RootElement;
+            var allFirstSymbols = allFirstJson.GetProperty("symbols");
 
-            Assert.Equal(CommandExitCodes.Success, firstExitCode);
-            Assert.Equal(string.Empty, firstStderr);
-            Assert.Equal(2, firstJson.GetProperty("count").GetInt32());
-            Assert.Equal("unused:2", firstJson.GetProperty("next_cursor").GetString());
-            Assert.Equal("Hidden", firstSymbols[0].GetProperty("name").GetString());
-            Assert.Equal("InternalOnly", firstSymbols[1].GetProperty("name").GetString());
+            Assert.Equal(CommandExitCodes.Success, allFirstExitCode);
+            Assert.Equal(string.Empty, allFirstStderr);
+            Assert.Equal(2, allFirstJson.GetProperty("count").GetInt32());
+            Assert.Equal("unused:2", allFirstJson.GetProperty("next_cursor").GetString());
+            Assert.Equal("Hidden", allFirstSymbols[0].GetProperty("name").GetString());
+            Assert.Equal("InternalOnly", allFirstSymbols[1].GetProperty("name").GetString());
 
-            var (secondExitCode, secondStdout, secondStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            var (allSecondExitCode, allSecondStdout, allSecondStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
                 ["--db", dbPath, "--json", "--all", "--lang", "csharp", "--limit", "2", "--cursor", "unused:2"],
                 _jsonOptions));
-            using var secondDocument = ParseJsonOutput(secondStdout);
-            var secondJson = secondDocument.RootElement;
-            var secondSymbols = secondJson.GetProperty("symbols");
-            var secondQuery = secondJson.GetProperty("query_context");
+            using var allSecondDocument = ParseJsonOutput(allSecondStdout);
+            var allSecondJson = allSecondDocument.RootElement;
+            var allSecondSymbols = allSecondJson.GetProperty("symbols");
+            var allSecondQuery = allSecondJson.GetProperty("query_context");
 
-            Assert.Equal(CommandExitCodes.Success, secondExitCode);
-            Assert.Equal(string.Empty, secondStderr);
-            Assert.Equal(2, secondJson.GetProperty("count").GetInt32());
-            Assert.Equal("unused:4", secondJson.GetProperty("next_cursor").GetString());
-            Assert.Equal("unused:2", secondQuery.GetProperty("cursor").GetString());
-            Assert.Equal(2, secondQuery.GetProperty("offset").GetInt32());
-            Assert.Equal("PathResolver", secondSymbols[0].GetProperty("name").GetString());
-            Assert.Equal("ConnectionString", secondSymbols[1].GetProperty("name").GetString());
+            Assert.Equal(CommandExitCodes.Success, allSecondExitCode);
+            Assert.Equal(string.Empty, allSecondStderr);
+            Assert.Equal(2, allSecondJson.GetProperty("count").GetInt32());
+            Assert.Equal("unused:4", allSecondJson.GetProperty("next_cursor").GetString());
+            Assert.Equal("unused:2", allSecondQuery.GetProperty("cursor").GetString());
+            Assert.Equal(2, allSecondQuery.GetProperty("offset").GetInt32());
+            Assert.Equal("PathResolver", allSecondSymbols[0].GetProperty("name").GetString());
+            Assert.Equal("ConnectionString", allSecondSymbols[1].GetProperty("name").GetString());
         }
         finally
         {
@@ -1945,7 +1850,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_WithJsonByBucketGroupsReturnedSymbolsByTaxonomyBucket()
+    public void RunUnused_JsonAndCompactByBucketShareTaxonomyFixture_Issue4067()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
         try
@@ -1964,41 +1869,29 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("InternalOnly", byBucket.GetProperty("maybe_unused_nonpublic")[0].GetProperty("name").GetString());
             Assert.Equal(3, byBucket.GetProperty("public_or_exported_no_refs").GetArrayLength());
             Assert.Equal("ConnectionString", byBucket.GetProperty("reflection_or_config_suspect")[0].GetProperty("name").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunUnused_CompactJsonByBucketEmitsSummariesOnly_Issue4067()
-    {
-        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
-        try
-        {
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            var (compactExitCode, compactStdout, compactStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
                 ["--db", dbPath, "--compact", "--by-bucket", "--lang", "csharp"],
                 _jsonOptions));
 
             Assert.True(
-                exitCode == CommandExitCodes.Success,
-                $"exit={exitCode}, stdout={stdout}, stderr={stderr}");
-            Assert.Equal(string.Empty, stderr);
-            Assert.False(string.IsNullOrWhiteSpace(stdout));
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var likelyUnused = json
+                compactExitCode == CommandExitCodes.Success,
+                $"exit={compactExitCode}, stdout={compactStdout}, stderr={compactStderr}");
+            Assert.Equal(string.Empty, compactStderr);
+            Assert.False(string.IsNullOrWhiteSpace(compactStdout));
+            using var compactDocument = ParseJsonOutput(compactStdout);
+            var compactJson = compactDocument.RootElement;
+            var likelyUnused = compactJson
                 .GetProperty("by_bucket")
                 .GetProperty("likely_unused_private");
 
-            Assert.True(json.GetProperty("compact").GetBoolean());
-            Assert.False(json.TryGetProperty("symbols", out _));
+            Assert.True(compactJson.GetProperty("compact").GetBoolean());
+            Assert.False(compactJson.TryGetProperty("symbols", out _));
             Assert.Equal(JsonValueKind.Object, likelyUnused.ValueKind);
             Assert.Equal(1, likelyUnused.GetProperty("count").GetInt32());
             Assert.Equal("Hidden", likelyUnused.GetProperty("representative").GetProperty("name").GetString());
             Assert.False(likelyUnused.TryGetProperty("symbols", out _));
-            Assert.Contains(json.GetProperty("omitted_sections").EnumerateArray(), section => section.GetString() == "by_bucket.symbols");
+            Assert.Contains(compactJson.GetProperty("omitted_sections").EnumerateArray(), section => section.GetString() == "by_bucket.symbols");
         }
         finally
         {
@@ -2059,7 +1952,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_WithJsonBucketFilterReturnsOnlyRequestedBucket()
+    public void RunUnused_BucketConfidenceAndActionableFiltersShareFixture_Issue3977()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
         try
@@ -2079,32 +1972,38 @@ public partial class QueryCommandRunnerTests
             Assert.False(json.GetProperty("returned_bucket_counts").TryGetProperty("maybe_unused_nonpublic", out _));
             Assert.Equal("Hidden", symbols[0].GetProperty("name").GetString());
             Assert.Equal("likely_unused_private", symbols[0].GetProperty("unused_bucket").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunUnused_WithJsonMinConfidenceFiltersLowerConfidenceBuckets()
-    {
-        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
-        try
-        {
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            var (confidenceExitCode, confidenceStdout, confidenceStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
                 ["--db", dbPath, "--json", "--lang", "csharp", "--min-confidence", "medium"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+            using var confidenceDocument = ParseJsonOutput(confidenceStdout);
+            var confidenceJson = confidenceDocument.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.Equal("Hidden", json.GetProperty("symbols")[0].GetProperty("name").GetString());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("by_confidence").GetProperty("medium").GetInt32());
-            Assert.False(json.GetProperty("summary").GetProperty("by_confidence").TryGetProperty("low", out _));
+            Assert.Equal(CommandExitCodes.Success, confidenceExitCode);
+            Assert.Equal(string.Empty, confidenceStderr);
+            Assert.Equal(1, confidenceJson.GetProperty("count").GetInt32());
+            Assert.Equal("Hidden", confidenceJson.GetProperty("symbols")[0].GetProperty("name").GetString());
+            Assert.Equal(1, confidenceJson.GetProperty("summary").GetProperty("by_confidence").GetProperty("medium").GetInt32());
+            Assert.False(confidenceJson.GetProperty("summary").GetProperty("by_confidence").TryGetProperty("low", out _));
+
+            var (actionableExitCode, actionableStdout, actionableStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--actionable", "--confidence", "medium"],
+                _jsonOptions));
+
+            using var actionableDocument = ParseJsonOutput(actionableStdout);
+            var actionableJson = actionableDocument.RootElement;
+            var actionableQuery = actionableJson.GetProperty("query_context");
+
+            Assert.Equal(CommandExitCodes.Success, actionableExitCode);
+            Assert.Equal(string.Empty, actionableStderr);
+            Assert.Equal(1, actionableJson.GetProperty("count").GetInt32());
+            Assert.Equal("Hidden", actionableJson.GetProperty("symbols")[0].GetProperty("name").GetString());
+            Assert.Equal("likely_unused_private", actionableQuery.GetProperty("bucket").GetString());
+            Assert.Equal("medium", actionableQuery.GetProperty("min_confidence").GetString());
+            Assert.True(actionableQuery.GetProperty("actionable").GetBoolean());
+            Assert.True(actionableQuery.GetProperty("exclude_tests").GetBoolean());
+            Assert.Equal("private", actionableQuery.GetProperty("visibility")[0].GetString());
         }
         finally
         {
@@ -2113,7 +2012,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_CountJsonIncludesBucketSummary_Issue3944()
+    public void RunUnused_CountJsonSummaryAndBucketFilterShareFixture_Issue3944()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
         try
@@ -2136,65 +2035,23 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(3, json.GetProperty("summary").GetProperty("by_bucket").GetProperty("public_or_exported_no_refs").GetInt32());
             Assert.Equal(8, json.GetProperty("summary").GetProperty("by_confidence").GetProperty("low").GetInt32());
             Assert.Equal(4, json.GetProperty("summary").GetProperty("by_contract_domain").GetProperty("configuration_contract").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunUnused_CountJsonWithBucketFilterCountsFilteredSymbols()
-    {
-        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
-        try
-        {
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            var (filteredExitCode, filteredStdout, filteredStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
                 ["--db", dbPath, "--json", "--lang", "csharp", "--bucket", "public_or_exported_no_refs", "--min-confidence", "low", "--count"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var query = json.GetProperty("query_context");
+            using var filteredDocument = ParseJsonOutput(filteredStdout);
+            var filteredJson = filteredDocument.RootElement;
+            var query = filteredJson.GetProperty("query_context");
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(3, json.GetProperty("count").GetInt32());
-            Assert.Equal(1, json.GetProperty("files").GetInt32());
-            Assert.Equal(3, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
-            Assert.Equal(3, json.GetProperty("summary").GetProperty("by_bucket").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(CommandExitCodes.Success, filteredExitCode);
+            Assert.Equal(string.Empty, filteredStderr);
+            Assert.Equal(3, filteredJson.GetProperty("count").GetInt32());
+            Assert.Equal(1, filteredJson.GetProperty("files").GetInt32());
+            Assert.Equal(3, filteredJson.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(3, filteredJson.GetProperty("summary").GetProperty("by_bucket").GetProperty("public_or_exported_no_refs").GetInt32());
             Assert.Equal("public_or_exported_no_refs", query.GetProperty("bucket").GetString());
             Assert.Equal("low", query.GetProperty("min_confidence").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunUnused_ActionableUsesConfidenceAliasForPrivateCandidates_Issue3977()
-    {
-        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
-        try
-        {
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--actionable", "--confidence", "medium"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var query = json.GetProperty("query_context");
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.Equal("Hidden", json.GetProperty("symbols")[0].GetProperty("name").GetString());
-            Assert.Equal("likely_unused_private", query.GetProperty("bucket").GetString());
-            Assert.Equal("medium", query.GetProperty("min_confidence").GetString());
-            Assert.True(query.GetProperty("actionable").GetBoolean());
-            Assert.True(query.GetProperty("exclude_tests").GetBoolean());
-            Assert.Equal("private", query.GetProperty("visibility")[0].GetString());
         }
         finally
         {
@@ -2356,7 +2213,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_WithJsonUsesReturnedBucketCountsForCurrentPage()
+    public void RunUnused_ReturnedCountsAndDiversificationShareFixture()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
         try
@@ -2380,34 +2237,22 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, json.GetProperty("returned_contract_domain_counts").GetProperty("private_or_file_local").GetInt32());
             Assert.Equal(1, json.GetProperty("returned_contract_domain_counts").GetProperty("nonpublic_internal").GetInt32());
             Assert.False(json.GetProperty("returned_contract_domain_counts").TryGetProperty("public_api_surface", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunUnused_WithJsonDiversifiesBucketsBeforeLimit()
-    {
-        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
-        try
-        {
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            var (diverseExitCode, diverseStdout, diverseStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
                 ["--db", dbPath, "--json", "--all", "--lang", "csharp", "--limit", "4"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var symbols = json.GetProperty("symbols");
+            using var diverseDocument = ParseJsonOutput(diverseStdout);
+            var diverseJson = diverseDocument.RootElement;
+            var diverseSymbols = diverseJson.GetProperty("symbols");
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(["Hidden", "InternalOnly", "PathResolver", "ConnectionString"], symbols.EnumerateArray().Select(symbol => symbol.GetProperty("name").GetString()).ToArray());
-            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
-            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("maybe_unused_nonpublic").GetInt32());
-            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
-            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
+            Assert.Equal(CommandExitCodes.Success, diverseExitCode);
+            Assert.Equal(string.Empty, diverseStderr);
+            Assert.Equal(["Hidden", "InternalOnly", "PathResolver", "ConnectionString"], diverseSymbols.EnumerateArray().Select(symbol => symbol.GetProperty("name").GetString()).ToArray());
+            Assert.Equal(1, diverseJson.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
+            Assert.Equal(1, diverseJson.GetProperty("returned_bucket_counts").GetProperty("maybe_unused_nonpublic").GetInt32());
+            Assert.Equal(1, diverseJson.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(1, diverseJson.GetProperty("returned_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
         }
         finally
         {
@@ -2651,7 +2496,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_WithJsonZeroResults_UsesUnusedSchema()
+    public void RunUnused_IndexedAndUnsupportedZeroResultsShareFixture()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
         try
@@ -2673,33 +2518,21 @@ public partial class QueryCommandRunnerTests
             Assert.True(json.TryGetProperty("returned_bucket_counts", out var bucketCounts));
             Assert.Empty(bucketCounts.EnumerateObject());
             Assert.False(json.TryGetProperty("unused", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunUnused_WithJsonUnsupportedLanguageZeroResults_UsesUnusedSchema()
-    {
-        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
-        try
-        {
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            var (unsupportedExitCode, unsupportedStdout, unsupportedStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
                 ["--db", dbPath, "--json", "--lang", "toml"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+            using var unsupportedDocument = ParseJsonOutput(unsupportedStdout);
+            var unsupportedJson = unsupportedDocument.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.False(json.GetProperty("graph_supported").GetBoolean());
-            Assert.Contains("not indexed", json.GetProperty("graph_support_reason").GetString());
-            Assert.Equal(0, json.GetProperty("symbols").GetArrayLength());
-            Assert.Empty(json.GetProperty("returned_bucket_counts").EnumerateObject());
+            Assert.Equal(CommandExitCodes.Success, unsupportedExitCode);
+            Assert.Equal(string.Empty, unsupportedStderr);
+            Assert.Equal(0, unsupportedJson.GetProperty("count").GetInt32());
+            Assert.False(unsupportedJson.GetProperty("graph_supported").GetBoolean());
+            Assert.Contains("not indexed", unsupportedJson.GetProperty("graph_support_reason").GetString());
+            Assert.Equal(0, unsupportedJson.GetProperty("symbols").GetArrayLength());
+            Assert.Empty(unsupportedJson.GetProperty("returned_bucket_counts").EnumerateObject());
         }
         finally
         {
@@ -2708,7 +2541,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_WithJsonMissingGraphTable_UsesUnusedSchema()
+    public void RunUnused_MissingGraphJsonAndHumanCountShareFixture()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_missing_graph_json");
         try
@@ -2732,6 +2565,15 @@ public partial class QueryCommandRunnerTests
             Assert.True(json.TryGetProperty("returned_bucket_counts", out var bucketCounts));
             Assert.Empty(bucketCounts.EnumerateObject());
             Assert.False(json.TryGetProperty("unused", out _));
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--lang", "csharp", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal("0", countStdout.Trim());
+            Assert.Contains("degraded", countStderr);
+            Assert.Contains("symbol_references table missing", countStderr);
         }
         finally
         {
@@ -2740,7 +2582,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_CountJson_DoesNotNeedChunksForReflectionClassification()
+    public void RunUnused_MissingChunksCountAndResultsShareFixture()
     {
         var (projectRoot, dbPath) = CreateReflectionUnusedFixtureDb();
         try
@@ -2763,60 +2605,18 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(2, json.GetProperty("count").GetInt32());
             Assert.Equal(1, json.GetProperty("files").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunUnused_WithJsonMissingChunks_DegradesReflectionClassificationWithoutCrashing()
-    {
-        var (projectRoot, dbPath) = CreateReflectionUnusedFixtureDb();
-        try
-        {
-            using (var db = new DbContext(dbPath))
-            using (var cmd = db.Connection.CreateCommand())
-            {
-                cmd.CommandText = "DROP TABLE chunks;";
-                cmd.ExecuteNonQuery();
-            }
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            var (resultsExitCode, resultsStdout, resultsStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
                 ["--db", dbPath, "--json", "--all", "--lang", "csharp"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var symbols = document.RootElement.GetProperty("symbols").EnumerateArray()
+            using var resultsDocument = ParseJsonOutput(resultsStdout);
+            var symbols = resultsDocument.RootElement.GetProperty("symbols").EnumerateArray()
                 .ToDictionary(symbol => symbol.GetProperty("name").GetString()!, StringComparer.Ordinal);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(CommandExitCodes.Success, resultsExitCode);
+            Assert.Equal(string.Empty, resultsStderr);
             Assert.Equal("public_or_exported_no_refs", symbols["FullName"].GetProperty("unused_bucket").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunUnused_CountHumanMissingGraphTable_WarnsDegradedZero()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_missing_graph_count_human");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--lang", "csharp", "--count"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("0", stdout.Trim());
-            Assert.Contains("degraded", stderr);
-            Assert.Contains("symbol_references table missing", stderr);
         }
         finally
         {
@@ -4849,33 +4649,6 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_HumanOutputGroupsByConfidenceBucket()
-    {
-        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
-        try
-        {
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
-                ["--db", dbPath, "--all", "--lang", "csharp"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Contains("Likely unused private (1)", stdout);
-            Assert.Contains("Maybe unused non-public (1)", stdout);
-            Assert.Contains("Public/exported with no refs (3)", stdout);
-            Assert.Contains("Intentional-surface suspects (4)", stdout);
-            Assert.Contains("confidence=medium", stdout);
-            Assert.Contains("confidence=low", stdout);
-            Assert.Contains("domain=private_or_file_local", stdout);
-            Assert.Contains("domain=configuration_contract", stdout);
-            Assert.Contains("returned potentially unused symbols; returned buckets:", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
     public void RunSymbols_RejectsExactSubstringAlias()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_wrong_exact_alias");
@@ -4895,42 +4668,31 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
-    [InlineData("--exact", "--exact-name")]
-    [InlineData("--exact", "--exact-substring")]
-    [InlineData("--exact-substring", "--exact-name")]
-    public void RunDefinition_RejectsCombinedExactFlags(string first, string second)
+    [Fact]
+    public void SymbolCommands_RejectCombinedExactFlags()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_combined_exact");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
-                ["Run", "--db", dbPath, first, second],
-                _jsonOptions));
+            var cases = new[]
+            {
+                (Command: "definition", First: "--exact", Second: "--exact-name"),
+                (Command: "definition", First: "--exact", Second: "--exact-substring"),
+                (Command: "definition", First: "--exact-substring", Second: "--exact-name"),
+                (Command: "symbols", First: "--exact", Second: "--exact-name"),
+            };
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("pass only one of --exact, --exact-substring, --token-boundary, --exact-name", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
+            foreach (var testCase in cases)
+            {
+                var args = new[] { "Run", "--db", dbPath, testCase.First, testCase.Second };
+                var (exitCode, _, stderr) = CaptureConsole(() => testCase.Command == "definition"
+                    ? QueryCommandRunner.RunDefinition(args, _jsonOptions)
+                    : QueryCommandRunner.RunSymbols(args, _jsonOptions));
 
-    [Fact]
-    public void RunSymbols_RejectsCombinedExactAndExactName()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_combined_exact_name");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["Run", "--db", dbPath, "--exact", "--exact-name"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("pass only one of --exact, --exact-substring, --token-boundary, --exact-name", stderr);
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Contains("pass only one of --exact, --exact-substring, --token-boundary, --exact-name", stderr);
+            }
         }
         finally
         {
@@ -5138,7 +4900,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunHotspots_ZeroJson_StaleSqlGraphContractIncludesDegradedStateWhenSqlScopeIsEmpty()
+    public void RunHotspots_DegradedAndCleanZeroResultsShareSqlFixture()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_zero_sql_graph_contract");
         try
@@ -5158,6 +4920,19 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
             Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
+
+            var (filteredExitCode, filteredStdout, filteredStderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--kind", "class"],
+                _jsonOptions));
+
+            using var filteredDocument = ParseJsonOutput(filteredStdout);
+            var filteredJson = filteredDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, filteredExitCode);
+            Assert.Equal(string.Empty, filteredStderr);
+            Assert.Equal(0, filteredJson.GetProperty("count").GetInt32());
+            Assert.False(filteredJson.TryGetProperty("sql_graph_contract_ready", out _));
+            Assert.False(filteredJson.TryGetProperty("sql_graph_contract_degraded_reason", out _));
         }
         finally
         {
@@ -5166,7 +4941,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_ZeroJson_StaleSqlGraphContractStaysCleanWhenSqlSymbolsCannotMatchKind()
+    public void RunUnused_ZeroJsonAndCountShareCleanSqlScopeFixture()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_zero_sql_graph_contract");
         try
@@ -5187,64 +4962,21 @@ public partial class QueryCommandRunnerTests
             Assert.False(json.TryGetProperty("sql_graph_contract_ready", out _));
             Assert.False(json.TryGetProperty("sql_graph_contract_degraded_reason", out _));
             Assert.False(json.TryGetProperty("degraded", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunUnused_CountZeroJson_StaleSqlGraphContractStaysCleanWhenSqlSymbolsCannotMatchKind()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_zero_sql_graph_contract_count");
-        try
-        {
-            var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
-            DowngradeSqlGraphContractVersion(dbPath);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
                 ["--db", dbPath, "--json", "--kind", "interface", "--count"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+            using var countDocument = ParseJsonOutput(countStdout);
+            var countJson = countDocument.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Equal(0, json.GetProperty("files").GetInt32());
-            Assert.False(json.TryGetProperty("sql_graph_contract_ready", out _));
-            Assert.False(json.TryGetProperty("sql_graph_contract_degraded_reason", out _));
-            Assert.False(json.GetProperty("degraded").GetBoolean());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunHotspots_ZeroJson_StaleSqlGraphContractStaysCleanWhenSqlSymbolsCannotMatchKind()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_zero_sql_graph_contract_kind");
-        try
-        {
-            var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
-            DowngradeSqlGraphContractVersion(dbPath);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
-                ["--db", dbPath, "--json", "--kind", "class"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.False(json.TryGetProperty("sql_graph_contract_ready", out _));
-            Assert.False(json.TryGetProperty("sql_graph_contract_degraded_reason", out _));
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            Assert.Equal(0, countJson.GetProperty("count").GetInt32());
+            Assert.Equal(0, countJson.GetProperty("files").GetInt32());
+            Assert.False(countJson.TryGetProperty("sql_graph_contract_ready", out _));
+            Assert.False(countJson.TryGetProperty("sql_graph_contract_degraded_reason", out _));
+            Assert.False(countJson.GetProperty("degraded").GetBoolean());
         }
         finally
         {
@@ -6767,12 +6499,8 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
-    [InlineData("route", "/products/{id:int}")]
-    [InlineData("implements", "IDisposable")]
-    [InlineData("attribute", "Authorize")]
-    [InlineData("layout", "MainLayout")]
-    public void RunSymbols_AcceptsRazorDirectiveKindFilters(string kind, string expectedName)
+    [Fact]
+    public void RunSymbols_AcceptsRazorDirectiveKindFilters()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_razor_kind_filter");
         try
@@ -6789,17 +6517,28 @@ public partial class QueryCommandRunnerTests
                 @layout MainLayout
                 """);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--kind", kind, "--json"],
-                _jsonOptions));
+            var cases = new[]
+            {
+                (Kind: "route", Name: "/products/{id:int}"),
+                (Kind: "implements", Name: "IDisposable"),
+                (Kind: "attribute", Name: "Authorize"),
+                (Kind: "layout", Name: "MainLayout"),
+            };
 
-            var rows = ParseJsonLines(stdout).Select(document => document.RootElement).ToList();
+            foreach (var testCase in cases)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                    ["--db", dbPath, "--kind", testCase.Kind, "--json"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Single(rows);
-            Assert.Equal(kind, rows[0].GetProperty("kind").GetString());
-            Assert.Equal(expectedName, rows[0].GetProperty("name").GetString());
+                var rows = ParseJsonLines(stdout).Select(document => document.RootElement).ToList();
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Single(rows);
+                Assert.Equal(testCase.Kind, rows[0].GetProperty("kind").GetString());
+                Assert.Equal(testCase.Name, rows[0].GetProperty("name").GetString());
+            }
         }
         finally
         {

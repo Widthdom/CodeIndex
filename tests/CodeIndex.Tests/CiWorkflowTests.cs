@@ -18,10 +18,8 @@ public class CiWorkflowTests
 
         AssertContainsAll(
             testScript,
-            "--settings\", \"tests/CodeIndex.Tests/CodeIndex.Tests.runsettings");
-        AssertDoesNotContainAny(
-            testScript,
-            "--results-directory\", \"./TestResults");
+            "--settings\", \"tests/CodeIndex.Tests/CodeIndex.Tests.runsettings",
+            "--results-directory\", $resultsDirectory");
         AssertContainsAll(
             workflow,
             "include:\n" +
@@ -65,13 +63,21 @@ public class CiWorkflowTests
             "- name: Verify formatting");
         AssertContainsAll(
             testScript,
-            "$collectCoverage = $CollectCoverage -eq \"true\"",
+            "$includeCoverage = $CollectCoverage -eq \"true\"",
+            "if ($includeCoverage)",
             "[ValidateSet(\"true\", \"false\")]",
             "Skipping XPlat Code Coverage outside ubuntu-24.04/net8.0",
+            "$firstExitCode = Invoke-TestRun -LogPath $firstLogPath -ResultFileName \"test_results_first.trx\" -IncludeCoverage $includeCoverage",
+            "Skipping XPlat Code Coverage on the flaky-classification retry.",
+            "$retryExitCode = Invoke-TestRun -LogPath $retryLogPath -ResultFileName \"test_results_retry.trx\" -IncludeCoverage $false",
+            "\"--no-build\"",
+            "\"--no-restore\"",
             "--blame-crash",
             "--blame-hang",
             "--blame-hang-timeout\", \"5m",
             "test-output-first.txt",
+            "[string]$ResultFileName",
+            "trx;LogFileName=$ResultFileName",
             "$resultsDirectory = \"./TestResults\"",
             "Join-Path $resultsDirectory \"test-output-first.txt\"",
             "Join-Path $resultsDirectory \"test-output-retry.txt\"",
@@ -87,7 +93,6 @@ public class CiWorkflowTests
             "flaky-retry.txt");
         AssertDoesNotContainAny(
             testScript,
-            "\"--no-restore\"",
             "New-Item -ItemType Directory -Force -Path ./TestResults",
             "Tee-Object",
             "steps.lane.outputs.primary_lane",
@@ -96,8 +101,8 @@ public class CiWorkflowTests
             workflow,
             "-Framework \"${{ matrix.test-framework }}\"",
             "id: test",
-            "steps.test.outputs.summarize == 'true' || failure()",
-            "run: dotnet run --project tools/CodeIndex.TestTelemetry --configuration Release -- summarize",
+            "- name: Summarize TRX telemetry\n        if: always()",
+            "run: dotnet run --project tools/CodeIndex.TestTelemetry --configuration Release --no-build --no-restore -- summarize",
             "TestResults/**/*.trx",
             "TestResults/**/*.txt",
             "TestResults/**/*.xml",
@@ -107,18 +112,17 @@ public class CiWorkflowTests
         AssertContainsAll(
             workflow,
             "- name: Upload test results\n        if: always() && (steps.test.outputs.summarize == 'true' || failure())",
-            "- name: Publish\n        if: matrix.primary_lane",
+            "- name: Publish\n        if: matrix.primary_lane\n        run: dotnet publish src/CodeIndex/CodeIndex.csproj --configuration Release --no-build --no-restore --output publish",
             "- name: Upload build artifact\n        if: matrix.primary_lane");
         AssertDoesNotContainAny(
             workflow,
-            "tools/CodeIndex.TestTelemetry --configuration Release --no-build",
             "TestResults/**/*Sequence*.xml",
             "if: matrix.os == 'ubuntu-24.04' && matrix.test-framework == 'net8.0'",
             "always() && matrix.os == 'ubuntu-24.04' && matrix.test-framework == 'net8.0'",
             "always() && !(matrix.os == 'windows-2022' && matrix.test-framework == 'net9.0')");
         AssertDoesNotContainAny(
             workflow,
-            "if: always()\n        run: dotnet run --project tools/CodeIndex.TestTelemetry",
+            "- name: Summarize TRX telemetry\n        if: always() && (steps.test.outputs.summarize == 'true' || failure())",
             "- name: Upload test results\n        if: always()\n");
         Assert.Contains("function Invoke-TestRun", testScript);
     }
@@ -147,6 +151,57 @@ public class CiWorkflowTests
             "Get-MpPreference",
             "Windows Defender exclusion audit:",
             "GitHub-hosted runner temp root used by actions and pinned TMP/TEMP.");
+    }
+
+    [Fact]
+    public void BuildAndCodeqlWorkflows_IgnoreLicenseTextHandledByFocusedPolicyWorkflow()
+    {
+        var dotnetWorkflow = RepositoryTestPaths.ReadNormalizedDotnetWorkflow();
+        var codeqlWorkflow = RepositoryTestPaths.ReadWorkflow("codeql.yml").Replace("\r\n", "\n");
+        var licensePolicyWorkflow = RepositoryTestPaths.ReadWorkflow("license-policy.yml");
+        const string licenseTextIgnoreBlock =
+            "paths-ignore:\n" +
+            "      - '**.md'\n" +
+            "      - 'LICENSE'\n" +
+            "      - 'LICENSES/**'";
+
+        Assert.Equal(2, CountOccurrences(dotnetWorkflow, licenseTextIgnoreBlock));
+        Assert.Equal(2, CountOccurrences(codeqlWorkflow, licenseTextIgnoreBlock));
+        AssertContainsAll(licensePolicyWorkflow, "- 'LICENSE'", "- 'LICENSES/**'");
+    }
+
+    [Fact]
+    public void TestWorkflows_CancelSupersededPullRequestRunsOnly()
+    {
+        const string concurrencyPolicy =
+            "concurrency:\n" +
+            "  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}\n" +
+            "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}";
+
+        foreach (var workflowName in new[]
+        {
+            "changelog-fragments.yml",
+            "codeql.yml",
+            "dotnet.yml",
+            "license-policy.yml",
+        })
+        {
+            var workflow = RepositoryTestPaths.ReadWorkflow(workflowName).Replace("\r\n", "\n");
+            Assert.Equal(1, CountOccurrences(workflow, concurrencyPolicy));
+        }
+    }
+
+    [Fact]
+    public void ChangelogWorkflow_CachesAndRestoresLockedToolDependenciesOnce()
+    {
+        var workflow = RepositoryTestPaths.ReadWorkflow("changelog-fragments.yml").Replace("\r\n", "\n");
+
+        AssertContainsAll(
+            workflow,
+            "cache: true",
+            "cache-dependency-path: tools/CodeIndex.Changelog/packages.lock.json",
+            "dotnet restore tools/CodeIndex.Changelog/CodeIndex.Changelog.csproj --locked-mode",
+            "dotnet run --project tools/CodeIndex.Changelog --no-restore -- check");
     }
 
     [Fact]
@@ -334,6 +389,19 @@ public class CiWorkflowTests
     {
         foreach (var excluded in excludedValues)
             Assert.DoesNotContain(excluded, text, comparisonType);
+    }
+
+    private static int CountOccurrences(string text, string value)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+
+        return count;
     }
 
     private static IReadOnlyList<(string FileName, string Text)> ReadStepBlocks(

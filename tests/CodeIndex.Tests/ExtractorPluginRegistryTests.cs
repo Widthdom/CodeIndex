@@ -588,33 +588,33 @@ public class ExtractorPluginRegistryTests
         }
     }
 
-    [Theory]
-    [InlineData("language")]
-    [InlineData("extension")]
-    [InlineData("kind")]
-    public void LoadPatternConfigs_RejectsOverlongScalarValues_3245(string scalarName)
+    [Fact]
+    public void LoadPatternConfigs_RejectsOverlongScalarValues_3245()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"extractor_registry_scalar_cap_{scalarName}");
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_scalar_caps");
         lock (TestConsoleLock.Gate)
         {
             try
             {
-                ExtractorPluginRegistry.ResetForTests();
-                var content = BuildPatternConfigWithOverlongScalar(scalarName);
-                WritePatternConfig(projectRoot, $"{scalarName}.yaml", content);
+                foreach (var scalarName in new[] { "language", "extension", "kind" })
+                {
+                    ExtractorPluginRegistry.ResetForTests();
+                    var content = BuildPatternConfigWithOverlongScalar(scalarName);
+                    WritePatternConfig(projectRoot, "case.yaml", content);
 
-                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
-                var status = ExtractorPluginRegistry.GetStatusSnapshot();
+                    ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
+                    var status = ExtractorPluginRegistry.GetStatusSnapshot();
 
-                Assert.Equal(0, status.PatternConfigCount);
-                Assert.Equal(1, status.SkippedFileCount);
-                Assert.Equal(1, status.DiagnosticCount);
-                var diagnostic = Assert.Single(status.Diagnostics!);
-                Assert.Equal("pattern", diagnostic.Kind);
-                Assert.Equal("error", diagnostic.Severity);
-                Assert.Equal("invalid_pattern_config", diagnostic.Category);
-                Assert.Contains($"{scalarName} scalar is too long", diagnostic.Message, StringComparison.Ordinal);
-                Assert.Contains("maximum", diagnostic.Message, StringComparison.Ordinal);
+                    Assert.Equal(0, status.PatternConfigCount);
+                    Assert.Equal(1, status.SkippedFileCount);
+                    Assert.Equal(1, status.DiagnosticCount);
+                    var diagnostic = Assert.Single(status.Diagnostics!);
+                    Assert.Equal("pattern", diagnostic.Kind);
+                    Assert.Equal("error", diagnostic.Severity);
+                    Assert.Equal("invalid_pattern_config", diagnostic.Category);
+                    Assert.Contains($"{scalarName} scalar is too long", diagnostic.Message, StringComparison.Ordinal);
+                    Assert.Contains("maximum", diagnostic.Message, StringComparison.Ordinal);
+                }
             }
             finally
             {
