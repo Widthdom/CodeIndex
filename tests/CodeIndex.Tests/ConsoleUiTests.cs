@@ -28,6 +28,20 @@ public class ConsoleUiTests
         }
     }
 
+    [Fact]
+    public void CompletionRenderer_UtilityCommandsExcludeQueryFlags_Issue4427()
+    {
+        foreach (var command in new[] { "completions", "license", "export", "import", "batch", "mcp", "lsp" })
+        {
+            var expected = CliFlagSchema.GetCompletionFlagsForCommand(command).Select(flag => flag.Name).ToHashSet(StringComparer.Ordinal);
+            Assert.DoesNotContain("--body", expected);
+            Assert.DoesNotContain("--exact", expected);
+            Assert.DoesNotContain("--kind", expected);
+            Assert.DoesNotContain("--lang", expected);
+        }
+    }
+
+
     private static readonly Dictionary<short, OpCode> SingleByteOpCodes = typeof(OpCodes)
         .GetFields(BindingFlags.Public | BindingFlags.Static)
         .Where(field => field.GetValue(null) is OpCode opCode && opCode.Size == 1)

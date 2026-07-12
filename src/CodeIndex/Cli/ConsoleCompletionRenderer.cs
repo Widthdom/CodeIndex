@@ -51,7 +51,11 @@ internal static class ConsoleCompletionRenderer
     // bash / zsh の専用ブランチを持つコマンド。順序は意図的で、`search` が最終 elif、`else` が
     // generic catch-all となるよう揃える。テストもこの並びを前提にしている。
     private static readonly string[] EnumeratedCompletionCommands =
-        CliCommandCatalog.Commands.Where(command => command != "search").Append("search").ToArray();
+    [
+        "find", "excerpt", "references", "inspect", "hotspots", "status", "validate-config", "db", "report", "suggestions",
+        .. CliCommandCatalog.Commands.Except(["find", "excerpt", "references", "inspect", "hotspots", "status", "validate-config", "db", "report", "suggestions", "search"]),
+        "search",
+    ];
 
     // Generic-branch representative set: union of completion flags from these commands populates
     // the bash/zsh `else` branch. Excludes find/excerpt/etc. which have their own branches, and
