@@ -1880,7 +1880,7 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsCall_Callers_MixedRepoStaleSqlGraphContractDoesNotDegradePureCSharpQuery()
+    public void ToolsCall_CallersAndAnalyzeShareMixedRepoCSharpFixture()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_callers_mixed_sql_graph_contract");
         try
@@ -1896,6 +1896,13 @@ public partial class McpServerTests
             Assert.Equal(1, structured["count"]!.GetValue<int>());
             Assert.Null(structured["sql_graph_contract_ready"]);
             Assert.Null(structured["sql_graph_contract_degraded_reason"]);
+
+            var analyzeRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"N","exact":true}}}""")!;
+            var analyzeResponse = server.HandleMessage(analyzeRequest)!;
+            var analyzeStructured = analyzeResponse["result"]!["structuredContent"]!;
+
+            Assert.Null(analyzeStructured["sql_graph_contract_ready"]);
+            Assert.Null(analyzeStructured["sql_graph_contract_degraded_reason"]);
         }
         finally
         {
@@ -3621,31 +3628,6 @@ public partial class McpServerTests
             Assert.Equal(1, impactStructured["count"]!.GetValue<int>());
             Assert.False(impactStructured["sql_graph_contract_ready"]!.GetValue<bool>());
             Assert.Contains("sql_graph_contract_ready=false", impactStructured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void ToolsCall_AnalyzeSymbol_MixedRepoStaleSqlGraphContractDoesNotDegradePureCSharpBundle()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_analyze_symbol_mixed_sql_graph_contract");
-        try
-        {
-            var dbPath = CreateMixedSqlGraphContractFixtureDb(projectRoot);
-            DowngradeSqlGraphContractRows(dbPath);
-            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
-
-            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"N","exact":true}}}""")!;
-            var response = server.HandleMessage(request)!;
-            var structured = response["result"]!["structuredContent"]!;
-
-            Assert.Null(structured["sql_graph_contract_ready"]);
-            Assert.Null(structured["sql_graph_contract_ready"]);
-            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
-            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
         }
         finally
         {
