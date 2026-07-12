@@ -54,6 +54,7 @@ public static class SymbolKindCatalog
         "protocol",
         "protocol_impl",
         "reference",
+        "record",
         "rule",
         "route",
         "run",
