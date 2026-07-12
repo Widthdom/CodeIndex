@@ -830,19 +830,38 @@ public static partial class QueryCommandRunner
                     continue;
 
                 if (keptLines.Count != compact.MatchLines.Count)
-                {
-                    var keptSet = keptLines.ToHashSet();
-                    compact.MatchLines = keptLines;
-                    compact.Highlights = compact.Highlights
-                        .Where(highlight => keptSet.Contains(highlight.Line))
-                        .ToList();
-                }
+                    compact = RefocusSearchResultAfterDedup(result, queryContext, options, exact, rawFts, keptLines);
             }
 
             rows.Add(new SearchDisplayRow(result, compact));
         }
 
         return rows;
+    }
+
+    internal static CompactSearchResult RefocusSearchResultAfterDedup(
+        SearchResult result,
+        SearchSnippetQueryContext queryContext,
+        QueryCommandOptions options,
+        bool exact,
+        bool rawFts,
+        List<int> keptLines)
+    {
+        var keptSet = keptLines.ToHashSet();
+        var compact = SearchSnippetFormatter.ToCompactResult(
+            result,
+            queryContext,
+            options.SnippetLines,
+            exact,
+            options.MaxLineWidth,
+            result.Lang,
+            options.SnippetFocus,
+            exposeLiteralHighlights: exact,
+            preferredMatchLine: keptLines[0]);
+        SearchSnippetFormatter.ApplyOutputMetadata(compact, options.SnippetLines, options.MaxLineWidth, exact, rawFts);
+        compact.MatchLines = compact.MatchLines.Where(keptSet.Contains).ToList();
+        compact.Highlights = compact.Highlights.Where(highlight => keptSet.Contains(highlight.Line)).ToList();
+        return compact;
     }
 
     private sealed record SearchDisplayFacetFilters(
