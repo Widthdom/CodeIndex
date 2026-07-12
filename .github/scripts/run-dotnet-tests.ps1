@@ -24,8 +24,7 @@ $testArgs = @(
   "--results-directory", $resultsDirectory,
   "--blame-crash",
   "--blame-hang",
-  "--blame-hang-timeout", "5m",
-  "--logger", "trx;LogFileName=test_results.trx"
+  "--blame-hang-timeout", "5m"
 )
 
 $includeCoverage = $CollectCoverage -eq "true"
@@ -53,10 +52,14 @@ function Invoke-TestRun {
     [string]$LogPath,
 
     [Parameter(Mandatory = $true)]
+    [string]$ResultFileName,
+
+    [Parameter(Mandatory = $true)]
     [bool]$IncludeCoverage
   )
 
   $runArgs = @($testArgs)
+  $runArgs += @("--logger", "trx;LogFileName=$ResultFileName")
   if ($IncludeCoverage) {
     $runArgs += @("--collect", "XPlat Code Coverage")
   }
@@ -79,7 +82,7 @@ function Invoke-TestRun {
 }
 
 $firstLogPath = Join-Path $resultsDirectory "test-output-first.txt"
-$firstExitCode = Invoke-TestRun -LogPath $firstLogPath -IncludeCoverage $includeCoverage
+$firstExitCode = Invoke-TestRun -LogPath $firstLogPath -ResultFileName "test_results_first.trx" -IncludeCoverage $includeCoverage
 if ($firstExitCode -eq 0) {
   exit 0
 }
@@ -96,7 +99,7 @@ if ($includeCoverage) {
   Write-Host "Skipping XPlat Code Coverage on the flaky-classification retry."
 }
 $retryLogPath = Join-Path $resultsDirectory "test-output-retry.txt"
-$retryExitCode = Invoke-TestRun -LogPath $retryLogPath -IncludeCoverage $false
+$retryExitCode = Invoke-TestRun -LogPath $retryLogPath -ResultFileName "test_results_retry.trx" -IncludeCoverage $false
 if ($retryExitCode -eq 0) {
   "Initial test run failed, but the single retry passed. Treat this run as flaky and inspect TRX/blame artifacts." |
     Set-Content -Encoding UTF8 -Path (Join-Path $resultsDirectory "flaky-retry.txt")

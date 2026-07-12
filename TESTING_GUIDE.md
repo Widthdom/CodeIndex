@@ -239,6 +239,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   The `dotnet.yml` matrix test step delegates test argument construction, coverage gating, `TestResults` path ownership for failure-log capture, TestSessionTimeout handling, and single flaky retry classification to this script. Keep workflow YAML limited to matrix/lane parameter wiring, and update `CiWorkflowTests` when changing either the script contract or artifact/summarize gating.
   Keep the converted coverage boolean in a local whose name differs from the case-insensitive `CollectCoverage` string parameter; otherwise PowerShell coerces the boolean back to a string before invoking typed helpers.
   Pass the repository-root `TestResults` directory explicitly to `dotnet test`; runsettings paths can otherwise resolve relative to the test project, separating TRX and coverage output from workflow telemetry and artifact paths.
+  Give the initial attempt and flaky-classification retry distinct TRX filenames so a passing retry cannot overwrite the failure evidence that triggered it.
   Summarize TRX telemetry on successful and failed matrix lanes so optimization work has comparable slow-test evidence; keep result and dump artifact uploads failure-gated to avoid unnecessary transfer time.
 - `.github/scripts/configure-windows-test-host.ps1`
   The `dotnet.yml` and `release.yml` Windows lanes share TMP/TEMP pinning and Defender exclusion setup here so both workflows keep the same test-host performance assumptions. Update `CiWorkflowTests` when changing this script or its workflow call contract.
@@ -651,6 +652,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   `dotnet.yml` の matrix test step は、test 引数構築、coverage gating、failure log capture 用の `TestResults` path ownership、TestSessionTimeout handling、1 回だけの flaky retry classification をこのスクリプトに委譲します。workflow YAML は matrix/lane parameter wiring に限定し、script contract や artifact/summarize gating を変更するときは `CiWorkflowTests` も更新してください。
   変換後のcoverage booleanは、大文字小文字を区別しない`CollectCoverage` string parameterとは異なる名前のlocalに保持してください。同名だとPowerShellがtyped helper呼び出し前にbooleanをstringへ戻します。
   repository rootの`TestResults` directoryを`dotnet test`へ明示的に渡してください。そうしないとrunsettingsのpathがtest project相対で解決され、TRX/coverage outputがworkflowのtelemetry/artifact pathから分離することがあります。
+  初回attemptとflaky classification retryには別々のTRX filenameを付け、成功したretryが、その契機となったfailure evidenceを上書きしないようにしてください。
   最適化で比較可能なslow-test evidenceを得るため、成功・失敗どちらのmatrix laneでもTRX telemetryをsummaryしてください。不要な転送時間を避けるため、result/dump artifact uploadは失敗時限定のままにします。
 - `.github/scripts/configure-windows-test-host.ps1`
   `dotnet.yml` と `release.yml` の Windows lane は、TMP/TEMP 固定と Defender 除外 setup をこのスクリプトで共有します。両 workflow の test-host performance 前提を揃えるため、スクリプトまたは workflow からの呼び出し contract を変更するときは `CiWorkflowTests` も更新してください。
