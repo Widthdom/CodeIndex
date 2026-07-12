@@ -7881,30 +7881,31 @@ jobs:
         }
     }
 
-    [Theory]
-    [InlineData("rb", "ruby", "package/example.rb")]
-    [InlineData("fs", "fsharp", "Module.fs")]
-    public void RunSearch_AcceptsRubyAndFsharpLangAliases(string alias, string canonicalLang, string filePath)
+    [Fact]
+    public void RunSearch_AcceptsRubyAndFsharpLangAliases()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_{canonicalLang}_{alias}_lang_alias");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_ruby_fsharp_lang_aliases");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                filePath,
-                canonicalLang,
-                """
-                public_api
-                """);
+            var cases = new[]
+            {
+                (Alias: "rb", CanonicalLang: "ruby", FilePath: "package/example.rb"),
+                (Alias: "fs", CanonicalLang: "fsharp", FilePath: "Module.fs"),
+            };
+            foreach (var testCase in cases)
+                TestProjectHelper.InsertIndexedFile(dbPath, testCase.FilePath, testCase.CanonicalLang, "public_api\n");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["public_api", "--db", dbPath, "--lang", alias, "--exact", "--count"],
-                _jsonOptions));
+            foreach (var testCase in cases)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    ["public_api", "--db", dbPath, "--lang", testCase.Alias, "--exact", "--count"],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("1", stdout.Trim());
-            Assert.Equal(string.Empty, stderr);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("1", stdout.Trim());
+                Assert.Equal(string.Empty, stderr);
+            }
         }
         finally
         {
