@@ -188,10 +188,14 @@ public partial class McpServer
                 ["excludeTests"] = excludeTests,
                 ["results"] = ToJsonArray(compactResults)
             };
-            AddSearchStabilityMetadata(structured, reader, cursor, results);
+            AddSearchStabilityMetadata(structured, reader, cursor, results, truncated);
             AddResultEnvelope(structured, results.Count, truncated ? null : results.Count, truncated);
             if (format == "compact")
-                ApplyCompactResults(structured, results, result => result.Path, result => result.StartLine);
+                ApplyCompactResults(
+                    structured,
+                    compactResults,
+                    result => result.Path,
+                    result => result.MatchLines.Count > 0 ? result.MatchLines[0] : result.ChunkStartLine);
             var topResult = results[0];
             AddNextStepSuggestion(
                 structured,

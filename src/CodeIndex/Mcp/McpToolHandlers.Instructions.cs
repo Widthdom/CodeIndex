@@ -142,7 +142,12 @@ public partial class McpServer
             payload["freshness_degraded_reason"] = freshness.FreshnessDegradedReason;
     }
 
-    private static void AddSearchStabilityMetadata(JsonObject payload, DbReader reader, SearchCursor? cursor, IReadOnlyList<SearchResult> results)
+    private static void AddSearchStabilityMetadata(
+        JsonObject payload,
+        DbReader reader,
+        SearchCursor? cursor,
+        IReadOnlyList<SearchResult> results,
+        bool moreAvailable = false)
     {
         var freshness = reader.GetFreshnessHint();
         payload["result_stable_at"] = freshness.IndexedAt.HasValue
@@ -152,7 +157,7 @@ public partial class McpServer
         if (!freshness.FreshnessAvailable && freshness.FreshnessDegradedReason != null)
             payload["freshness_degraded_reason"] = freshness.FreshnessDegradedReason;
 
-        if (results.Count > 0)
+        if (moreAvailable && results.Count > 0)
             payload["next_cursor"] = FormatSearchCursor(results[^1]);
     }
 
