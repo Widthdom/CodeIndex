@@ -104,6 +104,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Keep MCP mixed and zero-result SQL graph metadata assertions single and non-duplicated.
   MCP deps and symbol-hotspots degraded zero results share one downgraded server fixture.
   MCP unused-symbols and symbol-hotspots kind-filtered clean zero results share one downgraded server fixture.
+  CLI unused kind-filtered zero-result and count JSON envelopes share one downgraded SQL fixture.
   MCP definition clean metadata and callers/impact degraded metadata share one stale-contract server fixture.
   Deps missing-graph byte-limit and summary-only zero payloads share one read-only fixture.
   Deps JSON-only control rejection across non-JSON formats uses one data-driven theory.
@@ -511,6 +512,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   MCP mixed/zero-result SQL graph metadataのassertは重複させず1回にしてください。
   MCP depsとsymbol-hotspotsのdegraded zero resultは1つのdowngraded server fixtureを共有してください。
   MCP unused-symbolsとsymbol-hotspotsのkind-filtered clean zero resultは1つのdowngraded server fixtureを共有してください。
+  CLI unusedのkind-filtered zero-resultとcount JSON envelopeは1つのdowngraded SQL fixtureを共有してください。
   MCP definitionのclean metadataとcallers/impactのdegraded metadataは1つのstale-contract server fixtureを共有してください。
   deps missing-graphのbyte-limitとsummary-only zero payloadは1つのread-only fixtureを共有してください。
   depsのJSON-only controlをnon-JSON formatで拒否する検証は1つのdata-driven theoryにしてください。

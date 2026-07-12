@@ -4928,7 +4928,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_ZeroJson_StaleSqlGraphContractStaysCleanWhenSqlSymbolsCannotMatchKind()
+    public void RunUnused_ZeroJsonAndCountShareCleanSqlScopeFixture()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_zero_sql_graph_contract");
         try
@@ -4949,36 +4949,21 @@ public partial class QueryCommandRunnerTests
             Assert.False(json.TryGetProperty("sql_graph_contract_ready", out _));
             Assert.False(json.TryGetProperty("sql_graph_contract_degraded_reason", out _));
             Assert.False(json.TryGetProperty("degraded", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunUnused_CountZeroJson_StaleSqlGraphContractStaysCleanWhenSqlSymbolsCannotMatchKind()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_zero_sql_graph_contract_count");
-        try
-        {
-            var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
-            DowngradeSqlGraphContractVersion(dbPath);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
                 ["--db", dbPath, "--json", "--kind", "interface", "--count"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+            using var countDocument = ParseJsonOutput(countStdout);
+            var countJson = countDocument.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Equal(0, json.GetProperty("files").GetInt32());
-            Assert.False(json.TryGetProperty("sql_graph_contract_ready", out _));
-            Assert.False(json.TryGetProperty("sql_graph_contract_degraded_reason", out _));
-            Assert.False(json.GetProperty("degraded").GetBoolean());
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            Assert.Equal(0, countJson.GetProperty("count").GetInt32());
+            Assert.Equal(0, countJson.GetProperty("files").GetInt32());
+            Assert.False(countJson.TryGetProperty("sql_graph_contract_ready", out _));
+            Assert.False(countJson.TryGetProperty("sql_graph_contract_degraded_reason", out _));
+            Assert.False(countJson.GetProperty("degraded").GetBoolean());
         }
         finally
         {
