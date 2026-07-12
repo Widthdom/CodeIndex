@@ -1441,6 +1441,7 @@ public partial class McpServer
         {
             var requestToken = _currentRequestToken.Value;
             var status = reader.GetStatus();
+            QueryCommandRunner.ApplyStatusSymbolKindLimits(status, reader.GetSymbolKindCounts());
             WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit, requestToken);
             var macProfile = MacProfileDetector.DetectCurrentWithDiagnostics();
             status.MacProfile = macProfile.Profile;
@@ -1492,6 +1493,7 @@ public partial class McpServer
                 status.RecommendedAction = BuildFoldBackfillCommand(_dbPath, _dbPathExplicit);
                 status.AlternativeAction = BuildFoldRebuildRepairCommand(status.ProjectRoot, _dbPath, _dbPathExplicit);
             }
+            status.Summary = QueryCommandRunner.BuildStatusSummary(status);
             var checkFailures = checkWorkspace
                 ? BuildMcpStatusCheckFailures(status, statusScopes)
                 : [];
@@ -1735,6 +1737,12 @@ public partial class McpServer
             ["chunks"] = status.Chunks,
             ["symbols"] = status.Symbols,
             ["references"] = status.References,
+            ["symbol_kinds"] = JsonSerializer.SerializeToNode(status.SymbolKinds),
+            ["symbol_kind_limit"] = status.SymbolKindLimit,
+            ["symbol_kind_name_limit"] = status.SymbolKindNameLimit,
+            ["symbol_kind_total_count"] = status.SymbolKindTotalCount,
+            ["symbol_kind_omitted_count"] = status.SymbolKindOmittedCount,
+            ["symbol_kind_names_truncated"] = status.SymbolKindNamesTruncated,
             ["language_count"] = status.Languages.Count,
             ["top_languages"] = new JsonArray(status.Languages
                 .OrderByDescending(kv => kv.Value)

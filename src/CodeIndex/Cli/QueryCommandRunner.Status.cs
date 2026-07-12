@@ -140,15 +140,8 @@ public static partial class QueryCommandRunner
             status.UpdateCheck = updateResult;
 
             // Build one-line summary for AI orientation / AI向けの1行サマリーを構築
-            var topLangs = status.Languages.OrderByDescending(kv => kv.Value).Take(3).Select(kv => kv.Key);
-            var freshness = BuildStatusFreshnessLabel(status);
-            var dirty = status.GitIsDirty == true ? ", dirty" : "";
             ApplyStatusDegradationGuidance(status, options);
-
-            var degraded = IsStatusDegraded(status)
-                ? ", DEGRADED"
-                : "";
-            status.Summary = $"{status.Files} files, {status.Symbols} symbols, {status.References} refs across {status.Languages.Count} languages ({string.Join(", ", topLangs)}); index {freshness}{dirty}{degraded}";
+            status.Summary = BuildStatusSummary(status);
 
             IReadOnlyList<StatusCheckFailure> checkFailures = options.CheckWorkspace
                 ? BuildStatusCheckFailures(status, options.StatusCheckScopes)
@@ -796,7 +789,7 @@ public static partial class QueryCommandRunner
         int OmittedCount,
         bool NamesTruncated);
 
-    private static void ApplyStatusSymbolKindLimits(StatusResult status, Dictionary<string, long> symbolKinds)
+    internal static void ApplyStatusSymbolKindLimits(StatusResult status, Dictionary<string, long> symbolKinds)
     {
         var limitedSymbolKinds = LimitStatusKindCounts(symbolKinds);
         status.SymbolKinds = limitedSymbolKinds.Counts;
@@ -840,6 +833,15 @@ public static partial class QueryCommandRunner
         status.SymbolsByLanguageKindTotalCounts = totalCounts;
         status.SymbolsByLanguageKindOmittedCounts = omittedCounts;
         status.SymbolsByLanguageKindNamesTruncated = truncatedLanguages;
+    }
+
+    internal static string BuildStatusSummary(StatusResult status)
+    {
+        var topLangs = status.Languages.OrderByDescending(kv => kv.Value).Take(3).Select(kv => kv.Key);
+        var freshness = BuildStatusFreshnessLabel(status);
+        var dirty = status.GitIsDirty == true ? ", dirty" : "";
+        var degraded = IsStatusDegraded(status) ? ", DEGRADED" : "";
+        return $"{status.Files} files, {status.Symbols} symbols, {status.References} refs across {status.Languages.Count} languages ({string.Join(", ", topLangs)}); index {freshness}{dirty}{degraded}";
     }
 
     private static LimitedStatusKindCounts LimitStatusKindCounts(IReadOnlyDictionary<string, long> counts)
