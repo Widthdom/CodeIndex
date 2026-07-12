@@ -47,7 +47,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSymbols_FormatCompact_ReturnsBoundedRows_Issue4165()
+    public void RunSymbols_CompactAndSummaryModesReuseEditorFixture_Issues4165And4317()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_compact_issue4165");
         try
@@ -81,36 +81,42 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, row.GetProperty("definition_sites").GetInt32());
             Assert.False(row.TryGetProperty("signature", out _));
             Assert.True(root.TryGetProperty("query_context", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunSymbols_CompactAliasReturnsBoundedRows_Issue4317()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_compact_alias_issue4317");
-        try
-        {
-            var dbPath = CreateSymbolsEditorFormatFixtureDb(projectRoot);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+            var (aliasExitCode, aliasStdout, aliasStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["Run", "--db", dbPath, "--compact", "--exact-name", "--sort", "hotspot", "--lang", "csharp", "--kind", "function", "--limit", "1"],
                 _jsonOptions));
 
-            Assert.True(exitCode == CommandExitCodes.Success, stderr);
-            Assert.Equal(string.Empty, stderr);
+            Assert.True(aliasExitCode == CommandExitCodes.Success, aliasStderr);
+            Assert.Equal(string.Empty, aliasStderr);
 
-            using var document = ParseJsonOutput(stdout);
-            var root = document.RootElement;
-            var row = Assert.Single(root.GetProperty("symbols").EnumerateArray().ToList());
+            using var aliasDocument = ParseJsonOutput(aliasStdout);
+            var aliasRoot = aliasDocument.RootElement;
+            var aliasRow = Assert.Single(aliasRoot.GetProperty("symbols").EnumerateArray().ToList());
 
-            Assert.Equal("compact", root.GetProperty("format").GetString());
-            Assert.Equal(1, root.GetProperty("emitted_count").GetInt32());
-            Assert.Equal("Run", row.GetProperty("name").GetString());
-            Assert.Equal("src/App.cs", row.GetProperty("path").GetString());
+            Assert.Equal("compact", aliasRoot.GetProperty("format").GetString());
+            Assert.Equal(1, aliasRoot.GetProperty("emitted_count").GetInt32());
+            Assert.Equal("Run", aliasRow.GetProperty("name").GetString());
+            Assert.Equal("src/App.cs", aliasRow.GetProperty("path").GetString());
+
+            var (summaryExitCode, summaryStdout, summaryStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Run", "--db", dbPath, "--json", "--summary-only", "--exact-name", "--lang", "csharp", "--kind", "function", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.True(summaryExitCode == CommandExitCodes.Success, summaryStderr);
+            Assert.Equal(string.Empty, summaryStderr);
+
+            using var summaryDocument = ParseJsonOutput(summaryStdout);
+            var summaryRoot = summaryDocument.RootElement;
+
+            Assert.Equal(1, summaryRoot.GetProperty("count").GetInt32());
+            Assert.Equal(0, summaryRoot.GetProperty("emitted_count").GetInt32());
+            Assert.Equal(1, summaryRoot.GetProperty("omitted_count").GetInt32());
+            Assert.True(summaryRoot.GetProperty("summary_only").GetBoolean());
+            Assert.False(summaryRoot.GetProperty("truncated").GetBoolean());
+            Assert.Equal(1, summaryRoot.GetProperty("summary_only_omitted_count").GetInt32());
+            Assert.False(summaryRoot.TryGetProperty("row_limit_reached", out _));
+            Assert.False(summaryRoot.TryGetProperty("symbols", out _));
+            Assert.Equal("summary_only", Assert.Single(summaryRoot.GetProperty("omitted_by").EnumerateArray().ToList()).GetString());
         }
         finally
         {
@@ -131,54 +137,17 @@ public partial class QueryCommandRunnerTests
                 new[] { "--query", "--compact", "--db", dbPath, "--format", "count" },
             })
             {
-                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                    args,
-                    _jsonOptions));
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(args, _jsonOptions));
 
                 Assert.True(exitCode == CommandExitCodes.Success, stderr);
                 Assert.Equal(string.Empty, stderr);
 
                 using var document = ParseJsonOutput(stdout);
                 var root = document.RootElement;
-
                 Assert.Equal("--compact", root.GetProperty("query").GetString());
                 Assert.False(root.TryGetProperty("format", out _));
                 Assert.Equal(0, root.GetProperty("count").GetInt32());
             }
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunSymbols_SummaryOnlyJsonOmitsRowsWithMetadata_Issue4165()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_summary_only_issue4165");
-        try
-        {
-            var dbPath = CreateSymbolsEditorFormatFixtureDb(projectRoot);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["Run", "--db", dbPath, "--json", "--summary-only", "--exact-name", "--lang", "csharp", "--kind", "function", "--limit", "1"],
-                _jsonOptions));
-
-            Assert.True(exitCode == CommandExitCodes.Success, stderr);
-            Assert.Equal(string.Empty, stderr);
-
-            using var document = ParseJsonOutput(stdout);
-            var root = document.RootElement;
-
-            Assert.Equal(1, root.GetProperty("count").GetInt32());
-            Assert.Equal(0, root.GetProperty("emitted_count").GetInt32());
-            Assert.Equal(1, root.GetProperty("omitted_count").GetInt32());
-            Assert.True(root.GetProperty("summary_only").GetBoolean());
-            Assert.False(root.GetProperty("truncated").GetBoolean());
-            Assert.Equal(1, root.GetProperty("summary_only_omitted_count").GetInt32());
-            Assert.False(root.TryGetProperty("row_limit_reached", out _));
-            Assert.False(root.TryGetProperty("symbols", out _));
-            Assert.Equal("summary_only", Assert.Single(root.GetProperty("omitted_by").EnumerateArray().ToList()).GetString());
         }
         finally
         {

@@ -82,6 +82,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Excerpt focus-column validation follows this rule for zero and non-numeric values, reusing one indexed Markdown fixture.
   Inspect path-line exact/enclosing-symbol cases reuse one indexed source fixture and iterate read-only line queries within a fact.
   Definition and symbols exact-mode conflict validation share one empty database and a cross-command flag-pair table.
+  Symbols compact flag/alias and summary-only JSON envelopes share one editor-format fixture.
   Razor directive kind-filter queries share one indexed component fixture and iterate route, implements, attribute, and layout expectations in one fact.
   Symbols literal-query coverage shares one empty database for double-dash and explicit `--query` forms when proving compact-looking text is not expanded.
   Symbols hotspot, references, size, and path ranking queries share one symbol-sort fixture because all are read-only views of the same ranking signals.
@@ -461,6 +462,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   excerpt の focus-column validation も zero と non-numeric value にこの規則を適用し、1つの indexed Markdown fixture を再利用してください。
   inspect path-line の exact/enclosing-symbol case は1つの indexed source fixture を再利用し、read-only line query を fact 内で反復してください。
   definition と symbols の exact-mode conflict validation は1つの空databaseとcross-command flag-pair tableを共有してください。
+  symbols compact flag/aliasとsummary-only JSON envelopeは1つのeditor-format fixtureを共有してください。
   Razor directive kind-filter query は1つの indexed component fixture を共有し、route、implements、attribute、layout の期待値を1つの fact 内で反復してください。
   symbols literal-query coverage は、compact風のtextが展開されないことを確認するdouble-dash形式と明示的`--query`形式で1つの空databaseを共有してください。
   symbols の hotspot、references、size、path ranking query は同じranking signalのread-only viewなので、1つのsymbol-sort fixtureを共有してください。
