@@ -382,10 +382,11 @@ public static partial class QueryCommandRunner
         if (options.SampleSize.HasValue && rows.Count > options.SampleSize.Value)
             rows = SampleSearchRows(rows, options.SampleSize.Value);
 
-        if (rows.Count > options.Limit)
+        var limitTruncated = rows.Count > options.Limit;
+        if (limitTruncated)
             rows = rows.Take(options.Limit).ToList();
 
-        return new SearchOutputSelection(rows, originalCount, rows.Count < originalCount);
+        return new SearchOutputSelection(rows, originalCount, rows.Count < originalCount, limitTruncated);
     }
 
     private static List<SearchDisplayRow> SampleSearchRows(List<SearchDisplayRow> rows, int sampleSize)
@@ -628,7 +629,7 @@ public static partial class QueryCommandRunner
         }
     }
 
-    private sealed record SearchOutputSelection(List<SearchDisplayRow> Rows, int OriginalCount, bool Truncated);
+    private sealed record SearchOutputSelection(List<SearchDisplayRow> Rows, int OriginalCount, bool Truncated, bool LimitTruncated);
 
     private sealed record SearchGroupOutputSelection(
         List<SearchGroupedCountItemJsonResult> Groups,
@@ -949,7 +950,10 @@ public static partial class QueryCommandRunner
             if (pageLimit <= 0)
                 break;
 
-            var page = ReadSearchResults(reader, options, exact, pageLimit, cursor, requestedLimit);
+            // The extra display candidate is only a pagination probe. Guard evaluation must
+            // retain the user's requested budget or its bounded candidate scan can stop before
+            // the first qualifying row.
+            var page = ReadSearchResults(reader, options, exact, pageLimit, cursor, options.Limit);
             pagesRead++;
             if (page.Count == 0)
                 break;
@@ -981,10 +985,14 @@ public static partial class QueryCommandRunner
     private static int GetSearchDisplayCandidateLimit(QueryCommandOptions options)
     {
         var requested = Math.Max(1, options.Limit);
-        if (!options.FirstPerFile && !options.SampleSize.HasValue)
+        // Guard filtering couples its bounded candidate scan to the requested result count.
+        // Overfetching here can exhaust that scan before a qualifying row is reached.
+        if (options.GuardFilters.Count > 0)
             return requested;
+        if (!options.FirstPerFile && !options.SampleSize.HasValue)
+            return requested == int.MaxValue ? requested : requested + 1;
         var sampleTarget = Math.Max(requested, options.SampleSize ?? requested);
-        return Math.Min(SearchOriginFilterMaxCandidates, Math.Max(requested, sampleTarget * SearchOriginFilterOverFetchFactor));
+        return Math.Min(SearchOriginFilterMaxCandidates, Math.Max(requested + 1, sampleTarget * SearchOriginFilterOverFetchFactor));
     }
 
     private static List<SearchResult> ReadSearchResults(DbReader reader, QueryCommandOptions options, bool exact, int limit, SearchCursor? cursor = null, int? guardRequestedLimit = null)
@@ -1318,7 +1326,7 @@ public static partial class QueryCommandRunner
             first.ExactSubstringHint = hint;
     }
 
-    private static void WriteJsonStreamDone(int count, JsonSerializerOptions jsonOptions, bool interrupted = false, DbReader? reader = null)
+    private static void WriteJsonStreamDone(int count, JsonSerializerOptions jsonOptions, bool interrupted = false, bool truncated = false, DbReader? reader = null)
     {
         var includeDiagnostics = HasReadOnlyFallbackDiagnostics(reader);
         Console.WriteLine(JsonSerializer.Serialize(
@@ -1326,6 +1334,8 @@ public static partial class QueryCommandRunner
                 Done: !interrupted,
                 Count: count,
                 Interrupted: interrupted,
+                Truncated: truncated,
+                HasMore: truncated,
                 ReadOnlyFallback: includeDiagnostics ? reader!.ReadOnlyFallback : null,
                 WalCheckpointAttempted: includeDiagnostics ? reader!.WalCheckpointAttempted : null,
                 WalCheckpointSucceeded: includeDiagnostics ? reader!.WalCheckpointSucceeded : null,
