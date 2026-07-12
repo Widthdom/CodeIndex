@@ -558,34 +558,35 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
-    [InlineData("hotspot")]
-    [InlineData("references")]
-    public void RunSymbols_SortByReferenceSignalsAddsRankingMetadata_Issue3451(string sortMode)
+    [Fact]
+    public void RunSymbols_ReferenceSignalSortsReuseRankingFixture_Issue3451()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_sort_reference_signals");
         try
         {
             var dbPath = CreateSymbolSortFixtureDb(projectRoot);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--kind", "function", "--lang", "csharp", "--path", "src/Beta.cs", "--sort", sortMode, "--limit", "4"],
-                _jsonOptions));
+            foreach (var sortMode in new[] { "hotspot", "references" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                    ["--db", dbPath, "--json", "--kind", "function", "--lang", "csharp", "--path", "src/Beta.cs", "--sort", sortMode, "--limit", "4"],
+                    _jsonOptions));
 
-            Assert.True(exitCode == CommandExitCodes.Success, $"exit={exitCode}; stderr={stderr}; stdout={stdout}");
-            Assert.Equal(string.Empty, stderr);
-            var rows = ParseJsonLines(stdout).Select(document => document.RootElement).ToList();
-            Assert.Equal("ShortHot", rows[0].GetProperty("name").GetString());
-            Assert.Equal(sortMode, rows[0].GetProperty("sort_mode").GetString());
-            Assert.True(rows[0].GetProperty("reference_count").GetInt32() >= 2);
-            Assert.True(rows[0].GetProperty("hotspot_score").GetDouble() > 0);
-            Assert.True(rows[0].GetProperty("ranking_reference_score").GetDouble() > 0);
-            Assert.True(rows[0].GetProperty("ranking_hotspot_score").GetDouble() > 0);
-            Assert.True(rows[0].GetProperty("generic_name_penalty").GetDouble() > 0);
-            Assert.True(rows[0].GetProperty("structural_rank_penalty").GetDouble() > 0);
-            Assert.True(rows[0].GetProperty("definition_sites").GetInt32() > 0);
-            Assert.True(rows[0].GetProperty("size_lines").GetInt32() > 0);
-            Assert.True(rows[0].GetProperty("complexity_score").GetDouble() > 0);
+                Assert.True(exitCode == CommandExitCodes.Success, $"exit={exitCode}; stderr={stderr}; stdout={stdout}");
+                Assert.Equal(string.Empty, stderr);
+                var rows = ParseJsonLines(stdout).Select(document => document.RootElement).ToList();
+                Assert.Equal("ShortHot", rows[0].GetProperty("name").GetString());
+                Assert.Equal(sortMode, rows[0].GetProperty("sort_mode").GetString());
+                Assert.True(rows[0].GetProperty("reference_count").GetInt32() >= 2);
+                Assert.True(rows[0].GetProperty("hotspot_score").GetDouble() > 0);
+                Assert.True(rows[0].GetProperty("ranking_reference_score").GetDouble() > 0);
+                Assert.True(rows[0].GetProperty("ranking_hotspot_score").GetDouble() > 0);
+                Assert.True(rows[0].GetProperty("generic_name_penalty").GetDouble() > 0);
+                Assert.True(rows[0].GetProperty("structural_rank_penalty").GetDouble() > 0);
+                Assert.True(rows[0].GetProperty("definition_sites").GetInt32() > 0);
+                Assert.True(rows[0].GetProperty("size_lines").GetInt32() > 0);
+                Assert.True(rows[0].GetProperty("complexity_score").GetDouble() > 0);
+            }
         }
         finally
         {
