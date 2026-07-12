@@ -142,9 +142,12 @@ public static partial class SymbolExtractor
                     ? mappedLine
                     : FindLineNumberForOffset(lineStarts ??= BuildLineStarts(lines), FindJsonPropertyOffset(content, propertyName, ref searchOffset));
 
-            var kind = property.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array
-                ? "namespace"
-                : "property";
+            var kind = property.Value.ValueKind switch
+            {
+                JsonValueKind.Object => "object",
+                JsonValueKind.Array => "array",
+                _ => "property",
+            };
 
             if (!TryAddStructuredDataSymbol(fileId, kind, name, line, lines, parentPath, symbols, "structured_data_symbol_budget_exceeded", ref truncated))
                 return;
@@ -157,14 +160,86 @@ public static partial class SymbolExtractor
             }
             else if (property.Value.ValueKind == JsonValueKind.Array)
             {
-                foreach (var item in property.Value.EnumerateArray())
-                {
-                    if (item.ValueKind == JsonValueKind.Object)
-                        ExtractJsonObjectSymbols(fileId, content, lines, ref lineStarts, item, name, ref searchOffset, symbols, propertyLines, depth + 1, ref traversalNodes, ref truncated);
-                    if (truncated)
-                        return;
-                }
+                ExtractJsonArraySymbols(
+                    fileId,
+                    content,
+                    lines,
+                    ref lineStarts,
+                    property.Value,
+                    name,
+                    line,
+                    ref searchOffset,
+                    symbols,
+                    propertyLines,
+                    depth + 1,
+                    ref traversalNodes,
+                    ref truncated);
+                if (truncated)
+                    return;
             }
+        }
+    }
+
+    private static void ExtractJsonArraySymbols(
+        long fileId,
+        string content,
+        string[] lines,
+        ref int[]? lineStarts,
+        JsonElement element,
+        string arrayPath,
+        int arrayLine,
+        ref int searchOffset,
+        List<SymbolRecord> symbols,
+        Dictionary<string, Queue<int>>? propertyLines,
+        int depth,
+        ref int traversalNodes,
+        ref bool truncated)
+    {
+        if (depth >= StructuredDataMaxJsonDepth)
+        {
+            AddStructuredDataDiagnosticSymbol(symbols, fileId, "structured_data_depth_budget_exceeded", line: 1, lines, "Structured data traversal exceeded the maximum depth; nested symbols were truncated.", ref truncated);
+            return;
+        }
+
+        var index = 0;
+        foreach (var item in element.EnumerateArray())
+        {
+            if (traversalNodes >= StructuredDataMaxTraversalNodes)
+            {
+                AddStructuredDataDiagnosticSymbol(symbols, fileId, "structured_data_traversal_budget_exceeded", line: 1, lines, "Structured data traversal exceeded the per-file node budget; remaining nodes were truncated.", ref truncated);
+                return;
+            }
+
+            traversalNodes++;
+            var itemPath = $"{arrayPath}[{index}]";
+            if (itemPath.Length > StructuredDataMaxPathLength)
+            {
+                DrainJsonPropertyLines(item, propertyLines);
+                index++;
+                continue;
+            }
+
+            var kind = item.ValueKind switch
+            {
+                JsonValueKind.Object => "object",
+                JsonValueKind.Array => "array",
+                _ => "value",
+            };
+            if (!TryAddStructuredDataSymbol(fileId, kind, itemPath, arrayLine, lines, arrayPath, symbols, "structured_data_symbol_budget_exceeded", ref truncated))
+                return;
+
+            if (item.ValueKind == JsonValueKind.Object)
+            {
+                ExtractJsonObjectSymbols(fileId, content, lines, ref lineStarts, item, itemPath, ref searchOffset, symbols, propertyLines, depth + 1, ref traversalNodes, ref truncated);
+            }
+            else if (item.ValueKind == JsonValueKind.Array)
+            {
+                ExtractJsonArraySymbols(fileId, content, lines, ref lineStarts, item, itemPath, arrayLine, ref searchOffset, symbols, propertyLines, depth + 1, ref traversalNodes, ref truncated);
+            }
+
+            if (truncated)
+                return;
+            index++;
         }
     }
 
