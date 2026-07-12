@@ -25,7 +25,7 @@ public partial class McpServerTests
     public async Task RequestBeforeInitialize_IsRejected_Issue4468()
     {
         using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
-        var transport = new QueueMcpTransport("""{"jsonrpc":"2.0","id":1,"method":"ping"}""");
+        var transport = new QueueMcpTransport(prependInitialize: false, """{"jsonrpc":"2.0","id":1,"method":"ping"}""");
 
         await server.RunAsync(transport, CancellationToken.None);
 
