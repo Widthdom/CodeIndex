@@ -22,6 +22,17 @@ public class SuggestionStoreTests : IDisposable
         _store = new SuggestionStore(_tempDir);
     }
 
+    [Fact]
+    public void ValidCategories_IncludeExhaustiveAuditFindingTypes_Issue4423()
+    {
+        Assert.Contains("security", SuggestionRecord.ValidCategories);
+        Assert.Contains("performance", SuggestionRecord.ValidCategories);
+        Assert.Contains("bug", SuggestionRecord.ValidCategories);
+        Assert.Contains("cleanup", SuggestionRecord.ValidCategories);
+        Assert.Contains("documentation", SuggestionRecord.ValidCategories);
+        Assert.Contains("feature_request", SuggestionRecord.ValidCategories);
+    }
+
     // --- ComputeHash tests / ComputeHash テスト ---
 
     [Fact]

@@ -428,6 +428,7 @@ public class GitHubIssueReporterTests : IDisposable
         Assert.Equal(["enhancement"], GitHubIssueReporter.BuildIssueLabels(new SuggestionRecord { Category = "output_format" }));
         Assert.Equal(["bug"], GitHubIssueReporter.BuildIssueLabels(new SuggestionRecord { Category = "crash_report" }));
         Assert.Equal(["bug"], GitHubIssueReporter.BuildIssueLabels(new SuggestionRecord { Category = "unexpected_error" }));
+        Assert.Equal(["bug"], GitHubIssueReporter.BuildIssueLabels(new SuggestionRecord { Category = "bug" }));
     }
 
     [Fact]

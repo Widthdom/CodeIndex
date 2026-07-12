@@ -26,9 +26,11 @@ public class SuggestionRecord
     /// <summary>
     /// Suggestion category. One of: symbol_extraction, reference_extraction,
     /// search_ranking, language_support, output_format, crash_report,
-    /// unexpected_error, other.
+    /// unexpected_error, security, performance, bug, cleanup, documentation,
+    /// feature_request, other.
     /// 提案カテゴリ。symbol_extraction, reference_extraction, search_ranking,
-    /// language_support, output_format, crash_report, unexpected_error, other のいずれか。
+    /// language_support, output_format, crash_report, unexpected_error, security,
+    /// performance, bug, cleanup, documentation, feature_request, other のいずれか。
     /// </summary>
     public string Category { get; set; } = string.Empty;
 
@@ -149,6 +151,12 @@ public class SuggestionRecord
         "output_format",
         "crash_report",
         "unexpected_error",
+        "security",
+        "performance",
+        "bug",
+        "cleanup",
+        "documentation",
+        "feature_request",
         "other"
     };
 }
