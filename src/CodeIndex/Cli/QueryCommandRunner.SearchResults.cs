@@ -950,7 +950,10 @@ public static partial class QueryCommandRunner
             if (pageLimit <= 0)
                 break;
 
-            var page = ReadSearchResults(reader, options, exact, pageLimit, cursor, requestedLimit);
+            // The extra display candidate is only a pagination probe. Guard evaluation must
+            // retain the user's requested budget or its bounded candidate scan can stop before
+            // the first qualifying row.
+            var page = ReadSearchResults(reader, options, exact, pageLimit, cursor, options.Limit);
             pagesRead++;
             if (page.Count == 0)
                 break;
@@ -982,6 +985,10 @@ public static partial class QueryCommandRunner
     private static int GetSearchDisplayCandidateLimit(QueryCommandOptions options)
     {
         var requested = Math.Max(1, options.Limit);
+        // Guard filtering couples its bounded candidate scan to the requested result count.
+        // Overfetching here can exhaust that scan before a qualifying row is reached.
+        if (options.GuardFilters.Count > 0)
+            return requested;
         if (!options.FirstPerFile && !options.SampleSize.HasValue)
             return requested == int.MaxValue ? requested : requested + 1;
         var sampleTarget = Math.Max(requested, options.SampleSize ?? requested);
