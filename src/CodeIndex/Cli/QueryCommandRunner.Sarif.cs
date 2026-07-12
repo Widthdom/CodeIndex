@@ -13,10 +13,13 @@ public static partial class QueryCommandRunner
     }
 
     private static (string Path, int Line, int Column, string Message) ToSymbolQuickfixItem(SymbolResult result)
-        => (result.Path, GetSymbolDisplayLine(result), 1, FormatSymbolLocationLabel(result));
+        => (result.Path, GetSymbolDisplayLine(result), GetSymbolDisplayColumn(result), FormatSymbolLocationLabel(result));
 
     private static (string Path, int Line, int Column, string Message, string RuleId) ToSymbolSarifItem(SymbolResult result)
-        => (result.Path, GetSymbolDisplayLine(result), 1, FormatSymbolLocationLabel(result), string.IsNullOrWhiteSpace(result.Kind) ? "symbol" : $"symbol.{result.Kind}");
+        => (result.Path, GetSymbolDisplayLine(result), GetSymbolDisplayColumn(result), FormatSymbolLocationLabel(result), string.IsNullOrWhiteSpace(result.Kind) ? "symbol" : $"symbol.{result.Kind}");
+
+    private static int GetSymbolDisplayColumn(SymbolResult result)
+        => result.StartColumn.HasValue ? result.StartColumn.Value + 1 : 1;
 
     private static int GetSymbolDisplayLine(SymbolResult result)
         => Math.Max(1, result.Line > 0 ? result.Line : result.StartLine);
@@ -28,6 +31,11 @@ public static partial class QueryCommandRunner
     }
 
     private static void WriteSarif(IEnumerable<(string Path, int Line, int Column, string Message, string RuleId)> items, JsonSerializerOptions jsonOptions)
+        => WriteSarif(
+            items.Select(item => new SarifLocation(item.Path, item.Line, item.Column, null, item.Message, item.RuleId)),
+            jsonOptions);
+
+    private static void WriteSarif(IEnumerable<SarifLocation> items, JsonSerializerOptions jsonOptions)
     {
         var writer = Console.Out;
         var itemOptions = GetCompactJsonOptions(jsonOptions);
@@ -79,7 +87,7 @@ public static partial class QueryCommandRunner
         writer.Write("},\"defaultConfiguration\":{\"level\":\"warning\"},\"properties\":{\"tags\":[\"cdidx\",\"code-search\"]}}");
     }
 
-    private static void WriteSarifResult(TextWriter writer, (string Path, int Line, int Column, string Message, string RuleId) item, JsonSerializerOptions jsonOptions)
+    private static void WriteSarifResult(TextWriter writer, SarifLocation item, JsonSerializerOptions jsonOptions)
     {
         writer.Write("{\"ruleId\":");
         writer.Write(JsonSerializer.Serialize(item.RuleId, jsonOptions));
@@ -91,6 +99,11 @@ public static partial class QueryCommandRunner
         writer.Write(Math.Max(1, item.Line).ToString(CultureInfo.InvariantCulture));
         writer.Write(",\"startColumn\":");
         writer.Write(Math.Max(1, item.Column).ToString(CultureInfo.InvariantCulture));
+        if (item.EndColumn.HasValue)
+        {
+            writer.Write(",\"endColumn\":");
+            writer.Write(Math.Max(Math.Max(1, item.Column) + 1, item.EndColumn.Value).ToString(CultureInfo.InvariantCulture));
+        }
         writer.Write("}}}]}");
     }
 
@@ -101,4 +114,6 @@ public static partial class QueryCommandRunner
             normalized = normalized[2..];
         return normalized;
     }
+
+    private sealed record SarifLocation(string Path, int Line, int Column, int? EndColumn, string Message, string RuleId);
 }

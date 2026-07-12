@@ -1459,7 +1459,23 @@ public partial class DbReaderTests : IDisposable
         Assert.Equal("src/session.py", caller.Path);
         Assert.Equal("login", caller.CallerName);
         Assert.Equal("authenticate", caller.CalleeName);
+        Assert.Equal(12, caller.FirstColumn);
         Assert.Equal(1, caller.ReferenceCount);
+    }
+
+    [Fact]
+    public void GetCallers_FirstColumnComesFromFirstReferenceLocation_Issue4417()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord { Path = "src/locations.cs", Lang = "csharp" });
+        _writer.InsertReferences([
+            new ReferenceRecord { FileId = fileId, SymbolName = "Target", ReferenceKind = "call", Line = 2, Column = 20, Context = "                   Target();", ContainerKind = "function", ContainerName = "Run" },
+            new ReferenceRecord { FileId = fileId, SymbolName = "Target", ReferenceKind = "call", Line = 3, Column = 5, Context = "    Target();", ContainerKind = "function", ContainerName = "Run" },
+        ]);
+
+        var caller = Assert.Single(_reader.GetCallers("Target", exact: true));
+
+        Assert.Equal(2, caller.FirstLine);
+        Assert.Equal(20, caller.FirstColumn);
     }
 
     [Fact]

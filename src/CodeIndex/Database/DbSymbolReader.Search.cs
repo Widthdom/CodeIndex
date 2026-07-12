@@ -517,6 +517,7 @@ public partial class DbReader
         var sql = $@"
             SELECT f.path, f.lang, s.kind, {GetSymbolColumnSql("sub_kind")} AS sub_kind, s.name, s.line,
                    {startLineSql} AS start_line,
+                   {GetSymbolColumnSql("start_column")} AS start_column,
                    {endLineSql} AS end_line,
                    {bodyStartLineSql} AS body_start_line,
                    {bodyEndLineSql} AS body_end_line,
@@ -679,27 +680,42 @@ public partial class DbReader
                 Name = reader.GetString(4),
                 Line = reader.GetInt32(5),
                 StartLine = GetInt32OrFallback(reader, 6, 5),
-                EndLine = GetInt32OrFallback(reader, 7, 5),
-                BodyStartLine = GetNullableInt32(reader, 8),
-                BodyEndLine = GetNullableInt32(reader, 9),
-                Signature = GetNullableString(reader, 10),
-                ContainerKind = GetNullableString(reader, 11),
-                ContainerName = GetNullableString(reader, 12),
-                Visibility = GetNullableString(reader, 13),
-                ReturnType = GetNullableString(reader, 14),
+                StartColumn = ResolveSymbolIdentifierStartColumn(
+                    GetNullableInt32(reader, 7),
+                    GetNullableString(reader, 11),
+                    reader.GetString(4)),
+                EndLine = GetInt32OrFallback(reader, 8, 5),
+                BodyStartLine = GetNullableInt32(reader, 9),
+                BodyEndLine = GetNullableInt32(reader, 10),
+                Signature = GetNullableString(reader, 11),
+                ContainerKind = GetNullableString(reader, 12),
+                ContainerName = GetNullableString(reader, 13),
+                Visibility = GetNullableString(reader, 14),
+                ReturnType = GetNullableString(reader, 15),
                 SortMode = includeRankingMetadata ? sortModeName : null,
-                ReferenceCount = includeRankingMetadata ? Convert.ToInt32(reader.GetInt64(15)) : null,
-                HotspotScore = includeRankingMetadata ? Math.Round(reader.GetDouble(16), 3) : null,
-                RankingReferenceScore = includeRankingMetadata ? Math.Round(reader.GetDouble(17), 3) : null,
-                RankingHotspotScore = includeRankingMetadata ? Math.Round(reader.GetDouble(18), 3) : null,
-                GenericNamePenalty = includeRankingMetadata ? Math.Round(reader.GetDouble(19), 3) : null,
-                StructuralRankPenalty = includeRankingMetadata ? Math.Round(reader.GetDouble(20), 3) : null,
-                DefinitionSites = includeRankingMetadata ? Convert.ToInt32(reader.GetInt64(21)) : null,
-                SizeLines = includeRankingMetadata ? Convert.ToInt32(reader.GetInt64(22)) : null,
-                ComplexityScore = includeRankingMetadata ? Math.Round(reader.GetDouble(23), 3) : null,
+                ReferenceCount = includeRankingMetadata ? Convert.ToInt32(reader.GetInt64(16)) : null,
+                HotspotScore = includeRankingMetadata ? Math.Round(reader.GetDouble(17), 3) : null,
+                RankingReferenceScore = includeRankingMetadata ? Math.Round(reader.GetDouble(18), 3) : null,
+                RankingHotspotScore = includeRankingMetadata ? Math.Round(reader.GetDouble(19), 3) : null,
+                GenericNamePenalty = includeRankingMetadata ? Math.Round(reader.GetDouble(20), 3) : null,
+                StructuralRankPenalty = includeRankingMetadata ? Math.Round(reader.GetDouble(21), 3) : null,
+                DefinitionSites = includeRankingMetadata ? Convert.ToInt32(reader.GetInt64(22)) : null,
+                SizeLines = includeRankingMetadata ? Convert.ToInt32(reader.GetInt64(23)) : null,
+                ComplexityScore = includeRankingMetadata ? Math.Round(reader.GetDouble(24), 3) : null,
             });
         }
         return results;
+    }
+
+    private static int? ResolveSymbolIdentifierStartColumn(int? declarationStartColumn, string? signature, string name)
+    {
+        if (!declarationStartColumn.HasValue || string.IsNullOrWhiteSpace(signature) || string.IsNullOrEmpty(name))
+            return declarationStartColumn;
+
+        var firstLineEnd = signature.IndexOfAny(['\r', '\n']);
+        var firstLine = firstLineEnd >= 0 ? signature[..firstLineEnd] : signature;
+        var relativeColumn = firstLine.IndexOf(name, StringComparison.Ordinal);
+        return relativeColumn >= 0 ? declarationStartColumn.Value + relativeColumn : declarationStartColumn;
     }
 
     private static string GetGenericSymbolRankNamePenaltySql(string nameSql)

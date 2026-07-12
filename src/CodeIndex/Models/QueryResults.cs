@@ -230,6 +230,8 @@ public class SymbolResult
     public string Name { get; set; } = string.Empty;
     public int Line { get; set; }
     public int StartLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? StartColumn { get; set; }
     public int EndLine { get; set; }
     public int? BodyStartLine { get; set; }
     public int? BodyEndLine { get; set; }
@@ -623,6 +625,7 @@ public class CallerResult
     public bool AggregateTruncated { get; set; }
     public double ReferenceWeightScore { get; set; }
     public int FirstLine { get; set; }
+    public int FirstColumn { get; set; }
     public int ReferenceCount { get; set; }
     public bool HasSelfReference { get; set; }
     public bool HasMutualRecursion { get; set; }

@@ -1272,16 +1272,17 @@ public static partial class QueryCommandRunner
             yield return (row.Result.Path, span.Line, span.Column, $"search match: {query}");
     }
 
-    private static IEnumerable<(string Path, int Line, int Column, string Message, string RuleId)> ToSearchSarifItems(SearchDisplayRow row, string query, bool useMatchLines)
+    private static IEnumerable<SarifLocation> ToSearchSarifItems(SearchDisplayRow row, string query, bool useMatchLines)
     {
-        if (!useMatchLines || row.Compact.MatchLines.Count == 0)
+        var spans = GetSearchLocationSpans(row, useMatchLines).ToList();
+        if (spans.Count == 0)
         {
-            yield return (row.Result.Path, row.Result.StartLine, 1, $"search match: {query}", "search");
+            yield return new SarifLocation(row.Result.Path, row.Result.StartLine, 1, null, $"search match: {query}", "search");
             yield break;
         }
 
-        foreach (var line in row.Compact.MatchLines)
-            yield return (row.Result.Path, line, 1, $"search match: {query}", "search");
+        foreach (var span in spans)
+            yield return new SarifLocation(row.Result.Path, span.Line, span.Column, span.Column + span.Length, $"search match: {query}", "search");
     }
 
     private sealed record SearchDisplayRow(SearchResult Result, CompactSearchResult Compact);

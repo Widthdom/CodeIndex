@@ -1438,6 +1438,9 @@ public class LspServerTests
             var locations = response!["result"]!.AsArray();
             Assert.NotEmpty(locations);
             Assert.Equal(new Uri(sourcePath).AbsoluteUri, locations[0]!["uri"]!.GetValue<string>());
+            var range = locations[0]!["range"]!;
+            Assert.Equal(17, range["start"]!["character"]!.GetValue<int>());
+            Assert.Equal(23, range["end"]!["character"]!.GetValue<int>());
         }
         finally
         {
