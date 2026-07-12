@@ -102,6 +102,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Assert each MCP SQL graph readiness field and degraded reason once per response.
   MCP analyze-symbol and references stale-SQL-contract checks share one downgraded server fixture.
   Keep MCP mixed and zero-result SQL graph metadata assertions single and non-duplicated.
+  MCP deps and symbol-hotspots degraded zero results share one downgraded server fixture.
   MCP definition clean metadata and callers/impact degraded metadata share one stale-contract server fixture.
   Deps missing-graph byte-limit and summary-only zero payloads share one read-only fixture.
   Deps JSON-only control rejection across non-JSON formats uses one data-driven theory.
@@ -507,6 +508,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   MCP SQL graph readiness fieldとdegraded reasonはresponseごとに1回だけassertしてください。
   MCP analyze-symbolとreferencesのstale SQL contract checkは1つのdowngraded server fixtureを共有してください。
   MCP mixed/zero-result SQL graph metadataのassertは重複させず1回にしてください。
+  MCP depsとsymbol-hotspotsのdegraded zero resultは1つのdowngraded server fixtureを共有してください。
   MCP definitionのclean metadataとcallers/impactのdegraded metadataは1つのstale-contract server fixtureを共有してください。
   deps missing-graphのbyte-limitとsummary-only zero payloadは1つのread-only fixtureを共有してください。
   depsのJSON-only controlをnon-JSON formatで拒否する検証は1つのdata-driven theoryにしてください。
