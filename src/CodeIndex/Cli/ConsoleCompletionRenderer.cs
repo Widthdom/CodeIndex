@@ -51,9 +51,7 @@ internal static class ConsoleCompletionRenderer
     // bash / zsh の専用ブランチを持つコマンド。順序は意図的で、`search` が最終 elif、`else` が
     // generic catch-all となるよう揃える。テストもこの並びを前提にしている。
     private static readonly string[] EnumeratedCompletionCommands =
-    [
-        "find", "excerpt", "references", "inspect", "hotspots", "status", "validate-config", "db", "report", "suggestions", "search",
-    ];
+        CliCommandCatalog.Commands.Where(command => command != "search").Append("search").ToArray();
 
     // Generic-branch representative set: union of completion flags from these commands populates
     // the bash/zsh `else` branch. Excludes find/excerpt/etc. which have their own branches, and
@@ -104,6 +102,8 @@ internal static class ConsoleCompletionRenderer
         sb.Append("        --log-format) COMPREPLY=($(compgen -W \"text json\" -- \"$cur\")) ;;\n");
         sb.Append($"        --lang) COMPREPLY=($(compgen -W \"{langs}\" -- \"$cur\")) ;;\n");
         sb.Append($"        --kind) COMPREPLY=($(compgen -W \"{kinds}\" -- \"$cur\")) ;;\n");
+        foreach (var (flag, values) in GetEnumValueCompletions())
+            sb.Append($"        {flag}) COMPREPLY=($(compgen -W \"{string.Join(' ', values)}\" -- \"$cur\")) ;;\n");
         sb.Append("        *)\n");
         for (var i = 0; i < EnumeratedCompletionCommands.Length; i++)
         {
@@ -305,6 +305,7 @@ internal static class ConsoleCompletionRenderer
             "<name>" => "name",
             "<host:port>" => "address",
             "<stdio|http>" => "transport:(stdio http)",
+            _ when GetEnumValues(flag) is { } values => $"value:({string.Join(' ', values)})",
             _ => "value",
         };
         return $"'{name}[{desc}]:{valueSpec}'";
@@ -347,6 +348,7 @@ internal static class ConsoleCompletionRenderer
                 "<auto|always|never>" => " -a 'auto always never'",
                 "<basic|256|truecolor>" => " -a 'basic 256 truecolor'",
                 "<text|json>" => " -a 'text json'",
+                _ when GetEnumValues(flag) is { } values => $" -a '{string.Join(' ', values)}'",
                 _ => "",
             };
             var description = flag.Description.Replace("'", "\\'");
@@ -382,6 +384,7 @@ internal static class ConsoleCompletionRenderer
                 "<lang>" => $" -a '{langs}'",
                 "<kind>" => $" -a '{kinds}'",
                 "<stdio|http>" => " -a 'stdio http'",
+                _ when GetEnumValues(flag) is { } values => $" -a '{string.Join(' ', values)}'",
                 _ => "",
             };
             description = description.Replace("'", "\\'");
@@ -407,6 +410,10 @@ internal static class ConsoleCompletionRenderer
         sb.AppendLine("    $colorModes = @('auto', 'always', 'never')");
         sb.AppendLine("    $palettes = @('basic', '256', 'truecolor')");
         sb.AppendLine("    $logFormats = @('text', 'json')");
+        sb.AppendLine("    $enumValues = @{");
+        foreach (var (flag, values) in GetEnumValueCompletions())
+            sb.AppendLine($"        '{EscapePowerShellSingleQuoted(flag)}' = @({FormatPowerShellArray(values)})");
+        sb.AppendLine("    }");
         sb.AppendLine($"    $topLevelFlags = @({topLevelFlags})");
         sb.AppendLine("    $subcommands = @{");
         foreach (var (command, subcommands) in CommandSubcommands)
@@ -431,6 +438,7 @@ internal static class ConsoleCompletionRenderer
         sb.AppendLine("        '--log-format' { $logFormats | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
         sb.AppendLine("        '--lang' { $langs | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
         sb.AppendLine("        '--kind' { $kinds | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
+        sb.AppendLine("        { $enumValues.ContainsKey($_) } { $enumValues[$_] | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
         sb.AppendLine("    }");
         sb.AppendLine("    if (-not $subcmd -or ($tokens.Count -le 2 -and -not ([string]::IsNullOrEmpty($wordToComplete)) -and -not $afterLastToken)) {");
         sb.AppendLine("        $commands + @('--help', '--version', '--license') + $topLevelFlags | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ 'ParameterName' }");
@@ -508,4 +516,19 @@ internal static class ConsoleCompletionRenderer
 
     private static string EscapePowerShellSingleQuoted(string value) =>
         value.Replace("'", "''", StringComparison.Ordinal);
+
+    private static string[]? GetEnumValues(CliFlag flag)
+    {
+        var placeholder = flag.ValuePlaceholder;
+        if (placeholder is null || placeholder.Length < 3 || placeholder[0] != '<' || placeholder[^1] != '>' || !placeholder.Contains('|'))
+            return null;
+        return placeholder[1..^1].Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
+    private static IEnumerable<(string Flag, string[] Values)> GetEnumValueCompletions() =>
+        CliFlagSchema.All
+            .Select(flag => (Flag: flag.Name, Values: GetEnumValues(flag)))
+            .Where(item => item.Values is not null)
+            .GroupBy(item => item.Flag, StringComparer.Ordinal)
+            .Select(group => (group.Key, group.SelectMany(item => item.Values!).Distinct(StringComparer.Ordinal).ToArray()));
 }

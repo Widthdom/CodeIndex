@@ -14,6 +14,20 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public class ConsoleUiTests
 {
+    [Fact]
+    public void CompletionRenderer_EnumValuesMatchAcrossShells_Issue4426()
+    {
+        foreach (var shell in new[] { "bash", "zsh", "fish", "powershell" })
+        {
+            var script = ConsoleCompletionRenderer.GetCompletionScript(shell);
+            Assert.Contains("stable", script);
+            Assert.Contains("prerelease", script);
+            Assert.Contains("issue-drafts", script);
+            Assert.Contains("submitted_pending_triage", script);
+            Assert.Contains("osc9", script);
+        }
+    }
+
     private static readonly Dictionary<short, OpCode> SingleByteOpCodes = typeof(OpCodes)
         .GetFields(BindingFlags.Public | BindingFlags.Static)
         .Where(field => field.GetValue(null) is OpCode opCode && opCode.Size == 1)
