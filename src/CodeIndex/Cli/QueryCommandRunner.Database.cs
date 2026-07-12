@@ -225,9 +225,6 @@ public static partial class QueryCommandRunner
         return Path.GetDirectoryName(Path.GetFullPath(dbPath));
     }
 
-    private static void WriteDatabaseOpenFailure(Exception ex, string dbPath)
-        => _ = WriteDatabaseOpenFailureJsonAware(ex, dbPath, json: false, JsonSerializerOptions.Default);
-
     private static int WriteDatabaseOpenFailureJsonAware(
         Exception ex,
         string dbPath,
