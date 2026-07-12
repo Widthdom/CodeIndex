@@ -2481,7 +2481,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_WithJsonZeroResults_UsesUnusedSchema()
+    public void RunUnused_IndexedAndUnsupportedZeroResultsShareFixture()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
         try
@@ -2503,33 +2503,21 @@ public partial class QueryCommandRunnerTests
             Assert.True(json.TryGetProperty("returned_bucket_counts", out var bucketCounts));
             Assert.Empty(bucketCounts.EnumerateObject());
             Assert.False(json.TryGetProperty("unused", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunUnused_WithJsonUnsupportedLanguageZeroResults_UsesUnusedSchema()
-    {
-        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
-        try
-        {
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            var (unsupportedExitCode, unsupportedStdout, unsupportedStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
                 ["--db", dbPath, "--json", "--lang", "toml"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+            using var unsupportedDocument = ParseJsonOutput(unsupportedStdout);
+            var unsupportedJson = unsupportedDocument.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.False(json.GetProperty("graph_supported").GetBoolean());
-            Assert.Contains("not indexed", json.GetProperty("graph_support_reason").GetString());
-            Assert.Equal(0, json.GetProperty("symbols").GetArrayLength());
-            Assert.Empty(json.GetProperty("returned_bucket_counts").EnumerateObject());
+            Assert.Equal(CommandExitCodes.Success, unsupportedExitCode);
+            Assert.Equal(string.Empty, unsupportedStderr);
+            Assert.Equal(0, unsupportedJson.GetProperty("count").GetInt32());
+            Assert.False(unsupportedJson.GetProperty("graph_supported").GetBoolean());
+            Assert.Contains("not indexed", unsupportedJson.GetProperty("graph_support_reason").GetString());
+            Assert.Equal(0, unsupportedJson.GetProperty("symbols").GetArrayLength());
+            Assert.Empty(unsupportedJson.GetProperty("returned_bucket_counts").EnumerateObject());
         }
         finally
         {
