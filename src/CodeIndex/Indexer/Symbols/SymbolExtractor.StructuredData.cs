@@ -228,6 +228,7 @@ public static partial class SymbolExtractor
     {
         List<SymbolRecord>? symbols = null;
         List<YamlPathFrame>? stack = null;
+        Dictionary<string, int>? sequenceIndexes = null;
         int? blockScalarIndent = null;
         var traversalNodes = 0;
         var truncated = false;
@@ -276,6 +277,16 @@ public static partial class SymbolExtractor
                 stack.RemoveAt(stack.Count - 1);
 
             var parentPath = stack == null || stack.Count == 0 ? null : stack[^1].Path;
+            if (trimmed.StartsWith("- ", StringComparison.Ordinal))
+            {
+                var sequenceKey = $"{indent}:{parentPath}";
+                sequenceIndexes ??= new Dictionary<string, int>(StringComparer.Ordinal);
+                sequenceIndexes.TryGetValue(sequenceKey, out var sequenceIndex);
+                sequenceIndexes[sequenceKey] = sequenceIndex + 1;
+                var itemPath = $"{parentPath}[{sequenceIndex}]";
+                (stack ??= []).Add(new YamlPathFrame(indent, itemPath));
+                parentPath = itemPath;
+            }
             var pathLength = string.IsNullOrEmpty(parentPath)
                 ? key.Length
                 : parentPath.Length + 1 + key.Length;
@@ -284,7 +295,8 @@ public static partial class SymbolExtractor
             var path = string.IsNullOrEmpty(parentPath) ? key : parentPath + "." + key;
 
             var value = StripYamlInlineComment(match.Groups["value"].ValueSpan).Trim();
-            var isContainer = IsYamlContainerValue(value);
+            var isBlockScalar = !value.IsEmpty && (value[0] == '|' || value[0] == '>');
+            var isContainer = !isBlockScalar && IsYamlContainerValue(value);
             var kind = isContainer ? "namespace" : "property";
 
             traversalNodes++;
@@ -300,11 +312,13 @@ public static partial class SymbolExtractor
                 ref truncated))
                 break;
 
-            if (isContainer)
+            if (isBlockScalar)
+            {
+                blockScalarIndent = indent;
+            }
+            else if (isContainer)
             {
                 (stack ??= []).Add(new YamlPathFrame(indent, path));
-                if (!value.IsEmpty && (value[0] == '|' || value[0] == '>'))
-                    blockScalarIndent = indent;
             }
         }
 

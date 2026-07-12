@@ -875,8 +875,32 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "name" && symbol.Line == 1);
         Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == "jobs.build" && symbol.ContainerName == "jobs");
         Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "jobs.build.runs-on");
-        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "jobs.build.steps.uses");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "jobs.build.steps[0].uses");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "jobs.build.steps[1].run");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "notes");
         Assert.DoesNotContain(symbols, symbol => symbol.Name.Contains("jobs.fake", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_Yaml_PreservesSequenceIdentityAndClassifiesBlockScalars_Issue4411()
+    {
+        const string content = """
+            steps:
+              - name: Build
+                run: |
+                  dotnet build
+              - name: Test
+                run: >-
+                  dotnet test
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "yaml", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "steps[0].name");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "steps[0].run");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "steps[1].name");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "steps[1].run");
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "namespace" && symbol.Name.EndsWith(".run", StringComparison.Ordinal));
     }
 
     [Fact]
