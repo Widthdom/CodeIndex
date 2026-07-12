@@ -2020,7 +2020,7 @@ public partial class QueryCommandRunnerTests
         {
             var (exitCode, _, stderr) = CaptureConsole(() =>
             {
-                InvokeWriteDatabaseOpenFailure(exception);
+                InvokeWriteDatabaseOpenFailureJsonAware(exception);
                 return CommandExitCodes.DatabaseError;
             });
 
@@ -6140,13 +6140,14 @@ public partial class QueryCommandRunnerTests
     private (int ExitCode, string StdOut, string StdErr) RunInspectInProcess(params string[] args)
         => CaptureConsole(() => QueryCommandRunner.RunInspect(args, _jsonOptions));
 
-    private static void InvokeWriteDatabaseOpenFailure(Exception exception)
+    private void InvokeWriteDatabaseOpenFailureJsonAware(Exception exception)
     {
         var method = typeof(QueryCommandRunner).GetMethod(
-            "WriteDatabaseOpenFailure",
+            "WriteDatabaseOpenFailureJsonAware",
             BindingFlags.NonPublic | BindingFlags.Static);
         Assert.NotNull(method);
-        method.Invoke(null, [exception, "/tmp/db-open-failure-test.db"]);
+        var exitCode = method.Invoke(null, [exception, "/tmp/db-open-failure-test.db", false, _jsonOptions]);
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
     }
 
     private static (int ExitCode, string StdOut, string StdErr) RunSanitizedPublishedCli(PublishedCli publishedCli, params string[] args)
