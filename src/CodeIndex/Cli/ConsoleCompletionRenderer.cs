@@ -238,7 +238,7 @@ internal static class ConsoleCompletionRenderer
     {
         var args = new List<string>();
         foreach (var flag in CliFlagSchema.GetCompletionFlagsForCommand(command))
-            args.AddRange(FormatZshArguments(flag, langs, kinds));
+            args.AddRange(FormatZshArguments(flag, langs, kinds, command));
         // Append a trailing positional placeholder so zsh suggests path/query completion after
         // the flags - but only for commands that actually accept a positional argument. `status`,
         // `db`, `hotspots`, etc. would reject anything typed there, so emitting no placeholder
@@ -284,14 +284,14 @@ internal static class ConsoleCompletionRenderer
         return args;
     }
 
-    private static IEnumerable<string> FormatZshArguments(CliFlag flag, string langs, string kinds)
+    private static IEnumerable<string> FormatZshArguments(CliFlag flag, string langs, string kinds, string? command = null)
     {
-        yield return FormatZshArgument(flag.Name, flag, langs, kinds);
+        yield return FormatZshArgument(flag.Name, flag, langs, kinds, command);
         if (flag.ShortName is not null)
-            yield return FormatZshArgument(flag.ShortName, flag, langs, kinds);
+            yield return FormatZshArgument(flag.ShortName, flag, langs, kinds, command);
     }
 
-    private static string FormatZshArgument(string name, CliFlag flag, string langs, string kinds)
+    private static string FormatZshArgument(string name, CliFlag flag, string langs, string kinds, string? command)
     {
         var desc = flag.Description.Replace("'", "''");
         if (!flag.IsValueBearing)
@@ -314,6 +314,7 @@ internal static class ConsoleCompletionRenderer
             "<name>" => "name",
             "<host:port>" => "address",
             "<stdio|http>" => "transport:(stdio http)",
+            _ when flag.Name == "--format" && command is not null && GetFormatValues(command) is { } formats => $"value:({string.Join(' ', formats)})",
             _ when GetEnumValues(flag) is { } values => $"value:({string.Join(' ', values)})",
             _ => "value",
         };
@@ -374,6 +375,15 @@ internal static class ConsoleCompletionRenderer
         {
             if (flag.Commands.Count == 0)
                 continue;
+            if (flag.Name == "--format")
+            {
+                foreach (var command in flag.Commands.OrderBy(c => Array.IndexOf(Commands, c)))
+                {
+                    var values = GetFormatValues(command) ?? [];
+                    lines.Add($"complete -c cdidx -n '__fish_seen_subcommand_from {command}' -l format -r -a '{string.Join(' ', values)}' -d '{flag.Description.Replace("'", "\\'")}'");
+                }
+                continue;
+            }
             var commands = string.Join(' ', flag.Commands.OrderBy(c => Array.IndexOf(Commands, c)));
             var name = flag.Name.TrimStart('-');
             // Token order is `-l name (-r)? (-a 'values')? -d 'description'` - matches the
@@ -561,4 +571,7 @@ internal static class ConsoleCompletionRenderer
         yield return ("suggestions", ["json", "markdown", "issue-drafts"]);
         yield return ("languages", ["text", "json", "markdown"]);
     }
+
+    private static string[]? GetFormatValues(string command) =>
+        GetFormatValueCompletions().FirstOrDefault(item => item.Command == command).Values;
 }
