@@ -8777,104 +8777,58 @@ jobs:
     }
 
     [Fact]
-    public void RunExcerpt_FocusLineWithoutFocusColumnReturnsUsageError()
+    public void RunExcerpt_LocationAndFocusValidationReuseOneFixture_Issue3916()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_focus_dep");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "dist/data.txt", "text", new string('a', 320) + "TARGET" + new string('b', 320));
+            TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "line one\nline two\nline three\n");
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+            var (focusDependencyExitCode, _, focusDependencyStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
                 ["dist/data.txt", "--db", dbPath, "--start", "1", "--end", "1", "--json", "--max-line-width", "96", "--focus-line", "1"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--focus-line requires --focus-column", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
+            Assert.Equal(CommandExitCodes.UsageError, focusDependencyExitCode);
+            Assert.Contains("--focus-line requires --focus-column", focusDependencyStderr);
 
-    [Fact]
-    public void RunExcerpt_FocusLengthWithoutFocusColumnReturnsSpecificUsageError_Issue3916()
-    {
-        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
-            ["dist/data.txt", "--start", "1", "--focus-length", "6"],
-            _jsonOptions));
+            var (focusLengthExitCode, _, focusLengthStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["dist/data.txt", "--start", "1", "--focus-length", "6"],
+                _jsonOptions));
 
-        Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains("--focus-length requires --focus-column", stderr);
-    }
+            Assert.Equal(CommandExitCodes.UsageError, focusLengthExitCode);
+            Assert.Contains("--focus-length requires --focus-column", focusLengthStderr);
 
-    [Fact]
-    public void RunExcerpt_AcceptsPathStartEndLocationArgument_Issue3916()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_location_range");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "line one\nline two\nline three\n");
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+            var (locationExitCode, locationStdout, locationStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
                 ["README.md:2-3", "--db", dbPath, "--json"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            var root = document.RootElement;
-            Assert.Equal("README.md", root.GetProperty("path").GetString());
-            Assert.Equal(2, root.GetProperty("start_line").GetInt32());
-            Assert.Equal(3, root.GetProperty("end_line").GetInt32());
-            Assert.Contains("line two", root.GetProperty("content").GetString(), StringComparison.Ordinal);
-            Assert.Contains("line three", root.GetProperty("content").GetString(), StringComparison.Ordinal);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
+            Assert.Equal(CommandExitCodes.Success, locationExitCode);
+            Assert.Equal(string.Empty, locationStderr);
+            using (var locationDocument = ParseJsonOutput(locationStdout))
+            {
+                var root = locationDocument.RootElement;
+                Assert.Equal("README.md", root.GetProperty("path").GetString());
+                Assert.Equal(2, root.GetProperty("start_line").GetInt32());
+                Assert.Equal(3, root.GetProperty("end_line").GetInt32());
+                Assert.Contains("line two", root.GetProperty("content").GetString(), StringComparison.Ordinal);
+                Assert.Contains("line three", root.GetProperty("content").GetString(), StringComparison.Ordinal);
+            }
 
-    [Fact]
-    public void RunExcerpt_FocusLineOutsideReturnedRangeReturnsUsageError()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_focus_range");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "line one\nline two\nline three");
-
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+            var (focusLineExitCode, _, focusLineStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
                 ["README.md", "--db", dbPath, "--start", "2", "--end", "2", "--focus-line", "999", "--focus-column", "1", "--json"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--focus-line (999) must be within the returned excerpt range", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
+            Assert.Equal(CommandExitCodes.UsageError, focusLineExitCode);
+            Assert.Contains("--focus-line (999) must be within the returned excerpt range", focusLineStderr);
 
-    [Fact]
-    public void RunExcerpt_FocusColumnOutsideFocusedLineReturnsUsageError()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_focus_column_range");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "dist/data.txt", "text", new string('a', 320) + "TARGET" + new string('b', 320));
-
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+            var (focusColumnExitCode, _, focusColumnStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
                 ["dist/data.txt", "--db", dbPath, "--start", "1", "--end", "1", "--focus-column", "9999", "--max-line-width", "40", "--json"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--focus-column (9999) must be within the focused line length", stderr);
+            Assert.Equal(CommandExitCodes.UsageError, focusColumnExitCode);
+            Assert.Contains("--focus-column (9999) must be within the focused line length", focusColumnStderr);
         }
         finally
         {
