@@ -1206,6 +1206,25 @@ public class ProgramCliTests
     }
 
     [ProductionRuntimeFact]
+    public void Suggestions_ListJsonUsesSampledTitle_Issue4432()
+    {
+        using var fixture = SuggestionFixture.Create();
+        fixture.Add(
+            "output_format",
+            "csharp",
+            "A longer prose description that should not be exposed as the concise list title",
+            submitted: false,
+            sampledTitle: "Concise sampled title");
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(["suggestions", "list", "--db", fixture.DbPath, "--json"]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        Assert.Equal("Concise sampled title", doc.RootElement.GetProperty("title").GetString());
+    }
+
+    [ProductionRuntimeFact]
     public void Suggestions_ExportJsonSupportsLimitAndOffset()
     {
         using var fixture = SuggestionFixture.Create();
@@ -1387,6 +1406,31 @@ public class ProgramCliTests
         Assert.Equal(1, preflight.GetProperty("match_count").GetInt32());
         Assert.Equal(2878, preflight.GetProperty("matches")[0].GetProperty("number").GetInt32());
         Assert.Equal("title_exact", preflight.GetProperty("matches")[0].GetProperty("reason").GetString());
+    }
+
+    [ProductionRuntimeFact]
+    public void Suggestions_ExportIssueDraftsUsesAvailableGitHubTitleCapacity_Issue4462()
+    {
+        using var fixture = SuggestionFixture.Create();
+        var sampledTitle = "Target StringBuilder materialization operations instead of building intermediate collections when exporting issue draft candidates";
+        fixture.Add(
+            "search_ranking",
+            "csharp",
+            "Issue draft title should retain the differentiating end of the sampled title",
+            submitted: false,
+            sampledTitle: sampledTitle);
+        var openIssuesPath = fixture.WriteOpenIssuesJson("[]");
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "issue-drafts", "--open-issues", openIssuesPath
+        ]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        var title = doc.RootElement.GetProperty("drafts")[0].GetProperty("title").GetString();
+        Assert.Equal($"[AI Suggestion] search_ranking: {sampledTitle}", title);
+        Assert.True(title!.Length <= GitHubIssueReporter.MaxGitHubIssueTitleLength);
     }
 
     [ProductionRuntimeFact]

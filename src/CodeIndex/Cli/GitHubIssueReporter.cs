@@ -679,7 +679,7 @@ internal static class GitHubIssueReporter
 
         var scrubbedForTitle = SanitizeIssueTitleText(ScrubInlineCode(description));
         var maxDescriptionLength = MaxGitHubIssueTitleLength - prefix.Length;
-        var shortDesc = TruncateWithEllipsis(scrubbedForTitle, Math.Min(63, maxDescriptionLength));
+        var shortDesc = TruncateWithEllipsis(scrubbedForTitle, maxDescriptionLength);
         var title = prefix + shortDesc;
         return title.Length <= MaxGitHubIssueTitleLength
             ? title

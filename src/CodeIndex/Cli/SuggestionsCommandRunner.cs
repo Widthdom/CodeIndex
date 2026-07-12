@@ -447,7 +447,7 @@ internal static class SuggestionsCommandRunner
         record.ClientVersion,
         record.McpClientName,
         record.McpClientVersion,
-        FormatTitle(record.Description, 120),
+        FormatTitle(record.SampledTitle ?? record.Description, 120),
         IsSubmitted(record),
         record.UpstreamUrl,
         record.UpstreamIssueNumber,
