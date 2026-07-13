@@ -7589,19 +7589,29 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpReflectionNameLiteral_CapturesMemberReference()
+    public void Extract_CsharpReflectionNames_ReuseLiteralAndDecoyFixture()
     {
         const string content = """
             using System;
-            using System.Reflection;
-
             public class Target
             {
                 public void Foo() { }
+                public string DisplayName { get; set; } = "";
+                public void FooDynamic() { }
+                public void FooLineComment() { }
+                public void FooBlockComment() { }
+                public void FooString() { }
+                public void Real() { }
 
-                public MethodInfo? Resolve()
+                public void Resolve(string suffix, string name)
                 {
-                    return typeof(Target).GetMethod("Foo");
+                    _ = typeof(Target).GetMethod("Foo");
+                    _ = typeof(Target).GetProperty("Display" + "Name");
+                    _ = typeof(Target).GetMethod("Foo" + suffix);
+                    _ = typeof(Target).GetMethod(name); // GetMethod("FooLineComment")
+                    _ = typeof(Target).GetMethod(name); /* GetMethod("FooBlockComment") */
+                    _ = "GetMethod(\"FooString\")";
+                    _ = typeof(Target).GetMethod("Real");
                 }
             }
             """;
@@ -7613,135 +7623,16 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "Foo"
             && reference.ReferenceKind == "type_reference"
             && reference.ContainerName == "Resolve");
-    }
-
-    [Fact]
-    public void Extract_CsharpReflectionNameLiteralConcat_CapturesMemberReference()
-    {
-        const string content = """
-            using System;
-
-            public class Target
-            {
-                public string DisplayName { get; set; } = "";
-
-                public void Resolve()
-                {
-                    _ = typeof(Target).GetProperty("Display" + "Name");
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
         Assert.Contains(references, reference =>
             reference.SymbolName == "DisplayName"
             && reference.ReferenceKind == "type_reference"
             && reference.ContainerName == "Resolve");
-    }
-
-    [Fact]
-    public void Extract_CsharpReflectionNameDynamicConcat_DoesNotCaptureMemberReference()
-    {
-        const string content = """
-            using System;
-
-            public class Target
-            {
-                public void Foo() { }
-
-                public void Resolve(string suffix)
-                {
-                    _ = typeof(Target).GetMethod("Fo" + suffix);
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "Foo"
-            && reference.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_CsharpReflectionNameLiteralInComment_DoesNotCaptureMemberReference()
-    {
-        const string content = """
-            using System;
-
-            public class Target
-            {
-                public void Foo() { }
-
-                public void Resolve(string name)
-                {
-                    _ = typeof(Target).GetMethod(name); // GetMethod("Foo")
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "Foo"
-            && reference.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_CsharpReflectionNameLiteralInBlockComment_DoesNotCaptureMemberReference()
-    {
-        const string content = """
-            using System;
-
-            public class Target
-            {
-                public void Foo() { }
-
-                public void Resolve(string name)
-                {
-                    _ = typeof(Target).GetMethod(name); /* GetMethod("Foo") */
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "Foo"
-            && reference.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_CsharpReflectionNameLiteralInString_DoesNotCaptureMemberReference()
-    {
-        const string content = """
-            using System;
-
-            public class Target
-            {
-                public void Foo() { }
-
-                public void Resolve()
-                {
-                    _ = "GetMethod(\"Foo\")";
-                    _ = typeof(Target).GetMethod("Real");
-                }
-
-                public void Real() { }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "Foo"
-            && reference.ReferenceKind == "type_reference");
+        AssertReferencesDoNotContainAny(
+            references,
+            "FooDynamic",
+            "FooLineComment",
+            "FooBlockComment",
+            "FooString");
         Assert.Contains(references, reference =>
             reference.SymbolName == "Real"
             && reference.ReferenceKind == "type_reference");
