@@ -743,10 +743,48 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             using var document = ParseJsonOutput(stdout);
-            var row = Assert.Single(document.RootElement.EnumerateArray());
+            var root = document.RootElement;
+            Assert.Equal(JsonOutputContract.ApiVersion, root.GetProperty("api_version").GetString());
+            Assert.Equal("compact", root.GetProperty("format").GetString());
+            Assert.Equal(1, root.GetProperty("count").GetInt32());
+            Assert.False(root.GetProperty("truncated").GetBoolean());
+            Assert.Equal("Authenticate", root.GetProperty("query_context").GetProperty("text").GetString());
+            var row = Assert.Single(root.GetProperty("results").EnumerateArray());
             Assert.Equal("src/app.cs", row.GetProperty("file").GetString());
             Assert.True(row.GetProperty("line").GetInt32() > 0);
             Assert.Equal(2, row.EnumerateObject().Count());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDefinition_FormatCompactEmitsVersionedLocationEnvelope_Issue4467()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_compact_envelope_4467");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/service.cs", "csharp", "public sealed class CompactService { }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["CompactService", "--db", dbPath, "--format", "compact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            Assert.Equal(JsonOutputContract.ApiVersion, root.GetProperty("api_version").GetString());
+            Assert.Equal("compact", root.GetProperty("format").GetString());
+            Assert.Equal(1, root.GetProperty("count").GetInt32());
+            Assert.False(root.GetProperty("truncated").GetBoolean());
+            Assert.Equal("CompactService", root.GetProperty("query_context").GetProperty("text").GetString());
+            var row = Assert.Single(root.GetProperty("results").EnumerateArray());
+            Assert.Equal("src/service.cs", row.GetProperty("file").GetString());
+            Assert.True(row.GetProperty("line").GetInt32() > 0);
         }
         finally
         {
@@ -4857,7 +4895,7 @@ public partial class QueryCommandRunnerTests
             Assert.True(System.Text.Encoding.UTF8.GetByteCount(stdout) <= 1024);
             using (var compactDocument = ParseJsonOutput(stdout))
             {
-                var row = Assert.Single(compactDocument.RootElement.EnumerateArray());
+                var row = Assert.Single(compactDocument.RootElement.GetProperty("results").EnumerateArray());
                 Assert.Equal("src/token.cs", row.GetProperty("file").GetString());
                 Assert.False(row.TryGetProperty("snippet", out _));
             }

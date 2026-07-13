@@ -673,7 +673,7 @@ public static partial class QueryCommandRunner
         if (options.OutputFormat == OutputFormatCompact)
         {
             exitCode = WriteJsonObjectWithOptionalByteLimit(
-                "[]",
+                BuildCompactLocationsPayload([], options, jsonOptions).ToJsonString(jsonOptions),
                 options,
                 "compact search results",
                 "Increase --max-json-bytes or remove the byte cap.");
@@ -1366,7 +1366,7 @@ public static partial class QueryCommandRunner
     private static int WriteCompactSearchResults(IEnumerable<CompactSearchResult> results, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
     {
         using var writer = new StringWriter(CultureInfo.InvariantCulture);
-        WriteCompactSearchResults(writer, results, jsonOptions);
+        WriteCompactSearchResults(writer, results, options, jsonOptions);
         return WriteJsonObjectWithOptionalByteLimit(
             writer.ToString().TrimEnd('\r', '\n'),
             options,
@@ -1374,15 +1374,12 @@ public static partial class QueryCommandRunner
             "Reduce --limit, --snippet-lines, or use `--json=ndjson --max-json-bytes` for streaming output.");
     }
 
-    private static void WriteCompactSearchResults(TextWriter writer, IEnumerable<CompactSearchResult> results, JsonSerializerOptions jsonOptions)
+    private static void WriteCompactSearchResults(TextWriter writer, IEnumerable<CompactSearchResult> results, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
     {
         var locations = results.Select(result => new FormattedLocation(
             result.Path,
             result.MatchLines.Count > 0 ? result.MatchLines[0] : result.ChunkStartLine));
-        WriteCompactLocations(
-            writer,
-            locations,
-            jsonOptions);
+        writer.WriteLine(BuildCompactLocationsPayload(locations, options, jsonOptions).ToJsonString(jsonOptions));
     }
 
     private static void WriteJsonArray<T>(IEnumerable<T> items, Action<TextWriter, T> writeItem, JsonSerializerOptions jsonOptions)
