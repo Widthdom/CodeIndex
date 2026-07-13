@@ -2603,15 +2603,15 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunInspect_CSharpBraceCharLiteralKeepsMethodInsideClass()
+    public void RunInspect_CSharpBraceLiteralsKeepFollowingMethodsInsideClass()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_csharp_brace_char");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_csharp_brace_literals");
         try
         {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "fixture.cs"),
-                """""
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/fixture.cs",
+                """"
                 namespace Demo;
 
                 public class FixtureHost
@@ -2624,49 +2624,7 @@ public partial class QueryCommandRunnerTests
                     public void AfterBraceLiteral()
                     {
                     }
-                }
-                """"");
 
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json", "--quiet"],
-                _jsonOptions));
-            var (inspectExitCode, inspectStdout, inspectStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["AfterBraceLiteral", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(inspectStdout);
-            var json = document.RootElement;
-            var definition = Assert.Single(json.GetProperty("definitions").EnumerateArray());
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, inspectExitCode);
-            Assert.Equal(string.Empty, inspectStderr);
-            Assert.Equal("AfterBraceLiteral", definition.GetProperty("name").GetString());
-            Assert.Equal("class", definition.GetProperty("container_kind").GetString());
-            Assert.Equal("FixtureHost", definition.GetProperty("container_name").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunInspect_CSharpMultilineRawStringBraceKeepsMethodInsideClass()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_csharp_raw_string_brace");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "fixture.cs"),
-                """"
-                namespace Demo;
-
-                public class FixtureHost
-                {
                     public string UsesRawFixture()
                     {
                         return """
@@ -2677,49 +2635,7 @@ public partial class QueryCommandRunnerTests
                     public void AfterRawString()
                     {
                     }
-                }
-                """");
 
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json", "--quiet"],
-                _jsonOptions));
-            var (inspectExitCode, inspectStdout, inspectStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["AfterRawString", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(inspectStdout);
-            var json = document.RootElement;
-            var definition = Assert.Single(json.GetProperty("definitions").EnumerateArray());
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, inspectExitCode);
-            Assert.Equal(string.Empty, inspectStderr);
-            Assert.Equal("AfterRawString", definition.GetProperty("name").GetString());
-            Assert.Equal("class", definition.GetProperty("container_kind").GetString());
-            Assert.Equal("FixtureHost", definition.GetProperty("container_name").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunInspect_CSharpMultilineVerbatimStringBraceKeepsMethodInsideClass()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_csharp_verbatim_string_brace");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "fixture.cs"),
-                """"
-                namespace Demo;
-
-                public class FixtureHost
-                {
                     public string UsesVerbatimFixture()
                     {
                         return @"
@@ -2733,25 +2649,29 @@ public partial class QueryCommandRunnerTests
                 }
                 """");
 
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var dbPath = TestProjectHelper.ProjectPath(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
                 [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
-            var (inspectExitCode, inspectStdout, inspectStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["AfterVerbatimString", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(inspectStdout);
-            var json = document.RootElement;
-            var definition = Assert.Single(json.GetProperty("definitions").EnumerateArray());
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, inspectExitCode);
-            Assert.Equal(string.Empty, inspectStderr);
-            Assert.Equal("AfterVerbatimString", definition.GetProperty("name").GetString());
-            Assert.Equal("class", definition.GetProperty("container_kind").GetString());
-            Assert.Equal("FixtureHost", definition.GetProperty("container_name").GetString());
+
+            foreach (var methodName in new[] { "AfterBraceLiteral", "AfterRawString", "AfterVerbatimString" })
+            {
+                var (inspectExitCode, inspectStdout, inspectStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                    [methodName, "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                    _jsonOptions));
+
+                using var document = ParseJsonOutput(inspectStdout);
+                var definition = Assert.Single(document.RootElement.GetProperty("definitions").EnumerateArray());
+
+                Assert.Equal(CommandExitCodes.Success, inspectExitCode);
+                Assert.Equal(string.Empty, inspectStderr);
+                Assert.Equal(methodName, definition.GetProperty("name").GetString());
+                Assert.Equal("class", definition.GetProperty("container_kind").GetString());
+                Assert.Equal("FixtureHost", definition.GetProperty("container_name").GetString());
+            }
         }
         finally
         {
