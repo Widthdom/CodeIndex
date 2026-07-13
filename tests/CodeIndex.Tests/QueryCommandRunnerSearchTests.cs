@@ -11643,6 +11643,11 @@ jobs:
             Assert.False(document.RootElement.GetProperty("done").GetBoolean());
             Assert.True(document.RootElement.GetProperty("interrupted").GetBoolean());
             Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal("max_json_bytes_exceeded", document.RootElement.GetProperty("interruption_reason").GetString());
+            Assert.Equal(2, document.RootElement.GetProperty("max_json_bytes").GetInt32());
+            Assert.True(document.RootElement.GetProperty("first_omitted_result_bytes").GetInt32() > 2);
+            Assert.Equal(2, document.RootElement.GetProperty("omitted_count").GetInt32());
+            Assert.Contains("Increase --max-json-bytes", document.RootElement.GetProperty("recovery_guidance").GetString(), StringComparison.Ordinal);
         }
         finally
         {

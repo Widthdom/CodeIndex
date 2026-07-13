@@ -463,13 +463,14 @@ public static partial class QueryCommandRunner
             .ThenBy(group => group.Path, StringComparer.Ordinal)
             .ToList();
 
-    private static int WriteProjectedSearchResults(CompactSearchResult[] results, QueryCommandOptions options, JsonSerializerOptions jsonOptions, JsonSerializerOptions ndjsonOptions, out int emittedCount, out bool interrupted)
+    private static int WriteProjectedSearchResults(CompactSearchResult[] results, QueryCommandOptions options, JsonSerializerOptions jsonOptions, JsonSerializerOptions ndjsonOptions, out int emittedCount, out bool interrupted, out int? firstOmittedResultBytes)
     {
         var projected = results.Select(result => BuildProjectedSearchResult(result, options.SearchFields!, queryName: null, recipeName: null)).ToArray();
         if (options.JsonOutputFormat == JsonOutputFormatArray)
         {
             emittedCount = projected.Length;
             interrupted = false;
+            firstOmittedResultBytes = null;
             using var writer = new StringWriter(CultureInfo.InvariantCulture);
             WriteJsonArray(
                 writer,
@@ -485,11 +486,12 @@ public static partial class QueryCommandRunner
 
         emittedCount = 0;
         interrupted = false;
+        firstOmittedResultBytes = null;
         var bytesWritten = 0;
         foreach (var result in projected)
         {
             var line = result.ToJsonString(ndjsonOptions);
-            if (WouldExceedJsonByteLimit(options, bytesWritten, line, out interrupted))
+            if (WouldExceedJsonByteLimit(options, bytesWritten, line, out interrupted, out firstOmittedResultBytes))
                 break;
             Console.WriteLine(line);
             bytesWritten += Encoding.UTF8.GetByteCount(line) + Environment.NewLine.Length;
@@ -554,15 +556,16 @@ public static partial class QueryCommandRunner
         return payload;
     }
 
-    private static void WriteSearchNdjsonResults(CompactSearchResult[] results, QueryCommandOptions options, JsonSerializerOptions ndjsonOptions, out int emittedCount, out bool interrupted)
+    private static void WriteSearchNdjsonResults(CompactSearchResult[] results, QueryCommandOptions options, JsonSerializerOptions ndjsonOptions, out int emittedCount, out bool interrupted, out int? firstOmittedResultBytes)
     {
         emittedCount = 0;
         interrupted = false;
+        firstOmittedResultBytes = null;
         var bytesWritten = 0;
         foreach (var result in results)
         {
             var line = JsonSerializer.Serialize(result, CliJsonSerializerContextFactory.Create(ndjsonOptions).CompactSearchResult);
-            if (WouldExceedJsonByteLimit(options, bytesWritten, line, out interrupted))
+            if (WouldExceedJsonByteLimit(options, bytesWritten, line, out interrupted, out firstOmittedResultBytes))
                 break;
             Console.WriteLine(line);
             bytesWritten += Encoding.UTF8.GetByteCount(line) + Environment.NewLine.Length;
@@ -570,17 +573,22 @@ public static partial class QueryCommandRunner
         }
     }
 
-    private static bool WouldExceedJsonByteLimit(QueryCommandOptions options, int bytesWritten, string nextLine, out bool interrupted)
+    private static bool WouldExceedJsonByteLimit(QueryCommandOptions options, int bytesWritten, string nextLine, out bool interrupted, out int? omittedResultBytes)
     {
         interrupted = false;
+        omittedResultBytes = null;
         if (!options.MaxJsonBytes.HasValue)
             return false;
         var nextBytes = Encoding.UTF8.GetByteCount(nextLine) + Environment.NewLine.Length;
         if (bytesWritten + nextBytes <= options.MaxJsonBytes.Value)
             return false;
         interrupted = true;
+        omittedResultBytes = nextBytes;
         return true;
     }
+
+    private static bool WouldExceedJsonByteLimit(QueryCommandOptions options, int bytesWritten, string nextLine, out bool interrupted)
+        => WouldExceedJsonByteLimit(options, bytesWritten, nextLine, out interrupted, out _);
 
     private static void WriteSearchNextSteps(List<SearchDisplayRow> rows, QueryCommandOptions options)
     {
@@ -1326,7 +1334,7 @@ public static partial class QueryCommandRunner
             first.ExactSubstringHint = hint;
     }
 
-    private static void WriteJsonStreamDone(int count, JsonSerializerOptions jsonOptions, bool interrupted = false, bool truncated = false, DbReader? reader = null)
+    private static void WriteJsonStreamDone(int count, JsonSerializerOptions jsonOptions, bool interrupted = false, bool truncated = false, DbReader? reader = null, int? maxJsonBytes = null, int? firstOmittedResultBytes = null, int? omittedCount = null)
     {
         var includeDiagnostics = HasReadOnlyFallbackDiagnostics(reader);
         Console.WriteLine(JsonSerializer.Serialize(
@@ -1336,6 +1344,11 @@ public static partial class QueryCommandRunner
                 Interrupted: interrupted,
                 Truncated: truncated,
                 HasMore: truncated,
+                InterruptionReason: interrupted ? "max_json_bytes_exceeded" : null,
+                MaxJsonBytes: interrupted ? maxJsonBytes : null,
+                FirstOmittedResultBytes: interrupted ? firstOmittedResultBytes : null,
+                OmittedCount: interrupted ? omittedCount : null,
+                RecoveryGuidance: interrupted ? "Increase --max-json-bytes, reduce --limit or --snippet-lines, or use --search-fields to request fewer fields." : null,
                 ReadOnlyFallback: includeDiagnostics ? reader!.ReadOnlyFallback : null,
                 WalCheckpointAttempted: includeDiagnostics ? reader!.WalCheckpointAttempted : null,
                 WalCheckpointSucceeded: includeDiagnostics ? reader!.WalCheckpointSucceeded : null,

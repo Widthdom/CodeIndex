@@ -233,6 +233,20 @@ public class ConsoleUiTests
         Assert.Contains("--max-json-bytes", recipesOutput);
     }
 
+    [Theory]
+    [InlineData("symbols", "truncates result rows")]
+    [InlineData("search", "--json=array rejects the whole output")]
+    [InlineData("inspect", "rejects the whole response")]
+    [InlineData("map", "issue-drafts output reject the whole response")]
+    public void PrintCommandUsage_ExplainsEffectiveJsonOverflowPolicy_Issue4440(string command, string expected)
+    {
+        using var capture = ConsoleCapture.Start(captureOut: true);
+
+        Assert.True(ConsoleUi.PrintCommandUsage(command));
+
+        Assert.Contains(expected, capture.Out!.ToString(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void PrintCommandUsage_InspectSplitsQueryAndLinePathModes_Issue3916()
     {

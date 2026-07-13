@@ -434,6 +434,16 @@ internal sealed record JsonStreamDoneResult(
     [property: JsonPropertyName("interrupted")] bool Interrupted,
     [property: JsonPropertyName("truncated")] bool Truncated,
     [property: JsonPropertyName("has_more")] bool HasMore,
+    [property: JsonPropertyName("interruption_reason")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? InterruptionReason = null,
+    [property: JsonPropertyName("max_json_bytes")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? MaxJsonBytes = null,
+    [property: JsonPropertyName("first_omitted_result_bytes")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? FirstOmittedResultBytes = null,
+    [property: JsonPropertyName("omitted_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? OmittedCount = null,
+    [property: JsonPropertyName("recovery_guidance")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RecoveryGuidance = null,
     [property: JsonPropertyName("read_only_fallback")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? ReadOnlyFallback = null,
     [property: JsonPropertyName("wal_checkpoint_attempted")]

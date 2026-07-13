@@ -11,6 +11,8 @@ public static partial class QueryCommandRunner
         JsonSerializerOptions jsonOptions,
         CancellationToken cancellationToken = default)
     {
+        int? jsonDoneTotalCount = null;
+        int? jsonDoneFirstOmittedResultBytes = null;
         var previewOptionError = ValidatePreviewOptions("search", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
         if (previewOptionError != null)
         {
@@ -711,9 +713,11 @@ public static partial class QueryCommandRunner
                 AttachSearchNextSteps(compactResults, options);
                 if (options.SearchFields != null)
                 {
-                    var projectedExitCode = WriteProjectedSearchResults(compactResults, options, jsonOptions, ndjsonOptions, out var projectedDoneCount, out var projectedInterrupted);
+                    var projectedExitCode = WriteProjectedSearchResults(compactResults, options, jsonOptions, ndjsonOptions, out var projectedDoneCount, out var projectedInterrupted, out var projectedFirstOmittedResultBytes);
                     jsonDoneCount = projectedDoneCount;
                     jsonDoneInterrupted = projectedInterrupted;
+                    jsonDoneTotalCount = compactResults.Length;
+                    jsonDoneFirstOmittedResultBytes = projectedFirstOmittedResultBytes;
                     return projectedExitCode;
                 }
                 if (options.OutputFormat == OutputFormatCompact)
@@ -761,9 +765,11 @@ public static partial class QueryCommandRunner
                 }
                 else
                 {
-                    WriteSearchNdjsonResults(compactResults, options, ndjsonOptions, out var emittedCount, out var interrupted);
+                    WriteSearchNdjsonResults(compactResults, options, ndjsonOptions, out var emittedCount, out var interrupted, out var firstOmittedResultBytes);
                     jsonDoneCount = emittedCount;
                     jsonDoneInterrupted = interrupted;
+                    jsonDoneTotalCount = compactResults.Length;
+                    jsonDoneFirstOmittedResultBytes = firstOmittedResultBytes;
                 }
             }
             else
@@ -793,7 +799,7 @@ public static partial class QueryCommandRunner
         }, exitCode =>
         {
             if (options.Json && options.JsonOutputFormat == JsonOutputFormatNdjson && jsonDoneCount.HasValue && !options.ResultsOnly)
-                WriteJsonStreamDone(jsonDoneCount.Value, ndjsonOptions, jsonDoneInterrupted, jsonDoneTruncated, jsonDoneReader);
+                WriteJsonStreamDone(jsonDoneCount.Value, ndjsonOptions, jsonDoneInterrupted, jsonDoneTruncated, jsonDoneReader, options.MaxJsonBytes, jsonDoneFirstOmittedResultBytes, jsonDoneTotalCount - jsonDoneCount);
         });
     }
 }
