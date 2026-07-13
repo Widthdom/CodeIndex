@@ -659,6 +659,32 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRun_WithFiles_RejectsNonexistentUnindexedIgnoreFile_4471()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "sample.cs"), "public class Sample { }\n");
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "missing/.gitignore",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("none of the paths supplied to --files resolved", json.GetProperty("message").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DryRun_WithFiles_AllowsDeletedIndexedProjectPath_4471()
     {
         var projectRoot = CreateTempProject();

@@ -51,6 +51,27 @@ public static partial class IndexCommandRunner
         var estimatedSymbolsDroppedByKindFilter = 0L;
         var unsupportedTotal = 0;
         var unknownExtensionTotal = 0;
+        var normalizedUpdatePaths = options.UpdateFiles.Count > 0
+            ? NormalizeUpdateFileTargets(projectPath, options.UpdateFiles, options.Json)
+            : [];
+
+        if (options.UpdateFiles.Count > 0)
+        {
+            var hasExistingCandidate = normalizedUpdatePaths.Any(path =>
+                File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(projectPath, path.Replace('/', Path.DirectorySeparatorChar)))));
+            var hasIndexedCandidate = normalizedUpdatePaths.Any(path =>
+                dbSnapshot.Files.ContainsKey(FileIndexer.NormalizeIndexPath(path)));
+            if (!hasExistingCandidate && !hasIndexedCandidate)
+            {
+                return WriteCommandError(
+                    options.Json,
+                    jsonOptions,
+                    "none of the paths supplied to --files resolved to an existing in-project file or an indexed path",
+                    CommandExitCodes.UsageError,
+                    "Check each path and rerun `cdidx index <projectPath> --files <path> [path ...] --dry-run`.",
+                    CommandErrorCodes.UsageError);
+            }
+        }
 
         void RecordDryRunError(string file, string message)
         {
@@ -80,6 +101,7 @@ public static partial class IndexCommandRunner
             options,
             dryIndexer,
             projectPath,
+            normalizedUpdatePaths,
             jsonOptions,
             cancellationToken,
             RecordDryRunScanErrors,
@@ -90,27 +112,6 @@ public static partial class IndexCommandRunner
             out var exitCode))
         {
             return exitCode;
-        }
-
-        if (options.UpdateFiles.Count > 0 && !authoritativeFullScan)
-        {
-            var resolvedCandidates = dryCandidates.ToArray();
-            var resolvedDeleteCandidates = dryDeleteCandidates.ToArray();
-            dryCandidates = resolvedCandidates;
-            dryDeleteCandidates = resolvedDeleteCandidates;
-            var hasExistingCandidate = resolvedCandidates.Length > 0;
-            var hasIndexedDeleteCandidate = resolvedDeleteCandidates.Any(path =>
-                dbSnapshot.Files.ContainsKey(FileIndexer.NormalizeIndexPath(path)));
-            if (!hasExistingCandidate && !hasIndexedDeleteCandidate)
-            {
-                return WriteCommandError(
-                    options.Json,
-                    jsonOptions,
-                    "none of the paths supplied to --files resolved to an existing in-project file or an indexed path",
-                    CommandExitCodes.UsageError,
-                    "Check each path and rerun `cdidx index <projectPath> --files <path> [path ...] --dry-run`.",
-                    CommandErrorCodes.UsageError);
-            }
         }
 
         var dryFileSamples = new List<string>();
@@ -284,6 +285,7 @@ public static partial class IndexCommandRunner
         IndexCommandOptions options,
         FileIndexer dryIndexer,
         string projectPath,
+        IReadOnlyList<string> normalizedUpdatePaths,
         JsonSerializerOptions jsonOptions,
         CancellationToken cancellationToken,
         Action<IEnumerable<FileIndexer.ScanError>> recordDryRunScanErrors,
@@ -303,8 +305,7 @@ public static partial class IndexCommandRunner
         {
             // --files: only the specified files / --files: 指定ファイルのみ
             var relevantIgnoreFileChanged = ContainsRelevantIgnoreFileUpdate(projectPath, options.UpdateFiles);
-            var updatePaths = NormalizeUpdateFileTargets(projectPath, options.UpdateFiles, options.Json);
-            if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(updatePaths))
+            if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(normalizedUpdatePaths))
             {
                 FileIndexer.ScanFilesResult scanResult;
                 try
@@ -323,9 +324,9 @@ public static partial class IndexCommandRunner
             }
             else
             {
-                dryDeleteCandidates = updatePaths
+                dryDeleteCandidates = normalizedUpdatePaths
                     .Where(path => !File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(projectPath, path.Replace('/', Path.DirectorySeparatorChar)))));
-                dryCandidates = updatePaths
+                dryCandidates = normalizedUpdatePaths
                     .Select(path => Path.Combine(projectPath, path.Replace('/', Path.DirectorySeparatorChar)))
                     .Where(p => File.Exists(LongPath.EnsureWindowsPrefix(p)));
             }
