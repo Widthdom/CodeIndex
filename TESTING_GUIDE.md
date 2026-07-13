@@ -31,6 +31,7 @@ Use the full suite by default. Use targeted filters only while iterating locally
 - Coverage collection runs only on the initial primary-lane test attempt; the one flaky-classification retry reuses the same test arguments without rerunning the coverage collector.
 - Matrix test invocations use both `--no-build` and `--no-restore` because each lane completes its scoped locked restore and Release build before entering the shared test helper.
 - Primary-lane publish also uses `--no-build --no-restore`, reusing the production project output and dependency graph built through the Release test project.
+- Release cross-compile lanes skip the RID-agnostic solution build because they do not run tests and the self-contained RID publish necessarily performs the real build; native lanes retain the solution build before testing.
 - Release workflow tests use `--no-build --no-restore` after the solution's locked restore and Release build so each runtime lane does not reevaluate dependencies.
 - Curated release-note generation caches the changelog tool lock file, performs one conditional locked restore, and runs the tool with `--no-restore`.
 - Keep package audit, primary-lane build/lint, coverage collection, coverage artifact upload, publish, and build artifact upload keyed to the matrix `primary_lane` value; define the lane set once with explicit matrix entries instead of recomputing or excluding combinations in later steps.
@@ -483,6 +484,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - coverage collection は primary lane の初回 test attempt だけで実行し、flaky classification の1回だけの retry では同じ test 引数を再利用しつつ coverage collector を再実行しないでください。
 - matrix test invocation は shared test helper の前に各 lane の scoped locked restore と Release build が完了しているため、`--no-build` と `--no-restore` の両方を使ってください。
 - primary-lane publish も `--no-build --no-restore` を使い、Release test project 経由で build 済みの production project output と dependency graph を再利用してください。
+- release の cross-compile lane は test を実行せず、self-contained RID publish が実 build を必ず行うため、RID 非依存の solution build を省略する。native lane は test 前の solution build を維持する。
 - release workflow の test も solution の locked restore と Release build 後に `--no-build --no-restore` を使い、runtime lane ごとの dependency 再評価を避けてください。
 - curated release-note生成はchangelog toolのlock fileをcacheし、conditional locked restoreを1回行ってからtoolを`--no-restore`で実行してください。
 - package audit、primary-lane build/lint、coverage の収集、coverage artifact upload、publish、build artifact upload は matrix の `primary_lane` 値に揃えてください。lane の組み合わせは明示的な matrix entry で一度だけ定義し、後続 step で再計算したり exclude したりしません。

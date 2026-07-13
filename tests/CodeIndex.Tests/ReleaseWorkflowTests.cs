@@ -28,7 +28,7 @@ public partial class ReleaseWorkflowTests
         AssertContainsAll(
             workflow,
             "dotnet restore CodeIndex.sln --locked-mode",
-            "dotnet build CodeIndex.sln --configuration Release --no-restore",
+            "- name: Build\n        if: ${{ !matrix.cross_compile }}\n        run: dotnet build CodeIndex.sln --configuration Release --no-restore",
             "dotnet test CodeIndex.sln --configuration Release --no-build --no-restore --nologo");
     }
 
