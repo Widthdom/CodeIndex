@@ -5,39 +5,24 @@ namespace CodeIndex.Tests;
 public sealed class OperationTimeoutScopeTests
 {
     [Fact]
-    public void Token_InfiniteTimeoutUsesNoTimeoutBudget_Issue4129()
+    public void Token_NonPositiveAndInfiniteTimeoutsUseNoTimeoutBudget_Issue4129()
     {
-        using var cts = new CancellationTokenSource();
-        using var scope = OperationTimeoutScope.Create(
-            OperationTimeoutCategories.McpRequest,
-            Timeout.InfiniteTimeSpan,
-            cts.Token);
+        foreach (var timeout in new[] { Timeout.InfiniteTimeSpan, TimeSpan.Zero })
+        {
+            using var cts = new CancellationTokenSource();
+            using var scope = OperationTimeoutScope.Create(
+                OperationTimeoutCategories.McpRequest,
+                timeout,
+                cts.Token);
 
-        Assert.False(scope.Budget.HasTimeout);
-        Assert.Equal(Timeout.InfiniteTimeSpan, scope.Timeout);
+            Assert.False(scope.Budget.HasTimeout);
+            Assert.Equal(Timeout.InfiniteTimeSpan, scope.Timeout);
 
-        cts.Cancel();
+            cts.Cancel();
 
-        Assert.True(scope.Token.IsCancellationRequested);
-        Assert.False(scope.IsTimeoutCancellationRequested);
-    }
-
-    [Fact]
-    public void Token_ZeroTimeoutUsesNoTimeoutBudget_Issue4129()
-    {
-        using var cts = new CancellationTokenSource();
-        using var scope = OperationTimeoutScope.Create(
-            OperationTimeoutCategories.McpRequest,
-            TimeSpan.Zero,
-            cts.Token);
-
-        Assert.False(scope.Budget.HasTimeout);
-        Assert.Equal(Timeout.InfiniteTimeSpan, scope.Timeout);
-
-        cts.Cancel();
-
-        Assert.True(scope.Token.IsCancellationRequested);
-        Assert.False(scope.IsTimeoutCancellationRequested);
+            Assert.True(scope.Token.IsCancellationRequested);
+            Assert.False(scope.IsTimeoutCancellationRequested);
+        }
     }
 
     [Fact]
