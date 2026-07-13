@@ -475,8 +475,7 @@ public class MetricsSinkTests
         }
         finally
         {
-            if (File.Exists(metricsPath))
-                File.Delete(metricsPath);
+            TestProjectHelper.DeleteFile(metricsPath);
         }
     }
 

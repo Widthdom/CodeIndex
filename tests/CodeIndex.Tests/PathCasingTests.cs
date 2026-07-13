@@ -201,8 +201,7 @@ public class PathCasingTests
         }
         finally
         {
-            if (File.Exists(probePath))
-                File.Delete(probePath);
+            TestProjectHelper.DeleteFile(probePath);
         }
     }
 
