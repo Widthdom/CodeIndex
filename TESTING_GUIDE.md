@@ -288,6 +288,7 @@ Use the inventory below before adding or moving a test class:
 - Schema-constraint fixtures dispose every `DbContext`, connection, command, and reader before directory cleanup; do not add unconditional pool resets that serialize these independent schema checks.
 - SQLite connection-string and command-policy tests are parallel-safe when every in-memory connection and command is instance-owned and disposed; referencing `Microsoft.Data.Sqlite` alone is not a reason to join the SQLite-sensitive collection.
 - Cross-platform path matrices can run in parallel when cache seeding is guarded by `PathCasingTestLock` and every filesystem/git fixture owns a unique temporary workspace.
+- Exception-formatting contract tests should guard their shared console helper with `TestConsoleLock` and remain parallelizable; their in-memory SQLite retry probes do not mutate the process pool.
 - JSON API-version fixtures use locked console capture and scoped project cleanup; deleting the project before an unconditional pool reset makes that reset both redundant and too late, so keep this contract suite parallelizable.
 - Golden JSON snapshot fixtures share the same cleanup/capture ownership and should not pay a process-wide pool reset after each of the status, search, references, impact, and excerpt snapshots.
 - Temporary repositories and files: create them through `TestProjectHelper` when practical, and do not depend on user-level git config.
@@ -712,6 +713,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - schema-constraint fixture は directory cleanup 前にすべての `DbContext`、connection、command、reader を dispose する。独立した schema check を直列化する無条件 pool reset を追加しないこと。
 - SQLite connection-string / command-policy test は、各 in-memory connection と command を test instance が所有して dispose する限り parallel-safe である。`Microsoft.Data.Sqlite` を参照するだけでは SQLite-sensitive collection に入れる理由にならない。
 - cross-platform path matrix は、cache seed を `PathCasingTestLock` で保護し、各 filesystem / git fixture が一意な temporary workspace を所有する限り parallel 実行できる。
+- exception-formatting contract test は共有 console helper を `TestConsoleLock` で保護して parallel 実行可能に保つ。in-memory SQLite retry probe は process pool を変更しない。
 - JSON API-version fixture は locked console capture と scoped project cleanup を使う。project 削除後の無条件 pool reset は冗長なうえ遅すぎるため、この contract suite は parallel 実行可能な状態を保つ。
 - golden JSON snapshot fixture も同じ cleanup / capture ownership に従う。status、search、references、impact、excerpt の各 snapshot 後に process-wide pool reset を支払わないこと。
 - 一時 repo / file: 可能な限り `TestProjectHelper` 経由で作り、user-level の git config に依存しない。
