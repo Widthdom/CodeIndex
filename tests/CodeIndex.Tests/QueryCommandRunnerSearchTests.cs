@@ -724,7 +724,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSearch_FormatCompactEmitsBoundedSnippet_Issue3481()
+    public void RunSearch_FormatCompactEmitsLocationRowWithoutHeavyFields_Issues3481And4461()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_format_compact");
         try
@@ -744,13 +744,9 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             using var document = ParseJsonOutput(stdout);
             var row = Assert.Single(document.RootElement.EnumerateArray());
-            Assert.Equal("Authenticate", row.GetProperty("query").GetString());
-            Assert.Equal("src/app.cs", row.GetProperty("path").GetString());
-            Assert.True(row.GetProperty("chunk_start_line").GetInt32() > 0);
-            Assert.Contains("Authenticate", row.GetProperty("snippet").GetString(), StringComparison.Ordinal);
-            Assert.NotEmpty(row.GetProperty("match_lines").EnumerateArray());
-            Assert.NotEmpty(row.GetProperty("highlights").EnumerateArray());
-            Assert.False(row.TryGetProperty("name", out _));
+            Assert.Equal("src/app.cs", row.GetProperty("file").GetString());
+            Assert.True(row.GetProperty("line").GetInt32() > 0);
+            Assert.Equal(2, row.EnumerateObject().Count());
         }
         finally
         {
@@ -4853,12 +4849,18 @@ public partial class QueryCommandRunnerTests
                 "public sealed class TokenStore { private string token = \"secret\"; }");
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["token", "--db", dbPath, "--format", "compact", "--max-json-bytes", "1"],
+                ["token", "--db", dbPath, "--format", "compact", "--limit", "1", "--max-json-bytes", "1024"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("compact search results JSON output", stderr, StringComparison.Ordinal);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(System.Text.Encoding.UTF8.GetByteCount(stdout) <= 1024);
+            using (var compactDocument = ParseJsonOutput(stdout))
+            {
+                var row = Assert.Single(compactDocument.RootElement.EnumerateArray());
+                Assert.Equal("src/token.cs", row.GetProperty("file").GetString());
+                Assert.False(row.TryGetProperty("snippet", out _));
+            }
 
             var (zeroExitCode, zeroStdout, zeroStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["MissingToken", "--db", dbPath, "--format", "compact", "--max-json-bytes", "1"],

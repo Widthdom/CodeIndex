@@ -1376,12 +1376,12 @@ public static partial class QueryCommandRunner
 
     private static void WriteCompactSearchResults(TextWriter writer, IEnumerable<CompactSearchResult> results, JsonSerializerOptions jsonOptions)
     {
-        var itemOptions = GetCompactJsonOptions(jsonOptions);
-        var context = CliJsonSerializerContextFactory.Create(itemOptions);
-        WriteJsonArray(
+        var locations = results.Select(result => new FormattedLocation(
+            result.Path,
+            result.MatchLines.Count > 0 ? result.MatchLines[0] : result.ChunkStartLine));
+        WriteCompactLocations(
             writer,
-            results,
-            (writer, result) => writer.Write(JsonSerializer.Serialize(result, context.CompactSearchResult)),
+            locations,
             jsonOptions);
     }
 

@@ -2179,6 +2179,7 @@ AI agents that query the database directly via SQL need the `sqlite3` CLI.
 | Human file sizes | Human-facing output formats file sizes with binary units (`KiB`, `MiB`, `GiB`, ...), so large repositories and `map` / `files` listings are easier to scan. |
 | Raw byte counts | Use `--bytes` on `files` or `map` when shell pipelines need raw byte counts in text output. |
 | JSON size fields | JSON output (`--json`) always keeps size fields as raw integer bytes for machine consumers. |
+| Ad hoc `search --format compact` | Emits bounded location rows containing only `file` and `line`. Snippets, highlights, facets, and ranking metadata remain available through the normal JSON formats. |
 | `find --count --json` | `files` is the canonical matched-file count. The older `file_count` field remains a deprecated compatibility alias with the same value for the current major release and is not scheduled for removal before the next major release. New consumers should read `files`. |
 
 `map` entrypoint fields:
@@ -4968,6 +4969,7 @@ AIエージェントがDBを直接SQL検索する場合、`sqlite3` CLIが必要
 | human file size | 人間向け出力では、file size を2進単位（`KiB`、`MiB`、`GiB` など）で表示します。大きな repository や `map` / `files` の一覧を読み取りやすくするためです。 |
 | raw byte count | text output を shell pipeline で扱うなど、生 byte 数が必要な場合は `files` または `map` に `--bytes` を指定してください。 |
 | JSON size field | JSON output（`--json`）では、機械処理向けに size field を常に raw integer bytes のまま返します。 |
+| ad hoc `search --format compact` | `file` と `line` だけを含む上限付き location row を返します。snippet、highlight、facet、ranking metadata が必要な場合は通常の JSON format を使ってください。 |
 | `find --count --json` | `files` が一致 file 数の正規 field です。古い `file_count` field は現在の major release 中、同じ値を返す非推奨の互換 alias として残り、次の major release より前に削除される予定はありません。新しい consumer は `files` を読んでください。 |
 
 `map` entrypoint 候補の field:

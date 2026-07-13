@@ -166,9 +166,13 @@ public static partial class QueryCommandRunner
         }, jsonOptions);
 
     private static void WriteCompactLocations(IEnumerable<FormattedLocation> locations, JsonSerializerOptions jsonOptions)
+        => WriteCompactLocations(Console.Out, locations, jsonOptions);
+
+    private static void WriteCompactLocations(TextWriter writer, IEnumerable<FormattedLocation> locations, JsonSerializerOptions jsonOptions)
     {
         var itemOptions = GetCompactJsonOptions(jsonOptions);
         WriteJsonArray(
+            writer,
             locations,
             (writer, location) =>
             {
