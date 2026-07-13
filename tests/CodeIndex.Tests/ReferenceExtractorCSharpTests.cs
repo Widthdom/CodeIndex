@@ -3709,7 +3709,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithLambdaScopedDeclarationPatternVariable_DoesNotLeakIntoOuterIfBody()
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithLambdaScopedPatternVariables_DoNotLeakIntoOuterIfBodies()
     {
         const string content = """
             namespace RealNs;
@@ -3726,7 +3726,7 @@ public partial class ReferenceExtractorTests
 
             public sealed class Uses
             {
-                public RealNs.Status Read(object[] values)
+                public RealNs.Status ReadLambda(object[] values)
                 {
                     if (values.Any(value => value is Holder RealNs))
                     {
@@ -3735,42 +3735,20 @@ public partial class ReferenceExtractorTests
 
                     return RealNs.Status.Ready;
                 }
-            }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
-            .OrderBy(reference => reference.Line)
-            .ToList();
-
-        Assert.Equal([19, 22], readyRefs.Select(reference => reference.Line).ToArray());
-        Assert.All(readyRefs, reference => Assert.Equal("Read", reference.ContainerName));
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithNestedLambdaScopedDeclarationPatternVariable_DoesNotLeakIntoOuterIfBody()
-    {
-        const string content = """
-            namespace RealNs;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public RealNs.Status Read(object[] values)
+                public RealNs.Status ReadNested(object[] values)
                 {
                     if (values.Any(value => value is Holder RealNs && values.Any(other => other is Holder Other)))
+                    {
+                        return RealNs.Status.Ready;
+                    }
+
+                    return RealNs.Status.Ready;
+                }
+
+                public RealNs.Status ReadStatic(object[] values)
+                {
+                    if (values.Any(static value => value is Holder RealNs))
                     {
                         return RealNs.Status.Ready;
                     }
@@ -3785,11 +3763,12 @@ public partial class ReferenceExtractorTests
 
         var readyRefs = references
             .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
-            .OrderBy(reference => reference.Line)
-            .ToList();
+            .GroupBy(reference => reference.ContainerName)
+            .ToDictionary(group => group.Key!, group => group.Count());
 
-        Assert.Equal([19, 22], readyRefs.Select(reference => reference.Line).ToArray());
-        Assert.All(readyRefs, reference => Assert.Equal("Read", reference.ContainerName));
+        Assert.Equal(2, readyRefs["ReadLambda"]);
+        Assert.Equal(2, readyRefs["ReadNested"]);
+        Assert.Equal(2, readyRefs["ReadStatic"]);
     }
 
     [Fact]
@@ -3955,48 +3934,6 @@ public partial class ReferenceExtractorTests
         Assert.Equal([64, 30], readyRefs["ReadGuard"].Select(reference => reference.Column).ToArray());
         Assert.Equal([30], readyRefs["ReadComment"].Select(reference => reference.Column).ToArray());
         Assert.Equal([83, 30], readyRefs["ReadMultiLineComment"].Select(reference => reference.Column).ToArray());
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithStaticLambdaScopedDeclarationPatternVariable_DoesNotLeakIntoOuterIfBody()
-    {
-        const string content = """
-            namespace RealNs;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public RealNs.Status Read(object[] values)
-                {
-                    if (values.Any(static value => value is Holder RealNs))
-                    {
-                        return RealNs.Status.Ready;
-                    }
-
-                    return RealNs.Status.Ready;
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
-            .OrderBy(reference => reference.Line)
-            .ToList();
-
-        Assert.Equal([19, 22], readyRefs.Select(reference => reference.Line).ToArray());
-        Assert.All(readyRefs, reference => Assert.Equal("Read", reference.ContainerName));
     }
 
     [Fact]

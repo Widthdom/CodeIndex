@@ -151,6 +151,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   C# local-shadowing boundary coverage shares later declarations and nested-block exits in one extraction pass.
   Property lexical-shadowing coverage keeps getter-only and getter/setter scope boundaries in the shared indented fixture.
   Lambda parameter shadowing keeps parenthesized same-line and ordinary method-parameter forms in the shared lambda fixture.
+  C# lambda-scoped declaration-pattern coverage shares ordinary, nested, and static lambda forms in one extraction pass.
   Inspect and references command coverage applies the same switch-expression grouping so each surface builds one graph-ready database and validates results by container.
   Apply the same combined null-comparison fixture to inspect reference-bundle coverage instead of indexing each operator separately.
   Production-runtime switch relational-pattern coverage places less-than and greater-than methods in one source and pays one CLI indexing subprocess.
@@ -644,6 +645,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   C# local-shadowing boundary coverage は後続 declaration と nested-block exit を1回の extraction pass で共有してください。
   property lexical-shadowing coverage は getter-only と getter/setter のscope boundaryを共有のindented fixtureに併置してください。
   lambda parameter shadowing は parenthesized same-line と通常のmethod-parameter 形式を共有のlambda fixtureに併置してください。
+  C# lambda-scoped declaration-pattern coverage は ordinary、nested、static lambda 形式を1回の extraction pass で共有してください。
   inspect / references command coverage も同じ switch-expression の統合方針を適用し、各 surface で1つの graph-ready database を構築して container ごとに結果を検証してください。
   inspect reference-bundle coverageにも同じnull-comparison統合fixtureを適用し、operatorごとの個別indexingを避けてください。
   production-runtime switch relational-pattern coverage はless-thanとgreater-thanのmethodを1 sourceに置き、CLI indexing subprocessを1回だけ実行してください。
