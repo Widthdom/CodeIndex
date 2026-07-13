@@ -4330,9 +4330,9 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunInspect_ExactJson_CSharpSwitchExpressionRecursivePatternVariableDoesNotLeakReferenceContext()
+    public void RunInspect_ExactJson_CSharpSwitchExpressionPatternVariablesKeepOnlyGenuineReferenceContext()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_switch_expression_recursive_pattern_collision");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_switch_expression_pattern_collisions");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
@@ -4352,11 +4352,20 @@ public partial class QueryCommandRunnerTests
 
                 public sealed class Uses
                 {
-                    public Demo.Status Read(object value)
+                    public Demo.Status ReadRecursive(object value)
                     {
                         return value switch
                         {
                             Holder { Ready: > 0 } Status => (Demo.Status)Status.Ready,
+                            _ => Demo.Status.Ready
+                        };
+                    }
+
+                    public Demo.Status ReadComment(object value)
+                    {
+                        return value switch
+                        {
+                            Holder Status /* when comment */ => (Demo.Status)Status.Ready,
                             _ => Demo.Status.Ready
                         };
                     }
@@ -4370,9 +4379,10 @@ public partial class QueryCommandRunnerTests
 
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
-            var referenceLines = json.GetProperty("references")
+            var referenceContainers = json.GetProperty("references")
                 .EnumerateArray()
-                .Select(reference => reference.GetProperty("line").GetInt32())
+                .Select(reference => reference.GetProperty("container_name").GetString())
+                .OrderBy(name => name)
                 .ToArray();
             var callerReferenceCounts = json.GetProperty("callers")
                 .EnumerateArray()
@@ -4381,8 +4391,8 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal([20], referenceLines);
-            Assert.Equal([1], callerReferenceCounts);
+            Assert.Equal(["ReadComment", "ReadRecursive"], referenceContainers);
+            Assert.Equal([1, 1], callerReferenceCounts);
             Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
             Assert.True(json.GetProperty("graph_supported").GetBoolean());
         }
@@ -4848,69 +4858,6 @@ public partial class QueryCommandRunnerTests
             Assert.True(json.GetProperty("graph_supported").GetBoolean());
             Assert.False(json.TryGetProperty("graph_degraded", out _));
             Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunInspect_ExactJson_CSharpSwitchExpressionDeclarationPatternWhenInCommentDoesNotLeakReferenceContext()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_switch_expression_declaration_pattern_when_comment_collision");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
-                """
-                namespace Demo;
-
-                public enum Status
-                {
-                    Ready
-                }
-
-                public sealed class Holder
-                {
-                    public int Ready { get; set; }
-                }
-
-                public sealed class Uses
-                {
-                    public Demo.Status Read(object value)
-                    {
-                        return value switch
-                        {
-                            Holder Status /* when comment */ => (Demo.Status)Status.Ready,
-                            _ => Demo.Status.Ready
-                        };
-                    }
-                }
-                """);
-            MarkGraphAndFoldReady(dbPath);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var referenceLines = json.GetProperty("references")
-                .EnumerateArray()
-                .Select(reference => reference.GetProperty("line").GetInt32())
-                .ToArray();
-            var callerReferenceCounts = json.GetProperty("callers")
-                .EnumerateArray()
-                .Select(caller => caller.GetProperty("reference_count").GetInt32())
-                .ToArray();
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal([20], referenceLines);
-            Assert.Equal([1], callerReferenceCounts);
-            Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
-            Assert.True(json.GetProperty("graph_supported").GetBoolean());
         }
         finally
         {

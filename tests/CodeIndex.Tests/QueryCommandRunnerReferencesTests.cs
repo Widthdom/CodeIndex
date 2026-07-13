@@ -7822,9 +7822,9 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunReferences_ExactJson_CSharpSwitchExpressionDeclarationPatternWhenInMultiLineCommentDoesNotLeakReferenceContext()
+    public void RunReferences_ExactJson_CSharpSwitchExpressionPatternVariablesKeepOnlyGenuineReferenceContext()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_switch_expression_declaration_pattern_when_multiline_comment_collision");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_switch_expression_pattern_collisions");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
@@ -7844,7 +7844,7 @@ public partial class QueryCommandRunnerTests
 
                 public sealed class Uses
                 {
-                    public Demo.Status Read(object value)
+                    public Demo.Status ReadMultiLineComment(object value)
                     {
                         return value switch
                         {
@@ -7853,62 +7853,8 @@ public partial class QueryCommandRunnerTests
                             _ => Demo.Status.Ready
                         };
                     }
-                }
-                """);
-            MarkGraphAndFoldReady(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
-
-            using var first = ParseJsonOutput(stdout);
-            var firstJson = first.RootElement;
-            var rows = ParseJsonLines(stdout)
-                .Select(document => (
-                    Line: document.RootElement.GetProperty("line").GetInt32(),
-                    Column: document.RootElement.GetProperty("column").GetInt32(),
-                    ContainerName: document.RootElement.GetProperty("container_name").GetString()))
-                .OrderBy(row => row.Line)
-                .ThenBy(row => row.Column)
-                .ToArray();
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", firstJson.GetProperty("reference_kind").GetString());
-            Assert.Equal([20, 21], rows.Select(row => row.Line).ToArray());
-            Assert.Equal([83, 30], rows.Select(row => row.Column).ToArray());
-            Assert.All(rows, row => Assert.Equal("Read", row.ContainerName));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunReferences_ExactJson_CSharpSwitchExpressionDeclarationPatternWhenGuardDoesNotLeakReferenceContext()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_switch_expression_declaration_pattern_when_guard_collision");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
-                """
-                namespace Demo;
-
-                public enum Status
-                {
-                    Ready
-                }
-
-                public sealed class Holder
-                {
-                    public int Ready { get; set; }
-                }
-
-                public sealed class Uses
-                {
-                    public Demo.Status Read(object value)
+                    public Demo.Status ReadGuard(object value)
                     {
                         return value switch
                         {
@@ -7916,62 +7862,8 @@ public partial class QueryCommandRunnerTests
                             _ => Demo.Status.Ready
                         };
                     }
-                }
-                """);
-            MarkGraphAndFoldReady(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
-
-            using var first = ParseJsonOutput(stdout);
-            var firstJson = first.RootElement;
-            var rows = ParseJsonLines(stdout)
-                .Select(document => (
-                    Line: document.RootElement.GetProperty("line").GetInt32(),
-                    Column: document.RootElement.GetProperty("column").GetInt32(),
-                    ContainerName: document.RootElement.GetProperty("container_name").GetString()))
-                .OrderBy(row => row.Line)
-                .ThenBy(row => row.Column)
-                .ToArray();
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", firstJson.GetProperty("reference_kind").GetString());
-            Assert.Equal([19, 20], rows.Select(row => row.Line).ToArray());
-            Assert.Equal([64, 30], rows.Select(row => row.Column).ToArray());
-            Assert.All(rows, row => Assert.Equal("Read", row.ContainerName));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunReferences_ExactJson_CSharpSwitchExpressionRecursivePatternVariableDoesNotLeakReferenceContext()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_switch_expression_recursive_pattern_collision");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
-                """
-                namespace Demo;
-
-                public enum Status
-                {
-                    Ready
-                }
-
-                public sealed class Holder
-                {
-                    public int Ready { get; set; }
-                }
-
-                public sealed class Uses
-                {
-                    public Demo.Status Read(object value)
+                    public Demo.Status ReadRecursive(object value)
                     {
                         return value switch
                         {
@@ -7987,14 +7879,21 @@ public partial class QueryCommandRunnerTests
                 ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+            using var first = ParseJsonOutput(stdout);
+            var firstJson = first.RootElement;
+            var rowsByContainer = ParseJsonLines(stdout)
+                .Select(document => (
+                    Column: document.RootElement.GetProperty("column").GetInt32(),
+                    ContainerName: document.RootElement.GetProperty("container_name").GetString()))
+                .GroupBy(row => row.ContainerName)
+                .ToDictionary(group => group.Key!, group => group.Select(row => row.Column).ToArray());
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
-            Assert.Equal(20, json.GetProperty("line").GetInt32());
-            Assert.Equal("Read", json.GetProperty("container_name").GetString());
+            Assert.Equal("call", firstJson.GetProperty("reference_kind").GetString());
+            Assert.Equal([83, 30], rowsByContainer["ReadMultiLineComment"]);
+            Assert.Equal([64, 30], rowsByContainer["ReadGuard"]);
+            Assert.Equal([30], rowsByContainer["ReadRecursive"]);
         }
         finally
         {
