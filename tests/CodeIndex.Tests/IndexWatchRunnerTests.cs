@@ -4,7 +4,6 @@ using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
-using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -12,7 +11,6 @@ namespace CodeIndex.Tests;
 /// Tests for <see cref="IndexWatchRunner"/> (`cdidx index --watch`).
 /// `cdidx index --watch` のテスト。
 /// </summary>
-[Collection("SQLite pool sensitive")]
 public class IndexWatchRunnerTests
 {
     private readonly JsonSerializerOptions _jsonOptions = new()
@@ -620,7 +618,6 @@ public class IndexWatchRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -883,9 +880,6 @@ public class IndexWatchRunnerTests
         finally
         {
             DeleteDirectory(projectRoot);
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
         }
     }
 
@@ -945,9 +939,6 @@ public class IndexWatchRunnerTests
         finally
         {
             DeleteDirectory(projectRoot);
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
         }
     }
 
@@ -1008,9 +999,6 @@ public class IndexWatchRunnerTests
         finally
         {
             DeleteDirectory(projectRoot);
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
         }
     }
 
