@@ -7264,42 +7264,15 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpGenericNoArgAttribute_ClassifiedAsAttribute()
-    {
-        // Regression (issue #293 follow-up): generic no-arg C# attributes such as
-        // `[MyAudit<int>]`, `[assembly: MyAttr<string>]`, and multi-line `[\n MyAttr<int>\n]`
-        // must still classify as `attribute`. The no-arg attribute regex must accept an
-        // optional generic argument list after the name so these references are indexed.
-        // リグレッション (issue #293 補足): `[MyAudit<int>]` などのジェネリック引数なし属性、
-        // `[assembly: MyAttr<string>]` のような assembly targeted 形、そして複数行の
-        // `[\n MyAttr<int>\n]` も `attribute` として取り込まれること。
-        const string content = """
-            [assembly: MyAttr<string>]
-            [MyAudit<int>]
-            [
-                MyAttr<int>
-            ]
-            public class C
-            {
-            }
-            """;
-
-        var references = ReferenceExtractor.Extract(1, "csharp", content, []);
-
-        var myAudit = Assert.Single(references.Where(r => r.SymbolName == "MyAudit"));
-        Assert.Equal("attribute", myAudit.ReferenceKind);
-        Assert.Equal(2, references.Count(r => r.SymbolName == "MyAttr" && r.ReferenceKind == "attribute"));
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_CsharpGenericNoArgAttribute_RecordsTypeArgumentReferences()
+    public void Extract_CsharpGenericNoArgAttributes_ReuseClassificationAndTypeArgumentFixture()
     {
         // Regression (issue #1455): C# 11 generic attributes must still emit references for
         // custom type arguments inside the attribute's `<...>` list.
         // リグレッション (issue #1455): C# 11 の generic attribute では、属性の `<...>` 内に
         // 現れるユーザー定義型引数も参照として記録すること。
         const string content = """
+            [assembly: AssemblyAttr<string>]
+
             public class Payload
             {
             }
@@ -7310,6 +7283,10 @@ public partial class ReferenceExtractorTests
 
             [Serializable<Payload>]
             [MyAttr<Dictionary<string, Converter>>]
+            [MyAudit<int>]
+            [
+                MultiLineAttr<int>
+            ]
             public class Data
             {
             }
@@ -7322,6 +7299,9 @@ public partial class ReferenceExtractorTests
         Assert.Equal("attribute", serializable.ReferenceKind);
         var myAttr = Assert.Single(references.Where(r => r.SymbolName == "MyAttr"));
         Assert.Equal("attribute", myAttr.ReferenceKind);
+        Assert.Contains(references, r => r.SymbolName == "AssemblyAttr" && r.ReferenceKind == "attribute");
+        Assert.Contains(references, r => r.SymbolName == "MyAudit" && r.ReferenceKind == "attribute");
+        Assert.Contains(references, r => r.SymbolName == "MultiLineAttr" && r.ReferenceKind == "attribute");
         Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Converter" && r.ReferenceKind == "type_reference");
