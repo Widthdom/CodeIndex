@@ -367,6 +367,7 @@ For boundary tests, use the smallest fixture that still crosses the boundary. If
 - Prefer `ConsoleCapture` for simple stdout/stderr capture, and lock direct console mutations with `TestConsoleLock.Gate`.
 - Assert exit codes with `CommandExitCodes`.
 - For JSON output, parse it with `JsonDocument` instead of asserting raw strings.
+- For rejected checkpoint names, assert the usage exit/error code and syntax hint together, and verify that no checkpoint directory was created.
 
 ### JSON `--json` output snapshots
 
@@ -774,6 +775,7 @@ GitHub workflow、`global.json`、ドキュメントなど、checked-in され�
 - 単純な stdout/stderr capture では `ConsoleCapture` を優先し、直接コンソールを差し替える場合は `TestConsoleLock.Gate` で直列化する。
 - 終了コードは `CommandExitCodes` で検証する。
 - JSON 出力は生文字列比較ではなく `JsonDocument` で解析して検証する。
+- 拒否される checkpoint 名では usage の終了コード / error code と構文 hint を併せて検証し、checkpoint directory が作成されていないことも確認する。
 
 ### JSON `--json` 出力 snapshot
 
