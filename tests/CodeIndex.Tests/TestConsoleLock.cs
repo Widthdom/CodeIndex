@@ -1,5 +1,10 @@
 namespace CodeIndex.Tests;
 
+[CollectionDefinition("Console sensitive", DisableParallelization = true)]
+public sealed class ConsoleSensitiveCollection
+{
+}
+
 internal static class TestConsoleLock
 {
     internal static readonly object Gate = new();

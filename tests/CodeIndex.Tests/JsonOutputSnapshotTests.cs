@@ -15,6 +15,7 @@ namespace CodeIndex.Tests;
 /// To regenerate goldens after an intentional shape change, set <c>UPDATE_SNAPSHOTS=1</c>
 /// and re-run only these tests, then review the diff before committing.
 /// </summary>
+[Collection("Console sensitive")]
 public class JsonOutputSnapshotTests
 {
     private readonly JsonSerializerOptions _jsonOptions = new()
