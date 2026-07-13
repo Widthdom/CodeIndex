@@ -7,11 +7,12 @@ namespace CodeIndex.Tests;
 public class BoundedHttpContentReaderTests
 {
     [Fact]
-    public async Task WriteToPrivateFileAsync_WritesContentWithOwnerOnlyMode()
+    public async Task WriteToPrivateFileAsync_WritesPrivateContentAndRejectsOverflow()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"cdidx-install-test-{Guid.NewGuid():N}.sh");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_install_content");
         try
         {
+            var path = TestProjectHelper.ProjectPath(projectRoot, "install.sh");
             await BoundedHttpContentReader.WriteToPrivateFileAsync(
                 new UnknownLengthContent(Encoding.UTF8.GetBytes("#!/bin/sh\nexit 0\n")),
                 path,
@@ -24,23 +25,12 @@ public class BoundedHttpContentReaderTests
                 var permissions = File.GetUnixFileMode(path) & PermissionBits;
                 Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, permissions);
             }
-        }
-        finally
-        {
-            TestProjectHelper.DeleteFile(path);
-        }
-    }
 
-    [Fact]
-    public async Task WriteToPrivateFileAsync_RejectsStreamOverLimit()
-    {
-        var path = Path.Combine(Path.GetTempPath(), $"cdidx-install-test-{Guid.NewGuid():N}.sh");
-        try
-        {
+            var overflowPath = TestProjectHelper.ProjectPath(projectRoot, "overflow.sh");
             var ex = await Assert.ThrowsAsync<InvalidDataException>(() =>
                 BoundedHttpContentReader.WriteToPrivateFileAsync(
                     new UnknownLengthContent(Encoding.UTF8.GetBytes("12345")),
-                    path,
+                    overflowPath,
                     maxBytes: 4,
                     CancellationToken.None));
 
@@ -48,7 +38,7 @@ public class BoundedHttpContentReaderTests
         }
         finally
         {
-            TestProjectHelper.DeleteFile(path);
+            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
