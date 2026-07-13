@@ -308,25 +308,41 @@ internal static class UpdateChecker
             (int)MaxPrereleaseResponseBytes,
             MaxLatestReleaseJsonDepth);
         if (doc.RootElement.ValueKind != JsonValueKind.Array)
-            return null;
+            throw new JsonException("Prerelease release metadata root must be an array.");
 
         foreach (var release in doc.RootElement.EnumerateArray())
         {
             if (release.ValueKind != JsonValueKind.Object)
-                continue;
+                throw new JsonException("Prerelease release metadata entries must be objects.");
 
-            var isDraft = release.TryGetProperty("draft", out var draftElement)
-                && draftElement.ValueKind == JsonValueKind.True;
+            if (!release.TryGetProperty("tag_name", out var tagElement)
+                || tagElement.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(tagElement.GetString()))
+            {
+                throw new JsonException("Prerelease release metadata entries require a non-empty string tag_name.");
+            }
+
+            if (!release.TryGetProperty("draft", out var draftElement)
+                || draftElement.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                throw new JsonException("Prerelease release metadata entries require a boolean draft field.");
+            }
+
+            if (!release.TryGetProperty("prerelease", out var prereleaseElement)
+                || prereleaseElement.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                throw new JsonException("Prerelease release metadata entries require a boolean prerelease field.");
+            }
+
+            var isDraft = draftElement.ValueKind == JsonValueKind.True;
             if (isDraft)
                 continue;
 
-            var isPrerelease = release.TryGetProperty("prerelease", out var prereleaseElement)
-                && prereleaseElement.ValueKind == JsonValueKind.True;
+            var isPrerelease = prereleaseElement.ValueKind == JsonValueKind.True;
             if (!isPrerelease)
                 continue;
 
-            if (release.TryGetProperty("tag_name", out var tagElement))
-                return tagElement.GetString();
+            return tagElement.GetString();
         }
 
         return null;

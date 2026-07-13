@@ -2960,6 +2960,19 @@ exit 7
         Assert.Contains($"{UpdateChecker.MaxPrereleaseResponseBytes} byte limit", ex.Message);
     }
 
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("[null]")]
+    [InlineData("[{\"tag_name\":\"v3.0.0\",\"draft\":\"false\",\"prerelease\":false}]")]
+    [InlineData("[{\"tag_name\":\"v3.0.0\",\"draft\":false,\"prerelease\":\"false\"}]")]
+    public async Task UpdateChecker_ReadLatestPrereleaseTagAsync_RejectsMalformedSchema_Issue4469(string payload)
+    {
+        using var content = new ByteArrayContent(Encoding.UTF8.GetBytes(payload));
+
+        await Assert.ThrowsAsync<JsonException>(() =>
+            UpdateChecker.ReadLatestPrereleaseTagAsync(content, CancellationToken.None));
+    }
+
     [Fact]
     public async Task UpdateChecker_FetchLatestReleaseTagAsync_CancelsStalledBody()
     {
