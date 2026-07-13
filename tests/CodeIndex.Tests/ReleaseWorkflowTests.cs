@@ -6,7 +6,6 @@ using System.Text.Json;
 
 namespace CodeIndex.Tests;
 
-[Collection("SQLite pool sensitive")]
 public partial class ReleaseWorkflowTests
 {
     [Fact]
