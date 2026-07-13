@@ -577,8 +577,7 @@ public class AuditLogSinkTests
         }
         finally
         {
-            if (File.Exists(path))
-                File.Delete(path);
+            TestProjectHelper.DeleteFile(path);
         }
     }
 
@@ -921,8 +920,7 @@ public class AuditLogSinkTests
         finally
         {
             releaseWriter.Set();
-            if (File.Exists(path))
-                File.Delete(path);
+            TestProjectHelper.DeleteFile(path);
         }
     }
 

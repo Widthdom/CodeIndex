@@ -27,8 +27,7 @@ public class BoundedHttpContentReaderTests
         }
         finally
         {
-            if (File.Exists(path))
-                File.Delete(path);
+            TestProjectHelper.DeleteFile(path);
         }
     }
 
@@ -49,8 +48,7 @@ public class BoundedHttpContentReaderTests
         }
         finally
         {
-            if (File.Exists(path))
-                File.Delete(path);
+            TestProjectHelper.DeleteFile(path);
         }
     }
 

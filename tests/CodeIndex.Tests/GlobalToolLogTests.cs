@@ -37,8 +37,7 @@ public class GlobalToolLogTests
         }
         finally
         {
-            if (File.Exists(path))
-                File.Delete(path);
+            TestProjectHelper.DeleteFile(path);
         }
     }
 
