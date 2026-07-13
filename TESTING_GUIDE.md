@@ -322,6 +322,7 @@ Use the inventory below before adding or moving a test class:
 - SQLite connection policy builder coverage should verify connection strings, command timeout, and status diagnostics in one test; these allocation-only checks do not need three runner cases.
 - SQLite command parameter builders should verify primitive types, stable dates, and copied parameter shapes on one command fixture rather than allocating three independent test cases.
 - Timeout-origin coverage should exercise timer cancellation and caller cancellation sequentially in one async test so the distinguishing assertion does not duplicate runner setup.
+- Bounded in-memory HTTP reads should cover unknown-length success and declared-length rejection in one async contract rather than splitting two adjacent buffer-policy assertions.
 - Long-running or performance-oriented tests: keep them skipped by default or give them broad deterministic budgets; if CI reports them in xUnit long-running diagnostics, first check runner load before tightening thresholds.
 - When a response-size algorithm needs a large production ceiling, prefer a narrowly scoped test-only budget override and a small representative payload; restore process-global overrides in `finally` and keep the suite non-parallel.
 - Pagination and suppression fixtures should cross the fetched-window boundary with the fewest additional records needed to distinguish full totals from the returned page.
@@ -777,6 +778,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - SQLite connection policy builder coverage は connection string、command timeout、status diagnostics を1つの test で検証する。allocation-only check に3つの runner case は不要である。
 - SQLite command parameter builder は primitive type、stable date、copied parameter shape を1つの command fixture で検証し、3つの独立 test case を割り当てない。
 - timeout origin coverage は timer cancellation / caller cancellation を1つの async test で順に検証し、区別の assertion のために runner setup を重複させない。
+- bounded in-memory HTTP read は unknown-length success / declared-length rejection を1つの async contract で検証し、隣接する buffer-policy assertion を分割しない。
 - 長時間または performance 系テスト: デフォルト skip にするか、決定的で十分広い budget を与える。CI の xUnit long-running 診断に出た場合は、閾値を締める前に runner 負荷を確認する。
 
 ## 共通ヘルパー

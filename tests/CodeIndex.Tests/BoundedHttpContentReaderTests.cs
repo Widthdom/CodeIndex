@@ -43,7 +43,7 @@ public class BoundedHttpContentReaderTests
     }
 
     [Fact]
-    public async Task ReadAsByteArrayAsync_ReadsNormalUnknownLengthPayload_Issue3799()
+    public async Task ReadAsByteArrayAsync_ReadsUnknownLengthAndRejectsDeclaredOverflow_Issue3799()
     {
         var payload = Encoding.UTF8.GetBytes("normal payload");
 
@@ -53,11 +53,7 @@ public class BoundedHttpContentReaderTests
             CancellationToken.None);
 
         Assert.Equal(payload, bytes);
-    }
 
-    [Fact]
-    public async Task ReadAsByteArrayAsync_RejectsDeclaredLengthOverLimit()
-    {
         using var content = new ByteArrayContent([1]);
         content.Headers.ContentLength = 5;
 
