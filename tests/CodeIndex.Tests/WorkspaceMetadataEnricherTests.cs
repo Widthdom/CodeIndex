@@ -321,7 +321,7 @@ public class WorkspaceMetadataEnricherTests
     }
 
     [Fact]
-    public void Enrich_StatusResult_PopulatesCommitsAheadWhenIndexedHeadShaIsAncestor()
+    public void Enrich_StatusResult_DistinguishesAncestorAndMissingIndexedHeadSha()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_workspace_ahead_count");
         try
@@ -347,25 +347,12 @@ public class WorkspaceMetadataEnricherTests
 
             Assert.Equal(projectRoot, status.ProjectRoot);
             Assert.Equal(2, status.CommitsAheadOfIndexedHead);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void Enrich_StatusResult_LeavesCommitsAheadNullWhenIndexedHeadShaIsMissing()
-    {
-        var (projectRoot, dbPath, _) = CreateDirtyGitProject("cdidx_workspace_ahead_no_sha");
-        try
-        {
-            var status = new StatusResult();
+            var legacyStatus = new StatusResult();
+            WorkspaceMetadataEnricher.Enrich(legacyStatus, dbPath);
 
-            WorkspaceMetadataEnricher.Enrich(status, dbPath);
-
-            Assert.Equal(projectRoot, status.ProjectRoot);
-            Assert.Null(status.CommitsAheadOfIndexedHead);
+            Assert.Equal(projectRoot, legacyStatus.ProjectRoot);
+            Assert.Null(legacyStatus.CommitsAheadOfIndexedHead);
         }
         finally
         {
