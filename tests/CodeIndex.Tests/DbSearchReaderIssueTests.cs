@@ -3,7 +3,6 @@ using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
-[Collection("SQLite pool sensitive")]
 public sealed class DbSearchReaderIssueTests : IDisposable
 {
     private readonly string _dbPath;
