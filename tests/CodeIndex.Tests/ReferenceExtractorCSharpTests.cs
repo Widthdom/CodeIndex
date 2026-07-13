@@ -7941,56 +7941,27 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CSharpLambdaCapture_EmitsCaptureReferenceForEnclosingLocal()
+    public void Extract_CSharpLambdaCapture_ReuseCaptureAndShadowFixture()
     {
         const string content = """
-            class Demo
+            class CaptureDemo
             {
-                void Run()
+                void Capture()
                 {
                     var seed = 1;
                     System.Func<int> next = () => seed + 1;
                 }
             }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var capture = Assert.Single(references.Where(r =>
-            r.SymbolName == "seed"
-            && r.ReferenceKind == "capture"));
-        Assert.Equal(6, capture.Line);
-        Assert.Equal("function", capture.ContainerKind);
-        Assert.Equal("Run", capture.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CSharpLambdaCapture_DoesNotCaptureLambdaParameterShadow()
-    {
-        const string content = """
-            class Demo
+            class ShadowDemo
             {
-                void Run()
+                void Shadow()
                 {
                     var seed = 1;
                     System.Func<int, int> next = seed => seed + 1;
                 }
             }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.DoesNotContain(references, r =>
-            r.SymbolName == "seed"
-            && r.ReferenceKind == "capture");
-    }
-
-    [Fact]
-    public void Extract_CSharpLambdaCapture_DoesNotShareLocalsAcrossSameNamedMethods()
-    {
-        const string content = """
             class First
             {
                 void Run()
@@ -8011,9 +7982,12 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.DoesNotContain(references, r =>
+        var capture = Assert.Single(references.Where(r =>
             r.SymbolName == "seed"
-            && r.ReferenceKind == "capture");
+            && r.ReferenceKind == "capture"));
+        Assert.Equal(6, capture.Line);
+        Assert.Equal("function", capture.ContainerKind);
+        Assert.Equal("Capture", capture.ContainerName);
     }
 
     private static void AssertReferenceContains(
