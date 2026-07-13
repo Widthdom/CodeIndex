@@ -241,6 +241,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Generic C# attribute classification and custom type-argument references share one fixture across assembly-targeted, single-line, and multi-line forms.
 - Nested generic attribute forms extend that shared fixture instead of running a second parser pass solely for deeper angle-bracket nesting.
 - No-argument parameter attributes on methods, delegates, and lambdas share one C# fixture because all three exercise the same section-local parenthesis-depth rule.
+- Argument-bearing parameter attributes share one method fixture for inline and line-broken declaration layouts.
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). Its publish smoke disables NuGet vulnerability auditing because package advisory validation is covered by the normal build/test workflow's package vulnerability check, not by this runtime serialization test. It is reported as skipped on macOS arm64 while SDK/ILLink can crash before exercising `cdidx` (#2586). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
@@ -748,6 +749,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - generic C# attribute の分類と custom type-argument reference は、assembly target、single-line、multi-line の各形式で1つの fixture を共有します。
 - nested generic attribute 形式も同じ共有 fixture に含め、山括弧の深い入れ子だけのために2回目の parser pass を実行しません。
 - method、delegate、lambda の no-argument parameter attribute は、同じ section-local parenthesis-depth 規則を通るため1つの C# fixture を共有します。
+- 引数付き parameter attribute は、inline と改行された declaration layout で1つの method fixture を共有します。
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   は trimmed な RID 固有 CLI を publish し、SDK が生成した entry point（`dotnet` 経由の `cdidx.dll`、または native の `cdidx`/`cdidx.exe` apphost）を実行します。この publish smoke は NuGet 脆弱性監査を無効化します。package advisory の検証は通常の build/test workflow の package vulnerability check が担い、この runtime serialization テストの責務ではないためです。macOS arm64 では SDK/ILLink が `cdidx` に到達する前にクラッシュし得るため、このテストは skipped として報告されます（#2586）。self-contained publish output に常に `cdidx.dll` が出るとは仮定しないでください。
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`

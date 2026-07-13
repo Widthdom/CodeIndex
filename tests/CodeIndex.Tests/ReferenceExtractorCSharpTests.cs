@@ -6787,7 +6787,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpParameterAttributes_ClassifiedAsAttribute()
+    public void Extract_CsharpParameterAttributes_ReuseInlineAndMultilineFixture()
     {
         // Parameter attributes are introduced by `(` or `,` rather than a scope boundary, so
         // the classifier must use forward lookahead from `[` to disambiguate against C# 12
@@ -6797,7 +6797,12 @@ public partial class ReferenceExtractorTests
         const string content = """
             public class C
             {
-                public void M([Attr("x")] int a, [Other("y")] int b) { }
+                public void M(
+                    [Attr("x")] int a,
+                    [MultiLine("y")]
+                    int b)
+                {
+                }
             }
             """;
 
@@ -6805,7 +6810,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var attr = Assert.Single(references.Where(r => r.SymbolName == "Attr"));
-        var other = Assert.Single(references.Where(r => r.SymbolName == "Other"));
+        var other = Assert.Single(references.Where(r => r.SymbolName == "MultiLine"));
         Assert.Equal("attribute", attr.ReferenceKind);
         Assert.Equal("attribute", other.ReferenceKind);
     }
@@ -6828,32 +6833,6 @@ public partial class ReferenceExtractorTests
 
         var foo = Assert.Single(references.Where(r => r.SymbolName == "Foo"));
         Assert.Equal("attribute", foo.ReferenceKind);
-    }
-
-    [Fact]
-    public void Extract_CsharpMultiLineParameterAttribute_ClassifiedAsAttribute()
-    {
-        // Parameter attribute split across lines — `(` ends one line, `[Attr]` sits on the
-        // next, and the declaration continues after. Cross-line lookahead must still find
-        // the identifier after the matching `]`.
-        // 改行を挟んだパラメータ属性でも、跨行 lookahead で `]` の直後に続く識別子まで到達し、
-        // 属性として判定できること。
-        const string content = """
-            public class C
-            {
-                public void M(
-                    [Attr("x")]
-                    int a)
-                {
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var attr = Assert.Single(references.Where(r => r.SymbolName == "Attr"));
-        Assert.Equal("attribute", attr.ReferenceKind);
     }
 
     [Fact]
