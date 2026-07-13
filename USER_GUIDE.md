@@ -277,7 +277,7 @@ sections below show examples and option details for the most common workflows.
 | Graph | `references` | Find indexed references for a symbol name | `references` |
 | Graph | `callers` | Find callers of a symbol in graph-supported languages | `callers` |
 | Graph | `callees` | Find callees used by a caller symbol | `callees` |
-| Graph | `deps` | Show file-level dependency edges ranked by noise-adjusted `ranking_score` while preserving raw `reference_count` | `deps` |
+| Graph | `deps` | Show file-level dependency edges ranked by noise-adjusted `ranking_score`. C# applies the limit-scaled candidate window before target matching, so `reference_count` is candidate-scoped when that window truncates source/name groups. | `deps` |
 | Analysis | `impact` | Traverse transitive callers from a resolved symbol | `impact_analysis` |
 | Analysis | `unused` | Find symbols defined but not referenced, with confidence buckets | `unused_symbols` |
 | Analysis | `hotspots` | Rank high-impact symbols/files by reference volume; SQL scopes can use statement grouping | `symbol_hotspots` |
@@ -3090,7 +3090,7 @@ cdidx index . --quiet
 | Graph | `references` | symbol name の indexed references を検索 | `references` |
 | Graph | `callers` | graph-supported language で symbol の callers を検索 | `callers` |
 | Graph | `callees` | caller symbol が使う callees を検索 | `callees` |
-| Graph | `deps` | 生の `reference_count` を残しつつ noise-adjusted な `ranking_score` で並べた file-level dependency edges を表示 | `deps` |
+| Graph | `deps` | noise-adjusted な `ranking_score` で並べた file-level dependency edges を表示。C# は limit 連動の候補窓を target 照合前に適用するため、source/name group が窓で切り詰められた場合の `reference_count` は候補範囲内の値になります。 | `deps` |
 | Analysis | `impact` | 解決した symbol から transitive callers を探索 | `impact_analysis` |
 | Analysis | `unused` | 参照されていない可能性がある symbols を confidence bucket 付きで表示 | `unused_symbols` |
 | Analysis | `hotspots` | reference volume で high-impact symbols/files を ranking。SQL scope は statement grouping も使用可 | `symbol_hotspots` |

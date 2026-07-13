@@ -154,6 +154,128 @@ public partial class DbReaderTests
     }
 
     [Fact]
+    public void GetFileDependencies_CSharpLimitBoundsSourceNameCandidates_Issue4455()
+    {
+        var sourceFileId = InsertSyntheticDependencyFile("src/BoundedCaller.cs");
+        var targetFileId = InsertSyntheticDependencyFile("src/BoundedTarget.cs");
+        var symbolNames = Enumerable.Range(0, 201).Select(index => $"BoundedTarget{index:D3}").ToArray();
+
+        _writer.InsertSymbols(symbolNames.Select((name, index) => new SymbolRecord
+        {
+            FileId = targetFileId,
+            Kind = "class",
+            Name = name,
+            Line = index + 1,
+            StartLine = index + 1,
+            EndLine = index + 1,
+        }).ToArray());
+        _writer.InsertReferences(symbolNames.Select((name, index) => new ReferenceRecord
+        {
+            FileId = sourceFileId,
+            SymbolName = name,
+            ReferenceKind = "type_reference",
+            Line = index + 1,
+            Column = 1,
+            Context = name,
+        }).ToArray());
+
+        var dependency = Assert.Single(_reader.GetFileDependencies(limit: 1, lang: "csharp"));
+
+        Assert.Equal("src/BoundedTarget.cs", dependency.TargetPath);
+        Assert.Equal(DependencyNoiseProfile.GetRankingCandidateLimit(1), dependency.ReferenceCount);
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpLimitSkipsUnresolvedCandidates_Issue4455()
+    {
+        var sourceFileId = InsertSyntheticDependencyFile("src/ResolvedCandidateCaller.cs");
+        var targetFileId = InsertSyntheticDependencyFile("src/ResolvedCandidateTarget.cs");
+        var unresolvedNames = Enumerable.Range(0, 200).Select(index => $"ExternalType{index:D3}").ToArray();
+
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = targetFileId, Kind = "class", Name = "LocalDependency", Line = 1, StartLine = 1, EndLine = 1 },
+        ]);
+        _writer.InsertReferences([
+            .. unresolvedNames.Select((name, index) => new ReferenceRecord
+            {
+                FileId = sourceFileId,
+                SymbolName = name,
+                ReferenceKind = "type_reference",
+                Line = index + 1,
+                Column = 1,
+                Context = name,
+            }),
+            new ReferenceRecord
+            {
+                FileId = sourceFileId,
+                SymbolName = "LocalDependency",
+                ReferenceKind = "type_reference",
+                Line = unresolvedNames.Length + 1,
+                Column = 1,
+                Context = "LocalDependency",
+            },
+        ]);
+
+        var dependency = Assert.Single(_reader.GetFileDependencies(limit: 1, lang: "csharp"));
+
+        Assert.Equal("src/ResolvedCandidateTarget.cs", dependency.TargetPath);
+        Assert.Equal(1, dependency.ReferenceCount);
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpLimitSkipsOutOfScopeReverseTargets_Issue4455()
+    {
+        var sourceFileId = InsertSyntheticDependencyFile("src/ScopedCaller.cs");
+        var excludedTargetFileId = InsertSyntheticDependencyFile("src/excluded/ExcludedTargets.cs");
+        var includedTargetFileId = InsertSyntheticDependencyFile("src/included/IncludedTarget.cs");
+        var excludedNames = Enumerable.Range(0, 200).Select(index => $"ExcludedTarget{index:D3}").ToArray();
+
+        _writer.InsertSymbols([
+            .. excludedNames.Select((name, index) => new SymbolRecord
+            {
+                FileId = excludedTargetFileId,
+                Kind = "class",
+                Name = name,
+                Line = index + 1,
+                StartLine = index + 1,
+                EndLine = index + 1,
+            }),
+            new SymbolRecord { FileId = includedTargetFileId, Kind = "class", Name = "IncludedTarget", Line = 1, StartLine = 1, EndLine = 1 },
+        ]);
+        _writer.InsertReferences([
+            .. excludedNames.Select((name, index) => new ReferenceRecord
+            {
+                FileId = sourceFileId,
+                SymbolName = name,
+                ReferenceKind = "type_reference",
+                Line = index + 1,
+                Column = 1,
+                Context = name,
+            }),
+            new ReferenceRecord
+            {
+                FileId = sourceFileId,
+                SymbolName = "IncludedTarget",
+                ReferenceKind = "type_reference",
+                Line = excludedNames.Length + 1,
+                Column = 1,
+                Context = "IncludedTarget",
+            },
+        ]);
+
+        var dependency = Assert.Single(_reader.GetFileDependencies(
+            limit: 1,
+            lang: "csharp",
+            pathPatterns: ["src/included/*"],
+            excludePathPatterns: null,
+            excludeTests: false,
+            reverse: true));
+
+        Assert.Equal("src/included/IncludedTarget.cs", dependency.TargetPath);
+        Assert.Equal(1, dependency.ReferenceCount);
+    }
+
+    [Fact]
     public void GetFileDependencies_RanksNoiseAdjustedEdgesBeforeApplyingLimit_Issue4113()
     {
         var sourceFileId = InsertSyntheticDependencyFile("src/RankingCaller.cs");
