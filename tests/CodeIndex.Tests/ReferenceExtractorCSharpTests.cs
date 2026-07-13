@@ -7614,7 +7614,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedTypeDeclarations_DoNotCaptureNamespaceSegmentsAsCallReferences()
+    public void Extract_CsharpQualifiedTypes_ReuseDeclarationAndExpressionFixture()
     {
         const string content = """
             public class Consumer
@@ -7627,23 +7627,7 @@ public partial class ReferenceExtractorTests
                 {
                     return input;
                 }
-            }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "Text"
-            && reference.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedTypeExpressions_DoNotCaptureNamespaceSegmentsAsCallReferences()
-    {
-        const string content = """
-            public class Consumer
-            {
                 public object Convert(object value, List<System.Text.StringBuilder> builders)
                 {
                     var builder = (System.Text.StringBuilder)value;
