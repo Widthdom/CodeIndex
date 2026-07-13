@@ -2838,7 +2838,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedTernaryOrderByBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedCompoundOrderByExpressions_PreserveOnlyTrailingReferences()
     {
         const string content = """
             using System.Collections.Generic;
@@ -2858,46 +2858,15 @@ public partial class ReferenceExtractorTests
 
             public sealed class Uses
             {
-                public Demo.Status Read(IEnumerable<object> items, bool flag, int left, int right)
+                public Demo.Status ReadTernary(IEnumerable<object> items, bool flag, int left, int right)
                 {
                     return Sink.Pick(from Status in items
                                      orderby (flag ? left : right)
                                      select(Status.Ready),
                                      Demo.Status.Ready);
                 }
-            }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        var readyRef = Assert.Single(readyRefs);
-        Assert.Equal("Read", readyRef.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedCoalesceOrderByBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
-    {
-        const string content = """
-            using System.Collections.Generic;
-            using System.Linq;
-
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public static class Sink
-            {
-                public static Demo.Status Pick(object left, Demo.Status right) => right;
-            }
-
-            public sealed class Uses
-            {
-                public Demo.Status Read(IEnumerable<object> items, int? left, int right)
+                public Demo.Status ReadCoalesce(IEnumerable<object> items, int? left, int right)
                 {
                     return Sink.Pick(from Status in items
                                      orderby (left ?? right)
@@ -2910,9 +2879,13 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        var readyRef = Assert.Single(readyRefs);
-        Assert.Equal("Read", readyRef.ContainerName);
+        var readyRefs = references
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Select(reference => reference.ContainerName)
+            .OrderBy(name => name)
+            .ToArray();
+
+        Assert.Equal(["ReadCoalesce", "ReadTernary"], readyRefs);
     }
 
     [Fact]
