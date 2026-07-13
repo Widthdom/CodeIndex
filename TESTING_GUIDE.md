@@ -33,6 +33,7 @@ Use the full suite by default. Use targeted filters only while iterating locally
 - Primary-lane publish also uses `--no-build --no-restore`, reusing the production project output and dependency graph built through the Release test project.
 - Release cross-compile lanes skip the RID-agnostic solution build because they do not run tests and the self-contained RID publish necessarily performs the real build; native lanes retain the solution build before testing.
 - Release cross-compile lanes likewise use a locked production-project restore instead of restoring test and tool projects they never build; native test lanes retain the locked solution restore.
+- Release cross-compile lanes install only the repository-selected 9.0 SDK because they publish self-contained binaries and never execute the net8 test host; native lanes retain both pinned SDK lines.
 - Release workflow tests use `--no-build --no-restore` after the solution's locked restore and Release build so each runtime lane does not reevaluate dependencies.
 - Curated release-note generation caches the changelog tool lock file, performs one conditional locked restore, and runs the tool with `--no-restore`.
 - Keep package audit, primary-lane build/lint, coverage collection, coverage artifact upload, publish, and build artifact upload keyed to the matrix `primary_lane` value; define the lane set once with explicit matrix entries instead of recomputing or excluding combinations in later steps.
@@ -487,6 +488,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - primary-lane publish も `--no-build --no-restore` を使い、Release test project 経由で build 済みの production project output と dependency graph を再利用してください。
 - release の cross-compile lane は test を実行せず、self-contained RID publish が実 build を必ず行うため、RID 非依存の solution build を省略する。native lane は test 前の solution build を維持する。
 - release の cross-compile lane は build しない test / tool project を復元せず、production project だけを locked restore する。native test lane は locked solution restore を維持する。
+- release の cross-compile lane は self-contained binary を publish し、net8 test host を実行しないため、repository が選択する9.0 SDK だけを install する。native lane はpinされた両 SDK lineを維持する。
 - release workflow の test も solution の locked restore と Release build 後に `--no-build --no-restore` を使い、runtime lane ごとの dependency 再評価を避けてください。
 - curated release-note生成はchangelog toolのlock fileをcacheし、conditional locked restoreを1回行ってからtoolを`--no-restore`で実行してください。
 - package audit、primary-lane build/lint、coverage の収集、coverage artifact upload、publish、build artifact upload は matrix の `primary_lane` 値に揃えてください。lane の組み合わせは明示的な matrix entry で一度だけ定義し、後続 step で再計算したり exclude したりしません。

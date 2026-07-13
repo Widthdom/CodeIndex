@@ -27,6 +27,9 @@ public partial class ReleaseWorkflowTests
 
         AssertContainsAll(
             workflow,
+            "- name: Set up .NET SDKs\n        if: ${{ !matrix.cross_compile }}",
+            "- name: Set up cross-compile .NET SDK\n        if: matrix.cross_compile",
+            "dotnet-version: 9.0.301",
             "- name: Restore dependencies\n        if: ${{ !matrix.cross_compile }}\n        run: dotnet restore CodeIndex.sln --locked-mode",
             "- name: Restore publish dependencies\n        if: matrix.cross_compile\n        run: dotnet restore src/CodeIndex/CodeIndex.csproj --locked-mode",
             "- name: Build\n        if: ${{ !matrix.cross_compile }}\n        run: dotnet build CodeIndex.sln --configuration Release --no-restore",
