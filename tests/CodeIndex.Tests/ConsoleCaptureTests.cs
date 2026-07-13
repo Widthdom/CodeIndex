@@ -1,6 +1,5 @@
 namespace CodeIndex.Tests;
 
-[Collection("SQLite pool sensitive")]
 public class ConsoleCaptureTests
 {
     [Fact]
@@ -38,19 +37,22 @@ public class ConsoleCaptureTests
     [Fact]
     public void Dispose_DoesNotCloseCapturedWriters()
     {
-        var stdout = new StringWriter();
-        var stderr = new StringWriter();
-
-        using (var capture = ConsoleCapture.Start(stdout, stderr))
+        lock (TestConsoleLock.Gate)
         {
-            Console.Write("out");
-            Console.Error.Write("err");
+            var stdout = new StringWriter();
+            var stderr = new StringWriter();
+
+            using (var capture = ConsoleCapture.Start(stdout, stderr))
+            {
+                Console.Write("out");
+                Console.Error.Write("err");
+            }
+
+            stdout.Write(" after");
+            stderr.Write(" after");
+
+            Assert.Equal("out after", stdout.ToString());
+            Assert.Equal("err after", stderr.ToString());
         }
-
-        stdout.Write(" after");
-        stderr.Write(" after");
-
-        Assert.Equal("out after", stdout.ToString());
-        Assert.Equal("err after", stderr.ToString());
     }
 }
