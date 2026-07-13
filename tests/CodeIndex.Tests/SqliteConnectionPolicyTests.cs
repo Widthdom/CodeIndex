@@ -35,7 +35,7 @@ public class SqliteConnectionPolicyTests
     }
 
     [Fact]
-    public void BuildConnectionString_StabilizesModeAndPooling_Issue3983()
+    public void PolicyBuilders_StabilizeModesTimeoutsAndStatus_Issue3983()
     {
         const string dbPath = "fixture ; database.db";
 
@@ -61,23 +61,13 @@ public class SqliteConnectionPolicyTests
         Assert.Contains("immutable=1", immutable, StringComparison.Ordinal);
         Assert.Contains("mode=ro", immutable, StringComparison.Ordinal);
         Assert.Contains("Mode=ReadOnly", immutable, StringComparison.Ordinal);
-    }
 
-    [Fact]
-    public void CreateCommand_AppliesDefaultTimeout_Issue3983()
-    {
         using var connection = new SqliteConnection("Data Source=:memory:");
         connection.Open();
-
         using var command = SqliteConnectionPolicy.CreateCommand(connection, "SELECT 1");
-
         Assert.Equal("SELECT 1", command.CommandText);
         Assert.Equal(SqliteConnectionPolicy.DefaultCommandTimeoutSeconds, command.CommandTimeout);
-    }
 
-    [Fact]
-    public void BuildStatus_SurfacesFallbackAndTimeoutDiagnostics_Issue3983()
-    {
         var status = SqliteConnectionPolicy.BuildStatus(
             isReadOnly: true,
             readOnlyFallback: true,
