@@ -2481,7 +2481,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithThrowBeforeQueryKeywordNamedLocalFunctionInOrderBy_DoesNotLeakReference()
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithThrowBeforeQueryKeywordLocalFunctions_DoNotLeakReference()
     {
         const string content = """
             using System.Collections.Generic;
@@ -2501,44 +2501,15 @@ public partial class ReferenceExtractorTests
 
             public sealed class Uses
             {
-                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                public IEnumerable<int> ReadSelect(IEnumerable<Holder> items)
                 {
                     static System.Exception select(IEnumerable<Holder> xs) => new System.Exception(xs.Count().ToString());
                     return from Status in items
                            orderby items.Count() > 0 ? throw select(items) : 0, items.Count()
                            select Status.Ready;
                 }
-            }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithThrowBeforeGroupNamedLocalFunctionInOrderBy_DoesNotLeakReference()
-    {
-        const string content = """
-            using System.Collections.Generic;
-            using System.Linq;
-
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                public IEnumerable<int> ReadGroup(IEnumerable<Holder> items)
                 {
                     static System.Exception group(IEnumerable<Holder> xs) => new System.Exception(xs.Count().ToString());
                     return from Status in items
