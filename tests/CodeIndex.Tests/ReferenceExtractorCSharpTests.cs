@@ -7550,7 +7550,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpUsingStatementStaticMemberAccess_CapturesClassQualifierReference()
+    public void Extract_CsharpStaticQualifierContexts_ReuseUsingAndFieldFixture()
     {
         const string content = """
             public class Consumer
@@ -7562,6 +7562,8 @@ public partial class ReferenceExtractorTests
                     {
                     }
                 }
+
+                public int Read() => Options.DefaultTimeout;
             }
             """;
 
@@ -7572,29 +7574,8 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "FileFactory"
             && reference.ReferenceKind == "type_reference"
             && reference.ContainerName == "Run");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "ResourceFactory"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "Run");
-    }
-
-    [Fact]
-    public void Extract_CsharpStaticFieldAccess_CapturesClassQualifierReference()
-    {
-        const string content = """
-            public class Consumer
-            {
-                public int Read() => Options.DefaultTimeout;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Options"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "Read");
+        AssertReferenceContains(references, "ResourceFactory", "type_reference", containerName: "Run");
+        AssertReferenceContains(references, "Options", "type_reference", containerName: "Read");
     }
 
     [Fact]
