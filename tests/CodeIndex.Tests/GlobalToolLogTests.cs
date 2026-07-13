@@ -294,8 +294,7 @@ public class GlobalToolLogTests
         finally
         {
             TestProjectHelper.DeleteDirectory(logRoot);
-            if (File.Exists(capturedLogPath))
-                File.Delete(capturedLogPath);
+            TestProjectHelper.DeleteFile(capturedLogPath);
         }
     }
 

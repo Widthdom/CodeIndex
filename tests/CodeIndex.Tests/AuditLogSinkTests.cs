@@ -596,8 +596,7 @@ public class AuditLogSinkTests
         }
         finally
         {
-            if (File.Exists(path))
-                File.Delete(path);
+            TestProjectHelper.DeleteFile(path);
         }
     }
 
@@ -781,8 +780,7 @@ public class AuditLogSinkTests
             // surrounding MCP tool call.
             // ターゲットパスをディレクトリに差し替え、Append 用 FileStream を失敗させる。
             // 構築後に書き込み不能になったケースを擬似し、Record が握り潰すことを確認する。
-            if (File.Exists(path))
-                File.Delete(path);
+            TestProjectHelper.DeleteFile(path);
             Directory.CreateDirectory(path);
             try
             {
@@ -815,8 +813,7 @@ public class AuditLogSinkTests
         }
         finally
         {
-            if (File.Exists(path))
-                File.Delete(path);
+            TestProjectHelper.DeleteFile(path);
         }
     }
 
@@ -840,8 +837,7 @@ public class AuditLogSinkTests
         }
         finally
         {
-            if (File.Exists(path))
-                File.Delete(path);
+            TestProjectHelper.DeleteFile(path);
         }
     }
 
