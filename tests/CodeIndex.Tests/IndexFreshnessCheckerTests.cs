@@ -4,7 +4,6 @@ using CodeIndex.Indexer;
 
 namespace CodeIndex.Tests;
 
-[Collection("SQLite pool sensitive")]
 public class IndexFreshnessCheckerTests
 {
     [Fact]
@@ -40,7 +39,11 @@ public class IndexFreshnessCheckerTests
 
         Assert.Equal("src/Broken.cs: probe-failed", sample);
     }
+}
 
+[Collection("SQLite pool sensitive")]
+public class IndexFreshnessProbeOverrideTests
+{
     [Fact]
     public void Check_StampedPathCaseSensitivityAvoidsFilesystemWriteProbe_Issue3828()
     {
