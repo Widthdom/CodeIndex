@@ -20,7 +20,8 @@ internal static class WorkspaceCommandRunner
             "status" => List(json, jsonOptions, includeActiveWorkspaceStatus: true),
             "current" => Current(json, jsonOptions),
             "use" => Use(args[1..], json, jsonOptions),
-            _ => CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "Unknown workspace command.", CommandExitCodes.UsageError, "use `cdidx workspace list`, `cdidx workspace use <name>`, or `cdidx workspace current`.")
+            "clear" or "deactivate" => Clear(args[1..], json, jsonOptions),
+            _ => CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "Unknown workspace command.", CommandExitCodes.UsageError, "use `cdidx workspace list`, `cdidx workspace use <name>`, `cdidx workspace current`, or `cdidx workspace clear`.")
         };
     }
 
@@ -99,6 +100,42 @@ internal static class WorkspaceCommandRunner
             Console.WriteLine("No active workspace set.");
         else
             Console.WriteLine($"{state.Name}: {state.Root} -> {state.DbPath}");
+        return CommandExitCodes.Success;
+    }
+
+    private static int Clear(string[] args, bool json, JsonSerializerOptions jsonOptions)
+    {
+        if (args.Length != 0)
+            return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "workspace clear does not accept arguments.", CommandExitCodes.UsageError, "run `cdidx workspace clear` without a workspace name.");
+
+        if (!string.IsNullOrWhiteSpace(CdidxEnvironment.GetProcessEnvironmentVariable(ActiveWorkspace.EnvironmentVariable)))
+        {
+            return CommandErrorWriter.WriteJsonOrHuman(
+                json,
+                jsonOptions,
+                $"active workspace is set by {ActiveWorkspace.EnvironmentVariable}.",
+                CommandExitCodes.UsageError,
+                $"unset {ActiveWorkspace.EnvironmentVariable} before running `cdidx workspace clear`; environment configuration takes precedence over persisted state.");
+        }
+
+        try
+        {
+            ActiveWorkspace.Clear();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return CommandErrorWriter.WriteJsonOrHuman(
+                json,
+                jsonOptions,
+                $"failed to clear active workspace: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}",
+                CommandExitCodes.UsageError,
+                "verify that the per-user cdidx configuration directory is writable and try again.");
+        }
+
+        if (json)
+            Console.WriteLine(JsonSerializer.Serialize(ActiveWorkspaceJsonResult.From(state: null, path: null), jsonOptions));
+        else
+            Console.WriteLine("Active workspace cleared.");
         return CommandExitCodes.Success;
     }
 

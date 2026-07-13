@@ -100,7 +100,7 @@ public static class ConsoleUi
         ("inspect", "cdidx inspect --path <file> --line <line> [--end-line <line>] [--db <path>] [--json] [--format <text|json|compact>] [--pretty] [--compact] [--fields <csv>] [--outline-only] [--body-only] [--max-json-bytes <n>] [--body] [--body-start <line>] [--body-lines <n>|--body-line-count <n>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>]"),
         ("outline", "cdidx outline <path> [--db <path>] [--json] [--pretty] [--compact] [--verbose] [--limit <n>|--top <n>] [--cursor <outline:offset>] [--sort <source|kind|references|size|complexity|path|name>] [--kind <kind[,kind]>] [--outline-fields <csv>]"),
         ("status", "cdidx status [--db <path>] [--json] [--verbose] [--check[=workspace,fold,graph,issues,hotspot,csharp,sql,newer]] [--stale-after <duration>] [--explain <field>] [--log-path] [--config] [--check-updates]"),
-        ("workspace", "cdidx workspace <list|status|use|current> [name] [--json]"),
+        ("workspace", "cdidx workspace <list|status|use|current|clear|deactivate> [name] [--json]"),
         ("config", "cdidx config show [--json] [--show-paths]"),
         ("validate-config", "cdidx validate-config [--json]"),
         ("doctor", "cdidx doctor [--json] [--redact-paths|--show-paths] [--env-inventory[=compact|full]]"),

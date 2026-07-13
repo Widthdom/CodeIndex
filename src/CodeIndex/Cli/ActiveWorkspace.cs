@@ -78,6 +78,19 @@ internal static class ActiveWorkspace
         DataDirectorySecurity.WritePrivateText(statePath, JsonSerializer.Serialize(payload, ProgramRunner.CreateDefaultJsonOptions()));
     }
 
+    internal static bool Clear()
+    {
+        if (!TryGetStatePath(out var statePath, out var statePathReason))
+            throw new InvalidOperationException($"Active workspace state path is invalid: {statePathReason}.");
+
+        var ioPath = LongPath.EnsureWindowsPrefix(statePath);
+        if (!File.Exists(ioPath))
+            return false;
+
+        AtomicFileWriter.DeleteFileIfExists(statePath);
+        return true;
+    }
+
     private static string? ReadString(JsonElement element, string name)
         => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
