@@ -1,7 +1,6 @@
 namespace CodeIndex.Tests;
 
-[Collection("SQLite pool sensitive")]
-public sealed class SqlitePoolSensitiveCollectionTests
+public sealed class SqlitePoolSensitiveCollectionContractTests
 {
     [Fact]
     public void Collection_RegistersPoolCleanupFixture()
@@ -12,7 +11,11 @@ public sealed class SqlitePoolSensitiveCollectionTests
                 type.GetGenericTypeDefinition() == typeof(ICollectionFixture<>) &&
                 type.GetGenericArguments()[0] == typeof(SqlitePoolSensitiveFixture));
     }
+}
 
+[Collection("SQLite pool sensitive")]
+public sealed class SqlitePoolSensitiveCollectionTests
+{
     [Fact]
     public async Task Fixture_ClearsPoolsOnInitializeAndDispose()
     {
