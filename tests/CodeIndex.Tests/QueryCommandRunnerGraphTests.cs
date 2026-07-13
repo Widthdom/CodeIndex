@@ -24,6 +24,20 @@ public partial class QueryCommandRunnerTests
         Assert.DoesNotContain(value, stderr);
     }
 
+    [Theory]
+    [InlineData("text")]
+    [InlineData("json")]
+    public void RunDeps_UndocumentedFormatAliasesAreRejected_Issue4474(string format)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--format", format],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("deps --format must be one of edgelist, dot, graphml, or json-graph", stderr);
+    }
+
     [Fact]
     public void GraphOutputHelp_IncludesBoundedJsonControls_Issue4112()
     {

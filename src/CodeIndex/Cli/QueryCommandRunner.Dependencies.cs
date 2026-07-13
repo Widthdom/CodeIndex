@@ -862,8 +862,6 @@ public static partial class QueryCommandRunner
         error = null;
         switch (format)
         {
-            case OutputFormatText:
-            case OutputFormatJson:
             case OutputFormatEdgeList:
                 format = OutputFormatEdgeList;
                 return true;

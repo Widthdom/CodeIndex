@@ -85,6 +85,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Definition and symbols exact-mode conflict validation share one empty database and a cross-command flag-pair table.
   Symbols compact flag/alias and summary-only JSON envelopes share one editor-format fixture.
   Symbols JSON array, LSP, quickfix, and SARIF location formats share one editor-format fixture; definition SARIF severity coverage reuses that fixture and asserts informational `note` output separately from warning-level diagnostic output.
+  Command-specific output format coverage uses a command/format matrix that checks both parser acceptance and the matching usage line; recognized shared formats without a command implementation need a separate usage-error assertion.
   Unused default-suppression row, JSON count, summary-only, and text count envelopes, including the `--all` count control, share one unused-symbol fixture.
   Unused default-suppressed and `--all` JSON cursor pagination share one unused-symbol fixture.
   Unused full and compact `--by-bucket` JSON envelopes share one taxonomy fixture.
@@ -502,6 +503,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   definition と symbols の exact-mode conflict validation は1つの空databaseとcross-command flag-pair tableを共有してください。
   symbols compact flag/aliasとsummary-only JSON envelopeは1つのeditor-format fixtureを共有してください。
   symbols JSON array、LSP、quickfix、SARIF location format は1つの editor-format fixture を共有し、definition SARIF severity のテストも同じ fixture を再利用して、情報レベルの `note` 出力を warning レベルの診断出力とは分けて検証してください。
+  コマンド別の出力形式 coverage は command / format matrix で parser の受理と対応する usage line の両方を検証してください。共通 parser が認識してもコマンド側に実装がない形式には、別途 usage error の assertion が必要です。
   unused default-suppressionのrow、JSON count、summary-only、text count envelopeは、`--all` count controlも含めて1つのunused-symbol fixtureを共有してください。
   unusedのdefault-suppressed JSON cursor paginationと`--all` JSON cursor paginationは1つのunused-symbol fixtureを共有してください。
   unusedのfull JSONとcompact `--by-bucket` JSON envelopeは1つのtaxonomy fixtureを共有してください。

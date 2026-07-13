@@ -2185,6 +2185,21 @@ AI agents that query the database directly via SQL need the `sqlite3` CLI.
 | Compact location envelope | `--format compact` location output is a versioned object with `api_version`, `format`, `count`, `truncated`, `truncation`, `query_context`, and `results`. Ad hoc search rows contain only `file` and `line`; snippets, highlights, facets, and ranking metadata remain available through the normal JSON formats. |
 | `find --count --json` | `files` is the canonical matched-file count. The older `file_count` field remains a deprecated compatibility alias with the same value for the current major release and is not scheduled for removal before the next major release. New consumers should read `files`. |
 
+Command-specific `--format` values:
+
+| Commands | Supported values |
+|---|---|
+| `search` | `text`, `json`, `count`, `compact`, `grouped`, `csv`, `tsv`, `lsp`, `qf`, `sarif`, `issue-drafts`. Recipe and recipe-list modes have narrower sets shown by their usage lines. |
+| `definition`, `references`, `callers`, `callees`, `find`, `validate` | `text`, `json`, `count`, `compact`, `csv`, `tsv`, `lsp`, `qf`, `sarif` |
+| `symbols` | `text`, `json`, `count`, `compact`, `lsp`, `qf`, `sarif` |
+| `files` | `text`, `json`, `count`, `compact` |
+| `inspect` | `text`, `json`, `compact` |
+
+The parser recognizes a shared format vocabulary, but each command accepts only
+the values in its own usage line. A recognized value without a deliberate
+command-specific implementation is rejected with a usage error instead of
+silently falling back to another representation.
+
 `map` entrypoint fields:
 
 | Field or threshold | Meaning |
@@ -4977,6 +4992,20 @@ AIエージェントがDBを直接SQL検索する場合、`sqlite3` CLIが必要
 | JSON size field | JSON output（`--json`）では、機械処理向けに size field を常に raw integer bytes のまま返します。 |
 | compact location envelope | `--format compact` の location output は `api_version`、`format`、`count`、`truncated`、`truncation`、`query_context`、`results` を持つ versioned object です。ad hoc search row は `file` と `line` だけを含み、snippet、highlight、facet、ranking metadata が必要な場合は通常の JSON format を使ってください。 |
 | `find --count --json` | `files` が一致 file 数の正規 field です。古い `file_count` field は現在の major release 中、同じ値を返す非推奨の互換 alias として残り、次の major release より前に削除される予定はありません。新しい consumer は `files` を読んでください。 |
+
+コマンド別の `--format` 対応値:
+
+| コマンド | 対応値 |
+|---|---|
+| `search` | `text`、`json`、`count`、`compact`、`grouped`、`csv`、`tsv`、`lsp`、`qf`、`sarif`、`issue-drafts`。recipe / recipe list mode は usage line に示す、より限定された形式に対応します。 |
+| `definition`、`references`、`callers`、`callees`、`find`、`validate` | `text`、`json`、`count`、`compact`、`csv`、`tsv`、`lsp`、`qf`、`sarif` |
+| `symbols` | `text`、`json`、`count`、`compact`、`lsp`、`qf`、`sarif` |
+| `files` | `text`、`json`、`count`、`compact` |
+| `inspect` | `text`、`json`、`compact` |
+
+parser は共通の format 語彙を認識しますが、各コマンドが受け付けるのは
+そのコマンドの usage line に記載された値だけです。コマンド固有の実装がない
+認識済みの値は、別の表現へ暗黙に fallback せず usage error として拒否されます。
 
 `map` entrypoint 候補の field:
 

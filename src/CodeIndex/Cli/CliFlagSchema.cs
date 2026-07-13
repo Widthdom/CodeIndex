@@ -230,7 +230,7 @@ internal static class CliFlagSchema
             new() { Name = "--json", Description = "JSON output; search/files/validate also accept --json=array for a single JSON array", Commands = Set(JsonCommands) },
             new() { Name = "--pretty", Description = "Pretty-print JSON output with indentation", Commands = Set(JsonCommands), TopLevel = true },
             new() { Name = "--compact", Description = "AI-oriented compact JSON with capped list sections and truncation metadata", Commands = Set(CompactJsonCommands) },
-            new() { Name = "--format", ValuePlaceholder = "<text|json|count|compact|csv|tsv|lsp|qf|sarif|markdown|issue-drafts>", Description = "Standard output format for token budgets, editor integrations, and CI; supported values vary by command, and search recipes/map/suggestions export also accept issue-drafts", Commands = Set(FormatCommands) },
+            new() { Name = "--format", ValuePlaceholder = "<text|json|count|compact|grouped|csv|tsv|lsp|qf|sarif|dot|graphml|json-graph|edgelist|markdown|issue-drafts>", Description = "Standard output format for token budgets, editor integrations, and CI; supported values vary by command, and search recipes/map/suggestions export also accept issue-drafts", Commands = Set(FormatCommands) },
             new() { Name = "--quiet", ShortName = "-q", Description = "Suppress informational stderr output; errors still print", Commands = Set(AllCommands.ToArray()), TopLevel = true },
             new() { Name = "--silent", Description = "Alias for --quiet", Commands = Set(AllCommands.ToArray()), TopLevel = true },
             new() { Name = "--color", ValuePlaceholder = "<auto|always|never>", Description = "Color output mode", Commands = Set(), TopLevel = true },

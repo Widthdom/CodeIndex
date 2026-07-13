@@ -162,6 +162,24 @@ public partial class QueryCommandRunnerTests
         Assert.Null(options.ParseError);
     }
 
+    [Theory]
+    [InlineData("files", "sarif")]
+    [InlineData("inspect", "csv")]
+    public void RunDiscoveryCommand_RejectsUndocumentedParserFormat_Issue4474(string command, string format)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
+        {
+            "files" => QueryCommandRunner.RunFiles(["--format", format], _jsonOptions),
+            "inspect" => QueryCommandRunner.RunInspect(["Target", "--format", format], _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        });
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains($"--format {format} is not supported by {command}.", stderr);
+        Assert.Contains($"Usage: cdidx {command}", stderr);
+    }
+
 
 
     [Fact]
