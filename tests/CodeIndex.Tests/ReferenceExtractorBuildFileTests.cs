@@ -207,7 +207,7 @@ public partial class ReferenceExtractorTests
             }
             """;
 
-        ReferenceExtractionCase.Extract("json", content)
+        var scenario = ReferenceExtractionCase.Extract("json", content)
             .ShouldHaveCount(5)
             .ShouldContain("project_reference", ".agent_harness/command_guard_core.py", line: 2)
             .ShouldContain("project_reference", ".codex/hooks/bash_guard.py", line: 3)
@@ -217,6 +217,14 @@ public partial class ReferenceExtractorTests
             .ShouldNotContainSymbol("example.com/not-local.py")
             .ShouldNotContainSymbol("../outside.py")
             .ShouldNotContainSymbol("ignored.txt");
+
+        var lines = content.Split('\n');
+        Assert.Equal(
+            lines[2].IndexOf(".codex/hooks/bash_guard.py", StringComparison.Ordinal) + 1,
+            scenario.Single("project_reference", ".codex/hooks/bash_guard.py").Column);
+        Assert.Equal(
+            lines[4].IndexOf("tools", StringComparison.Ordinal) + 1,
+            scenario.Single("project_reference", "tools/runner.ps1").Column);
         Assert.True(ReferenceExtractor.SupportsLanguage("json"));
     }
 

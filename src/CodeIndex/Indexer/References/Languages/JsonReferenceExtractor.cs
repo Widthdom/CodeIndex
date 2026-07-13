@@ -68,7 +68,9 @@ internal static class JsonReferenceExtractor
                         seen,
                         fileId,
                         normalizedPath,
-                        tokenColumn + 1 + match.Groups["path"].Index,
+                        tokenColumn + 1 + MapDecodedIndexToSourceCharacterOffset(
+                            reader.ValueSpan,
+                            match.Groups["path"].Index),
                         "project_reference",
                         lines[lineIndex],
                         lineIndex + 1,
@@ -86,6 +88,42 @@ internal static class JsonReferenceExtractor
 
         return references;
     }
+
+    private static int MapDecodedIndexToSourceCharacterOffset(ReadOnlySpan<byte> rawValue, int decodedIndex)
+    {
+        var rawByteIndex = 0;
+        var sourceCharacterOffset = 0;
+        var decodedCharacterOffset = 0;
+        while (rawByteIndex < rawValue.Length && decodedCharacterOffset < decodedIndex)
+        {
+            if (rawValue[rawByteIndex] == (byte)'\\')
+            {
+                var escapedCharacterCount = rawByteIndex + 1 < rawValue.Length && rawValue[rawByteIndex + 1] == (byte)'u'
+                    ? 6
+                    : 2;
+                rawByteIndex += escapedCharacterCount;
+                sourceCharacterOffset += escapedCharacterCount;
+                decodedCharacterOffset++;
+                continue;
+            }
+
+            var utf8SequenceLength = GetUtf8SequenceLength(rawValue[rawByteIndex]);
+            var utf16CharacterCount = Encoding.UTF8.GetCharCount(rawValue.Slice(rawByteIndex, utf8SequenceLength));
+            rawByteIndex += utf8SequenceLength;
+            sourceCharacterOffset += utf16CharacterCount;
+            decodedCharacterOffset += utf16CharacterCount;
+        }
+
+        return sourceCharacterOffset;
+    }
+
+    private static int GetUtf8SequenceLength(byte leadingByte) => leadingByte switch
+    {
+        < 0x80 => 1,
+        < 0xE0 => 2,
+        < 0xF0 => 3,
+        _ => 4,
+    };
 
     private static bool IsSafeRepositoryLocalPath(string path)
     {
