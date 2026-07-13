@@ -3,7 +3,6 @@ using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
-[Collection("SQLite pool sensitive")]
 public class SqliteConnectionPolicyTests
 {
     [Theory]
