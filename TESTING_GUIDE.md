@@ -304,6 +304,7 @@ Use the inventory below before adding or moving a test class:
 - Temporary repositories and files: create them through `TestProjectHelper` when practical, and do not depend on user-level git config.
 - MCP unit fixtures that instantiate a real server should place its database inside a scoped temporary project and delete the project after server disposal instead of leaving a standalone database in the system temp directory.
 - MCP audit fixtures should co-locate the database, active log, and rotated logs under one temporary project so one resilient directory cleanup replaces per-file cleanup lists.
+- DB lifecycle fixture disposal should call the resilient shared file helper directly after releasing contexts and exclusive pool ownership; do not wrap it in a second catch-all that hides exhausted cleanup retries.
 - Long-running or performance-oriented tests: keep them skipped by default or give them broad deterministic budgets; if CI reports them in xUnit long-running diagnostics, first check runner load before tightening thresholds.
 - When a response-size algorithm needs a large production ceiling, prefer a narrowly scoped test-only budget override and a small representative payload; restore process-global overrides in `finally` and keep the suite non-parallel.
 - Pagination and suppression fixtures should cross the fetched-window boundary with the fewest additional records needed to distinguish full totals from the returned page.
@@ -741,6 +742,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - 一時 repo / file: 可能な限り `TestProjectHelper` 経由で作り、user-level の git config に依存しない。
 - real server を生成する MCP unit fixture は、system temp directory に単独 DB を残さず、scoped temporary project 内へ DB を置き、server dispose 後に project を削除する。
 - MCP audit fixture は database、active log、rotated log を同じ temporary project 配下へ置き、file ごとの cleanup list を1回の resilient directory cleanup に置き換える。
+- DB lifecycle fixture の dispose は context と exclusive pool ownership を解放後、resilient shared file helper を直接呼ぶ。cleanup retry の枯渇を隠す二重の catch-all で包まない。
 - 長時間または performance 系テスト: デフォルト skip にするか、決定的で十分広い budget を与える。CI の xUnit long-running 診断に出た場合は、閾値を締める前に runner 負荷を確認する。
 
 ## 共通ヘルパー
