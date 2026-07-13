@@ -126,6 +126,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   C# query-range generic null-comparison regressions place equality and inequality forms in one indexed source when both assert the same absence of leaked enum references.
   C# query-range collision forms for basic selection, directional ordering, keyword-named members, and object initializers share one indexed source when they assert the same empty inspect reference bundle.
   C# inspect brace-range regressions place char-literal, raw-string, and verbatim-string forms in one indexed class and query each following method from that shared fixture.
+  C# generic query-range selectors share simple and tuple type arguments in one fixture, while generic type-pattern coverage shares designation and no-designation forms in another fixture.
   Apply the same combined null-comparison fixture to inspect reference-bundle coverage instead of indexing each operator separately.
   Production-runtime switch relational-pattern coverage places less-than and greater-than methods in one source and pays one CLI indexing subprocess.
   Generic switch-arm guard and relational predecessors likewise share one production-runtime fixture and run only on the production `net8.0` target.
@@ -593,6 +594,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   C# query-range generic null-comparison regression は、どちらもenum reference漏えいがない同じ契約ならequalityとinequality形式を1つのindexed sourceに併置してください。
   C# query-range collision の basic selection、directional ordering、keyword 名 member、object initializer は、同じ空の inspect reference bundle を検証する場合は1つの indexed source を共有してください。
   C# inspect の brace-range regression は char literal、raw string、verbatim string を1つの indexed class に併置し、それぞれの後続 method を共有 fixture から query してください。
+  C# generic query-range selector は単純型引数と tuple 型引数を1つの fixture で共有し、generic type-pattern coverage は designation 有無を別の1 fixture で共有してください。
   inspect reference-bundle coverageにも同じnull-comparison統合fixtureを適用し、operatorごとの個別indexingを避けてください。
   production-runtime switch relational-pattern coverage はless-thanとgreater-thanのmethodを1 sourceに置き、CLI indexing subprocessを1回だけ実行してください。
   generic switch-arm のguardとrelational predecessorも同様に1つのproduction-runtime fixtureを共有し、production `net8.0` targetだけで実行してください。

@@ -4599,7 +4599,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunInspect_ExactJson_CSharpQueryRangeVariableGenericSelectorDoesNotLeakEnumReferenceBundle()
+    public void RunInspect_ExactJson_CSharpQueryRangeVariableGenericSelectorsDoNotLeakEnumReferenceBundle()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_query_generic_selector");
         try
@@ -4625,14 +4625,21 @@ public partial class QueryCommandRunnerTests
                 public static class Sink
                 {
                     public static int Wrap<TLeft, TRight>(int value) => value;
+                    public static int Wrap<T>(int value) => value;
                 }
 
                 public sealed class Uses
                 {
-                    public IEnumerable<int> Read(IEnumerable<Holder> items)
+                    public IEnumerable<int> ReadSimple(IEnumerable<Holder> items)
                     {
                         return from Status in items
                                select Sink.Wrap<int, int>(Status.Ready);
+                    }
+
+                    public IEnumerable<int> ReadTuple(IEnumerable<Holder> items)
+                    {
+                        return from Status in items
+                               select Sink.Wrap<(int, List<int>)>(Status.Ready);
                     }
                 }
                 """);
@@ -4725,7 +4732,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunInspect_ExactJson_CSharpQueryRangeVariableGenericTypePatternDesignationDoesNotLeakEnumReferenceBundle()
+    public void RunInspect_ExactJson_CSharpQueryRangeVariableGenericTypePatternFormsDoNotLeakEnumReferenceBundle()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_query_generic_type_pattern_designation");
         try
@@ -4750,63 +4757,13 @@ public partial class QueryCommandRunnerTests
 
                 public sealed class Uses
                 {
-                    public int Read(IEnumerable<Holder> items)
+                    public int ReadWithDesignation(IEnumerable<Holder> items)
                     {
                         return (from Status in items
                                 select Status is Dictionary<int, int> dict ? Status.Ready : 0).First();
                     }
-                }
-                """);
-            MarkGraphAndFoldReady(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(2, json.GetProperty("definitions").GetArrayLength());
-            Assert.Empty(json.GetProperty("references").EnumerateArray());
-            Assert.True(json.GetProperty("graph_supported").GetBoolean());
-            Assert.False(json.TryGetProperty("graph_degraded", out _));
-            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunInspect_ExactJson_CSharpQueryRangeVariableGenericTypePatternWithoutDesignationDoesNotLeakEnumReferenceBundle()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_query_generic_type_pattern_without_designation");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
-                """
-                using System.Collections.Generic;
-                using System.Linq;
-
-                namespace Demo;
-
-                public enum Status
-                {
-                    Ready
-                }
-
-                public sealed class Holder
-                {
-                    public int Ready { get; set; }
-                }
-
-                public sealed class Uses
-                {
-                    public int Read(IEnumerable<Holder> items)
+                    public int ReadWithoutDesignation(IEnumerable<Holder> items)
                     {
                         return (from Status in items
                                 select Status is Dictionary<int, int> ? Status.Ready : 0).First();
@@ -4872,67 +4829,6 @@ public partial class QueryCommandRunnerTests
                     {
                         return (from Status in items
                                 select Status as Dictionary<int, int> == null ? Status.Ready : 0).First();
-                    }
-                }
-                """);
-            MarkGraphAndFoldReady(dbPath);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(2, json.GetProperty("definitions").GetArrayLength());
-            Assert.Empty(json.GetProperty("references").EnumerateArray());
-            Assert.True(json.GetProperty("graph_supported").GetBoolean());
-            Assert.False(json.TryGetProperty("graph_degraded", out _));
-            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunInspect_ExactJson_CSharpQueryRangeVariableTupleGenericSelectorDoesNotLeakEnumReferenceBundle()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_query_tuple_generic_selector");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
-                """
-                using System.Collections.Generic;
-                using System.Linq;
-
-                namespace Demo;
-
-                public enum Status
-                {
-                    Ready
-                }
-
-                public sealed class Holder
-                {
-                    public int Ready { get; set; }
-                }
-
-                public static class Sink
-                {
-                    public static int Wrap<T>(int value) => value;
-                }
-
-                public sealed class Uses
-                {
-                    public IEnumerable<int> Read(IEnumerable<Holder> items)
-                    {
-                        return from Status in items
-                               select Sink.Wrap<(int, List<int>)>(Status.Ready);
                     }
                 }
                 """);
