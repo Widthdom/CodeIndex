@@ -731,6 +731,31 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_CheckpointTraversalName_JsonUsesUsageErrorAndSyntaxHint_Issue4477()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_traversal_4477");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        try
+        {
+            File.WriteAllText(dbPath, "db");
+
+            var (exitCode, json) = RunAndCaptureJson(["checkpoint", "../escape", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("invalid checkpoint name", json.GetProperty("message").GetString(), StringComparison.Ordinal);
+            Assert.Equal(CommandErrorCodes.UsageError, json.GetProperty("error_code").GetString());
+            Assert.Contains("non-blank single file name", json.GetProperty("hint").GetString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("writable", json.GetProperty("hint").GetString(), StringComparison.OrdinalIgnoreCase);
+            Assert.False(Directory.Exists(dbPath + ".checkpoints"));
+        }
+        finally
+        {
+            DeleteWorkDirectory(root);
+        }
+    }
+
+    [Fact]
     public void Run_CheckpointRejectsOversizedNameBeforePathConstruction_Issue3124()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_name_cap");
@@ -742,7 +767,7 @@ public class DbCommandRunnerTests
 
             var (exitCode, _, stderr) = RunAndCaptureStreams(["checkpoint", name, "--db", dbPath]);
 
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Contains($"checkpoint name is too long ({name.Length} characters; max {DbCommandRunner.MaxCheckpointNameLength})", stderr);
             Assert.Contains("truncated; original length", stderr);
             Assert.DoesNotContain(name, stderr);

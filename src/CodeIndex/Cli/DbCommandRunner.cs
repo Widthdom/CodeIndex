@@ -487,17 +487,20 @@ public static class DbCommandRunner
         }
         catch (Exception ex)
         {
-            var safeMessage = ex is ArgumentException
+            var isInputError = ex is ArgumentException;
+            var safeMessage = isInputError
                 ? CommandErrorWriter.FormatSanitizedExceptionMessage(ex)
                 : $"failed to create database checkpoint: {CommandErrorWriter.FormatSanitizedException(ex)}";
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
                 safeMessage,
-                CommandExitCodes.DatabaseError,
-                "Ensure the database and checkpoint directory are writable, then retry `cdidx db checkpoint`.",
-                CommandErrorCodes.DbError,
-                category: ex is ArgumentException ? null : DiagnosticRedactor.ClassifyException(ex));
+                isInputError ? CommandExitCodes.UsageError : CommandExitCodes.DatabaseError,
+                isInputError
+                    ? $"Use a non-blank single file name of at most {MaxCheckpointNameLength} characters; do not use `.` or `..`, directory separators, or characters invalid in file names on this operating system."
+                    : "Ensure the database and checkpoint directory are writable, then retry `cdidx db checkpoint`.",
+                isInputError ? CommandErrorCodes.UsageError : CommandErrorCodes.DbError,
+                category: isInputError ? null : DiagnosticRedactor.ClassifyException(ex));
         }
     }
 
