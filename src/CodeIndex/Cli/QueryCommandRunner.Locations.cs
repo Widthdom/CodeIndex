@@ -113,7 +113,7 @@ public static partial class QueryCommandRunner
         }
         if (options.OutputFormat == OutputFormatCompact)
         {
-            WriteCompactLocations([], jsonOptions);
+            WriteCompactLocations([], options, jsonOptions);
             return true;
         }
         if (options.OutputFormat == OutputFormatCsv || options.OutputFormat == OutputFormatTsv)
@@ -147,7 +147,7 @@ public static partial class QueryCommandRunner
         }
         if (options.OutputFormat == OutputFormatCompact)
         {
-            WriteCompactLocations(locations, jsonOptions);
+            WriteCompactLocations(locations, options, jsonOptions);
             return true;
         }
         if (options.OutputFormat == OutputFormatCsv || options.OutputFormat == OutputFormatTsv)
@@ -165,25 +165,39 @@ public static partial class QueryCommandRunner
             ["total_estimated"] = count,
         }, jsonOptions);
 
-    private static void WriteCompactLocations(IEnumerable<FormattedLocation> locations, JsonSerializerOptions jsonOptions)
+    private static void WriteCompactLocations(IEnumerable<FormattedLocation> locations, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+        => CommandOutputWriter.WriteJsonNode(BuildCompactLocationsPayload(locations, options, jsonOptions), jsonOptions);
+
+    private static JsonObject BuildCompactLocationsPayload(IEnumerable<FormattedLocation> locations, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
     {
-        var itemOptions = GetCompactJsonOptions(jsonOptions);
-        WriteJsonArray(
-            locations,
-            (writer, location) =>
+        var rows = new JsonArray();
+        foreach (var location in locations)
+        {
+            var row = new JsonObject
             {
-                writer.Write("{\"file\":");
-                writer.Write(JsonSerializer.Serialize(location.File, itemOptions));
-                writer.Write(",\"line\":");
-                writer.Write(location.Line.ToString(CultureInfo.InvariantCulture));
-                if (location.Column.HasValue)
-                {
-                    writer.Write(",\"column\":");
-                    writer.Write(location.Column.Value.ToString(CultureInfo.InvariantCulture));
-                }
-                writer.Write('}');
+                ["file"] = location.File,
+                ["line"] = location.Line,
+            };
+            if (location.Column.HasValue)
+                row["column"] = location.Column.Value;
+            rows.Add(row);
+        }
+
+        var limitReached = rows.Count >= options.Limit;
+        return new JsonObject
+        {
+            ["api_version"] = JsonOutputContract.ApiVersion,
+            ["format"] = OutputFormatCompact,
+            ["count"] = rows.Count,
+            ["truncated"] = limitReached,
+            ["truncation"] = new JsonObject
+            {
+                ["limit"] = options.Limit,
+                ["limit_reached"] = limitReached,
             },
-            jsonOptions);
+            ["query_context"] = BuildQueryContextJson(options, jsonOptions),
+            ["results"] = rows,
+        };
     }
 
     private static void WriteDelimitedLocations(IEnumerable<FormattedLocation> locations, string outputFormat)
