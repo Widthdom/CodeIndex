@@ -5686,7 +5686,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpCtorChainThis_RewritesToEnclosingClass()
+    public void Extract_CsharpCtorChains_ReuseThisBaseAndCrossLineFixture()
     {
         const string content = """
             namespace Demo;
@@ -5696,30 +5696,10 @@ public partial class ReferenceExtractorTests
                 public A(int x) { }
                 public A() : this(0) { }
                 public A(string s) : this(s.Length) { }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var chainRefs = references.Where(r => r.SymbolName == "A").ToList();
-        Assert.Equal(2, chainRefs.Count);
-        Assert.All(chainRefs, r => Assert.Equal("call", r.ReferenceKind));
-        Assert.All(chainRefs, r => Assert.Equal("function", r.ContainerKind));
-        Assert.All(chainRefs, r => Assert.Equal("A", r.ContainerName));
-        Assert.DoesNotContain(references, r => r.SymbolName == "this");
-        Assert.DoesNotContain(references, r => r.SymbolName == "base");
-    }
-
-    [Fact]
-    public void Extract_CsharpCtorChainBase_RewritesToBaseType()
-    {
-        const string content = """
-            namespace Demo;
-
-            public class A
-            {
-                public A(int x) { }
+                public A(int x, int y)
+                    : this(x + y)
+                {
+                }
             }
 
             public class B : A
@@ -5732,37 +5712,14 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var chainRefs = references
-            .Where(r => r.SymbolName == "A" && r.ContainerName == "B")
-            .ToList();
-        Assert.Equal(2, chainRefs.Count);
-        Assert.All(chainRefs, r => Assert.Equal("call", r.ReferenceKind));
-        Assert.DoesNotContain(references, r => r.SymbolName == "base");
-    }
-
-    [Fact]
-    public void Extract_CsharpCtorChainCrossLine_AttributesToConstructor()
-    {
-        const string content = """
-            namespace Demo;
-
-            public class A
-            {
-                public A(int x) { }
-                public A(int x, int y)
-                    : this(x + y)
-                {
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var chainRef = Assert.Single(references, r => r.SymbolName == "A");
-        Assert.Equal("call", chainRef.ReferenceKind);
-        Assert.Equal("function", chainRef.ContainerKind);
-        Assert.Equal("A", chainRef.ContainerName);
+        var thisChains = references.Where(r => r.SymbolName == "A" && r.ContainerName == "A").ToList();
+        Assert.Equal(3, thisChains.Count);
+        Assert.All(thisChains, r => Assert.Equal("call", r.ReferenceKind));
+        Assert.All(thisChains, r => Assert.Equal("function", r.ContainerKind));
+        var baseChains = references.Where(r => r.SymbolName == "A" && r.ContainerName == "B").ToList();
+        Assert.Equal(2, baseChains.Count);
+        Assert.All(baseChains, r => Assert.Equal("call", r.ReferenceKind));
+        AssertReferencesDoNotContainAny(references, "this", "base");
     }
 
     [Fact]

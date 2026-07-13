@@ -247,6 +247,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Namespace-qualified and Pascal-cased instance-member chains share one qualifier fixture with a rightmost static type reference, so positive and negative qualifier outcomes are checked after one parse.
 - Qualified C# type declarations and cast/generic expressions share one fixture because both exclude namespace segments from call references.
 - C# doc-cref masking around delimited-comment markers shares one fixture across a raw string after comment close, raw-string content, and verbatim-string content.
+- C# constructor-chain coverage shares `this`, `base`, and cross-line initializers in one class hierarchy and distinguishes rewritten targets by constructor container.
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). Its publish smoke disables NuGet vulnerability auditing because package advisory validation is covered by the normal build/test workflow's package vulnerability check, not by this runtime serialization test. It is reported as skipped on macOS arm64 while SDK/ILLink can crash before exercising `cdidx` (#2586). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
@@ -760,6 +761,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - namespace qualifier と PascalCase の instance-member chain は rightmost static type reference と1つの qualifier fixture を共有し、1回の parse 後に正例と call 除外を検証します。
 - qualified C# type の declaration と cast/generic expression は、どちらも namespace segment を call reference から除外するため1つの fixture を共有します。
 - C# doc-cref masking の delimited-comment marker coverage は、comment close 後の raw string、raw-string content、verbatim-string content で1つの fixture を共有します。
+- C# constructor-chain coverage は `this`、`base`、cross-line initializer を1つの class hierarchy で共有し、書き換え後の target を constructor container で区別します。
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   は trimmed な RID 固有 CLI を publish し、SDK が生成した entry point（`dotnet` 経由の `cdidx.dll`、または native の `cdidx`/`cdidx.exe` apphost）を実行します。この publish smoke は NuGet 脆弱性監査を無効化します。package advisory の検証は通常の build/test workflow の package vulnerability check が担い、この runtime serialization テストの責務ではないためです。macOS arm64 では SDK/ILLink が `cdidx` に到達する前にクラッシュし得るため、このテストは skipped として報告されます（#2586）。self-contained publish output に常に `cdidx.dll` が出るとは仮定しないでください。
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
