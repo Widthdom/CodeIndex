@@ -25,18 +25,28 @@ public class CiWorkflowTests
             "include:\n" +
             "          - os: ubuntu-24.04\n" +
             "            test-framework: net8.0\n" +
+            "            sdk-versions: |\n" +
+            "              8.0.413\n" +
+            "              9.0.301\n" +
             "            primary_lane: true\n" +
             "          - os: ubuntu-24.04\n" +
             "            test-framework: net9.0\n" +
+            "            sdk-versions: 9.0.301\n" +
             "            primary_lane: false\n" +
             "          - os: windows-2022\n" +
             "            test-framework: net8.0\n" +
+            "            sdk-versions: |\n" +
+            "              8.0.413\n" +
+            "              9.0.301\n" +
             "            primary_lane: false\n" +
             "          - os: macos-14\n" +
             "            test-framework: net8.0\n" +
+            "            sdk-versions: |\n" +
+            "              8.0.413\n" +
+            "              9.0.301\n" +
             "            primary_lane: false",
-            "- name: Set up .NET SDKs\n        id: setup-dotnet\n        continue-on-error: true\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: |\n            8.0.413\n            9.0.301",
-            "- name: Retry .NET SDK setup\n        if: steps.setup-dotnet.outcome == 'failure'\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: |\n            8.0.413\n            9.0.301",
+            "- name: Set up .NET SDK\n        id: setup-dotnet\n        continue-on-error: true\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: ${{ matrix.sdk-versions }}",
+            "- name: Retry .NET SDK setup\n        if: steps.setup-dotnet.outcome == 'failure'\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: ${{ matrix.sdk-versions }}",
             "- name: Restore dependencies\n        if: matrix.primary_lane\n        run: dotnet restore CodeIndex.sln --locked-mode",
             "- name: Restore test dependencies\n        if: ${{ !matrix.primary_lane }}\n        run: dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=${{ matrix.test-framework }} --locked-mode");
         AssertDoesNotContainAny(
@@ -231,7 +241,7 @@ public class CiWorkflowTests
         Assert.Equal(2, continueOnErrorBlocks.Length);
         var sdkSetupBlock = Assert.Single(
             continueOnErrorBlocks,
-            block => block.Text.Contains("- name: Set up .NET SDKs", StringComparison.Ordinal));
+            block => block.Text.Contains("- name: Set up .NET SDK", StringComparison.Ordinal));
         Assert.Equal("dotnet.yml", sdkSetupBlock.FileName);
         AssertContainsAll(
             sdkSetupBlock.Text,
@@ -318,7 +328,6 @@ public class CiWorkflowTests
         {
             "changelog-fragments.yml",
             "codeql.yml",
-            "dotnet.yml",
             "mutation-testing.yml",
             "release.yml",
         })
@@ -327,6 +336,14 @@ public class CiWorkflowTests
             AssertContainsAll(workflow, "8.0.413", "9.0.301");
             AssertDoesNotContainAny(workflow, "8.0.x", "9.0.x");
         }
+
+        var dotnetWorkflow = RepositoryTestPaths.ReadWorkflow("dotnet.yml");
+        AssertContainsAll(
+            dotnetWorkflow,
+            "test-framework: net8.0\n            sdk-versions: |\n              8.0.413\n              9.0.301",
+            "test-framework: net9.0\n            sdk-versions: 9.0.301",
+            "dotnet-version: ${{ matrix.sdk-versions }}");
+        Assert.Equal(2, CountOccurrences(dotnetWorkflow, "dotnet-version: ${{ matrix.sdk-versions }}"));
 
         var mutationWorkflow = RepositoryTestPaths.ReadWorkflow("mutation-testing.yml");
         AssertContainsAll(
