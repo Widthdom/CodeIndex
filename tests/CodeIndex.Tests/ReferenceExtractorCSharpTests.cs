@@ -3374,7 +3374,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithTerminalSelectGenericTypeArgumentComma_DoesNotLeakReference()
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithTerminalSelectGenericArguments_DoNotLeakReference()
     {
         const string content = """
             using System.Collections.Generic;
@@ -3395,54 +3395,27 @@ public partial class ReferenceExtractorTests
             public static class Sink
             {
                 public static int Wrap<TLeft, TRight>(int value) => value;
-            }
-
-            public sealed class Uses
-            {
-                public IEnumerable<int> Read(IEnumerable<Holder> items)
-                {
-                    return from Status in items
-                           select Sink.Wrap<int, int>(Status.Ready);
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithTerminalSelectSingleGenericArgument_DoesNotLeakReference()
-    {
-        const string content = """
-            using System.Collections.Generic;
-            using System.Linq;
-
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public static class Sink
-            {
                 public static int Wrap<T>(int value) => value;
             }
 
             public sealed class Uses
             {
-                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                public IEnumerable<int> ReadComma(IEnumerable<Holder> items)
+                {
+                    return from Status in items
+                           select Sink.Wrap<int, int>(Status.Ready);
+                }
+
+                public IEnumerable<int> ReadSingle(IEnumerable<Holder> items)
                 {
                     return from Status in items
                            select Sink.Wrap<int>(Status.Ready);
+                }
+
+                public IEnumerable<int> ReadTuple(IEnumerable<Holder> items)
+                {
+                    return from Status in items
+                           select Sink.Wrap<(int, List<int>)>(Status.Ready);
                 }
             }
             """;
@@ -3597,46 +3570,6 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "Ready" && reference.ReferenceKind == "call"));
         Assert.Equal("ReadLater", readyRef.ContainerName);
         Assert.Contains("Status.Ready", readyRef.Context, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithTerminalSelectTupleGenericTypeArgument_DoesNotLeakReference()
-    {
-        const string content = """
-            using System.Collections.Generic;
-            using System.Linq;
-
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public static class Sink
-            {
-                public static int Wrap<T>(int value) => value;
-            }
-
-            public sealed class Uses
-            {
-                public IEnumerable<int> Read(IEnumerable<Holder> items)
-                {
-                    return from Status in items
-                           select Sink.Wrap<(int, List<int>)>(Status.Ready);
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
     }
 
     [Fact]
