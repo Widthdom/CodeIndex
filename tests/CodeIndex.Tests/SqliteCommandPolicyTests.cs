@@ -56,34 +56,27 @@ public class SqliteCommandPolicyTests
     }
 
     [Fact]
-    public void ReadInt32Scalar_RejectsOverflowWithDiagnostic_Issue3982()
+    public void ScalarReaders_RejectOverflowAndNullWithDiagnostics_Issue3982()
     {
         using var connection = new SqliteConnection("Data Source=:memory:");
         connection.Open();
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT 2147483648";
 
-        var ex = Assert.Throws<InvalidDataException>(
+        var overflow = Assert.Throws<InvalidDataException>(
             () => SqliteCommandPolicy.ReadInt32Scalar(command, "fixture row count"));
 
-        Assert.Contains("fixture row count", ex.Message, StringComparison.Ordinal);
-        Assert.Contains("Int32", ex.Message, StringComparison.Ordinal);
-    }
+        Assert.Contains("fixture row count", overflow.Message, StringComparison.Ordinal);
+        Assert.Contains("Int32", overflow.Message, StringComparison.Ordinal);
 
-    [Fact]
-    public void ReadNullableScalars_HandleNullAndStrictRequiredDiagnostics_Issue3982()
-    {
-        using var connection = new SqliteConnection("Data Source=:memory:");
-        connection.Open();
-        using var command = connection.CreateCommand();
         command.CommandText = "SELECT NULL";
 
         Assert.Null(SqliteCommandPolicy.ReadNullableInt64Scalar(command, "nullable count"));
-        var ex = Assert.Throws<InvalidDataException>(
+        var nullValue = Assert.Throws<InvalidDataException>(
             () => SqliteCommandPolicy.ReadInt64Scalar(command, "required count"));
 
-        Assert.Contains("required count", ex.Message, StringComparison.Ordinal);
-        Assert.Contains("NULL", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("required count", nullValue.Message, StringComparison.Ordinal);
+        Assert.Contains("NULL", nullValue.Message, StringComparison.Ordinal);
     }
 
     [Fact]

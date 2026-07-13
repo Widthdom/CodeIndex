@@ -178,6 +178,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   prove warnings were suppressed.
 - Cancellation-only timeout tests use an infinite cancellable delay so the fixture has no unrelated wall-clock completion path.
 - SQL diagnostic truncation tests cross the character cap with a minimal fixed-width suffix instead of constructing thousands of progressively longer `UNION` clauses.
+- SQLite scalar-reader diagnostics reuse one open in-memory connection and command across overflow and null-result contracts.
 - Oversized file guards create sparse length-only fixtures when content is irrelevant, avoiding a matching managed byte-array allocation.
 - Full-scan and scoped-update oversized-file warning tests share `TestProjectHelper.WriteSparseFile(...)` so both execution modes avoid 10 MiB fixture allocations.
 - Oversized ignore-file rejection uses the same sparse helper because the size preflight rejects the file before rule contents matter.
@@ -639,6 +640,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   は不要です。
 - cancellation だけを検証する timeout test は、fixture に無関係な wall-clock 完了経路を持たせないよう infinite cancellable delay を使います。
 - SQL diagnostic truncation test は、長さが増え続ける数千個の `UNION` 句を組み立てず、最小の固定幅 suffix で文字数 cap を超えます。
+- SQLite scalar-reader diagnostic は、overflow と null-result の契約で 1 つの open 済み in-memory connection と command を再利用します。
 - 内容が契約に無関係な oversized file guard は sparse な length-only fixture を作り、同サイズの managed byte array 割り当てを避けます。
 - full-scan と scoped-update の oversized-file warning test は `TestProjectHelper.WriteSparseFile(...)` を共有し、両方の実行モードで 10 MiB fixture 割り当てを避けます。
 - oversized ignore-file rejection も同じ sparse helper を使います。size preflight が rule 内容を読む前に拒否するためです。
