@@ -1580,7 +1580,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithValueReceiverNamedLikeEnum_DoesNotLeakAsEnumMemberReference()
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithPropertyReceivers_RespectStaticContext()
     {
         const string content = """
             namespace Demo;
@@ -1595,80 +1595,31 @@ public partial class ReferenceExtractorTests
                 public int Ready { get; set; }
             }
 
-            public sealed class Uses
+            public sealed class UsesInstance
             {
                 public Holder Status { get; } = new();
 
-                public int Read()
+                public int ReadInstance()
                 {
                     return Status.Ready;
                 }
             }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithInstancePropertyShadowInStaticMethod_PreservesEnumReference()
-    {
-        const string content = """
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
+            public sealed class UsesInstanceFromStatic
             {
                 public Holder Status { get; } = new();
 
-                public static Demo.Status Read()
+                public static Demo.Status ReadInstanceFromStatic()
                 {
                     return Status.Ready;
                 }
             }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        var readyRef = Assert.Single(readyRefs);
-        Assert.Equal(19, readyRef.Line);
-        Assert.Equal("Read", readyRef.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithStaticPropertyShadowInStaticMethod_DoesNotLeakAsEnumMemberReference()
-    {
-        const string content = """
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
+            public sealed class UsesStatic
             {
                 public static Holder Status { get; } = new();
 
-                public static int Read()
+                public static int ReadStatic()
                 {
                     return Status.Ready;
                 }
@@ -1678,7 +1629,9 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+        var readyRef = Assert.Single(references.Where(reference =>
+            reference.SymbolName == "Ready" && reference.ReferenceKind == "call"));
+        Assert.Equal("ReadInstanceFromStatic", readyRef.ContainerName);
     }
 
     [Fact]
