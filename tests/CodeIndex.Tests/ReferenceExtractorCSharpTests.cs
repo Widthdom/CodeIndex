@@ -3830,45 +3830,8 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
     }
 
-    [Theory]
-    [InlineData("!=")]
-    [InlineData("==")]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithTerminalSelectGenericAsNullComparison_DoesNotLeakReference(string comparisonOperator)
-    {
-        var content = $$"""
-            using System.Collections.Generic;
-            using System.Linq;
-
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public int Read(IEnumerable<Holder> items)
-                {
-                    return (from Status in items
-                            select Status as Dictionary<int, int> {{comparisonOperator}} null ? Status.Ready : 0).First();
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
-    }
-
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithTerminalSelectGenericAsNullComparison_PreservesLaterEnumReference()
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithTerminalSelectGenericAsNullComparisons_KeepOnlyLaterEnumReference()
     {
         const string content = """
             using System.Collections.Generic;
@@ -3881,19 +3844,31 @@ public partial class ReferenceExtractorTests
                 Ready
             }
 
-            public static class Sink
-            {
-                public static Status Pick(int left, Status right) => right;
-            }
-
             public sealed class Holder
             {
                 public int Ready { get; set; }
             }
 
+            public static class Sink
+            {
+                public static Status Pick(int left, Status right) => right;
+            }
+
             public sealed class Uses
             {
-                public Status Read(IEnumerable<Holder> items)
+                public int ReadNotEqual(IEnumerable<Holder> items)
+                {
+                    return (from Status in items
+                            select Status as Dictionary<int, int> != null ? Status.Ready : 0).First();
+                }
+
+                public int ReadEqual(IEnumerable<Holder> items)
+                {
+                    return (from Status in items
+                            select Status as Dictionary<int, int> == null ? Status.Ready : 0).First();
+                }
+
+                public Status ReadLater(IEnumerable<Holder> items)
                 {
                     return Sink.Pick(
                         (from Status in items
@@ -3906,11 +3881,10 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Ready"
-            && reference.ReferenceKind == "call"
-            && reference.Line == 28
-            && reference.Context.Contains("Status.Ready", StringComparison.Ordinal));
+        var readyRef = Assert.Single(references.Where(reference =>
+            reference.SymbolName == "Ready" && reference.ReferenceKind == "call"));
+        Assert.Equal("ReadLater", readyRef.ContainerName);
+        Assert.Contains("Status.Ready", readyRef.Context, StringComparison.Ordinal);
     }
 
     [Fact]
