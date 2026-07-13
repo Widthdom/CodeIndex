@@ -39,6 +39,27 @@ public class WorkspaceCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void CheckedInWorkspaceManifest_ResolvesExistingProjectMembers_Issue4476()
+    {
+        var repositoryRoot = RepositoryTestPaths.Root;
+        var manifest = WorkspaceManifestLoader.Load(RepositoryTestPaths.Combine("cdidx.workspace.json"));
+
+        Assert.Equal(repositoryRoot, manifest.Root);
+        Assert.Collection(
+            manifest.Members,
+            member =>
+            {
+                Assert.Equal(RepositoryTestPaths.Combine("src", "CodeIndex"), member.Path);
+                Assert.True(member.Exists);
+            },
+            member =>
+            {
+                Assert.Equal(RepositoryTestPaths.Combine("tests", "CodeIndex.Tests"), member.Path);
+                Assert.True(member.Exists);
+            });
+    }
+
     [Theory]
     [InlineData("list")]
     [InlineData("status")]
