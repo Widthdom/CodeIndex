@@ -828,41 +828,22 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpInterpolatedRawString_KeepsInterpolationCallReferences()
+    public void Extract_CsharpInterpolatedRawStrings_ReuseDirectAndNestedFixture()
     {
         const string content = """"
             public class FixtureHost
             {
                 public string Run() => "ok";
 
-                public string UsesRawFixture()
+                public string Direct()
                 {
                     return $"""
                         value = {Run()}
                         literal = function main()
                         """;
                 }
-            }
-            """";
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var reference = Assert.Single(references);
-        Assert.Equal("Run", reference.SymbolName);
-        Assert.Equal("call", reference.ReferenceKind);
-        Assert.Equal("UsesRawFixture", reference.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpInterpolatedRawString_WithNestedInterpolatedString_KeepsInterpolationCallReferences()
-    {
-        const string content = """"
-            public class FixtureHost
-            {
-                public string Run() => "ok";
-
-                public string UsesRawFixture()
+                public string Nested()
                 {
                     return $"""
                         value = {$"{Run()}"}
@@ -875,9 +856,12 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var runReference = Assert.Single(references.Where(reference => reference.SymbolName == "Run"));
-        Assert.Equal("call", runReference.ReferenceKind);
-        Assert.Equal("UsesRawFixture", runReference.ContainerName);
+        var containers = references
+            .Where(reference => reference.SymbolName == "Run" && reference.ReferenceKind == "call")
+            .Select(reference => reference.ContainerName)
+            .OrderBy(name => name)
+            .ToArray();
+        Assert.Equal(["Direct", "Nested"], containers);
     }
 
     [Fact]

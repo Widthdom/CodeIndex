@@ -237,6 +237,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - C# BOM extraction keeps a simple leading-BOM import fixture plus one mixed-newline fixture that simultaneously covers leading and mid-file BOM handling across CRLF, bare CR, and LF boundaries; do not repeat separate extraction passes for newline subsets already present in the mixed fixture.
 - C# lambda-capture coverage keeps positive enclosing-local capture, parameter shadowing, and same-named-method isolation in one source fixture; a single capture assertion proves the negative regions did not leak.
 - Escaped-brace coverage for regular and verbatim interpolated C# strings shares one extraction fixture because both variants assert the same phantom-call exclusion.
+- Direct and nested interpolations inside C# raw strings share one source fixture and one extraction pass while retaining distinct container assertions.
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). Its publish smoke disables NuGet vulnerability auditing because package advisory validation is covered by the normal build/test workflow's package vulnerability check, not by this runtime serialization test. It is reported as skipped on macOS arm64 while SDK/ILLink can crash before exercising `cdidx` (#2586). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
@@ -740,6 +741,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - C# BOM 抽出は、単純な先頭 BOM import fixture と、CRLF・bare CR・LF 境界で先頭/mid-file BOM を同時に扱う1つの混在改行 fixture を維持します。混在 fixture に含まれる改行 subset ごとに抽出 pass を重複させないでください。
 - C# lambda capture coverage は、外側 local の正例、parameter shadowing、同名 method 間の分離を1つの source fixture にまとめます。capture が1件だけである assertion により、negative region からの漏れも同時に検証します。
 - C# interpolated string の escaped-brace coverage は、通常形式と逐語形式で同じ phantom call 除外を検証するため、1回の抽出 fixture を共有します。
+- C# raw string 内の direct interpolation と nested interpolation は1つの source fixture と抽出 pass を共有し、container assertion は個別に維持します。
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   は trimmed な RID 固有 CLI を publish し、SDK が生成した entry point（`dotnet` 経由の `cdidx.dll`、または native の `cdidx`/`cdidx.exe` apphost）を実行します。この publish smoke は NuGet 脆弱性監査を無効化します。package advisory の検証は通常の build/test workflow の package vulnerability check が担い、この runtime serialization テストの責務ではないためです。macOS arm64 では SDK/ILLink が `cdidx` に到達する前にクラッシュし得るため、このテストは skipped として報告されます（#2586）。self-contained publish output に常に `cdidx.dll` が出るとは仮定しないでください。
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
