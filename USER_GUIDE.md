@@ -2186,7 +2186,8 @@ Command-specific `--format` values:
 
 | Commands | Supported values |
 |---|---|
-| `search`, `definition`, `references`, `callers`, `callees`, `find`, `validate` | `text`, `json`, `count`, `compact`, `csv`, `tsv`, `lsp`, `qf`, `sarif`. Ad hoc `search` additionally supports `issue-drafts`; recipe and recipe-list modes have narrower sets shown by their usage lines. |
+| `search` | `text`, `json`, `count`, `compact`, `grouped`, `csv`, `tsv`, `lsp`, `qf`, `sarif`, `issue-drafts`. Recipe and recipe-list modes have narrower sets shown by their usage lines. |
+| `definition`, `references`, `callers`, `callees`, `find`, `validate` | `text`, `json`, `count`, `compact`, `csv`, `tsv`, `lsp`, `qf`, `sarif` |
 | `symbols` | `text`, `json`, `count`, `compact`, `lsp`, `qf`, `sarif` |
 | `files` | `text`, `json`, `count`, `compact` |
 | `inspect` | `text`, `json`, `compact` |
@@ -4990,7 +4991,8 @@ AIエージェントがDBを直接SQL検索する場合、`sqlite3` CLIが必要
 
 | コマンド | 対応値 |
 |---|---|
-| `search`、`definition`、`references`、`callers`、`callees`、`find`、`validate` | `text`、`json`、`count`、`compact`、`csv`、`tsv`、`lsp`、`qf`、`sarif`。ad hoc `search` は `issue-drafts` にも対応します。recipe / recipe list mode は usage line に示す、より限定された形式に対応します。 |
+| `search` | `text`、`json`、`count`、`compact`、`grouped`、`csv`、`tsv`、`lsp`、`qf`、`sarif`、`issue-drafts`。recipe / recipe list mode は usage line に示す、より限定された形式に対応します。 |
+| `definition`、`references`、`callers`、`callees`、`find`、`validate` | `text`、`json`、`count`、`compact`、`csv`、`tsv`、`lsp`、`qf`、`sarif` |
 | `symbols` | `text`、`json`、`count`、`compact`、`lsp`、`qf`、`sarif` |
 | `files` | `text`、`json`、`count`、`compact` |
 | `inspect` | `text`、`json`、`compact` |

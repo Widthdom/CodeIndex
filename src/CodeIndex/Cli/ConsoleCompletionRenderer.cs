@@ -558,18 +558,18 @@ internal static class ConsoleCompletionRenderer
 
     private static IEnumerable<(string Command, string[] Values)> GetFormatValueCompletions()
     {
-        yield return ("search", ["text", "json", "count", "compact", "csv", "tsv", "lsp", "qf", "sarif", "issue-drafts"]);
-        yield return ("recipes", ["text", "json", "issue-drafts"]);
-        yield return ("audit", ["text", "json", "count", "issue-drafts"]);
+        yield return ("search", ["text", "json", "count", "compact", "grouped", "csv", "tsv", "lsp", "qf", "sarif", "issue-drafts"]);
+        yield return ("recipes", ["text", "json", "compact"]);
+        yield return ("audit", ["text", "json", "count", "compact", "issue-drafts"]);
         foreach (var command in new[] { "definition", "references", "callers", "callees", "find", "validate" })
-            yield return (command, ["text", "json", "lsp", "qf", "sarif"]);
-        foreach (var command in new[] { "symbols", "files" })
-            yield return (command, ["text", "json", "count", "compact", "csv", "tsv"]);
-        yield return ("map", ["text", "json", "compact", "markdown"]);
+            yield return (command, ["text", "json", "count", "compact", "csv", "tsv", "lsp", "qf", "sarif"]);
+        yield return ("symbols", ["text", "json", "count", "compact", "lsp", "qf", "sarif"]);
+        yield return ("files", ["text", "json", "count", "compact"]);
+        yield return ("map", ["text", "json", "compact", "issue-drafts"]);
         yield return ("inspect", ["text", "json", "compact"]);
-        yield return ("deps", ["text", "json"]);
+        yield return ("deps", ["dot", "graphml", "json-graph", "edgelist"]);
         yield return ("suggestions", ["json", "markdown", "issue-drafts"]);
-        yield return ("languages", ["text", "json", "markdown"]);
+        yield return ("languages", ["text", "json", "count"]);
     }
 
     private static string[]? GetFormatValues(string command) =>

@@ -49,14 +49,16 @@ public class ConsoleUiTests
         var search = ExtractBetween(formatCase, "search)", "recipes)");
         var deps = ExtractBetween(formatCase, "deps)", "suggestions)");
         Assert.Contains("issue-drafts", search);
+        Assert.Contains("grouped", search);
         Assert.Contains("sarif", search);
         Assert.DoesNotContain("issue-drafts", deps);
         Assert.DoesNotContain("sarif", deps);
+        Assert.Contains("json-graph", deps);
 
         var powershell = ConsoleCompletionRenderer.GetCompletionScript("powershell");
         var formatValues = ExtractBetween(powershell, "$formatValues = @{", "    }");
-        Assert.Contains("'search' = @('text', 'json', 'count', 'compact', 'csv', 'tsv', 'lsp', 'qf', 'sarif', 'issue-drafts')", formatValues);
-        Assert.Contains("'deps' = @('text', 'json')", formatValues);
+        Assert.Contains("'search' = @('text', 'json', 'count', 'compact', 'grouped', 'csv', 'tsv', 'lsp', 'qf', 'sarif', 'issue-drafts')", formatValues);
+        Assert.Contains("'deps' = @('dot', 'graphml', 'json-graph', 'edgelist')", formatValues);
     }
 
 
@@ -480,15 +482,18 @@ public class ConsoleUiTests
 
     public static IEnumerable<object[]> StandardLocationFormatCases()
     {
-        string[] commands = ["search", "definition", "references", "callers", "callees", "find", "validate"];
-        string[] formats = ["text", "json", "count", "compact", "csv", "tsv", "lsp", "qf", "sarif"];
+        string[] standardFormats = ["text", "json", "count", "compact", "csv", "tsv", "lsp", "qf", "sarif"];
+        var standardCases = new[] { "definition", "references", "callers", "callees", "find", "validate" }
+            .SelectMany(command => standardFormats.Select(format => new object[] { command, format, true }));
+        var searchCases = new[] { "text", "json", "count", "compact", "grouped", "csv", "tsv", "lsp", "qf", "sarif", "issue-drafts" }
+            .Select(format => new object[] { "search", format, format != "issue-drafts" });
 
-        return commands.SelectMany(command => formats.Select(format => new object[] { command, format }));
+        return searchCases.Concat(standardCases);
     }
 
     [Theory]
     [MemberData(nameof(StandardLocationFormatCases))]
-    public void StandardLocationFormats_AreAcceptedByParserAndDocumentedPerCommand_Issue4474(string command, string format)
+    public void StandardLocationFormats_AreAcceptedByParserAndDocumentedPerCommand_Issue4474(string command, string format, bool sharedParserFormat)
     {
         var options = QueryCommandRunner.ParseArgs(
             ["Target", "--format", format],
@@ -498,8 +503,11 @@ public class ConsoleUiTests
         const string formatPrefix = "[--format <";
         var formatStart = usage.IndexOf(formatPrefix, StringComparison.Ordinal);
 
-        Assert.Null(options.ParseError);
-        Assert.Equal(format, options.OutputFormat);
+        if (sharedParserFormat)
+        {
+            Assert.Null(options.ParseError);
+            Assert.Equal(format, options.OutputFormat);
+        }
         Assert.True(formatStart >= 0, $"Missing --format usage for {command}: {usage}");
 
         var valuesStart = formatStart + formatPrefix.Length;
@@ -2531,7 +2539,7 @@ public class ConsoleUiTests
             "[--audit-scope <source|all>]",
             "[--source-only]",
             "[--show-excluded]",
-            "[--format <text|json|count|compact|csv|tsv|lsp|qf|sarif|issue-drafts>]",
+            "[--format <text|json|count|compact|grouped|csv|tsv|lsp|qf|sarif|issue-drafts>]",
             "[--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>]",
             "[--total-limit <n>]",
             "[--exclude-comments]",
