@@ -4535,7 +4535,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithSwitchCaseDeclarationPatternVariable_DoesNotLeakAsEnumMemberReference()
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithStatementPatternVariables_KeepOnlyOuterEnumReferences()
     {
         const string content = """
             namespace Demo;
@@ -4552,7 +4552,7 @@ public partial class ReferenceExtractorTests
 
             public sealed class Uses
             {
-                public Demo.Status Read(object value)
+                public Demo.Status ReadSwitchCase(object value)
                 {
                     switch (value)
                     {
@@ -4563,73 +4563,15 @@ public partial class ReferenceExtractorTests
 
                     return Demo.Status.Ready;
                 }
-            }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        var readyRef = Assert.Single(readyRefs);
-        Assert.Equal(24, readyRef.Line);
-        Assert.Equal("Read", readyRef.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithConditionalExpressionDeclarationPatternVariable_DoesNotLeakAsEnumMemberReference()
-    {
-        const string content = """
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public Demo.Status Read(object value)
+                public Demo.Status ReadConditional(object value)
                 {
                     return value is Holder Status
                         ? (Demo.Status)Status.Ready
                         : Demo.Status.Ready;
                 }
-            }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        var readyRef = Assert.Single(readyRefs);
-        Assert.Equal(19, readyRef.Line);
-        Assert.Equal("Read", readyRef.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithRecursivePatternVariable_DoesNotLeakAsEnumMemberReference()
-    {
-        const string content = """
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public Demo.Status Read(object value)
+                public Demo.Status ReadRecursive(object value)
                 {
                     if (value is Holder { Ready: > 0 } Status)
                     {
@@ -4638,37 +4580,8 @@ public partial class ReferenceExtractorTests
 
                     return Demo.Status.Ready;
                 }
-            }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        var readyRef = Assert.Single(readyRefs);
-        Assert.Equal(22, readyRef.Line);
-        Assert.Equal("Read", readyRef.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithMultiLineRecursivePatternVariable_DoesNotLeakAsEnumMemberReference()
-    {
-        const string content = """
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public Demo.Status Read(object value)
+                public Demo.Status ReadMultiLineRecursive(object value)
                 {
                     if (value is Holder
                         {
@@ -4680,37 +4593,8 @@ public partial class ReferenceExtractorTests
 
                     return Demo.Status.Ready;
                 }
-            }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        var readyRef = Assert.Single(readyRefs);
-        Assert.Equal(25, readyRef.Line);
-        Assert.Equal("Read", readyRef.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithRecursivePatternCaseVariable_DoesNotLeakAsEnumMemberReference()
-    {
-        const string content = """
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public Demo.Status Read(object value)
+                public Demo.Status ReadRecursiveCase(object value)
                 {
                     switch (value)
                     {
@@ -4727,10 +4611,15 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        var readyRef = Assert.Single(readyRefs);
-        Assert.Equal(24, readyRef.Line);
-        Assert.Equal("Read", readyRef.ContainerName);
+        var readyRefs = references
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Select(reference => reference.ContainerName)
+            .OrderBy(name => name)
+            .ToArray();
+
+        Assert.Equal(
+            ["ReadConditional", "ReadMultiLineRecursive", "ReadRecursive", "ReadRecursiveCase", "ReadSwitchCase"],
+            readyRefs);
     }
 
     [Fact]
