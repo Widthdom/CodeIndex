@@ -12,6 +12,7 @@ internal static class UpdateChecker
     private const string LatestReleaseUrl = "https://api.github.com/repos/Widthdom/CodeIndex/releases/latest";
     private const string ReleasesUrl = "https://api.github.com/repos/Widthdom/CodeIndex/releases?per_page=20";
     internal const long MaxLatestReleaseResponseBytes = 64 * 1024;
+    internal const long MaxPrereleaseResponseBytes = 2 * 1024 * 1024;
     internal const int MaxLatestReleaseJsonDepth = 16;
     internal const int MaxUpdateCheckCacheBytes = 8 * 1024;
     internal const int MaxUpdateCheckCacheJsonDepth = 8;
@@ -300,35 +301,52 @@ internal static class UpdateChecker
     {
         var payload = await BoundedHttpContentReader.ReadAsByteArrayAsync(
             content,
-            MaxLatestReleaseResponseBytes,
+            MaxPrereleaseResponseBytes,
             cancellationToken).ConfigureAwait(false);
         using var doc = BoundedJson.ParseDocument(
             payload.AsMemory(),
-            (int)MaxLatestReleaseResponseBytes,
+            (int)MaxPrereleaseResponseBytes,
             MaxLatestReleaseJsonDepth);
         if (doc.RootElement.ValueKind != JsonValueKind.Array)
-            return null;
+            throw new JsonException("Prerelease release metadata root must be an array.");
 
+        string? selectedTag = null;
         foreach (var release in doc.RootElement.EnumerateArray())
         {
             if (release.ValueKind != JsonValueKind.Object)
-                continue;
+                throw new JsonException("Prerelease release metadata entries must be objects.");
 
-            var isDraft = release.TryGetProperty("draft", out var draftElement)
-                && draftElement.ValueKind == JsonValueKind.True;
+            if (!release.TryGetProperty("tag_name", out var tagElement)
+                || tagElement.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(tagElement.GetString()))
+            {
+                throw new JsonException("Prerelease release metadata entries require a non-empty string tag_name.");
+            }
+
+            if (!release.TryGetProperty("draft", out var draftElement)
+                || draftElement.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                throw new JsonException("Prerelease release metadata entries require a boolean draft field.");
+            }
+
+            if (!release.TryGetProperty("prerelease", out var prereleaseElement)
+                || prereleaseElement.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                throw new JsonException("Prerelease release metadata entries require a boolean prerelease field.");
+            }
+
+            var isDraft = draftElement.ValueKind == JsonValueKind.True;
             if (isDraft)
                 continue;
 
-            var isPrerelease = release.TryGetProperty("prerelease", out var prereleaseElement)
-                && prereleaseElement.ValueKind == JsonValueKind.True;
+            var isPrerelease = prereleaseElement.ValueKind == JsonValueKind.True;
             if (!isPrerelease)
                 continue;
 
-            if (release.TryGetProperty("tag_name", out var tagElement))
-                return tagElement.GetString();
+            selectedTag ??= tagElement.GetString();
         }
 
-        return null;
+        return selectedTag;
     }
 
     internal static string ResolveDefaultCachePath()
