@@ -2715,15 +2715,16 @@ exit 7
     }
 
     [Fact]
-    public void RunUpgrade_CheckOnlyJsonPrereleaseNotFound_ReportsStructuredFailure_Issue3453()
+    public void RunUpgrade_CheckOnlyJsonPrereleaseNotFound_ReportsStructuredFailure_Issue3453_Issue4469()
     {
         lock (TestConsoleLock.Gate)
         {
             var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
             ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
-                new StaticResponseHandler(new ByteArrayContent(Encoding.UTF8.GetBytes("""
+                new StaticResponseHandler(new ByteArrayContent(Encoding.UTF8.GetBytes(
+                    $$"""
                     [
-                      { "tag_name": "v9.9.9", "draft": false, "prerelease": false }
+                      { "tag_name": "v9.9.9", "draft": false, "prerelease": false, "body": "{{new string('x', (int)UpdateChecker.MaxLatestReleaseResponseBytes)}}" }
                     ]
                     """))))
             {
@@ -2946,6 +2947,17 @@ exit 7
         var tag = await UpdateChecker.ReadLatestPrereleaseTagAsync(content, CancellationToken.None);
 
         Assert.Equal("v3.1.0-rc.1", tag);
+    }
+
+    [Fact]
+    public async Task UpdateChecker_ReadLatestPrereleaseTagAsync_RejectsOverDedicatedLimit_Issue4469()
+    {
+        using var content = new ByteArrayContent(new byte[(int)UpdateChecker.MaxPrereleaseResponseBytes + 1]);
+
+        var ex = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            UpdateChecker.ReadLatestPrereleaseTagAsync(content, CancellationToken.None));
+
+        Assert.Contains($"{UpdateChecker.MaxPrereleaseResponseBytes} byte limit", ex.Message);
     }
 
     [Fact]

@@ -758,6 +758,9 @@ Use `--channel stable` (or `--channel latest`) to stay on stable releases,
 `--version <tag>` to install a specific release tag. JSON output includes
 `selected_version`, `selected_channel`, `selection_source`, and
 `include_prerelease` so automation can record why a release was selected.
+When the selected prerelease channel has no eligible release, JSON output uses
+`error: "prerelease_not_found"`; malformed or safely bounded-out release
+metadata uses `error: "invalid_response"` instead.
 
 On Windows, `cdidx upgrade` selects the same release but does not replace the
 running binary in place. It prints a NuGet handoff command such as
@@ -3556,6 +3559,9 @@ stable release に留まる場合は `--channel stable`（または `--channel l
 release tag を入れる場合は `--version <tag>` を使います。JSON 出力には
 `selected_version`、`selected_channel`、`selection_source`、
 `include_prerelease` が含まれるため、automation 側で選択理由を記録できます。
+選択した prerelease channel に対象 release がない場合、JSON 出力は
+`error: "prerelease_not_found"` を返します。不正な release metadata または
+安全上限を超えた metadata の場合は、代わりに `error: "invalid_response"` を返します。
 
 Windows では `cdidx upgrade` は同じ release を選択しますが、実行中 binary を
 その場では置き換えません。代わりに

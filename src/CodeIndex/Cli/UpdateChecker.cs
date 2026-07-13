@@ -12,6 +12,7 @@ internal static class UpdateChecker
     private const string LatestReleaseUrl = "https://api.github.com/repos/Widthdom/CodeIndex/releases/latest";
     private const string ReleasesUrl = "https://api.github.com/repos/Widthdom/CodeIndex/releases?per_page=20";
     internal const long MaxLatestReleaseResponseBytes = 64 * 1024;
+    internal const long MaxPrereleaseResponseBytes = 2 * 1024 * 1024;
     internal const int MaxLatestReleaseJsonDepth = 16;
     internal const int MaxUpdateCheckCacheBytes = 8 * 1024;
     internal const int MaxUpdateCheckCacheJsonDepth = 8;
@@ -300,11 +301,11 @@ internal static class UpdateChecker
     {
         var payload = await BoundedHttpContentReader.ReadAsByteArrayAsync(
             content,
-            MaxLatestReleaseResponseBytes,
+            MaxPrereleaseResponseBytes,
             cancellationToken).ConfigureAwait(false);
         using var doc = BoundedJson.ParseDocument(
             payload.AsMemory(),
-            (int)MaxLatestReleaseResponseBytes,
+            (int)MaxPrereleaseResponseBytes,
             MaxLatestReleaseJsonDepth);
         if (doc.RootElement.ValueKind != JsonValueKind.Array)
             return null;
