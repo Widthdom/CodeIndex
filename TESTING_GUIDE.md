@@ -317,6 +317,7 @@ Use the inventory below before adding or moving a test class:
 - Shared file-URI escaping and LSP round-trip parity should use one path/root case rather than duplicating equivalent percent-encoding setup in separate tests.
 - No-timeout sentinel coverage should exercise zero and infinite budgets in one contract test; both follow the same caller-cancellation path and do not need duplicate scope setup.
 - Bounded HTTP private-file success and overflow cases should share one temporary project and use distinct child paths instead of allocating and cleaning two standalone system-temp files.
+- Bounded HTTP memory-safety coverage checks huge declared-length allocation avoidance and whole pooled-buffer clearing in one contract test.
 - Environment-variable scope restoration should cover present and missing originals in one serialized test, avoiding duplicate process-variable setup and runner cases.
 - Pure process-launch builder contracts should verify base flags, invariant arguments, worker payloads, and UTF-8 redirects in one test instead of paying four runner cases for allocation-only assertions.
 - SQLite sensitive-fixture initialization, disposal, and boundary clearing should share one replaced callback scope; the boundary assertion can follow lifecycle assertions without rebuilding global hook state.
@@ -774,6 +775,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - shared file-URI escaping と LSP round-trip parity は1つの path / root case で検証し、同等の percent-encoding setup を別 test で重複させない。
 - no-timeout sentinel coverage は zero / infinite budget を1つの contract test で検証する。どちらも同じ caller-cancellation path に従うため scope setup を重複させない。
 - bounded HTTP private-file の success / overflow case は1つの temporary project と別々の child path を共有し、standalone system-temp file を2回確保・cleanup しない。
+- bounded HTTP の memory-safety coverage は、巨大な declared length の allocation 回避と pooled buffer 全体の clear を1つの contract test で検証する。
 - environment-variable scope restoration は present / missing original を1つの serialized test で検証し、process-variable setup と runner case の重複を避ける。
 - pure process-launch builder contract は base flag、invariant argument、worker payload、UTF-8 redirect を1つの test で検証し、allocation-only assertion のために4つの runner case を使わない。
 - SQLite sensitive fixture の initialize、dispose、boundary clear は1つの replaced callback scope を共有する。boundary assertion は global hook state を再構築せず lifecycle assertion に続けて検証できる。

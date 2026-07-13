@@ -64,7 +64,7 @@ public class BoundedHttpContentReaderTests
     }
 
     [Fact]
-    public async Task ReadAsByteArrayAsync_DoesNotPreallocateHugeDeclaredLength_Issue3964()
+    public async Task MemorySafety_AvoidsHugePreallocationAndClearsPooledBuffer_Issues3799_3964()
     {
         using var content = new DeclaredLengthContent([], int.MaxValue);
 
@@ -74,11 +74,7 @@ public class BoundedHttpContentReaderTests
             CancellationToken.None);
 
         Assert.Empty(bytes);
-    }
 
-    [Fact]
-    public void ClearSensitiveCopyBufferForTests_ClearsWholePooledBuffer_Issue3799()
-    {
         var buffer = Enumerable.Range(1, BoundedHttpContentReader.PooledCopyBufferSize)
             .Select(i => (byte)(i % 251))
             .ToArray();
