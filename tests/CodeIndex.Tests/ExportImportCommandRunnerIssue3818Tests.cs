@@ -8,21 +8,6 @@ namespace CodeIndex.Tests;
 public class ExportImportCommandRunnerIssue3818Tests
 {
     [Fact]
-    public void RunImport_JsonCancellationReturnsInterrupted_Issue3818()
-    {
-        var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-
-        var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
-            ExportImportCommandRunner.RunImport(["archive.cdidx.zip", "--db", "codeindex.db", "--json"], jsonOptions, cts.Token));
-
-        Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
-        Assert.Equal(string.Empty, stderr);
-        AssertImportError(stdout, "open_archive", CommandErrorCodes.Interrupted);
-    }
-
-    [Fact]
     public void ReplaceImportedDatabase_PostMoveCancellationRollsBackDestination_Issue3818()
     {
         var workDir = TestProjectHelper.CreateTempProject("cdidx_import_cancel_rollback");
@@ -85,6 +70,39 @@ public class ExportImportCommandRunnerIssue3818Tests
         }
     }
 
+    private static string ExportArchive(string projectRoot, string sourceDbPath)
+    {
+        var archivePath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
+        var (exitCode, _, stderr) = ConsoleCapture.Capture(() =>
+            ExportImportCommandRunner.RunExport([archivePath, "--db", sourceDbPath], new JsonSerializerOptions(), "test"));
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        return archivePath;
+    }
+
+}
+
+public class ExportImportCommandRunnerCancellationTests
+{
+    [Fact]
+    public void RunImport_JsonCancellationReturnsInterrupted_Issue3818()
+    {
+        var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+            ExportImportCommandRunner.RunImport(["archive.cdidx.zip", "--db", "codeindex.db", "--json"], jsonOptions, cts.Token));
+
+        Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = JsonDocument.Parse(stdout);
+        var root = document.RootElement;
+        Assert.Equal("error", root.GetProperty("status").GetString());
+        Assert.Equal("open_archive", root.GetProperty("phase").GetString());
+        Assert.Equal(CommandErrorCodes.Interrupted, root.GetProperty("error_code").GetString());
+    }
+
     [Fact]
     public void CopyToWithLimit_CancellationBeforeReadThrowsWithoutWriting_Issue3818()
     {
@@ -96,24 +114,5 @@ public class ExportImportCommandRunnerIssue3818Tests
         Assert.Throws<OperationCanceledException>(() =>
             ExportImportCommandRunner.CopyToWithLimit(source, target, maxBytes: 4, cts.Token));
         Assert.Equal(0, target.Length);
-    }
-
-    private static string ExportArchive(string projectRoot, string sourceDbPath)
-    {
-        var archivePath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
-        var (exitCode, _, stderr) = ConsoleCapture.Capture(() =>
-            ExportImportCommandRunner.RunExport([archivePath, "--db", sourceDbPath], new JsonSerializerOptions(), "test"));
-        Assert.Equal(CommandExitCodes.Success, exitCode);
-        Assert.Equal(string.Empty, stderr);
-        return archivePath;
-    }
-
-    private static void AssertImportError(string stdout, string expectedPhase, string expectedCode)
-    {
-        using var document = JsonDocument.Parse(stdout);
-        var root = document.RootElement;
-        Assert.Equal("error", root.GetProperty("status").GetString());
-        Assert.Equal(expectedPhase, root.GetProperty("phase").GetString());
-        Assert.Equal(expectedCode, root.GetProperty("error_code").GetString());
     }
 }
