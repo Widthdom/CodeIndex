@@ -124,6 +124,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Graph-command kind-semantics warnings reuse one graph-ready database across references, callers, and callees.
   Exact-zero graph hints use one combined Target/Caller fixture per scenario and iterate references, callers, and callees against it.
   C# query-range generic null-comparison regressions place equality and inequality forms in one indexed source when both assert the same absence of leaked enum references.
+  C# query-range collision forms for basic selection, directional ordering, keyword-named members, and object initializers share one indexed source when they assert the same empty inspect reference bundle.
   C# inspect brace-range regressions place char-literal, raw-string, and verbatim-string forms in one indexed class and query each following method from that shared fixture.
   Apply the same combined null-comparison fixture to inspect reference-bundle coverage instead of indexing each operator separately.
   Production-runtime switch relational-pattern coverage places less-than and greater-than methods in one source and pays one CLI indexing subprocess.
@@ -590,6 +591,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   graph-command kind-semantics warning は references、callers、callees 全体で1つの graph-ready database を再利用してください。
   exact-zero graph hint はscenarioごとに1つのTarget/Caller統合fixtureを使い、references、callers、calleesを反復してください。
   C# query-range generic null-comparison regression は、どちらもenum reference漏えいがない同じ契約ならequalityとinequality形式を1つのindexed sourceに併置してください。
+  C# query-range collision の basic selection、directional ordering、keyword 名 member、object initializer は、同じ空の inspect reference bundle を検証する場合は1つの indexed source を共有してください。
   C# inspect の brace-range regression は char literal、raw string、verbatim string を1つの indexed class に併置し、それぞれの後続 method を共有 fixture から query してください。
   inspect reference-bundle coverageにも同じnull-comparison統合fixtureを適用し、operatorごとの個別indexingを避けてください。
   production-runtime switch relational-pattern coverage はless-thanとgreater-thanのmethodを1 sourceに置き、CLI indexing subprocessを1回だけ実行してください。
