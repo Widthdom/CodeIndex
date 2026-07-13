@@ -308,6 +308,7 @@ Use the inventory below before adding or moving a test class:
 - Workspace active-status transitions should reuse one manifest/config fixture for inactive, active, missing, and stale assertions instead of rebuilding and re-selecting the same workspace for four independent tests.
 - Workspace metadata result-shape parity should enrich status, map, and analysis objects from one dirty Git fixture instead of initializing and committing three identical repositories.
 - Persisted-HEAD drift and recovery assertions should update metadata within one Git fixture rather than creating a second repository merely to test the matching state.
+- Latest-indexed-HEAD precedence should be asserted for status and analysis result shapes from one seeded repository rather than duplicating identical Git and database setup.
 - Long-running or performance-oriented tests: keep them skipped by default or give them broad deterministic budgets; if CI reports them in xUnit long-running diagnostics, first check runner load before tightening thresholds.
 - When a response-size algorithm needs a large production ceiling, prefer a narrowly scoped test-only budget override and a small representative payload; restore process-global overrides in `finally` and keep the suite non-parallel.
 - Pagination and suppression fixtures should cross the fetched-window boundary with the fewest additional records needed to distinguish full totals from the returned page.
@@ -749,6 +750,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - workspace active-status transition は inactive、active、missing、stale assertion で1つの manifest / config fixture を再利用し、同じ workspace を4つの独立 test で再構築・再選択しない。
 - workspace metadata の result-shape parity は1つの dirty Git fixture から status、map、analysis object を enrich し、同一 repo の initialize / commit を3回繰り返さない。
 - persisted HEAD の drift / recovery assertion は1つの Git fixture 内で metadata を更新し、matching state のためだけに2つ目の repo を作成しない。
+- latest indexed HEAD の優先順位は1つの seed 済み repo から status / analysis result shape の両方で検証し、同一 Git / DB setup を重複させない。
 - 長時間または performance 系テスト: デフォルト skip にするか、決定的で十分広い budget を与える。CI の xUnit long-running 診断に出た場合は、閾値を締める前に runner 負荷を確認する。
 
 ## 共通ヘルパー

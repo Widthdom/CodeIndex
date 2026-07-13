@@ -238,7 +238,7 @@ public class WorkspaceMetadataEnricherTests
     }
 
     [Fact]
-    public void Enrich_StatusResult_UsesLatestIndexedHeadShaBeforeFullScanHeadForWorktreeHeadChanged()
+    public void Enrich_ResultTypes_UseLatestIndexedHeadShaBeforeFullScanHeadForWorktreeHeadChanged()
     {
         var (projectRoot, dbPath, originalHead) = CreateDirtyGitProject("cdidx_workspace_current_head_preferred");
         try
@@ -252,37 +252,14 @@ public class WorkspaceMetadataEnricherTests
             }
 
             var status = new StatusResult { IndexedHeadSha = originalHead };
+            var analysis = new SymbolAnalysisResult();
 
             WorkspaceMetadataEnricher.Enrich(status, dbPath);
+            WorkspaceMetadataEnricher.Enrich(analysis, dbPath);
 
             Assert.Equal(staleFullScanHead, status.IndexedHeadCommit);
             Assert.False(status.WorktreeHeadChanged);
             Assert.Equal(0, status.CommitsAheadOfIndexedHead);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void Enrich_SymbolAnalysisResult_UsesLatestIndexedHeadShaBeforeFullScanHeadForWorktreeHeadChanged()
-    {
-        var (projectRoot, dbPath, originalHead) = CreateDirtyGitProject("cdidx_workspace_analysis_current_head");
-        try
-        {
-            var staleFullScanHead = new string('c', 40);
-            using (var db = new DbContext(dbPath))
-            {
-                var writer = new DbWriter(db.Connection);
-                writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, staleFullScanHead);
-                writer.SetMeta(DbContext.IndexedHeadShaMetaKey, originalHead);
-            }
-
-            var analysis = new SymbolAnalysisResult();
-
-            WorkspaceMetadataEnricher.Enrich(analysis, dbPath);
-
             Assert.Equal(staleFullScanHead, analysis.IndexedHeadCommit);
             Assert.False(analysis.WorktreeHeadChanged);
         }
