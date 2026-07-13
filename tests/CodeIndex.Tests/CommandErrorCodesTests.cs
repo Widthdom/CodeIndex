@@ -9,6 +9,7 @@ namespace CodeIndex.Tests;
 /// Tests for the stable machine-readable error-code taxonomy emitted by CLI runners (issue #1526).
 /// CLI ランナーが出す機械可読エラーコード分類のテスト (issue #1526)。
 /// </summary>
+[Collection("Console sensitive")]
 public class CommandErrorCodesTests
 {
     private readonly JsonSerializerOptions _jsonOptions = new()

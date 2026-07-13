@@ -14,6 +14,7 @@ namespace CodeIndex.Tests;
 /// CodeIndexException と、その <c>Code / Category / Path / Hint</c> を一律に出す
 /// CLI / MCP フォーマッタのカバレッジ (#1580)。
 /// </summary>
+[Collection("Console sensitive")]
 public class CodeIndexExceptionTests
 {
     private readonly JsonSerializerOptions _jsonOptions = new()

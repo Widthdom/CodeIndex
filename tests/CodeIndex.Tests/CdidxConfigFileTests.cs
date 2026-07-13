@@ -5,6 +5,7 @@ using System.Text.Json;
 
 namespace CodeIndex.Tests;
 
+[Collection("Console sensitive")]
 public class CdidxConfigFileTests
 {
     private readonly JsonSerializerOptions _jsonOptions = ProgramRunner.CreateDefaultJsonOptions();

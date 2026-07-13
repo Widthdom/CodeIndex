@@ -1,5 +1,6 @@
 namespace CodeIndex.Tests;
 
+[Collection("Console sensitive")]
 public class ConsoleCaptureTests
 {
     [Fact]

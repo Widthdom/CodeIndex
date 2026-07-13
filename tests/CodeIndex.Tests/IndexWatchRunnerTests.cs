@@ -11,6 +11,7 @@ namespace CodeIndex.Tests;
 /// Tests for <see cref="IndexWatchRunner"/> (`cdidx index --watch`).
 /// `cdidx index --watch` のテスト。
 /// </summary>
+[Collection("Console sensitive")]
 public class IndexWatchRunnerTests
 {
     private readonly JsonSerializerOptions _jsonOptions = new()
