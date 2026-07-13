@@ -111,7 +111,7 @@ while skipping references for only the over-limit file.
 |---|---|
 | Search and navigation | `search`, `find`, `excerpt`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect`, `map`, `deps`, `impact`, `unused`, and `hotspots`. See the [command reference](USER_GUIDE.md#command-reference). |
 | AI integration | `cdidx mcp` exposes indexed search tools for Claude Code, Cursor, Windsurf, Copilot, Codex, and other MCP clients. See [AI Integration](USER_GUIDE.md#ai-integration). |
-| Editor lookup | `cdidx lsp --db .cdidx/codeindex.db` starts a read-only LSP shim for editors that can launch an LSP command. |
+| Editor lookup | `cdidx lsp --db .cdidx/codeindex.db` starts a read-only LSP shim for editors that can launch an LSP command. C# semantic tokens distinguish keywords, modifiers, namespace components, types, fields, methods, and declarations. |
 | Freshness | `status --check`, `--files`, `--commits`, `--changed-between`, and `--watch` keep the DB aligned with the workspace. |
 | Validation | `cdidx validate` reports encoding and line-ending issues in indexed files. See [Validate indexed files](USER_GUIDE.md#validate-indexed-files). |
 | Language coverage | `cdidx languages --json` is the live capability probe; add `--format count`, `--summary-only`, `--capability <filter>`, `--language`, `--extension`, or `--alias` to narrow output. See [Supported languages](USER_GUIDE.md#supported-languages). |
@@ -321,7 +321,7 @@ cdidx lsp --db .cdidx/codeindex.db
 |---|---|
 | 検索とナビゲーション | `search`、`find`、`excerpt`、`symbols`、`definition`、`references`、`callers`、`callees`、`inspect`、`map`、`deps`、`impact`、`unused`、`hotspots`。詳細は [コマンドリファレンス](USER_GUIDE.md#コマンドリファレンス)。 |
 | AI 連携 | `cdidx mcp` は Claude Code、Cursor、Windsurf、Copilot、Codex などの MCP client に indexed search tool を提供します。詳細は [AIとの連携](USER_GUIDE.md#aiとの連携)。 |
-| editor lookup | `cdidx lsp --db .cdidx/codeindex.db` は、LSP command を起動できる editor 向けの read-only LSP shim です。 |
+| editor lookup | `cdidx lsp --db .cdidx/codeindex.db` は、LSP command を起動できる editor 向けの read-only LSP shim です。C# semantic token は keyword、modifier、namespace component、type、field、method、declaration を区別します。 |
 | 鮮度管理 | `status --check`、`--files`、`--commits`、`--changed-between`、`--watch` で DB と workspace を揃えます。 |
 | validation | `cdidx validate` は indexed file の encoding / line-ending 問題を報告します。詳細は [Indexed files を validate する](USER_GUIDE.md#indexed-files-を-validate-する)。 |
 | 対応言語 | `cdidx languages --json` が live capability probe です。`--language`、`--extension`、`--alias` で 1 行を lookup できます。詳細は [対応言語](USER_GUIDE.md#対応言語)。 |

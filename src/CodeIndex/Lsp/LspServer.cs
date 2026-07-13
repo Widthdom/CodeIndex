@@ -95,6 +95,7 @@ internal sealed class LspServer : IDisposable
         "regexp",
         "operator",
         "decorator",
+        "field",
     ];
     private static readonly string[] SemanticTokenModifiers =
     [
@@ -666,6 +667,13 @@ internal sealed class LspServer : IDisposable
             .OrderBy(token => token.Line)
             .ThenBy(token => token.StartCharacter)
             .ToList();
+        IEnumerable<SemanticToken> lexicalTokens = string.Equals(Path.GetExtension(document.ResolvedPath), ".cs", StringComparison.OrdinalIgnoreCase)
+            ? BuildCSharpLexicalSemanticTokens(document, lineCache)
+            : [];
+        symbols = RemoveOverlappingSemanticTokens(lexicalTokens.Concat(symbols))
+            .OrderBy(token => token.Line)
+            .ThenBy(token => token.StartCharacter)
+            .ToList();
         var data = new JsonArray();
         var previousLine = 0;
         var previousStart = 0;
@@ -894,6 +902,122 @@ internal sealed class LspServer : IDisposable
 
     private readonly record struct SemanticToken(int Line, int StartCharacter, int Length, int TokenType, int TokenModifiers);
 
+    private static IEnumerable<SemanticToken> RemoveOverlappingSemanticTokens(IEnumerable<SemanticToken> candidates)
+    {
+        var selected = new List<SemanticToken>();
+        foreach (var candidate in candidates)
+        {
+            if (selected.Any(existing =>
+                    existing.Line == candidate.Line &&
+                    existing.StartCharacter < candidate.StartCharacter + candidate.Length &&
+                    candidate.StartCharacter < existing.StartCharacter + existing.Length))
+            {
+                continue;
+            }
+
+            selected.Add(candidate);
+            if (selected.Count == MaxSemanticTokenItems)
+                break;
+        }
+        return selected;
+    }
+
+    private static readonly HashSet<string> CSharpModifiers = new(StringComparer.Ordinal)
+    {
+        "abstract", "async", "const", "extern", "file", "internal", "override", "partial",
+        "private", "protected", "public", "readonly", "required", "sealed", "static", "unsafe", "virtual", "volatile",
+    };
+
+    private static readonly HashSet<string> CSharpKeywords = new(StringComparer.Ordinal)
+    {
+        "as", "base", "bool", "break", "byte", "case", "catch", "char", "checked", "class", "continue",
+        "decimal", "default", "delegate", "do", "double", "else", "enum", "event", "explicit", "false", "finally",
+        "fixed", "float", "for", "foreach", "goto", "if", "implicit", "in", "int", "interface", "is", "lock",
+        "long", "namespace", "new", "null", "object", "operator", "out", "params", "record", "ref", "return", "sbyte",
+        "short", "sizeof", "stackalloc", "string", "struct", "switch", "this", "throw", "true", "try", "typeof",
+        "uint", "ulong", "unchecked", "using", "ushort", "void", "while", "with", "yield",
+    };
+
+    private IEnumerable<SemanticToken> BuildCSharpLexicalSemanticTokens(
+        IndexedDocumentContext document,
+        Dictionary<int, string?> lineCache)
+    {
+        var inBlockComment = false;
+        for (var line = 0; line < MaxSemanticTokenItems; line++)
+        {
+            if (!TryReadPositionLineCached(document.ResolvedPath, line, lineCache, out var sourceLine))
+                yield break;
+
+            var inString = false;
+            var quote = '\0';
+            for (var index = 0; index < sourceLine.Length;)
+            {
+                if (inBlockComment)
+                {
+                    var end = sourceLine.IndexOf("*/", index, StringComparison.Ordinal);
+                    if (end < 0)
+                        break;
+                    inBlockComment = false;
+                    index = end + 2;
+                    continue;
+                }
+
+                if (inString)
+                {
+                    if (sourceLine[index] == '\\')
+                    {
+                        index = Math.Min(index + 2, sourceLine.Length);
+                        continue;
+                    }
+                    if (sourceLine[index++] == quote)
+                        inString = false;
+                    continue;
+                }
+
+                if (index + 1 < sourceLine.Length && sourceLine[index] == '/' && sourceLine[index + 1] == '/')
+                    break;
+                if (index + 1 < sourceLine.Length && sourceLine[index] == '/' && sourceLine[index + 1] == '*')
+                {
+                    inBlockComment = true;
+                    index += 2;
+                    continue;
+                }
+                if (sourceLine[index] is '\'' or '"')
+                {
+                    inString = true;
+                    quote = sourceLine[index++];
+                    continue;
+                }
+                if (!IsCSharpIdentifierStart(sourceLine[index]))
+                {
+                    index++;
+                    continue;
+                }
+
+                var start = index++;
+                while (index < sourceLine.Length && IsTokenChar(sourceLine[index]))
+                    index++;
+                var word = sourceLine[start..index].TrimStart('@');
+                if (CSharpModifiers.Contains(word))
+                    yield return new SemanticToken(line, start, index - start, 16, 0);
+                else if (CSharpKeywords.Contains(word))
+                    yield return new SemanticToken(line, start, index - start, 15, 0);
+                else if (IsCSharpNamespaceComponent(sourceLine, start))
+                    yield return new SemanticToken(line, start, index - start, 0, 0);
+            }
+        }
+    }
+
+    private static bool IsCSharpIdentifierStart(char value) => char.IsLetter(value) || value is '_' or '@';
+
+    private static bool IsCSharpNamespaceComponent(string line, int start)
+    {
+        var prefix = line.AsSpan(0, start).TrimStart();
+        return prefix.StartsWith("using ", StringComparison.Ordinal) ||
+               prefix.StartsWith("global using ", StringComparison.Ordinal) ||
+               prefix.StartsWith("namespace ", StringComparison.Ordinal);
+    }
+
     private SemanticToken? BuildSemanticToken(IndexedDocumentContext document, SymbolResult symbol, Dictionary<int, string?> lineCache)
     {
         var line = Math.Max(symbol.Line, symbol.StartLine);
@@ -907,7 +1031,7 @@ internal sealed class LspServer : IDisposable
             startCharacter,
             length,
             SemanticTokenType(symbol.Kind),
-            1 << 1);
+            1 << 0);
     }
 
     private int FindSymbolStartCharacter(IndexedDocumentContext document, SymbolResult symbol, Dictionary<int, string?>? lineCache = null)
@@ -931,6 +1055,7 @@ internal sealed class LspServer : IDisposable
         "interface" => 4,
         "struct" => 5,
         "property" => 9,
+        "field" => 23,
         "function" or "test.method" => 13,
         _ => 8,
     };
