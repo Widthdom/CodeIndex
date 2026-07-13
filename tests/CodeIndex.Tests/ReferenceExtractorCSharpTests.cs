@@ -7314,7 +7314,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpNoArgParameterAttribute_ClassifiedAsAttribute()
+    public void Extract_CsharpNoArgParameterAttributes_ReuseMethodDelegateAndLambdaFixture()
     {
         // Regression (issue #293 follow-up): no-arg parameter attributes such as
         // `void M([FromServices] IService s)` must still classify as `attribute`.
@@ -7328,7 +7328,14 @@ public partial class ReferenceExtractorTests
             public class S
             {
                 public void M([FromServices] IService s) { }
+
+                public void Lambda()
+                {
+                    System.Func<int, int> f = ([Attr] int x) => x;
+                }
             }
+
+            public delegate void D([Attr] int x);
             """;
 
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
@@ -7336,36 +7343,10 @@ public partial class ReferenceExtractorTests
 
         var fromServices = Assert.Single(references.Where(r => r.SymbolName == "FromServices"));
         Assert.Equal("attribute", fromServices.ReferenceKind);
-        Assert.DoesNotContain(references, r => r.SymbolName == "FromServices" && r.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_CsharpNoArgDelegateAndLambdaParameterAttributes_ClassifiedAsAttribute()
-    {
-        // Regression (issue #293 follow-up): no-arg attributes on delegate parameters and
-        // lambda parameters also open their `[` inside outer parens, so they require
-        // section-local paren-depth tracking for top-level zone detection.
-        // リグレッション (issue #293 補足): デリゲート・ラムダの仮引数に付く no-arg 属性も
-        // `(` の中で `[` が開くため、section-local の paren 深さ追跡が必要。
-        const string content = """
-            public delegate void D([Attr] int x);
-            public class C
-            {
-                public void M()
-                {
-                    System.Func<int, int> f = ([Attr] int x) => x;
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        // Both occurrences of `Attr` should be classified as `attribute`, not `call`.
-        // 2 箇所の `Attr` が `attribute` として分類され、`call` にはならないこと。
         var attrs = references.Where(r => r.SymbolName == "Attr").ToList();
         Assert.Equal(2, attrs.Count);
         Assert.All(attrs, r => Assert.Equal("attribute", r.ReferenceKind));
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && (r.SymbolName == "FromServices" || r.SymbolName == "Attr"));
     }
 
     [Fact]
