@@ -125,7 +125,12 @@ jobs:
       # bump が公開アーティファクトに紛れ込まず release restore で気付ける。
       # 詳細は issue #1556 参照。
       - name: Restore dependencies
+        if: ${{ !matrix.cross_compile }}
         run: dotnet restore CodeIndex.sln --locked-mode
+
+      - name: Restore publish dependencies
+        if: matrix.cross_compile
+        run: dotnet restore src/CodeIndex/CodeIndex.csproj --locked-mode
 
       - name: Build
         if: ${{ !matrix.cross_compile }}

@@ -27,7 +27,8 @@ public partial class ReleaseWorkflowTests
 
         AssertContainsAll(
             workflow,
-            "dotnet restore CodeIndex.sln --locked-mode",
+            "- name: Restore dependencies\n        if: ${{ !matrix.cross_compile }}\n        run: dotnet restore CodeIndex.sln --locked-mode",
+            "- name: Restore publish dependencies\n        if: matrix.cross_compile\n        run: dotnet restore src/CodeIndex/CodeIndex.csproj --locked-mode",
             "- name: Build\n        if: ${{ !matrix.cross_compile }}\n        run: dotnet build CodeIndex.sln --configuration Release --no-restore",
             "dotnet test CodeIndex.sln --configuration Release --no-build --no-restore --nologo");
     }
