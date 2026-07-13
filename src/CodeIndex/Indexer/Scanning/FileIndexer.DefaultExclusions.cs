@@ -65,6 +65,18 @@ public partial class FileIndexer
         return IsDefaultExcludedFileName(fileName.AsSpan());
     }
 
+    internal static bool IsBuiltInSuggestionStorePath(string path)
+    {
+        var fileName = Path.GetFileName(path.AsSpan());
+        if (!fileName.StartsWith("suggestions-".AsSpan(), StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var parent = Path.GetDirectoryName(path);
+        return parent != null
+            && Path.GetFileName(Path.TrimEndingDirectorySeparator(parent.AsSpan()))
+                .Equals(".cdidx".AsSpan(), StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool IsDefaultExcludedFileName(ReadOnlySpan<char> fileName)
     {
         if (fileName.IsEmpty)
