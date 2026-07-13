@@ -2,7 +2,6 @@ using CodeIndex;
 
 namespace CodeIndex.Tests;
 
-[Collection("SQLite pool sensitive")]
 public class ProcessLaunchPolicyTests
 {
     [Fact]
@@ -73,7 +72,11 @@ public class ProcessLaunchPolicyTests
         Assert.False(startInfo.StandardOutputEncoding!.GetPreamble().Length > 0);
         Assert.False(startInfo.StandardErrorEncoding!.GetPreamble().Length > 0);
     }
+}
 
+[Collection("SQLite pool sensitive")]
+public class SubprocessEnvironmentPolicyTests
+{
     [Fact]
     public void SubprocessEnvironmentPolicy_WorkerOnlyForwardsTestPrefixedEnvironment_Issue3910()
     {
