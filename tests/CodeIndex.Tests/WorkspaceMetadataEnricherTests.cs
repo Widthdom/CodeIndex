@@ -11,55 +11,25 @@ namespace CodeIndex.Tests;
 public class WorkspaceMetadataEnricherTests
 {
     [Fact]
-    public void Enrich_StatusResult_PopulatesProjectRootHeadAndDirty()
+    public void Enrich_ResultTypes_PopulateProjectRootHeadAndDirty()
     {
-        var (projectRoot, dbPath, expectedHead) = CreateDirtyGitProject("cdidx_workspace_status");
+        var (projectRoot, dbPath, expectedHead) = CreateDirtyGitProject("cdidx_workspace_results");
         try
         {
             var status = new StatusResult();
+            var map = new RepoMapResult();
+            var analysis = new SymbolAnalysisResult();
 
             WorkspaceMetadataEnricher.Enrich(status, dbPath);
+            WorkspaceMetadataEnricher.Enrich(map, dbPath);
+            WorkspaceMetadataEnricher.Enrich(analysis, dbPath);
 
             Assert.Equal(projectRoot, status.ProjectRoot);
             Assert.Equal(expectedHead, status.GitHead);
             Assert.True(status.GitIsDirty);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void Enrich_RepoMapResult_PopulatesProjectRootHeadAndDirty()
-    {
-        var (projectRoot, dbPath, expectedHead) = CreateDirtyGitProject("cdidx_workspace_map");
-        try
-        {
-            var map = new RepoMapResult();
-
-            WorkspaceMetadataEnricher.Enrich(map, dbPath);
-
             Assert.Equal(projectRoot, map.ProjectRoot);
             Assert.Equal(expectedHead, map.GitHead);
             Assert.True(map.GitIsDirty);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void Enrich_SymbolAnalysisResult_PopulatesProjectRootHeadAndDirty()
-    {
-        var (projectRoot, dbPath, expectedHead) = CreateDirtyGitProject("cdidx_workspace_analysis");
-        try
-        {
-            var analysis = new SymbolAnalysisResult();
-
-            WorkspaceMetadataEnricher.Enrich(analysis, dbPath);
-
             Assert.Equal(projectRoot, analysis.ProjectRoot);
             Assert.Equal(expectedHead, analysis.GitHead);
             Assert.True(analysis.GitIsDirty);
