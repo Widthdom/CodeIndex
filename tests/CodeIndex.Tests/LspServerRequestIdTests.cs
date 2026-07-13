@@ -4,7 +4,6 @@ using CodeIndex.Lsp;
 
 namespace CodeIndex.Tests;
 
-[Collection("SQLite pool sensitive")]
 public class LspServerRequestIdTests
 {
     [Fact]
