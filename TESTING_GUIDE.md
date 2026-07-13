@@ -285,6 +285,7 @@ Use the inventory below before adding or moving a test class:
 - Console-only test classes do not need the SQLite-sensitive non-parallel collection once every capture/swap window, including writer-disposal checks, is protected by `TestConsoleLock.Gate`.
 - Pure i18n resolution, self-locking JSON-envelope capture, and isolated LSP request/budget fixtures should remain outside the SQLite-sensitive collection; owning a temporary DB is not itself process-global state when the context is disposed before helper cleanup.
 - Reader issue fixtures with per-instance DB ownership and external-process fixtures with per-instance directories are likewise parallel-safe when their `Dispose` paths release those resources through the shared helpers.
+- Schema-constraint fixtures dispose every `DbContext`, connection, command, and reader before directory cleanup; do not add unconditional pool resets that serialize these independent schema checks.
 - Temporary repositories and files: create them through `TestProjectHelper` when practical, and do not depend on user-level git config.
 - Long-running or performance-oriented tests: keep them skipped by default or give them broad deterministic budgets; if CI reports them in xUnit long-running diagnostics, first check runner load before tightening thresholds.
 - When a response-size algorithm needs a large production ceiling, prefer a narrowly scoped test-only budget override and a small representative payload; restore process-global overrides in `finally` and keep the suite non-parallel.
@@ -704,6 +705,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - console だけを扱う test class は、writer disposal check を含むすべての capture / swap 期間が `TestConsoleLock.Gate` で保護されていれば、SQLite-sensitive non-parallel collection に入れる必要はない。
 - pure i18n resolution、内部で lock する JSON-envelope capture、独立した LSP request / budget fixture は SQLite-sensitive collection の外に保つ。一時 DB を所有するだけなら、context を helper cleanup 前に dispose している限り process-global state ではない。
 - instance ごとに DB を所有する reader issue fixture と、instance ごとに directory を所有する external-process fixture も、`Dispose` で共有 helper を通して resource を解放する限り parallel-safe である。
+- schema-constraint fixture は directory cleanup 前にすべての `DbContext`、connection、command、reader を dispose する。独立した schema check を直列化する無条件 pool reset を追加しないこと。
 - 一時 repo / file: 可能な限り `TestProjectHelper` 経由で作り、user-level の git config に依存しない。
 - 長時間または performance 系テスト: デフォルト skip にするか、決定的で十分広い budget を与える。CI の xUnit long-running 診断に出た場合は、閾値を締める前に runner 負荷を確認する。
 

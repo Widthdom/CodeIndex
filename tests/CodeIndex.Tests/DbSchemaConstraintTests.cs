@@ -5,7 +5,6 @@ using System.Text.RegularExpressions;
 
 namespace CodeIndex.Tests;
 
-[Collection("SQLite pool sensitive")]
 public class DbSchemaConstraintTests
 {
     [Theory]
@@ -33,7 +32,6 @@ public class DbSchemaConstraintTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
@@ -64,7 +62,6 @@ public class DbSchemaConstraintTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
@@ -91,7 +88,6 @@ public class DbSchemaConstraintTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
