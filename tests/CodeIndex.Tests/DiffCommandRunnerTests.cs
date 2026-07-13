@@ -720,6 +720,42 @@ public class DiffCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DetailedJsonIgnoresReferenceLineSurrogateIds_Issue4478()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_refline_id_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_refline_id_right");
+        try
+        {
+            var content = "public class Same { public void Run() { Foo(); } }";
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            TestProjectHelper.InsertIndexedFile(leftDb, "src/Same.cs", "csharp", content);
+            TestProjectHelper.InsertIndexedFile(rightDb, "src/Same.cs", "csharp", content);
+            SetMeta(leftDb, DbContext.IndexedProjectRootMetaKey, Path.GetFullPath(leftRoot));
+            SetMeta(rightDb, DbContext.IndexedProjectRootMetaKey, Path.GetFullPath(leftRoot));
+            RemapReferenceLineIds(rightDb);
+
+            var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--json", "--detailed"]);
+
+            Assert.Equal(0, exitCode);
+            using var document = JsonDocument.Parse(output);
+            var root = document.RootElement;
+            Assert.Equal("identical", root.GetProperty("status").GetString());
+            Assert.True(root.GetProperty("identical").GetBoolean());
+            Assert.Empty(root.GetProperty("files_only_in_left").EnumerateArray());
+            Assert.Empty(root.GetProperty("files_only_in_right").EnumerateArray());
+            Assert.Empty(root.GetProperty("symbols_only_in_left").EnumerateArray());
+            Assert.Empty(root.GetProperty("symbols_only_in_right").EnumerateArray());
+            Assert.Empty(root.GetProperty("metadata_drift").EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
     public void Run_ReturnsUnreadableExitCodeForMissingDatabase_Issue1724()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_diff_missing");
@@ -923,6 +959,21 @@ public class DiffCommandRunnerTests
             )
             """,
             command => command.Parameters.AddWithValue("$context", context));
+    }
+
+    private static void RemapReferenceLineIds(string dbPath)
+    {
+        ExecuteNonQuery(
+            dbPath,
+            """
+            PRAGMA foreign_keys = OFF;
+            UPDATE reference_lines
+            SET id = id + 1000000;
+            UPDATE symbol_references
+            SET reference_line_id = reference_line_id + 1000000
+            WHERE reference_line_id IS NOT NULL;
+            PRAGMA foreign_keys = ON;
+            """);
     }
 
     private static void RecreateSymbolsTableWithoutMetadataTargetSourceColumn(string dbPath)
