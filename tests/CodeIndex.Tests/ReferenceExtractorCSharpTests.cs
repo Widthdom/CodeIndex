@@ -2029,7 +2029,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryRangeVariableNamedLikeEnum_DoesNotLeakAsEnumMemberReference()
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryRangeVariableNamedLikeEnum_StopsAtQueryBoundaries()
     {
         const string content = """
             using System.Collections.Generic;
@@ -2045,75 +2045,6 @@ public partial class ReferenceExtractorTests
             public sealed class Holder
             {
                 public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public IEnumerable<int> Read(IEnumerable<Holder> items)
-                {
-                    return from Status in items
-                           select Status.Ready;
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryRangeVariableNamedLikeEnum_DoesNotLeakAfterQuery()
-    {
-        const string content = """
-            using System.Collections.Generic;
-            using System.Linq;
-
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public Demo.Status Read(IEnumerable<Holder> items)
-                {
-                    _ = from Status in items
-                        select Status.Ready;
-
-                    return Demo.Status.Ready;
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        Assert.Single(readyRefs);
-        Assert.Equal("Read", readyRefs[0].ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryRangeVariableNamedLikeEnum_DoesNotLeakPastQueryArgument()
-    {
-        const string content = """
-            using System.Collections.Generic;
-            using System.Linq;
-
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
             }
 
             public static class Sink
@@ -2121,14 +2052,23 @@ public partial class ReferenceExtractorTests
                 public static Demo.Status Pick(IEnumerable<int> left, Demo.Status right) => right;
             }
 
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
             public sealed class Uses
             {
-                public Demo.Status Read(IEnumerable<Holder> items)
+                public IEnumerable<int> QueryOnly(IEnumerable<Holder> items)
+                {
+                    return from Status in items
+                           select Status.Ready;
+                }
+
+                public Demo.Status ReadAfter(IEnumerable<Holder> items)
+                {
+                    _ = from Status in items
+                        select Status.Ready;
+
+                    return Demo.Status.Ready;
+                }
+
+                public Demo.Status ReadArgument(IEnumerable<Holder> items)
                 {
                     return Sink.Pick(from Status in items select Status.Ready, Demo.Status.Ready);
                 }
@@ -2138,9 +2078,13 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        Assert.Single(readyRefs);
-        Assert.Equal("Read", readyRefs[0].ContainerName);
+        var readyRefs = references
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Select(reference => reference.ContainerName)
+            .OrderBy(name => name)
+            .ToArray();
+
+        Assert.Equal(["ReadAfter", "ReadArgument"], readyRefs);
     }
 
     [Fact]
