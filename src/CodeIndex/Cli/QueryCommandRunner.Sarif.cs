@@ -30,12 +30,16 @@ public static partial class QueryCommandRunner
         return string.IsNullOrWhiteSpace(result.Name) ? kind : $"{kind} {result.Name}";
     }
 
-    private static void WriteSarif(IEnumerable<(string Path, int Line, int Column, string Message, string RuleId)> items, JsonSerializerOptions jsonOptions)
+    private static void WriteSarif(
+        IEnumerable<(string Path, int Line, int Column, string Message, string RuleId)> items,
+        JsonSerializerOptions jsonOptions,
+        string level = "warning")
         => WriteSarif(
             items.Select(item => new SarifLocation(item.Path, item.Line, item.Column, null, item.Message, item.RuleId)),
-            jsonOptions);
+            jsonOptions,
+            level);
 
-    private static void WriteSarif(IEnumerable<SarifLocation> items, JsonSerializerOptions jsonOptions)
+    private static void WriteSarif(IEnumerable<SarifLocation> items, JsonSerializerOptions jsonOptions, string level = "warning")
     {
         var writer = Console.Out;
         var itemOptions = GetCompactJsonOptions(jsonOptions);
@@ -47,12 +51,12 @@ public static partial class QueryCommandRunner
                 .Where(ruleId => !string.IsNullOrWhiteSpace(ruleId))
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(ruleId => ruleId, StringComparer.Ordinal),
-            (ruleWriter, ruleId) => WriteSarifRule(ruleWriter, ruleId, itemOptions),
+            (ruleWriter, ruleId) => WriteSarifRule(ruleWriter, ruleId, level, itemOptions),
             separator: ",");
         writer.Write("}},\"results\":");
         WriteJsonArrayInline(
             itemList,
-            (resultWriter, item) => WriteSarifResult(resultWriter, item, itemOptions),
+            (resultWriter, item) => WriteSarifResult(resultWriter, item, level, itemOptions),
             separator: ",");
         writer.WriteLine("}]}");
     }
@@ -72,7 +76,7 @@ public static partial class QueryCommandRunner
         writer.Write(']');
     }
 
-    private static void WriteSarifRule(TextWriter writer, string ruleId, JsonSerializerOptions jsonOptions)
+    private static void WriteSarifRule(TextWriter writer, string ruleId, string level, JsonSerializerOptions jsonOptions)
     {
         writer.Write("{\"id\":");
         writer.Write(JsonSerializer.Serialize(ruleId, jsonOptions));
@@ -84,14 +88,18 @@ public static partial class QueryCommandRunner
         writer.Write(JsonSerializer.Serialize("A machine-readable cdidx finding emitted from an indexed code query.", jsonOptions));
         writer.Write("},\"helpUri\":\"https://github.com/Widthdom/CodeIndex\",\"help\":{\"text\":");
         writer.Write(JsonSerializer.Serialize("Review the referenced location and surrounding code before filing or acting on this result.", jsonOptions));
-        writer.Write("},\"defaultConfiguration\":{\"level\":\"warning\"},\"properties\":{\"tags\":[\"cdidx\",\"code-search\"]}}");
+        writer.Write("},\"defaultConfiguration\":{\"level\":");
+        writer.Write(JsonSerializer.Serialize(level, jsonOptions));
+        writer.Write("},\"properties\":{\"tags\":[\"cdidx\",\"code-search\"]}}");
     }
 
-    private static void WriteSarifResult(TextWriter writer, SarifLocation item, JsonSerializerOptions jsonOptions)
+    private static void WriteSarifResult(TextWriter writer, SarifLocation item, string level, JsonSerializerOptions jsonOptions)
     {
         writer.Write("{\"ruleId\":");
         writer.Write(JsonSerializer.Serialize(item.RuleId, jsonOptions));
-        writer.Write(",\"level\":\"warning\",\"message\":{\"text\":");
+        writer.Write(",\"level\":");
+        writer.Write(JsonSerializer.Serialize(level, jsonOptions));
+        writer.Write(",\"message\":{\"text\":");
         writer.Write(JsonSerializer.Serialize(item.Message, jsonOptions));
         writer.Write("},\"locations\":[{\"physicalLocation\":{\"artifactLocation\":{\"uri\":");
         writer.Write(JsonSerializer.Serialize(NormalizeSarifArtifactUri(item.Path), jsonOptions));

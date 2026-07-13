@@ -304,7 +304,51 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, sarifExitCode);
             Assert.Equal(string.Empty, sarifStderr);
             Assert.Equal("2.1.0", sarifDocument.RootElement.GetProperty("version").GetString());
+            Assert.Equal("warning", sarifDocument.RootElement
+                .GetProperty("runs")[0]
+                .GetProperty("tool")
+                .GetProperty("driver")
+                .GetProperty("rules")[0]
+                .GetProperty("defaultConfiguration")
+                .GetProperty("level")
+                .GetString());
+            Assert.Equal("warning", result.GetProperty("level").GetString());
             Assert.Contains("Run", result.GetProperty("message").GetProperty("text").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDefinition_SarifUsesNoteSeverityForNavigationResults_Issue4466()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_sarif_severity_issue4466");
+        try
+        {
+            var dbPath = CreateSymbolsEditorFormatFixtureDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Run", "--db", dbPath, "--format", "sarif", "--exact-name", "--lang", "csharp", "--kind", "function"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var run = document.RootElement.GetProperty("runs")[0];
+            var rule = Assert.Single(run
+                .GetProperty("tool")
+                .GetProperty("driver")
+                .GetProperty("rules")
+                .EnumerateArray()
+                .ToList());
+            var result = Assert.Single(run.GetProperty("results").EnumerateArray().ToList());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("definition", rule.GetProperty("id").GetString());
+            Assert.Equal("note", rule.GetProperty("defaultConfiguration").GetProperty("level").GetString());
+            Assert.Equal("definition", result.GetProperty("ruleId").GetString());
+            Assert.Equal("note", result.GetProperty("level").GetString());
         }
         finally
         {
