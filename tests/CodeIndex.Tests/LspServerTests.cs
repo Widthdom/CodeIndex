@@ -493,7 +493,7 @@ public class LspServerTests
             var sourcePath = Path.Combine(projectRoot, "app.cs");
             var source = string.Join('\n',
             [
-                "using System.Text;",
+                "using Text = System.Text;",
                 "namespace Sample.Tools { internal sealed class App",
                 "{",
                 "    private const int Count = 1;",

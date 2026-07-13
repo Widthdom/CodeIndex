@@ -1101,7 +1101,8 @@ internal sealed class LspServer : IDisposable
         var brace = line.IndexOf('{', nameStart);
         var nameEnd = new[] { semicolon, brace }.Where(value => value >= 0).DefaultIfEmpty(line.Length).Min();
         var alias = line.IndexOf('=', nameStart, Math.Max(0, nameEnd - nameStart));
-        return alias < 0 && start < nameEnd;
+        var qualifiedNameStart = alias >= 0 ? alias + 1 : nameStart;
+        return start >= qualifiedNameStart && start < nameEnd;
     }
 
     private SemanticToken? BuildSemanticToken(IndexedDocumentContext document, SymbolResult symbol, Dictionary<int, string?> lineCache)
