@@ -1959,95 +1959,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithOutDeclarationShadowing_DoesNotLeakAsEnumMemberReference()
-    {
-        const string content = """
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                private static bool TryGet(out Holder holder)
-                {
-                    holder = new Holder();
-                    return true;
-                }
-
-                public Demo.Status Read()
-                {
-                    if (TryGet(out Holder Status))
-                    {
-                        _ = Status.Ready;
-                    }
-
-                    return Demo.Status.Ready;
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        Assert.Single(readyRefs);
-        Assert.Equal("Read", readyRefs[0].ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithCatchShadowing_DoesNotLeakAfterCatchBlock()
-    {
-        const string content = """
-            using System;
-
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public Status Read()
-                {
-                    try
-                    {
-                        throw new Exception();
-                    }
-                    catch (Exception Status)
-                    {
-                        _ = Status.Message;
-                    }
-
-                    return Status.Ready;
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        Assert.Single(readyRefs);
-        Assert.Equal("Read", readyRefs[0].ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithUsingStatementShadowing_DoesNotLeakAfterUsingBlock()
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithScopedShadowing_StopsAtStatementBoundaries()
     {
         const string content = """
             using System;
@@ -2070,7 +1982,37 @@ public partial class ReferenceExtractorTests
 
             public sealed class Uses
             {
-                public Status Read(bool flag)
+                private static bool TryGet(out Holder holder)
+                {
+                    holder = new Holder();
+                    return true;
+                }
+
+                public Demo.Status ReadOutDeclaration()
+                {
+                    if (TryGet(out Holder Status))
+                    {
+                        _ = Status.Ready;
+                    }
+
+                    return Demo.Status.Ready;
+                }
+
+                public Status ReadCatch()
+                {
+                    try
+                    {
+                        throw new Exception();
+                    }
+                    catch (Exception Status)
+                    {
+                        _ = Status.Message;
+                    }
+
+                    return Status.Ready;
+                }
+
+                public Status ReadUsing(bool flag)
                 {
                     if (flag)
                     {
@@ -2082,42 +2024,8 @@ public partial class ReferenceExtractorTests
 
                     return Status.Ready;
                 }
-            }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        Assert.Single(readyRefs);
-        Assert.Equal("Read", readyRefs[0].ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithOutVarShadowing_DoesNotLeakAsEnumMemberReference()
-    {
-        const string content = """
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                private static bool TryGet(out Holder holder)
-                {
-                    holder = new Holder();
-                    return true;
-                }
-
-                public Demo.Status Read()
+                public Demo.Status ReadOutVar()
                 {
                     if (TryGet(out var Status))
                     {
@@ -2132,9 +2040,13 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        Assert.Single(readyRefs);
-        Assert.Equal("Read", readyRefs[0].ContainerName);
+        var readyRefs = references
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Select(reference => reference.ContainerName)
+            .OrderBy(name => name)
+            .ToArray();
+
+        Assert.Equal(["ReadCatch", "ReadOutDeclaration", "ReadOutVar", "ReadUsing"], readyRefs);
     }
 
     [Fact]
