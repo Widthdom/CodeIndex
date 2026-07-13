@@ -4348,7 +4348,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithForeachValueNamedLikeEnum_DoesNotLeakAfterEmbeddedStatement()
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithForeachValueNamedLikeEnum_RespectsEmbeddedStatementScopes()
     {
         const string content = """
             using System.Collections.Generic;
@@ -4367,80 +4367,20 @@ public partial class ReferenceExtractorTests
 
             public sealed class Uses
             {
-                public Demo.Status Read(IEnumerable<Holder> items)
+                public Demo.Status ReadEmbedded(IEnumerable<Holder> items)
                 {
                     foreach (var Status in items)
                         _ = Status.Ready;
 
                     return Demo.Status.Ready;
                 }
-            }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        Assert.Single(readyRefs);
-        Assert.Equal("Read", readyRefs[0].ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithForeachValueNamedLikeEnum_DoesNotLeakAfterSameLineEmbeddedStatement()
-    {
-        const string content = """
-            using System.Collections.Generic;
-
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public Demo.Status Read(IEnumerable<Holder> items)
+                public Demo.Status ReadSameLine(IEnumerable<Holder> items)
                 {
                     foreach (var Status in items) _ = Status.Ready; return Demo.Status.Ready;
                 }
-            }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        Assert.Single(readyRefs);
-        Assert.Equal("Read", readyRefs[0].ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithForeachValueNamedLikeEnum_DoesNotLeakInsideElseBranch()
-    {
-        const string content = """
-            using System.Collections.Generic;
-
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public Demo.Status Read(IEnumerable<Holder> items, bool flag)
+                public Demo.Status ReadElse(IEnumerable<Holder> items, bool flag)
                 {
                     foreach (var Status in items)
                         if (flag)
@@ -4456,9 +4396,13 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        Assert.Single(readyRefs);
-        Assert.Equal("Read", readyRefs[0].ContainerName);
+        var readyRefs = references
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Select(reference => reference.ContainerName)
+            .OrderBy(name => name)
+            .ToArray();
+
+        Assert.Equal(["ReadElse", "ReadEmbedded", "ReadSameLine"], readyRefs);
     }
 
     [Fact]
