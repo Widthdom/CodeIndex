@@ -194,7 +194,7 @@ public class WorkspaceMetadataEnricherTests
     }
 
     [Fact]
-    public void Enrich_StatusResult_FlagsWorktreeHeadChangedWhenPersistedHeadDiffersFromRuntimeHead()
+    public void Enrich_StatusResult_TracksPersistedHeadDriftAndRecovery()
     {
         var (projectRoot, dbPath, originalHead) = CreateDirtyGitProject("cdidx_workspace_head_changed");
         try
@@ -217,31 +217,19 @@ public class WorkspaceMetadataEnricherTests
             Assert.Equal(originalHead, status.GitHead);
             Assert.Equal(staleHead, status.IndexedHeadCommit);
             Assert.True(status.WorktreeHeadChanged);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void Enrich_StatusResult_DoesNotFlagWorktreeHeadChangedWhenPersistedHeadMatchesRuntimeHead()
-    {
-        var (projectRoot, dbPath, originalHead) = CreateDirtyGitProject("cdidx_workspace_head_match");
-        try
-        {
             using (var db = new DbContext(dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, originalHead);
             }
 
-            var status = new StatusResult();
+            var recoveredStatus = new StatusResult();
 
-            WorkspaceMetadataEnricher.Enrich(status, dbPath);
+            WorkspaceMetadataEnricher.Enrich(recoveredStatus, dbPath);
 
-            Assert.Equal(originalHead, status.IndexedHeadCommit);
-            Assert.False(status.WorktreeHeadChanged);
+            Assert.Equal(originalHead, recoveredStatus.IndexedHeadCommit);
+            Assert.False(recoveredStatus.WorktreeHeadChanged);
         }
         finally
         {
