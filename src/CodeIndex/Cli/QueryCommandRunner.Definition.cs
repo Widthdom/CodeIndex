@@ -158,7 +158,10 @@ public static partial class QueryCommandRunner
                 }
                 if (options.OutputFormat == OutputFormatSarif)
                 {
-                    WriteSarif(results.Select(r => (r.Path, GetSymbolDisplayLine(r), GetSymbolDisplayColumn(r), $"{r.Kind} {r.Name}", "definition")), jsonOptions);
+                    WriteSarif(
+                        results.Select(r => (r.Path, GetSymbolDisplayLine(r), GetSymbolDisplayColumn(r), $"{r.Kind} {r.Name}", "definition")),
+                        jsonOptions,
+                        level: "note");
                     return CommandExitCodes.Success;
                 }
                 foreach (var r in results)

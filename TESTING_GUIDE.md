@@ -84,7 +84,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Inspect path-line exact/enclosing-symbol cases reuse one indexed source fixture and iterate read-only line queries within a fact.
   Definition and symbols exact-mode conflict validation share one empty database and a cross-command flag-pair table.
   Symbols compact flag/alias and summary-only JSON envelopes share one editor-format fixture.
-  Symbols JSON array, LSP, quickfix, and SARIF location formats share one editor-format fixture.
+  Symbols JSON array, LSP, quickfix, and SARIF location formats share one editor-format fixture; definition SARIF severity coverage reuses that fixture and asserts informational `note` output separately from warning-level diagnostic output.
   Unused default-suppression row, JSON count, summary-only, and text count envelopes, including the `--all` count control, share one unused-symbol fixture.
   Unused default-suppressed and `--all` JSON cursor pagination share one unused-symbol fixture.
   Unused full and compact `--by-bucket` JSON envelopes share one taxonomy fixture.
@@ -501,7 +501,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   inspect path-line の exact/enclosing-symbol case は1つの indexed source fixture を再利用し、read-only line query を fact 内で反復してください。
   definition と symbols の exact-mode conflict validation は1つの空databaseとcross-command flag-pair tableを共有してください。
   symbols compact flag/aliasとsummary-only JSON envelopeは1つのeditor-format fixtureを共有してください。
-  symbols JSON array、LSP、quickfix、SARIF location formatは1つのeditor-format fixtureを共有してください。
+  symbols JSON array、LSP、quickfix、SARIF location format は1つの editor-format fixture を共有し、definition SARIF severity のテストも同じ fixture を再利用して、情報レベルの `note` 出力を warning レベルの診断出力とは分けて検証してください。
   unused default-suppressionのrow、JSON count、summary-only、text count envelopeは、`--all` count controlも含めて1つのunused-symbol fixtureを共有してください。
   unusedのdefault-suppressed JSON cursor paginationと`--all` JSON cursor paginationは1つのunused-symbol fixtureを共有してください。
   unusedのfull JSONとcompact `--by-bucket` JSON envelopeは1つのtaxonomy fixtureを共有してください。

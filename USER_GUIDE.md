@@ -1336,7 +1336,7 @@ With `--json`, symbol results also include definition ranges, optional body rang
 {"path":"src/Services/UserService.cs","lang":"csharp","kind":"function","name":"GetUserById","line":24,"start_line":24,"end_line":41,"body_start_line":26,"body_end_line":41,"signature":"public async Task<User> GetUserById(int id)","container_kind":"class","container_name":"UserService","visibility":"public","return_type":"Task<User>"}
 ```
 
-Use `--json=array` when a downstream tool needs one JSON array instead of newline-delimited symbol records. Use `--format lsp`, `--format qf`, or `--format sarif` to emit editor locations, quickfix rows, or SARIF diagnostics for the same symbol result set.
+Use `--json=array` when a downstream tool needs one JSON array instead of newline-delimited symbol records. Use `--format lsp`, `--format qf`, or `--format sarif` to emit editor locations, quickfix rows, or SARIF locations for the same symbol result set. Because `definition` is a navigation command rather than a diagnostic scan, its SARIF rules and results use the informational `note` level instead of `warning`.
 
 When `definition --body` is combined with `--json`, `body_content` is capped to a bounded excerpt and `body_content_truncated` is true when the stored body exceeds the returned payload.
 
@@ -4141,7 +4141,7 @@ function   CreateUser                               src/Services/UserService.cs:
 {"path":"src/Services/UserService.cs","lang":"csharp","kind":"function","name":"GetUserById","line":24,"start_line":24,"end_line":41,"body_start_line":26,"body_end_line":41,"signature":"public async Task<User> GetUserById(int id)","container_kind":"class","container_name":"UserService","visibility":"public","return_type":"Task<User>"}
 ```
 
-後続ツールが newline-delimited symbol record ではなく単一 JSON array を必要とする場合は `--json=array` を使ってください。同じ symbol result set を editor location、quickfix 行、SARIF diagnostics として出したい場合は `--format lsp`、`--format qf`、`--format sarif` を使います。
+後続ツールが newline-delimited symbol record ではなく単一 JSON array を必要とする場合は `--json=array` を使ってください。同じ symbol result set を editor location、quickfix 行、SARIF location として出したい場合は `--format lsp`、`--format qf`、`--format sarif` を使います。`definition` は診断 scan ではなく navigation command なので、その SARIF rule と result は `warning` ではなく情報レベルの `note` を使います。
 
 `definition --body` と `--json` を組み合わせた場合、`body_content` は bounded excerpt に cap され、保存された body が返却 payload を超えると `body_content_truncated` が true になります。
 
