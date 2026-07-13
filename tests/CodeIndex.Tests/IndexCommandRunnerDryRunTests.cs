@@ -685,6 +685,42 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRun_WithFiles_RejectsSymlinkSkippedByPolicy_4471()
+    {
+        var projectRoot = CreateTempProject();
+        var outsidePath = Path.Combine(Path.GetTempPath(), $"cdidx_dryrun_symlink_{Guid.NewGuid():N}.cs");
+        try
+        {
+            File.WriteAllText(outsidePath, "public class Outside { }\n");
+            try
+            {
+                File.CreateSymbolicLink(Path.Combine(projectRoot, "link.cs"), outsidePath);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+            {
+                return;
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "link.cs",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("none of the paths supplied to --files resolved", json.GetProperty("message").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            DeleteFile(outsidePath);
+        }
+    }
+
+    [Fact]
     public void Run_DryRun_WithFiles_AllowsDeletedIndexedProjectPath_4471()
     {
         var projectRoot = CreateTempProject();

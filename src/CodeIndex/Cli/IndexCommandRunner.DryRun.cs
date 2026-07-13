@@ -58,7 +58,11 @@ public static partial class IndexCommandRunner
         if (options.UpdateFiles.Count > 0)
         {
             var hasExistingCandidate = normalizedUpdatePaths.Any(path =>
-                File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(projectPath, path.Replace('/', Path.DirectorySeparatorChar)))));
+            {
+                var absolutePath = Path.Combine(projectPath, path.Replace('/', Path.DirectorySeparatorChar));
+                return File.Exists(LongPath.EnsureWindowsPrefix(absolutePath))
+                    && !dryIndexer.EvaluatePathFilter(absolutePath).ShouldSkip;
+            });
             var hasIndexedCandidate = normalizedUpdatePaths.Any(path =>
                 dbSnapshot.Files.ContainsKey(FileIndexer.NormalizeIndexPath(path)));
             if (!hasExistingCandidate && !hasIndexedCandidate)
@@ -715,7 +719,7 @@ public static partial class IndexCommandRunner
             var hasFileIssues = DryRunTableExists(connection, "file_issues");
 
             using var command = connection.CreateCommand();
-            var filteredSymbolsExpression = hasSymbols
+            var filteredSymbolsExpression = hasSymbols && symbolKindFilter.IsActive
                 ? BuildDryRunFilteredSymbolCountExpression(command, symbolKindFilter)
                 : "0";
             command.CommandText = $"""
@@ -734,11 +738,12 @@ public static partial class IndexCommandRunner
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
+                var symbols = reader.GetInt64(3);
                 files[reader.GetString(0)] = new DryRunExistingFileRows(
                     reader.IsDBNull(1) ? null : reader.GetString(1),
                     reader.GetInt64(2),
-                    reader.GetInt64(3),
-                    reader.GetInt64(4),
+                    symbols,
+                    symbolKindFilter.IsActive ? reader.GetInt64(4) : symbols,
                     reader.GetInt64(5),
                     reader.GetInt64(6),
                     reader.GetInt64(7));
@@ -764,9 +769,6 @@ public static partial class IndexCommandRunner
         SqliteCommand command,
         SymbolKindFilter symbolKindFilter)
     {
-        if (!symbolKindFilter.IsActive)
-            return "(SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id)";
-
         var conditions = new List<string>();
         if (symbolKindFilter.Include.Count > 0)
         {
