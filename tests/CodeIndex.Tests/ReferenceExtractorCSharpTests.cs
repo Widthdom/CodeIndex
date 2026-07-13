@@ -939,7 +939,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpInterpolatedString_WithEscapedBraces_DoesNotLeakPhantomReference()
+    public void Extract_CsharpInterpolatedStrings_WithEscapedBraces_ReuseFixture()
     {
         const string content = """
             public class FixtureHost
@@ -948,22 +948,8 @@ public partial class ReferenceExtractorTests
                 {
                     return $"{{Run()}}";
                 }
-            }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Run");
-    }
-
-    [Fact]
-    public void Extract_CsharpInterpolatedVerbatimString_WithEscapedBraces_DoesNotLeakPhantomReference()
-    {
-        const string content = """
-            public class FixtureHost
-            {
-                public string Render()
+                public string RenderVerbatim()
                 {
                     return $@"{{Run()}}";
                 }
