@@ -186,6 +186,43 @@ public partial class DbReaderTests
     }
 
     [Fact]
+    public void GetFileDependencies_CSharpLimitSkipsUnresolvedCandidates_Issue4455()
+    {
+        var sourceFileId = InsertSyntheticDependencyFile("src/ResolvedCandidateCaller.cs");
+        var targetFileId = InsertSyntheticDependencyFile("src/ResolvedCandidateTarget.cs");
+        var unresolvedNames = Enumerable.Range(0, 200).Select(index => $"ExternalType{index:D3}").ToArray();
+
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = targetFileId, Kind = "class", Name = "LocalDependency", Line = 1, StartLine = 1, EndLine = 1 },
+        ]);
+        _writer.InsertReferences([
+            .. unresolvedNames.Select((name, index) => new ReferenceRecord
+            {
+                FileId = sourceFileId,
+                SymbolName = name,
+                ReferenceKind = "type_reference",
+                Line = index + 1,
+                Column = 1,
+                Context = name,
+            }),
+            new ReferenceRecord
+            {
+                FileId = sourceFileId,
+                SymbolName = "LocalDependency",
+                ReferenceKind = "type_reference",
+                Line = unresolvedNames.Length + 1,
+                Column = 1,
+                Context = "LocalDependency",
+            },
+        ]);
+
+        var dependency = Assert.Single(_reader.GetFileDependencies(limit: 1, lang: "csharp"));
+
+        Assert.Equal("src/ResolvedCandidateTarget.cs", dependency.TargetPath);
+        Assert.Equal(1, dependency.ReferenceCount);
+    }
+
+    [Fact]
     public void GetFileDependencies_RanksNoiseAdjustedEdgesBeforeApplyingLimit_Issue4113()
     {
         var sourceFileId = InsertSyntheticDependencyFile("src/RankingCaller.cs");

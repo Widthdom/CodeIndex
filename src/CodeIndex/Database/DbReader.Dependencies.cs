@@ -402,10 +402,26 @@ public partial class DbReader
             // 最終 edge ranking と同じ over-fetch 候補窓を source/name group にも適用し、
             // 小さな --limit でも LIMIT 前に C# 参照グラフ全体を比較する事態を防ぐ。
             sql += @",
+            csharp_dependency_targets AS (
+                SELECT dst.path AS target_path,
+                       " + targetLogicalSymbolNameExpr + @" AS symbol_name,
+                       MAX(CASE WHEN " + BuildMetadataTargetKindExpr("dst") + @" THEN 1 ELSE 0 END) AS has_metadata_target_kind
+                FROM symbols s
+                JOIN files dst ON s.file_id = dst.id
+                WHERE dst.lang = 'csharp'
+                GROUP BY dst.path, " + targetLogicalSymbolNameExpr + @"
+            ),
             bounded_source_name_counts AS (
-                SELECT *
-                FROM source_name_counts
-                ORDER BY ref_count DESC, source_path, symbol_name, context, column_number, raw_reference_kind
+                SELECT snc.*
+                FROM source_name_counts snc
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM csharp_dependency_targets tf
+                    WHERE tf.symbol_name = snc.symbol_name
+                      AND tf.target_path != snc.source_path
+                      AND (snc.is_metadata = 0 OR tf.has_metadata_target_kind = 1)
+                )
+                ORDER BY snc.ref_count DESC, snc.source_path, snc.symbol_name, snc.context, snc.column_number, snc.raw_reference_kind
                 LIMIT @sourceCandidateLimit
             ),";
         }
