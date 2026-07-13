@@ -4932,7 +4932,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithSwitchExpressionRecursivePatternVariable_DoesNotLeakAsEnumMemberReference()
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithSwitchExpressionPatternVariables_KeepOnlyGenuineEnumMemberReferences()
     {
         const string content = """
             namespace Demo;
@@ -4949,7 +4949,7 @@ public partial class ReferenceExtractorTests
 
             public sealed class Uses
             {
-                public Demo.Status Read(object value)
+                public Demo.Status ReadRecursive(object value)
                 {
                     return value switch
                     {
@@ -4957,37 +4957,7 @@ public partial class ReferenceExtractorTests
                         _ => Demo.Status.Ready
                     };
                 }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        var readyRef = Assert.Single(readyRefs);
-        Assert.Equal(20, readyRef.Line);
-        Assert.Equal("Read", readyRef.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithSwitchExpressionDeclarationPatternVariable_DoesNotLeakAsEnumMemberReference()
-    {
-        const string content = """
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public Demo.Status Read(object value)
+                public Demo.Status ReadDeclaration(object value)
                 {
                     return value switch
                     {
@@ -4995,37 +4965,7 @@ public partial class ReferenceExtractorTests
                         _ => Demo.Status.Ready
                     };
                 }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        var readyRef = Assert.Single(readyRefs);
-        Assert.Equal(20, readyRef.Line);
-        Assert.Equal("Read", readyRef.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithSwitchExpressionDeclarationPatternWhenGuard_DoesNotLeakAsEnumMemberReference()
-    {
-        const string content = """
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public Demo.Status Read(object value)
+                public Demo.Status ReadGuard(object value)
                 {
                     return value switch
                     {
@@ -5033,42 +4973,7 @@ public partial class ReferenceExtractorTests
                         _ => Demo.Status.Ready
                     };
                 }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
-            .OrderBy(reference => reference.Line)
-            .ThenBy(reference => reference.Column)
-            .ToList();
-
-        Assert.Equal([19, 20], readyRefs.Select(reference => reference.Line).ToArray());
-        Assert.Equal([64, 30], readyRefs.Select(reference => reference.Column).ToArray());
-        Assert.All(readyRefs, reference => Assert.Equal("Read", reference.ContainerName));
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithSwitchExpressionDeclarationPatternWhenInComment_DoesNotLeakAsEnumMemberReference()
-    {
-        const string content = """
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public Demo.Status Read(object value)
+                public Demo.Status ReadComment(object value)
                 {
                     return value switch
                     {
@@ -5076,37 +4981,7 @@ public partial class ReferenceExtractorTests
                         _ => Demo.Status.Ready
                     };
                 }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        var readyRef = Assert.Single(readyRefs);
-        Assert.Equal(20, readyRef.Line);
-        Assert.Equal("Read", readyRef.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithSwitchExpressionDeclarationPatternWhenInMultiLineComment_DoesNotLeakAsEnumMemberReference()
-    {
-        const string content = """
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public Demo.Status Read(object value)
+                public Demo.Status ReadMultiLineComment(object value)
                 {
                     return value switch
                     {
@@ -5123,13 +4998,14 @@ public partial class ReferenceExtractorTests
 
         var readyRefs = references
             .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
-            .OrderBy(reference => reference.Line)
-            .ThenBy(reference => reference.Column)
-            .ToList();
+            .GroupBy(reference => reference.ContainerName)
+            .ToDictionary(group => group.Key!, group => group.OrderBy(reference => reference.Line).ToArray());
 
-        Assert.Equal([20, 21], readyRefs.Select(reference => reference.Line).ToArray());
-        Assert.Equal([83, 30], readyRefs.Select(reference => reference.Column).ToArray());
-        Assert.All(readyRefs, reference => Assert.Equal("Read", reference.ContainerName));
+        Assert.Equal([30], readyRefs["ReadRecursive"].Select(reference => reference.Column).ToArray());
+        Assert.Equal([30], readyRefs["ReadDeclaration"].Select(reference => reference.Column).ToArray());
+        Assert.Equal([64, 30], readyRefs["ReadGuard"].Select(reference => reference.Column).ToArray());
+        Assert.Equal([30], readyRefs["ReadComment"].Select(reference => reference.Column).ToArray());
+        Assert.Equal([83, 30], readyRefs["ReadMultiLineComment"].Select(reference => reference.Column).ToArray());
     }
 
     [Fact]
