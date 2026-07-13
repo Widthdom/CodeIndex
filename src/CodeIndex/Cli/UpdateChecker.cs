@@ -310,6 +310,7 @@ internal static class UpdateChecker
         if (doc.RootElement.ValueKind != JsonValueKind.Array)
             throw new JsonException("Prerelease release metadata root must be an array.");
 
+        string? selectedTag = null;
         foreach (var release in doc.RootElement.EnumerateArray())
         {
             if (release.ValueKind != JsonValueKind.Object)
@@ -342,10 +343,10 @@ internal static class UpdateChecker
             if (!isPrerelease)
                 continue;
 
-            return tagElement.GetString();
+            selectedTag ??= tagElement.GetString();
         }
 
-        return null;
+        return selectedTag;
     }
 
     internal static string ResolveDefaultCachePath()

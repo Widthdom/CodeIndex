@@ -2963,6 +2963,7 @@ exit 7
     [Theory]
     [InlineData("{}")]
     [InlineData("[null]")]
+    [InlineData("[{\"tag_name\":\"v3.1.0-rc.1\",\"draft\":false,\"prerelease\":true},null]")]
     [InlineData("[{\"tag_name\":\"v3.0.0\",\"draft\":\"false\",\"prerelease\":false}]")]
     [InlineData("[{\"tag_name\":\"v3.0.0\",\"draft\":false,\"prerelease\":\"false\"}]")]
     public async Task UpdateChecker_ReadLatestPrereleaseTagAsync_RejectsMalformedSchema_Issue4469(string payload)
