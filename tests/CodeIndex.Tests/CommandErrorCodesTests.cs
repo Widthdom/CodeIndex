@@ -2,7 +2,6 @@ using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Diagnostics;
-using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -10,7 +9,6 @@ namespace CodeIndex.Tests;
 /// Tests for the stable machine-readable error-code taxonomy emitted by CLI runners (issue #1526).
 /// CLI ランナーが出す機械可読エラーコード分類のテスト (issue #1526)。
 /// </summary>
-[Collection("SQLite pool sensitive")]
 public class CommandErrorCodesTests
 {
     private readonly JsonSerializerOptions _jsonOptions = new()
@@ -79,9 +77,7 @@ public class CommandErrorCodesTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            TestProjectHelper.DeleteFile(dbPath);
         }
     }
 
