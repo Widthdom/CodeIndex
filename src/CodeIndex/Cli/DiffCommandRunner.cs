@@ -228,12 +228,17 @@ public static class DiffCommandRunner
             symbol_references.line,
             symbol_references.column_number,
             symbol_references.context,
-            symbol_references.reference_line_id,
+            CASE WHEN symbol_references.reference_line_id IS NULL THEN 0 ELSE 1 END,
+            COALESCE(reference_line_files.path, ''),
+            reference_lines.line,
+            reference_lines.context,
             symbol_references.container_kind,
             symbol_references.container_name,
             symbol_references.container_name_folded
         FROM symbol_references
         LEFT JOIN files ON files.id = symbol_references.file_id
+        LEFT JOIN reference_lines ON reference_lines.id = symbol_references.reference_line_id
+        LEFT JOIN files AS reference_line_files ON reference_line_files.id = reference_lines.file_id
         ORDER BY
             COALESCE(files.path, ''),
             symbol_references.symbol_name,
@@ -242,7 +247,10 @@ public static class DiffCommandRunner
             symbol_references.line,
             symbol_references.column_number,
             symbol_references.context,
-            symbol_references.reference_line_id,
+            CASE WHEN symbol_references.reference_line_id IS NULL THEN 0 ELSE 1 END,
+            COALESCE(reference_line_files.path, ''),
+            reference_lines.line,
+            reference_lines.context,
             symbol_references.container_kind,
             symbol_references.container_name,
             symbol_references.container_name_folded

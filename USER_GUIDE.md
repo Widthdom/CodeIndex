@@ -386,6 +386,11 @@ to the import target project root. Imports targeting `.../.cdidx/codeindex.db`
 use the sibling project directory; other database paths fall back to the process
 current directory.
 
+Use `cdidx diff <db1> <db2> --detailed --json` to verify the restored index.
+Database identity is based on semantic index content: reference-line links are
+compared by their indexed path, line, and context rather than SQLite surrogate
+row IDs, so equivalent databases remain identical after rows are rehydrated.
+
 ## Flag compatibility and migrations
 
 `--exact` remains accepted for compatibility, but new usage should prefer the
@@ -3198,6 +3203,11 @@ SQLite file が CodeIndex DB であることを検証してから destination da
 `--prune-paths` は import した `indexed_project_root` metadata を import 先 project root に書き換えます。
 `.../.cdidx/codeindex.db` を import 先にした場合は sibling の project directory を使い、
 それ以外の database path では process current directory に fallback します。
+
+復元した index の確認には `cdidx diff <db1> <db2> --detailed --json` を使います。
+database の同一性は semantic index content に基づきます。reference-line link は SQLite の
+surrogate row ID ではなく indexed path、line、context で比較されるため、row が再構築されても
+意味的に同等な database は identical のままです。
 
 ## フラグ互換性と移行
 
