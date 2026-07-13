@@ -3117,7 +3117,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedKeywordNamedParameterBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedKeywordNamedValues_PreserveOnlyTrailingReferences()
     {
         const string content = """
             using System.Collections.Generic;
@@ -3137,46 +3137,15 @@ public partial class ReferenceExtractorTests
 
             public sealed class Uses
             {
-                public Demo.Status Read(IEnumerable<object> items, int Select)
+                public Demo.Status ReadParameter(IEnumerable<object> items, int Select)
                 {
                     return Sink.Pick(from Status in items
                                      orderby (Select)
                                      select(Status.Ready),
                                      Demo.Status.Ready);
                 }
-            }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        var readyRef = Assert.Single(readyRefs);
-        Assert.Equal("Read", readyRef.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedKeywordNamedLocalBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
-    {
-        const string content = """
-            using System.Collections.Generic;
-            using System.Linq;
-
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public static class Sink
-            {
-                public static Demo.Status Pick(object left, Demo.Status right) => right;
-            }
-
-            public sealed class Uses
-            {
-                public Demo.Status Read(IEnumerable<object> items)
+                public Demo.Status ReadLocal(IEnumerable<object> items)
                 {
                     const int Select = 1;
                     return Sink.Pick(from Status in items
@@ -3190,9 +3159,13 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        var readyRef = Assert.Single(readyRefs);
-        Assert.Equal("Read", readyRef.ContainerName);
+        var readyRefs = references
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Select(reference => reference.ContainerName)
+            .OrderBy(name => name)
+            .ToArray();
+
+        Assert.Equal(["ReadLocal", "ReadParameter"], readyRefs);
     }
 
     [Fact]
