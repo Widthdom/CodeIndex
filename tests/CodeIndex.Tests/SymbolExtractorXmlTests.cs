@@ -15,6 +15,62 @@ namespace CodeIndex.Tests;
 public partial class SymbolExtractorTests
 {
     [Fact]
+    public void Extract_NuGetConfig_EmitsSecurityPolicyValues_Issue4459()
+    {
+        const string content = """
+            <configuration>
+              <config>
+                <add key="signatureValidationMode" value="require" />
+              </config>
+              <packageSources>
+                <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+              </packageSources>
+              <packageSourceMapping>
+                <packageSource key="nuget.org">
+                  <package pattern="CodeIndex.*" />
+                </packageSource>
+              </packageSourceMapping>
+              <trustedSigners>
+                <author name="Example Author">
+                  <certificate fingerprint="AABBCCDD" hashAlgorithm="SHA256" allowUntrustedRoot="false" />
+                </author>
+                <repository name="nuget.org" serviceIndex="https://api.nuget.org/v3/index.json">
+                  <certificate fingerprint="11223344" hashAlgorithm="SHA256" allowUntrustedRoot="true" />
+                </repository>
+              </trustedSigners>
+            </configuration>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+
+        Assert.Contains(symbols, symbol => symbol.Name == "nuget.org" && symbol.SubKind == "nuget.package_source");
+        Assert.Contains(symbols, symbol => symbol.Name == "https://api.nuget.org/v3/index.json" && symbol.SubKind == "nuget.package_source_url");
+        Assert.Contains(symbols, symbol => symbol.Name == "nuget.org" && symbol.SubKind == "nuget.package_source_mapping");
+        Assert.Contains(symbols, symbol => symbol.Name == "CodeIndex.*" && symbol.SubKind == "nuget.package_source_mapping_pattern");
+        Assert.Contains(symbols, symbol => symbol.Name == "require" && symbol.SubKind == "nuget.signature_validation_mode");
+        Assert.Contains(symbols, symbol => symbol.Name == "Example Author" && symbol.SubKind == "nuget.trusted_signer");
+        Assert.Contains(symbols, symbol => symbol.Name == "AABBCCDD" && symbol.SubKind == "nuget.certificate_fingerprint");
+        Assert.Contains(symbols, symbol => symbol.Name == "false" && symbol.SubKind == "nuget.allow_untrusted_root");
+        Assert.Contains(symbols, symbol => symbol.Name == "true" && symbol.SubKind == "nuget.allow_untrusted_root");
+    }
+
+    [Fact]
+    public void Extract_NonNuGetXml_DoesNotPromoteMatchingAttributeValues_Issue4459()
+    {
+        const string content = """
+            <root>
+              <packageSources>
+                <add key="not-a-source" value="https://example.invalid" />
+              </packageSources>
+            </root>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "xml", content);
+
+        Assert.DoesNotContain(symbols, symbol => symbol.SubKind?.StartsWith("nuget.", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
     public void Extract_RunSettings_EmitsConfigurationSectionsAndValueSignatures_Issue4457()
     {
         const string content = """

@@ -19,6 +19,7 @@ public static partial class SymbolExtractor
     public const int DockerfileContractVersion = 2;
     public const int MakefileContractVersion = 2;
     public const int StyleAndXamlContractVersion = 2;
+    public const int XmlContractVersion = 3;
     public const int FunctionalLanguageContractVersion = 2;
     public const int DynamicLanguageContractVersion = 2;
     public const int SystemsLanguageContractVersion = 2;
@@ -73,7 +74,8 @@ public static partial class SymbolExtractor
             "csharp" => CSharpContractVersion,
             "dockerfile" => DockerfileContractVersion,
             "makefile" => MakefileContractVersion,
-            "sass" or "stylus" or "xml" => StyleAndXamlContractVersion,
+            "sass" or "stylus" => StyleAndXamlContractVersion,
+            "xml" => XmlContractVersion,
             "clojure" or "erlang" or "ocaml" or "raku" => FunctionalLanguageContractVersion,
             "crystal" or "groovy" or "julia" or "tcl" => DynamicLanguageContractVersion,
             "ada" or "d" or "nim" => SystemsLanguageContractVersion,
@@ -2428,6 +2430,54 @@ public static partial class SymbolExtractor
     [
         "class", "struct", "interface", "protocol", "protocol_impl", "namespace", "enum", "object", "heading", "specialization", "class_hook"
     ];
+
+    private static bool[] FindPowerShellEnumBodyLines(string[] structuralLines)
+    {
+        var result = new bool[structuralLines.Length];
+        var waitingForOpeningBrace = false;
+        var enumBraceDepth = 0;
+
+        for (var i = 0; i < structuralLines.Length; i++)
+        {
+            var line = structuralLines[i];
+            if (enumBraceDepth > 0)
+                result[i] = true;
+
+            if (enumBraceDepth == 0 && !waitingForOpeningBrace)
+            {
+                var trimmed = line.AsSpan().TrimStart();
+                if (trimmed.StartsWith("enum", StringComparison.OrdinalIgnoreCase)
+                    && trimmed.Length > 4
+                    && char.IsWhiteSpace(trimmed[4]))
+                {
+                    waitingForOpeningBrace = true;
+                }
+            }
+
+            if (!waitingForOpeningBrace && enumBraceDepth == 0)
+                continue;
+
+            foreach (var character in line)
+            {
+                if (character == '{')
+                    enumBraceDepth++;
+                else if (character == '}')
+                    enumBraceDepth--;
+            }
+
+            if (enumBraceDepth > 0)
+            {
+                waitingForOpeningBrace = false;
+            }
+            else if (!waitingForOpeningBrace || line.Contains('}'))
+            {
+                enumBraceDepth = 0;
+                waitingForOpeningBrace = false;
+            }
+        }
+
+        return result;
+    }
 
     private static bool IsRustDirectTraitBodyMember(List<SymbolRecord> symbols, int candidateLine)
     {

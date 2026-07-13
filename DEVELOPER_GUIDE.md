@@ -1009,6 +1009,7 @@ Extractor strategy by language surface:
 | Common Lisp / Racket | Use a lightweight S-expression scanner that masks strings, line comments, and `#| ... |#` block comments before extracting definitions and function ranges. |
 | HTML | Uses a dedicated character-level state machine instead of the regex pattern loop. It walks tag openers, quoted/unquoted attribute values including multi-line values, and masks `<script>` / `<style>` / `<textarea>` / `<title>` bodies plus `<!-- ... -->` comments so attribute-lookalike strings inside those regions do not leak phantom symbols. |
 | JSON / JSON Lines | JSON emits `object`, `array`, `property`, and bounded primitive-array `value` symbols with indexed paths. `.jsonl` and `.ndjson` parse each non-empty physical line independently and prefix symbols with a stable zero-based record path such as `[0].result.path`. |
+| XML / NuGet.config | Generic XML emits bounded element and attribute paths. NuGet.config additionally promotes package sources, source mappings, signature validation mode, trusted signer names, certificate fingerprints, and `allowUntrustedRoot` values to semantic `property` symbols with `nuget.*` subkinds. |
 
 JavaScript and TypeScript export/reference details:
 
@@ -1061,6 +1062,7 @@ Supported symbol kinds by language:
 | Lua / R / Haskell / F# | language-specific functions/types/modules/signatures | imports/requires/opens where supported | mixed |
 | VB.NET | subs/functions, classes/modules, structures, interfaces, enums, properties, events | namespaces/imports, `AddressOf`, `Handles` | yes |
 | Zig / PowerShell / CSS-SCSS / Batch / Assembly / HTML | language-specific functions, labels, selectors, stages, Web Components, properties, imports | language-specific references where implemented | mixed |
+| XML | bounded element/attribute paths plus NuGet.config security-policy values | XAML references where implemented | mixed |
 
 Shell and PowerShell files also expose a synthetic `<script>` function symbol spanning the file. Top-level call references use this scope as their graph container, while references inside declared functions retain the declared function container.
 
@@ -1072,7 +1074,7 @@ For JavaScript / TypeScript, reference extraction also captures tagged template 
 
 SQL also emits `namespace` symbols for `CREATE SCHEMA`, but the summary table above does not have a dedicated namespace column. SQL graph extraction emits `reference` edges for named source/target forms such as `FROM`, `JOIN`, `INSERT INTO`, `UPDATE`, `TRUNCATE TABLE`, `DELETE FROM`, `DELETE ... USING`, and `MERGE ... USING`; procedure and table-valued-function calls stay on the `call` path.
 
-Additionally, 19 languages are detected and indexed as raw text without symbol extraction: cmake, clojure, crystal, dockerignore, d, editorconfig, erlang, gitignore, justfile, julia, markdown, nim, ocaml, svelte, tcl, toml, vue, xml, yaml.
+Additionally, 18 languages are detected and indexed as raw text without symbol extraction: cmake, clojure, crystal, dockerignore, d, editorconfig, erlang, gitignore, justfile, julia, markdown, nim, ocaml, svelte, tcl, toml, vue, yaml.
 
 VB.NET container patterns use `RegexOptions.IgnoreCase` plus `VisualBasicEnd`-based range tracking, so `Partial` spelling differences and multi-file type families still receive stable definition ranges and hotspot-family metadata.
 
@@ -3458,6 +3460,7 @@ LIMIT 20;
 | Common Lisp / Racket | 文字列、行 comment、`#| ... |#` block comment を mask してから definition と function range を抽出する軽量な S-expression scanner を使います。 |
 | HTML | 汎用の正規表現 loop を使わず、専用の文字単位 state machine で tag opener、引用符付き/なし attribute value（複数行値を含む）、`<script>` / `<style>` / `<textarea>` / `<title>` body、`<!-- ... -->` comment を扱い、attribute 名に似た body 内文字列から phantom symbol が漏れないようにします。 |
 | JSON / JSON Lines | JSON は `object`、`array`、`property` と、上限付きの primitive-array `value` symbol を index 付き path で出力します。`.jsonl` と `.ndjson` は空でない物理行を個別に parse し、`[0].result.path` のような安定した 0 始まり record path を付けます。 |
+| XML / NuGet.config | 汎用 XML は上限付きの element / attribute path を出力します。NuGet.config ではさらに package source、source mapping、署名検証モード、trusted signer 名、証明書 fingerprint、`allowUntrustedRoot` の値を `nuget.*` subkind 付きの semantic `property` symbol にします。 |
 
 JavaScript / TypeScript の export / reference 詳細:
 
@@ -3510,6 +3513,7 @@ SQL 固有の symbol extraction:
 | Lua / R / Haskell / F# | 言語別の function / type / module / signature | import / require / open など対応済み surface | mixed |
 | VB.NET | Sub/Function、Class/Module、Structure、Interface、Enum、Property、Event | Namespace、Imports、`AddressOf`、`Handles` | yes |
 | Zig / PowerShell / CSS-SCSS / Batch / Assembly / HTML | 言語別 function、label、selector、stage、Web Component、property、import | 実装済みの言語別 reference | mixed |
+| XML | 上限付き element / attribute path と NuGet.config security-policy value | 実装済みの XAML reference | mixed |
 
 Shell と PowerShell のファイルには、ファイル全体を覆う合成 `<script>` 関数シンボルも作成される。トップレベルの call reference はこのスコープを graph container として使い、宣言済み関数内の reference はその関数 container を維持する。
 
@@ -3521,7 +3525,7 @@ JavaScript / TypeScript では、reference extraction が `` gql`...` ``、`` st
 
 SQL は `CREATE SCHEMA` から `namespace` シンボルも出力するが、上の要約表には namespace 専用列はない。SQL graph extraction は `FROM`、`JOIN`、`INSERT INTO`、`UPDATE`、`TRUNCATE TABLE`、`DELETE FROM`、`DELETE ... USING`、`MERGE ... USING` のような source/target 形を `reference` edge として出力し、procedure call と table-valued function 使用は `call` 経路に残す。
 
-他に19言語がテキスト検索用に検出されるがシンボル抽出パターンは未対応: cmake, clojure, crystal, dockerignore, d, editorconfig, erlang, gitignore, justfile, julia, markdown, nim, ocaml, svelte, tcl, toml, vue, xml, yaml。
+他に18言語がテキスト検索用に検出されるがシンボル抽出パターンは未対応: cmake, clojure, crystal, dockerignore, d, editorconfig, erlang, gitignore, justfile, julia, markdown, nim, ocaml, svelte, tcl, toml, vue, yaml。
 
 正規表現ベースの抽出は意図的にシンプルです。AST精度よりも速度とポータビリティを優先しています。
 

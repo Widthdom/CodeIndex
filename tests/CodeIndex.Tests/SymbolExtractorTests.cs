@@ -11701,6 +11701,33 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_PowerShell_HashtableKeysAreNotEnumMembers_Issue4446()
+    {
+        const string content = """
+            $results = @(
+                @{
+                    Path = 'C:\temp'
+                    Reason = 'missing'
+                }
+            )
+
+            enum Environment
+            {
+                Dev
+                Staging = 2
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "powershell", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "enum" && s.Name == "Path");
+        Assert.DoesNotContain(symbols, s => s.Kind == "enum" && s.Name == "Reason");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Environment");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Dev");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Staging");
+    }
+
+    [Fact]
     public void Extract_PowerShell_DetectsAliasDefinitions()
     {
         const string content = """
@@ -12057,8 +12084,9 @@ public partial class SymbolExtractorTests
         Assert.True(SymbolExtractor.MakefileContractVersion > SymbolExtractor.DefaultContractVersion);
         Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("sass"));
         Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("stylus"));
-        Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("xml"));
         Assert.True(SymbolExtractor.StyleAndXamlContractVersion > SymbolExtractor.DefaultContractVersion);
+        Assert.Equal(SymbolExtractor.XmlContractVersion, SymbolExtractor.GetContractVersion("xml"));
+        Assert.True(SymbolExtractor.XmlContractVersion > SymbolExtractor.StyleAndXamlContractVersion);
     }
 
     [Fact]

@@ -44,6 +44,10 @@ Symbol and reference extraction are lightweight indexing hints optimized for
 speed, locality, explainability, and retrieval usefulness. Embeddings, vector
 search, and LLM-based semantic ranking are not assumptions of CodeIndex core.
 
+NuGet.config XML receives security-policy symbols for package sources and source
+mappings, signature validation mode, trusted signers, certificate fingerprints,
+and `allowUntrustedRoot`, so these controls can be queried by their configured values.
+
 ## Contribution Policy
 
 Issue reports, feature requests, and improvement suggestions are welcome.
@@ -258,6 +262,10 @@ coding agent、chat application、compiler、exact semantic-analysis engine で�
 Symbol / reference extraction は、速度、ローカル完結、説明可能性、retrieval の有用性に
 寄せた lightweight indexing hint です。Embedding、vector search、LLM-based semantic
 ranking は CodeIndex core の前提機能ではありません。
+
+NuGet.config XML では package source / source mapping、署名検証モード、trusted
+signer、証明書 fingerprint、`allowUntrustedRoot` をセキュリティポリシーの
+シンボルとして抽出するため、設定値からこれらの制御を検索できます。
 
 ## コントリビューション方針
 

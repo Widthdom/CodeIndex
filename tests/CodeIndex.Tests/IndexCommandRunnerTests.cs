@@ -5740,6 +5740,56 @@ public sealed class Caller
     }
 
     [Fact]
+    public void Run_FilesUpdate_ReindexesUnchangedNuGetConfigWhenXmlExtractorVersionChanged_Issue4459()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "nuget.config");
+            File.WriteAllText(
+                sourcePath,
+                """
+                <configuration>
+                  <config>
+                    <add key="signatureValidationMode" value="require" />
+                  </config>
+                </configuration>
+                """);
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    DELETE FROM symbols WHERE sub_kind = 'nuget.signature_validation_mode';
+                    UPDATE codeindex_meta SET value = '2' WHERE key = 'symbol_extractor_version_xml';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", sourcePath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("skipped").GetInt32());
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+            using var symbolCmd = verify.CreateCommand();
+            symbolCmd.CommandText = "SELECT COUNT(*) FROM symbols WHERE name = 'require' AND sub_kind = 'nuget.signature_validation_mode'";
+            Assert.Equal(1L, (long)symbolCmd.ExecuteScalar()!);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FilesUpdate_ReindexesUnchangedJsonFileWhenExpandedLanguageExtractorVersionChanged()
     {
         var projectRoot = CreateTempProject();
