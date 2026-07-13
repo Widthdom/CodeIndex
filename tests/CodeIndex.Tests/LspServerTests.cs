@@ -1561,6 +1561,52 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_PositionLookup_DisambiguatesClassFromSameNamedConstructor_Issue4443()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_class_constructor");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            var source = """
+                public class Widget
+                {
+                    public Widget() { }
+                    private Widget? field;
+                }
+                """;
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
+            MarkGraphReady(dbPath);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var classCharacter = CharacterOf(source, 0, "Widget");
+
+            var definition = server.HandleMessage(CreateDefinitionRequest(sourcePath, 44431, 0, classCharacter));
+            var hover = server.HandleMessage(CreatePositionRequest("textDocument/hover", sourcePath, 44432, 0, classCharacter));
+            var references = server.HandleMessage(CreateReferencesRequest(sourcePath, 44433, 0, classCharacter, includeDeclaration: true));
+
+            Assert.NotNull(definition);
+            var definitionLocation = Assert.Single(definition!["result"]!.AsArray());
+            Assert.Equal(0, definitionLocation!["range"]!["start"]!["line"]!.GetValue<int>());
+
+            Assert.NotNull(hover);
+            var hoverText = hover!["result"]!["contents"]!["value"]!.GetValue<string>();
+            Assert.Contains("class Widget", hoverText, StringComparison.Ordinal);
+            Assert.DoesNotContain("Widget()", hoverText, StringComparison.Ordinal);
+
+            Assert.NotNull(references);
+            var referenceLocations = references!["result"]!.AsArray();
+            Assert.NotEmpty(referenceLocations);
+            Assert.DoesNotContain(referenceLocations, location => location!["range"]!["start"]!["line"]!.GetValue<int>() == 2);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_Declaration_ReturnsDefinitionLocation_Issues3537And4420()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_alias");
