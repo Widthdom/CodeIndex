@@ -17,7 +17,7 @@ public sealed class SqlitePoolSensitiveCollectionContractTests
 public sealed class SqlitePoolSensitiveCollectionTests
 {
     [Fact]
-    public async Task Fixture_ClearsPoolsOnInitializeAndDispose()
+    public async Task FixtureAndCollectionBoundary_ClearPoolsThroughSharedCallback()
     {
         var clearCount = 0;
         using var _ = SqlitePoolCleanup.ReplaceClearAllPoolsForTesting(() => clearCount++);
@@ -27,17 +27,10 @@ public sealed class SqlitePoolSensitiveCollectionTests
         await fixture.DisposeAsync();
 
         Assert.Equal(2, clearCount);
-    }
-
-    [Fact]
-    public void CollectionBoundaryClear_DoesNotDeferBehindActiveExclusiveOwner()
-    {
-        var clearCount = 0;
-        using var _ = SqlitePoolCleanup.ReplaceClearAllPoolsForTesting(() => clearCount++);
         using var owner = SqlitePoolCleanup.EnterExclusiveOwner();
 
         SqlitePoolCleanup.ClearPoolsAtCollectionBoundary();
 
-        Assert.Equal(1, clearCount);
+        Assert.Equal(3, clearCount);
     }
 }
