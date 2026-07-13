@@ -192,6 +192,49 @@ public partial class ReferenceExtractorTests
         Assert.True(ReferenceExtractor.SupportsLanguage("yaml"));
     }
 
+    [Fact]
+    public void Extract_Json_IndexesRepositoryLocalPathValues_Issue4460()
+    {
+        const string content = """
+            {
+              "core": ".agent_harness/command_guard_core.py",
+              "codex": { "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/bash_guard.py\"" },
+              "claude": [".claude/settings.json", ".claude/hooks/bash-guard.py"],
+              "windows": "tools\\runner.ps1",
+              "url": "https://example.com/not-local.py",
+              "parent": "../outside.py",
+              "bare": "ignored.txt"
+            }
+            """;
+
+        var scenario = ReferenceExtractionCase.Extract("json", content)
+            .ShouldHaveCount(5)
+            .ShouldContain("project_reference", ".agent_harness/command_guard_core.py", line: 2)
+            .ShouldContain("project_reference", ".codex/hooks/bash_guard.py", line: 3)
+            .ShouldContain("project_reference", ".claude/settings.json", line: 4)
+            .ShouldContain("project_reference", ".claude/hooks/bash-guard.py", line: 4)
+            .ShouldContain("project_reference", "tools/runner.ps1", line: 5)
+            .ShouldNotContainSymbol("example.com/not-local.py")
+            .ShouldNotContainSymbol("../outside.py")
+            .ShouldNotContainSymbol("ignored.txt");
+
+        var lines = content.Split('\n');
+        Assert.Equal(
+            lines[2].IndexOf(".codex/hooks/bash_guard.py", StringComparison.Ordinal) + 1,
+            scenario.Single("project_reference", ".codex/hooks/bash_guard.py").Column);
+        Assert.Equal(
+            lines[4].IndexOf("tools", StringComparison.Ordinal) + 1,
+            scenario.Single("project_reference", "tools/runner.ps1").Column);
+        Assert.True(ReferenceExtractor.SupportsLanguage("json"));
+    }
+
+    [Fact]
+    public void Extract_Json_MalformedInputDoesNotEmitPartialReferences_Issue4460()
+    {
+        ReferenceExtractionCase.Extract("json", "{ \"path\": \"scripts/run.sh\"")
+            .ShouldHaveCount(0);
+    }
+
     private sealed class ReferenceExtractionCase
     {
         private readonly IReadOnlyList<ReferenceRecord> references;

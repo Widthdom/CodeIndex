@@ -68,6 +68,7 @@
     "html",
     "java",
     "javascript",
+    "json",
     "justfile",
     "kotlin",
     "lua",
