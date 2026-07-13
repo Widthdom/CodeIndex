@@ -491,15 +491,21 @@ public class LspServerTests
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             var sourcePath = Path.Combine(projectRoot, "app.cs");
-            var source = """
-                using System.Text;
-                namespace Sample.Tools;
-                internal sealed class App
-                {
-                    private const int Count = 1;
-                    public void Run() { }
-                }
-                """;
+            var source = string.Join('\n',
+            [
+                "using System.Text;",
+                "namespace Sample.Tools { internal sealed class App",
+                "{",
+                "    private const int Count = 1;",
+                "    public void Run() { }",
+                "    private string Raw = \"\"\"",
+                "public class RawContent",
+                "\"\"\";",
+                "    private string Verbatim = @\"start",
+                "private sealed VerbatimContent\";",
+                "}",
+                "}",
+            ]);
             File.WriteAllText(sourcePath, source);
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
             using var db = new DbContext(dbPath);
@@ -513,14 +519,15 @@ public class LspServerTests
             AssertSemanticToken(tokens, 0, "System", 0, 0);
             AssertSemanticToken(tokens, 0, "Text", 0, 0);
             AssertSemanticToken(tokens, 1, "namespace", 15, 0);
-            AssertSemanticToken(tokens, 2, "internal", 16, 0);
-            AssertSemanticToken(tokens, 2, "sealed", 16, 0);
-            AssertSemanticToken(tokens, 2, "class", 15, 0);
-            AssertSemanticToken(tokens, 2, "App", 2, 1);
-            AssertSemanticToken(tokens, 4, "private", 16, 0);
-            AssertSemanticToken(tokens, 4, "const", 16, 0);
-            AssertSemanticToken(tokens, 4, "Count", 23, 1);
-            AssertSemanticToken(tokens, 5, "Run", 13, 1);
+            AssertSemanticToken(tokens, 1, "internal", 16, 0);
+            AssertSemanticToken(tokens, 1, "sealed", 16, 0);
+            AssertSemanticToken(tokens, 1, "class", 15, 0);
+            AssertSemanticToken(tokens, 1, "App", 2, 1);
+            AssertSemanticToken(tokens, 3, "private", 16, 0);
+            AssertSemanticToken(tokens, 3, "const", 16, 0);
+            AssertSemanticToken(tokens, 3, "Count", 23, 1);
+            AssertSemanticToken(tokens, 4, "Run", 13, 1);
+            Assert.DoesNotContain(tokens, token => token.Line is 6 or 9);
             Assert.DoesNotContain(tokens.SelectMany((left, index) => tokens.Skip(index + 1).Select(right => (left, right))), pair =>
                 pair.left.Line == pair.right.Line &&
                 pair.left.Character < pair.right.Character + pair.right.Text.Length &&

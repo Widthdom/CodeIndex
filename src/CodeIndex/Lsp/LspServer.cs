@@ -943,13 +943,14 @@ internal sealed class LspServer : IDisposable
         Dictionary<int, string?> lineCache)
     {
         var inBlockComment = false;
+        var stringMode = CSharpStringMode.None;
+        var rawQuoteCount = 0;
+        var ordinaryQuote = '\0';
         for (var line = 0; line < MaxSemanticTokenItems; line++)
         {
             if (!TryReadPositionLineCached(document.ResolvedPath, line, lineCache, out var sourceLine))
                 yield break;
 
-            var inString = false;
-            var quote = '\0';
             for (var index = 0; index < sourceLine.Length;)
             {
                 if (inBlockComment)
@@ -962,15 +963,40 @@ internal sealed class LspServer : IDisposable
                     continue;
                 }
 
-                if (inString)
+                if (stringMode == CSharpStringMode.Raw)
+                {
+                    var end = FindRawStringEnd(sourceLine, index, rawQuoteCount);
+                    if (end < 0)
+                        break;
+                    stringMode = CSharpStringMode.None;
+                    index = end;
+                    continue;
+                }
+
+                if (stringMode == CSharpStringMode.Verbatim)
+                {
+                    var end = sourceLine.IndexOf('"', index);
+                    if (end < 0)
+                        break;
+                    if (end + 1 < sourceLine.Length && sourceLine[end + 1] == '"')
+                    {
+                        index = end + 2;
+                        continue;
+                    }
+                    stringMode = CSharpStringMode.None;
+                    index = end + 1;
+                    continue;
+                }
+
+                if (stringMode == CSharpStringMode.Ordinary)
                 {
                     if (sourceLine[index] == '\\')
                     {
                         index = Math.Min(index + 2, sourceLine.Length);
                         continue;
                     }
-                    if (sourceLine[index++] == quote)
-                        inString = false;
+                    if (sourceLine[index++] == ordinaryQuote)
+                        stringMode = CSharpStringMode.None;
                     continue;
                 }
 
@@ -982,10 +1008,31 @@ internal sealed class LspServer : IDisposable
                     index += 2;
                     continue;
                 }
+                var quoteCount = CountConsecutive(sourceLine, index, '"');
+                if (quoteCount >= 3)
+                {
+                    stringMode = CSharpStringMode.Raw;
+                    rawQuoteCount = quoteCount;
+                    index += quoteCount;
+                    continue;
+                }
+                if (sourceLine[index] == '@' && index + 1 < sourceLine.Length && sourceLine[index + 1] == '"')
+                {
+                    stringMode = CSharpStringMode.Verbatim;
+                    index += 2;
+                    continue;
+                }
+                if (sourceLine[index] == '@' && index + 2 < sourceLine.Length && sourceLine[index + 1] == '$' && sourceLine[index + 2] == '"')
+                {
+                    stringMode = CSharpStringMode.Verbatim;
+                    index += 3;
+                    continue;
+                }
                 if (sourceLine[index] is '\'' or '"')
                 {
-                    inString = true;
-                    quote = sourceLine[index++];
+                    stringMode = CSharpStringMode.Ordinary;
+                    ordinaryQuote = sourceLine[index];
+                    index++;
                     continue;
                 }
                 if (!IsCSharpIdentifierStart(sourceLine[index]))
@@ -1010,12 +1057,51 @@ internal sealed class LspServer : IDisposable
 
     private static bool IsCSharpIdentifierStart(char value) => char.IsLetter(value) || value is '_' or '@';
 
+    private enum CSharpStringMode
+    {
+        None,
+        Ordinary,
+        Verbatim,
+        Raw,
+    }
+
+    private static int CountConsecutive(string text, int start, char value)
+    {
+        var index = start;
+        while (index < text.Length && text[index] == value)
+            index++;
+        return index - start;
+    }
+
+    private static int FindRawStringEnd(string line, int start, int quoteCount)
+    {
+        for (var index = start; index < line.Length; index++)
+        {
+            if (line[index] == '"' && CountConsecutive(line, index, '"') >= quoteCount)
+                return index + quoteCount;
+        }
+        return -1;
+    }
+
     private static bool IsCSharpNamespaceComponent(string line, int start)
     {
-        var prefix = line.AsSpan(0, start).TrimStart();
-        return prefix.StartsWith("using ", StringComparison.Ordinal) ||
-               prefix.StartsWith("global using ", StringComparison.Ordinal) ||
-               prefix.StartsWith("namespace ", StringComparison.Ordinal);
+        var trimmedStart = line.Length - line.AsSpan().TrimStart().Length;
+        var trimmedLine = line.AsSpan(trimmedStart);
+        var nameStart = trimmedLine.StartsWith("global using ", StringComparison.Ordinal)
+            ? trimmedStart + "global using ".Length
+            : trimmedLine.StartsWith("using ", StringComparison.Ordinal)
+                ? trimmedStart + "using ".Length
+                : trimmedLine.StartsWith("namespace ", StringComparison.Ordinal)
+                    ? trimmedStart + "namespace ".Length
+                    : -1;
+        if (nameStart < 0 || start < nameStart)
+            return false;
+
+        var semicolon = line.IndexOf(';', nameStart);
+        var brace = line.IndexOf('{', nameStart);
+        var nameEnd = new[] { semicolon, brace }.Where(value => value >= 0).DefaultIfEmpty(line.Length).Min();
+        var alias = line.IndexOf('=', nameStart, Math.Max(0, nameEnd - nameStart));
+        return alias < 0 && start < nameEnd;
     }
 
     private SemanticToken? BuildSemanticToken(IndexedDocumentContext document, SymbolResult symbol, Dictionary<int, string?> lineCache)
