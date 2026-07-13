@@ -7579,7 +7579,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpNamespaceAndInstanceMemberAccess_DoesNotCaptureQualifierReference()
+    public void Extract_CsharpInstanceQualifiers_ReuseNamespaceAndPascalChainFixture()
     {
         const string content = """
             namespace Demo.Tools;
@@ -7589,52 +7589,9 @@ public partial class ReferenceExtractorTests
                 public void Run(Service service)
                 {
                     service.Start();
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "Demo"
-            && reference.ReferenceKind == "call");
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "service"
-            && reference.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedStaticMemberAccess_CapturesRightmostTypeQualifier()
-    {
-        const string content = """
-            public class Consumer
-            {
-                public void Run()
-                {
                     System.Console.WriteLine("ok");
                 }
-            }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Console"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "Run");
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "System"
-            && reference.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_CsharpPascalCaseInstanceMemberChain_DoesNotCaptureMiddleQualifierReference()
-    {
-        const string content = """
-            public class Consumer
-            {
                 public int Read(Config config, Request request)
                 {
                     _ = config.Options.DefaultTimeout;
@@ -7646,12 +7603,14 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
+        AssertReferenceContains(references, "Console", "type_reference", containerName: "Run");
         Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "Options"
-            && reference.ReferenceKind == "call");
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "User"
-            && reference.ReferenceKind == "call");
+            reference.ReferenceKind == "call"
+            && (reference.SymbolName == "Demo"
+                || reference.SymbolName == "service"
+                || reference.SymbolName == "System"
+                || reference.SymbolName == "Options"
+                || reference.SymbolName == "User"));
     }
 
     [Fact]

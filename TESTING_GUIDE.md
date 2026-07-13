@@ -244,6 +244,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Argument-bearing parameter attributes share one method fixture for inline and line-broken declaration layouts.
 - Direct and `global::` static type qualifiers share one C# fixture while retaining per-container reference assertions.
 - Static qualifiers in using statements and field access share one consumer fixture and extraction pass.
+- Namespace-qualified and Pascal-cased instance-member chains share one qualifier fixture with a rightmost static type reference, so positive and negative qualifier outcomes are checked after one parse.
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). Its publish smoke disables NuGet vulnerability auditing because package advisory validation is covered by the normal build/test workflow's package vulnerability check, not by this runtime serialization test. It is reported as skipped on macOS arm64 while SDK/ILLink can crash before exercising `cdidx` (#2586). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
@@ -754,6 +755,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - 引数付き parameter attribute は、inline と改行された declaration layout で1つの method fixture を共有します。
 - direct と `global::` の static type qualifier は、container ごとの reference assertion を維持しながら1つの C# fixture を共有します。
 - using statement と field access の static qualifier は、1つの consumer fixture と抽出 pass を共有します。
+- namespace qualifier と PascalCase の instance-member chain は rightmost static type reference と1つの qualifier fixture を共有し、1回の parse 後に正例と call 除外を検証します。
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   は trimmed な RID 固有 CLI を publish し、SDK が生成した entry point（`dotnet` 経由の `cdidx.dll`、または native の `cdidx`/`cdidx.exe` apphost）を実行します。この publish smoke は NuGet 脆弱性監査を無効化します。package advisory の検証は通常の build/test workflow の package vulnerability check が担い、この runtime serialization テストの責務ではないためです。macOS arm64 では SDK/ILLink が `cdidx` に到達する前にクラッシュし得るため、このテストは skipped として報告されます（#2586）。self-contained publish output に常に `cdidx.dll` が出るとは仮定しないでください。
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
