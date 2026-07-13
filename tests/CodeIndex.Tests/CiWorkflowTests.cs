@@ -327,7 +327,6 @@ public class CiWorkflowTests
         foreach (var workflowName in new[]
         {
             "changelog-fragments.yml",
-            "codeql.yml",
             "mutation-testing.yml",
             "release.yml",
         })
@@ -344,6 +343,10 @@ public class CiWorkflowTests
             "test-framework: net9.0\n            sdk-versions: 9.0.301",
             "dotnet-version: ${{ matrix.sdk-versions }}");
         Assert.Equal(2, CountOccurrences(dotnetWorkflow, "dotnet-version: ${{ matrix.sdk-versions }}"));
+
+        var codeqlWorkflow = RepositoryTestPaths.ReadWorkflow("codeql.yml");
+        AssertContainsAll(codeqlWorkflow, "dotnet-version: 9.0.301");
+        AssertDoesNotContainAny(codeqlWorkflow, "8.0.413", "8.0.x", "9.0.x");
 
         var mutationWorkflow = RepositoryTestPaths.ReadWorkflow("mutation-testing.yml");
         AssertContainsAll(
