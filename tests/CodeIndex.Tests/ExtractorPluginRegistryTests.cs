@@ -8,6 +8,7 @@ using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
+[Collection("Console sensitive")]
 public class ExtractorPluginRegistryTests
 {
     internal const string ThrowingPluginConstructorEnvironmentVariable = "CDIDX_TEST_THROWING_PLUGIN_CTOR";
