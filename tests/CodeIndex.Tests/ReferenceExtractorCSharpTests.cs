@@ -2338,7 +2338,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithPostfixNullForgivingBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithPostfixExpressionsBeforeTerminalSelect_PreserveOnlyTrailingReferences()
     {
         const string content = """
             using System.Collections.Generic;
@@ -2364,12 +2364,20 @@ public partial class ReferenceExtractorTests
 
             public sealed class Uses
             {
-                public Status Read(IEnumerable<Holder> items)
+                public Status ReadNullForgiving(IEnumerable<Holder> items)
                 {
                     return Sink.Pick(from Status in items
                                      let alias = Sink.Maybe(Status)!
                                      select(Status.Ready),
                                      Status.Ready);
+                }
+
+                public Status ReadIncrement(IEnumerable<object> items, int counter)
+                {
+                    return Sink.Pick(from Status in items
+                                     let n = counter++
+                                     select(Status.Ready),
+                                     Demo.Status.Ready);
                 }
             }
             """;
@@ -2377,9 +2385,13 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        Assert.Single(readyRefs);
-        Assert.Equal("Read", readyRefs[0].ContainerName);
+        var readyRefs = references
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Select(reference => reference.ContainerName)
+            .OrderBy(name => name)
+            .ToArray();
+
+        Assert.Equal(["ReadIncrement", "ReadNullForgiving"], readyRefs);
     }
 
     [Fact]
@@ -2562,45 +2574,6 @@ public partial class ReferenceExtractorTests
             .ToArray();
 
         Assert.Equal(["ReadArray", "ReadNullable", "ReadTuple"], readyRefs);
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithPostfixIncrementBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
-    {
-        const string content = """
-            using System.Collections.Generic;
-            using System.Linq;
-
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public static class Sink
-            {
-                public static Demo.Status Pick(object left, Demo.Status right) => right;
-            }
-
-            public sealed class Uses
-            {
-                public Demo.Status Read(IEnumerable<object> items, int counter)
-                {
-                    return Sink.Pick(from Status in items
-                                     let n = counter++
-                                     select(Status.Ready),
-                                     Demo.Status.Ready);
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        Assert.Single(readyRefs);
-        Assert.Equal("Read", readyRefs[0].ContainerName);
     }
 
     [Fact]
