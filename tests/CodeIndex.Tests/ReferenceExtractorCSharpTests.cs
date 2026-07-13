@@ -2131,7 +2131,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedTerminalSelectInArgument_PreservesOnlyTrailingReference()
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedQueryTerminalsInArguments_PreserveOnlyTrailingReferences()
     {
         const string content = """
             using System.Collections.Generic;
@@ -2156,48 +2156,12 @@ public partial class ReferenceExtractorTests
 
             public sealed class Uses
             {
-                public Demo.Status Read(IEnumerable<Holder> items)
+                public Demo.Status ReadSelect(IEnumerable<Holder> items)
                 {
                     return Sink.Pick(from Status in items select(Status.Ready), Demo.Status.Ready);
                 }
-            }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        Assert.Single(readyRefs);
-        Assert.Equal("Read", readyRefs[0].ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedGroupByQueryInArgument_PreservesOnlyTrailingReference()
-    {
-        const string content = """
-            using System.Collections.Generic;
-            using System.Linq;
-
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public static class Sink
-            {
-                public static Demo.Status Pick(object left, Demo.Status right) => right;
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public Demo.Status Read(IEnumerable<Holder> items)
+                public Demo.Status ReadGroup(IEnumerable<Holder> items)
                 {
                     return Sink.Pick(from Status in items group(Status.Ready) by items.Count(), Demo.Status.Ready);
                 }
@@ -2207,9 +2171,13 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        Assert.Single(readyRefs);
-        Assert.Equal("Read", readyRefs[0].ContainerName);
+        var readyRefs = references
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Select(reference => reference.ContainerName)
+            .OrderBy(name => name)
+            .ToArray();
+
+        Assert.Equal(["ReadGroup", "ReadSelect"], readyRefs);
     }
 
     [Fact]

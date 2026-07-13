@@ -147,6 +147,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   C# awaited order-by coverage shares direct and comment-separated keyword-named local-function calls in one extraction pass.
   C# throw-expression order-by coverage shares `select`- and `group`-named local functions in one extractor source.
   C# parenthesized compound order-by coverage shares ternary and coalesce expressions in one extraction pass.
+  C# parenthesized query-terminal argument coverage shares select and group-by forms in one extractor source.
   Inspect and references command coverage applies the same switch-expression grouping so each surface builds one graph-ready database and validates results by container.
   Apply the same combined null-comparison fixture to inspect reference-bundle coverage instead of indexing each operator separately.
   Production-runtime switch relational-pattern coverage places less-than and greater-than methods in one source and pays one CLI indexing subprocess.
@@ -636,6 +637,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   C# awaited order-by coverage は direct / comment-separated のkeyword-named local-function call を1回の extraction pass で共有してください。
   C# throw-expression order-by coverage は `select` / `group` 名のlocal function を1つの extractor source で共有してください。
   C# parenthesized compound order-by coverage は ternary / coalesce expression を1回の extraction pass で共有してください。
+  C# parenthesized query-terminal argument coverage は select / group-by 形式を1つの extractor source で共有してください。
   inspect / references command coverage も同じ switch-expression の統合方針を適用し、各 surface で1つの graph-ready database を構築して container ごとに結果を検証してください。
   inspect reference-bundle coverageにも同じnull-comparison統合fixtureを適用し、operatorごとの個別indexingを避けてください。
   production-runtime switch relational-pattern coverage はless-thanとgreater-thanのmethodを1 sourceに置き、CLI indexing subprocessを1回だけ実行してください。
