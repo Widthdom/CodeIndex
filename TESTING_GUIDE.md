@@ -310,6 +310,7 @@ Use the inventory below before adding or moving a test class:
 - Persisted-HEAD drift and recovery assertions should update metadata within one Git fixture rather than creating a second repository merely to test the matching state.
 - Latest-indexed-HEAD precedence should be asserted for status and analysis result shapes from one seeded repository rather than duplicating identical Git and database setup.
 - Commits-ahead ancestor and missing-stamp behavior should share the same multi-commit repository; the missing case only requires a fresh result object without `IndexedHeadSha`.
+- Shared file-URI escaping and LSP round-trip parity should use one path/root case rather than duplicating equivalent percent-encoding setup in separate tests.
 - Long-running or performance-oriented tests: keep them skipped by default or give them broad deterministic budgets; if CI reports them in xUnit long-running diagnostics, first check runner load before tightening thresholds.
 - When a response-size algorithm needs a large production ceiling, prefer a narrowly scoped test-only budget override and a small representative payload; restore process-global overrides in `finally` and keep the suite non-parallel.
 - Pagination and suppression fixtures should cross the fetched-window boundary with the fewest additional records needed to distinguish full totals from the returned page.
@@ -753,6 +754,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - persisted HEAD の drift / recovery assertion は1つの Git fixture 内で metadata を更新し、matching state のためだけに2つ目の repo を作成しない。
 - latest indexed HEAD の優先順位は1つの seed 済み repo から status / analysis result shape の両方で検証し、同一 Git / DB setup を重複させない。
 - commits-ahead の ancestor / missing-stamp behavior は同じ multi-commit repo を共有する。missing case は `IndexedHeadSha` のない新しい result object だけで検証できる。
+- shared file-URI escaping と LSP round-trip parity は1つの path / root case で検証し、同等の percent-encoding setup を別 test で重複させない。
 - 長時間または performance 系テスト: デフォルト skip にするか、決定的で十分広い budget を与える。CI の xUnit long-running 診断に出た場合は、閾値を締める前に runner 負荷を確認する。
 
 ## 共通ヘルパー
