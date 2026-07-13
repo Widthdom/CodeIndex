@@ -154,6 +154,38 @@ public partial class DbReaderTests
     }
 
     [Fact]
+    public void GetFileDependencies_CSharpLimitBoundsSourceNameCandidates_Issue4455()
+    {
+        var sourceFileId = InsertSyntheticDependencyFile("src/BoundedCaller.cs");
+        var targetFileId = InsertSyntheticDependencyFile("src/BoundedTarget.cs");
+        var symbolNames = Enumerable.Range(0, 201).Select(index => $"BoundedTarget{index:D3}").ToArray();
+
+        _writer.InsertSymbols(symbolNames.Select((name, index) => new SymbolRecord
+        {
+            FileId = targetFileId,
+            Kind = "class",
+            Name = name,
+            Line = index + 1,
+            StartLine = index + 1,
+            EndLine = index + 1,
+        }).ToArray());
+        _writer.InsertReferences(symbolNames.Select((name, index) => new ReferenceRecord
+        {
+            FileId = sourceFileId,
+            SymbolName = name,
+            ReferenceKind = "type_reference",
+            Line = index + 1,
+            Column = 1,
+            Context = name,
+        }).ToArray());
+
+        var dependency = Assert.Single(_reader.GetFileDependencies(limit: 1, lang: "csharp"));
+
+        Assert.Equal("src/BoundedTarget.cs", dependency.TargetPath);
+        Assert.Equal(DependencyNoiseProfile.GetRankingCandidateLimit(1), dependency.ReferenceCount);
+    }
+
+    [Fact]
     public void GetFileDependencies_RanksNoiseAdjustedEdgesBeforeApplyingLimit_Issue4113()
     {
         var sourceFileId = InsertSyntheticDependencyFile("src/RankingCaller.cs");
