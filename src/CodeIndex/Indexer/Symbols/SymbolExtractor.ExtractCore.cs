@@ -156,6 +156,9 @@ public static partial class SymbolExtractor
         var shellScannerLines = lang == "shell"
             ? MaskShellHeredocLines(lines)
             : null;
+        var powershellEnumBodyLines = lang == "powershell"
+            ? FindPowerShellEnumBodyLines(structuralLines)
+            : null;
         int[]?[] csharpMatchColumnToRaw = null!;
         var csharpMatchLines = lang == "csharp"
             ? BuildCSharpMatchLines(lines, out csharpMatchColumnToRaw)
@@ -384,6 +387,13 @@ public static partial class SymbolExtractor
                 {
                     if (lang == "csharp" && ReferenceEquals(pattern.Regex, CSharpEnumMemberRegex))
                         continue;
+                    if (lang == "powershell"
+                        && pattern.Kind == "enum"
+                        && pattern.BodyStyle == BodyStyle.None
+                        && !powershellEnumBodyLines![i])
+                    {
+                        continue;
+                    }
                     // Merge multi-line field headers for C# regardless of kind. Kind "property" (plain
                     // fields) and kind "function" (const / static readonly fields) both need the
                     // merge. Non-field function patterns (methods, constructors, operators, indexers)
