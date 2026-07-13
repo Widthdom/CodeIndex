@@ -3039,7 +3039,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithNestedQueryBeforeOrderByComma_DoesNotLeakReference()
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithNestedQueriesBeforeOrderByComma_RespectTerminalBoundaries()
     {
         const string content = """
             using System.Collections.Generic;
@@ -3055,38 +3055,6 @@ public partial class ReferenceExtractorTests
             public sealed class Holder
             {
                 public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public IEnumerable<int> Read(IEnumerable<Holder> items, IEnumerable<int> others)
-                {
-                    return from Status in items
-                           let nested = from x in others select x
-                           orderby items.Count(), nested.Count()
-                           select Status.Ready;
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithNestedQueryBeforeParenthesizedOrderByComma_PreservesOnlyTrailingReference()
-    {
-        const string content = """
-            using System.Collections.Generic;
-            using System.Linq;
-
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
             }
 
             public static class Sink
@@ -3094,14 +3062,17 @@ public partial class ReferenceExtractorTests
                 public static Demo.Status Pick(object left, Demo.Status right) => right;
             }
 
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
             public sealed class Uses
             {
-                public Demo.Status Read(IEnumerable<Holder> items, IEnumerable<int> others)
+                public IEnumerable<int> QueryOnly(IEnumerable<Holder> items, IEnumerable<int> others)
+                {
+                    return from Status in items
+                           let nested = from x in others select x
+                           orderby items.Count(), nested.Count()
+                           select Status.Ready;
+                }
+
+                public Demo.Status ReadTrailing(IEnumerable<Holder> items, IEnumerable<int> others)
                 {
                     return Sink.Pick(from Status in items
                                      let nested = from x in others select x
@@ -3115,9 +3086,9 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        Assert.Single(readyRefs);
-        Assert.Equal("Read", readyRefs[0].ContainerName);
+        var readyRef = Assert.Single(references.Where(reference =>
+            reference.SymbolName == "Ready" && reference.ReferenceKind == "call"));
+        Assert.Equal("ReadTrailing", readyRef.ContainerName);
     }
 
     [Fact]

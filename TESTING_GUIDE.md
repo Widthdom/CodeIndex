@@ -154,6 +154,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   C# lambda-scoped declaration-pattern coverage shares ordinary, nested, and static lambda forms in one extraction pass.
   C# declaration-pattern statement coverage shares single-line if, multiline if, and multiline while forms in one extractor source.
   C# parenthesized terminal-select boundary coverage shares uppercase-constant and generic-close predecessors in one extraction pass.
+  C# nested-query order-by coverage shares plain and parenthesized comma boundaries in one extractor source.
   Inspect and references command coverage applies the same switch-expression grouping so each surface builds one graph-ready database and validates results by container.
   Apply the same combined null-comparison fixture to inspect reference-bundle coverage instead of indexing each operator separately.
   Production-runtime switch relational-pattern coverage places less-than and greater-than methods in one source and pays one CLI indexing subprocess.
@@ -650,6 +651,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   C# lambda-scoped declaration-pattern coverage は ordinary、nested、static lambda 形式を1回の extraction pass で共有してください。
   C# declaration-pattern statement coverage は single-line if、multiline if、multiline while 形式を1つの extractor source で共有してください。
   C# parenthesized terminal-select boundary coverage は uppercase-constant / generic-close predecessor を1回の extraction pass で共有してください。
+  C# nested-query order-by coverage は plain / parenthesized comma boundary を1つの extractor source で共有してください。
   inspect / references command coverage も同じ switch-expression の統合方針を適用し、各 surface で1つの graph-ready database を構築して container ごとに結果を検証してください。
   inspect reference-bundle coverageにも同じnull-comparison統合fixtureを適用し、operatorごとの個別indexingを避けてください。
   production-runtime switch relational-pattern coverage はless-thanとgreater-thanのmethodを1 sourceに置き、CLI indexing subprocessを1回だけ実行してください。
