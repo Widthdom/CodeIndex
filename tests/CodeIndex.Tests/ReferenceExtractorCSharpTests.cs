@@ -2390,7 +2390,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithAwaitBeforeQueryKeywordNamedLocalFunctionInOrderBy_DoesNotLeakReference()
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithAwaitedQueryKeywordNamedLocalFunctions_DoNotLeakReference()
     {
         const string content = """
             using System.Collections.Generic;
@@ -2411,45 +2411,15 @@ public partial class ReferenceExtractorTests
 
             public sealed class Uses
             {
-                public async Task<IEnumerable<int>> Read(IEnumerable<Holder> items)
+                public async Task<IEnumerable<int>> ReadDirect(IEnumerable<Holder> items)
                 {
                     static async Task<int> select(IEnumerable<Holder> xs) => await Task.FromResult(xs.Count());
                     return from Status in items
                            orderby await select(items), items.Count()
                            select Status.Ready;
                 }
-            }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithCommentSeparatedAwaitBeforeQueryKeywordNamedLocalFunctionInOrderBy_DoesNotLeakReference()
-    {
-        const string content = """
-            using System.Collections.Generic;
-            using System.Linq;
-            using System.Threading.Tasks;
-
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public async Task<IEnumerable<int>> Read(IEnumerable<Holder> items)
+                public async Task<IEnumerable<int>> ReadCommentSeparated(IEnumerable<Holder> items)
                 {
                     static async Task<int> select(IEnumerable<Holder> xs) => await Task.FromResult(xs.Count());
                     return from Status in items
