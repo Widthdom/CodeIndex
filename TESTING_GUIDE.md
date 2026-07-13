@@ -292,6 +292,7 @@ Use the inventory below before adding or moving a test class:
 - Split pure pre-cancelled import and bounded-stream checks from import-replacement fixtures that mutate test-only hooks, so only the hook-owning class remains serialized.
 - Release workflow and package-normalizer tests can run outside the SQLite-sensitive collection: xUnit keeps methods in their single class sequential, so its two scoped durability-hook probes cannot overlap each other.
 - Database-diff fixtures own independent left/right projects, lock console capture, and keep their sole row-budget override within the same sequential xUnit class; they do not require process-wide SQLite serialization.
+- Keep `SuggestionStore` environment-boundary and configured-pruning cases in their small non-parallel fixture; hashing, deduplication, archive, and ordinary persistence cases own isolated directories and should remain parallelizable.
 - JSON API-version fixtures use locked console capture and scoped project cleanup; deleting the project before an unconditional pool reset makes that reset both redundant and too late, so keep this contract suite parallelizable.
 - Golden JSON snapshot fixtures share the same cleanup/capture ownership and should not pay a process-wide pool reset after each of the status, search, references, impact, and excerpt snapshots.
 - Temporary repositories and files: create them through `TestProjectHelper` when practical, and do not depend on user-level git config.
@@ -722,6 +723,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - pure な事前 cancellation import / bounded-stream check は test-only hook を変更する import replacement fixture から分離し、hook を所有する class だけを直列化する。
 - release workflow / package-normalizer test は SQLite-sensitive collection の外で実行できる。xUnit は単一 class 内の method を直列に保つため、scope された2件の durability-hook probe は互いに重ならない。
 - database diff fixture は独立した left / right project を所有し、console capture を lock し、唯一の row-budget override を同じ xUnit class の直列実行内に閉じるため、process-wide な SQLite 直列化は不要である。
+- `SuggestionStore` の environment boundary / configured pruning case は小さな non-parallel fixture に隔離する。hash、deduplication、archive、通常の persistence case は独立 directory を所有し、parallel 実行可能に保つ。
 - JSON API-version fixture は locked console capture と scoped project cleanup を使う。project 削除後の無条件 pool reset は冗長なうえ遅すぎるため、この contract suite は parallel 実行可能な状態を保つ。
 - golden JSON snapshot fixture も同じ cleanup / capture ownership に従う。status、search、references、impact、excerpt の各 snapshot 後に process-wide pool reset を支払わないこと。
 - 一時 repo / file: 可能な限り `TestProjectHelper` 経由で作り、user-level の git config に依存しない。
