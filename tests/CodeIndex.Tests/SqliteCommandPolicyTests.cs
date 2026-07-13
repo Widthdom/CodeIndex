@@ -7,7 +7,7 @@ namespace CodeIndex.Tests;
 public class SqliteCommandPolicyTests
 {
     [Fact]
-    public void AddTypedParameters_StabilizesSqliteTypes_Issue3982()
+    public void ParameterBuilders_StabilizeTypesDatesAndCopies_Issues3907_3982()
     {
         using var command = new SqliteCommand();
 
@@ -34,12 +34,6 @@ public class SqliteCommandPolicyTests
         Assert.Equal(DbType.Int32, limit.DbType);
         Assert.Equal(10, limit.Value);
         Assert.Throws<ArgumentOutOfRangeException>(() => SqliteCommandPolicy.AddOffset(command, "@offset", -1));
-    }
-
-    [Fact]
-    public void AddDateTime_UsesStableSqliteTextFormat_Issue3907()
-    {
-        using var command = new SqliteCommand();
 
         var parameter = SqliteCommandPolicy.AddDateTime(
             command,
@@ -50,22 +44,15 @@ public class SqliteCommandPolicyTests
         Assert.Equal(DbType.String, parameter.DbType);
         Assert.Equal("2026-06-23 04:05:06.7891234", parameter.Value);
         Assert.Equal(27, parameter.Size);
-    }
-
-    [Fact]
-    public void AddCopy_PreservesExplicitParameterShape_Issue3907()
-    {
-        using var sourceCommand = new SqliteCommand();
-        var source = SqliteCommandPolicy.AddText(sourceCommand, "@path", "src/app.cs");
 
         using var targetCommand = new SqliteCommand();
-        var copy = SqliteCommandPolicy.AddCopy(targetCommand, source);
+        var copy = SqliteCommandPolicy.AddCopy(targetCommand, text);
 
-        Assert.Equal(source.ParameterName, copy.ParameterName);
-        Assert.Equal(source.SqliteType, copy.SqliteType);
-        Assert.Equal(source.DbType, copy.DbType);
-        Assert.Equal(source.Size, copy.Size);
-        Assert.Equal(source.Value, copy.Value);
+        Assert.Equal(text.ParameterName, copy.ParameterName);
+        Assert.Equal(text.SqliteType, copy.SqliteType);
+        Assert.Equal(text.DbType, copy.DbType);
+        Assert.Equal(text.Size, copy.Size);
+        Assert.Equal(text.Value, copy.Value);
     }
 
     [Fact]
