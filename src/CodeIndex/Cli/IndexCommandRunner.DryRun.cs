@@ -38,7 +38,7 @@ public static partial class IndexCommandRunner
         var dryScanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
         DryRunScanMetadata dryScanMetadata;
         var resolvedDbPath = DbPathResolver.NormalizeDbPath(DbPathResolver.ResolveForIndex(projectPath, options.DbPath, options.DataDir).DbPath);
-        var dbSnapshot = ReadDryRunDbSnapshot(resolvedDbPath);
+        var dbSnapshot = ReadDryRunDbSnapshot(resolvedDbPath, options.SymbolKindFilter);
         var normalizedProjectRoot = Path.GetFullPath(projectPath);
         var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(dbSnapshot.IndexedProjectRoot)
             ? null
@@ -48,8 +48,34 @@ public static partial class IndexCommandRunner
         var projectedDeletePaths = new HashSet<string>(StringComparer.Ordinal);
         var projectedPurgePaths = new HashSet<string>(StringComparer.Ordinal);
         var estimatedTableMutations = CreateEmptyEstimatedTableMutations();
+        var estimatedSymbolsDroppedByKindFilter = 0L;
         var unsupportedTotal = 0;
         var unknownExtensionTotal = 0;
+        var normalizedUpdatePaths = options.UpdateFiles.Count > 0
+            ? NormalizeUpdateFileTargets(projectPath, options.UpdateFiles, options.Json)
+            : [];
+
+        if (options.UpdateFiles.Count > 0)
+        {
+            var hasExistingCandidate = normalizedUpdatePaths.Any(path =>
+            {
+                var absolutePath = Path.Combine(projectPath, path.Replace('/', Path.DirectorySeparatorChar));
+                return File.Exists(LongPath.EnsureWindowsPrefix(absolutePath))
+                    && !dryIndexer.EvaluatePathFilter(absolutePath).ShouldSkip;
+            });
+            var hasIndexedCandidate = normalizedUpdatePaths.Any(path =>
+                dbSnapshot.Files.ContainsKey(FileIndexer.NormalizeIndexPath(path)));
+            if (!hasExistingCandidate && !hasIndexedCandidate)
+            {
+                return WriteCommandError(
+                    options.Json,
+                    jsonOptions,
+                    "none of the paths supplied to --files resolved to an existing in-project file or an indexed path",
+                    CommandExitCodes.UsageError,
+                    "Check each path and rerun `cdidx index <projectPath> --files <path> [path ...] --dry-run`.",
+                    CommandErrorCodes.UsageError);
+            }
+        }
 
         void RecordDryRunError(string file, string message)
         {
@@ -79,6 +105,7 @@ public static partial class IndexCommandRunner
             options,
             dryIndexer,
             projectPath,
+            normalizedUpdatePaths,
             jsonOptions,
             cancellationToken,
             RecordDryRunScanErrors,
@@ -176,7 +203,7 @@ public static partial class IndexCommandRunner
                         dbRelativePath);
                 }
             }
-            AddEstimatedUpdateMutation(estimatedTableMutations, dbSnapshot, dbRelativePath);
+            estimatedSymbolsDroppedByKindFilter += AddEstimatedUpdateMutation(estimatedTableMutations, dbSnapshot, dbRelativePath);
             if (dryFileSamples.Count < DryRunFileSampleLimit)
                 dryFileSamples.Add(displayRelativePath);
             langCounts[probe.Language] = langCounts.GetValueOrDefault(probe.Language) + 1;
@@ -232,6 +259,8 @@ public static partial class IndexCommandRunner
                 CandidatePathsTruncated = candidatePathsTruncated,
                 TotalsLowerBound = candidatePathsTruncated,
                 EstimatedTableMutations = estimatedTableMutations,
+                SymbolsDroppedByKindFilter = estimatedSymbolsDroppedByKindFilter,
+                SymbolKindFilter = options.SymbolKindFilter.ToJsonResult(),
                 FileSamples = dryFileSamples.Count > 0 ? dryFileSamples : null,
                 FileSamplesTruncated = candidatePathsTruncated || dryFileCount > dryFileSamples.Count,
                 FileSampleLimit = DryRunFileSampleLimit,
@@ -260,6 +289,7 @@ public static partial class IndexCommandRunner
         IndexCommandOptions options,
         FileIndexer dryIndexer,
         string projectPath,
+        IReadOnlyList<string> normalizedUpdatePaths,
         JsonSerializerOptions jsonOptions,
         CancellationToken cancellationToken,
         Action<IEnumerable<FileIndexer.ScanError>> recordDryRunScanErrors,
@@ -279,8 +309,7 @@ public static partial class IndexCommandRunner
         {
             // --files: only the specified files / --files: 指定ファイルのみ
             var relevantIgnoreFileChanged = ContainsRelevantIgnoreFileUpdate(projectPath, options.UpdateFiles);
-            var updatePaths = NormalizeUpdateFileTargets(projectPath, options.UpdateFiles, options.Json);
-            if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(updatePaths))
+            if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(normalizedUpdatePaths))
             {
                 FileIndexer.ScanFilesResult scanResult;
                 try
@@ -299,9 +328,9 @@ public static partial class IndexCommandRunner
             }
             else
             {
-                dryDeleteCandidates = updatePaths
+                dryDeleteCandidates = normalizedUpdatePaths
                     .Where(path => !File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(projectPath, path.Replace('/', Path.DirectorySeparatorChar)))));
-                dryCandidates = updatePaths
+                dryCandidates = normalizedUpdatePaths
                     .Select(path => Path.Combine(projectPath, path.Replace('/', Path.DirectorySeparatorChar)))
                     .Where(p => File.Exists(LongPath.EnsureWindowsPrefix(p)));
             }
@@ -630,14 +659,17 @@ public static partial class IndexCommandRunner
             ["file_issues"] = 0,
         };
 
-    private static void AddEstimatedUpdateMutation(
+    private static long AddEstimatedUpdateMutation(
         Dictionary<string, long> mutations,
         DryRunDbSnapshot snapshot,
         string relativePath)
     {
         mutations["files"]++;
-        if (snapshot.Files.TryGetValue(relativePath, out var rows))
-            AddExistingChildRows(mutations, rows);
+        if (!snapshot.Files.TryGetValue(relativePath, out var rows))
+            return 0;
+
+        AddExistingChildRows(mutations, rows, rows.FilteredSymbols);
+        return rows.Symbols - rows.FilteredSymbols;
     }
 
     private static void AddEstimatedDeleteMutation(
@@ -649,19 +681,22 @@ public static partial class IndexCommandRunner
             return;
 
         mutations["files"]++;
-        AddExistingChildRows(mutations, rows);
+        AddExistingChildRows(mutations, rows, rows.Symbols);
     }
 
-    private static void AddExistingChildRows(Dictionary<string, long> mutations, DryRunExistingFileRows rows)
+    private static void AddExistingChildRows(
+        Dictionary<string, long> mutations,
+        DryRunExistingFileRows rows,
+        long symbols)
     {
         mutations["chunks"] += rows.Chunks;
-        mutations["symbols"] += rows.Symbols;
+        mutations["symbols"] += symbols;
         mutations["symbol_references"] += rows.SymbolReferences;
         mutations["reference_lines"] += rows.ReferenceLines;
         mutations["file_issues"] += rows.FileIssues;
     }
 
-    private static DryRunDbSnapshot ReadDryRunDbSnapshot(string dbPath)
+    private static DryRunDbSnapshot ReadDryRunDbSnapshot(string dbPath, SymbolKindFilter symbolKindFilter)
     {
         try
         {
@@ -684,11 +719,15 @@ public static partial class IndexCommandRunner
             var hasFileIssues = DryRunTableExists(connection, "file_issues");
 
             using var command = connection.CreateCommand();
+            var filteredSymbolsExpression = hasSymbols && symbolKindFilter.IsActive
+                ? BuildDryRunFilteredSymbolCountExpression(command, symbolKindFilter)
+                : "0";
             command.CommandText = $"""
                 SELECT f.path,
                        f.checksum,
                        {(hasChunks ? "(SELECT COUNT(*) FROM chunks c WHERE c.file_id = f.id)" : "0")} AS chunks_count,
                        {(hasSymbols ? "(SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id)" : "0")} AS symbols_count,
+                       {filteredSymbolsExpression} AS filtered_symbols_count,
                        {(hasSymbolReferences ? "(SELECT COUNT(*) FROM symbol_references r WHERE r.file_id = f.id)" : "0")} AS symbol_references_count,
                        {(hasReferenceLines ? "(SELECT COUNT(*) FROM reference_lines l WHERE l.file_id = f.id)" : "0")} AS reference_lines_count,
                        {(hasFileIssues ? "(SELECT COUNT(*) FROM file_issues i WHERE i.file_id = f.id)" : "0")} AS file_issues_count
@@ -699,13 +738,15 @@ public static partial class IndexCommandRunner
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
+                var symbols = reader.GetInt64(3);
                 files[reader.GetString(0)] = new DryRunExistingFileRows(
                     reader.IsDBNull(1) ? null : reader.GetString(1),
                     reader.GetInt64(2),
-                    reader.GetInt64(3),
-                    reader.GetInt64(4),
+                    symbols,
+                    symbolKindFilter.IsActive ? reader.GetInt64(4) : symbols,
                     reader.GetInt64(5),
-                    reader.GetInt64(6));
+                    reader.GetInt64(6),
+                    reader.GetInt64(7));
             }
 
             return new DryRunDbSnapshot(files, indexedProjectRoot);
@@ -722,6 +763,39 @@ public static partial class IndexCommandRunner
         {
             return DryRunDbSnapshot.Empty;
         }
+    }
+
+    private static string BuildDryRunFilteredSymbolCountExpression(
+        SqliteCommand command,
+        SymbolKindFilter symbolKindFilter)
+    {
+        var conditions = new List<string>();
+        if (symbolKindFilter.Include.Count > 0)
+        {
+            var parameters = AddDryRunSymbolKindParameters(command, "include", symbolKindFilter.Include);
+            conditions.Add($"s.kind IS NOT NULL AND trim(s.kind) <> '' AND s.kind COLLATE NOCASE IN ({parameters})");
+        }
+        if (symbolKindFilter.Exclude.Count > 0)
+        {
+            var parameters = AddDryRunSymbolKindParameters(command, "exclude", symbolKindFilter.Exclude);
+            conditions.Add($"(s.kind IS NULL OR trim(s.kind) = '' OR s.kind COLLATE NOCASE NOT IN ({parameters}))");
+        }
+
+        return $"(SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id AND {string.Join(" AND ", conditions)})";
+    }
+
+    private static string AddDryRunSymbolKindParameters(
+        SqliteCommand command,
+        string prefix,
+        IReadOnlyList<string> values)
+    {
+        var names = new string[values.Count];
+        for (var i = 0; i < values.Count; i++)
+        {
+            names[i] = $"@{prefix}{i}";
+            command.Parameters.AddWithValue(names[i], values[i]);
+        }
+        return string.Join(", ", names);
     }
 
     private static bool DryRunTableExists(SqliteConnection connection, string tableName)
@@ -760,6 +834,7 @@ public static partial class IndexCommandRunner
         string? Checksum,
         long Chunks,
         long Symbols,
+        long FilteredSymbols,
         long SymbolReferences,
         long ReferenceLines,
         long FileIssues);

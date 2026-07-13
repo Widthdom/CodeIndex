@@ -311,6 +311,47 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRun_SymbolKindFiltersAdjustSymbolEstimateAndExposeResolvedPolicy_4470()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sample.cs"),
+                "public class Sample { public void First() { } public void Second() { } }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var (_, unfiltered) = RunAndCaptureJson([projectRoot, "--dry-run", "--json"]);
+            var (exitCode, filtered) = RunAndCaptureJson([
+                projectRoot,
+                "--dry-run",
+                "--include-symbol-kind",
+                "method,class,method",
+                "--exclude-symbol-kind",
+                "class",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var unfilteredMutations = unfiltered.GetProperty("estimated_table_mutations");
+            var filteredMutations = filtered.GetProperty("estimated_table_mutations");
+            Assert.True(filteredMutations.GetProperty("symbols").GetInt64() < unfilteredMutations.GetProperty("symbols").GetInt64());
+            Assert.Equal(
+                unfilteredMutations.GetProperty("symbol_references").GetInt64(),
+                filteredMutations.GetProperty("symbol_references").GetInt64());
+            Assert.True(filtered.GetProperty("symbols_dropped_by_kind_filter").GetInt64() > 0);
+            var policy = filtered.GetProperty("symbol_kind_filter");
+            Assert.Equal(["class", "method"], policy.GetProperty("include").EnumerateArray().Select(value => value.GetString()).ToArray());
+            Assert.Equal(["class"], policy.GetProperty("exclude").EnumerateArray().Select(value => value.GetString()).ToArray());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DryRun_WithFiles_ReportsChecksumRenamePurgeWithoutWriting()
     {
         var projectRoot = CreateTempProject();
@@ -548,7 +589,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_DryRun_WithFiles_IgnoresAbsolutePathOutsideProjectRoot()
+    public void Run_DryRun_WithFiles_RejectsAbsolutePathOutsideProjectRoot_4471()
     {
         var projectRoot = CreateTempProject();
         var outsidePath = Path.Combine(Path.GetTempPath(), $"cdidx_dryrun_outside_{Guid.NewGuid():N}.cs");
@@ -558,9 +599,9 @@ public partial class IndexCommandRunnerTests
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", outsidePath, "--dry-run", "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("dry_run", json.GetProperty("status").GetString());
-            Assert.Equal(0, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("none of the paths supplied to --files resolved", json.GetProperty("message").GetString());
         }
         finally
         {
@@ -570,7 +611,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_DryRun_WithFiles_IgnoresTraversalOutsideProjectRoot()
+    public void Run_DryRun_WithFiles_RejectsTraversalOutsideProjectRoot_4471()
     {
         var parentDir = TestProjectHelper.CreateTempProject("cdidx_dryrun_parent");
         var projectRoot = Path.Combine(parentDir, "project");
@@ -582,13 +623,130 @@ public partial class IndexCommandRunnerTests
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "../outside.cs", "--dry-run", "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("dry_run", json.GetProperty("status").GetString());
-            Assert.Equal(0, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("none of the paths supplied to --files resolved", json.GetProperty("message").GetString());
         }
         finally
         {
             DeleteDirectory(parentDir);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithFiles_RejectsNonexistentUnindexedProjectPath_4471()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "missing.cs",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("none of the paths supplied to --files resolved", json.GetProperty("message").GetString());
+            Assert.Contains("--files <path>", json.GetProperty("hint").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithFiles_RejectsNonexistentUnindexedIgnoreFile_4471()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "sample.cs"), "public class Sample { }\n");
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "missing/.gitignore",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("none of the paths supplied to --files resolved", json.GetProperty("message").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithFiles_RejectsSymlinkSkippedByPolicy_4471()
+    {
+        var projectRoot = CreateTempProject();
+        var outsidePath = Path.Combine(Path.GetTempPath(), $"cdidx_dryrun_symlink_{Guid.NewGuid():N}.cs");
+        try
+        {
+            File.WriteAllText(outsidePath, "public class Outside { }\n");
+            try
+            {
+                File.CreateSymbolicLink(Path.Combine(projectRoot, "link.cs"), outsidePath);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+            {
+                return;
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "link.cs",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("none of the paths supplied to --files resolved", json.GetProperty("message").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            DeleteFile(outsidePath);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithFiles_AllowsDeletedIndexedProjectPath_4471()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "deleted.cs");
+            File.WriteAllText(sourcePath, "public class Deleted { }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            File.Delete(sourcePath);
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "deleted.cs",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("projected_file_deletes").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
         }
     }
 

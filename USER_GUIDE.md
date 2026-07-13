@@ -1601,7 +1601,7 @@ same source location.
 | `--duplicate-confidence <low\|medium\|high>` / `--duplicate-threshold <score>` | `search --format issue-drafts`, `suggestions export --format issue-drafts` | Tune duplicate-preflight matching. `low`, `medium`, and `high` map to score thresholds of 0.35, 0.45, and 0.7; `--duplicate-threshold` accepts an explicit 0.0-1.0 score and reports `confidence: "custom"` in the JSON summary. |
 | `--issue-title <title>` / `--issue-label <label>` | `search --format issue-drafts` | Set the title for an ad hoc search draft and add label hints. `--issue-label` can be repeated or comma-separated. |
 | `--check` | `status` | Verify that `.cdidx/codeindex.db` exactly matches the current indexable workspace by comparing DB file paths/checksums against a fresh filesystem scan. Matching indexes exit `0`; stale indexes exit `5`. |
-| `--dry-run` | `index` | Scan files and report what would change without writing to the database |
+| `--dry-run` | `index` | Scan files and report what would change without writing to the database; JSON includes the resolved symbol-kind filter and filtered symbol mutation estimate |
 | `--limit <n>` / `--max-results <n>` | Query result commands except `suggestions`; `--max-results` is `search` only | Max results (default: 20, max: 10000; `map` uses it per section) |
 | `--lang <lang>` | Query commands | Filter by language (case-insensitive; `--lang Python` is treated as `--lang python`). Common aliases such as `c#`, `cs`, `kt`, and `kts` are also accepted. Unknown values emit an `Available: <languages>` hint on zero-result responses in human-readable output. |
 | `--visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | Include only symbols with the requested visibility values: `public`, `protected`, `internal`, `private`. `public` matches stored exported aliases such as `pub`, `open`, and `export`; `private` also matches `fileprivate`. |
@@ -1660,7 +1660,7 @@ same source location.
 | `--verbose` | `index` | Show per-file status (`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`) |
 | `--commits <id...>` | `index` | Update only files changed in specified commits. Prefer this after a normal commit because git history includes rename/delete paths. |
 | `--changed-between <old-ref> <new-ref>` | `index` | Update only files changed between two git refs. Useful after branch switches when tooling knows the previous and current refs; rename old and new paths are both considered. |
-| `--files <path...>` | `index` | Update only the specified files. Safe for known in-place edits or new files; old rename/delete paths are not purged unless you also list them explicitly. |
+| `--files <path...>` | `index` | Update only the specified files. Safe for known in-place edits or new files; old rename/delete paths are not purged unless you also list them explicitly. A dry-run exits with a usage error when none of the supplied paths resolves to an existing in-project file or a path already present in the index. |
 | `--force` | `index` | Bypass the per-database index lock. Only use when you are sure no other `cdidx index` is active against the same DB; concurrent runs may corrupt the schema. |
 | `--duration-format <auto\|seconds\|hms>` | `index` | Choose human elapsed-time display for index summaries. `auto` (default) uses unit labels; `seconds` emits decimal seconds; `hms` keeps `HH:MM:SS`. JSON always keeps raw `elapsed_ms`. |
 | `--dry-run-path-limit <n>` | `index` (`--dry-run` only) | Process at most `<n>` dry-run candidate paths before returning truncated estimates. Defaults to `100000`; values above `1000000` are rejected. When the limit is reached, dry-run JSON sets `candidate_paths_truncated: true` and `totals_lower_bound: true`, and reports `candidate_path_limit` plus `candidate_paths_processed`. |
@@ -1980,7 +1980,7 @@ JSON5-style line comments (`//`) and trailing commas are accepted so the file st
 
 cdidx scans your project directory, applies the built-in skip lists plus user `.gitignore` / `.cdidxignore` rules, skips Windows Hidden/System paths before language detection, splits each remaining source file into overlapping chunks, and stores everything in a SQLite database with FTS5 full-text search. In each directory, `.gitignore` is loaded before `.cdidxignore`; later rules are additive, so a `!` pattern in `.cdidxignore` can re-include a path ignored earlier by `.gitignore` in the same directory scope. Incremental mode (default) first purges database entries for files that no longer exist on disk, then checks each file's last-modified timestamp against the database — only files whose timestamp exactly matches are skipped, and any difference (newer or older) triggers re-indexing. Newly appeared files are indexed as new entries. The same path filter is reused for scoped `--files` / `--commits` refreshes, commit-based refreshes automatically switch to a full scan when ignore files changed, and Git-managed workspaces follow the repository's `core.ignorecase` setting when evaluating ignore rules. This means re-indexing after a branch switch only processes the files that actually differ unless ignore rules themselves changed.
 
-At index time, `--include-symbol-kind` keeps only matching symbol kinds and `--exclude-symbol-kind` drops matching symbol kinds before rows are written to `symbols`. Values are comma-separated and case-insensitive. If both filters are present, include is applied first and exclude wins for overlapping kinds. The resolved policy is included in index JSON as `symbol_kind_filter`, and the summary reports `symbols_dropped_by_kind_filter`.
+At index time, `--include-symbol-kind` keeps only matching symbol kinds and `--exclude-symbol-kind` drops matching symbol kinds before rows are written to `symbols`. Values are comma-separated and case-insensitive. If both filters are present, include is applied first and exclude wins for overlapping kinds. The resolved policy is included in index JSON as `symbol_kind_filter`, and the summary reports `symbols_dropped_by_kind_filter`. Dry-run JSON applies the same policy to its DB-backed `estimated_table_mutations.symbols` estimate and exposes both `symbol_kind_filter` and the estimated `symbols_dropped_by_kind_filter`; reference estimates remain unchanged because symbol-kind filters do not filter reference rows.
 
 ### Incremental update reliability
 
@@ -4406,7 +4406,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--duplicate-confidence <low\|medium\|high>` / `--duplicate-threshold <score>` | `search --format issue-drafts`, `suggestions export --format issue-drafts` | duplicate preflight の一致しきい値を調整します。`low`、`medium`、`high` は score threshold 0.35、0.45、0.7 に対応します。`--duplicate-threshold` は明示的な 0.0-1.0 の score を受け取り、JSON summary では `confidence: "custom"` を出力します。 |
 | `--issue-title <title>` / `--issue-label <label>` | `search --format issue-drafts` | ad hoc search draft の title を指定し、label hint を追加します。`--issue-label` は繰り返し指定またはカンマ区切りに対応します。 |
 | `--check` | `status` | DB のファイル path/checksum と現在の index 対象 workspace を比較し、`.cdidx/codeindex.db` が完全一致するか確認。完全一致なら終了コード `0`、stale なら `5` |
-| `--dry-run` | `index` | DB に書き込まず、どの変更が発生するかだけを走査して報告 |
+| `--dry-run` | `index` | DB に書き込まず、どの変更が発生するかだけを走査して報告。JSON には解決済み symbol-kind filter とフィルター適用後の symbol mutation 推計を含む |
 | `--limit <n>` / `--max-results <n>` | `suggestions` 以外のクエリ結果コマンド。`--max-results` は `search` のみ | 最大結果数（デフォルト: 20、最大: 10000。`map` では各セクションごとの件数） |
 | `--visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | `public`, `protected`, `internal`, `private` の可視性でシンボルを絞り込む。`public` は `pub`、`open`、`export` などの保存済み exported alias にも一致し、`private` は `fileprivate` にも一致 |
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | 指定した可視性のシンボルを除外する。値と alias 展開は `--visibility` と同じ |
@@ -4462,7 +4462,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--verbose` | `index` | ファイルごとのステータス表示（`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`） |
 | `--commits <id...>` | `index` | 指定コミットの変更ファイルのみ更新。通常のコミット後はこちらを推奨。rename/delete の旧パスも git 履歴から拾える。 |
 | `--changed-between <old-ref> <new-ref>` | `index` | 2つの git ref 間で変更されたファイルのみ更新。ブランチ切り替え前後の ref が分かる workflow 向け。rename の旧パスと新パスを両方考慮する。 |
-| `--files <path...>` | `index` | 指定ファイルのみ更新。把握している in-place 編集や新規ファイル向け。rename/delete の旧パスは明示しない限り purge されない。 |
+| `--files <path...>` | `index` | 指定ファイルのみ更新。把握している in-place 編集や新規ファイル向け。rename/delete の旧パスは明示しない限り purge されない。指定した path が既存の project 内ファイルにも index 内の既存 path にも 1 件も解決されない場合、dry-run は usage error で終了する。 |
 | `--force` | `index` | 同一 DB に対する index ロックを bypass する。他の `cdidx index` が走っていないと確信できる場合のみ使う。並行実行は schema を破壊し得る。 |
 | `--duration-format <auto\|seconds\|hms>` | `index` | index summary の human 経過時間表示を選ぶ。`auto`（既定）は単位付き、`seconds` は小数秒、`hms` は `HH:MM:SS` を維持。JSON は常に raw の `elapsed_ms` を返す。 |
 | `--dry-run-path-limit <n>` | `index`（`--dry-run` 専用） | truncate された estimate を返す前に処理する dry-run candidate path 数を指定する。既定は `100000` で、`1000000` を超える値は拒否される。上限に達した場合、dry-run JSON は `candidate_paths_truncated: true` と `totals_lower_bound: true` を設定し、`candidate_path_limit` と `candidate_paths_processed` も返す。 |
@@ -4781,7 +4781,7 @@ MCP のレスポンスサイズ上限は、環境変数 override で guard が�
 
 cdidxはプロジェクトディレクトリを走査し、組み込みのスキップ対象とユーザーの `.gitignore` / `.cdidxignore` を適用し、Windows の Hidden/System パスを言語検出前にスキップしたうえで、各ソースファイルを重複を持つチャンクに分割し、FTS5全文検索付きのSQLiteデータベースに格納します。同じディレクトリでは `.gitignore` を先に読み、`.cdidxignore` を後から読むため、後の `.cdidxignore` ルールは加算的に適用され、`!` パターンで同じディレクトリスコープの `.gitignore` 除外を再包含できます。インクリメンタルモード（デフォルト）では各ファイルの最終更新タイムスタンプをDB内の値と比較し、完全一致するファイルのみスキップします。タイムスタンプが異なれば（新しくても古くても）再インデックスされるため、ブランチ切り替え後も正確にインデックスが更新されます。`--files` / `--commits` の部分更新も同じパスフィルタを再利用し、commit 側で ignore ファイルが変わったときは自動でフルスキャンへ切り替わります。Git 管理下の ignore 判定は OS 固定ではなく `core.ignorecase` を参照し、`**` も Git の path-form globstar だけを特別扱いするため、差分更新でも Git と同じ範囲で ignore されます。つまり ignore ルール自体が変わらない限り、差分再インデックスは実際に変わったファイルだけに比例します。
 
-index 時には `--include-symbol-kind` で一致する kind だけを保持し、`--exclude-symbol-kind` で一致する kind を `symbols` に書き込む前に除外できます。値はカンマ区切りで、大文字小文字は区別しません。両方を指定した場合は include を先に適用し、重複した kind では exclude が優先されます。解決済み policy は index JSON の `symbol_kind_filter` に入り、summary には `symbols_dropped_by_kind_filter` が出ます。
+index 時には `--include-symbol-kind` で一致する kind だけを保持し、`--exclude-symbol-kind` で一致する kind を `symbols` に書き込む前に除外できます。値はカンマ区切りで、大文字小文字は区別しません。両方を指定した場合は include を先に適用し、重複した kind では exclude が優先されます。解決済み policy は index JSON の `symbol_kind_filter` に入り、summary には `symbols_dropped_by_kind_filter` が出ます。dry-run JSON も同じ policy を DB ベースの `estimated_table_mutations.symbols` 推計へ適用し、`symbol_kind_filter` と推計値の `symbols_dropped_by_kind_filter` を出力します。symbol-kind filter は reference 行を絞り込まないため、reference の推計値は変わりません。
 
 ### インクリメンタル更新の信頼性
 
