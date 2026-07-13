@@ -144,6 +144,40 @@ public class ProgramRunnerTests
         Assert.True(document.RootElement.TryGetProperty("count", out _));
     }
 
+    [Fact]
+    public void RunAuditAlias_SummaryOnlyJsonUsesCompactRecipeSummary_Issue4472()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("audit-summary-only");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                [
+                    "audit",
+                    "resource-materialization-audit",
+                    "--db",
+                    dbPath,
+                    "--json",
+                    "--summary-only"
+                ],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var root = document.RootElement;
+            Assert.Equal("resource-materialization-audit", root.GetProperty("recipe").GetString());
+            Assert.True(root.TryGetProperty("query_count", out _));
+            Assert.True(root.TryGetProperty("result_count", out _));
+            Assert.True(root.TryGetProperty("queries", out _));
+            Assert.False(root.TryGetProperty("results", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("refs", "cdidx references")]
     [InlineData("stats", "cdidx status")]
