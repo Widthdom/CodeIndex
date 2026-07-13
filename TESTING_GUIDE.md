@@ -130,6 +130,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   C# switch-expression pattern-variable coverage keeps recursive, declaration, guard, and comment-trivia forms in one extractor fixture when their contract is the set of genuine enum-member references.
   C# foreach-shadowing coverage shares embedded, same-line, and dangling-else forms in one source and distinguishes the surviving references by container.
   C# lambda-parameter shadowing coverage shares simple, multiline, after-lambda, and same-line boundary forms in one extraction pass.
+  C# query range-variable members named `select` share plain, escaped, and trivia-separated access forms in one extractor source.
   Inspect and references command coverage applies the same switch-expression grouping so each surface builds one graph-ready database and validates results by container.
   Apply the same combined null-comparison fixture to inspect reference-bundle coverage instead of indexing each operator separately.
   Production-runtime switch relational-pattern coverage places less-than and greater-than methods in one source and pays one CLI indexing subprocess.
@@ -602,6 +603,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   C# switch-expression pattern-variable coverage は、真の enum-member reference 集合を同じ contract とする recursive、declaration、guard、comment-trivia 形式を1つの extractor fixture で共有してください。
   C# foreach shadowing coverage は embedded、same-line、dangling-else 形式を1つの source で共有し、残る reference を container で区別してください。
   C# lambda parameter shadowing coverage は simple、multiline、after-lambda、same-line boundary 形式を1回の extraction pass で共有してください。
+  C# query range-variable の `select` 名 member は plain、escaped、trivia-separated access 形式を1つの extractor source で共有してください。
   inspect / references command coverage も同じ switch-expression の統合方針を適用し、各 surface で1つの graph-ready database を構築して container ごとに結果を検証してください。
   inspect reference-bundle coverageにも同じnull-comparison統合fixtureを適用し、operatorごとの個別indexingを避けてください。
   production-runtime switch relational-pattern coverage はless-thanとgreater-thanのmethodを1 sourceに置き、CLI indexing subprocessを1回だけ実行してください。
