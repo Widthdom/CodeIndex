@@ -484,6 +484,62 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_SemanticTokens_ClassifiesCSharpKeywordsModifiersAndDeclarations_Issue4444()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_semantic_tokens");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            var source = string.Join('\n',
+            [
+                "using Text = System.Text;",
+                "namespace Sample.Tools { internal sealed class App",
+                "{",
+                "    private const int Count = 1;",
+                "    public void Run() { }",
+                "    private string Raw = \"\"\"",
+                "public class RawContent",
+                "\"\"\";",
+                "    private string Verbatim = @\"start",
+                "private sealed VerbatimContent\";",
+                "}",
+                "}",
+            ]);
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+
+            var response = server.HandleMessage(CreateTextDocumentRequest("textDocument/semanticTokens/full", sourcePath, 4444));
+
+            Assert.NotNull(response);
+            var tokens = DecodeSemanticTokens(response!["result"]!["data"]!.AsArray(), source);
+            AssertSemanticToken(tokens, 0, "using", 15, 0);
+            AssertSemanticToken(tokens, 0, "System", 0, 0);
+            AssertSemanticToken(tokens, 0, "Text", 0, 0);
+            AssertSemanticToken(tokens, 1, "namespace", 15, 0);
+            AssertSemanticToken(tokens, 1, "internal", 16, 0);
+            AssertSemanticToken(tokens, 1, "sealed", 16, 0);
+            AssertSemanticToken(tokens, 1, "class", 15, 0);
+            AssertSemanticToken(tokens, 1, "App", 2, 1);
+            AssertSemanticToken(tokens, 3, "private", 16, 0);
+            AssertSemanticToken(tokens, 3, "const", 16, 0);
+            AssertSemanticToken(tokens, 3, "Count", 23, 1);
+            AssertSemanticToken(tokens, 4, "Run", 13, 1);
+            Assert.DoesNotContain(tokens, token => token.Line is 6 or 9);
+            Assert.DoesNotContain(tokens.SelectMany((left, index) => tokens.Skip(index + 1).Select(right => (left, right))), pair =>
+                pair.left.Line == pair.right.Line &&
+                pair.left.Character < pair.right.Character + pair.right.Text.Length &&
+                pair.right.Character < pair.left.Character + pair.left.Text.Length);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_InlayHint_HonorsRangeAndSuppressesExplicitTypes_Issue4418()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_inlay_hint_range");
@@ -2422,6 +2478,38 @@ public class LspServerTests
     {
         var lines = source.Split('\n');
         return lines[line].IndexOf(value, StringComparison.Ordinal);
+    }
+
+    private static List<(int Line, int Character, string Text, int Type, int Modifiers)> DecodeSemanticTokens(
+        JsonArray data,
+        string source)
+    {
+        var values = data.Select(node => node!.GetValue<int>()).ToArray();
+        var sourceLines = source.Split('\n');
+        var tokens = new List<(int, int, string, int, int)>();
+        var line = 0;
+        var character = 0;
+        for (var index = 0; index < values.Length; index += 5)
+        {
+            line += values[index];
+            character = values[index] == 0 ? character + values[index + 1] : values[index + 1];
+            tokens.Add((line, character, sourceLines[line].Substring(character, values[index + 2]), values[index + 3], values[index + 4]));
+        }
+        return tokens;
+    }
+
+    private static void AssertSemanticToken(
+        List<(int Line, int Character, string Text, int Type, int Modifiers)> tokens,
+        int line,
+        string text,
+        int type,
+        int modifiers)
+    {
+        Assert.Contains(tokens, token =>
+            token.Line == line &&
+            token.Text == text &&
+            token.Type == type &&
+            token.Modifiers == modifiers);
     }
 
     private static IEnumerable<JsonNode?> FlattenDocumentSymbols(JsonArray symbols)
