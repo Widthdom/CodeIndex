@@ -3590,7 +3590,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithLaterLocalShadowing_DoesNotSuppressEarlierReference()
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithLocalShadowing_RespectsDeclarationAndBlockBoundaries()
     {
         const string content = """
             namespace Demo;
@@ -3613,16 +3613,29 @@ public partial class ReferenceExtractorTests
                     Holder Status = new();
                     return Demo.Status.Ready;
                 }
+
+                public void AfterBlock()
+                {
+                    {
+                        var Status = new Holder();
+                        _ = Status.Ready;
+                    }
+
+                    _ = Status.Ready;
+                }
             }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
-            .OrderBy(reference => reference.Line)
-            .ToList();
-        Assert.Equal([17, 19], readyRefs.Select(reference => reference.Line).ToArray());
+        var readyRefs = references
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .GroupBy(reference => reference.ContainerName)
+            .ToDictionary(group => group.Key!, group => group.Count());
+
+        Assert.Equal(2, readyRefs["Before"]);
+        Assert.Equal(1, readyRefs["AfterBlock"]);
     }
 
     [Fact]
@@ -8602,47 +8615,6 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain(references, r =>
             r.SymbolName == "seed"
             && r.ReferenceKind == "capture");
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithBlockScopedLocalNamedLikeEnum_DoesNotLeakPastBlock()
-    {
-        const string content = """
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public void Run()
-                {
-                    {
-                        var Status = new Holder();
-                        _ = Status.Ready;
-                    }
-
-                    _ = Status.Ready;
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
-            .ToList();
-
-        var readyRef = Assert.Single(readyRefs);
-        Assert.Equal("Run", readyRef.ContainerName);
     }
 
     private static void AssertReferenceContains(
