@@ -5819,8 +5819,8 @@ public partial class SymbolExtractorTests
         // issue #447 follow-up: `_map = new()` で宣言確定後は、長い object/collection
         // initializer でも bounded な確認フェーズ満了で raw header に戻らず、そのまま
         // 継続して終端 `;` まで追跡しなければならない。
-        var initializerLines = Enumerable.Range(1, 18)
-            .Select(i => $"            [\"k{i:00}\"] = {i}")
+        var initializerLines = Enumerable.Range(1, 120)
+            .Select(i => $"            [\"k{i:000}\"] = {i}")
             .ToArray();
         var content = string.Join(
             "\n",
@@ -5842,8 +5842,39 @@ public partial class SymbolExtractorTests
             && s.Name == "_map"
             && s.Visibility == "private"
             && s.ReturnType == "Dictionary<string,int>"));
-        Assert.Contains("_map = new()", map.Signature);
-        Assert.Contains("};", map.Signature);
+        var signature = Assert.IsType<string>(map.Signature);
+        Assert.Contains("_map = new()", signature);
+        Assert.Equal(1024, signature.Length);
+        Assert.EndsWith("…;", signature, StringComparison.Ordinal);
+        Assert.DoesNotContain("k120", signature, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Extract_CSharp_BoundsStaticReadonlyCollectionInitializerSignature_Issue4445()
+    {
+        var initializerLines = Enumerable.Range(1, 120)
+            .Select(i => $"        \"value-{i:000}\",")
+            .ToArray();
+        var content = string.Join(
+            "\n",
+            [
+                "public static class Catalog",
+                "{",
+                "    private static readonly string[] Values =",
+                "    [",
+                .. initializerLines,
+                "    ];",
+                "}"
+            ]);
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var values = Assert.Single(symbols.Where(s => s.Kind == "field" && s.Name == "Values"));
+        var signature = Assert.IsType<string>(values.Signature);
+        Assert.StartsWith("private static readonly string[] Values =", signature, StringComparison.Ordinal);
+        Assert.Equal(1024, signature.Length);
+        Assert.EndsWith("…;", signature, StringComparison.Ordinal);
+        Assert.DoesNotContain("value-120", signature, StringComparison.Ordinal);
     }
 
     [Fact]
