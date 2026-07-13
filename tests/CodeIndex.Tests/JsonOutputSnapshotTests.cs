@@ -227,5 +227,8 @@ public class Probe
     }
 
     private static (int ExitCode, string Stdout, string Stderr) CaptureConsole(Func<int> action)
-        => ConsoleCapture.Capture(action);
+    {
+        lock (TestConsoleLock.Gate)
+            return ConsoleCapture.Capture(action);
+    }
 }

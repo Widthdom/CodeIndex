@@ -304,7 +304,7 @@ Use the inventory below before adding or moving a test class:
 - The reflection-only SQLite collection registration contract is parallel-safe; keep only fixture lifecycle tests that replace the global pool-clear callback in the sensitive collection.
 - Isolate config CLI cases that change current directory or real environment variables; ordinary config parsing and validation uses injected environment readers and independent temporary roots, so the main suite remains parallelizable.
 - JSON API-version fixtures use locked console capture and scoped project cleanup; deleting the project before an unconditional pool reset makes that reset both redundant and too late, so keep this contract suite parallelizable.
-- Golden JSON snapshot fixtures share the same cleanup/capture ownership and should not pay a process-wide pool reset after each of the status, search, references, impact, and excerpt snapshots.
+- Golden JSON snapshot fixtures serialize their shared console capture while retaining per-instance database cleanup; they should not pay a process-wide pool reset after each of the status, search, references, impact, and excerpt snapshots.
 - Temporary repositories and files: create them through `TestProjectHelper` when practical, and do not depend on user-level git config.
 - MCP unit fixtures that instantiate a real server should place its database inside a scoped temporary project and delete the project after server disposal instead of leaving a standalone database in the system temp directory.
 - MCP audit fixtures should co-locate the database, active log, and rotated logs under one temporary project so one resilient directory cleanup replaces per-file cleanup lists.
@@ -762,7 +762,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - reflection だけを行う SQLite collection registration contract は parallel-safe である。global pool-clear callback を置き換える fixture lifecycle test だけを sensitive collection に残す。
 - current directory または実 environment variable を変更する config CLI case を隔離する。通常の config parse / validation は注入された environment reader と独立 temporary root を使うため、main suite は parallel 実行可能に保つ。
 - JSON API-version fixture は locked console capture と scoped project cleanup を使う。project 削除後の無条件 pool reset は冗長なうえ遅すぎるため、この contract suite は parallel 実行可能な状態を保つ。
-- golden JSON snapshot fixture も同じ cleanup / capture ownership に従う。status、search、references、impact、excerpt の各 snapshot 後に process-wide pool reset を支払わないこと。
+- golden JSON snapshot fixture は shared console capture を直列化しつつ、instance ごとの database cleanup を維持する。status、search、references、impact、excerpt の各 snapshot 後に process-wide pool reset を支払わないこと。
 - 一時 repo / file: 可能な限り `TestProjectHelper` 経由で作り、user-level の git config に依存しない。
 - real server を生成する MCP unit fixture は、system temp directory に単独 DB を残さず、scoped temporary project 内へ DB を置き、server dispose 後に project を削除する。
 - MCP audit fixture は database、active log、rotated log を同じ temporary project 配下へ置き、file ごとの cleanup list を1回の resilient directory cleanup に置き換える。
