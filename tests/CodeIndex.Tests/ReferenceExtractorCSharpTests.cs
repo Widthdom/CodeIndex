@@ -1394,7 +1394,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithUsingAliasToNonEnumType_DoesNotLeakAsEnumMemberReference()
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithUsingAliases_DistinguishesEnumAndNonEnumTargets()
     {
         const string content = """
             namespace A;
@@ -1415,35 +1415,19 @@ public partial class ReferenceExtractorTests
 
             public class UsesAlias
             {
-                public int Read()
+                public int ReadNonEnum()
                 {
                     return Status.Ready;
                 }
             }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+            namespace C;
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
-    }
+            using Alias = A.Status;
 
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithUsingAliasToEnumType_PreservesEnumMemberReference()
-    {
-        const string content = """
-            namespace Demo;
-
-            public enum Status
+            public class UsesEnumAlias
             {
-                Ready
-            }
-
-            using Alias = Demo.Status;
-
-            public class UsesAlias
-            {
-                public Status Read()
+                public A.Status ReadEnum()
                 {
                     return Alias.Ready;
                 }
@@ -1455,7 +1439,7 @@ public partial class ReferenceExtractorTests
 
         var ready = Assert.Single(references.Where(reference => reference.SymbolName == "Ready"));
         Assert.Equal("call", ready.ReferenceKind);
-        Assert.Equal("Read", ready.ContainerName);
+        Assert.Equal("ReadEnum", ready.ContainerName);
     }
 
     [Fact]

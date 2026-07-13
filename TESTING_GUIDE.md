@@ -135,6 +135,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   C# statement-boundary shadowing shares out-declaration, out-var, catch, and using scopes in one extractor source.
   C# terminal-select generic type-pattern coverage shares designation and no-designation methods in one extraction pass.
   C# terminal-select generic `as` null-comparison coverage places equality, inequality, and a later genuine enum reference in one extractor source.
+  C# using-alias coverage places enum and non-enum targets in separate namespaces of one extractor source and asserts only the enum target survives.
   Inspect and references command coverage applies the same switch-expression grouping so each surface builds one graph-ready database and validates results by container.
   Apply the same combined null-comparison fixture to inspect reference-bundle coverage instead of indexing each operator separately.
   Production-runtime switch relational-pattern coverage places less-than and greater-than methods in one source and pays one CLI indexing subprocess.
@@ -612,6 +613,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   C# statement-boundary shadowing は out-declaration、out-var、catch、using scope を1つの extractor source で共有してください。
   C# terminal-select generic type-pattern coverage は designation あり / なしのmethodを1回の extraction pass で共有してください。
   C# terminal-select generic `as` null-comparison coverage は equality、inequality、後続する真の enum reference を1つの extractor source に併置してください。
+  C# using-alias coverage は enum / non-enum target を1つの extractor source 内の別 namespace に置き、enum target だけが残ることを検証してください。
   inspect / references command coverage も同じ switch-expression の統合方針を適用し、各 surface で1つの graph-ready database を構築して container ごとに結果を検証してください。
   inspect reference-bundle coverageにも同じnull-comparison統合fixtureを適用し、operatorごとの個別indexingを避けてください。
   production-runtime switch relational-pattern coverage はless-thanとgreater-thanのmethodを1 sourceに置き、CLI indexing subprocessを1回だけ実行してください。
