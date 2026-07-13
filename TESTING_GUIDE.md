@@ -295,6 +295,7 @@ Use the inventory below before adding or moving a test class:
 - Keep `SuggestionStore` environment-boundary and configured-pruning cases in their small non-parallel fixture; hashing, deduplication, archive, and ordinary persistence cases own isolated directories and should remain parallelizable.
 - Separate pure `ProcessStartInfo` construction contracts from subprocess-environment filtering tests; only the latter mutate the parent process environment and require the non-parallel collection.
 - Keep freshness diagnostic classification parallel; isolate only the stamped-case probe test that temporarily replaces `GitHelper` and `FileIndexer` test hooks.
+- Production source-policy scans for direct environment access are read-only and parallel-safe; isolate the separate `CdidxEnvironment` mutation contract that changes a real process variable.
 - JSON API-version fixtures use locked console capture and scoped project cleanup; deleting the project before an unconditional pool reset makes that reset both redundant and too late, so keep this contract suite parallelizable.
 - Golden JSON snapshot fixtures share the same cleanup/capture ownership and should not pay a process-wide pool reset after each of the status, search, references, impact, and excerpt snapshots.
 - Temporary repositories and files: create them through `TestProjectHelper` when practical, and do not depend on user-level git config.
@@ -728,6 +729,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `SuggestionStore` の environment boundary / configured pruning case は小さな non-parallel fixture に隔離する。hash、deduplication、archive、通常の persistence case は独立 directory を所有し、parallel 実行可能に保つ。
 - pure な `ProcessStartInfo` construction contract と subprocess environment filtering test を分離する。parent process environment を変更して non-parallel collection が必要なのは後者だけである。
 - freshness diagnostic classification は parallel 実行し、`GitHelper` / `FileIndexer` test hook を一時的に置き換える stamped-case probe test だけを隔離する。
+- production source の direct environment access policy scan は read-only で parallel-safe である。実 process variable を変更する別の `CdidxEnvironment` mutation contract だけを隔離する。
 - JSON API-version fixture は locked console capture と scoped project cleanup を使う。project 削除後の無条件 pool reset は冗長なうえ遅すぎるため、この contract suite は parallel 実行可能な状態を保つ。
 - golden JSON snapshot fixture も同じ cleanup / capture ownership に従う。status、search、references、impact、excerpt の各 snapshot 後に process-wide pool reset を支払わないこと。
 - 一時 repo / file: 可能な限り `TestProjectHelper` 経由で作り、user-level の git config に依存しない。
