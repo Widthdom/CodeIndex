@@ -2429,6 +2429,54 @@ public static partial class SymbolExtractor
         "class", "struct", "interface", "protocol", "protocol_impl", "namespace", "enum", "object", "heading", "specialization", "class_hook"
     ];
 
+    private static bool[] FindPowerShellEnumBodyLines(string[] structuralLines)
+    {
+        var result = new bool[structuralLines.Length];
+        var waitingForOpeningBrace = false;
+        var enumBraceDepth = 0;
+
+        for (var i = 0; i < structuralLines.Length; i++)
+        {
+            var line = structuralLines[i];
+            if (enumBraceDepth > 0)
+                result[i] = true;
+
+            if (enumBraceDepth == 0 && !waitingForOpeningBrace)
+            {
+                var trimmed = line.AsSpan().TrimStart();
+                if (trimmed.StartsWith("enum", StringComparison.OrdinalIgnoreCase)
+                    && trimmed.Length > 4
+                    && char.IsWhiteSpace(trimmed[4]))
+                {
+                    waitingForOpeningBrace = true;
+                }
+            }
+
+            if (!waitingForOpeningBrace && enumBraceDepth == 0)
+                continue;
+
+            foreach (var character in line)
+            {
+                if (character == '{')
+                    enumBraceDepth++;
+                else if (character == '}')
+                    enumBraceDepth--;
+            }
+
+            if (enumBraceDepth > 0)
+            {
+                waitingForOpeningBrace = false;
+            }
+            else if (!waitingForOpeningBrace || line.Contains('}'))
+            {
+                enumBraceDepth = 0;
+                waitingForOpeningBrace = false;
+            }
+        }
+
+        return result;
+    }
+
     private static bool IsRustDirectTraitBodyMember(List<SymbolRecord> symbols, int candidateLine)
     {
         SymbolRecord? innermostContainer = null;
