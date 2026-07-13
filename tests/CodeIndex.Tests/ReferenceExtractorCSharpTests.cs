@@ -5655,76 +5655,34 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpDocCref_DoesNotTreatRawStringAfterDelimitedDocCloseAsDocComment()
+    public void Extract_CsharpDocCref_ReuseDelimitedMarkerStringFixture()
     {
         const string content = """"
             class Foo {}
             class Bar {}
+            class RawFoo {}
+            class VerbatimFoo {}
             class Demo
             {
                 /**
                  * <summary><see cref="Foo"/></summary> */ string text = """<see cref="Bar"/>""";
-                void Run() {}
-            }
-            """";
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols)
-            .Where(r => r.Line == 6 && r.ReferenceKind == "type_reference")
-            .ToList();
-
-        Assert.DoesNotContain(references, r => r.SymbolName == "Foo");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Bar");
-    }
-
-    [Fact]
-    public void Extract_CsharpDocCref_DoesNotTreatRawStringContentStartingWithDelimitedDocMarkerAsDocComment()
-    {
-        const string content = """"
-            class Foo {}
-            class Demo
-            {
-                string text = """
-                /** <summary><see cref="Foo"/></summary> */
+                string raw = """
+                /** <summary><see cref="RawFoo"/></summary> */
                 """;
 
-                void Run() {}
-            }
-            """";
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.DoesNotContain(
-            references,
-            r => r.SymbolName == "Foo"
-                && r.ReferenceKind == "type_reference"
-                && r.Line == 5);
-    }
-
-    [Fact]
-    public void Extract_CsharpDocCref_DoesNotTreatVerbatimStringContentStartingWithDelimitedDocMarkerAsDocComment()
-    {
-        const string content = """
-            class Foo {}
-            class Demo
-            {
-                string text = @"line1
-                /** <summary><see cref="Foo"/></summary> */
+                string verbatim = @"line1
+                /** <summary><see cref=""VerbatimFoo""/></summary> */
                 line3";
 
                 void Run() {}
             }
-            """;
+            """";
 
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.DoesNotContain(
-            references,
-            r => r.SymbolName == "Foo"
-                && r.ReferenceKind == "type_reference"
-                && r.Line == 5);
+        AssertReferencesDoNotContainAny(references, "Foo", "Bar", "RawFoo", "VerbatimFoo");
     }
 
     [Fact]
