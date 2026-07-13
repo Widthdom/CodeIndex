@@ -1378,6 +1378,75 @@ public class WorkspaceCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("clear")]
+    [InlineData("deactivate")]
+    public void WorkspaceClear_RemovesPersistedActiveWorkspace_Issue4475(string command)
+    {
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_clear_config");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_clear_project");
+        using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+        Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", config.Root);
+        ActiveWorkspace.Save(new ActiveWorkspaceState(
+            "default",
+            project.Root,
+            Path.Combine(project.Root, ".cdidx", "codeindex.db")));
+
+        var (exitCode, stdout, stderr) = ConsoleCapture.Capture(
+            () => WorkspaceCommandRunner.Run([command, "--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Empty(stderr);
+        Assert.False(File.Exists(ActiveWorkspace.StatePath));
+        Assert.Null(ActiveWorkspace.Load());
+        using var document = JsonDocument.Parse(stdout);
+        Assert.False(document.RootElement.GetProperty("active").GetBoolean());
+        Assert.Equal("inactive", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("workspace").ValueKind);
+    }
+
+    [Fact]
+    public void WorkspaceClear_IsIdempotentWhenNoPersistedStateExists_Issue4475()
+    {
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_clear_empty_config");
+        using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+        Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", config.Root);
+
+        var (exitCode, stdout, stderr) = ConsoleCapture.Capture(
+            () => WorkspaceCommandRunner.Run(["clear"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal("Active workspace cleared.", stdout.Trim());
+        Assert.Empty(stderr);
+    }
+
+    [Fact]
+    public void WorkspaceClear_RejectsEnvironmentOverrideWithoutDeletingPersistedState_Issue4475()
+    {
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_clear_env_config");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_clear_env_project");
+        using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+        Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", config.Root);
+        ActiveWorkspace.Save(new ActiveWorkspaceState(
+            "default",
+            project.Root,
+            Path.Combine(project.Root, ".cdidx", "codeindex.db")));
+        Environment.SetEnvironmentVariable(
+            ActiveWorkspace.EnvironmentVariable,
+            Path.Combine(project.Root, ".cdidx", "environment.db"));
+
+        var (exitCode, _, stderr) = ConsoleCapture.Capture(
+            () => WorkspaceCommandRunner.Run(["clear"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains(ActiveWorkspace.EnvironmentVariable, stderr);
+        Assert.Contains("unset", stderr);
+        Assert.True(File.Exists(ActiveWorkspace.StatePath));
+    }
+
     private static string SwapAsciiCase(string value)
     {
         var chars = value.ToCharArray();
