@@ -408,7 +408,23 @@ public partial class DbReader
                        MAX(CASE WHEN " + BuildMetadataTargetKindExpr("dst") + @" THEN 1 ELSE 0 END) AS has_metadata_target_kind
                 FROM symbols s
                 JOIN files dst ON s.file_id = dst.id
-                WHERE dst.lang = 'csharp'
+                WHERE dst.lang = 'csharp'";
+            AppendDependencyGeneratedFilter(ref sql, "dst");
+            if (reverse && pathPatterns is { Count: > 0 })
+            {
+                var ors = new List<string>(pathPatterns.Count);
+                for (int i = 0; i < pathPatterns.Count; i++)
+                    ors.Add(BuildPathFilterPredicate("dst", "pathPattern", i, pathPatterns[i]));
+                sql += " AND (" + string.Join(" OR ", ors) + ")";
+            }
+            if (reverse && excludePathPatterns is { Count: > 0 })
+            {
+                for (int i = 0; i < excludePathPatterns.Count; i++)
+                    sql += $" AND NOT {BuildPathFilterPredicate("dst", "excludePath", i, excludePathPatterns[i])}";
+            }
+            if (excludeTests)
+                sql += $" AND NOT {DependencyTestPathCondition("dst.path")}";
+            sql += @"
                 GROUP BY dst.path, " + targetLogicalSymbolNameExpr + @"
             ),
             bounded_source_name_counts AS (
