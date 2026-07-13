@@ -12084,8 +12084,9 @@ public partial class SymbolExtractorTests
         Assert.True(SymbolExtractor.MakefileContractVersion > SymbolExtractor.DefaultContractVersion);
         Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("sass"));
         Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("stylus"));
-        Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("xml"));
         Assert.True(SymbolExtractor.StyleAndXamlContractVersion > SymbolExtractor.DefaultContractVersion);
+        Assert.Equal(SymbolExtractor.XmlContractVersion, SymbolExtractor.GetContractVersion("xml"));
+        Assert.True(SymbolExtractor.XmlContractVersion > SymbolExtractor.StyleAndXamlContractVersion);
     }
 
     [Fact]

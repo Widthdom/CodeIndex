@@ -191,6 +191,9 @@ public static partial class SymbolExtractor
                         reader.MoveToElement();
                     }
 
+                    if (!TryAddNuGetConfigValueSymbols(fileId, reader, path, lineNumber, lines, symbols, ref truncated))
+                        return symbols;
+
                     if (!reader.IsEmptyElement)
                     {
                         elementPaths.Push(path);
@@ -213,6 +216,88 @@ public static partial class SymbolExtractor
         }
 
         return TrimStructuredDataSymbols(symbols, fileId, "structured_data_xml_symbol_budget_exceeded", lines);
+    }
+
+    private static bool TryAddNuGetConfigValueSymbols(
+        long fileId,
+        XmlReader reader,
+        string path,
+        int lineNumber,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        ref bool truncated)
+    {
+        if (!path.StartsWith("configuration.", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        string? subKind = null;
+        string? value = null;
+        var localName = reader.LocalName;
+
+        if (path.Equals("configuration.packageSources.add", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!TryAddNuGetConfigValueSymbol(fileId, "nuget.package_source", reader.GetAttribute("key"), lineNumber, lines, path, symbols, ref truncated))
+                return false;
+            subKind = "nuget.package_source_url";
+            value = reader.GetAttribute("value");
+        }
+        else if (path.Equals("configuration.packageSourceMapping.packageSource", StringComparison.OrdinalIgnoreCase))
+        {
+            subKind = "nuget.package_source_mapping";
+            value = reader.GetAttribute("key");
+        }
+        else if (path.EndsWith(".packageSource.package", StringComparison.OrdinalIgnoreCase)
+                 && path.Contains(".packageSourceMapping.", StringComparison.OrdinalIgnoreCase))
+        {
+            subKind = "nuget.package_source_mapping_pattern";
+            value = reader.GetAttribute("pattern");
+        }
+        else if (path.Equals("configuration.config.add", StringComparison.OrdinalIgnoreCase)
+                 && string.Equals(reader.GetAttribute("key"), "signatureValidationMode", StringComparison.OrdinalIgnoreCase))
+        {
+            subKind = "nuget.signature_validation_mode";
+            value = reader.GetAttribute("value");
+        }
+        else if (path.Contains(".trustedSigners.", StringComparison.OrdinalIgnoreCase)
+                 && (localName.Equals("author", StringComparison.OrdinalIgnoreCase)
+                     || localName.Equals("repository", StringComparison.OrdinalIgnoreCase)))
+        {
+            subKind = "nuget.trusted_signer";
+            value = reader.GetAttribute("name");
+        }
+        else if (path.Contains(".trustedSigners.", StringComparison.OrdinalIgnoreCase)
+                 && localName.Equals("certificate", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!TryAddNuGetConfigValueSymbol(fileId, "nuget.certificate_fingerprint", reader.GetAttribute("fingerprint"), lineNumber, lines, path, symbols, ref truncated))
+                return false;
+            subKind = "nuget.allow_untrusted_root";
+            value = reader.GetAttribute("allowUntrustedRoot");
+        }
+
+        return TryAddNuGetConfigValueSymbol(fileId, subKind, value, lineNumber, lines, path, symbols, ref truncated);
+    }
+
+    private static bool TryAddNuGetConfigValueSymbol(
+        long fileId,
+        string? semanticKind,
+        string? semanticValue,
+        int lineNumber,
+        string[] lines,
+        string path,
+        List<SymbolRecord> symbols,
+        ref bool truncated)
+    {
+        if (semanticKind == null || string.IsNullOrWhiteSpace(semanticValue))
+            return true;
+
+        var normalizedValue = semanticValue.Trim();
+        if (normalizedValue.Length > StructuredDataMaxPathLength)
+            return true;
+        if (!TryAddStructuredDataSymbol(fileId, "property", normalizedValue, lineNumber, lines, path, symbols, "structured_data_xml_symbol_budget_exceeded", ref truncated))
+            return false;
+
+        symbols[^1].SubKind = semanticKind;
+        return true;
     }
 
     private static void AddManifestAssemblyIdentitySymbols(
