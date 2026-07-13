@@ -2144,7 +2144,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryRangeVariableNamedLikeEnum_OrderByComma_DoesNotLeakReference()
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryRangeVariableOrderByForms_DoNotLeakReference()
     {
         const string content = """
             using System.Collections.Generic;
@@ -2164,43 +2164,14 @@ public partial class ReferenceExtractorTests
 
             public sealed class Uses
             {
-                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                public IEnumerable<int> ReadComma(IEnumerable<Holder> items)
                 {
                     return from Status in items
                            orderby Status, items.Count()
                            select Status.Ready;
                 }
-            }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryRangeVariableNamedLikeEnum_OrderByDirectionalComma_DoesNotLeakReference()
-    {
-        const string content = """
-            using System.Collections.Generic;
-            using System.Linq;
-
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                public IEnumerable<int> ReadDirectional(IEnumerable<Holder> items)
                 {
                     return from Status in items
                            orderby Status descending, items.Count() ascending

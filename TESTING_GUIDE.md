@@ -139,6 +139,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   C# property-receiver shadowing shares instance, instance-from-static, and static-property contexts in one extraction pass.
   C# indented lexical shadowing shares local, using-var, and property-accessor containers in one extractor source.
   C# nullable suffix coverage before parenthesized terminal select shares scalar, tuple, and array-rank forms in one extraction pass.
+  C# query range-variable order-by coverage shares comma and directional-comma forms in one extractor source.
   Inspect and references command coverage applies the same switch-expression grouping so each surface builds one graph-ready database and validates results by container.
   Apply the same combined null-comparison fixture to inspect reference-bundle coverage instead of indexing each operator separately.
   Production-runtime switch relational-pattern coverage places less-than and greater-than methods in one source and pays one CLI indexing subprocess.
@@ -620,6 +621,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   C# property-receiver shadowing は instance、instance-from-static、static-property context を1回の extraction pass で共有してください。
   C# indented lexical shadowing は local、using-var、property-accessor container を1つの extractor source で共有してください。
   C# parenthesized terminal select 前のnullable suffix coverage は scalar、tuple、array-rank 形式を1回の extraction pass で共有してください。
+  C# query range-variable order-by coverage は comma / directional-comma 形式を1つの extractor source で共有してください。
   inspect / references command coverage も同じ switch-expression の統合方針を適用し、各 surface で1つの graph-ready database を構築して container ごとに結果を検証してください。
   inspect reference-bundle coverageにも同じnull-comparison統合fixtureを適用し、operatorごとの個別indexingを避けてください。
   production-runtime switch relational-pattern coverage はless-thanとgreater-thanのmethodを1 sourceに置き、CLI indexing subprocessを1回だけ実行してください。
