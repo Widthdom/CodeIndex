@@ -2138,7 +2138,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithLambdaParameterNamedLikeEnum_DoesNotLeakAsEnumMemberReference()
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithLambdaParameterNamedLikeEnum_RespectsLambdaBoundaries()
     {
         const string content = """
             using System;
@@ -2157,111 +2157,25 @@ public partial class ReferenceExtractorTests
 
             public sealed class Uses
             {
-                public Func<Holder, int> Build()
+                public Func<Holder, int> BuildSimple()
                 {
                     return Status => Status.Ready;
                 }
-            }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithMultiLineLambdaParameterNamedLikeEnum_DoesNotLeakAsEnumMemberReference()
-    {
-        const string content = """
-            using System;
-
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public Func<Holder, int> Build()
+                public Func<Holder, int> BuildMultiLine()
                 {
                     return
                         (Status) =>
                             Status.Ready;
                 }
-            }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithLambdaParameterNamedLikeEnum_DoesNotLeakAfterLambda()
-    {
-        const string content = """
-            using System;
-
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public Demo.Status Read()
+                public Demo.Status ReadAfter()
                 {
                     Func<Holder, int> f = Status => Status.Ready;
                     return Demo.Status.Ready;
                 }
-            }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        Assert.Single(readyRefs);
-        Assert.Equal("Read", readyRefs[0].ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithLambdaParameterNamedLikeEnum_DoesNotLeakAfterSameLineLambda()
-    {
-        const string content = """
-            using System;
-
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public Demo.Status Read()
+                public Demo.Status ReadSameLine()
                 {
                     Func<Holder, int> f = Status => Status.Ready; return Demo.Status.Ready;
                 }
@@ -2271,9 +2185,13 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        Assert.Single(readyRefs);
-        Assert.Equal("Read", readyRefs[0].ContainerName);
+        var readyRefs = references
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Select(reference => reference.ContainerName)
+            .OrderBy(name => name)
+            .ToArray();
+
+        Assert.Equal(["ReadAfter", "ReadSameLine"], readyRefs);
     }
 
     [Fact]
