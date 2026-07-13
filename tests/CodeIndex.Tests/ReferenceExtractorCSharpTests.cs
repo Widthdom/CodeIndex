@@ -1687,6 +1687,20 @@ public partial class ReferenceExtractorTests
                         return Demo.Status.Ready;
                     }
                 }
+
+                public Demo.Status SplitValue
+                {
+                    get
+                    {
+                        Holder Status = new();
+                        _ = Status.Ready;
+                        return Demo.Status.Ready;
+                    }
+                    set
+                    {
+                        _ = Status.Ready;
+                    }
+                }
             }
             """;
 
@@ -1698,8 +1712,12 @@ public partial class ReferenceExtractorTests
             .OrderBy(reference => reference.ContainerName)
             .ToArray();
 
-        Assert.Equal(["ReadLocal", "ReadUsingVar", "Value"], readyRefs.Select(reference => reference.ContainerName).ToArray());
+        Assert.Equal(
+            ["ReadLocal", "ReadUsingVar", "SplitValue", "SplitValue", "Value"],
+            readyRefs.Select(reference => reference.ContainerName).ToArray());
         Assert.Equal("property", readyRefs.Single(reference => reference.ContainerName == "Value").ContainerKind);
+        Assert.All(readyRefs.Where(reference => reference.ContainerName == "SplitValue"), reference =>
+            Assert.Equal("property", reference.ContainerKind));
     }
 
     [Fact]
@@ -1795,49 +1813,6 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         Assert.DoesNotContain(references, reference => reference.SymbolName == "Red" && reference.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithGetterLocalShadowing_DoesNotLeakIntoSetter()
-    {
-        const string content = """
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public Status Value
-                {
-                    get
-                    {
-                        Holder Status = new();
-                        _ = Status.Ready;
-                        return Demo.Status.Ready;
-                    }
-                    set
-                    {
-                        _ = Status.Ready;
-                    }
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
-            .OrderBy(reference => reference.Line)
-            .ToList();
-        Assert.Equal([21, 25], readyRefs.Select(reference => reference.Line).ToArray());
     }
 
     [Fact]
