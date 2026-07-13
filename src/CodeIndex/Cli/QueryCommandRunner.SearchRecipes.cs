@@ -160,8 +160,8 @@ public static partial class QueryCommandRunner
         };
     }
 
-    private static bool ShouldEmitGraphLiveness(QueryCommandOptions options)
-        => options.Verbose || options.Limit >= GraphLivenessLimitThreshold;
+    private static bool ShouldEmitGraphLiveness(QueryCommandOptions options, bool machineReadable)
+        => options.Verbose || (!machineReadable && options.Limit >= GraphLivenessLimitThreshold);
 
     private static void WriteGraphLiveness(
         string commandName,
@@ -170,9 +170,10 @@ public static partial class QueryCommandRunner
         string? format = null,
         string? groupBy = null,
         int? rows = null,
-        int? cycleCount = null)
+        int? cycleCount = null,
+        bool machineReadable = false)
     {
-        if (!ShouldEmitGraphLiveness(options))
+        if (!ShouldEmitGraphLiveness(options, machineReadable))
             return;
 
         var parts = new List<string>

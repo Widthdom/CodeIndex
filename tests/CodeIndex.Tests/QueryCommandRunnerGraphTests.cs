@@ -37,7 +37,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunDeps_JsonSummaryModesShareGraphFixture_Issues4112And4353()
+    public void RunDeps_JsonSummaryModesShareGraphFixture_Issues4112And4353And4450()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_summary_only");
         try
@@ -56,9 +56,17 @@ public partial class QueryCommandRunnerTests
             Assert.True(json.GetProperty("count").GetInt32() >= 1);
             Assert.False(json.TryGetProperty("edges", out _));
             Assert.Equal("sql", json.GetProperty("query_context").GetProperty("lang").GetString());
-            Assert.Contains("Progress: deps", stderr);
-            Assert.Contains("phase=read_edges", stderr);
-            Assert.Contains("phase=write_output", stderr);
+            Assert.Equal(string.Empty, stderr);
+
+            var (verboseExitCode, verboseStdout, verboseStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--json", "--summary-only", "--limit", "80", "--lang", "sql", "--verbose"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, verboseExitCode);
+            ParseJsonOutput(verboseStdout).Dispose();
+            Assert.Contains("Progress: deps", verboseStderr);
+            Assert.Contains("phase=read_edges", verboseStderr);
+            Assert.Contains("phase=write_output", verboseStderr);
 
             var (graphExitCode, graphStdout, graphStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
                 ["--db", dbPath, "--format", "json-graph", "--summary-only", "--limit", "80", "--lang", "sql"],

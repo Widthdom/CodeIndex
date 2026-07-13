@@ -589,9 +589,10 @@ public static partial class QueryCommandRunner
             List<FileDependencyResult> cycleCandidates;
             var cycleCandidateRowCount = 0;
             var cycleCandidateLimit = GetDependencyCycleGraphLimit(options.Limit);
+            var machineReadable = DepsEmitsJson(options, depsFormat);
             if (options.DependencyCycles)
             {
-                WriteGraphLiveness("deps", "read_cycle_candidates", options, depsFormat);
+                WriteGraphLiveness("deps", "read_cycle_candidates", options, depsFormat, machineReadable: machineReadable);
                 cycleCandidates = GetWorkspaceFileDependencyCycleCandidates(
                     reader,
                     options,
@@ -604,11 +605,11 @@ public static partial class QueryCommandRunner
             }
             else
             {
-                WriteGraphLiveness("deps", "read_edges", options, depsFormat);
+                WriteGraphLiveness("deps", "read_edges", options, depsFormat, machineReadable: machineReadable);
                 results = GetWorkspaceFileDependencies(reader, options, reverse, options.Limit, cancellationToken);
                 cycleCandidates = results;
             }
-            WriteGraphLiveness("deps", "shape_output", options, depsFormat, rows: results.Count);
+            WriteGraphLiveness("deps", "shape_output", options, depsFormat, rows: results.Count, machineReadable: machineReadable);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
@@ -659,7 +660,7 @@ public static partial class QueryCommandRunner
             if (options.DependencyCycles)
             {
                 symbolFilter = ApplyDependencySymbolFilters(cycleCandidates, options);
-                WriteGraphLiveness("deps", "analyze_cycles", options, depsFormat, rows: symbolFilter.Edges.Count);
+                WriteGraphLiveness("deps", "analyze_cycles", options, depsFormat, rows: symbolFilter.Edges.Count, machineReadable: machineReadable);
                 var analysis = AnalyzeDependencyCycles(
                     symbolFilter.Edges,
                     cycleCandidateLimit,
@@ -727,7 +728,7 @@ public static partial class QueryCommandRunner
                         AddDependencyCycleAnalysisJsonFields(payload, dependencyCycleAnalysis);
                     AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary);
                     AddFreshnessHint(payload, reader);
-                    WriteGraphLiveness("deps", "write_output", options, depsFormat, rows: outputEdges.Count, cycleCount: 0);
+                    WriteGraphLiveness("deps", "write_output", options, depsFormat, rows: outputEdges.Count, cycleCount: 0, machineReadable: machineReadable);
                     var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions);
                     return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
                 }
@@ -743,7 +744,7 @@ public static partial class QueryCommandRunner
 
             if (depsFormat is OutputFormatDot or OutputFormatGraphMl or OutputFormatJsonGraph)
             {
-                WriteGraphLiveness("deps", "write_output", options, depsFormat, rows: outputEdges.Count, cycleCount: cycles.Count);
+                WriteGraphLiveness("deps", "write_output", options, depsFormat, rows: outputEdges.Count, cycleCount: cycles.Count, machineReadable: machineReadable);
                 var writeExitCode = WriteDependencyGraph(
                     outputEdges,
                     depsFormat,
@@ -777,7 +778,7 @@ public static partial class QueryCommandRunner
                     payload["edges"] = JsonSerializer.SerializeToNode(outputEdges, CliJsonSerializerContextFactory.Create(jsonOptions).ListFileDependencyResult);
                 AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary);
                 AddFreshnessHint(payload, reader);
-                WriteGraphLiveness("deps", "write_output", options, depsFormat, rows: outputEdges.Count, cycleCount: cycles.Count);
+                WriteGraphLiveness("deps", "write_output", options, depsFormat, rows: outputEdges.Count, cycleCount: cycles.Count, machineReadable: machineReadable);
                 return WriteDepsJsonPayload(payload, options, jsonOptions);
             }
             else
