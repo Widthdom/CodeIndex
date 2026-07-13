@@ -2337,7 +2337,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryKeywordNamedLocalFunctionAfterGreaterThanInOrderByTernary_DoesNotLeakReference()
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryKeywordNamedLocalFunctionsInOrderByTernaries_DoNotLeakReference()
     {
         const string content = """
             using System.Collections.Generic;
@@ -2357,81 +2357,23 @@ public partial class ReferenceExtractorTests
 
             public sealed class Uses
             {
-                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                public IEnumerable<int> ReadGreater(IEnumerable<Holder> items)
                 {
                     static int select(IEnumerable<Holder> xs) => xs.Count();
                     return from Status in items
                            orderby items.Count() > select(items) ? 1 : 0, items.Count()
                            select Status.Ready;
                 }
-            }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryKeywordNamedLocalFunctionAfterLessThanInOrderByTernary_DoesNotLeakReference()
-    {
-        const string content = """
-            using System.Collections.Generic;
-            using System.Linq;
-
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                public IEnumerable<int> ReadLess(IEnumerable<Holder> items)
                 {
                     static int select(IEnumerable<Holder> xs) => xs.Count();
                     return from Status in items
                            orderby items.Count() < select(items) ? 1 : 0, items.Count()
                            select Status.Ready;
                 }
-            }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryKeywordNamedLocalFunctionAfterBangInOrderByTernary_DoesNotLeakReference()
-    {
-        const string content = """
-            using System.Collections.Generic;
-            using System.Linq;
-
-            namespace Demo;
-
-            public enum Status
-            {
-                Ready
-            }
-
-            public sealed class Holder
-            {
-                public int Ready { get; set; }
-            }
-
-            public sealed class Uses
-            {
-                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                public IEnumerable<int> ReadBang(IEnumerable<Holder> items)
                 {
                     static bool select(IEnumerable<Holder> xs) => xs.Any();
                     return from Status in items
