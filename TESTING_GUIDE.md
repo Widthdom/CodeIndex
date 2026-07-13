@@ -243,6 +243,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Keep the converted coverage boolean in a local whose name differs from the case-insensitive `CollectCoverage` string parameter; otherwise PowerShell coerces the boolean back to a string before invoking typed helpers.
   Pass the repository-root `TestResults` directory explicitly to `dotnet test`; runsettings paths can otherwise resolve relative to the test project, separating TRX and coverage output from workflow telemetry and artifact paths.
   Give the initial attempt and flaky-classification retry distinct TRX filenames so a passing retry cannot overwrite the failure evidence that triggered it.
+  Collect crash diagnostics on the initial attempt only. The flaky-classification retry reuses that evidence and skips the crash collector, while retaining blame-hang and its five-minute kill bound in case the retry hangs.
   Summarize TRX telemetry only when the test helper reports a failed initial attempt (including pass-on-retry); clean first-pass lanes and jobs that failed before testing should not pay for a second project launch and TRX parse. Keep result and dump artifact uploads failure-gated to avoid unnecessary transfer time.
 - `.github/scripts/configure-windows-test-host.ps1`
   The `dotnet.yml` and `release.yml` Windows lanes share TMP/TEMP pinning and Defender exclusion setup here so both workflows keep the same test-host performance assumptions. Update `CiWorkflowTests` when changing this script or its workflow call contract.
@@ -678,6 +679,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   変換後のcoverage booleanは、大文字小文字を区別しない`CollectCoverage` string parameterとは異なる名前のlocalに保持してください。同名だとPowerShellがtyped helper呼び出し前にbooleanをstringへ戻します。
   repository rootの`TestResults` directoryを`dotnet test`へ明示的に渡してください。そうしないとrunsettingsのpathがtest project相対で解決され、TRX/coverage outputがworkflowのtelemetry/artifact pathから分離することがあります。
   初回attemptとflaky classification retryには別々のTRX filenameを付け、成功したretryが、その契機となったfailure evidenceを上書きしないようにしてください。
+  crash diagnostics は初回 attempt だけで収集する。flaky classification retry は初回の evidence を再利用して crash collector を省略する一方、retry 自体が hang した場合に備えて blame-hang と5分の kill bound は維持する。
   TRX telemetry summary は test helper が初回 attempt の失敗を報告した場合（retry 成功を含む）だけ実行する。clean first-pass lane と test 開始前に失敗した job は、2回目の project 起動と TRX parse を支払わない。不要な転送時間を避けるため、result / dump artifact upload も failure-gated のままにする。
 - `.github/scripts/configure-windows-test-host.ps1`
   `dotnet.yml` と `release.yml` の Windows lane は、TMP/TEMP 固定と Defender 除外 setup をこのスクリプトで共有します。両 workflow の test-host performance 前提を揃えるため、スクリプトまたは workflow からの呼び出し contract を変更するときは `CiWorkflowTests` も更新してください。
