@@ -1,9 +1,7 @@
 using CodeIndex.Database;
-using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
-[Collection("SQLite pool sensitive")]
 public class JsonStringListCodecTests
 {
     [Fact]
@@ -102,7 +100,6 @@ public class JsonStringListCodecTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             TestProjectHelper.DeleteFile(dbPath);
         }
     }
@@ -130,7 +127,6 @@ public class JsonStringListCodecTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             TestProjectHelper.DeleteFile(dbPath);
         }
     }
