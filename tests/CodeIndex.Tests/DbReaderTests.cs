@@ -1535,6 +1535,15 @@ public partial class DbReaderTests : IDisposable
         Assert.Equal("Dockerfile", dependency.SourcePath);
         Assert.Equal("Dockerfile", dependency.TargetPath);
         Assert.Contains("build", dependency.Symbols);
+
+        Assert.Empty(_reader.GetFileDependencies(
+            lang: "dockerfile",
+            pathPatterns: ["does/not/match/**"],
+            reverse: true));
+        Assert.Empty(_reader.GetFileDependencies(
+            lang: "dockerfile",
+            excludePathPatterns: ["Dockerfile"],
+            reverse: true));
     }
 
     [Fact]

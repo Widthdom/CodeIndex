@@ -586,6 +586,7 @@ public partial class DbReader
                        snc.symbol_name,
                        snc.ref_count
                 FROM source_name_counts snc
+                JOIN files self_dst ON self_dst.id = snc.source_file_id
                 WHERE snc.source_lang = 'dockerfile'
                   AND snc.raw_reference_kind = 'call'
                   AND EXISTS (
@@ -594,7 +595,22 @@ public partial class DbReader
                         WHERE stage.file_id = snc.source_file_id
                           AND stage.kind = 'stage'
                           AND stage.name = snc.symbol_name COLLATE NOCASE
-                  )
+                  )";
+        if (reverse && pathPatterns is { Count: > 0 })
+        {
+            var ors = new List<string>(pathPatterns.Count);
+            for (int i = 0; i < pathPatterns.Count; i++)
+                ors.Add(BuildPathFilterPredicate("self_dst", "pathPattern", i, pathPatterns[i]));
+            sql += " AND (" + string.Join(" OR ", ors) + ")";
+        }
+        if (reverse && excludePathPatterns is { Count: > 0 })
+        {
+            for (int i = 0; i < excludePathPatterns.Count; i++)
+                sql += $" AND NOT {BuildPathFilterPredicate("self_dst", "excludePath", i, excludePathPatterns[i])}";
+        }
+        if (reverse && excludeTests)
+            sql += $" AND NOT {DependencyTestPathCondition("self_dst.path")}";
+        sql += @"
                 UNION ALL
                 SELECT snc.source_path,
                        ptf.target_path,
