@@ -101,7 +101,7 @@ public class CiWorkflowTests
             workflow,
             "-Framework \"${{ matrix.test-framework }}\"",
             "id: test",
-            "- name: Summarize TRX telemetry\n        if: always() && (steps.test.outputs.summarize == 'true' || failure())",
+            "- name: Summarize TRX telemetry\n        if: always() && steps.test.outputs.summarize == 'true'",
             "run: dotnet run --project tools/CodeIndex.TestTelemetry --configuration Release --no-build --no-restore -- summarize",
             "TestResults/**/*.trx",
             "TestResults/**/*.txt",
@@ -123,6 +123,7 @@ public class CiWorkflowTests
         AssertDoesNotContainAny(
             workflow,
             "- name: Summarize TRX telemetry\n        if: always()\n",
+            "- name: Summarize TRX telemetry\n        if: always() && (steps.test.outputs.summarize == 'true' || failure())",
             "- name: Upload test results\n        if: always()\n");
         Assert.Contains("function Invoke-TestRun", testScript);
     }
