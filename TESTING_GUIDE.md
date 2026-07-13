@@ -317,6 +317,7 @@ Use the inventory below before adding or moving a test class:
 - No-timeout sentinel coverage should exercise zero and infinite budgets in one contract test; both follow the same caller-cancellation path and do not need duplicate scope setup.
 - Bounded HTTP private-file success and overflow cases should share one temporary project and use distinct child paths instead of allocating and cleaning two standalone system-temp files.
 - Environment-variable scope restoration should cover present and missing originals in one serialized test, avoiding duplicate process-variable setup and runner cases.
+- Pure process-launch builder contracts should verify base flags, invariant arguments, worker payloads, and UTF-8 redirects in one test instead of paying four runner cases for allocation-only assertions.
 - Long-running or performance-oriented tests: keep them skipped by default or give them broad deterministic budgets; if CI reports them in xUnit long-running diagnostics, first check runner load before tightening thresholds.
 - When a response-size algorithm needs a large production ceiling, prefer a narrowly scoped test-only budget override and a small representative payload; restore process-global overrides in `finally` and keep the suite non-parallel.
 - Pagination and suppression fixtures should cross the fetched-window boundary with the fewest additional records needed to distinguish full totals from the returned page.
@@ -767,6 +768,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - no-timeout sentinel coverage は zero / infinite budget を1つの contract test で検証する。どちらも同じ caller-cancellation path に従うため scope setup を重複させない。
 - bounded HTTP private-file の success / overflow case は1つの temporary project と別々の child path を共有し、standalone system-temp file を2回確保・cleanup しない。
 - environment-variable scope restoration は present / missing original を1つの serialized test で検証し、process-variable setup と runner case の重複を避ける。
+- pure process-launch builder contract は base flag、invariant argument、worker payload、UTF-8 redirect を1つの test で検証し、allocation-only assertion のために4つの runner case を使わない。
 - 長時間または performance 系テスト: デフォルト skip にするか、決定的で十分広い budget を与える。CI の xUnit long-running 診断に出た場合は、閾値を締める前に runner 負荷を確認する。
 
 ## 共通ヘルパー

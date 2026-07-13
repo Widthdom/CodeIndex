@@ -5,7 +5,7 @@ namespace CodeIndex.Tests;
 public class ProcessLaunchPolicyTests
 {
     [Fact]
-    public void CreateNoShellStartInfo_SetsExplicitLaunchContract_Issue3991()
+    public void StartInfoBuilders_SetExplicitArgumentsAndUtf8LaunchContracts_Issues3991_4075()
     {
         var startInfo = ProcessLaunchPolicy.CreateNoShellStartInfo(
             fileName: "/usr/bin/git",
@@ -22,25 +22,15 @@ public class ProcessLaunchPolicyTests
         Assert.True(startInfo.RedirectStandardError);
         Assert.True(startInfo.CreateNoWindow);
         Assert.Equal(string.Empty, startInfo.Arguments);
-    }
 
-    [Fact]
-    public void AddInvariantIntArgument_AppendsProtocolArgumentPair_Issue3991()
-    {
-        var startInfo = ProcessLaunchPolicy.CreateNoShellStartInfo();
+        var integerArgs = ProcessLaunchPolicy.CreateNoShellStartInfo();
+        ProcessLaunchPolicy.AddInvariantIntArgument(integerArgs, "--max-line-bytes", 8192);
 
-        ProcessLaunchPolicy.AddInvariantIntArgument(startInfo, "--max-line-bytes", 8192);
+        Assert.Equal(["--max-line-bytes", "8192"], integerArgs.ArgumentList.ToArray());
 
-        Assert.Equal(["--max-line-bytes", "8192"], startInfo.ArgumentList.ToArray());
-    }
-
-    [Fact]
-    public void AddWorkerCommandArguments_AppendsCommandPayloadAndProtocolLimit_Issue4075()
-    {
-        var startInfo = ProcessLaunchPolicy.CreateNoShellStartInfo();
-
+        var workerArgs = ProcessLaunchPolicy.CreateNoShellStartInfo();
         ProcessLaunchPolicy.AddWorkerCommandArguments(
-            startInfo,
+            workerArgs,
             "__cdidx-worker",
             16384,
             "/tmp/hook.dll",
@@ -54,23 +44,18 @@ public class ProcessLaunchPolicyTests
                 ProcessLaunchPolicy.WorkerProtocolMaxLineBytesOption,
                 "16384",
             ],
-            startInfo.ArgumentList.ToArray());
-        Assert.Equal(string.Empty, startInfo.Arguments);
-    }
+            workerArgs.ArgumentList.ToArray());
+        Assert.Equal(string.Empty, workerArgs.Arguments);
 
-    [Fact]
-    public void CreateUtf8RedirectedWorkerStartInfo_DisablesShellAndUsesUtf8NoBom_Issue3991()
-    {
-        var startInfo = ProcessLaunchPolicy.CreateUtf8RedirectedWorkerStartInfo();
-
-        Assert.False(startInfo.UseShellExecute);
-        Assert.True(startInfo.RedirectStandardInput);
-        Assert.True(startInfo.RedirectStandardOutput);
-        Assert.True(startInfo.RedirectStandardError);
-        Assert.True(startInfo.CreateNoWindow);
-        Assert.False(startInfo.StandardInputEncoding!.GetPreamble().Length > 0);
-        Assert.False(startInfo.StandardOutputEncoding!.GetPreamble().Length > 0);
-        Assert.False(startInfo.StandardErrorEncoding!.GetPreamble().Length > 0);
+        var utf8Worker = ProcessLaunchPolicy.CreateUtf8RedirectedWorkerStartInfo();
+        Assert.False(utf8Worker.UseShellExecute);
+        Assert.True(utf8Worker.RedirectStandardInput);
+        Assert.True(utf8Worker.RedirectStandardOutput);
+        Assert.True(utf8Worker.RedirectStandardError);
+        Assert.True(utf8Worker.CreateNoWindow);
+        Assert.Empty(utf8Worker.StandardInputEncoding!.GetPreamble());
+        Assert.Empty(utf8Worker.StandardOutputEncoding!.GetPreamble());
+        Assert.Empty(utf8Worker.StandardErrorEncoding!.GetPreamble());
     }
 }
 
