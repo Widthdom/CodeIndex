@@ -1660,7 +1660,7 @@ same source location.
 | `--verbose` | `index` | Show per-file status (`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`) |
 | `--commits <id...>` | `index` | Update only files changed in specified commits. Prefer this after a normal commit because git history includes rename/delete paths. |
 | `--changed-between <old-ref> <new-ref>` | `index` | Update only files changed between two git refs. Useful after branch switches when tooling knows the previous and current refs; rename old and new paths are both considered. |
-| `--files <path...>` | `index` | Update only the specified files. Safe for known in-place edits or new files; old rename/delete paths are not purged unless you also list them explicitly. |
+| `--files <path...>` | `index` | Update only the specified files. Safe for known in-place edits or new files; old rename/delete paths are not purged unless you also list them explicitly. A dry-run exits with a usage error when none of the supplied paths resolves to an existing in-project file or a path already present in the index. |
 | `--force` | `index` | Bypass the per-database index lock. Only use when you are sure no other `cdidx index` is active against the same DB; concurrent runs may corrupt the schema. |
 | `--duration-format <auto\|seconds\|hms>` | `index` | Choose human elapsed-time display for index summaries. `auto` (default) uses unit labels; `seconds` emits decimal seconds; `hms` keeps `HH:MM:SS`. JSON always keeps raw `elapsed_ms`. |
 | `--dry-run-path-limit <n>` | `index` (`--dry-run` only) | Process at most `<n>` dry-run candidate paths before returning truncated estimates. Defaults to `100000`; values above `1000000` are rejected. When the limit is reached, dry-run JSON sets `candidate_paths_truncated: true` and `totals_lower_bound: true`, and reports `candidate_path_limit` plus `candidate_paths_processed`. |
@@ -4461,7 +4461,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--verbose` | `index` | ファイルごとのステータス表示（`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`） |
 | `--commits <id...>` | `index` | 指定コミットの変更ファイルのみ更新。通常のコミット後はこちらを推奨。rename/delete の旧パスも git 履歴から拾える。 |
 | `--changed-between <old-ref> <new-ref>` | `index` | 2つの git ref 間で変更されたファイルのみ更新。ブランチ切り替え前後の ref が分かる workflow 向け。rename の旧パスと新パスを両方考慮する。 |
-| `--files <path...>` | `index` | 指定ファイルのみ更新。把握している in-place 編集や新規ファイル向け。rename/delete の旧パスは明示しない限り purge されない。 |
+| `--files <path...>` | `index` | 指定ファイルのみ更新。把握している in-place 編集や新規ファイル向け。rename/delete の旧パスは明示しない限り purge されない。指定した path が既存の project 内ファイルにも index 内の既存 path にも 1 件も解決されない場合、dry-run は usage error で終了する。 |
 | `--force` | `index` | 同一 DB に対する index ロックを bypass する。他の `cdidx index` が走っていないと確信できる場合のみ使う。並行実行は schema を破壊し得る。 |
 | `--duration-format <auto\|seconds\|hms>` | `index` | index summary の human 経過時間表示を選ぶ。`auto`（既定）は単位付き、`seconds` は小数秒、`hms` は `HH:MM:SS` を維持。JSON は常に raw の `elapsed_ms` を返す。 |
 | `--dry-run-path-limit <n>` | `index`（`--dry-run` 専用） | truncate された estimate を返す前に処理する dry-run candidate path 数を指定する。既定は `100000` で、`1000000` を超える値は拒否される。上限に達した場合、dry-run JSON は `candidate_paths_truncated: true` と `totals_lower_bound: true` を設定し、`candidate_path_limit` と `candidate_paths_processed` も返す。 |

@@ -589,7 +589,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_DryRun_WithFiles_IgnoresAbsolutePathOutsideProjectRoot()
+    public void Run_DryRun_WithFiles_RejectsAbsolutePathOutsideProjectRoot_4471()
     {
         var projectRoot = CreateTempProject();
         var outsidePath = Path.Combine(Path.GetTempPath(), $"cdidx_dryrun_outside_{Guid.NewGuid():N}.cs");
@@ -599,9 +599,9 @@ public partial class IndexCommandRunnerTests
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", outsidePath, "--dry-run", "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("dry_run", json.GetProperty("status").GetString());
-            Assert.Equal(0, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("none of the paths supplied to --files resolved", json.GetProperty("message").GetString());
         }
         finally
         {
@@ -611,7 +611,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_DryRun_WithFiles_IgnoresTraversalOutsideProjectRoot()
+    public void Run_DryRun_WithFiles_RejectsTraversalOutsideProjectRoot_4471()
     {
         var parentDir = TestProjectHelper.CreateTempProject("cdidx_dryrun_parent");
         var projectRoot = Path.Combine(parentDir, "project");
@@ -623,13 +623,68 @@ public partial class IndexCommandRunnerTests
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "../outside.cs", "--dry-run", "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("dry_run", json.GetProperty("status").GetString());
-            Assert.Equal(0, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("none of the paths supplied to --files resolved", json.GetProperty("message").GetString());
         }
         finally
         {
             DeleteDirectory(parentDir);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithFiles_RejectsNonexistentUnindexedProjectPath_4471()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "missing.cs",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("none of the paths supplied to --files resolved", json.GetProperty("message").GetString());
+            Assert.Contains("--files <path>", json.GetProperty("hint").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithFiles_AllowsDeletedIndexedProjectPath_4471()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "deleted.cs");
+            File.WriteAllText(sourcePath, "public class Deleted { }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            File.Delete(sourcePath);
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "deleted.cs",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("projected_file_deletes").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
         }
     }
 

@@ -92,6 +92,27 @@ public static partial class IndexCommandRunner
             return exitCode;
         }
 
+        if (options.UpdateFiles.Count > 0 && !authoritativeFullScan)
+        {
+            var resolvedCandidates = dryCandidates.ToArray();
+            var resolvedDeleteCandidates = dryDeleteCandidates.ToArray();
+            dryCandidates = resolvedCandidates;
+            dryDeleteCandidates = resolvedDeleteCandidates;
+            var hasExistingCandidate = resolvedCandidates.Length > 0;
+            var hasIndexedDeleteCandidate = resolvedDeleteCandidates.Any(path =>
+                dbSnapshot.Files.ContainsKey(FileIndexer.NormalizeIndexPath(path)));
+            if (!hasExistingCandidate && !hasIndexedDeleteCandidate)
+            {
+                return WriteCommandError(
+                    options.Json,
+                    jsonOptions,
+                    "none of the paths supplied to --files resolved to an existing in-project file or an indexed path",
+                    CommandExitCodes.UsageError,
+                    "Check each path and rerun `cdidx index <projectPath> --files <path> [path ...] --dry-run`.",
+                    CommandErrorCodes.UsageError);
+            }
+        }
+
         var dryFileSamples = new List<string>();
         var dryFileCount = 0;
         var candidatePathsProcessed = 0;
