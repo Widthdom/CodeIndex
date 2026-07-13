@@ -10917,6 +10917,41 @@ jobs:
     }
 
     [Fact]
+    public void RunFind_RegexJsonPreservesZeroLengthAnchors_Issue4473()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_zero_length_regex_4473");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/text.txt", "text", "alpha");
+
+            var (startExitCode, startStdout, startStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["^", "--regex", "--db", dbPath, "--path", "src/text.txt", "--focus-column", "1", "--json"],
+                _jsonOptions));
+            var (endExitCode, endStdout, endStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["$", "--regex", "--db", dbPath, "--path", "src/text.txt", "--focus-column", "6", "--json"],
+                _jsonOptions));
+
+            using var startDocument = ParseJsonOutput(startStdout);
+            using var endDocument = ParseJsonOutput(endStdout);
+
+            Assert.Equal(CommandExitCodes.Success, startExitCode);
+            Assert.Equal(string.Empty, startStderr);
+            Assert.Equal(1, startDocument.RootElement.GetProperty("column").GetInt32());
+            Assert.Equal(0, startDocument.RootElement.GetProperty("length").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, endExitCode);
+            Assert.Equal(string.Empty, endStderr);
+            Assert.Equal(6, endDocument.RootElement.GetProperty("column").GetInt32());
+            Assert.Equal(0, endDocument.RootElement.GetProperty("length").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFind_RegexMatcherUsesSharedTimeoutAndCultureInvariant_Issue3559()
     {
         var method = typeof(DbReader).GetMethod("CreateFindRegexMatcher", BindingFlags.NonPublic | BindingFlags.Static);

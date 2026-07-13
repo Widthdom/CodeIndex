@@ -327,7 +327,7 @@ public partial class DbReader
             {
                 if (!match.Success)
                     continue;
-                if (TryCreateFindLineMatch(match.Index, Math.Max(1, match.Length), rawIndexMap, focusColumn, out var lineMatch))
+                if (TryCreateFindLineMatch(match.Index, match.Length, rawIndexMap, focusColumn, out var lineMatch))
                     yield return lineMatch;
             }
 
@@ -357,7 +357,8 @@ public partial class DbReader
         }
 
         lineMatch = new FindLineMatch(rawMatchColumn, rawMatchLength);
-        return !focusColumn.HasValue || (focusColumn.Value >= rawMatchColumn + 1 && focusColumn.Value <= rawMatchColumn + rawMatchLength);
+        var focusEndColumn = rawMatchColumn + Math.Max(1, rawMatchLength);
+        return !focusColumn.HasValue || (focusColumn.Value >= rawMatchColumn + 1 && focusColumn.Value <= focusEndColumn);
     }
 
     private static Regex CreateFindRegexMatcher(string query, bool exact)
