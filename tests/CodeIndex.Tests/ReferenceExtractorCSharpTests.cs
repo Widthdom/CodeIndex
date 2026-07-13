@@ -7518,7 +7518,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpStaticMemberAccess_CapturesClassQualifierReference()
+    public void Extract_CsharpStaticMemberAccess_ReuseDirectAndGlobalFixture()
     {
         const string content = """
             public static class Program
@@ -7527,25 +7527,8 @@ public partial class ReferenceExtractorTests
                 {
                     return ProgramRunner.Run(args);
                 }
-            }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "ProgramRunner"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "Main");
-    }
-
-    [Fact]
-    public void Extract_CsharpGlobalQualifiedStaticMemberAccess_CapturesClassQualifierReference()
-    {
-        const string content = """
-            public static class Program
-            {
-                public static int Main(string[] args)
+                public static int Global(string[] args)
                 {
                     return global::ProgramRunner.Run(args);
                 }
@@ -7555,10 +7538,12 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "ProgramRunner"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "Main");
+        var containers = references
+            .Where(reference => reference.SymbolName == "ProgramRunner" && reference.ReferenceKind == "type_reference")
+            .Select(reference => reference.ContainerName)
+            .OrderBy(name => name)
+            .ToArray();
+        Assert.Equal(["Global", "Main"], containers);
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "global::ProgramRunner"
             && reference.ReferenceKind == "call");
