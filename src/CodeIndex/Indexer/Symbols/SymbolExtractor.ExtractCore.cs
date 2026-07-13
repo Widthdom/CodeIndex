@@ -1210,6 +1210,13 @@ public static partial class SymbolExtractor
                             kind = "field";
                         }
 
+                        if (lang == "csharp"
+                            && pattern.BodyStyle == BodyStyle.None
+                            && (pattern.Kind == "property" || kind == "field"))
+                        {
+                            signature = BoundCSharpFieldInitializerSignature(signature);
+                        }
+
                         List<string>? fortranProcedureNames = null;
                         if (lang == "fortran"
                             && pattern.Kind == "function"
@@ -2072,6 +2079,26 @@ public static partial class SymbolExtractor
             ExpandShellAliasSymbols(fileId, lines, symbols, extractionState);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
+    }
+
+    private const int CSharpFieldInitializerSignatureLimit = 1024;
+
+    private static string BoundCSharpFieldInitializerSignature(string signature)
+    {
+        if (signature.Length <= CSharpFieldInitializerSignatureLimit
+            || !signature.Contains('='))
+        {
+            return signature;
+        }
+
+        // Field signatures are metadata, not bodies. Large object/collection initializers can
+        // otherwise consume an entire CLI, JSON, MCP, or LSP response budget after multiline
+        // signatures are collapsed to one line. Keep a deterministic declaration prefix and an
+        // explicit terminator while bounding the value persisted in the symbol database. #4445
+        // field signature は body ではなくメタデータである。複数行を1行へ畳み込んだ巨大な
+        // object/collection initializer が CLI / JSON / MCP / LSP の応答予算を使い切らないよう、
+        // DB に保存する値を制限しつつ宣言prefixと明示的な終端を維持する。#4445
+        return string.Concat(signature.AsSpan(0, CSharpFieldInitializerSignatureLimit - 2), "…;");
     }
 
     private static void AddScriptScopeSymbol(long fileId, string[] lines, List<SymbolRecord> symbols)
