@@ -491,6 +491,8 @@ internal sealed class IndexDryRunJsonResult
     public bool CandidatePathsTruncated { get; init; }
     public bool TotalsLowerBound { get; init; }
     public Dictionary<string, long> EstimatedTableMutations { get; init; } = new();
+    public long SymbolsDroppedByKindFilter { get; init; }
+    public IndexSymbolKindFilterJsonResult SymbolKindFilter { get; init; } = new();
     public List<string>? FileSamples { get; init; }
     public bool FileSamplesTruncated { get; init; }
     public int FileSampleLimit { get; init; }

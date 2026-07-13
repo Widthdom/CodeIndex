@@ -311,6 +311,47 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRun_SymbolKindFiltersAdjustSymbolEstimateAndExposeResolvedPolicy_4470()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sample.cs"),
+                "public class Sample { public void First() { } public void Second() { } }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var (_, unfiltered) = RunAndCaptureJson([projectRoot, "--dry-run", "--json"]);
+            var (exitCode, filtered) = RunAndCaptureJson([
+                projectRoot,
+                "--dry-run",
+                "--include-symbol-kind",
+                "method,class,method",
+                "--exclude-symbol-kind",
+                "class",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var unfilteredMutations = unfiltered.GetProperty("estimated_table_mutations");
+            var filteredMutations = filtered.GetProperty("estimated_table_mutations");
+            Assert.True(filteredMutations.GetProperty("symbols").GetInt64() < unfilteredMutations.GetProperty("symbols").GetInt64());
+            Assert.Equal(
+                unfilteredMutations.GetProperty("symbol_references").GetInt64(),
+                filteredMutations.GetProperty("symbol_references").GetInt64());
+            Assert.True(filtered.GetProperty("symbols_dropped_by_kind_filter").GetInt64() > 0);
+            var policy = filtered.GetProperty("symbol_kind_filter");
+            Assert.Equal(["class", "method"], policy.GetProperty("include").EnumerateArray().Select(value => value.GetString()).ToArray());
+            Assert.Equal(["class"], policy.GetProperty("exclude").EnumerateArray().Select(value => value.GetString()).ToArray());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DryRun_WithFiles_ReportsChecksumRenamePurgeWithoutWriting()
     {
         var projectRoot = CreateTempProject();
