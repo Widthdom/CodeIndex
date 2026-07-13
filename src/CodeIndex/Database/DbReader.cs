@@ -945,7 +945,7 @@ public partial class DbReader : IDisposable
     // script 形式の top-level code は container symbol なしの参照行を出す。実行可能な top-level
     // 文として自然に解釈できる言語だけを合成 `<top-level>` caller として扱い、Java などの
     // class/module 中心言語では unknown container を偽の call-graph root にしない。
-    private const string SyntheticTopLevelCallerLanguagesSql = "('csharp', 'javascript', 'typescript', 'python')";
+    private const string SyntheticTopLevelCallerLanguagesSql = "('csharp', 'dockerfile', 'javascript', 'typescript', 'python')";
 
     private static string BuildCallerContainerPredicate(string fileAlias, string referenceAlias) =>
         $"({referenceAlias}.container_name IS NOT NULL OR ({fileAlias}.lang IN {SyntheticTopLevelCallerLanguagesSql} AND {referenceAlias}.container_name IS NULL))";

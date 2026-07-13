@@ -575,6 +575,27 @@ public partial class DbReader
                           AND python_import_resolves(snc.source_path, tf.target_path, snc.symbol_name, snc.raw_reference_kind, snc.context, snc.column_number, " + pythonImportSignatureExpr + @")
                   ))
                 UNION ALL
+                -- Dockerfile stages are symbols within one file, so their dependency edge is
+                -- intentionally a self-file edge. Keep this exception stage-specific rather
+                -- than weakening the cross-file contract for other symbols or languages.
+                -- Dockerfile stage は同一ファイル内の symbol であるため、この依存 edge は
+                -- 意図的に self-file edge とする。他の symbol / 言語の cross-file 契約を
+                -- 緩めないよう stage に限定する。
+                SELECT snc.source_path,
+                       snc.source_path,
+                       snc.symbol_name,
+                       snc.ref_count
+                FROM source_name_counts snc
+                WHERE snc.source_lang = 'dockerfile'
+                  AND snc.raw_reference_kind = 'call'
+                  AND EXISTS (
+                        SELECT 1
+                        FROM symbols stage
+                        WHERE stage.file_id = snc.source_file_id
+                          AND stage.kind = 'stage'
+                          AND stage.name = snc.symbol_name COLLATE NOCASE
+                  )
+                UNION ALL
                 SELECT snc.source_path,
                        ptf.target_path,
                        snc.symbol_name,

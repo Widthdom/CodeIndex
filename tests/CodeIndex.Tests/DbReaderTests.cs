@@ -1509,6 +1509,35 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void DockerfileStageReferencesSurfaceAcrossCallersImpactAndDependencies_Issue4451()
+    {
+        InsertIndexedFile("Dockerfile", "dockerfile",
+            """
+            FROM alpine AS build
+            RUN touch /artifact
+
+            FROM scratch AS runtime
+            COPY --from=build /artifact /artifact
+            """);
+
+        var caller = Assert.Single(_reader.GetCallers("build", lang: "dockerfile", exact: true));
+        Assert.Equal("Dockerfile", caller.Path);
+        Assert.Equal("function", caller.CallerKind);
+        Assert.Equal("<top-level>", caller.CallerName);
+        Assert.Equal("build", caller.CalleeName);
+
+        var impact = _reader.AnalyzeImpact("build", maxDepth: 5, lang: "dockerfile");
+        Assert.Single(impact.Callers);
+        Assert.Equal("<top-level>", impact.Callers[0].CallerName);
+        Assert.NotEqual("no_callers", impact.ZeroResultReason);
+
+        var dependency = Assert.Single(_reader.GetFileDependencies(lang: "dockerfile"));
+        Assert.Equal("Dockerfile", dependency.SourcePath);
+        Assert.Equal("Dockerfile", dependency.TargetPath);
+        Assert.Contains("build", dependency.Symbols);
+    }
+
+    [Fact]
     public void GetCallers_CSharpTopLevelStatementCallWithExplicitKindSurfacesSyntheticTopLevelCaller()
     {
         InsertIndexedFile("src/Program.cs", "csharp",
