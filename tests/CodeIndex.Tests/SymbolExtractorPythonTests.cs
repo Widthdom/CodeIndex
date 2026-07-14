@@ -344,7 +344,7 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Python_ExpandsImportAliasesAndImportedNames()
+    public void Extract_Python_StaticImports_ReuseAliasQualifiedAndDottedFixture()
     {
         var content = """
             import numpy as np
@@ -354,62 +354,28 @@ public partial class SymbolExtractorTests
                 zip_longest as zipl,
             )
             from .helpers import build as build_helper
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var imports = symbols.Where(symbol => symbol.Kind == "import").ToList();
-
-        Assert.Contains(imports, symbol => symbol.Name == "numpy");
-        Assert.Contains(imports, symbol => symbol.Name == "np");
-        Assert.Contains(imports, symbol => symbol.Name == "collections");
-        Assert.Contains(imports, symbol => symbol.Name == "defaultdict");
-        Assert.Contains(imports, symbol => symbol.Name == "OrderedDict");
-        Assert.Contains(imports, symbol => symbol.Name == "OD");
-        Assert.Contains(imports, symbol => symbol.Name == "itertools");
-        Assert.Contains(imports, symbol => symbol.Name == "chain");
-        Assert.Contains(imports, symbol => symbol.Name == "zip_longest");
-        Assert.Contains(imports, symbol => symbol.Name == "zipl");
-        Assert.Contains(imports, symbol => symbol.Name == "helpers");
-        Assert.Contains(imports, symbol => symbol.Name == "build");
-        Assert.Contains(imports, symbol => symbol.Name == "build_helper");
-    }
-
-    [Fact]
-    public void Extract_Python_ExpandsFromImportQualifiedNamesForSearchability()
-    {
-        var content = """
             from package import submodule as alias
             from .helpers import build
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var imports = symbols.Where(symbol => symbol.Kind == "import").ToList();
-
-        Assert.Contains(imports, symbol => symbol.Name == "package");
-        Assert.Contains(imports, symbol => symbol.Name == "package.submodule");
-        Assert.Contains(imports, symbol => symbol.Name == "submodule");
-        Assert.Contains(imports, symbol => symbol.Name == "alias");
-        Assert.Contains(imports, symbol => symbol.Name == "helpers");
-        Assert.Contains(imports, symbol => symbol.Name == "helpers.build");
-        Assert.Contains(imports, symbol => symbol.Name == "build");
-    }
-
-    [Fact]
-    public void Extract_Python_ExpandsDottedImportPrefixesForSearchability()
-    {
-        var content = """
-            import package.submodule as alias
+            import dotted.module as dotted_alias
             from package.subpackage import helper
             """;
 
         var symbols = SymbolExtractor.Extract(1, "python", content);
-        var imports = symbols.Where(symbol => symbol.Kind == "import").ToList();
+        var imports = symbols.Where(symbol => symbol.Kind == "import")
+            .Select(symbol => symbol.Name).ToHashSet(StringComparer.Ordinal);
 
-        Assert.Contains(imports, symbol => symbol.Name == "package");
-        Assert.Contains(imports, symbol => symbol.Name == "package.submodule");
-        Assert.Contains(imports, symbol => symbol.Name == "package.subpackage");
-        Assert.Contains(imports, symbol => symbol.Name == "alias");
-        Assert.Contains(imports, symbol => symbol.Name == "helper");
+        foreach (var importName in new[]
+                 {
+                     "numpy", "np", "collections", "defaultdict", "OrderedDict", "OD",
+                     "itertools", "chain", "zip_longest", "zipl", "helpers", "helpers.build",
+                     "build", "build_helper", "package", "package.submodule", "submodule", "alias",
+                     "dotted", "dotted.module", "dotted_alias", "package.subpackage", "helper",
+                 })
+        {
+            Assert.Contains(importName, imports);
+        }
     }
 
     [Fact]
