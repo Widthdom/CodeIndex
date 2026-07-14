@@ -2571,7 +2571,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_RubyCommandTargets_StopBeforeKeywordOptions()
+    public void Extract_RubyRailsCommandTargets_ReuseAssociationValidationAndCallbackFixture()
     {
         const string content = """
             class Article
@@ -2579,25 +2579,7 @@ public partial class ReferenceExtractorTests
               validates :title, presence: true
               before_action :load_article, only: :show
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.Contains(references, reference => reference.SymbolName == "comments" && reference.ContainerName == "Article");
-        Assert.Contains(references, reference => reference.SymbolName == "title" && reference.ContainerName == "Article");
-        Assert.Contains(references, reference => reference.SymbolName == "load_article" && reference.ContainerName == "Article");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "dependent");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "destroy");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "presence");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "only");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "show");
-    }
-
-    [Fact]
-    public void Extract_RubyAssociationClassNameOption_IndexesClassNameTarget()
-    {
-        const string content = """
             class Post
               belongs_to :author, class_name: "User"
               has_many :line_items, :class_name => 'Orders::LineItem'
@@ -2611,7 +2593,11 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, reference => reference.SymbolName == "line_items" && reference.ContainerName == "Post");
         Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ContainerName == "Post");
         Assert.Contains(references, reference => reference.SymbolName == "Orders::LineItem" && reference.ContainerName == "Post");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "class_name");
+        Assert.Contains(references, reference => reference.SymbolName == "comments" && reference.ContainerName == "Article");
+        Assert.Contains(references, reference => reference.SymbolName == "title" && reference.ContainerName == "Article");
+        Assert.Contains(references, reference => reference.SymbolName == "load_article" && reference.ContainerName == "Article");
+        Assert.DoesNotContain(references, reference => reference.SymbolName is
+            "dependent" or "destroy" or "presence" or "only" or "show" or "class_name");
     }
 
     [Fact]
