@@ -5107,10 +5107,18 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_GoFunctionLiteralSignatures_CapturesParameterAndReturnTypes()
+    public void Extract_GoFunctionSignatures_ReuseLiteralDeclarationAndInterfaceFixture()
     {
         const string content = """
             package main
+
+            type Handler func(DeclaredRequest) DeclaredResponse
+
+            type Server struct {
+                Callback func(DeclaredContext, *DeclaredPayload) DeclaredResult
+            }
+
+            var factory func(Config) *Client
 
             func configure() {
                 handler := func(ctx Context, req *Request) (Response, error) {
@@ -5119,7 +5127,9 @@ public partial class ReferenceExtractorTests
                 wrapped := with(func(Event) Result {
                     return Result{}
                 })
-                _, _ = handler, wrapped
+                contract := interface{ Handle(InterfaceContext, *InterfaceRequest) (InterfaceResponse, error); io.Reader }
+                transformer := interface{ Transform(InterfaceEvent) InterfaceResult }
+                _, _, _, _ = handler, wrapped, contract, transformer
             }
             """;
 
@@ -5131,6 +5141,14 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        foreach (var typeName in new[]
+                 { "DeclaredRequest", "DeclaredResponse", "DeclaredContext", "DeclaredPayload", "DeclaredResult", "Config", "Client", "InterfaceContext", "InterfaceRequest", "InterfaceResponse", "Reader", "InterfaceEvent", "InterfaceResult" })
+        {
+            Assert.Contains(references, r => r.SymbolName == typeName && r.ReferenceKind == "type_reference");
+        }
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "Handle" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Transform" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -5160,59 +5178,6 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "StandaloneEvent" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "StandaloneResult" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "i" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoFunctionTypeDeclarations_CapturesParameterAndReturnTypes()
-    {
-        const string content = """
-            package main
-
-            type Handler func(Request) Response
-
-            type Server struct {
-                Callback func(Context, *Payload) Result
-            }
-
-            var factory func(Config) *Client
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Request" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Context" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Config" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Client" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoInlineInterfaceMembers_CapturesSignatureTypes()
-    {
-        const string content = """
-            package main
-
-            func bind() {
-                handler := interface{ Handle(Context, *Request) (Response, error); io.Reader }
-                transformer := interface{ Transform(Event) Result }
-                _, _ = handler, transformer
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Context" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Request" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Reader" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Handle" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Transform" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]

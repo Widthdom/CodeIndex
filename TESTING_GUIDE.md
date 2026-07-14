@@ -283,6 +283,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Go type-set coverage shares interface unions and standalone composite approximations in one fixture while retaining bitwise-expression negatives.
 - Go generic type-argument coverage shares called and standalone instantiation forms in one fixture while retaining indexed-value negatives.
 - Go struct-field coverage shares embedded, multi-name, generic, and inline fields in one file fixture while retaining field-name negatives.
+- Go function-signature coverage shares literal, declared function type, function-valued field/variable, and inline interface forms in one file fixture.
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). Its publish smoke disables NuGet vulnerability auditing because package advisory validation is covered by the normal build/test workflow's package vulnerability check, not by this runtime serialization test. It is reported as skipped on macOS arm64 while SDK/ILLink can crash before exercising `cdidx` (#2586). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
@@ -832,6 +833,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - Go type-set coverage は interface union と standalone composite approximation を1つの fixture で共有し、bitwise expression の negative assertion を維持します。
 - Go generic type-argument coverage は call と standalone instantiation の形式を1つの fixture で共有し、indexed value の negative assertion を維持します。
 - Go struct-field coverage は embedded、multi-name、generic、inline field を1つの file fixture で共有し、field name の negative assertion を維持します。
+- Go function-signature coverage は literal、declared function type、function-valued field/variable、inline interface の形式を1つの file fixture で共有します。
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   は trimmed な RID 固有 CLI を publish し、SDK が生成した entry point（`dotnet` 経由の `cdidx.dll`、または native の `cdidx`/`cdidx.exe` apphost）を実行します。この publish smoke は NuGet 脆弱性監査を無効化します。package advisory の検証は通常の build/test workflow の package vulnerability check が担い、この runtime serialization テストの責務ではないためです。macOS arm64 では SDK/ILLink が `cdidx` に到達する前にクラッシュし得るため、このテストは skipped として報告されます（#2586）。self-contained publish output に常に `cdidx.dll` が出るとは仮定しないでください。
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
