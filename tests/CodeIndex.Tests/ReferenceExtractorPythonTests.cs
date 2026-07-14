@@ -642,105 +642,43 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_PythonFunctionReturnAnnotation_CapturesReturnTypeReference()
+    public void Extract_PythonAnnotations_ReuseReturnParameterAndVariableFixture()
     {
         const string content = """
             def load() -> models.User:
                 return get_user()
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "User"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "load");
-    }
-
-    [Fact]
-    public void Extract_PythonGenericReturnAnnotation_CapturesNestedTypeReference()
-    {
-        const string content = """
             def load_many() -> list[models.User]:
                 return []
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "User"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "load_many");
-    }
-
-    [Fact]
-    public void Extract_PythonFunctionParameterAnnotation_CapturesParameterTypeReference()
-    {
-        const string content = """
-            def save(user: models.User):
+            def save_one(user: models.User):
                 persist(user)
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "User"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "save");
-    }
-
-    [Fact]
-    public void Extract_PythonGenericParameterAnnotation_CapturesNestedTypeReference()
-    {
-        const string content = """
-            def save(users: Sequence[models.User]):
+            def save_many(users: Sequence[models.User]):
                 persist(users)
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "User"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "save");
-    }
-
-    [Fact]
-    public void Extract_PythonVariableAnnotation_CapturesVariableTypeReference()
-    {
-        const string content = """
-            def save():
+            def assign_one():
                 user: models.User = load_user()
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "User"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "save");
-    }
-
-    [Fact]
-    public void Extract_PythonGenericVariableAnnotation_CapturesNestedTypeReference()
-    {
-        const string content = """
-            def save():
+            def assign_many():
                 users: Sequence[models.User] = []
             """;
 
         var symbols = SymbolExtractor.Extract(1, "python", content);
         var references = ReferenceExtractor.Extract(1, "python", content, symbols);
 
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "User"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "save");
+        AssertAnnotated("load");
+        AssertAnnotated("load_many");
+        AssertAnnotated("save_one");
+        AssertAnnotated("save_many");
+        AssertAnnotated("assign_one");
+        AssertAnnotated("assign_many");
+
+        void AssertAnnotated(string containerName) =>
+            Assert.Contains(references, reference =>
+                reference.SymbolName == "User"
+                && reference.ReferenceKind == "type_reference"
+                && reference.ContainerName == containerName);
     }
 
     [Fact]

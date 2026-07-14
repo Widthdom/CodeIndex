@@ -254,6 +254,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - C# multiline member attribution shares expression-bodied method and property layouts, Allman/same-line braces, and intervening block comments in one fixture, using unique member containers for assertions.
 - Python `isinstance`/`issubclass` runtime type checks share single-type and tuple forms in one module fixture, with function containers retaining case-level assertions.
 - Python class-header type references share single-base, multiple-base, and metaclass forms in one module fixture, distinguished by class container.
+- Python annotation coverage shares direct and generic return, parameter, and local-variable forms in one module fixture, with function containers preserving each assertion.
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). Its publish smoke disables NuGet vulnerability auditing because package advisory validation is covered by the normal build/test workflow's package vulnerability check, not by this runtime serialization test. It is reported as skipped on macOS arm64 while SDK/ILLink can crash before exercising `cdidx` (#2586). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
@@ -774,6 +775,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - C# multiline member 帰属テストは expression-bodied method/property、Allman/same-line brace、途中の block comment を1つの fixture で共有し、一意な member container ごとに検証します。
 - Python の `isinstance`/`issubclass` runtime type check は単一型と tuple 形式を1つの module fixture で共有し、function container ごとの検証を維持します。
 - Python class header の type reference は単一 base、複数 base、metaclass 形式を1つの module fixture で共有し、class container で区別します。
+- Python annotation coverage は direct/generic の return、parameter、local variable 形式を1つの module fixture で共有し、function container ごとの検証を維持します。
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   は trimmed な RID 固有 CLI を publish し、SDK が生成した entry point（`dotnet` 経由の `cdidx.dll`、または native の `cdidx`/`cdidx.exe` apphost）を実行します。この publish smoke は NuGet 脆弱性監査を無効化します。package advisory の検証は通常の build/test workflow の package vulnerability check が担い、この runtime serialization テストの責務ではないためです。macOS arm64 では SDK/ILLink が `cdidx` に到達する前にクラッシュし得るため、このテストは skipped として報告されます（#2586）。self-contained publish output に常に `cdidx.dll` が出るとは仮定しないでください。
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
