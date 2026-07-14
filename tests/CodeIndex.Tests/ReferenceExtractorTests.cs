@@ -5168,7 +5168,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_GoGenericCallTypeArguments_CapturesCallSiteTypes()
+    public void Extract_GoGenericTypeArguments_ReuseCallAndInstantiationFixture()
     {
         const string content = """
             package main
@@ -5176,8 +5176,10 @@ public partial class ReferenceExtractorTests
             func use(values []func()) {
                 decoded := Decode[User, *Payload](input)
                 mapped := stream.Map[model.Event, Result](events)
+                decoder := Decode[StandaloneUser]
+                mapper := stream.Map[model.StandaloneEvent, StandaloneResult]
                 values[i]()
-                _, _ = decoded, mapped
+                _, _, _, _ = decoded, mapped, decoder, mapper
             }
             """;
 
@@ -5188,6 +5190,9 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "StandaloneUser" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "StandaloneEvent" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "StandaloneResult" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "i" && r.ReferenceKind == "type_reference");
     }
 
@@ -5402,29 +5407,6 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Entry" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "handler" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "repositories" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "i" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoGenericInstantiations_CapturesTypeArgumentsWithoutCalls()
-    {
-        const string content = """
-            package main
-
-            func bind(values []func()) {
-                decoder := Decode[User]
-                mapper := stream.Map[model.Event, Result]
-                index := values[i]
-                _, _, _ = decoder, mapper, index
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "i" && r.ReferenceKind == "type_reference");
     }
 
