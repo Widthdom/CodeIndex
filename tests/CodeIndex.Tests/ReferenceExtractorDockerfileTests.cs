@@ -12,126 +12,48 @@ namespace CodeIndex.Tests;
 public partial class ReferenceExtractorTests
 {
     [Fact]
-    public void Extract_DockerfileFromStageReferences_IndexNamedStagesAndIgnoreBaseImages()
-    {
-        const string content = """
-            FROM golang:1.21 AS builder
-
-            FROM builder AS build2
-
-            FROM alpine:3.20
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
-        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
-
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "builder"
-            && reference.ReferenceKind == "call"));
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "alpine:3.20");
-    }
-
-    [Fact]
-    public void Extract_DockerfileFromStageReferences_IndexLowercaseInstructions()
+    public void Extract_DockerfileFromStageReferences_IndexNamedStageVariantsAndIgnoreBaseImages()
     {
         const string content = """
             from golang:1.21 as builder
-
-            from builder as build2
-
+            FROM builder AS build2
+            from builder as lowercase
             copy --from=builder /src/app /usr/local/bin/app
-
-            from alpine:3.20
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
-        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
-
-        Assert.Equal(2, references.Count(reference =>
-            reference.SymbolName == "builder"
-            && reference.ReferenceKind == "call"));
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "alpine:3.20");
-    }
-
-    [Fact]
-    public void Extract_DockerfileCopyFromReferences_IndexStageDependencies()
-    {
-        const string content = """
-            FROM golang:1.21 AS builder
-
             FROM debian:bookworm-slim AS runner
-
-            COPY --from=builder /src/app /usr/local/bin/app
-            COPY --from=builder /src/assets /opt/assets
-
+            COPY --from=builder /src/second /opt/second
+            COPY --from=builder /src/third /opt/third
             FROM runner AS final
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
-        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
-
-        Assert.Equal(2, references.Count(reference =>
-            reference.SymbolName == "builder"
-            && reference.ReferenceKind == "call"));
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "runner"
-            && reference.ReferenceKind == "call"));
-    }
-
-    [Fact]
-    public void Extract_DockerfileFromStageReferences_IndexPlatformFlaggedStages()
-    {
-        const string content = """
-            FROM golang:1.21 AS builder
-
-            FROM --platform=$BUILDPLATFORM builder AS final
-            COPY --from=builder /src/app /usr/local/bin/app
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
-        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
-
-        Assert.Equal(2, references.Count(reference =>
-            reference.SymbolName == "builder"
-            && reference.ReferenceKind == "call"));
-    }
-
-    [Fact]
-    public void Extract_DockerfileReferences_IndexHyphenatedStageNames()
-    {
-        const string content = """
+            FROM --platform=$BUILDPLATFORM builder AS platform
+            FROM builder AS commented # reuse the build stage
+            FROM alpine:3.20 AS external-base
             FROM node:20 AS build-env
-
             FROM build-env AS runtime
             COPY --from=build-env /src/app /usr/local/bin/app
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
-        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
-
-        Assert.Equal(2, references.Count(reference =>
-            reference.SymbolName == "build-env"
-            && reference.ReferenceKind == "call"));
-    }
-
-    [Fact]
-    public void Extract_DockerfileReferences_IndexDottedStageNames()
-    {
-        const string content = """
             FROM node:20 AS build.env
-
-            FROM build.env AS runtime
+            FROM build.env AS dotted-runtime
             COPY --from=build.env /src/app /usr/local/bin/app
             """;
 
         var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
         var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
 
-        Assert.Equal(2, references.Count(reference =>
-            reference.SymbolName == "build.env"
-            && reference.ReferenceKind == "call"));
+        var expectedCallCounts = new Dictionary<string, int>
+        {
+            ["builder"] = 7,
+            ["runner"] = 1,
+            ["build-env"] = 2,
+            ["build.env"] = 2,
+        };
+
+        foreach (var (stageName, expectedCount) in expectedCallCounts)
+        {
+            Assert.Equal(expectedCount, references.Count(reference =>
+                reference.SymbolName == stageName
+                && reference.ReferenceKind == "call"));
+        }
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "golang:1.21" or "debian:bookworm-slim" or "alpine:3.20" or "node:20");
     }
 
     [Fact]
@@ -308,23 +230,6 @@ public partial class ReferenceExtractorTests
 
             FROM alpine AS runtime
             COPY --from="builder" /src/app /usr/local/bin/app
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
-        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
-
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "builder"
-            && reference.ReferenceKind == "call"));
-    }
-
-    [Fact]
-    public void Extract_DockerfileFromStageReferences_AllowsInlineComments()
-    {
-        const string content = """
-            FROM node:20 AS builder
-
-            FROM builder AS runtime # reuse the build stage
             """;
 
         var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
