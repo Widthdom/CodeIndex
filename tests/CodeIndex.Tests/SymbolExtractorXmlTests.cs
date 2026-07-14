@@ -613,7 +613,7 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Xml_XamlCapturesBindingElementNameReferences()
+    public void Extract_Xml_XamlCapturesNamedObjectReferenceVariants()
     {
         var content = """
             <ContentPage xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -629,6 +629,13 @@ public partial class SymbolExtractorTests
                     <Binding.ElementName>
                         DetailsList
                     </Binding.ElementName>
+                    <TextBlock Text="{Binding Source={x:Reference ReferenceRoot}, Path=ReferenceTitle}" />
+                    <TextBlock Text="{Binding Source={x:Reference Name=NamedTarget}, Path=ReferenceTitle}" />
+                    <TextBlock Text="{Binding Source={x:ReferenceExtension Name=ExtensionTarget}, Path=ReferenceTitle}" />
+                    <x:Reference ToolTip="Name='Ignored'" Name="ObjectTarget" />
+                    <x:Reference.Name>
+                        PropertyTarget
+                    </x:Reference.Name>
                 </Grid>
             </ContentPage>
             """;
@@ -641,27 +648,14 @@ public partial class SymbolExtractorTests
         Assert.Contains("RootPanel", propertyNames);
         Assert.Contains("DetailsList", propertyNames);
         Assert.Contains("Name", propertyNames);
+        Assert.Contains("ReferenceRoot", propertyNames);
+        Assert.Contains("NamedTarget", propertyNames);
+        Assert.Contains("ExtensionTarget", propertyNames);
+        Assert.Contains("ObjectTarget", propertyNames);
+        Assert.Contains("PropertyTarget", propertyNames);
+        Assert.Contains("ReferenceTitle", propertyNames);
         Assert.DoesNotContain("Ignored", propertyNames);
-    }
-
-    [Fact]
-    public void Extract_Xml_XamlCapturesTemplateBindingProperties()
-    {
-        var content = """
-            <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                                xmlns:local="clr-namespace:Sample.Controls">
-                <ControlTemplate TargetType="{x:Type local:ButtonChrome}">
-                    <Border Background="{TemplateBinding Background}"
-                            BorderBrush="{TemplateBinding Property=local:ButtonChrome.BorderBrush}" />
-                </ControlTemplate>
-            </ResourceDictionary>
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "xml", content);
-
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Background");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "BorderBrush");
+        Assert.DoesNotContain("x:Reference", propertyNames);
     }
 
     [Fact]
@@ -698,35 +692,23 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Xml_XamlCapturesXReferenceTargets()
+    public void Extract_Xml_XamlCapturesTemplateBindingProperties()
     {
         var content = """
-            <ContentPage xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                         xmlns:local="clr-namespace:Sample.ViewModels">
-                <Grid>
-                    <TextBlock Text="{Binding Source={x:Reference RootPanel}, Path=Title}" />
-                    <TextBlock Text="{Binding Source={x:Reference Name=NamedTarget}, Path=Title}" />
-                    <TextBlock Text="{Binding Source={x:ReferenceExtension Name=ExtensionTarget}, Path=Title}" />
-                    <x:Reference ToolTip="Name='Ignored'" Name="ObjectTarget" />
-                    <x:Reference.Name>
-                        PropertyTarget
-                    </x:Reference.Name>
-                </Grid>
-            </ContentPage>
+            <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                                xmlns:local="clr-namespace:Sample.Controls">
+                <ControlTemplate TargetType="{x:Type local:ButtonChrome}">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding Property=local:ButtonChrome.BorderBrush}" />
+                </ControlTemplate>
+            </ResourceDictionary>
             """;
 
         var symbols = SymbolExtractor.Extract(1, "xml", content);
-        var propertyNames = symbols.Where(s => s.Kind == "property").Select(s => s.Name).ToList();
 
-        Assert.Contains("RootPanel", propertyNames);
-        Assert.Contains("NamedTarget", propertyNames);
-        Assert.Contains("ExtensionTarget", propertyNames);
-        Assert.Contains("ObjectTarget", propertyNames);
-        Assert.Contains("PropertyTarget", propertyNames);
-        Assert.Contains("Title", propertyNames);
-        Assert.DoesNotContain("Ignored", propertyNames);
-        Assert.DoesNotContain("x:Reference", propertyNames);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Background");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "BorderBrush");
     }
 
     [Fact]
