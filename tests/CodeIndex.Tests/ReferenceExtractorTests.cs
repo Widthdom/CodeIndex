@@ -4860,7 +4860,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_GoGenericFunctionConstraints_CapturesConstraintTypes()
+    public void Extract_GoGenericConstraints_ReuseFunctionAndTypeFixture()
     {
         const string content = """
             package main
@@ -4868,21 +4868,6 @@ public partial class ReferenceExtractorTests
             func Decode[T WireMessage, K KeyConstraint](value T) Result {
                 return Result{}
             }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "WireMessage" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "KeyConstraint" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoGenericTypeConstraints_CapturesConstraintTypes()
-    {
-        const string content = """
-            package main
 
             type Cache[T EntityConstraint] struct {
                 value T
@@ -4894,9 +4879,11 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "go", content);
         var references = ReferenceExtractor.Extract(1, "go", content, symbols);
 
+        Assert.Contains(references, r => r.SymbolName == "WireMessage" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "EntityConstraint" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "KeyConstraint" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "ValueConstraint" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
