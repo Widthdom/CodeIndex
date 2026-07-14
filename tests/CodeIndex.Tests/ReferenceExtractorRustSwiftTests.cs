@@ -1940,14 +1940,27 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_RustAssociatedCalls_CaptureReceiverTypeReferences()
+    public void Extract_RustAssociatedAccess_CapturesReceiverAndArgumentTypes()
     {
         const string content = """
-            fn build() {
+            struct LocalUser;
+
+            impl LocalUser {
+                fn make() -> Self {
+                    Self::new();
+                    LocalUser::new();
+                    Self {}
+                }
+            }
+
+            fn access() {
                 let user = User::new();
                 let store = crate::models::Store::open();
-                let users = Vec::<User>::new();
+                let users = Vec::<Item>::new();
                 let helper = crate::helpers::build();
+                <QualifiedUser as Service>::handle();
+                let _ = ConstantOwner::DEFAULT;
+                let _ = Result::<Value, Error>::Ok;
             }
             """;
 
@@ -1957,7 +1970,19 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Store" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Vec" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Item" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "LocalUser" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "QualifiedUser" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Service" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "ConstantOwner" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Error" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "helpers" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Self" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Self" && r.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, r => r.SymbolName == "DEFAULT" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Ok" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -2101,65 +2126,6 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Future" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Output" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_RustSelfAssociatedCalls_DoNotEmitSelfTypeReference()
-    {
-        const string content = """
-            struct User;
-
-            impl User {
-                fn make() -> Self {
-                    Self::new();
-                    User::new();
-                    Self {}
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Self" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Self" && r.ReferenceKind == "instantiate");
-    }
-
-    [Fact]
-    public void Extract_RustQualifiedAssociatedCalls_CapturesReceiverAndTraitTypes()
-    {
-        const string content = """
-            fn run() {
-                <User as Service>::handle();
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Service" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_RustAssociatedValues_CapturesReceiverAndTurbofishTypes()
-    {
-        const string content = """
-            fn defaults() {
-                let _ = User::DEFAULT;
-                let _ = Result::<User, Error>::Ok;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Error" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "DEFAULT" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Ok" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]

@@ -276,6 +276,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - TypeScript re-export surface coverage shares named/type-only exports, star/namespace forms, `with`/`assert` attributes, and inline/multiline attribute braces in one extraction. Give each module and exported alias a unique name so one assertion set preserves every layout contract.
 - TypeScript ordinary type-query coverage keeps inline/multiline `typeof` and `keyof` type positions together with inline/multiline runtime `typeof` exclusions in one extraction. Keep import-member and dynamic-import mapping tests separate because their emitted reference counts and symbol mapping are distinct contracts.
 - Rust module-surface reference coverage shares `extern crate`, external and inline `mod`, grouped/aliased/raw-identifier `use`, and glob imports in one extraction. Preserve negative assertions for aliases, inline modules, and the glob token when extending it.
+- Rust associated-access reference coverage shares direct/path-qualified/turbofish calls, qualified trait calls, associated values, and `Self` exclusions in one extraction. Use distinct receiver and argument type names, and retain negative assertions for path segments, associated members, and `Self`.
 - Suggestion store and archive cap tests share one sparse-file helper instead of allocating arrays at either persisted-size limit.
 - Persistent-log rotation tests size existing log fixtures through `FileStream.SetLength(...)` rather than allocating a 1 MiB zero buffer.
 - JSON-depth boundary fixtures use fixed-width character strings instead of `Enumerable.Repeat` pipelines for repeated brackets.
@@ -903,6 +904,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - TypeScript re-export surface coverage は named/type-only export、star/namespace form、`with`/`assert` attribute、inline/multiline attribute brace を1回の extraction で共有します。各 layout の契約を1組の assertion で維持できるよう、module と export alias には一意な名前を付けてください。
 - TypeScript の通常 type-query coverage は、inline/multiline の `typeof` と `keyof` type position、および inline/multiline の runtime `typeof` 除外を1回の extraction にまとめます。import-member と dynamic-import mapping は、生成される参照数と symbol mapping が別契約なので独立した test のまま維持してください。
 - Rust module-surface reference coverage は `extern crate`、external/inline `mod`、group/alias/raw identifier を含む `use`、glob import を1回の extraction で共有します。拡張時も alias、inline module、glob token に対する negative assertion を維持してください。
+- Rust associated-access reference coverage は direct/path-qualified/turbofish call、qualified trait call、associated value、`Self` 除外を1回の extraction で共有します。receiver と argument の型名は区別し、path segment、associated member、`Self` に対する negative assertion を維持してください。
 - suggestion store と archive cap の test は、どちらの persisted-size limit でも array を割り当てず、1 つの sparse-file helper を共有します。
 - persistent-log rotation test は 1 MiB の zero buffer を割り当てず、`FileStream.SetLength(...)` で既存 log fixture のサイズを設定します。
 - JSON-depth 境界 fixture の繰り返し bracket には、`Enumerable.Repeat` pipeline ではなく固定幅の文字列を使います。
