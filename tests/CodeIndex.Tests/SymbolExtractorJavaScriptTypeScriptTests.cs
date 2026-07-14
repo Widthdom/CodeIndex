@@ -1403,41 +1403,34 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScript_DoesNotLeakBlocklessArrowReturnedClasses()
+    public void Extract_JavaScript_BlocklessArrowReturnShapes_DoNotLeakClasses()
     {
         var content = """
-            const factory = () =>
-                class Hidden {
-                    method() {}
+            const plainFactory = () =>
+                class HiddenPlain {
+                    plainMethod() {}
                 };
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "factory");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "method");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DoesNotLeakWrappedBlocklessArrowReturnedClassesAndKeepsRange()
-    {
-        var content = """
-            const factory = () =>
+            const wrappedFactory = () =>
                 wrap(
-                    class Hidden {
-                        method() {}
+                    class HiddenWrapped {
+                        wrappedMethod() {}
                     }
                 );
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        var factory = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "factory"));
-        Assert.Equal(1, factory.StartLine);
-        Assert.Equal(6, factory.EndLine);
-        Assert.Equal(2, factory.BodyStartLine);
-        Assert.Equal(6, factory.BodyEndLine);
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "method");
+        AssertRange("plainFactory", 1, 2, 4);
+        AssertRange("wrappedFactory", 5, 6, 10);
+        Assert.DoesNotContain(symbols, s => s.Name is "HiddenPlain" or "HiddenWrapped" or "plainMethod" or "wrappedMethod");
+
+        void AssertRange(string name, int startLine, int bodyStartLine, int endLine)
+        {
+            var arrow = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == name));
+            Assert.Equal(startLine, arrow.StartLine);
+            Assert.Equal(bodyStartLine, arrow.BodyStartLine);
+            Assert.Equal(endLine, arrow.EndLine);
+            Assert.Equal(endLine, arrow.BodyEndLine);
+        }
     }
 
     [Fact]
