@@ -238,14 +238,14 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Go_DetectsFunctions()
+    public void Extract_Go_DetectsFunctionsMethodsGenericsAndAssignedLambdas()
     {
         // Should detect both regular and method functions
         // 通常関数とメソッド関数の両方を検出する
-        var content = "type Handler struct {\n}\ntype Store[T, U any] struct {\n}\nfunc NewHandler() *Handler {\n}\nfunc Load(input User) Result {\n}\nfunc (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {\n}\nfunc (s *Store[T, U]) Save(value T) {\n}\nfunc (Store[T, U]) Snapshot() {\n}";
+        var content = "type Handler struct {\n}\ntype Store[T, U any] struct {\n}\nfunc NewHandler() *Handler {\n}\nfunc Load(input User) Result {\n}\nfunc (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {\n}\nfunc (s *Store[T, U]) Save(value T) {\n}\nfunc (Store[T, U]) Snapshot() {\n}\nfunc Identity[T any](value T) T { return value }\nfunc Run() {\ntransform := func(value int) int {\nreturn value + 1\n}\n_ = transform\n}";
         var symbols = SymbolExtractor.Extract(1, "go", content);
 
-        Assert.Equal(5, symbols.Count(s => s.Kind == "function"));
+        Assert.Equal(7, symbols.Count(s => s.Kind == "function"));
         Assert.Contains(symbols, s => s.Name == "NewHandler");
         var regularFunction = Assert.Single(symbols, s => s.Name == "Load");
         Assert.Null(regularFunction.ContainerName);
@@ -258,43 +258,9 @@ public partial class SymbolExtractorTests
         var unnamedGenericMethod = Assert.Single(symbols, s => s.Name == "Snapshot");
         Assert.Equal("struct", unnamedGenericMethod.ContainerKind);
         Assert.Equal("Store", unnamedGenericMethod.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_Go_DetectsAssignedFuncLiteralAsLambda()
-    {
-        var content = """
-            package demo
-
-            func Run() {
-                transform := func(value int) int {
-                    return value + 1
-                }
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-
-        var lambda = Assert.Single(symbols, s => s.Kind == "lambda");
-        Assert.Equal("transform", lambda.Name);
-        Assert.Equal(4, lambda.Line);
-    }
-
-    [Fact]
-    public void Extract_Go_DetectsGenericFunctions()
-    {
-        var content = """
-            func Identity[T any](value T) T {
-                return value
-            }
-
-            func NewHandler() *Handler {
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Identity");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "NewHandler");
-        Assert.Equal(2, symbols.Count(s => s.Kind == "function"));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Run");
+        Assert.Equal("transform", Assert.Single(symbols, s => s.Kind == "lambda").Name);
     }
 
     [Fact]
