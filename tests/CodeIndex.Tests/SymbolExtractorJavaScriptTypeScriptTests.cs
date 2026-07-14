@@ -102,7 +102,7 @@ public partial class SymbolExtractorTests
     [Theory]
     [InlineData("javascript")]
     [InlineData("typescript")]
-    public void Extract_JavaScriptTypeScript_DetectsImportMetaResolveModuleSymbols(string language)
+    public void Extract_JavaScriptTypeScript_DetectsImportMetaModuleSymbols(string language)
     {
         var content = """
             const resolved = import.meta.resolve("./feature.js");
@@ -113,26 +113,7 @@ public partial class SymbolExtractorTests
             client.import.meta.resolve("./method.js");
             const dynamic = import.meta.resolve(path);
             const text = "import.meta.resolve('./string.js')";
-            """;
-        var symbols = SymbolExtractor.Extract(1, language, content);
 
-        var resolvedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./feature.js"));
-        Assert.Equal(1, resolvedImport.Line);
-        Assert.Contains("import.meta.resolve", resolvedImport.Signature);
-        var scopedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./scoped.js"));
-        Assert.Equal(3, scopedImport.Line);
-        Assert.Contains("import.meta.url", scopedImport.Signature);
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./method.js");
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "path");
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string.js");
-    }
-
-    [Theory]
-    [InlineData("javascript")]
-    [InlineData("typescript")]
-    public void Extract_JavaScriptTypeScript_DetectsNewUrlImportMetaModuleSymbols(string language)
-    {
-        var content = """
             const workerUrl = new URL("./worker.js", import.meta.url);
             const imageUrl = new URL(
               "./image.png",
@@ -146,17 +127,24 @@ public partial class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, language, content);
 
+        var resolvedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./feature.js"));
+        Assert.Equal(1, resolvedImport.Line);
+        Assert.Contains("import.meta.resolve", resolvedImport.Signature);
+        var scopedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./scoped.js"));
+        Assert.Equal(3, scopedImport.Line);
+        Assert.Contains("import.meta.url", scopedImport.Signature);
         var workerImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./worker.js"));
-        Assert.Equal(1, workerImport.Line);
+        Assert.Equal(10, workerImport.Line);
         Assert.Contains("new URL", workerImport.Signature);
         var imageImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./image.png"));
-        Assert.Equal(3, imageImport.Line);
+        Assert.Equal(12, imageImport.Line);
         Assert.Contains("import.meta.url", imageImport.Signature);
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./view.js");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name.Contains("${", StringComparison.Ordinal));
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./plain.js");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./other.js");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./href.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name is "./method.js" or "path" or "./string.js");
     }
 
     [Theory]
