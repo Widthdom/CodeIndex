@@ -440,12 +440,12 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_TypeScript_DetectsInlineClassMethods()
+    public void Extract_TypeScript_DetectsInlineMethodsAndSameLineSiblingClasses()
     {
-        var content = "export class Inline { run(): void {} first(): void {} second(): void {} }";
+        var content = "export class Inline { run(): void {} first(): void {} second(): void {} } export class A { alpha(): void {} } export class B { beta(): void {} } export class C { shared(): void {} } export class D { shared(): void {} }";
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Inline");
+        AssertSymbolsContain(symbols, "class", "Inline", "A", "B", "C", "D");
         var run = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "run"));
         var first = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "first"));
         var second = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "second"));
@@ -457,64 +457,37 @@ public partial class SymbolExtractorTests
         Assert.Equal("run(): void {}", run.Signature);
         Assert.Equal("first(): void {}", first.Signature);
         Assert.Equal("second(): void {}", second.Signature);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "alpha" && s.ContainerName == "A");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "beta" && s.ContainerName == "B");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "shared" && s.ContainerName == "C");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "shared" && s.ContainerName == "D");
     }
 
     [Fact]
-    public void Extract_TypeScript_DetectsSameLineSiblingClassesWithDistinctAndIdenticalMethods()
+    public void Extract_TypeScript_DetectsSameLineClassExpressionsAfterStatementPrefixes()
     {
-        var content = "export class A { first(): void {} } export class B { second(): void {} } export class C { run(): void {} } export class D { run(): void {} }";
+        var content = "foo(); export const ExportedService = class ExportedVisible { exportedKeep(): void {} }; bar(); const LocalService = class LocalVisible { localKeep(): void {} };";
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
-        AssertSymbolsContain(symbols, "class", "A", "B", "C", "D");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first" && s.ContainerName == "A");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second" && s.ContainerName == "B");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "C");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "D");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ExportedService" && s.Signature == "export const ExportedService = class ExportedVisible { exportedKeep(): void {} }");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "LocalService" && s.Signature == "const LocalService = class LocalVisible { localKeep(): void {} }");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && (s.Name == "ExportedVisible" || s.Name == "LocalVisible"));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "exportedKeep" && s.ContainerName == "ExportedService");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "localKeep" && s.ContainerName == "LocalService");
     }
 
     [Fact]
-    public void Extract_TypeScript_DetectsSameLineClassExpressionAfterStatementPrefixWithCleanSignature()
+    public void Extract_TypeScript_DetectsSameLinePublicClassesAfterStatementAndLocalClass()
     {
-        var content = "foo(); export const Service = class Visible { keep(): void {} };";
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service" && s.Signature == "export const Service = class Visible { keep(): void {} }");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Visible");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Service");
-    }
-
-    [Fact]
-    public void Extract_TypeScript_DetectsSameLinePublicClassAfterStatementPrefix()
-    {
-        var content = "foo(); class Visible { keep(): void {} }";
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Visible");
-    }
-
-    [Fact]
-    public void Extract_TypeScript_DetectsSameLinePublicClassAfterFunctionLocalHiddenClass()
-    {
-        var content = "function outer(): void { class Hidden { run(): void {} } } class Visible { keep(): void {} }";
+        var content = "foo(); class Prefixed { keep(): void {} } function outer(): void { class Hidden { run(): void {} } } class AfterLocal { stay(): void {} }";
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "outer");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Visible");
-    }
-
-    [Fact]
-    public void Extract_TypeScript_DetectsSameLineClassExpressionAfterStatementPrefix()
-    {
-        var content = "foo(); const Service = class Visible { keep(): void {} };";
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Visible");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Service");
+        AssertSymbolsContain(symbols, "class", "Prefixed", "AfterLocal");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Prefixed");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "stay" && s.ContainerName == "AfterLocal");
     }
 
     [Fact]

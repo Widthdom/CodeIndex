@@ -269,6 +269,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Oversized ignore-file rejection uses the same sparse helper because the size preflight rejects the file before rule contents matter.
 - Per-line oversize detection uses four short physical lines; hundreds of repetitions add no boundary coverage because the contract is independent per line.
 - Captured-output overflow tests cross the character budget by one character unless a larger excess is itself part of the contract.
+- JavaScript and TypeScript same-line class scanning shares one fixture per language for inline members, sibling classes with distinct and repeated method names, statement prefixes, and callable-local class masking. Keep the individual container, signature, and hidden-local assertions in the shared extraction instead of adding a method for each layout.
 - Suggestion store and archive cap tests share one sparse-file helper instead of allocating arrays at either persisted-size limit.
 - Persistent-log rotation tests size existing log fixtures through `FileStream.SetLength(...)` rather than allocating a 1 MiB zero buffer.
 - JSON-depth boundary fixtures use fixed-width character strings instead of `Enumerable.Repeat` pipelines for repeated brackets.
@@ -888,6 +889,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - oversized ignore-file rejection も同じ sparse helper を使います。size preflight が rule 内容を読む前に拒否するためです。
 - per-line oversize detection は 4 本の短い物理行を使います。契約は各行で独立しており、数百回の反復は境界 coverage を増やしません。
 - captured-output overflow test は、より大きな超過量自体が契約でない限り、文字数 budget を 1 文字だけ超えます。
+- JavaScript と TypeScript の same-line class scan は、inline member、異名/同名 method を持つ sibling class、statement prefix、callable-local class masking を言語ごとに1つの fixture で共有します。layout ごとに method を追加せず、個別の container、signature、hidden-local assertion を共有 extraction 内に維持してください。
 - suggestion store と archive cap の test は、どちらの persisted-size limit でも array を割り当てず、1 つの sparse-file helper を共有します。
 - persistent-log rotation test は 1 MiB の zero buffer を割り当てず、`FileStream.SetLength(...)` で既存 log fixture のサイズを設定します。
 - JSON-depth 境界 fixture の繰り返し bracket には、`Enumerable.Repeat` pipeline ではなく固定幅の文字列を使います。

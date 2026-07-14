@@ -355,79 +355,41 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScript_DetectsInlineClassMethods()
+    public void Extract_JavaScript_DetectsInlineMethodsAndSameLineSiblingClasses()
     {
-        var content = "export class Inline { run() {} }";
+        var content = "export class Inline { run() {} first() {} second() {} } class A { alpha() {} } class B { beta() {} } class C { shared() {} } class D { shared() {} }";
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Inline");
+        AssertSymbolsContain(symbols, "class", "Inline", "A", "B", "C", "D");
         var run = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "run"));
-        Assert.Equal("class", run.ContainerKind);
-        Assert.Equal("Inline", run.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DetectsInlineMultipleMethods()
-    {
-        var content = "class Inline { first() {} second() {} }";
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Inline");
         var first = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "first"));
         var second = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "second"));
-        Assert.Equal("class", first.ContainerKind);
-        Assert.Equal("Inline", first.ContainerName);
+        Assert.All([run, first, second], symbol =>
+        {
+            Assert.Equal("class", symbol.ContainerKind);
+            Assert.Equal("Inline", symbol.ContainerName);
+        });
+        Assert.Equal("run() {}", run.Signature);
         Assert.Equal("first() {}", first.Signature);
-        Assert.Equal("class", second.ContainerKind);
-        Assert.Equal("Inline", second.ContainerName);
         Assert.Equal("second() {}", second.Signature);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "alpha" && s.ContainerName == "A");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "beta" && s.ContainerName == "B");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "shared" && s.ContainerName == "C");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "shared" && s.ContainerName == "D");
     }
 
     [Fact]
-    public void Extract_JavaScript_DetectsSameLineSiblingClassesWithDistinctMethodNames()
+    public void Extract_JavaScript_DetectsSameLinePublicClassesAfterStatementAndLocalClass()
     {
-        var content = "class A { first() {} } class B { second() {} }";
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "A");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "B");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first" && s.ContainerName == "A");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second" && s.ContainerName == "B");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DetectsSameLineSiblingClassesWithIdenticalMethodNames()
-    {
-        var content = "class A { run() {} } class B { run() {} }";
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "A");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "B");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "A");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "B");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DetectsSameLinePublicClassAfterStatementPrefix()
-    {
-        var content = "foo(); class Visible { keep() {} }";
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Visible");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DetectsSameLinePublicClassAfterFunctionLocalHiddenClass()
-    {
-        var content = "function outer(){ class Hidden { run() {} } } class Visible { keep() {} }";
+        var content = "foo(); class Prefixed { keep() {} } function outer(){ class Hidden { run() {} } } class AfterLocal { stay() {} }";
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "outer");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Visible");
+        AssertSymbolsContain(symbols, "class", "Prefixed", "AfterLocal");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Prefixed");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "stay" && s.ContainerName == "AfterLocal");
     }
 
     [Fact]
