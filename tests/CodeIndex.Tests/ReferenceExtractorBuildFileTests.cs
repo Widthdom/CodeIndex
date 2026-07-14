@@ -123,12 +123,14 @@ public partial class ReferenceExtractorTests
     }
 
     [Theory]
-    [InlineData("shell", "helper() { :; }\nhelper\n", "helper", 3)]
-    [InlineData("powershell", "function Invoke-Task { }\nJoin-Path . child\nWrite-Host done\n", "Join-Path", 4)]
-    public void Extract_ScriptLanguages_TopLevelCallsUseSyntheticScriptScope_Issue4421(
+    [InlineData("shell", "helper() { nested; }\nnested() { :; }\nhelper\n", "helper", "nested", "helper", 4)]
+    [InlineData("powershell", "function Invoke-Task { Write-Host done }\nJoin-Path . child\nWrite-Host done\n", "Invoke-Task", "Write-Host", "Join-Path", 4)]
+    public void Extract_ScriptLanguages_CallsUseFunctionAndSyntheticScriptScopes_Issue4421(
         string language,
         string content,
-        string calledSymbol,
+        string functionName,
+        string nestedCallName,
+        string topLevelCallName,
         int expectedEndLine)
     {
         var symbols = SymbolExtractor.Extract(1, language, content);
@@ -140,24 +142,18 @@ public partial class ReferenceExtractorTests
         Assert.Equal(expectedEndLine, scriptScope.EndLine);
 
         var references = ReferenceExtractor.Extract(1, language, content, symbols);
+        var nestedCall = Assert.Single(references, reference =>
+            reference.ReferenceKind == "call"
+            && reference.SymbolName == nestedCallName
+            && reference.ContainerName == functionName);
+        Assert.Equal("function", nestedCall.ContainerKind);
+        Assert.Equal(functionName, nestedCall.ContainerName);
+
         var topLevelCall = Assert.Single(references, reference =>
             reference.ReferenceKind == "call"
-            && reference.SymbolName == calledSymbol);
+            && reference.SymbolName == topLevelCallName);
         Assert.Equal("function", topLevelCall.ContainerKind);
         Assert.Equal("<script>", topLevelCall.ContainerName);
-    }
-
-    [Theory]
-    [InlineData("shell", "helper() { nested; }\nnested() { :; }\n", "helper", "nested")]
-    [InlineData("powershell", "function Invoke-Task { Write-Host done }\n", "Invoke-Task", "Write-Host")]
-    public void Extract_ScriptLanguages_FunctionCallsKeepDeclaredFunctionContainer_Issue4421(
-        string language,
-        string content,
-        string containerName,
-        string calledSymbol)
-    {
-        ReferenceExtractionCase.Extract(language, content)
-            .ShouldContain("call", calledSymbol, containerName: containerName);
     }
 
     [Fact]

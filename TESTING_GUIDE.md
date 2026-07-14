@@ -66,6 +66,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Dockerfile `COPY --from` ONBUILD and quoted-stage forms share a fixture with tagged and digest-qualified external-image controls; assert exact call counts for the genuine stages so false positives cannot hide beside positive edges.
   Dockerfile RUN mount coverage keeps ordinary, multiple, quoted, and ONBUILD stage sources beside quoted-text and command-argument negatives in one fixture; exact per-stage counts make the negative controls observable without separate extraction passes.
   Dockerfile ARG expansion coverage places braced, unbraced, conditional, nested, and escaped forms in one fixture with distinct ARG names; assert one reference per declared name so escaped controls cannot add hidden edges.
+  Shell and PowerShell reference fixtures keep a declared-function call and a top-level call together when validating function versus synthetic `<script>` containers, so each language is extracted once for both scope contracts.
 - `FileIndexerTests.cs`, `FileIndexerContentLoadingTests.cs`, `FileIndexerTestSupport.cs`
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
 - `PathCompatibilityMatrixTests.cs`
@@ -641,6 +642,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   Dockerfile の `COPY --from` における ONBUILD と quote 付き stage 形式は、tag および digest 付き外部 image の control と fixture を共有します。正しい stage の call 数を厳密に検証し、正例 edge に紛れた false positive を見逃さないようにします。
   Dockerfile の RUN mount coverage は、通常、複数、quote、ONBUILD の stage source と、quote 付き text および command argument の負例を1つの fixture に置きます。stage ごとの厳密な件数により、別々の抽出を行わず negative control を観測可能にします。
   Dockerfile の ARG expansion coverage は、brace、brace なし、conditional、nested、escape 形式を、固有の ARG 名を持つ1つの fixture に置きます。宣言名ごとに1参照を厳密に検証し、escape の control が隠れた edge を追加できないようにします。
+  Shell と PowerShell の reference fixture は、function container と synthetic `<script>` container の区別を検証するとき、宣言済み function 内の call と top-level call を同居させ、各言語を両方の scope contract に対して1回だけ抽出します。
 - `FileIndexerTests.cs`、`FileIndexerContentLoadingTests.cs`、`FileIndexerTestSupport.cs`
   ファイル走査、言語判定、scan result 言語の再利用、content loading / canonicalization、checksum、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。共有 `FileIndexerTests` helper は `FileIndexerTestSupport.cs` に置きます。
 - `PathCompatibilityMatrixTests.cs`
