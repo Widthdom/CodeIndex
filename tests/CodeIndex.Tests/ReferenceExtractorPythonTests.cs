@@ -218,84 +218,54 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_PythonBareRaise_CapturesExceptionTypeReference()
+    public void Extract_PythonExceptionContexts_ReuseRaiseExceptAndHelperFixture()
     {
         const string content = """
-            def fail():
-                raise CustomError
-            """;
+            def fail_bare():
+                raise BareError
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+            def fail_from():
+                raise package.ChainedError from exc
 
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "CustomError"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "fail");
-    }
-
-    [Fact]
-    public void Extract_PythonRaiseFrom_CapturesExceptionTypeReference()
-    {
-        const string content = """
-            def fail():
-                raise package.CustomError from exc
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "CustomError"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "fail");
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "exc"
-            && reference.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_PythonExcept_CapturesExceptionTypeReference()
-    {
-        const string content = """
-            def recover():
+            def recover_single():
                 try:
                     run()
-                except CustomError as exc:
+                except SingleError as exc:
                     return exc
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "CustomError"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "recover");
-    }
-
-    [Fact]
-    public void Extract_PythonExceptTuple_CapturesEachExceptionTypeReference()
-    {
-        const string content = """
-            def recover():
+            def recover_tuple():
                 try:
                     run()
                 except (TimeoutError, network.NetworkError) as exc:
                     return exc
+
+            def test_invalid():
+                with pytest.raises(errors.ValidationError):
+                    validate({})
+
+            def cleanup():
+                with contextlib.suppress(errors.NotFoundError):
+                    remove()
             """;
 
         var symbols = SymbolExtractor.Extract(1, "python", content);
         var references = ReferenceExtractor.Extract(1, "python", content, symbols);
 
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "TimeoutError"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "recover");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "NetworkError"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "recover");
+        AssertExceptionType("BareError", "fail_bare");
+        AssertExceptionType("ChainedError", "fail_from");
+        AssertExceptionType("SingleError", "recover_single");
+        AssertExceptionType("TimeoutError", "recover_tuple");
+        AssertExceptionType("NetworkError", "recover_tuple");
+        AssertExceptionType("ValidationError", "test_invalid");
+        AssertExceptionType("NotFoundError", "cleanup");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "exc" && reference.ReferenceKind == "type_reference");
+
+        void AssertExceptionType(string symbolName, string containerName) =>
+            Assert.Contains(references, reference =>
+                reference.SymbolName == symbolName
+                && reference.ReferenceKind == "type_reference"
+                && reference.ContainerName == containerName);
     }
 
     [Fact]
@@ -790,42 +760,6 @@ public partial class ReferenceExtractorTests
                 reference.SymbolName == symbolName
                 && reference.ReferenceKind == "type_reference"
                 && reference.ContainerName == containerName);
-    }
-
-    [Fact]
-    public void Extract_PythonPytestRaises_CapturesExceptionTypeReference()
-    {
-        const string content = """
-            def test_invalid():
-                with pytest.raises(errors.ValidationError):
-                    validate({})
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "ValidationError"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "test_invalid");
-    }
-
-    [Fact]
-    public void Extract_PythonContextlibSuppress_CapturesExceptionTypeReference()
-    {
-        const string content = """
-            def cleanup():
-                with contextlib.suppress(errors.NotFoundError):
-                    remove()
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "NotFoundError"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "cleanup");
     }
 
     [Fact]
