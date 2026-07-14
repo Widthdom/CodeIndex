@@ -299,79 +299,37 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_PythonIsInstance_CapturesCheckedTypeReference()
+    public void Extract_PythonRuntimeTypeChecks_ReuseSingleAndTupleFixture()
     {
         const string content = """
-            def accepts(value):
+            def accepts_single(value):
                 return isinstance(value, models.User)
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "User"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "accepts");
-    }
-
-    [Fact]
-    public void Extract_PythonIsInstanceTuple_CapturesEachCheckedTypeReference()
-    {
-        const string content = """
-            def accepts(value):
+            def accepts_tuple(value):
                 return isinstance(value, (models.User, api.Admin))
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "User"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "accepts");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Admin"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "accepts");
-    }
-
-    [Fact]
-    public void Extract_PythonIsSubclass_CapturesCheckedTypeReference()
-    {
-        const string content = """
-            def accepts(cls):
+            def accepts_subclass(cls):
                 return issubclass(cls, services.Plugin)
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Plugin"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "accepts");
-    }
-
-    [Fact]
-    public void Extract_PythonIsSubclassTuple_CapturesEachCheckedTypeReference()
-    {
-        const string content = """
-            def accepts(cls):
+            def accepts_subclass_tuple(cls):
                 return issubclass(cls, (services.Plugin, mixins.Audited))
             """;
 
         var symbols = SymbolExtractor.Extract(1, "python", content);
         var references = ReferenceExtractor.Extract(1, "python", content, symbols);
 
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Plugin"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "accepts");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Audited"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "accepts");
+        AssertTypeReference("User", "accepts_single");
+        AssertTypeReference("User", "accepts_tuple");
+        AssertTypeReference("Admin", "accepts_tuple");
+        AssertTypeReference("Plugin", "accepts_subclass");
+        AssertTypeReference("Plugin", "accepts_subclass_tuple");
+        AssertTypeReference("Audited", "accepts_subclass_tuple");
+
+        void AssertTypeReference(string symbolName, string containerName) =>
+            Assert.Contains(references, reference =>
+                reference.SymbolName == symbolName
+                && reference.ReferenceKind == "type_reference"
+                && reference.ContainerName == containerName);
     }
 
     [Fact]
