@@ -5723,109 +5723,39 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpRecordChain_RewritesToBaseType()
+    public void Extract_CsharpRecordChain_HeaderLayouts_AttributeBaseCallsWithoutStealingBodyCalls()
     {
+        // Keep the supported record-header layouts in one extraction fixture. Distinct record
+        // names let each assertion retain its original diagnostic precision.
         const string content = """
             namespace Demo;
 
-            public record Parent(int Value);
+            public record ParentInline(int Value);
+            public record ChildInline(int Value, int Extra) : ParentInline(Value);
 
-            public record Child(int Value, int Extra) : Parent(Value);
-            """;
+            public record ParentMultiline(int Value);
+            public record ChildMultiline(int Value, int Extra)
+                : ParentMultiline(Value);
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.SymbolName == "base");
-        Assert.DoesNotContain(references, r => r.SymbolName == "this");
-
-        // Record primary-ctor base call is attributed to a synthetic function named after
-        // the record, so `callers` / `callees` / `impact` can traverse the chain edge.
-        // record のプライマリーコンストラクタの base 呼び出しが、record 名の合成 function に紐付く。
-        var parentRef = Assert.Single(references, r => r.SymbolName == "Parent");
-        Assert.Equal("call", parentRef.ReferenceKind);
-        Assert.Equal("function", parentRef.ContainerKind);
-        Assert.Equal("Child", parentRef.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpRecordChain_MultilineBaseCall_RewritesToBaseType()
-    {
-        // Record declaration wraps the base primary-ctor call onto a continuation line.
-        // The synthetic function container must span the whole header range so the Parent
-        // reference is attributed to the record rather than landing without a container.
-        // record 宣言の base primary-ctor 呼び出しが改行で別行に来るケース。
-        // 合成 function コンテナは宣言ヘッダー全体を覆い、`Parent(...)` が record に紐付くこと。
-        const string content = """
-            namespace Demo;
-
-            public record Parent(int Value);
-
-            public record Child(int Value, int Extra)
-                : Parent(Value);
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var parentRef = Assert.Single(references, r => r.SymbolName == "Parent");
-        Assert.Equal("call", parentRef.ReferenceKind);
-        Assert.Equal("function", parentRef.ContainerKind);
-        Assert.Equal("Child", parentRef.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpRecordChain_BracedBodyAfterBaseCall_AttributesBaseCallOnly()
-    {
-        // Base primary-ctor call sits at the end of the record header on its own line,
-        // followed by a braced body. The synthetic container must cover the base-call line
-        // but not leak into body method lines (those keep their real innermost containers).
-        // base 呼び出し後に `{}` 本体が続くケース。合成コンテナはヘッダーのみを覆い、
-        // body 内のメソッド行は通常の container を維持すること。
-        const string content = """
-            namespace Demo;
-
-            public record Parent(int Value);
-
-            public record Child(int Value, int Extra)
-                : Parent(Value)
+            public record ParentBraced(int Value);
+            public record ChildBraced(int Value, int Extra)
+                : ParentBraced(Value)
             {
                 public int DoubleValue() => Value * 2;
             }
+
+            public record ParentSameLine(int Value);
+            public record ChildSameLine(int Value) : ParentSameLine(Value) { public int Sum() => Add(Value, 1); }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var parentRef = Assert.Single(references, r => r.SymbolName == "Parent");
-        Assert.Equal("function", parentRef.ContainerKind);
-        Assert.Equal("Child", parentRef.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpRecordChain_SameLineBracedBody_DoesNotStealBodyCallsForSyntheticCtor()
-    {
-        // Legal same-line braced record where the header, base call, and a body method all live
-        // on one line: `record Child(int V) : Parent(V) { public int Sum() => Add(V, 1); }`.
-        // The synthetic function-kind container must cover only the header portion of that line
-        // (before `{`), not the body. Overriding the whole line would steal `Add(...)` from its
-        // real inner container and misattribute it to the synthetic record ctor in callers/impact.
-        // 同一行 record 内の `{` より後ろの本体呼び出しが合成 ctor に奪われないことを固定する。
-        const string content = """
-            namespace Demo;
-
-            public record Parent(int Value);
-
-            public record Child(int Value) : Parent(Value) { public int Sum() => Add(Value, 1); }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var parentRef = Assert.Single(references, r => r.SymbolName == "Parent");
-        Assert.Equal("call", parentRef.ReferenceKind);
-        Assert.Equal("function", parentRef.ContainerKind);
-        Assert.Equal("Child", parentRef.ContainerName);
+        Assert.DoesNotContain(references, r => r.SymbolName is "base" or "this");
+        AssertRecordBaseCall("ParentInline", "ChildInline");
+        AssertRecordBaseCall("ParentMultiline", "ChildMultiline");
+        AssertRecordBaseCall("ParentBraced", "ChildBraced");
+        AssertRecordBaseCall("ParentSameLine", "ChildSameLine");
 
         // Add(...) sits past the header-terminating `{`, so the synthetic record ctor must NOT
         // claim it. The exact inner container depends on whether SymbolExtractor produces a Sum
@@ -5835,8 +5765,16 @@ public partial class ReferenceExtractorTests
         // 具体的な container は extractor の挙動に依存するため深追いしない）。
         var addRef = Assert.Single(references, r => r.SymbolName == "Add");
         Assert.False(
-            addRef.ContainerKind == "function" && addRef.ContainerName == "Child",
+            addRef.ContainerKind == "function" && addRef.ContainerName == "ChildSameLine",
             $"Add(...) was incorrectly attributed to the synthetic record ctor (container_kind={addRef.ContainerKind}, container_name={addRef.ContainerName}).");
+
+        void AssertRecordBaseCall(string parent, string child)
+        {
+            var parentRef = Assert.Single(references, r => r.SymbolName == parent);
+            Assert.Equal("call", parentRef.ReferenceKind);
+            Assert.Equal("function", parentRef.ContainerKind);
+            Assert.Equal(child, parentRef.ContainerName);
+        }
     }
 
     [Fact]
