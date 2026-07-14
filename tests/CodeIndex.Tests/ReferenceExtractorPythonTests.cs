@@ -682,66 +682,28 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_PythonTypeAlias_CapturesAliasedTypeReference()
+    public void Extract_PythonTypingFactories_ReuseAliasNewTypeAndTypeVarFixture()
     {
         const string content = """
-            UserAlias: TypeAlias = models.User
+            UserAlias: TypeAlias = models.AliasUser
+            UserId = NewType("UserId", models.UnderlyingUser)
+            TUser = TypeVar("TUser", bound=models.BoundUser)
+            TAccount = TypeVar("TAccount", models.ConstraintUser, models.ConstraintAdmin)
             """;
 
         var symbols = SymbolExtractor.Extract(1, "python", content);
         var references = ReferenceExtractor.Extract(1, "python", content, symbols);
 
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "User"
-            && reference.ReferenceKind == "type_reference");
-    }
+        AssertTypeReference("AliasUser");
+        AssertTypeReference("UnderlyingUser");
+        AssertTypeReference("BoundUser");
+        AssertTypeReference("ConstraintUser");
+        AssertTypeReference("ConstraintAdmin");
 
-    [Fact]
-    public void Extract_PythonNewType_CapturesUnderlyingTypeReference()
-    {
-        const string content = """
-            UserId = NewType("UserId", models.User)
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "User"
-            && reference.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_PythonTypeVarBound_CapturesBoundTypeReference()
-    {
-        const string content = """
-            TUser = TypeVar("TUser", bound=models.User)
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "User"
-            && reference.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_PythonTypeVarConstraints_CapturesConstraintTypeReferences()
-    {
-        const string content = """
-            TAccount = TypeVar("TAccount", models.User, models.Admin)
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "User"
-            && reference.ReferenceKind == "type_reference");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Admin"
-            && reference.ReferenceKind == "type_reference");
+        void AssertTypeReference(string symbolName) =>
+            Assert.Contains(references, reference =>
+                reference.SymbolName == symbolName
+                && reference.ReferenceKind == "type_reference");
     }
 
     [Fact]
