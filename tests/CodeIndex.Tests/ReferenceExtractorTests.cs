@@ -5016,7 +5016,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_GoEmbeddedFieldTypes_CapturesEmbeddedStructFields()
+    public void Extract_GoStructFields_ReuseEmbeddedNamedGenericAndInlineFixture()
     {
         const string content = """
             package main
@@ -5025,66 +5025,32 @@ public partial class ReferenceExtractorTests
                 *BaseStore
                 audit.Logger
                 Cache[Entry]
-                Name string
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "BaseStore" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Logger" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Cache" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Entry" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Name" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoMultiNameStructFields_CapturesSharedType()
-    {
-        const string content = """
-            package main
-
-            type Store struct {
                 Primary, Secondary *Client
-                Cache, Backup Repository[Entry]
-                active, stale bool
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Client" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Entry" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Primary" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Secondary" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "active" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoGenericStructFields_CapturesSpacedTypeArguments()
-    {
-        const string content = """
-            package main
-
-            type Store struct {
-                Owner Repository[Key, Value]
+                Owner, Backup Repository[Key, Value]
                 History []*model.Event
+                active, stale bool
                 Name string
             }
+
+            func build() {
+                payload := struct{ ID UserID; InlineOwner *User; Details model.Detail; Values []InlineValue }{}
+                _ = payload
+            }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "go", content);
         var references = ReferenceExtractor.Extract(1, "go", content, symbols);
 
-        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Owner" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Name" && r.ReferenceKind == "type_reference");
+        foreach (var typeName in new[]
+                 { "BaseStore", "Logger", "Cache", "Entry", "Client", "Repository", "Key", "Value", "Event", "UserID", "User", "Detail", "InlineValue" })
+        {
+            Assert.Contains(references, r => r.SymbolName == typeName && r.ReferenceKind == "type_reference");
+        }
+
+        foreach (var fieldName in new[] { "Name", "Primary", "Secondary", "Owner", "active", "ID", "InlineOwner" })
+        {
+            Assert.DoesNotContain(references, r => r.SymbolName == fieldName && r.ReferenceKind == "type_reference");
+        }
     }
 
     [Fact]
@@ -5221,29 +5187,6 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Config" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Client" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoInlineStructFields_CapturesFieldTypes()
-    {
-        const string content = """
-            package main
-
-            func build() {
-                payload := struct{ ID UserID; Owner *User; Details model.Detail; Values []Value }{}
-                _ = payload
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "UserID" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Detail" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "ID" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Owner" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
