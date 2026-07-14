@@ -460,15 +460,16 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_TypeScript_DetectsSameLineSiblingClassesWithDistinctMethodNames()
+    public void Extract_TypeScript_DetectsSameLineSiblingClassesWithDistinctAndIdenticalMethods()
     {
-        var content = "export class A { first(): void {} } export class B { second(): void {} }";
+        var content = "export class A { first(): void {} } export class B { second(): void {} } export class C { run(): void {} } export class D { run(): void {} }";
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "A");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "B");
+        AssertSymbolsContain(symbols, "class", "A", "B", "C", "D");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first" && s.ContainerName == "A");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second" && s.ContainerName == "B");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "C");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "D");
     }
 
     [Fact]
@@ -480,18 +481,6 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service" && s.Signature == "export const Service = class Visible { keep(): void {} }");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Visible");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Service");
-    }
-
-    [Fact]
-    public void Extract_TypeScript_DetectsSameLineSiblingClassesWithIdenticalMethodNames()
-    {
-        var content = "export class A { run(): void {} } export class B { run(): void {} }";
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "A");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "B");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "A");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "B");
     }
 
     [Fact]

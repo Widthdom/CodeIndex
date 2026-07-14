@@ -109,6 +109,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   JavaScript default-class coverage keeps a named class beside anonymous direct-base and mixin-base forms, proving member retention without inventing `extends` as a class name in one extraction.
   TypeScript default-class coverage extends the same shared fixture pattern to named, direct-base, mixin-base, and implements-only forms, retaining the anonymous `default` member container check.
   TypeScript inline-class coverage uses one multi-method declaration for single-member recognition, sibling splitting, exact signatures, and shared class-container metadata.
+  TypeScript same-line sibling-class coverage keeps distinct and identical method-name cases in one source, using four class containers to preserve attribution diagnostics.
 - `FileIndexerTests.cs`, `FileIndexerContentLoadingTests.cs`, `FileIndexerTestSupport.cs`
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
 - `PathCompatibilityMatrixTests.cs`
@@ -727,6 +728,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   JavaScript default-class coverage は、named class と anonymous direct-base/mixin-base 形式を1 extraction にまとめ、member を維持しつつ `extends` を class 名として捏造しないことを検証します。
   TypeScript default-class coverage も同じ共有 fixture 方針で named、direct-base、mixin-base、implements-only 形式をまとめ、anonymous member の `default` container 検証を維持します。
   TypeScript inline-class coverage は、single-member recognition、sibling 分割、正確な signature、共通 class-container metadata を1つの multi-method declaration で検証します。
+  TypeScript same-line sibling-class coverage は、distinct/identical method-name case を1 source にまとめ、4つの class container で attribution の診断性を維持します。
 - `FileIndexerTests.cs`、`FileIndexerContentLoadingTests.cs`、`FileIndexerTestSupport.cs`
   ファイル走査、言語判定、scan result 言語の再利用、content loading / canonicalization、checksum、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。共有 `FileIndexerTests` helper は `FileIndexerTestSupport.cs` に置きます。
 - `PathCompatibilityMatrixTests.cs`
