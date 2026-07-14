@@ -5903,184 +5903,76 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpGenericBase_StripsGenericArgs()
+    public void Extract_CsharpConstructorBaseTargets_ReuseGenericNestedAndMultilineFixture()
     {
+        // Resolve the main C# base-list shapes in one parse while unique terminal type names keep
+        // each rewritten constructor-chain edge independently diagnosable.
         const string content = """
             namespace Demo;
 
-            public class Holder<T>
-            {
-                public Holder(T value) { }
-            }
-
+            public class Holder<T> { public Holder(T value) { } }
             public class IntHolder : Holder<int>
             {
                 public IntHolder() : base(0) { }
             }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var chainRef = Assert.Single(references, r => r.SymbolName == "Holder" && r.ReferenceKind == "call");
-        Assert.Equal("call", chainRef.ReferenceKind);
-        Assert.Equal("IntHolder", chainRef.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpBaseAfterInterfaces_UsesFirstBaseListEntry()
-    {
-        // The C# compiler requires the base class to come first in the base list,
-        // so the first entry is the authoritative target for `base(...)`.
-        // C# の base list では基底クラスが先頭に来る必要があり、そこが base(...) の呼び先となる。
-        const string content = """
-            namespace Demo;
 
             public interface IMarker {}
-
-            public class Root
+            public class Root { public Root(int x) { } }
+            public class LeafInterfaces : Root, IMarker
             {
-                public Root(int x) { }
+                public LeafInterfaces() : base(42) { }
             }
-
-            public class Leaf : Root, IMarker
-            {
-                public Leaf() : base(42) { }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var chainRef = Assert.Single(references, r => r.SymbolName == "Root" && r.ReferenceKind == "call");
-        Assert.Equal("call", chainRef.ReferenceKind);
-        Assert.Equal("Leaf", chainRef.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpBaseCall_NestedTypeUnderGenericOuter_AttributesToTerminalSegment()
-    {
-        // End-to-end C# regression for the `Outer<int>.Base` attribution bug.
-        // `Outer<int>.Base` が `Base` へ張られることの E2E 回帰テスト。
-        const string content = """
-            namespace Demo;
 
             public class Outer<T>
             {
-                public class Base
-                {
-                    public Base(int x) {}
-                }
+                public class NestedBase { public NestedBase(int x) {} }
             }
-
-            public class Leaf : Outer<int>.Base
+            public class LeafNested : Outer<int>.NestedBase
             {
-                public Leaf() : base(0) {}
+                public LeafNested() : base(0) {}
             }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.Contains(references, r =>
-            r.SymbolName == "Base" && r.ContainerKind == "function" && r.ContainerName == "Leaf");
-        Assert.DoesNotContain(references, r => r.SymbolName == "base");
-    }
-
-    [Fact]
-    public void Extract_CsharpBaseCall_MultiLineBaseList_AttributesToParent()
-    {
-        // C# multi-line base-list (e.g. `class Child\n    : Parent`) must still resolve the
-        // `: base(...)` target. SymbolRecord.Signature only stores the first declaration line, so
-        // the header must be reconstructed from structural lines to find `: Parent`.
-        // C# の複数行 base-list (`class Child\n    : Parent` の形) でも `: base(...)` の
-        // 解決先を見失わないこと。SymbolRecord.Signature は 1 行目しか持たないため、ヘッダを
-        // structural lines から再構築する必要がある。
-        const string content = """
-            namespace Demo;
-
-            public class Parent
+            public class ParentMultiline { public ParentMultiline(int x) {} }
+            public class ChildMultiline
+                : ParentMultiline
             {
-                public Parent(int x) {}
+                public ChildMultiline() : base(0) {}
             }
 
-            public class Child
-                : Parent
+            public class OuterMulti<T>
             {
-                public Child() : base(0) {}
+                public class NestedMultiBase { public NestedMultiBase(int x) {} }
             }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.Contains(references, r =>
-            r.SymbolName == "Parent" && r.ContainerKind == "function" && r.ContainerName == "Child");
-        Assert.DoesNotContain(references, r => r.SymbolName == "base");
-    }
-
-    [Fact]
-    public void Extract_CsharpBaseCall_MultiLineBaseList_NestedGenericOuter_AttributesToTerminalSegment()
-    {
-        // Multi-line base-list combined with the `Outer<T>.Base` nested-generic form. Reconstructed
-        // header feeds both multi-line handling and the depth-aware terminal-segment extractor.
-        // 複数行 base-list と `Outer<T>.Base` ネスト generic 形の複合ケース。再構築したヘッダが
-        // 両方の分岐（multi-line 連結と depth-aware な末尾セグメント抽出）を通る。
-        const string content = """
-            namespace Demo;
-
-            public class Outer<T>
+            public class ChildNestedMulti<T>
+                : OuterMulti<T>.NestedMultiBase
             {
-                public class Base
-                {
-                    public Base(int x) {}
-                }
+                public ChildNestedMulti() : base(0) {}
             }
 
-            public class Child<T>
-                : Outer<T>.Base
-            {
-                public Child() : base(0) {}
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        Assert.Contains(references, r =>
-            r.SymbolName == "Base" && r.ContainerKind == "function" && r.ContainerName == "Child");
-        Assert.DoesNotContain(references, r => r.SymbolName == "base");
-    }
-
-    [Fact]
-    public void Extract_CsharpBaseCall_MultiLineBaseList_WithWhereClause_AttributesToParent()
-    {
-        // Multi-line base-list continuation followed by a `where` constraint must still resolve
-        // the base type correctly. The `where` clause regex is trimmed before extracting the
-        // first base entry, and the multi-line header path must not regress that behavior.
-        // 複数行 base-list の継続行の末尾に `where` 制約が続く形でも基底型が正しく解決されること。
-        const string content = """
-            namespace Demo;
-
-            public class Parent<U>
-            {
-                public Parent(U x) {}
-            }
-
-            public class Child<T>
-                : Parent<T>
+            public class ParentWhere<U> { public ParentWhere(U x) {} }
+            public class ChildWhere<T>
+                : ParentWhere<T>
                 where T : class, new()
             {
-                public Child() : base(null!) {}
+                public ChildWhere() : base(null!) {}
             }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.Contains(references, r =>
-            r.SymbolName == "Parent" && r.ContainerKind == "function" && r.ContainerName == "Child");
+        AssertBaseCall("Holder", "IntHolder");
+        AssertBaseCall("Root", "LeafInterfaces");
+        AssertBaseCall("NestedBase", "LeafNested");
+        AssertBaseCall("ParentMultiline", "ChildMultiline");
+        AssertBaseCall("NestedMultiBase", "ChildNestedMulti");
+        AssertBaseCall("ParentWhere", "ChildWhere");
         Assert.DoesNotContain(references, r => r.SymbolName == "base");
+
+        void AssertBaseCall(string baseName, string childName) =>
+            Assert.Contains(references, r =>
+                r.SymbolName == baseName && r.ReferenceKind == "call" &&
+                r.ContainerKind == "function" && r.ContainerName == childName);
     }
 
     [Fact]
