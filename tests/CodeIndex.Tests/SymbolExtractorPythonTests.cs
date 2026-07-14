@@ -491,35 +491,11 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Python_DetectsModuleDocstringHeading()
+    public void Extract_Python_TripleQuotedStrings_ReuseModuleHeadingAndFixtureMasking()
     {
-        var content = "\"\"\"Payments API helpers.\"\"\"\n\n"
-            + "def charge():\n"
-            + "    pass\n";
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-
-        Assert.Contains(symbols, s => s.Kind == "heading" && s.Name == "Payments API helpers.");
-    }
-
-    [Fact]
-    public void Extract_Python_DetectsPropertyDecorator()
-    {
-        var content = "class User:\n    @property\n    def name(self):\n        return self._name\n\n    def greet(self):\n        print(self.name)";
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "greet");
-    }
-
-    [Fact]
-    public void Extract_PythonTripleQuotedString_DoesNotLeakPhantomSymbols()
-    {
-        // Regression for issue #291: code-shaped fixture text inside """...""" /
-        // '''...''' / r"""...""" must not produce phantom class/function rows.
-        // issue #291 回帰: """...""" / '''...''' / r"""...""" 内のコード風のフィクスチャ
-        // テキストは、phantom の class/function を生成してはならない。
         const string content = """"
+            """Payments API helpers."""
+
             FIXTURE_DOUBLE = """
             class FakeDouble:
                 def method_in_double(self): pass
@@ -542,6 +518,7 @@ public partial class SymbolExtractorTests
 
         var symbols = SymbolExtractor.Extract(1, "python", content);
 
+        Assert.Contains(symbols, s => s.Kind == "heading" && s.Name == "Payments API helpers.");
         Assert.DoesNotContain(symbols, s => s.Name == "FakeDouble");
         Assert.DoesNotContain(symbols, s => s.Name == "FakeSingle");
         Assert.DoesNotContain(symbols, s => s.Name == "method_in_double");
@@ -549,6 +526,17 @@ public partial class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Name == "raw_fake");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "RealClass");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "real_method");
+    }
+
+    [Fact]
+    public void Extract_Python_DetectsPropertyDecorator()
+    {
+        var content = "class User:\n    @property\n    def name(self):\n        return self._name\n\n    def greet(self):\n        print(self.name)";
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "greet");
     }
 
     [Fact]

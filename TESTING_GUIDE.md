@@ -268,6 +268,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Python package-import coverage shares local/external aliases, current-package imports, relative module members, and parent-package members in one `__init__.py` fixture.
 - Python unclosed multiline-import coverage reuses one assertion path for EOF and following-code cases, reducing duplicated test setup while retaining both parses.
 - Python basic symbol coverage shares synchronous/asynchronous functions, assigned lambdas, and classes in one module fixture.
+- Python triple-quoted-string coverage shares the leading module-docstring heading with double/single/raw fixture masking in one extraction.
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). Its publish smoke disables NuGet vulnerability auditing because package advisory validation is covered by the normal build/test workflow's package vulnerability check, not by this runtime serialization test. It is reported as skipped on macOS arm64 while SDK/ILLink can crash before exercising `cdidx` (#2586). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
@@ -802,6 +803,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - Python package import coverage は local/external alias、current-package import、relative module member、parent-package member を1つの `__init__.py` fixture で共有します。
 - Python の未閉鎖 multiline import coverage は EOF と後続コードありの case で1つの assertion path を共有し、両方の parse を保ったまま test setup の重複を減らします。
 - Python basic symbol coverage は synchronous/asynchronous function、assigned lambda、class を1つの module fixture で共有します。
+- Python triple-quoted string coverage は先頭 module docstring の heading と double/single/raw fixture masking を1回の extraction で共有します。
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   は trimmed な RID 固有 CLI を publish し、SDK が生成した entry point（`dotnet` 経由の `cdidx.dll`、または native の `cdidx`/`cdidx.exe` apphost）を実行します。この publish smoke は NuGet 脆弱性監査を無効化します。package advisory の検証は通常の build/test workflow の package vulnerability check が担い、この runtime serialization テストの責務ではないためです。macOS arm64 では SDK/ILLink が `cdidx` に到達する前にクラッシュし得るため、このテストは skipped として報告されます（#2586）。self-contained publish output に常に `cdidx.dll` が出るとは仮定しないでください。
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
