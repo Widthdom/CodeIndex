@@ -484,7 +484,7 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Xml_XamlCapturesTypeObjectElementsAcrossLines()
+    public void Extract_Xml_XamlCapturesTypeObjectPropertyAndMarkupForms()
     {
         var content = """
             <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -498,28 +498,14 @@ public partial class SymbolExtractorTests
                     <x:TypeExtension TypeName=
                         "{x:Type vm:CustomButton}" />
                 </Style.TargetType>
-            </ResourceDictionary>
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "xml", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:PersonViewModel");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:CustomButton");
-    }
-
-    [Fact]
-    public void Extract_Xml_XamlCapturesTypePropertyElementsAcrossLines()
-    {
-        var content = """
-            <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                                xmlns:vm="clr-namespace:Sample.ViewModels">
                 <x:Type.TypeName>
-                    vm:PersonViewModel
+                    vm:PropertyPerson
                 </x:Type.TypeName>
                 <x:TypeExtension.TypeName>
-                    {x:Type vm:CustomButton}
+                    {x:Type vm:PropertyButton}
                 </x:TypeExtension.TypeName>
+                <ControlTemplate TargetType="{x:Type vm:MarkupPerson}" />
+                <TextBlock ToolTip="{x:TypeExtension TypeName=vm:MarkupButton}" />
             </ResourceDictionary>
             """;
 
@@ -527,26 +513,10 @@ public partial class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:PersonViewModel");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:CustomButton");
-    }
-
-    [Fact]
-    public void Extract_Xml_XamlCapturesTypeMarkupExtensions()
-    {
-        var content = """
-            <ContentPage xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                         xmlns:vm="clr-namespace:Sample.ViewModels">
-                <ContentPage.Resources>
-                    <ControlTemplate TargetType="{x:Type vm:PersonViewModel}" />
-                    <TextBlock ToolTip="{x:TypeExtension TypeName=vm:CustomButton}" />
-                </ContentPage.Resources>
-            </ContentPage>
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "xml", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:PersonViewModel");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:CustomButton");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:PropertyPerson");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:PropertyButton");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:MarkupPerson");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:MarkupButton");
     }
 
     [Fact]
