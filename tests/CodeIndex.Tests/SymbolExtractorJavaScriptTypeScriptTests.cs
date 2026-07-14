@@ -912,92 +912,49 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScript_DoesNotLeakClassMethodLocalClassExpressionMethods()
+    public void Extract_JavaScript_LocalClassForms_DoNotLeakFromCallableScopes()
     {
         var content = """
             export class Outer {
-                method() {
-                    const Inner = class {
-                        run() {}
+                expressionMethod() {
+                    const MethodExpression = class {
+                        methodExpressionMember() {}
                     };
                 }
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Outer");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ContainerName == "Outer");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Inner");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DoesNotLeakClassMethodDirectLocalClasses()
-    {
-        var content = """
-            class Outer {
-                method() {
-                    class Hidden {
-                        run() {}
+                directMethod() {
+                    class MethodDirect {
+                        methodDirectMember() {}
                     }
                 }
             }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Outer");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ContainerName == "Outer");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DoesNotLeakFunctionLocalClassExpressionMethods()
-    {
-        var content = """
-            function outer() {
-                const Service = class {
-                    run() {}
+            function expressionFunction() {
+                const FunctionExpression = class {
+                    functionExpressionMember() {}
                 };
             }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "outer");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DoesNotLeakDirectFunctionLocalClasses()
-    {
-        var content = """
-            function outer() {
-                class Hidden {
-                    run() {}
+            function directFunction() {
+                class FunctionDirect {
+                    functionDirectMember() {}
                 }
             }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "outer");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DoesNotLeakCommonJsFunctionExpressionLocalClassMethods()
-    {
-        var content = """
             exports.handler = function () {
-                const Local = class {
-                    inside() {}
+                const CommonJsExpression = class {
+                    commonJsMember() {}
                 };
             };
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Local");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "inside");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Outer");
+        foreach (var name in new[] { "expressionMethod", "directMethod" })
+            Assert.Contains(symbols, s => s.Kind == "function" && s.Name == name && s.ContainerName == "Outer");
+        foreach (var name in new[] { "expressionFunction", "directFunction" })
+            Assert.Contains(symbols, s => s.Kind == "function" && s.Name == name);
+        Assert.DoesNotContain(symbols, s => s.Name is
+            "MethodExpression" or "methodExpressionMember" or "MethodDirect" or "methodDirectMember"
+            or "FunctionExpression" or "functionExpressionMember" or "FunctionDirect" or "functionDirectMember"
+            or "CommonJsExpression" or "commonJsMember");
     }
 
     [Fact]

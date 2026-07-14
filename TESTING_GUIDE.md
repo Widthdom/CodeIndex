@@ -95,6 +95,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Swift `.self`, `#selector`, and `#keyPath` expression coverage shares one fixture, asserting qualified roots and excluding instance/member tokens together.
   JavaScript semicolonless blockless-arrow boundaries share one source for following class, expression-plus-class, and CommonJS class-export forms, with distinct hidden/visible names and exact arrow end lines.
   JavaScript direct and wrapper-call blockless-arrow class returns share one source with exact lambda ranges and distinct hidden class/member exclusions.
+  JavaScript callable-scope local-class coverage shares class methods, ordinary functions, and CommonJS function expressions in one source, with direct/class-expression forms and unique leak sentinels.
 - `FileIndexerTests.cs`, `FileIndexerContentLoadingTests.cs`, `FileIndexerTestSupport.cs`
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
 - `PathCompatibilityMatrixTests.cs`
@@ -699,6 +700,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   Swift の `.self`、`#selector`、`#keyPath` expression coverage は1 fixture を共有し、qualified root と instance/member token の除外をまとめて検証します。
   JavaScript の semicolonless blockless-arrow boundary は、後続 class、expression＋class、CommonJS class-export 形を、固有 hidden/visible 名と厳密な arrow end line を持つ1 source で共有します。
   JavaScript の direct/wrapper-call blockless-arrow class return は、厳密な lambda range と固有 hidden class/member 除外を持つ1 source を共有します。
+  JavaScript callable-scope local-class coverage は、class method、通常 function、CommonJS function expression の direct/class-expression 形と固有 leak sentinel を1 source で共有します。
 - `FileIndexerTests.cs`、`FileIndexerContentLoadingTests.cs`、`FileIndexerTestSupport.cs`
   ファイル走査、言語判定、scan result 言語の再利用、content loading / canonicalization、checksum、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。共有 `FileIndexerTests` helper は `FileIndexerTestSupport.cs` に置きます。
 - `PathCompatibilityMatrixTests.cs`
