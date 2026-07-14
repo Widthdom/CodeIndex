@@ -12,7 +12,7 @@ namespace CodeIndex.Tests;
 public partial class ReferenceExtractorTests
 {
     [Fact]
-    public void Extract_Assembly_EmitsCallAndBranchTargetsWithContainers()
+    public void Extract_Assembly_EmitsDirectTargetsAndIgnoresDecoratedIndirectTargets()
     {
         const string content = """
             section .text
@@ -39,6 +39,11 @@ public partial class ReferenceExtractorTests
             .done:
                 ret
             helper:
+                call qword	[rax]
+                jmp dword	[target]
+                call tab_helper
+                ret
+            tab_helper:
                 ret
             ; call ignored
             """;
@@ -47,7 +52,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "assembly", content, symbols);
 
         Assert.Contains(ReferenceExtractor.GetSupportedLanguages(), lang => lang == "assembly");
-        Assert.Equal(9, references.Count(reference => reference.ReferenceKind == "call"));
+        Assert.Equal(10, references.Count(reference => reference.ReferenceKind == "call"));
         Assert.Contains(references, reference =>
             reference.SymbolName == "printf"
             && reference.ReferenceKind == "call"
@@ -80,6 +85,10 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == ".done"
             && reference.ReferenceKind == "call"
             && reference.ContainerName == ".loop");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "tab_helper"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "helper");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "foo");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "mask");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "rax");
@@ -93,20 +102,4 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference => reference.SymbolName == "ignored");
     }
 
-    [Fact]
-    public void Extract_Assembly_IgnoresTabSeparatedIndirectTargetsAfterSizeDecorators()
-    {
-        const string content = "entry:\n    call qword\t[rax]\n    jmp dword\t[target]\n    call helper\nhelper:\n    ret\n";
-
-        var symbols = SymbolExtractor.Extract(1, "assembly", content);
-        var references = ReferenceExtractor.Extract(1, "assembly", content, symbols);
-
-        var reference = Assert.Single(references, reference => reference.ReferenceKind == "call");
-        Assert.Equal("helper", reference.SymbolName);
-        Assert.Equal("entry", reference.ContainerName);
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "qword");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "dword");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "rax");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "target");
-    }
 }
