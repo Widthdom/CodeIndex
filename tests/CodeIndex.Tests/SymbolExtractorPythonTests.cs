@@ -421,64 +421,18 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Python_IndexesQualifiedExportsFromInitModules()
+    public void Extract_Python_InitAllMutations_ReuseAssignmentAppendAndExtendFixture()
     {
         var content = """
             __all__ = [
                 "submodule",
                 "subpackage.tools",
             ]
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content, "package/subpkg/__init__.py");
-        var exports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
-
-        Assert.Contains("submodule", exports);
-        Assert.Contains("package.subpkg.submodule", exports);
-        Assert.Contains("subpackage.tools", exports);
-        Assert.Contains("package.subpkg.subpackage.tools", exports);
-    }
-
-    [Fact]
-    public void Extract_Python_IndexesAllAppendExportsFromInitModules()
-    {
-        var content = """
-            __all__ = []
             __all__.append("dynamic_api")
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content, "package/subpkg/__init__.py");
-        var exports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
-
-        Assert.Contains("dynamic_api", exports);
-        Assert.Contains("package.subpkg.dynamic_api", exports);
-    }
-
-    [Fact]
-    public void Extract_Python_IndexesAllExtendExportsFromInitModules()
-    {
-        var content = """
-            __all__ = []
             __all__.extend([
                 "first_api",
                 "second_api",
             ])
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content, "package/subpkg/__init__.py");
-        var exports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
-
-        Assert.Contains("first_api", exports);
-        Assert.Contains("package.subpkg.first_api", exports);
-        Assert.Contains("second_api", exports);
-        Assert.Contains("package.subpkg.second_api", exports);
-    }
-
-    [Fact]
-    public void Extract_Python_IndexesAllExtendExportsWhenValuesStartOnNextLine()
-    {
-        var content = """
-            __all__ = []
             __all__.extend(
                 [
                     "split_api",
@@ -489,8 +443,12 @@ public partial class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "python", content, "package/subpkg/__init__.py");
         var exports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
 
-        Assert.Contains("split_api", exports);
-        Assert.Contains("package.subpkg.split_api", exports);
+        foreach (var exportName in new[]
+                 { "submodule", "subpackage.tools", "dynamic_api", "first_api", "second_api", "split_api" })
+        {
+            Assert.Contains(exportName, exports);
+            Assert.Contains($"package.subpkg.{exportName}", exports);
+        }
     }
 
     [Fact]
