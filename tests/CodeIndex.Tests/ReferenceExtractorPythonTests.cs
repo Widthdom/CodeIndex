@@ -303,23 +303,6 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_PythonCast_CapturesTargetTypeReference()
-    {
-        const string content = """
-            def load(value):
-                return cast(models.User, value)
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "User"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "load");
-    }
-
-    [Fact]
     public void Extract_PythonMultilineAnnotations_CapturesSignatureTypeReferences()
     {
         const string content = """
@@ -532,57 +515,6 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_PythonQualifiedCast_CapturesTargetTypeReference()
-    {
-        const string content = """
-            def load(value):
-                return typing.cast(models.User, value)
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "User"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "load");
-    }
-
-    [Fact]
-    public void Extract_PythonAssertType_CapturesExpectedTypeReference()
-    {
-        const string content = """
-            def test_user(value):
-                assert_type(value, models.User)
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "User"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "test_user");
-    }
-
-    [Fact]
-    public void Extract_PythonQualifiedAssertType_CapturesExpectedTypeReference()
-    {
-        const string content = """
-            def test_user(value):
-                typing.assert_type(value, models.User)
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "User"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "test_user");
-    }
-
-    [Fact]
     public void Extract_PythonClassHeaders_ReuseSingleMultipleAndMetaclassFixture()
     {
         const string content = """
@@ -750,6 +682,18 @@ public partial class ReferenceExtractorTests
             def validate(value):
                 adapter = pydantic.TypeAdapter(models.AdapterUser)
                 return adapter.validate_python(value)
+
+            def cast_bare(value):
+                return cast(models.BareCastUser, value)
+
+            def cast_qualified(value):
+                return typing.cast(models.QualifiedCastUser, value)
+
+            def assert_bare(value):
+                assert_type(value, models.BareAssertUser)
+
+            def assert_qualified(value):
+                typing.assert_type(value, models.QualifiedAssertUser)
             """;
 
         var symbols = SymbolExtractor.Extract(1, "python", content);
@@ -760,6 +704,10 @@ public partial class ReferenceExtractorTests
         AssertHelperType("DataclassUser", "inspect_dataclass");
         AssertHelperType("AttrsUser", "inspect_attrs");
         AssertHelperType("AdapterUser", "validate");
+        AssertHelperType("BareCastUser", "cast_bare");
+        AssertHelperType("QualifiedCastUser", "cast_qualified");
+        AssertHelperType("BareAssertUser", "assert_bare");
+        AssertHelperType("QualifiedAssertUser", "assert_qualified");
 
         void AssertHelperType(string symbolName, string containerName) =>
             Assert.Contains(references, reference =>
