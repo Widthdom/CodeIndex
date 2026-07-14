@@ -799,7 +799,7 @@ public class IndexWatchRunnerTests
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
         try
         {
-            TestProjectHelper.InitializeGitRepo(projectRoot);
+            TestProjectHelper.RunGit(projectRoot, "init");
             TestProjectHelper.RunGit(projectRoot, "config", "core.ignorecase", "false");
             File.WriteAllText(Path.Combine(projectRoot, "hello.py"), "print('hi')\n");
 

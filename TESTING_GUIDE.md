@@ -256,7 +256,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Project-marker budget integration coverage overrides the directory budget to its smallest boundary and enumerates one child; do not materialize the production 8,192-directory cap merely to prove warning propagation.
 - `IndexWatchRunnerTests.RunCore_CancellationToken_StopsImmediately` and `RunCore_EmitsHumanFriendlyStartStop_WhenJsonDisabled`
   exercise watch-loop startup and shutdown under redirected console output. They call the asynchronous watch core directly without prebuilding an unused index, cancel after its synchronous startup prefix emits the start event, and use a bounded shutdown wait; do not reintroduce index setup, dedicated threads, signal polling, fixed sleeps, or process-wide SQLite pool resets for this path. The temp-project cleanup helper owns any platform-specific SQLite retry, so SQLite pool serialization is unnecessary; redirected process-wide console output still requires the console-sensitive collection.
-  The cancellation contract fixture uses an explicit case-sensitive Git repository so `path_comparison` has a deterministic expected value without a second repository-discovery probe after the watch loop exits.
+  The cancellation contract fixture uses only `git init` plus an explicit case-sensitive setting so `path_comparison` has a deterministic expected value without either a second repository-discovery probe after the watch loop exits or the commit-capable Git fixture's unrelated identity and signing setup.
 - `BackgroundTaskObserverTests`
   relies on `BackgroundTaskObserver`'s fault-only continuation contract: canceled
   tasks are awaited directly and do not need a post-cancellation fixed sleep to
@@ -878,7 +878,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - project-marker budget の integration coverage は directory budget を最小境界に override し、child を 1 件だけ列挙します。warning 伝播の検証だけのために本番の 8,192-directory cap を実体化しないでください。
 - `IndexWatchRunnerTests.RunCore_CancellationToken_StopsImmediately` と `RunCore_EmitsHumanFriendlyStartStop_WhenJsonDisabled`
   リダイレクトした console 出力の下で watch loop の起動と停止を検証する。未使用の index を事前構築せず非同期 watch core を直接呼び、同期的な起動 prefix が start event を出力した後に cancel して bounded shutdown wait を行う。この経路に index setup、専用 thread、signal polling、固定 sleep、process-wide SQLite pool reset を再導入しないこと。platform 固有の SQLite retry は temp-project cleanup helper が所有するため SQLite pool による直列化は不要だが、redirect した process-wide console 出力には console-sensitive collection が引き続き必要である。
-  cancellation contract fixture は明示的な case-sensitive Git repository を使い、watch loop 終了後に2回目の repository-discovery probe を行わず `path_comparison` の期待値を決定的にする。
+  cancellation contract fixture は `git init` と明示的な case-sensitive setting だけを使い、watch loop 終了後の2回目の repository-discovery probe と、commit 対応 Git fixture の無関係な identity/signing setup の両方を避けながら `path_comparison` の期待値を決定的にする。
 - `BackgroundTaskObserverTests`
   は `BackgroundTaskObserver` の fault-only continuation 契約に依存します。canceled
   task は直接 await し、warning が抑止されたことを示すための cancellation 後の固定 sleep
