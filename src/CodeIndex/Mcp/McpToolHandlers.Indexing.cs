@@ -841,28 +841,27 @@ public partial class McpServer
             // name_folded / *_folded. Stamp only when every row is backfilled; otherwise readers
             // would silently miss legacy rows on the folded-equality path. Codex #86 review.
             // MCP も incremental で skip される legacy 行が残るため、実検証を通してから stamp。
-            var backfillReady = skipped == 0 || writer.AllFoldedColumnsBackfilled();
-            var foldedKeysCurrent = skipped == 0 || writer.AllFoldedColumnValuesMatchCurrentFold();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
             var foldVersionMatchesCurrent = priorFoldVersion == currentFoldVersion;
             var foldFingerprintMatchesCurrent = priorFoldFingerprint == currentFoldFingerprint;
             var canRestampExistingFoldTrust = foldVersionMatchesCurrent && foldFingerprintMatchesCurrent;
-            if (backfillReady && foldedKeysCurrent && (skipped == 0 || canRestampExistingFoldTrust))
+            if (skipped == 0 || canRestampExistingFoldTrust)
             {
-                // MarkFoldReady re-verifies inside BEGIN IMMEDIATE; a concurrent NULL-folded
-                // insert during this restamp window leaves foldReadyAfter=false and degrades
-                // to the legacy "missing_fold_backfill" reason instead of silent misadvertise.
-                // Issue #1535.
-                // BEGIN IMMEDIATE 内で再検証する。concurrent NULL 差し込みで stamp が失敗した
-                // 場合は missing_fold_backfill に降格する。Issue #1535。
-                foldReadyAfter = writer.MarkFoldReady(
+                // The stamp transaction performs the only row verification for the common
+                // current-metadata path and reports whether NULL or stale values blocked it.
+                // current metadata 経路の row 検証は stamp transaction 内の一度だけにまとめ、
+                // NULL と stale value のどちらが妨げたかも保持する。
+                var foldStampResult = writer.MarkFoldReadyWithResult(
                     stampCurrentSymbolExtractorVersions: skipped == 0,
                     symbolExtractorLanguagesToStamp: skipped == 0 ? indexedSymbolExtractorLanguages : null);
-                if (!foldReadyAfter)
+                foldReadyAfter = foldStampResult == FoldReadyStampResult.Ready;
+                if (foldStampResult == FoldReadyStampResult.MissingBackfill)
                     foldReadyReason = DegradationReasonCodes.MissingFoldBackfill;
+                else if (foldStampResult == FoldReadyStampResult.NonCurrentFoldValues)
+                    foldReadyReason = DegradationReasonCodes.FoldRowsNotRestamped;
             }
-            else if (!backfillReady)
+            else if (!writer.AllFoldedColumnsBackfilled())
             {
                 foldReadyReason = DegradationReasonCodes.MissingFoldBackfill;
             }

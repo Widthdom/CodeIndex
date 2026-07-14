@@ -236,6 +236,7 @@ public partial class IndexCommandRunnerTests
         var loadedPaths = new ConcurrentBag<string>();
         var statLookups = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
         var statSnapshotReads = 0;
+        var foldBackfillVerifications = 0;
         try
         {
             RunGit(projectRoot, "init");
@@ -264,6 +265,7 @@ public partial class IndexCommandRunnerTests
                     IndexCommandRunner.FullScanExtractionQueueCapacityForTesting = capacity => queueCapacity = capacity;
                     IndexedFileStatReuse.LookupForTesting = path => statLookups.AddOrUpdate(path, 1, static (_, count) => count + 1);
                     DbWriter.ReusableStatSnapshotReadForTesting = () => statSnapshotReads++;
+                    DbWriter.FoldBackfillVerificationForTesting = () => foldBackfillVerifications++;
 
                     var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
 
@@ -282,6 +284,7 @@ public partial class IndexCommandRunnerTests
                     Assert.Equal(1, statLookups["feature.cs"]);
                     Assert.All(statLookups, lookup => Assert.Equal(1, lookup.Value));
                     Assert.Equal(1, statSnapshotReads);
+                    Assert.Equal(1, foldBackfillVerifications);
                 }
                 finally
                 {
@@ -290,6 +293,7 @@ public partial class IndexCommandRunnerTests
                     IndexCommandRunner.FullScanExtractionQueueCapacityForTesting = null;
                     IndexedFileStatReuse.LookupForTesting = null;
                     DbWriter.ReusableStatSnapshotReadForTesting = null;
+                    DbWriter.FoldBackfillVerificationForTesting = null;
                 }
             }
         }

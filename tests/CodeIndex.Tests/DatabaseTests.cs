@@ -3575,6 +3575,7 @@ public class DatabaseTests : IDisposable
         var stamped = _writer.MarkFoldReady();
 
         Assert.True(stamped);
+        Assert.Equal(FoldReadyStampResult.Ready, _writer.MarkFoldReadyWithResult());
         Assert.Equal(DbContext.FoldReadyFlag, _db.GetUserVersion() & DbContext.FoldReadyFlag);
     }
 
@@ -3611,6 +3612,7 @@ public class DatabaseTests : IDisposable
         var stamped = _writer.MarkFoldReady();
 
         Assert.False(stamped);
+        Assert.Equal(FoldReadyStampResult.MissingBackfill, _writer.MarkFoldReadyWithResult());
         Assert.Equal(0, _db.GetUserVersion() & DbContext.FoldReadyFlag);
         Assert.Null(_db.GetMetaString("fold_key_version"));
         Assert.Null(_db.GetMetaString("fold_key_fingerprint"));

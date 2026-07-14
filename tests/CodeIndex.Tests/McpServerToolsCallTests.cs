@@ -6109,6 +6109,7 @@ public partial class McpServerTests
         var discoveredPostExtractionHooks = false;
         var loadedPaths = new List<string>();
         var statSnapshotReads = 0;
+        var foldBackfillVerifications = 0;
         try
         {
             File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { public void Run() { } }\n");
@@ -6125,6 +6126,7 @@ public partial class McpServerTests
             McpServer.McpIndexCSharpMetadataResolveForTesting = () => resolvedCSharpMetadataTargets = true;
             McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
             DbWriter.ReusableStatSnapshotReadForTesting = () => statSnapshotReads++;
+            DbWriter.FoldBackfillVerificationForTesting = () => foldBackfillVerifications++;
 
             var secondResponse = CallIndex(server, fixtureDir);
 
@@ -6135,6 +6137,7 @@ public partial class McpServerTests
             Assert.False(resolvedCSharpMetadataTargets);
             Assert.False(rebuiltTypeScriptAugmentation);
             Assert.Equal(1, statSnapshotReads);
+            Assert.Equal(1, foldBackfillVerifications);
         }
         finally
         {
@@ -6144,6 +6147,7 @@ public partial class McpServerTests
             McpServer.McpIndexCSharpMetadataResolveForTesting = null;
             McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = null;
             DbWriter.ReusableStatSnapshotReadForTesting = null;
+            DbWriter.FoldBackfillVerificationForTesting = null;
             TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }

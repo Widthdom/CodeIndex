@@ -2290,8 +2290,6 @@ public static partial class IndexCommandRunner
             IReadOnlyCollection<string> skippedSymbolExtractorLanguageSet = skippedSymbolExtractorLanguages is null
                 ? Array.Empty<string>()
                 : skippedSymbolExtractorLanguages;
-            var backfillReady = skipped == 0 || writer.AllFoldedColumnsBackfilled(skippedSymbolExtractorLanguageSet);
-            var foldedKeysCurrent = skipped == 0 || writer.AllFoldedColumnValuesMatchCurrentFold();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
             var foldVersionMatchesCurrent = priorFoldVersion == currentFoldVersion;
@@ -2309,25 +2307,31 @@ public static partial class IndexCommandRunner
             // skipped 行は旧 key のまま残る。全件再生成済み（skipped==0）か、事前 metadata が
             // current と一致しているときだけ FoldReady を stamp する。途中中断で
             // user_version だけ落ちた current DB もここで回復させる。
-            if (backfillReady && foldedKeysCurrent && (skipped == 0 || canRestampExistingFoldTrust))
+            if (skipped == 0 || canRestampExistingFoldTrust)
             {
-                // MarkFoldReady re-verifies inside BEGIN IMMEDIATE; if a concurrent writer slipped
-                // in a NULL-folded row between the upfront check and this stamp, the stamp is
-                // skipped and we degrade to the legacy reason instead of silent misadvertisement.
-                // Issue #1535.
-                // BEGIN IMMEDIATE 内で再検証するため、concurrent writer による NULL 差し込みで
-                // stamp は失敗し、silent な fold-trust 誤広告ではなく legacy 理由に降格する。Issue #1535。
-                foldReadyAfter = writer.MarkFoldReady(
+                // Validate once inside BEGIN IMMEDIATE and retain the precise failure category.
+                // This avoids scanning every folded value before MarkFoldReady repeats the same
+                // work, while preserving the concurrent-writer safety from Issue #1535.
+                // BEGIN IMMEDIATE 内で一度だけ検証し、Issue #1535 の concurrent-writer safety と
+                // 失敗理由を維持しながら、stamp 前後の重複した全 folded-value scan を避ける。
+                var foldStampResult = writer.MarkFoldReadyWithResult(
                     stampCurrentSymbolExtractorVersions: skipped == 0,
                     symbolExtractorLanguagesToStamp: skipped == 0 ? indexedSymbolExtractorLanguages : null);
-                if (!foldReadyAfter)
+                foldReadyAfter = foldStampResult == FoldReadyStampResult.Ready;
+                if (foldStampResult == FoldReadyStampResult.MissingBackfill)
                 {
-                    backfillReady = false;
                     foldReadyReasonAfter = GetFoldReadyReason(false, foldVersionMatchesCurrent, foldFingerprintMatchesCurrent);
+                }
+                else if (foldStampResult == FoldReadyStampResult.NonCurrentFoldValues)
+                {
+                    foldReadyReasonAfter = DegradationReasonCodes.FoldRowsNotRestamped;
                 }
             }
             else
+            {
+                var backfillReady = writer.AllFoldedColumnsBackfilled(skippedSymbolExtractorLanguageSet);
                 foldReadyReasonAfter = GetFoldReadyReason(backfillReady, foldVersionMatchesCurrent, foldFingerprintMatchesCurrent);
+            }
 
             StampWriterVersionAndSymbolKindFilter(writer, ConsoleUi.LoadVersion(), options.SymbolKindFilter.Signature);
 

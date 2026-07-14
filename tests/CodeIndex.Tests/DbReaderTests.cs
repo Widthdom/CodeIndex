@@ -1195,6 +1195,7 @@ public partial class DbReaderTests : IDisposable
             }
             Assert.True(writer.AllFoldedColumnsBackfilled());
             Assert.False(writer.AllFoldedColumnsBackfilled(requireCurrentFoldKeys: true));
+            Assert.Equal(FoldReadyStampResult.NonCurrentFoldValues, writer.MarkFoldReadyWithResult());
             Assert.False(writer.MarkFoldReady());
         }
         finally

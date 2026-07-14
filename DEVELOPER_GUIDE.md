@@ -262,6 +262,13 @@ and row rewrites that must succeed or fail together should be placed inside the
 same `DbWriter.BeginTransaction()` scope; do not stamp readiness or schema
 trust metadata before the dependent rows are written.
 
+`MarkFoldReadyWithResult` is the single validation-and-stamp path used by CLI and
+MCP when carried fold metadata is current. It checks NULL folded columns and
+current folded values once under `BEGIN IMMEDIATE`, returns a precise failure
+category, and stamps readiness without a caller-side full-table pre-scan. When
+carried metadata is stale, callers may run the cheaper NULL-only check solely to
+prioritize the legacy-backfill degradation reason.
+
 ### Extending the indexer
 
 Out-of-tree post-extraction hooks can implement `CodeIndex.Indexer.Hooks.IPostExtractionHook` in a `.dll` placed under `~/.config/cdidx/hooks/` (or the directory named by `CDIDX_HOOKS_DIR`). Hook discovery rejects symlink/reparse-point hook directories, examines at most `CDIDX_HOOK_DISCOVERY_MAX_DLLS` DLL candidates (default: 128), rejects symlink/reparse-point candidates, requires each candidate to be no larger than `CDIDX_HOOK_DISCOVERY_MAX_BYTES` bytes (default: 67108864), then loads the bounded candidate set in path order. Discovery validates that each concrete hook type has a public parameterless constructor, but hook constructors execute inside the isolated callback worker when callbacks run. Hooks are called after built-in symbol extraction and again after built-in reference extraction, before rows are persisted. Hooks receive a `FileContext` plus mutable `IList<SymbolRecord>` / `IList<ReferenceRecord>` values, so they can annotate extracted records, add synthetic symbols, or add domain-specific references.
@@ -2681,6 +2688,12 @@ standalone stamp にも commit boundary を持たせ、raw SQL transaction か�
 `BEGIN` を試みないようにします。dependent metadata と row rewrite が一体で成功・失敗すべき
 場合は、同じ `DbWriter.BeginTransaction()` scope に入れてください。dependent row を書く前に
 readiness や schema trust metadata を stamp してはいけません。
+
+carried fold metadata が current の場合、CLI と MCP は `MarkFoldReadyWithResult` を唯一の
+validation-and-stamp 経路として使います。`BEGIN IMMEDIATE` の下で NULL folded column と current
+folded value を 1 回だけ検証し、正確な失敗 category を返して、caller 側の full-table pre-scan なしで
+readiness を stamp します。carried metadata が stale の場合は、legacy-backfill の degradation reason
+を優先するためだけに、より軽い NULL-only check を caller が実行できます。
 
 ### インデクサー拡張
 

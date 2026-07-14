@@ -25,18 +25,24 @@ public partial class DbWriter
     /// folded columns, so both intentional fold changes and runtime ICU / invariant-casing
     /// drift degrade safely to NOCASE until `--rebuild`. Issue #97.
     ///
-    /// Re-verifies <see cref="AllFoldedColumnsBackfilled"/> inside a BEGIN IMMEDIATE
-    /// transaction so a concurrent writer cannot insert NULL-folded rows between the
-    /// caller's pre-check and this stamp. Returns false (and writes nothing) when the
-    /// re-verify fails, so callers can surface a friendly retry message instead of
+    /// Verifies <see cref="AllFoldedColumnsBackfilled"/> inside a BEGIN IMMEDIATE
+    /// transaction so a concurrent writer cannot insert NULL-folded rows while the
+    /// stamp is being decided. Returns false (and writes nothing) when the verification
+    /// fails, so callers can surface a friendly retry message instead of
     /// silently advertising fold-trust to readers. Issue #1535.
     /// FoldReady bit + fold_key_version + fold_key_fingerprint を書く。runtime drift を含む
     /// silent mismatch を防ぎ、ズレた場合は `--rebuild` まで NOCASE fallback に降格する。
-    /// BEGIN IMMEDIATE で囲んだうえで再検証し、concurrent writer による NULL 行差し込みで
+    /// BEGIN IMMEDIATE で囲んで検証し、concurrent writer による NULL 行差し込みで
     /// fold_ready が嘘になるのを防ぐ。Issue #1535。
     /// </summary>
     /// <returns>True when the bit was actually stamped; false when re-verification failed.</returns>
     public bool MarkFoldReady(
+        bool stampCurrentSymbolExtractorVersions = false,
+        IReadOnlyCollection<string>? symbolExtractorLanguagesToStamp = null)
+        => MarkFoldReadyWithResult(stampCurrentSymbolExtractorVersions, symbolExtractorLanguagesToStamp)
+            == FoldReadyStampResult.Ready;
+
+    internal FoldReadyStampResult MarkFoldReadyWithResult(
         bool stampCurrentSymbolExtractorVersions = false,
         IReadOnlyCollection<string>? symbolExtractorLanguagesToStamp = null)
     {
@@ -51,16 +57,15 @@ public partial class DbWriter
                 if (stampCurrentSymbolExtractorVersions)
                     StampSymbolExtractorVersions(symbolExtractorLanguagesToStamp);
 
-                if (!AllFoldedColumnsBackfilledCore(
-                        requireCurrentSymbolExtractorVersions: false,
-                        requireCurrentFoldKeys: true))
+                var validationResult = ValidateFoldRowsForReadyStamp();
+                if (validationResult != FoldReadyStampResult.Ready)
                 {
                     if (ownTransaction)
                     {
                         Execute("COMMIT");
                         ownTransaction = false;
                     }
-                    return false;
+                    return validationResult;
                 }
 
                 ApplyReadyBitToUserVersion(DbContext.FoldReadyFlag, ownTransaction ? null : _activeTransaction);
@@ -75,7 +80,7 @@ public partial class DbWriter
                     Execute("COMMIT");
                     ownTransaction = false;
                 }
-                return true;
+                return FoldReadyStampResult.Ready;
             }
             catch (Exception)
             {
@@ -90,6 +95,20 @@ public partial class DbWriter
         {
             gateLease.Dispose();
         }
+    }
+
+    private FoldReadyStampResult ValidateFoldRowsForReadyStamp()
+    {
+        if (!AllFoldedColumnsBackfilledCore(
+                requireCurrentSymbolExtractorVersions: false,
+                requireCurrentFoldKeys: false))
+        {
+            return FoldReadyStampResult.MissingBackfill;
+        }
+
+        return AllFoldedColumnValuesMatchCurrentFold()
+            ? FoldReadyStampResult.Ready
+            : FoldReadyStampResult.NonCurrentFoldValues;
     }
 
     public void ClearReadyFlags() => Execute("PRAGMA user_version = 0");
@@ -155,4 +174,11 @@ public partial class DbWriter
         if (next != current)
             Execute($"PRAGMA user_version = {next}", transaction);
     }
+}
+
+internal enum FoldReadyStampResult
+{
+    Ready,
+    MissingBackfill,
+    NonCurrentFoldValues,
 }
