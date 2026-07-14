@@ -2634,7 +2634,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_RubyRescueClause_IndexesExceptionTypes()
+    public void Extract_RubyExceptionForms_ReuseRescueDslAndRaiseFixture()
     {
         const string content = """
             def load
@@ -2642,45 +2642,11 @@ public partial class ReferenceExtractorTests
             rescue Network::TimeoutError, ParserError => error
               nil
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Network::TimeoutError"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "load");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "ParserError"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "load");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "rescue");
-    }
-
-    [Fact]
-    public void Extract_RubyRescueFrom_IndexesExceptionClassTargets()
-    {
-        const string content = """
             class ApplicationController
               rescue_from Payment::Declined, AuthorizationError, with: :render_error
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "rescue_from");
-        Assert.Contains(references, reference => reference.SymbolName == "Payment::Declined" && reference.ContainerName == "ApplicationController");
-        Assert.Contains(references, reference => reference.SymbolName == "AuthorizationError" && reference.ContainerName == "ApplicationController");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "with");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "render_error");
-    }
-
-    [Fact]
-    public void Extract_RubyRaiseSyntax_IsIgnored()
-    {
-        const string content = """
             def fail
               raise("boom")
               ValueError()
@@ -2690,8 +2656,17 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "ruby", content);
         var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "raise");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Network::TimeoutError" && reference.ReferenceKind == "type_reference" &&
+            reference.ContainerName == "load");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ParserError" && reference.ReferenceKind == "type_reference" &&
+            reference.ContainerName == "load");
+        Assert.Contains(references, reference => reference.SymbolName == "Payment::Declined" && reference.ContainerName == "ApplicationController");
+        Assert.Contains(references, reference => reference.SymbolName == "AuthorizationError" && reference.ContainerName == "ApplicationController");
         Assert.Contains(references, reference => reference.SymbolName == "ValueError" && reference.ContainerName == "fail");
+        Assert.DoesNotContain(references, reference => reference.SymbolName is
+            "rescue" or "rescue_from" or "with" or "render_error" or "raise");
     }
 
     [Fact]
