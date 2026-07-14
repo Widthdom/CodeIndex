@@ -150,17 +150,29 @@ public partial class SymbolExtractorTests
     [Theory]
     [InlineData("javascript")]
     [InlineData("typescript")]
-    public void Extract_JavaScriptTypeScript_DetectsImportScriptsModuleSymbols(string language)
+    public void Extract_JavaScriptTypeScript_DetectsWorkerLoadingModuleSymbols(string language)
     {
         var content = """
             importScripts("./worker-a.js", "/worker-b.js");
             importScripts(
               "./legacy.js",
-              `./template-worker.js`,
+              `./template-script.js`,
               `./${name}.js`
             );
             loader.importScripts("./method.js");
             const text = "importScripts('./string.js')";
+
+            const worker = new Worker("./worker.js");
+            const shared = new SharedWorker(
+              "./shared-worker.js",
+              { type: "module" }
+            );
+            const templatedWorker = new Worker(`./template-worker.js`, { type: "module" });
+            const computedWorker = new Worker(`./${name}.js`);
+            const windowWorker = new window.Worker("./window-worker.js");
+            const globalShared = new globalThis.SharedWorker("./global-shared-worker.js");
+            const plainWorker = Worker("./plain-worker.js");
+            const service = new ServiceWorker("./service-worker.js");
             """;
         var symbols = SymbolExtractor.Extract(1, language, content);
 
@@ -169,10 +181,18 @@ public partial class SymbolExtractorTests
         var legacyImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./legacy.js"));
         Assert.Equal(3, legacyImport.Line);
         Assert.Contains("importScripts", legacyImport.Signature);
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./template-worker.js");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./template-script.js");
+        var workerImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./worker.js"));
+        Assert.Equal(10, workerImport.Line);
+        Assert.Contains("new Worker", workerImport.Signature);
+        var sharedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./shared-worker.js"));
+        Assert.Equal(12, sharedImport.Line);
+        Assert.Contains("type", sharedImport.Signature);
+        foreach (var name in new[] { "./template-worker.js", "./window-worker.js", "./global-shared-worker.js" })
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == name);
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name.Contains("${", StringComparison.Ordinal));
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./method.js");
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name is
+            "./method.js" or "./string.js" or "./plain-worker.js" or "./service-worker.js");
     }
 
     [Theory]
@@ -235,40 +255,6 @@ public partial class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./generic-worklet.js");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "dynamicPath");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string-audio.js");
-    }
-
-    [Theory]
-    [InlineData("javascript")]
-    [InlineData("typescript")]
-    public void Extract_JavaScriptTypeScript_DetectsWorkerConstructorModuleSymbols(string language)
-    {
-        var content = """
-            const worker = new Worker("./worker.js");
-            const shared = new SharedWorker(
-              "./shared-worker.js",
-              { type: "module" }
-            );
-            const templated = new Worker(`./template-worker.js`, { type: "module" });
-            const computed = new Worker(`./${name}.js`);
-            const windowWorker = new window.Worker("./window-worker.js");
-            const globalShared = new globalThis.SharedWorker("./global-shared-worker.js");
-            const plain = Worker("./plain-worker.js");
-            const service = new ServiceWorker("./service-worker.js");
-            """;
-        var symbols = SymbolExtractor.Extract(1, language, content);
-
-        var workerImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./worker.js"));
-        Assert.Equal(1, workerImport.Line);
-        Assert.Contains("new Worker", workerImport.Signature);
-        var sharedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./shared-worker.js"));
-        Assert.Equal(3, sharedImport.Line);
-        Assert.Contains("type", sharedImport.Signature);
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./template-worker.js");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./window-worker.js");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./global-shared-worker.js");
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name.Contains("${", StringComparison.Ordinal));
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./plain-worker.js");
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./service-worker.js");
     }
 
     [Fact]
