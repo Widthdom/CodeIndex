@@ -238,31 +238,11 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_AppManifest_IgnoresDtdWithSharedReaderPolicy_Issue3981()
+    public void Extract_AppManifest_IgnoresDtdWithoutResolvingExternalEntities_Issues3981And4345()
     {
         const string content = """
             <!DOCTYPE assembly [
-              <!ENTITY local "ignored">
-            ]>
-            <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
-              <assemblyIdentity version="1.0.0.0" name="CodeIndex.App" processorArchitecture="*" type="win32" />
-            </assembly>
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "app_manifest", content);
-
-        Assert.Contains(symbols, symbol =>
-            symbol.Kind == "assembly"
-            && symbol.Name == "CodeIndex.App"
-            && symbol.Line == 5);
-    }
-
-    [Fact]
-    public void Extract_AppManifest_DoesNotResolveExternalEntityWithSharedReaderPolicy_Issue4345()
-    {
-        const string content = """
-            <!DOCTYPE assembly [
-              <!ENTITY xxe SYSTEM "file:///should/not/be/read">
+              <!ENTITY local "ignored"><!ENTITY xxe SYSTEM "file:///should/not/be/read">
             ]>
             <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
               <assemblyIdentity version="1.0.0.0" name="CodeIndex.App" processorArchitecture="*" type="win32" />
@@ -274,7 +254,8 @@ public partial class SymbolExtractorTests
 
         Assert.Contains(symbols, symbol =>
             symbol.Kind == "assembly"
-            && symbol.Name == "CodeIndex.App");
+            && symbol.Name == "CodeIndex.App"
+            && symbol.Line == 5);
         Assert.DoesNotContain(symbols, symbol => symbol.Signature?.Contains("should/not/be/read", StringComparison.Ordinal) == true);
     }
 

@@ -88,6 +88,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   SCSS quoted, URL, bare-URL, and media-qualified imports share one entry-point fixture with parameterized and parameterless mixin includes, asserting import and call edges together.
   TypeScript runtime `typeof` negatives keep multiline assignment and inline arrow-function layouts in one source, excluding both operand names from type references at once.
   TypeScript generic tagged-template coverage keeps ordinary and function-type generic arguments in one source with distinct tags and container assertions.
+  App-manifest DTD coverage combines local and external entity declarations in one document, preserving assembly extraction while asserting external targets never enter signatures.
 - `FileIndexerTests.cs`, `FileIndexerContentLoadingTests.cs`, `FileIndexerTestSupport.cs`
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
 - `PathCompatibilityMatrixTests.cs`
@@ -685,6 +686,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   SCSS の quoted、URL、bare-URL、media-qualified import は、引数あり・なしの mixin include と1つの entry-point fixture を共有し、import と call edge を同時に検証します。
   TypeScript runtime `typeof` 負例は、multiline assignment と inline arrow-function の配置を1つの source に置き、両 operand 名を type reference から一度に除外します。
   TypeScript generic tagged-template coverage は、通常型引数と function-type 型引数を固有 tag・container assertion 付きの1 source で共有します。
+  App-manifest DTD coverage は local/external entity declaration を1 document にまとめ、assembly 抽出を維持しつつ external target が signature に入らないことを検証します。
 - `FileIndexerTests.cs`、`FileIndexerContentLoadingTests.cs`、`FileIndexerTestSupport.cs`
   ファイル走査、言語判定、scan result 言語の再利用、content loading / canonicalization、checksum、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。共有 `FileIndexerTests` helper は `FileIndexerTestSupport.cs` に置きます。
 - `PathCompatibilityMatrixTests.cs`
