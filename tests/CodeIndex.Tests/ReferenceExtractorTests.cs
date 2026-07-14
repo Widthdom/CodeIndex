@@ -5016,10 +5016,18 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_GoBuiltinTypeArguments_CapturesAllocatedTypesWithoutBuiltinCalls()
+    public void Extract_GoChannelAndBuiltinTypes_ReuseDeclarationAndAllocationFixture()
     {
         const string content = """
             package main
+
+            var updates <-chan DeclaredEvent
+            var commands chan<- Command
+            type Stream chan Result
+
+            type Broker struct {
+                Inputs chan<- *Payload
+            }
 
             func allocate() {
                 users := make([]User, 0)
@@ -5037,6 +5045,11 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "CacheEntry" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Client" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "DeclaredEvent" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Command" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "chan" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "new" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "make" && r.ReferenceKind == "call");
     }
@@ -5154,31 +5167,6 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "StandaloneEvent" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "StandaloneResult" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "i" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoChannelTypeDeclarations_CapturesElementTypes()
-    {
-        const string content = """
-            package main
-
-            var updates <-chan Event
-            var commands chan<- Command
-            type Stream chan Result
-
-            type Broker struct {
-                Inputs chan<- *Payload
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Command" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "chan" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
