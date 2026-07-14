@@ -380,25 +380,6 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Xml_XamlCapturesXKey()
-    {
-        var content = """
-            <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-                <SolidColorBrush x:Key="{x:Static Member={x:Type local:Keys}.AccentBrush}" Color="Tomato" />
-                <Style x:Key="PrimaryButtonStyle" TargetType="Button">
-                    <Setter Property="Background" Value="{StaticResource AccentBrush}" />
-                </Style>
-            </ResourceDictionary>
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "xml", content);
-
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "local:Keys.AccentBrush");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PrimaryButtonStyle");
-    }
-
-    [Fact]
     public void Extract_Xml_XamlCapturesTargetTypeAndDataType()
     {
         var content = """
@@ -720,6 +701,8 @@ public partial class SymbolExtractorTests
                                 xmlns:local="clr-namespace:Sample.ViewModels">
                 <SolidColorBrush x:Key="PrimaryBrush" Color="Tomato" />
                 <SolidColorBrush x:Key="{x:Static local:Keys.WarningBrush}" Color="Orange" />
+                <SolidColorBrush x:Key="{x:Static Member={x:Type local:Keys}.AccentBrush}" Color="Red" />
+                <Style x:Key="PrimaryButtonStyle" TargetType="Button" />
                 <TextBlock Foreground="{StaticResource PrimaryBrush}" />
                 <Border BorderBrush="{DynamicResource ResourceKey={x:Static Member={x:Type local:Keys}.AccentBrush}}" />
                 <TextBlock DataContext="{Binding Source={StaticResource ViewModelLocator}, Path=CurrentUser.DisplayName}" />
@@ -734,6 +717,7 @@ public partial class SymbolExtractorTests
         Assert.Contains("PrimaryBrush", propertyNames);
         Assert.Contains("local:Keys.WarningBrush", propertyNames);
         Assert.Contains("local:Keys.AccentBrush", propertyNames);
+        Assert.Contains("PrimaryButtonStyle", propertyNames);
         Assert.Contains("ViewModelLocator", propertyNames);
         Assert.Contains("DisplayName", propertyNames);
         Assert.DoesNotContain("StaticResource", propertyNames);
