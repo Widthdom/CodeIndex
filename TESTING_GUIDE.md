@@ -276,6 +276,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Ruby Rails command-target coverage shares associations, validation, callbacks, and `class_name` options in one fixture while excluding keyword-option tokens.
 - Ruby type-composition coverage shares inheritance, mixin/using targets, contextual control keywords, and refinements in one fixture with container-specific references.
 - Ruby call-syntax coverage shares no-parentheses commands, brace blocks, and `do`/`end` blocks in one fixture while retaining container attribution.
+- Ruby framework subject DSL coverage shares RSpec `describe` constants and Rails route resource symbols in one fixture while suppressing DSL/option keywords.
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). Its publish smoke disables NuGet vulnerability auditing because package advisory validation is covered by the normal build/test workflow's package vulnerability check, not by this runtime serialization test. It is reported as skipped on macOS arm64 while SDK/ILLink can crash before exercising `cdidx` (#2586). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
@@ -818,6 +819,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - Ruby Rails command-target coverage は association、validation、callback、`class_name` option を1つの fixture で共有し、keyword option token を除外します。
 - Ruby type composition coverage は inheritance、mixin/using target、contextual control keyword、refinement を1つの fixture で共有し、container ごとの reference を検証します。
 - Ruby call syntax coverage は parenthesis なし command、brace block、`do`/`end` block を1つの fixture で共有し、container 帰属を維持します。
+- Ruby framework subject DSL coverage は RSpec `describe` constant と Rails route resource symbol を1つの fixture で共有し、DSL/option keyword を抑止します。
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   は trimmed な RID 固有 CLI を publish し、SDK が生成した entry point（`dotnet` 経由の `cdidx.dll`、または native の `cdidx`/`cdidx.exe` apphost）を実行します。この publish smoke は NuGet 脆弱性監査を無効化します。package advisory の検証は通常の build/test workflow の package vulnerability check が担い、この runtime serialization テストの責務ではないためです。macOS arm64 では SDK/ILLink が `cdidx` に到達する前にクラッシュし得るため、このテストは skipped として報告されます（#2586）。self-contained publish output に常に `cdidx.dll` が出るとは仮定しないでください。
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`

@@ -2693,27 +2693,14 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_RubyRSpecDescribe_IndexesSubjectConstant()
+    public void Extract_RubyFrameworkSubjectDsl_ReuseRSpecAndRailsRouteFixture()
     {
         const string content = """
             RSpec.describe User do
               describe Account do
               end
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "describe");
-        Assert.Contains(references, reference => reference.SymbolName == "User");
-        Assert.Contains(references, reference => reference.SymbolName == "Account");
-    }
-
-    [Fact]
-    public void Extract_RubyRailsRoutes_IndexesResourceNames()
-    {
-        const string content = """
             Rails.application.routes.draw do
               resources :articles, only: :show
               resource :profile
@@ -2723,8 +2710,9 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "ruby", content);
         var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "resources");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "resource");
+        Assert.DoesNotContain(references, reference => reference.SymbolName is "describe" or "resources" or "resource");
+        Assert.Contains(references, reference => reference.SymbolName == "User");
+        Assert.Contains(references, reference => reference.SymbolName == "Account");
         Assert.Contains(references, reference => reference.SymbolName == "articles");
         Assert.Contains(references, reference => reference.SymbolName == "profile");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "only");
