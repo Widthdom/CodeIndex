@@ -106,6 +106,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   JavaScript ordinary-string and template-literal brace masking shares one fixture with distinct classes and members, retaining exact container and range checks after each literal.
   JavaScript regex-brace masking keeps direct literals, wrapped `if`/`else if`, plain `else`, `do`/`while`, and `finally` forms in one class fixture with a final sibling boundary and a block-comment method-shape negative.
   JavaScript class-field arrow ASI coverage shares numeric and string field boundaries, computed-member continuation, class-closing literal termination, and final template literals in one fixture with distinct class/member names.
+  JavaScript default-class coverage keeps a named class beside anonymous direct-base and mixin-base forms, proving member retention without inventing `extends` as a class name in one extraction.
 - `FileIndexerTests.cs`, `FileIndexerContentLoadingTests.cs`, `FileIndexerTestSupport.cs`
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
 - `PathCompatibilityMatrixTests.cs`
@@ -721,6 +722,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   JavaScript の通常文字列と template literal の brace masking は、固有の class/member を持つ1 fixture で共有し、各 literal 後の正確な container/range 検証を維持します。
   JavaScript regex brace masking は、direct literal、wrapped `if`/`else if`、plain `else`、`do`/`while`、`finally` 形式を、末尾 sibling 境界と block-comment method-shape 負例を持つ1 class fixture で共有します。
   JavaScript class-field arrow の ASI coverage は、numeric/string field 境界、computed-member continuation、class-closing literal 終端、末尾 template literal を、固有の class/member 名を持つ1 fixture で共有します。
+  JavaScript default-class coverage は、named class と anonymous direct-base/mixin-base 形式を1 extraction にまとめ、member を維持しつつ `extends` を class 名として捏造しないことを検証します。
 - `FileIndexerTests.cs`、`FileIndexerContentLoadingTests.cs`、`FileIndexerTestSupport.cs`
   ファイル走査、言語判定、scan result 言語の再利用、content loading / canonicalization、checksum、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。共有 `FileIndexerTests` helper は `FileIndexerTestSupport.cs` に置きます。
 - `PathCompatibilityMatrixTests.cs`

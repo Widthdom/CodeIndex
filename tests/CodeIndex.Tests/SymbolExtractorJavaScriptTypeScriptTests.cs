@@ -288,45 +288,26 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScript_DetectsExportDefaultClassMembers()
+    public void Extract_JavaScript_HandlesNamedAndAnonymousDefaultClassMembers()
     {
         var content = """""
             export default class DefaultJs {
-                run() {}
+                namedRun() {}
+            }
+
+            export default class extends Base {
+                baseRun() {}
+            }
+
+            export default class extends mixin(Base) {
+                mixinRun() {}
             }
             """"";
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "DefaultJs");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DoesNotInventExtendsAsAnonymousDefaultClassName()
-    {
-        var content = """
-            export default class extends Base {
-                run() {}
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "extends");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DoesNotInventExtendsAsAnonymousDefaultDerivedClassName()
-    {
-        var content = """
-            export default class extends mixin(Base) {
-                run() {}
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "extends");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
+        AssertSymbolsContain(symbols, "function", "namedRun", "baseRun", "mixinRun");
     }
 
     [Fact]
