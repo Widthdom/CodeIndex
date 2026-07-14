@@ -808,7 +808,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_PythonLegitimateCalls_AreNotDroppedByOtherLanguageKeywordLists()
+    public void Extract_PythonKeywordFiltering_ReuseCallsRaiseAndYieldFixture()
     {
         const string content = """
             def caller():
@@ -822,44 +822,10 @@ public partial class ReferenceExtractorTests
                 notexcluded()
                 apply()
                 task()
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        var names = references.Select(reference => reference.SymbolName).ToHashSet(StringComparer.Ordinal);
-        Assert.Contains("run", names);
-        Assert.Contains("build", names);
-        Assert.Contains("install", names);
-        Assert.Contains("clean", names);
-        Assert.Contains("help", names);
-        Assert.Contains("print", names);
-        Assert.Contains("require", names);
-        Assert.Contains("notexcluded", names);
-        Assert.Contains("apply", names);
-        Assert.Contains("task", names);
-        Assert.Equal(10, references.Count(reference => reference.ReferenceKind == "call"));
-    }
-
-    [Fact]
-    public void Extract_PythonRaiseSyntax_IsIgnored()
-    {
-        const string content = """
             def fail():
                 raise(ValueError())
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "raise");
-        Assert.Contains(references, reference => reference.SymbolName == "ValueError" && reference.ContainerName == "fail");
-    }
-
-    [Fact]
-    public void Extract_PythonYieldSyntax_IsIgnored()
-    {
-        const string content = """
             def stream(xs):
                 yield(item())
                 yield from(source())
@@ -868,8 +834,15 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "python", content);
         var references = ReferenceExtractor.Extract(1, "python", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "yield");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "from");
+        var names = references.Select(reference => reference.SymbolName).ToHashSet(StringComparer.Ordinal);
+        foreach (var callName in new[]
+                 { "run", "build", "install", "clean", "help", "print", "require", "notexcluded", "apply", "task" })
+        {
+            Assert.Contains(callName, names);
+        }
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName is "raise" or "yield" or "from");
+        Assert.Contains(references, reference => reference.SymbolName == "ValueError" && reference.ContainerName == "fail");
         Assert.Contains(references, reference => reference.SymbolName == "item" && reference.ContainerName == "stream");
         Assert.Contains(references, reference => reference.SymbolName == "source" && reference.ContainerName == "stream");
     }

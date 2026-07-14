@@ -260,6 +260,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Python type-introspection helper coverage shares direct/qualified `get_type_hints`, dataclass/attrs field lookup, and Pydantic `TypeAdapter` in one module fixture with unique targets.
 - Python exception type-reference coverage shares bare/chained raises, single/tuple except clauses, `pytest.raises`, and `contextlib.suppress` in one module fixture.
 - Python f-string masking shares single-line, multiline-literal, and nested-string-brace interpolation forms in one module fixture with distinct call containers.
+- Python keyword filtering shares cross-language keyword-like calls with `raise(...)` and `yield` syntax in one module fixture, retaining positive inner-call checks.
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). Its publish smoke disables NuGet vulnerability auditing because package advisory validation is covered by the normal build/test workflow's package vulnerability check, not by this runtime serialization test. It is reported as skipped on macOS arm64 while SDK/ILLink can crash before exercising `cdidx` (#2586). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
@@ -786,6 +787,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - Python type introspection helper coverage は direct/qualified `get_type_hints`、dataclass/attrs field lookup、Pydantic `TypeAdapter` を一意な target を持つ1つの module fixture で共有します。
 - Python exception の type-reference coverage は bare/chained raise、single/tuple except、`pytest.raises`、`contextlib.suppress` を1つの module fixture で共有します。
 - Python f-string masking は single-line、multiline literal、nested string brace の interpolation 形式を一意な call container を持つ1つの module fixture で共有します。
+- Python keyword filtering は他言語の keyword に似た call と `raise(...)`/`yield` 構文を1つの module fixture で共有し、内側の正しい call 検証を維持します。
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   は trimmed な RID 固有 CLI を publish し、SDK が生成した entry point（`dotnet` 経由の `cdidx.dll`、または native の `cdidx`/`cdidx.exe` apphost）を実行します。この publish smoke は NuGet 脆弱性監査を無効化します。package advisory の検証は通常の build/test workflow の package vulnerability check が担い、この runtime serialization テストの責務ではないためです。macOS arm64 では SDK/ILLink が `cdidx` に到達する前にクラッシュし得るため、このテストは skipped として報告されます（#2586）。self-contained publish output に常に `cdidx.dll` が出るとは仮定しないでください。
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
