@@ -54,7 +54,7 @@ public partial class DbWriter
     {
         if (symbols.Count == 0) return;
 
-        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 19);
+        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 20);
         for (int i = 0; i < symbols.Count; i += rowsPerStatement)
         {
             CheckBatchCancellationAndReportProgress("insert_symbols", i, symbols.Count, cancellationToken);
@@ -253,24 +253,26 @@ public partial class DbWriter
     {
         var sql = CreateBatchSqlBuilder(rowCount, estimatedCharsPerRow: 64);
         sql.Append("INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content) VALUES ");
+        var parameterIndex = 0;
         for (var row = 0; row < rowCount; row++)
         {
             if (row > 0)
                 sql.Append(", ");
-            sql.Append($"(@fid{row}, @idx{row}, @start{row}, @end{row}, @content{row})");
+            AppendBatchParameterTuple(sql, ref parameterIndex, columnCount: 5);
         }
         return sql.ToString();
     }
 
     private static void AddChunkInsertParameters(SqliteCommand cmd, int rowCount)
     {
+        var parameterIndex = 0;
         for (var row = 0; row < rowCount; row++)
         {
-            cmd.Parameters.Add($"@fid{row}", SqliteType.Integer);
-            cmd.Parameters.Add($"@idx{row}", SqliteType.Integer);
-            cmd.Parameters.Add($"@start{row}", SqliteType.Integer);
-            cmd.Parameters.Add($"@end{row}", SqliteType.Integer);
-            cmd.Parameters.Add($"@content{row}", SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
         }
     }
 
@@ -287,46 +289,41 @@ public partial class DbWriter
                     name_folded
                 )
                 VALUES ");
+        var parameterIndex = 0;
         for (var row = 0; row < rowCount; row++)
         {
             if (row > 0)
                 sql.Append(", ");
-            sql.Append($@"(
-                    @fid{row}, @kind{row}, @subKind{row}, @name{row}, @line{row}, @startLine{row}, @startColumn{row}, @endLine{row},
-                    @bodyStartLine{row}, @bodyEndLine{row}, @signature{row},
-                    @containerKind{row}, @containerName{row}, @containerQualifiedName{row}, @familyKey{row},
-                    @visibility{row}, @returnType{row},
-                    @isMetadataTarget{row}, @metadataTargetSource{row},
-                    @nameFolded{row}
-                )");
+            AppendBatchParameterTuple(sql, ref parameterIndex, columnCount: 20);
         }
         return sql.ToString();
     }
 
     private static void AddSymbolInsertParameters(SqliteCommand cmd, int rowCount)
     {
+        var parameterIndex = 0;
         for (var row = 0; row < rowCount; row++)
         {
-            cmd.Parameters.Add($"@fid{row}", SqliteType.Integer);
-            cmd.Parameters.Add($"@kind{row}", SqliteType.Text);
-            cmd.Parameters.Add($"@subKind{row}", SqliteType.Text);
-            cmd.Parameters.Add($"@name{row}", SqliteType.Text);
-            cmd.Parameters.Add($"@line{row}", SqliteType.Integer);
-            cmd.Parameters.Add($"@startLine{row}", SqliteType.Integer);
-            cmd.Parameters.Add($"@startColumn{row}", SqliteType.Integer);
-            cmd.Parameters.Add($"@endLine{row}", SqliteType.Integer);
-            cmd.Parameters.Add($"@bodyStartLine{row}", SqliteType.Integer);
-            cmd.Parameters.Add($"@bodyEndLine{row}", SqliteType.Integer);
-            cmd.Parameters.Add($"@signature{row}", SqliteType.Text);
-            cmd.Parameters.Add($"@containerKind{row}", SqliteType.Text);
-            cmd.Parameters.Add($"@containerName{row}", SqliteType.Text);
-            cmd.Parameters.Add($"@containerQualifiedName{row}", SqliteType.Text);
-            cmd.Parameters.Add($"@familyKey{row}", SqliteType.Text);
-            cmd.Parameters.Add($"@visibility{row}", SqliteType.Text);
-            cmd.Parameters.Add($"@returnType{row}", SqliteType.Text);
-            cmd.Parameters.Add($"@isMetadataTarget{row}", SqliteType.Integer);
-            cmd.Parameters.Add($"@metadataTargetSource{row}", SqliteType.Text);
-            cmd.Parameters.Add($"@nameFolded{row}", SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
         }
     }
 }

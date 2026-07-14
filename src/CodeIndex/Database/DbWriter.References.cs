@@ -108,7 +108,7 @@ public partial class DbWriter
             int batchEnd = Math.Min(i + rowsPerStatement, rows.Length);
             var statementRowCount = batchEnd - i;
             var sql = ReferenceLineUpsertSqlCache.GetOrAdd(statementRowCount, static count => BuildReferenceLineUpsertSql(count));
-            var cmd = RentCommand(sql, c => AddReferenceLineParameters(c, statementRowCount, "@fid", "@line", "@context"));
+            var cmd = RentCommand(sql, c => AddReferenceLineParameters(c, statementRowCount));
             try
             {
                 AssignReferenceLineParameterValues(cmd, rows, i, batchEnd);
@@ -130,7 +130,7 @@ public partial class DbWriter
             var sql = ReferenceLineLookupSqlCache.GetOrAdd(statementRowCount, static count => BuildReferenceLineLookupSql(count));
             var cmd = RentCommand(
                 sql,
-                c => AddReferenceLineParameters(c, statementRowCount, "@lookupFid", "@lookupLine", "@lookupContext"));
+                c => AddReferenceLineParameters(c, statementRowCount));
             try
             {
                 AssignReferenceLineParameterValues(cmd, rows, i, keyEnd);
@@ -187,7 +187,7 @@ public partial class DbWriter
             int batchEnd = Math.Min(i + rowsPerStatement, rows.Count);
             var statementRowCount = batchEnd - i;
             var sql = ReferenceLineInsertSqlCache.GetOrAdd(statementRowCount, static count => BuildReferenceLineInsertSql(count));
-            var cmd = RentCommand(sql, c => AddReferenceLineParameters(c, statementRowCount, "@fid", "@line", "@context"));
+            var cmd = RentCommand(sql, c => AddReferenceLineParameters(c, statementRowCount));
             try
             {
                 AssignReferenceLineParameterValues(cmd, rows, i, batchEnd);

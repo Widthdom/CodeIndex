@@ -15,37 +15,34 @@ public partial class DbWriter
                     is_mutual_recursion
                 )
                 VALUES ");
+        var parameterIndex = 0;
         for (var row = 0; row < rowCount; row++)
         {
             if (row > 0)
                 sql.Append(", ");
-            sql.Append($@"(
-                    @fid{row}, @symbolName{row}, @referenceKind{row}, @line{row}, @columnNumber{row},
-                    @context{row}, @referenceLineId{row}, @containerKind{row}, @containerName{row},
-                    @symbolNameFolded{row}, @containerNameFolded{row}, @isSelfReference{row},
-                    @isMutualRecursion{row}
-                )");
+            AppendBatchParameterTuple(sql, ref parameterIndex, columnCount: 13);
         }
         return sql.ToString();
     }
 
     private static void AddReferenceInsertParameters(SqliteCommand cmd, int rowCount)
     {
+        var parameterIndex = 0;
         for (var row = 0; row < rowCount; row++)
         {
-            cmd.Parameters.Add($"@fid{row}", SqliteType.Integer);
-            cmd.Parameters.Add($"@symbolName{row}", SqliteType.Text);
-            cmd.Parameters.Add($"@referenceKind{row}", SqliteType.Text);
-            cmd.Parameters.Add($"@line{row}", SqliteType.Integer);
-            cmd.Parameters.Add($"@columnNumber{row}", SqliteType.Integer);
-            cmd.Parameters.Add($"@context{row}", SqliteType.Text);
-            cmd.Parameters.Add($"@referenceLineId{row}", SqliteType.Integer);
-            cmd.Parameters.Add($"@containerKind{row}", SqliteType.Text);
-            cmd.Parameters.Add($"@containerName{row}", SqliteType.Text);
-            cmd.Parameters.Add($"@symbolNameFolded{row}", SqliteType.Text);
-            cmd.Parameters.Add($"@containerNameFolded{row}", SqliteType.Text);
-            cmd.Parameters.Add($"@isSelfReference{row}", SqliteType.Integer);
-            cmd.Parameters.Add($"@isMutualRecursion{row}", SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
         }
     }
 
@@ -59,11 +56,12 @@ public partial class DbWriter
     {
         var sql = CreateBatchSqlBuilder(rowCount, estimatedCharsPerRow: 64);
         sql.Append("INSERT INTO reference_lines (file_id, line, context) VALUES ");
+        var parameterIndex = 0;
         for (var row = 0; row < rowCount; row++)
         {
             if (row > 0)
                 sql.Append(", ");
-            sql.Append($"(@fid{row}, @line{row}, @context{row})");
+            AppendBatchParameterTuple(sql, ref parameterIndex, columnCount: 3);
         }
         return sql.Append(suffix).ToString();
     }
@@ -71,11 +69,12 @@ public partial class DbWriter
     private static string BuildReferenceLineLookupSql(int rowCount)
     {
         var rows = CreateBatchSqlBuilder(rowCount, estimatedCharsPerRow: 48);
+        var parameterIndex = 0;
         for (var row = 0; row < rowCount; row++)
         {
             if (row > 0)
                 rows.Append(", ");
-            rows.Append($"(@lookupFid{row}, @lookupLine{row}, @lookupContext{row})");
+            AppendBatchParameterTuple(rows, ref parameterIndex, columnCount: 3);
         }
         return $@"
                 WITH lookup(file_id, line, context) AS (
@@ -91,16 +90,14 @@ public partial class DbWriter
 
     private static void AddReferenceLineParameters(
         SqliteCommand cmd,
-        int rowCount,
-        string fileIdPrefix,
-        string linePrefix,
-        string contextPrefix)
+        int rowCount)
     {
+        var parameterIndex = 0;
         for (var row = 0; row < rowCount; row++)
         {
-            cmd.Parameters.Add($"{fileIdPrefix}{row}", SqliteType.Integer);
-            cmd.Parameters.Add($"{linePrefix}{row}", SqliteType.Integer);
-            cmd.Parameters.Add($"{contextPrefix}{row}", SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
         }
     }
 
