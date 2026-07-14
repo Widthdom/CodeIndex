@@ -30,6 +30,9 @@ public partial class DbWriter
         if (references.Count == 0) return;
 
         int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 13);
+        var foldedNameCache = CreateFoldedNameCache(
+            Math.Min(references.Count, rowsPerStatement),
+            namesPerRow: 2);
         var newReferenceLineIds = referenceLinesAreNew
             ? new Dictionary<(long FileId, int Line, string Context), long>()
             : null;
@@ -37,7 +40,6 @@ public partial class DbWriter
         {
             CheckBatchCancellationAndReportProgress("insert_references", i, references.Count, cancellationToken);
             int end = Math.Min(i + rowsPerStatement, references.Count);
-            var foldedNameCache = CreateFoldedNameCache(end - i, namesPerRow: 2);
             // Always open a chunk-scoped transaction or SAVEPOINT so reference_lines and
             // symbol_references share one rollback boundary; without it a mid-chunk failure
             // under an outer transaction would orphan committed reference_lines (#1518).

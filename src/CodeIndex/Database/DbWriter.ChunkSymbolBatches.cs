@@ -55,11 +55,13 @@ public partial class DbWriter
         if (symbols.Count == 0) return;
 
         int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 20);
+        var foldedNameCache = CreateFoldedNameCache(
+            Math.Min(symbols.Count, rowsPerStatement),
+            namesPerRow: 1);
         for (int i = 0; i < symbols.Count; i += rowsPerStatement)
         {
             CheckBatchCancellationAndReportProgress("insert_symbols", i, symbols.Count, cancellationToken);
             int end = Math.Min(i + rowsPerStatement, symbols.Count);
-            var foldedNameCache = CreateFoldedNameCache(end - i, namesPerRow: 1);
             try
             {
                 // Only create a batch transaction when not already inside an outer transaction

@@ -6,6 +6,7 @@ namespace CodeIndex.Database;
 public partial class DbWriter
 {
     private const int BatchSize = 500;
+    private const int MaxFoldedNameCacheEntries = 4096;
 
     private static object FoldedNameDbValue(string? name, Dictionary<string, string?> cache)
     {
@@ -15,7 +16,15 @@ public partial class DbWriter
         if (!cache.TryGetValue(name, out var folded))
         {
             folded = NameFold.Fold(name);
-            cache[name] = folded;
+            // A single generated file can contain tens of thousands of unique names.
+            // Keep cross-batch reuse bounded instead of retaining every unique key until
+            // the file insert completes; the first entries still cover recurring symbols
+            // and containers without turning the cache into a second symbol table.
+            // 生成ファイルでは一意名が数万件に達し得るため、file insert 終了まで
+            // 全件を保持しない。先頭の recurring name/container を再利用しつつ、
+            // cache 自体が第2の symbol table になることを防ぐ。
+            if (cache.Count < MaxFoldedNameCacheEntries)
+                cache[name] = folded;
         }
 
         return (object?)folded ?? DBNull.Value;
