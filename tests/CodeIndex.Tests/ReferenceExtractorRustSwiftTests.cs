@@ -1764,41 +1764,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_RustDeriveAttributes_CaptureTraitTypeReferences()
-    {
-        const string content = """
-            #[derive(Debug, Clone, serde::Serialize)]
-            struct User;
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Debug" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Clone" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Serialize" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "derive" && r.ReferenceKind == "call");
-        Assert.DoesNotContain(references, r => r.SymbolName == "derive" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_RustCfgAttrDeriveAttributes_CaptureTraitTypeReferences()
-    {
-        const string content = """
-            #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-            struct User;
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Serialize" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Deserialize" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "cfg_attr" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_RustMultilineCfgAttrDeriveAttributes_CaptureTraitTypeReferences()
+    public void Extract_RustAttributes_CaptureDeriveTraitsAndAnnotations()
     {
         const string content = """
             #[cfg_attr(
@@ -1810,6 +1776,18 @@ public partial class ReferenceExtractorTests
                 )
             )]
             struct User;
+
+            #[derive(Default, Eq, serde::Deserialize)]
+            struct Account;
+
+            #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+            struct Message;
+
+            #[tokio::test]
+            async fn verifies_user() {}
+
+            #[serde(rename = "id")]
+            struct Record;
             """;
 
         var symbols = SymbolExtractor.Extract(1, "rust", content);
@@ -1818,32 +1796,22 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Debug" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Clone" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Serialize" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Deserialize" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Default" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Eq" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Debug" && r.Line == 4 && r.Column == 9);
         Assert.Contains(references, r => r.SymbolName == "Clone" && r.Line == 5 && r.Column == 9);
         Assert.Contains(references, r => r.SymbolName == "Serialize" && r.Line == 6 && r.Column == 16);
+        Assert.Contains(references, r => r.SymbolName == "tokio::test" && r.ReferenceKind == "annotation");
+        Assert.Contains(references, r => r.SymbolName == "serde" && r.ReferenceKind == "annotation");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "derive"
+            && r.Context == "#[derive(Default, Eq, serde::Deserialize)]");
         Assert.DoesNotContain(references, r => r.SymbolName == "cfg_attr" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
-    public void Extract_RustAttributes_CaptureAnnotationReferences()
-    {
-        const string content = """
-            #[tokio::test]
-            async fn verifies_user() {}
-
-            #[serde(rename = "id")]
-            struct User;
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "tokio::test" && r.ReferenceKind == "annotation");
-        Assert.Contains(references, r => r.SymbolName == "serde" && r.ReferenceKind == "annotation");
-    }
-
-    [Fact]
-    public void Extract_RustTypeModifiers_DoNotBecomeTypeReferences()
+    public void Extract_RustTypeModifiers_PreserveTypesWithoutBorrowExpressionLeakage()
     {
         const string content = """
             fn make() -> impl Future<Output = User> {
@@ -1856,6 +1824,11 @@ public partial class ReferenceExtractorTests
                 mutable: *mut State,
                 text: &'static str,
                 dynamic: Box<dyn Iterator<Item = User> + Send + 'static>,
+            }
+
+            fn demo(buffer: &mut Buffer, writer: &mut dyn Write, parser: &mut impl Parser) {
+                let next: &mut crate::io::Cursor = todo!();
+                take(&mut buffer);
             }
             """;
 
@@ -1872,62 +1845,16 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Send" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Marker" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "State" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Buffer" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Cursor" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Write" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Parser" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "'static" && r.ReferenceKind == "lifetime_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "buffer" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(
             references,
             r => r.ReferenceKind == "type_reference"
                 && r.SymbolName is "impl" or "dyn" or "const" or "mut" or "ref" or "static");
-    }
-
-    [Fact]
-    public void Extract_RustMutableReferenceTypes_CaptureReferencedType()
-    {
-        const string content = """
-            fn demo(buffer: &mut Buffer) {
-                let next: &mut crate::io::Cursor = todo!();
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Buffer" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Cursor" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "mut" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_RustMutableDynAndImplReferences_CaptureTraitType()
-    {
-        const string content = """
-            fn demo(writer: &mut dyn Write, parser: &mut impl Parser) {
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Write" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Parser" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(
-            references,
-            r => r.ReferenceKind == "type_reference" && (r.SymbolName is "dyn" or "impl" or "mut"));
-    }
-
-    [Fact]
-    public void Extract_RustMutableBorrowExpression_DoesNotEmitTypeReference()
-    {
-        const string content = """
-            fn demo(buffer: &mut Buffer) {
-                take(&mut buffer);
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Buffer" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "buffer" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
