@@ -5293,7 +5293,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_GoGenericCompositeLiterals_CapturesTypeAndArguments()
+    public void Extract_GoCompositeLiterals_ReuseGenericArraySliceAndMapFixture()
     {
         const string content = """
             package main
@@ -5301,8 +5301,14 @@ public partial class ReferenceExtractorTests
             func build(values []func()) {
                 cache := Cache[Entry]{}
                 set := model.Set[Key, Value]{}
+                users := []User{}
+                widgets := [3]*Widget{}
+                events := [...]model.Event{}
+                nested := [][]NestedEntry{}
+                lookup := map[MapKey]MapValue{}
+                qualified := map[model.Tenant]*MapEntry{}
                 values[i]()
-                _, _ = cache, set
+                _, _, _, _, _, _, _, _ = cache, set, users, widgets, events, nested, lookup, qualified
             }
             """;
 
@@ -5311,59 +5317,13 @@ public partial class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.SymbolName == "Cache" && r.ReferenceKind == "instantiate");
         Assert.Contains(references, r => r.SymbolName == "Set" && r.ReferenceKind == "instantiate");
-        Assert.Contains(references, r => r.SymbolName == "Entry" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
+        foreach (var typeName in new[]
+                 { "Entry", "Key", "Value", "User", "Widget", "Event", "NestedEntry", "MapKey", "MapValue", "Tenant", "MapEntry" })
+        {
+            Assert.Contains(references, r => r.SymbolName == typeName && r.ReferenceKind == "type_reference");
+        }
+
         Assert.DoesNotContain(references, r => r.SymbolName == "i" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoArraySliceCompositeLiterals_CapturesElementTypes()
-    {
-        const string content = """
-            package main
-
-            func build(values []func()) {
-                users := []User{}
-                widgets := [3]*Widget{}
-                events := [...]model.Event{}
-                nested := [][]Entry{}
-                values[i]()
-                _, _, _, _ = users, widgets, events, nested
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Entry" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "i" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoMapCompositeLiterals_CapturesKeyAndValueTypes()
-    {
-        const string content = """
-            package main
-
-            func build() {
-                lookup := map[Key]Value{}
-                qualified := map[model.Tenant]*Entry{}
-                _ = lookup
-                _ = qualified
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Tenant" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Entry" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "map" && r.ReferenceKind == "type_reference");
     }
 
