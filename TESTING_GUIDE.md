@@ -300,6 +300,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Solidity reference coverage shares inheritance whitespace variants, library/modifier/event/interface edges, and comment/string negatives in one fixture.
 - Terraform reference coverage shares resource/module/data traversals and raw `var`/`local` object references in one exact-per-name fixture.
 - Language masker copy-on-write coverage pairs unchanged-array reuse and required-clone behavior within the same Lua and Solidity test methods.
+- COBOL target-statement coverage places SQL/CICS, report, sort, queue, file, literal, and external-call variants in one program and checks exact grouped edge counts.
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). Its publish smoke disables NuGet vulnerability auditing because package advisory validation is covered by the normal build/test workflow's package vulnerability check, not by this runtime serialization test. It is reported as skipped on macOS arm64 while SDK/ILLink can crash before exercising `cdidx` (#2586). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
@@ -867,6 +868,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - Solidity reference coverage は inheritance whitespace variant、library/modifier/event/interface edge、comment/string negative を1つの fixture で共有します。
 - Terraform reference coverage は resource/module/data traversal と raw `var`/`local` object reference を、name ごとの厳密な件数を持つ1つの fixture で共有します。
 - Language masker の copy-on-write coverage は、変更不要時の配列再利用と mask 必要時の clone を Lua/Solidity それぞれ同じテストメソッド内で検証します。
+- COBOL target-statement coverage は SQL/CICS、report、sort、queue、file、literal、external-call variant を1つの program に配置し、group ごとの edge 件数を厳密に検証します。
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   は trimmed な RID 固有 CLI を publish し、SDK が生成した entry point（`dotnet` 経由の `cdidx.dll`、または native の `cdidx`/`cdidx.exe` apphost）を実行します。この publish smoke は NuGet 脆弱性監査を無効化します。package advisory の検証は通常の build/test workflow の package vulnerability check が担い、この runtime serialization テストの責務ではないためです。macOS arm64 では SDK/ILLink が `cdidx` に到達する前にクラッシュし得るため、このテストは skipped として報告されます（#2586）。self-contained publish output に常に `cdidx.dll` が出るとは仮定しないでください。
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
