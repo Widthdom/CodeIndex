@@ -211,21 +211,6 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_SQL_QualifiedNamesAllowWhitespaceAroundDots()
-    {
-        var content =
-            "CREATE PROCEDURE [sales] . [sp_Report] AS SELECT 1;\n" +
-            "CREATE VIEW dbo . v_Orders AS SELECT 1;\n" +
-            "CREATE TYPE sales . Money AS ENUM ('usd');\n";
-
-        var symbols = SymbolExtractor.Extract(1, "sql", content);
-
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name.Contains("sp_Report", StringComparison.Ordinal));
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name.Contains("v_Orders", StringComparison.Ordinal));
-        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name.Contains("Money", StringComparison.Ordinal));
-    }
-
-    [Fact]
     public void Extract_SQL_ProcedureBodyRange_TSqlBeginEnd()
     {
         // Multi-line T-SQL CREATE PROCEDURE with explicit BEGIN/END body terminated by GO.
@@ -699,6 +684,9 @@ public partial class SymbolExtractorTests
     public void Extract_SQL_KeepsQualifiedNamesWhenDotsHaveSurroundingWhitespace()
     {
         var content =
+            "CREATE PROCEDURE [sales] . [sp_Report] AS SELECT 1;\n" +
+            "CREATE VIEW dbo . v_Orders AS SELECT 1;\n" +
+            "CREATE TYPE sales . Money AS ENUM ('usd');\n" +
             "CREATE SCHEMA sales . reporting;\n" +
             "CREATE SCHEMA AUTHORIZATION sales . auth_owner;\n" +
             "CREATE SEQUENCE sales . seq_orders START WITH 1;\n" +
@@ -722,6 +710,9 @@ public partial class SymbolExtractorTests
             "ALTER FULLTEXT CATALOG sales . ft_catalog REORGANIZE;\n";
         var symbols = SymbolExtractor.Extract(1, "sql", content);
 
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name.Contains("sp_Report", StringComparison.Ordinal));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name.Contains("v_Orders", StringComparison.Ordinal));
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name.Contains("Money", StringComparison.Ordinal));
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "sales.reporting");
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "sales.auth_owner");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.seq_orders");

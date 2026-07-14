@@ -71,6 +71,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Swift attribute and visibility modifiers such as `@available`, `@discardableResult`, and `package` share one declaration fixture when their contracts are independent kind/name recognition checks.
   Swift extension coverage keeps escaped members, generic targets, nested generic conformance targets, and qualified targets with special members in one source when unique target names preserve failure diagnosis.
   SQL MySQL-definer and PostgreSQL return-field extraction shares one mixed-dialect fixture with comment/string false-positive controls when distinct symbol names keep every contract independently assertable.
+  SQL qualified-name whitespace coverage keeps procedure, view, enum type, schema, sequence, extension, synonym, and other CREATE/ALTER kinds in one fixture so dot normalization is paid for once across the DDL matrix.
 - `FileIndexerTests.cs`, `FileIndexerContentLoadingTests.cs`, `FileIndexerTestSupport.cs`
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
 - `PathCompatibilityMatrixTests.cs`
@@ -651,6 +652,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   Swift の `@available`、`@discardableResult`、`package` などの attribute / visibility modifier は、契約が独立した kind/name 認識である場合、1つの declaration fixture を共有します。
   Swift extension coverage は、固有の target 名によって失敗診断を維持できる場合、escaped member、generic target、nested generic conformance target、special member を持つ qualified target を1つの source にまとめます。
   SQL の MySQL definer と PostgreSQL return field 抽出は、固有の symbol 名で各契約を独立して検証できる場合、comment/string false-positive control を含む1つの mixed-dialect fixture を共有します。
+  SQL qualified-name の空白 coverage は、procedure、view、enum type、schema、sequence、extension、synonym などの CREATE/ALTER kind を1つの fixture に置き、DDL matrix 全体の dot normalization を1回の抽出で検証します。
 - `FileIndexerTests.cs`、`FileIndexerContentLoadingTests.cs`、`FileIndexerTestSupport.cs`
   ファイル走査、言語判定、scan result 言語の再利用、content loading / canonicalization、checksum、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。共有 `FileIndexerTests` helper は `FileIndexerTestSupport.cs` に置きます。
 - `PathCompatibilityMatrixTests.cs`
