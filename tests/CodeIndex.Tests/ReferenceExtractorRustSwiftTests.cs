@@ -1973,7 +1973,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_RustStructLiterals_CaptureInstantiationReferences()
+    public void Extract_RustConstructors_CaptureStructAndTupleInstantiationReferences()
     {
         const string content = """
             struct Config {
@@ -1984,32 +1984,13 @@ public partial class ReferenceExtractorTests
                 enabled: bool,
             }
 
-            fn build() {
+            fn build(value: Value) {
                 let user = User { id: 1 };
                 let store = crate::models::Store { ready: true };
                 let wrapped = Wrapper::<User> { value: user };
                 let helper = crate::helpers::state { ready: true };
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "instantiate");
-        Assert.Contains(references, r => r.SymbolName == "Store" && r.ReferenceKind == "instantiate");
-        Assert.Contains(references, r => r.SymbolName == "Wrapper" && r.ReferenceKind == "instantiate");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Config" && r.ReferenceKind == "instantiate");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Local" && r.ReferenceKind == "instantiate");
-        Assert.DoesNotContain(references, r => r.SymbolName == "state" && r.ReferenceKind == "instantiate");
-    }
-
-    [Fact]
-    public void Extract_RustTupleConstructors_CaptureInstantiationReferences()
-    {
-        const string content = """
-            fn build(value: Value) {
-                let user = User(value);
-                let maybe = Some(user);
+                let tuple_user = TupleUser(value);
+                let maybe = Some(tuple_user);
                 let result = Ok(maybe);
                 helper(result);
             }
@@ -2019,10 +2000,16 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
 
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Store" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "Wrapper" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "TupleUser" && r.ReferenceKind == "instantiate");
         Assert.Contains(references, r => r.SymbolName == "Some" && r.ReferenceKind == "instantiate");
         Assert.Contains(references, r => r.SymbolName == "Ok" && r.ReferenceKind == "instantiate");
         Assert.Contains(references, r => r.SymbolName == "helper" && r.ReferenceKind == "call");
-        Assert.DoesNotContain(references, r => r.SymbolName == "User" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Config" && r.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Local" && r.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, r => r.SymbolName == "state" && r.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, r => r.SymbolName == "TupleUser" && r.ReferenceKind == "call");
     }
 
     [Fact]
