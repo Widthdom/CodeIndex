@@ -137,18 +137,19 @@ public class TestDeterminismTests
     }
 
     [Fact]
-    public async Task RunConcurrentlyAsync_ReturnsEachWorkerResult()
+    public async Task RunConcurrentlyAsync_UsesDedicatedWorkersAndReturnsEachResult()
     {
         var started = 0;
 
         var results = await TestDeterminism.RunConcurrentlyAsync(
-            Enumerable.Range(0, 4).Select<int, Func<int>>(worker => () =>
+            Enumerable.Range(0, 4).Select<int, Func<(int Worker, bool IsThreadPoolThread)>>(worker => () =>
             {
                 Interlocked.Increment(ref started);
-                return worker;
+                return (worker, Thread.CurrentThread.IsThreadPoolThread);
             }));
 
         Assert.Equal(4, started);
-        Assert.Equal([0, 1, 2, 3], results.Order());
+        Assert.Equal([0, 1, 2, 3], results.Select(result => result.Worker).Order());
+        Assert.All(results, result => Assert.False(result.IsThreadPoolThread));
     }
 }

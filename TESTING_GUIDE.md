@@ -278,6 +278,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - CSV entry-cap tests share `TestProjectHelper.RepeatCsvEntry(...)` across index and query parsers so boundary construction stays consistent.
 - Raw FTS operator boundary tests reuse the same joined-entry builder with their grammar-specific separators.
 - Synchronized console-write coverage uses the smallest repeated slow-writer workload that still exercises both concurrent producers; do not scale iteration counts as a stress test.
+- `TestDeterminism.RunConcurrentlyAsync(...)` starts gate-waiting workers as dedicated long-running tasks. Do not move them back to `Task.Run`: blocked workers can starve the shared pool before the final worker reaches the gate, turning Windows runner load into a five-second false timeout and a full-suite retry.
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
   is a coarse runaway guard for the real `InstallScriptTests.cs` C# extraction fixture. Its wall-clock budget is intentionally broader than a benchmark so slower or noisy CI hosts do not fail the suite for ordinary variance.
 - `SymbolExtractorTests.Extract_JavaScriptLargeExportedObjectLiteralProperties_CompletesWithinPracticalBudget` and `Extract_CSharp_ReferenceExtractorFixture_CompletesWithinPracticalBudget`
@@ -900,6 +901,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - CSV entry cap test は index / query parser 間で `TestProjectHelper.RepeatCsvEntry(...)` を共有し、境界 fixture の構築を揃えます。
 - raw FTS operator 境界 test も、grammar 固有の separator を指定して同じ joined-entry builder を再利用します。
 - synchronized console write の coverage は、2 つの concurrent producer を検証できる最小の反復 slow-writer workload を使います。stress test として iteration 数を増やさないでください。
+- `TestDeterminism.RunConcurrentlyAsync(...)` は gate 待ち worker を dedicated long-running task として起動します。`Task.Run` に戻さないでください。blocked worker が最後の worker の gate 到達前に shared pool を枯渇させ、Windows runner の負荷を5秒の偽timeoutとfull-suite retryへ変えてしまいます。
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
   は実ファイル `InstallScriptTests.cs` を C# 抽出に通す coarse な runaway guard です。wall-clock の予算は benchmark より意図的に広く取り、遅い / 混雑した CI host で通常の揺れだけにより suite が失敗しないようにしています。
 - `SymbolExtractorTests.Extract_JavaScriptLargeExportedObjectLiteralProperties_CompletesWithinPracticalBudget` と `Extract_CSharp_ReferenceExtractorFixture_CompletesWithinPracticalBudget`
