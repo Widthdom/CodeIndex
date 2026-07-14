@@ -5328,12 +5328,12 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_GoCompositeTypeConversions_CapturesConvertedTypes()
+    public void Extract_GoTypeConversions_ReuseCompositeAndParenthesizedFixture()
     {
         const string content = """
             package main
 
-            func convert(raw any, rawMap any, rawChan any) {
+            func convertDirect(raw any, rawMap any, rawChan any) {
                 users := []User(raw)
                 lookup := map[Key]Value(rawMap)
                 stream := chan Event(rawChan)
@@ -5342,67 +5342,36 @@ public partial class ReferenceExtractorTests
                 }
                 _, _, _, _ = users, lookup, stream, returned
             }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "raw" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoParenthesizedTypeConversions_CapturesConvertedTypes()
-    {
-        const string content = """
-            package main
-
-            func convert(callback func(any) any, raw any) {
+            func convertParenthesized(callback func(any) any, rawParen any) {
                 var _ Interface = (*Concrete)(nil)
                 var _ = (**Node)(nil)
-                id := (model.ID)(raw)
-                value := (callback)(raw)
+                id := (model.ID)(rawParen)
+                value := (callback)(rawParen)
                 _, _ = id, value
             }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Interface" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Concrete" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Node" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "ID" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "callback" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoParenthesizedCompositeTypeConversions_CapturesConvertedTypes()
-    {
-        const string content = """
-            package main
-
-            func convert(callback func(any) any, raw any) {
-                users := ([]User)(raw)
-                lookup := (map[Key]Value)(raw)
-                stream := (chan Event)(raw)
-                value := (callback)(raw)
-                _, _, _, _ = users, lookup, stream, value
+            func convertParenthesizedComposite(callbackComposite func(any) any, rawComposite any) {
+                parenUsers := ([]ParenUser)(rawComposite)
+                parenLookup := (map[ParenKey]ParenValue)(rawComposite)
+                parenStream := (chan ParenEvent)(rawComposite)
+                value := (callbackComposite)(rawComposite)
+                _, _, _, _ = parenUsers, parenLookup, parenStream, value
             }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "go", content);
         var references = ReferenceExtractor.Extract(1, "go", content, symbols);
 
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
+        foreach (var typeName in new[]
+                 { "User", "Key", "Value", "Event", "Result", "Interface", "Concrete", "Node", "ID", "ParenUser", "ParenKey", "ParenValue", "ParenEvent" })
+        {
+            Assert.Contains(references, r => r.SymbolName == typeName && r.ReferenceKind == "type_reference");
+        }
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "raw" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "callback" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "callbackComposite" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
