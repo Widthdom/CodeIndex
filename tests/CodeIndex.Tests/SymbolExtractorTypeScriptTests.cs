@@ -1806,17 +1806,17 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_TypeScript_KeepsSiblingMethodsAfterWrappedControlFlowRegexLiterals()
+    public void Extract_TypeScript_KeepsSiblingMethodsAfterControlFlowRegexLiteralLayouts()
     {
         var content = """
             export class Example {
-                first(value: string): void {
+                ifWrapped(value: string): void {
                     if (
                         ready
                     ) /{/.test(value);
                 }
 
-                second(value: string): void {
+                elseIfWrapped(value: string): void {
                     if (first) {
                     }
                     else if (
@@ -1824,59 +1824,33 @@ public partial class SymbolExtractorTests
                     ) /{/.test(value);
                 }
 
-                third(): void {}
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "third");
-    }
-
-    [Fact]
-    public void Extract_TypeScript_KeepsSiblingMethodsAfterElseRegexLiteral()
-    {
-        var content = """
-            export class Example {
-                first(value: string): void {
+                elseDirect(value: string): void {
                     if (cond) {
                     }
                     else /{/.test(value);
                 }
 
-                second(): void {}
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
-    }
-
-    [Fact]
-    public void Extract_TypeScript_KeepsSiblingMethodsAfterDoAndFinallyRegexLiterals()
-    {
-        var content = """
-            export class Example {
-                first(value: string): void {
+                doLoop(value: string): void {
                     do /{/.test(value); while (cond);
                 }
 
-                second(value: string): void {
+                finallyBlock(value: string): void {
                     try {
                     }
                     finally /{/.test(value);
                 }
 
-                third(): void {}
+                finalSibling(): void {}
             }
             """;
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "third");
+        string[] expectedMethods =
+        [
+            "ifWrapped", "elseIfWrapped", "elseDirect", "doLoop", "finallyBlock", "finalSibling"
+        ];
+        Assert.All(expectedMethods, name =>
+            Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == name && s.ContainerName == "Example")));
     }
 
 #if NET8_0
