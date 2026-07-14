@@ -425,7 +425,7 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Xml_XamlCapturesTypeArgumentsAsClassSymbols()
+    public void Extract_Xml_XamlCapturesTypeArgumentVariantsAsClassSymbols()
     {
         var content = """
             <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -435,30 +435,10 @@ public partial class SymbolExtractorTests
                 <local:Pair x:TypeArguments="x:String, vm:PersonViewModel" />
                 <local:Factory x:TypeArguments="{x:Type vm:CustomButton}" />
                 <local:Nested x:TypeArguments="vm:Outer(x:String, vm:InnerModel)" />
-            </ResourceDictionary>
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "xml", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "x:String");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:PersonViewModel");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:CustomButton");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:Outer");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:InnerModel");
-    }
-
-    [Fact]
-    public void Extract_Xml_XamlCapturesWrappedTypeArgumentsAcrossLines()
-    {
-        var content = """
-            <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                                xmlns:vm="clr-namespace:Sample.ViewModels"
-                                xmlns:local="clr-namespace:Sample.Controls">
                 <local:Pair
-                    x:TypeArguments="x:String,
-                                     vm:Outer(
-                                         vm:InnerModel,
+                    x:TypeArguments="vm:Wrapped,
+                                     vm:Nested(
+                                         vm:WrappedInner,
                                          x:Int32)" />
             </ResourceDictionary>
             """;
@@ -468,6 +448,11 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "x:String");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:Outer");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:InnerModel");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:PersonViewModel");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:CustomButton");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:Wrapped");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:Nested");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:WrappedInner");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "x:Int32");
     }
 
