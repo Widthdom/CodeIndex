@@ -1333,6 +1333,9 @@ public static partial class IndexCommandRunner
                 writer.InsertIssues(fileId, issues);
         }
 
+        var reusableIndexedFileStats = !options.Rebuild && !startedWithNoIndexedFiles
+            ? writer.LoadReusableIndexedFileStats(options.MaxSymbolsPerFile, options.MaxReferencesPerFile)
+            : null;
         Dictionary<string, IndexedFileStatReuseResult?>? csharpPrepassStatReuse = null;
 
         bool CanReuseCSharpPrepassTargetWithoutRead(CSharpStaticInterfacePrepass.FileTarget target)
@@ -1343,14 +1346,11 @@ public static partial class IndexCommandRunner
                 return false;
 
             var existingFile = IndexedFileStatReuse.TryGetReusableUnchangedFile(
-                writer,
+                reusableIndexedFileStats!,
                 target.FilePath,
                 target.IndexPath,
                 target.Language,
-                options.MaxSymbolsPerFile,
-                options.MaxReferencesPerFile,
-                target.GeneratedExtractionSuppressed,
-                allowReuse: true);
+                target.GeneratedExtractionSuppressed);
             if (existingFile == null)
             {
                 (csharpPrepassStatReuse ??= new Dictionary<string, IndexedFileStatReuseResult?>(
@@ -1446,20 +1446,18 @@ public static partial class IndexCommandRunner
                 && (language != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                 && (language != "sql" || sqlGraphContractMatchesCurrent)
                 && AllowReuseWithCurrentHotspotFamilyTrust(language, hotspotFamilyTrustMatchesCurrent);
-            var existingFile = allowReuse
-                && language == "csharp"
-                && csharpPrepassStatReuse != null
-                && csharpPrepassStatReuse.TryGetValue(target.IndexPath, out var cachedCSharpPrepassReuse)
+            var existingFile = !allowReuse
+                ? null
+                : language == "csharp"
+                  && csharpPrepassStatReuse != null
+                  && csharpPrepassStatReuse.TryGetValue(target.IndexPath, out var cachedCSharpPrepassReuse)
                     ? cachedCSharpPrepassReuse
                     : IndexedFileStatReuse.TryGetReusableUnchangedFile(
-                        writer,
+                        reusableIndexedFileStats!,
                         target.FilePath,
                         target.IndexPath,
                         language,
-                        options.MaxSymbolsPerFile,
-                        options.MaxReferencesPerFile,
-                        target.GeneratedExtractionSuppressed,
-                        allowReuse);
+                        target.GeneratedExtractionSuppressed);
             if (existingFile == null)
                 return false;
 

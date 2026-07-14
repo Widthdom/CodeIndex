@@ -6108,6 +6108,7 @@ public partial class McpServerTests
         var optimizedFts = false;
         var discoveredPostExtractionHooks = false;
         var loadedPaths = new List<string>();
+        var statSnapshotReads = 0;
         try
         {
             File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { public void Run() { } }\n");
@@ -6123,6 +6124,7 @@ public partial class McpServerTests
             McpServer.McpIndexFtsOptimizeForTesting = () => optimizedFts = true;
             McpServer.McpIndexCSharpMetadataResolveForTesting = () => resolvedCSharpMetadataTargets = true;
             McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
+            DbWriter.ReusableStatSnapshotReadForTesting = () => statSnapshotReads++;
 
             var secondResponse = CallIndex(server, fixtureDir);
 
@@ -6132,6 +6134,7 @@ public partial class McpServerTests
             Assert.False(optimizedFts);
             Assert.False(resolvedCSharpMetadataTargets);
             Assert.False(rebuiltTypeScriptAugmentation);
+            Assert.Equal(1, statSnapshotReads);
         }
         finally
         {
@@ -6140,6 +6143,7 @@ public partial class McpServerTests
             McpServer.McpIndexFtsOptimizeForTesting = null;
             McpServer.McpIndexCSharpMetadataResolveForTesting = null;
             McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = null;
+            DbWriter.ReusableStatSnapshotReadForTesting = null;
             TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
@@ -7117,10 +7121,12 @@ public partial class McpServerTests
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_rebuild_fresh_{Guid.NewGuid():N}");
         Directory.CreateDirectory(fixtureDir);
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_rebuild_fresh");
+        var statSnapshotReads = 0;
         try
         {
             File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { }");
             using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            DbWriter.ReusableStatSnapshotReadForTesting = () => statSnapshotReads++;
 
             var request = new JsonObject
             {
@@ -7141,9 +7147,11 @@ public partial class McpServerTests
 
             Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
             Assert.True(response["result"]!["structuredContent"]!["summary"]!["files"]!.GetValue<long>() >= 1L);
+            Assert.Equal(0, statSnapshotReads);
         }
         finally
         {
+            DbWriter.ReusableStatSnapshotReadForTesting = null;
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
         }

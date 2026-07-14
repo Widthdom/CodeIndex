@@ -233,6 +233,13 @@ and typed parameter schemas are created only on a cache miss; each execution
 reassigns parameter values by ordinal. Keep new bulk-write paths on this bounded
 cache so large indexes do not rebuild equivalent SQLite commands per file.
 
+Repository-wide incremental scans load stat-reuse candidates with one SQLite
+statement before the C# contract prepass and parallel extraction. Each candidate
+is still compared with a fresh filesystem size and UTC modification time, and
+language extractor versions, extraction caps, stale issue metadata, and generated
+code suppression must all remain part of the snapshot eligibility contract. Do
+not replace this snapshot with per-file database probes in either CLI or MCP.
+
 `FileIssue` rows may include nullable `origin` and `severity` metadata.
 For `replacement_char`, `origin: source_literal` means the file contains a
 valid encoded U+FFFD literal, while `origin: decode_replacement` means the
@@ -2651,6 +2658,12 @@ row-count shape ごとに bounded な `PreparedCommandCache` で再利用しま�
 型付き parameter schema は cache miss 時だけ構築し、各実行では ordinal 順に parameter
 value を再設定します。大規模 index で同じ SQLite command を file ごとに再構築しないよう、
 新しい bulk-write 経路もこの bounded cache に載せてください。
+
+リポジトリ全体の incremental scan は、C# contract prepass と parallel extraction の前に
+stat-reuse 候補を 1 回の SQLite statement で読みます。各候補は引き続き最新の filesystem
+size と UTC 更新時刻と照合し、language extractor version、extraction cap、古い issue metadata、
+generated-code suppression も snapshot eligibility contract に含めます。CLI と MCP のどちらでも、
+この snapshot を file ごとの database probe に戻さないでください。
 
 `FileIssue` rows には nullable な `origin` / `severity` metadata が入ることがある。
 `replacement_char` では `origin: source_literal` が正規にエンコードされた U+FFFD

@@ -2500,6 +2500,25 @@ public class DatabaseTests : IDisposable
             maxSymbolsPerFile: 10,
             maxReferencesPerFile: 10,
             generatedExtractionSuppressed: false));
+
+        var reusableStats = _writer.LoadReusableIndexedFileStats(
+            maxSymbolsPerFile: 10,
+            maxReferencesPerFile: 10);
+        Assert.Equal(2, reusableStats.Count);
+        Assert.Equal(fileId, reusableStats["src/caps.cs"].FileId);
+        Assert.Equal(modified.AddMinutes(1), reusableStats["src/caps.cs"].ModifiedUtc);
+        Assert.Equal(20, reusableStats["src/caps.cs"].Size);
+        Assert.Equal("csharp", reusableStats["src/caps.cs"].Language);
+        Assert.False(reusableStats["src/caps.cs"].GeneratedExtractionSuppressed);
+        Assert.Equal(generatedFileId, reusableStats["src/generated.g.cs"].FileId);
+        Assert.True(reusableStats["src/generated.g.cs"].GeneratedExtractionSuppressed);
+        Assert.DoesNotContain("src/cap-issue.cs", reusableStats.Keys);
+
+        var reusableStatsUnderLowerCap = _writer.LoadReusableIndexedFileStats(
+            maxSymbolsPerFile: 1,
+            maxReferencesPerFile: 10);
+        Assert.DoesNotContain("src/caps.cs", reusableStatsUnderLowerCap.Keys);
+        Assert.Contains("src/generated.g.cs", reusableStatsUnderLowerCap.Keys);
     }
 
     [Fact]

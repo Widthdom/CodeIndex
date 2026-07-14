@@ -91,4 +91,43 @@ internal static class IndexedFileStatReuse
             return null;
         }
     }
+
+    internal static IndexedFileStatReuseResult? TryGetReusableUnchangedFile(
+        IReadOnlyDictionary<string, ReusableIndexedFileStat> reusableFiles,
+        string absolutePath,
+        string relativePath,
+        string? language,
+        bool? generatedExtractionSuppressed)
+    {
+        LookupForTesting?.Invoke(relativePath);
+        if (language == null
+            || !reusableFiles.TryGetValue(relativePath, out var indexed)
+            || !string.Equals(indexed.Language, language, StringComparison.Ordinal)
+            || (generatedExtractionSuppressed.HasValue
+                && indexed.GeneratedExtractionSuppressed != generatedExtractionSuppressed.Value))
+        {
+            return null;
+        }
+
+        try
+        {
+            var info = new FileInfo(absolutePath);
+            if (!info.Exists
+                || info.Length != indexed.Size
+                || info.LastWriteTimeUtc != indexed.ModifiedUtc)
+            {
+                return null;
+            }
+
+            return new IndexedFileStatReuseResult(indexed.FileId, indexed.Size);
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
 }

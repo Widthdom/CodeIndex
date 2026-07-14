@@ -103,7 +103,9 @@ The first index does the expensive scan once. After edits, branch switches, or
 CI checkouts, refresh with `cdidx .`, `--files`, `--commits`, or
 `--changed-between` as appropriate. See the [User Guide quick start](USER_GUIDE.md#quick-start)
 and [incremental update reliability](USER_GUIDE.md#incremental-update-reliability)
-for the full workflow.
+for the full workflow. Repository-wide refreshes load unchanged-file metadata
+in one batch, then validate each candidate against the live filesystem instead
+of issuing a SQLite lookup for every file.
 
 For a faster first pass when you only need text search, `definition`, `symbols`,
 or `map`, run `cdidx . --symbols-only`. Reference graph commands remain degraded
@@ -322,6 +324,8 @@ cdidx lsp --db .cdidx/codeindex.db
 状況に応じて `cdidx .`、`--files`、`--commits`、`--changed-between` で更新します。
 全体の流れは [ユーザーガイドのクイックスタート](USER_GUIDE.md#クイックスタート) と
 [インクリメンタル更新の信頼性](USER_GUIDE.md#インクリメンタル更新の信頼性) を参照してください。
+リポジトリ全体の更新では unchanged-file metadata を一括で読み、file ごとの SQLite lookup を
+繰り返さずに各候補を実 filesystem と照合します。
 
 まず text search、`definition`、`symbols`、`map` だけを速く使いたい場合は
 `cdidx . --symbols-only` を使えます。reference graph 系コマンドは、このフラグなしで

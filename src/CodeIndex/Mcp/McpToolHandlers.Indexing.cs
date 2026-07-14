@@ -383,26 +383,29 @@ public partial class McpServer
             knownReadableFileSizes[path] = size;
         }
         await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
+        var reusableIndexedFileStats = !rebuild && !startedWithNoIndexedFiles
+            ? writer.LoadReusableIndexedFileStats(maxSymbolsPerFile, maxReferencesPerFile)
+            : null;
         Dictionary<string, IndexedFileStatReuseResult?>? csharpPrepassStatReuse = null;
         bool IsGeneratedExtractionSuppressed(CSharpStaticInterfacePrepass.FileTarget target)
             => target.GeneratedExtractionSuppressed == true;
 
         bool CanReuseCSharpPrepassTargetWithoutRead(CSharpStaticInterfacePrepass.FileTarget target)
         {
-            if (!symbolKindFilterMatchesPrior || !csharpSymbolNameContractMatchesCurrent)
+            if (rebuild
+                || startedWithNoIndexedFiles
+                || !symbolKindFilterMatchesPrior
+                || !csharpSymbolNameContractMatchesCurrent)
                 return false;
             if (target.Language != "csharp")
                 return false;
 
             var existingFile = IndexedFileStatReuse.TryGetReusableUnchangedFile(
-                writer,
+                reusableIndexedFileStats!,
                 target.FilePath,
                 target.IndexPath,
                 target.Language,
-                maxSymbolsPerFile,
-                maxReferencesPerFile,
-                IsGeneratedExtractionSuppressed(target),
-                allowReuse: true);
+                IsGeneratedExtractionSuppressed(target));
             if (existingFile == null)
             {
                 (csharpPrepassStatReuse ??= new Dictionary<string, IndexedFileStatReuseResult?>(
@@ -484,20 +487,18 @@ public partial class McpServer
                     && (target.Language != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                     && (target.Language != "sql" || sqlGraphContractMatchesCurrent)
                     && AllowReuseWithCurrentHotspotFamilyTrust(target.Language, hotspotFamilyTrustMatchesCurrent);
-                var statMatchedFile = allowStatReuse
-                    && target.Language == "csharp"
-                    && csharpPrepassStatReuse != null
-                    && csharpPrepassStatReuse.TryGetValue(target.IndexPath, out var cachedCSharpPrepassReuse)
+                var statMatchedFile = !allowStatReuse
+                    ? null
+                    : target.Language == "csharp"
+                      && csharpPrepassStatReuse != null
+                      && csharpPrepassStatReuse.TryGetValue(target.IndexPath, out var cachedCSharpPrepassReuse)
                         ? cachedCSharpPrepassReuse
                         : IndexedFileStatReuse.TryGetReusableUnchangedFile(
-                            writer,
+                            reusableIndexedFileStats!,
                             filePath,
                             target.IndexPath,
                             target.Language,
-                            maxSymbolsPerFile,
-                            maxReferencesPerFile,
-                            IsGeneratedExtractionSuppressed(target),
-                            allowStatReuse);
+                            IsGeneratedExtractionSuppressed(target));
                 if (statMatchedFile != null)
                 {
                     skipped++;
