@@ -197,7 +197,7 @@ internal static class TestDeterminism
                     return worker();
                 },
                 cancellationToken,
-                TaskCreationOptions.LongRunning,
+                TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
                 TaskScheduler.Default))
             .ToArray();
 
