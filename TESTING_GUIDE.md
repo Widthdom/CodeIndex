@@ -92,7 +92,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Solidity's representative declaration/range fixture also owns comment and string false-positive controls on existing lines, avoiding a second extraction without shifting range assertions.
   Python type-introspection helper coverage keeps bare and qualified `cast` / `assert_type` calls beside other helper APIs, using distinct target types and containers in one extraction.
   Python f-string interpolation coverage keeps single-line, multiline, nested-expression, and format-specifier-followed calls in one fixture with exact per-container call sets.
-  Swift `.self`, `#selector`, and `#keyPath` expression coverage shares one fixture, asserting qualified roots and excluding instance/member tokens together.
+  Swift `.self`, `#selector`, and `#keyPath` expression coverage shares one fixture, asserting qualified roots and excluding instance/member tokens together, including every member segment in a multi-segment key path.
   JavaScript semicolonless blockless-arrow boundaries share one source for following class, expression-plus-class, and CommonJS class-export forms, with distinct hidden/visible names and exact arrow end lines.
   JavaScript direct and wrapper-call blockless-arrow class returns share one source with exact lambda ranges and distinct hidden class/member exclusions.
   JavaScript callable-scope local-class coverage shares class methods, ordinary functions, and CommonJS function expressions in one source, with direct/class-expression forms and unique leak sentinels.
@@ -711,7 +711,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   Solidity の代表 declaration/range fixture は既存行上の comment/string false-positive control も担当し、range assertion をずらさず2回目の抽出を省きます。
   Python type-introspection helper coverage は bare/qualified `cast` / `assert_type` を他の helper API と同居させ、固有 target type と container を1回の抽出で検証します。
   Python f-string interpolation coverage は single-line、multiline、nested-expression、format-specifier 後の call を、container 別 call 集合を厳密に検証する1 fixture で共有します。
-  Swift の `.self`、`#selector`、`#keyPath` expression coverage は1 fixture を共有し、qualified root と instance/member token の除外をまとめて検証します。
+  Swift の `.self`、`#selector`、`#keyPath` expression coverage は1 fixture を共有し、multi-segment key path の全 member segment を含め、qualified root と instance/member token の除外をまとめて検証します。
   JavaScript の semicolonless blockless-arrow boundary は、後続 class、expression＋class、CommonJS class-export 形を、固有 hidden/visible 名と厳密な arrow end line を持つ1 source で共有します。
   JavaScript の direct/wrapper-call blockless-arrow class return は、厳密な lambda range と固有 hidden class/member 除外を持つ1 source を共有します。
   JavaScript callable-scope local-class coverage は、class method、通常 function、CommonJS function expression の direct/class-expression 形と固有 leak sentinel を1 source で共有します。

@@ -985,7 +985,11 @@ public partial class ReferenceExtractorTests
                 @objc func handleTap(_ sender: Any) {}
                 @objc var titleText: String = ""
             }
-            class Person { @objc var name: String = "" }
+            class Address { @objc var street: String = "" }
+            class Person {
+                @objc var name: String = ""
+                @objc var address: Address
+            }
 
             func configure(user: User) {
                 let userType = User.self
@@ -996,6 +1000,7 @@ public partial class ReferenceExtractorTests
                 let getter = #selector(getter: ViewController.titleText)
                 let unqualifiedSelector = #selector(handleTap(_:))
                 let name = #keyPath(Person.name)
+                let street = #keyPath(Person.address.street)
                 let unqualifiedKeyPath = #keyPath(name)
             }
             """;
@@ -1019,7 +1024,7 @@ public partial class ReferenceExtractorTests
                 && reference.ContainerName == "configure");
         }
         Assert.DoesNotContain(references, reference =>
-            reference.SymbolName is "user" or "handleTap" or "titleText" or "name"
+            reference.SymbolName is "user" or "handleTap" or "titleText" or "name" or "address" or "street"
             && reference.ReferenceKind == "type_reference");
     }
     [Fact]
