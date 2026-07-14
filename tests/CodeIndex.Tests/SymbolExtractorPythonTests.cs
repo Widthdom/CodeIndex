@@ -229,10 +229,12 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Python_CachedPropertyDecoratorsAreProperties()
+    public void Extract_Python_PropertyDecoratorFamilies_ReuseSingleFixture()
     {
         var content = """
+            import abc
             import functools
+            from abc import abstractproperty
             from functools import cached_property
 
             class Metrics:
@@ -243,19 +245,7 @@ public partial class SymbolExtractorTests
                 @functools.cached_property
                 def count(self) -> int:
                     return 2
-            """;
-        var symbols = SymbolExtractor.Extract(1, "python", content);
 
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "total");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "count");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "total");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "count");
-    }
-
-    [Fact]
-    public void Extract_Python_PropertyAccessorDecoratorsAreProperties()
-    {
-        var content = """
             class User:
                 @property
                 def name(self) -> str:
@@ -268,8 +258,23 @@ public partial class SymbolExtractorTests
                 @name.deleter
                 def name(self) -> None:
                     del self._name
+
+            class Base:
+                @abstractproperty
+                def abstract_name(self) -> str:
+                    raise NotImplementedError
+
+                @abc.abstractproperty
+                def abstract_value(self) -> int:
+                    raise NotImplementedError
             """;
         var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        foreach (var propertyName in new[] { "total", "count", "abstract_name", "abstract_value" })
+        {
+            Assert.Contains(symbols, s => s.Kind == "property" && s.Name == propertyName);
+            Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == propertyName);
+        }
 
         Assert.Equal(3, symbols.Count(s => s.Kind == "property" && s.Name == "name"));
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name" && s.SubKind == "setter");
@@ -336,30 +341,6 @@ public partial class SymbolExtractorTests
             && s.Signature != null
             && s.Signature.Contains("BaseRepository", StringComparison.Ordinal)
             && s.Signature.Contains("Generic[T]", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public void Extract_Python_AbstractPropertyDecoratorsAreProperties()
-    {
-        var content = """
-            import abc
-            from abc import abstractproperty
-
-            class Base:
-                @abstractproperty
-                def name(self) -> str:
-                    raise NotImplementedError
-
-                @abc.abstractproperty
-                def value(self) -> int:
-                    raise NotImplementedError
-            """;
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "name");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "value");
     }
 
     [Fact]
