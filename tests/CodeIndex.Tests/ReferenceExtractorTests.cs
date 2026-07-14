@@ -5429,7 +5429,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_GoInterfaceTypeSetTerms_CapturesUnionTypes()
+    public void Extract_GoTypeSetTerms_ReuseUnionAndApproximationFixture()
     {
         const string content = """
             package main
@@ -5437,6 +5437,11 @@ public partial class ReferenceExtractorTests
             type Identifier interface {
                 ~CustomID | External
                 model.Token | ~Alias
+            }
+
+            type SliceLike interface {
+                ~[]Element
+                ~map[Key]Value
             }
 
             func flags() {
@@ -5452,29 +5457,12 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "External" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Token" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Alias" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "FlagA" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "FlagB" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoStandaloneTypeSetTerms_CapturesApproximationTypes()
-    {
-        const string content = """
-            package main
-
-            type SliceLike interface {
-                ~[]Element
-                ~map[Key]Value
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
         Assert.Contains(references, r => r.SymbolName == "Element" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "map" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "FlagA" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "FlagB" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
