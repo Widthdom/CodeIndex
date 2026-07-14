@@ -216,7 +216,7 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Go_DetectsNamedTypesAndAliasesAsClassSymbols()
+    public void Extract_Go_DetectsNamedAliasAndGenericTypeSymbols()
     {
         var content = """
             package demo
@@ -234,6 +234,16 @@ public partial class SymbolExtractorTests
                     Read([]byte) (int, error)
                 }
             )
+
+            type Stack[T any] struct {
+                items []T
+            }
+
+            type Container[T comparable, U any] interface {
+                Get() U
+            }
+
+            type GenericAlias[T any] string
             """;
 
         var symbols = SymbolExtractor.Extract(1, "go", content);
@@ -244,6 +254,9 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Score");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Node");
         Assert.Contains(symbols, s => s.Kind == "protocol" && s.Name == "Reader");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Stack");
+        Assert.Contains(symbols, s => s.Kind == "protocol" && s.Name == "Container");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "GenericAlias");
     }
 
     [Fact]
@@ -360,27 +373,6 @@ public partial class SymbolExtractorTests
         var label = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "Retry");
         Assert.Equal(4, label.Line);
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name is "case" or "default");
-    }
-
-    [Fact]
-    public void Extract_Go_DetectsGenericTypeDeclarations()
-    {
-        var content = """
-            type Stack[T any] struct {
-                items []T
-            }
-
-            type Container[T comparable, U any] interface {
-                Get() U
-            }
-
-            type Alias[T any] string
-            """;
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-
-        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Stack");
-        Assert.Contains(symbols, s => s.Kind == "protocol" && s.Name == "Container");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Alias");
     }
 
     [Fact]
