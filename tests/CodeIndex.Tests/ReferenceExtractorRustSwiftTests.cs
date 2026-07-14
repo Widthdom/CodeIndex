@@ -1566,12 +1566,14 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_RustAssociatedTypeDefaults_CaptureBoundAndDefaultTypeReferences()
+    public void Extract_RustAssociatedTypes_CaptureBoundAndDefaultTypeReferences()
     {
         const string content = """
             trait Builder {
                 type Output = ();
-                type Error: std::error::Error = String;
+                type BuildFailure: std::error::Error = String;
+                type Item: Display + Debug;
+                type StreamFailure: Into<AppError> = IoError;
             }
             """;
 
@@ -1580,6 +1582,11 @@ public partial class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.SymbolName == "Error" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "String" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Display" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Debug" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Into" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "AppError" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "IoError" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -1672,26 +1679,6 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Request" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_RustAssociatedTypes_CaptureBoundTypeReferences()
-    {
-        const string content = """
-            trait Stream {
-                type Item: Display + Debug;
-                type Error: Into<AppError> = IoError;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Display" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Debug" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Into" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "AppError" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "IoError" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -2129,11 +2116,12 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_RustFunctionTraitBounds_CapturesReturnTypes()
+    public void Extract_RustFunctionTraitBounds_CaptureDeclarationAndSupertraitReturnTypes()
     {
         const string content = """
             fn call<F: FnOnce() -> Result<User, Error>>(f: F) {}
             fn where_call<F>(f: F) where F: FnOnce() -> Response {}
+            trait Handler: FnOnce() -> SupertraitUser {}
             """;
 
         var symbols = SymbolExtractor.Extract(1, "rust", content);
@@ -2144,19 +2132,6 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Error" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_RustTraitSuperFunctionBounds_CapturesReturnTypes()
-    {
-        const string content = """
-            trait Handler: FnOnce() -> User {}
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "FnOnce" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "SupertraitUser" && r.ReferenceKind == "type_reference");
     }
 }
