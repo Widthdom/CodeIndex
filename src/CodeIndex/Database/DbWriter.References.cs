@@ -54,18 +54,27 @@ public partial class DbWriter
             try
             {
                 var parameterIndex = 0;
+                (long FileId, int Line, string Context)? previousReferenceLineKey = null;
+                var previousReferenceLineId = 0L;
                 for (int j = i; j < end; j++)
                 {
                     var reference = references[j];
                     ValidateReferenceKinds(reference);
-                    var referenceLineId = referenceLineIds[(reference.FileId, reference.Line, reference.Context)];
+                    var referenceLineKey = (reference.FileId, reference.Line, reference.Context);
+                    if (previousReferenceLineKey is not { } previousKey
+                        || !ReferenceLineKeysEqual(previousKey, referenceLineKey))
+                    {
+                        previousReferenceLineId = referenceLineIds[referenceLineKey];
+                        previousReferenceLineKey = referenceLineKey;
+                    }
+
                     cmd.Parameters[parameterIndex++].Value = reference.FileId;
                     cmd.Parameters[parameterIndex++].Value = reference.SymbolName;
                     cmd.Parameters[parameterIndex++].Value = reference.ReferenceKind;
                     cmd.Parameters[parameterIndex++].Value = reference.Line;
                     cmd.Parameters[parameterIndex++].Value = reference.Column;
                     cmd.Parameters[parameterIndex++].Value = DBNull.Value;
-                    cmd.Parameters[parameterIndex++].Value = referenceLineId;
+                    cmd.Parameters[parameterIndex++].Value = previousReferenceLineId;
                     cmd.Parameters[parameterIndex++].Value = (object?)reference.ContainerKind ?? DBNull.Value;
                     cmd.Parameters[parameterIndex++].Value = (object?)reference.ContainerName ?? DBNull.Value;
                     cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(reference.SymbolName, foldedNameCache);
@@ -95,11 +104,18 @@ public partial class DbWriter
     {
         var batchCount = end - start;
         var referenceLineKeys = new HashSet<(long FileId, int Line, string Context)>(batchCount);
+        (long FileId, int Line, string Context)? previousReferenceLineKey = null;
         for (int i = start; i < end; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var reference = references[i];
-            referenceLineKeys.Add((reference.FileId, reference.Line, reference.Context));
+            var referenceLineKey = (reference.FileId, reference.Line, reference.Context);
+            if (previousReferenceLineKey is not { } previousKey
+                || !ReferenceLineKeysEqual(previousKey, referenceLineKey))
+            {
+                referenceLineKeys.Add(referenceLineKey);
+                previousReferenceLineKey = referenceLineKey;
+            }
         }
 
         var rows = referenceLineKeys.ToArray();
@@ -165,11 +181,18 @@ public partial class DbWriter
     {
         var batchCount = end - start;
         var referenceLineKeys = new HashSet<(long FileId, int Line, string Context)>(batchCount);
+        (long FileId, int Line, string Context)? previousReferenceLineKey = null;
         for (int i = start; i < end; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var reference = references[i];
-            referenceLineKeys.Add((reference.FileId, reference.Line, reference.Context));
+            var referenceLineKey = (reference.FileId, reference.Line, reference.Context);
+            if (previousReferenceLineKey is not { } previousKey
+                || !ReferenceLineKeysEqual(previousKey, referenceLineKey))
+            {
+                referenceLineKeys.Add(referenceLineKey);
+                previousReferenceLineKey = referenceLineKey;
+            }
         }
 
         var lineIds = new Dictionary<(long FileId, int Line, string Context), long>(referenceLineKeys.Count);
@@ -213,6 +236,13 @@ public partial class DbWriter
 
         return lineIds;
     }
+
+    private static bool ReferenceLineKeysEqual(
+        (long FileId, int Line, string Context) left,
+        (long FileId, int Line, string Context) right)
+        => left.FileId == right.FileId
+           && left.Line == right.Line
+           && string.Equals(left.Context, right.Context, StringComparison.Ordinal);
 
     internal void RefreshMutualRecursionFlags()
     {
