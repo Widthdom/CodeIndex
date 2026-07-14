@@ -2531,7 +2531,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_RubyAliasDeclarations_IndexAliasEndpoints()
+    public void Extract_RubyMetaprogrammingDeclarations_ReuseAliasVisibilityAndModuleFunctionFixture()
     {
         const string content = """
             class Person
@@ -2541,43 +2541,14 @@ public partial class ReferenceExtractorTests
               alias_method :full_name, :name
               alias display_name name
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "alias");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "alias_method");
-        Assert.Contains(references, reference => reference.SymbolName == "full_name" && reference.ContainerName == "Person");
-        Assert.Contains(references, reference => reference.SymbolName == "display_name" && reference.ContainerName == "Person");
-        Assert.Equal(2, references.Count(reference => reference.SymbolName == "name" && reference.ContainerName == "Person"));
-    }
-
-    [Fact]
-    public void Extract_RubyConstantVisibilityDeclarations_IndexConstants()
-    {
-        const string content = """
             class Config
               SecretKey = "x"
               Token = "t"
               private_constant :SecretKey
               public_constant :Token
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "private_constant");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "public_constant");
-        Assert.Contains(references, reference => reference.SymbolName == "SecretKey" && reference.ContainerName == "Config");
-        Assert.Contains(references, reference => reference.SymbolName == "Token" && reference.ContainerName == "Config");
-    }
-
-    [Fact]
-    public void Extract_RubyModuleFunction_IndexesExportedMethods()
-    {
-        const string content = """
             module Formatting
               def normalize
               end
@@ -2589,7 +2560,13 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "ruby", content);
         var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "module_function");
+        Assert.DoesNotContain(references, reference => reference.SymbolName is
+            "alias" or "alias_method" or "private_constant" or "public_constant" or "module_function");
+        Assert.Contains(references, reference => reference.SymbolName == "full_name" && reference.ContainerName == "Person");
+        Assert.Contains(references, reference => reference.SymbolName == "display_name" && reference.ContainerName == "Person");
+        Assert.Equal(2, references.Count(reference => reference.SymbolName == "name" && reference.ContainerName == "Person"));
+        Assert.Contains(references, reference => reference.SymbolName == "SecretKey" && reference.ContainerName == "Config");
+        Assert.Contains(references, reference => reference.SymbolName == "Token" && reference.ContainerName == "Config");
         Assert.Contains(references, reference => reference.SymbolName == "normalize" && reference.ContainerName == "Formatting");
     }
 
