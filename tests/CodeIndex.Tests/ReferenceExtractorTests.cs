@@ -5375,40 +5375,21 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_GoMethodExpressions_CapturesReceiverTypes()
+    public void Extract_GoMethodExpressions_ReuseGenericReceiverFixture()
     {
         const string content = """
             package main
 
-            func bind(handler Handler) {
+            func bind(handler Handler, repositories []Repository[User]) {
                 serve := Handler.Serve
                 run := (*Worker).Run
                 stringify := model.User.String
                 method := handler.Serve
-                _, _, _, _ = serve, run, stringify, method
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Worker" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "handler" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoGenericMethodExpressions_CapturesReceiverTypesAndArguments()
-    {
-        const string content = """
-            package main
-
-            func bind(repositories []Repository[User]) {
                 find := Repository[User].Find
                 save := (*Store[model.Entry]).Save
-                method := repositories[i].Find
-                _, _, _ = find, save, method
+                genericMethod := repositories[i].Find
+                _, _, _, _, _, _ = serve, run, stringify, method, find, save
+                _ = genericMethod
             }
             """;
 
@@ -5419,6 +5400,7 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Store" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Entry" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "handler" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "repositories" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "i" && r.ReferenceKind == "type_reference");
     }
