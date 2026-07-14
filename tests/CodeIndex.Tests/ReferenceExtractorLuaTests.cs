@@ -5,7 +5,7 @@ namespace CodeIndex.Tests;
 public class ReferenceExtractorLuaTests
 {
     [Fact]
-    public void MaskLongCommentAndStringLines_ReturnsOriginalArrayWithoutLongText()
+    public void MaskLongCommentAndStringLines_UsesCopyOnWrite()
     {
         var lines = new[]
         {
@@ -16,22 +16,17 @@ public class ReferenceExtractorLuaTests
         var masked = LuaReferenceExtractor.MaskLongCommentAndStringLines(lines);
 
         Assert.Same(lines, masked);
-    }
-
-    [Fact]
-    public void MaskLongCommentAndStringLines_ClonesWhenLongTextIsMasked()
-    {
-        var lines = new[]
+        var longTextLines = new[]
         {
             "local value = [[",
             "Phantom.call()",
             "]]",
         };
 
-        var masked = LuaReferenceExtractor.MaskLongCommentAndStringLines(lines);
+        var maskedLongText = LuaReferenceExtractor.MaskLongCommentAndStringLines(longTextLines);
 
-        Assert.NotSame(lines, masked);
-        Assert.DoesNotContain("Phantom", masked[1], StringComparison.Ordinal);
+        Assert.NotSame(longTextLines, maskedLongText);
+        Assert.DoesNotContain("Phantom", maskedLongText[1], StringComparison.Ordinal);
     }
 
     [Fact]

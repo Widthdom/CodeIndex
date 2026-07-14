@@ -5,7 +5,7 @@ namespace CodeIndex.Tests;
 public partial class SymbolExtractorTests
 {
     [Fact]
-    public void SolidityMaskCommentsAndStrings_ReturnsOriginalArrayWithoutMasking()
+    public void SolidityMaskCommentsAndStrings_UsesCopyOnWrite()
     {
         var lines = new[]
         {
@@ -17,24 +17,19 @@ public partial class SymbolExtractorTests
         var masked = SolidityLanguageSupport.MaskCommentsAndStrings(lines);
 
         Assert.Same(lines, masked);
-    }
-
-    [Fact]
-    public void SolidityMaskCommentsAndStrings_ClonesWhenMaskingRequired()
-    {
-        var lines = new[]
+        var stringLines = new[]
         {
             "contract Vault {",
             "    string constant Text = \"function Nope() public {};\";",
             "}",
         };
 
-        var masked = SolidityLanguageSupport.MaskCommentsAndStrings(lines);
+        var maskedStrings = SolidityLanguageSupport.MaskCommentsAndStrings(stringLines);
 
-        Assert.NotSame(lines, masked);
-        Assert.Same(lines[0], masked[0]);
-        Assert.DoesNotContain("Nope", masked[1], StringComparison.Ordinal);
-        Assert.Same(lines[2], masked[2]);
+        Assert.NotSame(stringLines, maskedStrings);
+        Assert.Same(stringLines[0], maskedStrings[0]);
+        Assert.DoesNotContain("Nope", maskedStrings[1], StringComparison.Ordinal);
+        Assert.Same(stringLines[2], maskedStrings[2]);
     }
 
     [Fact]
