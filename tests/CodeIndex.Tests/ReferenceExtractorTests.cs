@@ -4913,13 +4913,18 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_GoMethodReceiverTypes_CapturesReceiverType()
+    public void Extract_GoMethodSignatures_ReuseReceiverAndInterfaceFixture()
     {
         const string content = """
             package main
 
             func (h *Handler) Serve(ctx Context) Result {
                 return Result{}
+            }
+
+            type Contract interface {
+                Handle(ctx InterfaceContext, input Request) (Response, error)
+                Watch() <-chan Event
             }
             """;
 
@@ -4929,24 +4934,7 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Context" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoInterfaceMethodSignatures_CapturesParameterAndReturnTypes()
-    {
-        const string content = """
-            package main
-
-            type Handler interface {
-                Handle(ctx Context, input Request) (Response, error)
-                Watch() <-chan Event
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Context" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "InterfaceContext" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Request" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
