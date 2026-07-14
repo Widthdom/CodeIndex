@@ -257,6 +257,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Python annotation coverage shares direct and generic return, parameter, and local-variable forms in one module fixture, with function containers preserving each assertion.
 - Python typing-factory coverage shares `TypeAlias`, `NewType`, bounded `TypeVar`, and constrained `TypeVar` declarations in one module fixture with unique target types.
 - Python advanced-typing coverage shares multiline/commented `TypeVar`, `ParamSpec`, callable annotations, variadic tuple unpacking, and literal unions in one logical-header fixture with unique type names.
+- Python type-introspection helper coverage shares direct/qualified `get_type_hints`, dataclass/attrs field lookup, and Pydantic `TypeAdapter` in one module fixture with unique targets.
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). Its publish smoke disables NuGet vulnerability auditing because package advisory validation is covered by the normal build/test workflow's package vulnerability check, not by this runtime serialization test. It is reported as skipped on macOS arm64 while SDK/ILLink can crash before exercising `cdidx` (#2586). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
@@ -780,6 +781,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - Python annotation coverage は direct/generic の return、parameter、local variable 形式を1つの module fixture で共有し、function container ごとの検証を維持します。
 - Python typing factory の coverage は `TypeAlias`、`NewType`、bound 付き `TypeVar`、constraint 付き `TypeVar` を一意な target type を持つ1つの module fixture で共有します。
 - Python advanced typing coverage は multiline/comment 付き `TypeVar`、`ParamSpec`、callable annotation、variadic tuple unpack、literal union を一意な型名を持つ1つの logical-header fixture で共有します。
+- Python type introspection helper coverage は direct/qualified `get_type_hints`、dataclass/attrs field lookup、Pydantic `TypeAdapter` を一意な target を持つ1つの module fixture で共有します。
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   は trimmed な RID 固有 CLI を publish し、SDK が生成した entry point（`dotnet` 経由の `cdidx.dll`、または native の `cdidx`/`cdidx.exe` apphost）を実行します。この publish smoke は NuGet 脆弱性監査を無効化します。package advisory の検証は通常の build/test workflow の package vulnerability check が担い、この runtime serialization テストの責務ではないためです。macOS arm64 では SDK/ILLink が `cdidx` に到達する前にクラッシュし得るため、このテストは skipped として報告されます（#2586）。self-contained publish output に常に `cdidx.dll` が出るとは仮定しないでください。
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
