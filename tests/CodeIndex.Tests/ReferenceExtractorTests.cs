@@ -2601,13 +2601,40 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_RubyClassInheritance_IndexesSuperclass()
+    public void Extract_RubyTypeComposition_ReuseInheritanceMixinAndRefinementFixture()
     {
         const string content = """
             class ApplicationJob
             end
 
             class CleanupJob < ApplicationJob
+            end
+
+            module Shared
+            end
+
+            module ModName
+            end
+
+            class Worker
+              include Shared
+              extend ModName
+              prepend AuditTrail
+              using CurrencyFormatting
+              before_action :authenticate
+              attr_accessor :name
+
+              def run(x)
+                super(x)
+                yield(item())
+              end
+            end
+
+            module StringFormatting
+              refine String do
+                def titleize
+                end
+              end
             end
             """;
 
@@ -2617,6 +2644,16 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, reference =>
             reference.SymbolName == "ApplicationJob"
             && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Shared" && reference.ContainerName == "Worker");
+        Assert.Contains(references, reference => reference.SymbolName == "ModName" && reference.ContainerName == "Worker");
+        Assert.Contains(references, reference => reference.SymbolName == "AuditTrail" && reference.ContainerName == "Worker");
+        Assert.Contains(references, reference => reference.SymbolName == "CurrencyFormatting" && reference.ContainerName == "Worker");
+        Assert.Contains(references, reference => reference.SymbolName == "authenticate" && reference.ContainerName == "Worker");
+        Assert.Contains(references, reference => reference.SymbolName == "name" && reference.ContainerName == "Worker");
+        Assert.Contains(references, reference => reference.SymbolName == "item" && reference.ContainerName == "run");
+        Assert.Contains(references, reference => reference.SymbolName == "String" && reference.ContainerName == "StringFormatting");
+        Assert.DoesNotContain(references, reference => reference.SymbolName is
+            "include" or "prepend" or "using" or "super" or "yield" or "refine");
     }
 
     [Fact]
@@ -2653,67 +2690,6 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, reference => reference.SymbolName == "ValueError" && reference.ContainerName == "fail");
         Assert.DoesNotContain(references, reference => reference.SymbolName is
             "rescue" or "rescue_from" or "with" or "render_error" or "raise");
-    }
-
-    [Fact]
-    public void Extract_RubyContextualKeywords_AreIgnored()
-    {
-        const string content = """
-            module Shared
-            end
-
-            module ModName
-            end
-
-            class Worker
-              include Shared
-              extend ModName
-              prepend AuditTrail
-              using CurrencyFormatting
-              before_action :authenticate
-              attr_accessor :name
-
-              def run(x)
-                super(x)
-                yield(item())
-              end
-            end
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "include");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "prepend");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "using");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "super");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "yield");
-        Assert.Contains(references, reference => reference.SymbolName == "Shared" && reference.ContainerName == "Worker");
-        Assert.Contains(references, reference => reference.SymbolName == "ModName" && reference.ContainerName == "Worker");
-        Assert.Contains(references, reference => reference.SymbolName == "AuditTrail" && reference.ContainerName == "Worker");
-        Assert.Contains(references, reference => reference.SymbolName == "CurrencyFormatting" && reference.ContainerName == "Worker");
-        Assert.Contains(references, reference => reference.SymbolName == "authenticate" && reference.ContainerName == "Worker");
-        Assert.Contains(references, reference => reference.SymbolName == "name" && reference.ContainerName == "Worker");
-        Assert.Contains(references, reference => reference.SymbolName == "item" && reference.ContainerName == "run");
-    }
-
-    [Fact]
-    public void Extract_RubyRefine_IndexesRefinedClass()
-    {
-        const string content = """
-            module StringFormatting
-              refine String do
-                def titleize
-                end
-              end
-            end
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "refine");
-        Assert.Contains(references, reference => reference.SymbolName == "String" && reference.ContainerName == "StringFormatting");
     }
 
     [Fact]
