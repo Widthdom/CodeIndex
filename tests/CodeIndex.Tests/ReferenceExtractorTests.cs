@@ -2493,71 +2493,23 @@ public partial class ReferenceExtractorTests
 
 
     [Fact]
-    public void Extract_RubyRequireCall_IsNotDropped()
+    public void Extract_RubyLoadingAndDependencyDsl_ReuseSingleFixture()
     {
         const string content = """
-            def load
+            def load_json
               require("json")
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.Contains(references, reference => reference.SymbolName == "require" && reference.ContainerName == "load");
-    }
-
-    [Fact]
-    public void Extract_RubyRequireRelative_IndexesTargetPath()
-    {
-        const string content = """
             def load_user
               require_relative "models/user"
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.Contains(references, reference => reference.SymbolName == "require_relative" && reference.ContainerName == "load_user");
-        Assert.Contains(references, reference => reference.SymbolName == "models/user" && reference.ContainerName == "load_user");
-    }
-
-    [Fact]
-    public void Extract_RubyLoad_IndexesLoadedPath()
-    {
-        const string content = """
             def boot
               load "config/routes.rb"
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.Contains(references, reference => reference.SymbolName == "load" && reference.ContainerName == "boot");
-        Assert.Contains(references, reference => reference.SymbolName == "config/routes.rb" && reference.ContainerName == "boot");
-    }
-
-    [Fact]
-    public void Extract_RubyGem_IndexesDependencyName()
-    {
-        const string content = """
             gem "rails", "~> 8.0"
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "gem");
-        Assert.Contains(references, reference => reference.SymbolName == "rails");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "~> 8.0");
-    }
-
-    [Fact]
-    public void Extract_RubyAutoload_IndexesConstantTarget()
-    {
-        const string content = """
             module Registry
               autoload :User, "models/user"
             end
@@ -2566,9 +2518,16 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "ruby", content);
         var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
 
+        Assert.Contains(references, reference => reference.SymbolName == "require" && reference.ContainerName == "load_json");
+        Assert.Contains(references, reference => reference.SymbolName == "require_relative" && reference.ContainerName == "load_user");
+        Assert.Contains(references, reference => reference.SymbolName == "models/user" && reference.ContainerName == "load_user");
+        Assert.Contains(references, reference => reference.SymbolName == "load" && reference.ContainerName == "boot");
+        Assert.Contains(references, reference => reference.SymbolName == "config/routes.rb" && reference.ContainerName == "boot");
+        Assert.Contains(references, reference => reference.SymbolName == "rails");
         Assert.Contains(references, reference => reference.SymbolName == "autoload" && reference.ContainerName == "Registry");
         Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ContainerName == "Registry");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "models/user");
+        Assert.DoesNotContain(references, reference => reference.SymbolName is "gem" or "~> 8.0");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "models/user" && reference.ContainerName == "Registry");
     }
 
     [Fact]
