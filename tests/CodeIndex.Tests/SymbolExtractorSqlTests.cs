@@ -51,25 +51,17 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_SQL_MySqlDefinerCreatesDefinerSymbols()
+    public void Extract_SQL_DetectsDefinersAndReturnFieldsWithoutTriviaFalsePositives()
     {
         const string content = """
+            -- CREATE DEFINER='ghost'@'%' PROCEDURE hidden()
+            SELECT 'RETURNS TABLE(fake int)';
             CREATE DEFINER='admin'@'%' PROCEDURE schema.proc()
             BEGIN
               SELECT 1;
             END;
             CREATE DEFINER=`app_user`@`localhost` VIEW `schema`.`v_orders` AS SELECT 1;
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "sql", content);
-
-        AssertSymbolsContain(symbols, "definer", "admin@%", "app_user@localhost");
-    }
-
-    [Fact]
-    public void Extract_SQL_PostgresReturnsTableAndOutParametersCreateFieldSymbols()
-    {
-        const string content = """
             CREATE FUNCTION public.search_orders()
             RETURNS TABLE(id bigint, customer_name text, total numeric(12, 2))
             AS $$
@@ -80,23 +72,7 @@ public partial class SymbolExtractorTests
 
             CREATE FUNCTION public.load_order(OUT order_id int, OUT order_name text) RETURNS RECORD
             AS $$ SELECT 1, 'a' $$ LANGUAGE sql;
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "sql", content);
-
-        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "id" && s.ContainerName == "public.search_orders" && s.ReturnType == "bigint");
-        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "customer_name" && s.ContainerName == "public.search_orders" && s.ReturnType == "text");
-        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "total" && s.ContainerName == "public.search_orders" && s.ReturnType == "numeric(12, 2)");
-        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "order_id" && s.ContainerName == "public.load_order");
-        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "order_name" && s.ContainerName == "public.load_order");
-    }
-
-    [Fact]
-    public void Extract_SQL_DoesNotEmitDefinerOrReturnFieldsFromCommentsAndStrings()
-    {
-        const string content = """
-            -- CREATE DEFINER='ghost'@'%' PROCEDURE hidden()
-            SELECT 'RETURNS TABLE(fake int)';
             CREATE FUNCTION public.real()
             RETURNS TABLE(real_id int)
             AS $$ SELECT 1 $$ LANGUAGE sql;
@@ -104,9 +80,15 @@ public partial class SymbolExtractorTests
 
         var symbols = SymbolExtractor.Extract(1, "sql", content);
 
+        AssertSymbolsContain(symbols, "definer", "admin@%", "app_user@localhost");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "id" && s.ContainerName == "public.search_orders" && s.ReturnType == "bigint");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "customer_name" && s.ContainerName == "public.search_orders" && s.ReturnType == "text");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "total" && s.ContainerName == "public.search_orders" && s.ReturnType == "numeric(12, 2)");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "order_id" && s.ContainerName == "public.load_order");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "order_name" && s.ContainerName == "public.load_order");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "real_id");
         Assert.DoesNotContain(symbols, s => s.Kind == "definer" && s.Name == "ghost@%");
         Assert.DoesNotContain(symbols, s => s.Kind == "field" && s.Name == "fake");
-        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "real_id");
     }
 
     [Fact]
