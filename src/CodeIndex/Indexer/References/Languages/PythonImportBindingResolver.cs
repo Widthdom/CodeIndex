@@ -29,26 +29,63 @@ internal static class PythonImportBindingResolver
         => TryResolveImportedTypeCall(candidate, preparedLine, callIndex, symbols, out _);
 
     public static bool TryResolveImportedTypeCall(string candidate, string preparedLine, int callIndex, IReadOnlyList<SymbolRecord> symbols, out string canonicalName)
+        => TryResolveImportedTypeCall(candidate, preparedLine, callIndex, BuildImportedTypeCallLookup(symbols), out canonicalName);
+
+    internal static bool TryResolveImportedTypeCall(
+        string candidate,
+        string preparedLine,
+        int callIndex,
+        ImportedTypeCallLookup lookup,
+        out string canonicalName)
     {
         canonicalName = candidate;
         var receiver = GetReceiver(preparedLine, callIndex);
-        foreach (var signature in symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Signature).Distinct(StringComparer.Ordinal))
+        if (receiver != null && lookup.ModuleAliases.Contains(receiver) && IsTypeLike(candidate))
         {
-            foreach (var binding in Parse(signature, sourcePath: null))
+            return true;
+        }
+
+        if (lookup.ImportedTypesByLocalName.TryGetValue(candidate, out var importedName)
+            && IsTypeLike(importedName))
+        {
+            canonicalName = importedName;
+            return true;
+        }
+
+        return false;
+    }
+
+    internal static ImportedTypeCallLookup BuildImportedTypeCallLookup(IReadOnlyList<SymbolRecord> symbols)
+    {
+        HashSet<string>? seenSignatures = null;
+        HashSet<string>? moduleAliases = null;
+        Dictionary<string, string>? importedTypesByLocalName = null;
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "import"
+                || string.IsNullOrWhiteSpace(symbol.Signature)
+                || !(seenSignatures ??= new HashSet<string>(StringComparer.Ordinal)).Add(symbol.Signature))
             {
-                if (receiver != null && binding.IsModule && receiver == binding.LocalName && IsTypeLike(candidate))
+                continue;
+            }
+
+            foreach (var binding in Parse(symbol.Signature, sourcePath: null))
+            {
+                if (binding.IsModule)
                 {
-                    canonicalName = candidate;
-                    return true;
+                    (moduleAliases ??= new HashSet<string>(StringComparer.Ordinal)).Add(binding.LocalName);
                 }
-                if (!binding.IsModule && candidate == binding.LocalName && IsTypeLike(binding.ImportedName))
+                else
                 {
-                    canonicalName = binding.ImportedName;
-                    return true;
+                    (importedTypesByLocalName ??= new Dictionary<string, string>(StringComparer.Ordinal))
+                        .TryAdd(binding.LocalName, binding.ImportedName);
                 }
             }
         }
-        return false;
+
+        return new ImportedTypeCallLookup(
+            moduleAliases ?? EmptyStringSet,
+            importedTypesByLocalName ?? EmptyImportedTypeMap);
     }
 
     public static string? ResolveTargetName(string? sourcePath, string? referenceName, string? context, long? columnNumber, string? signature)
@@ -61,7 +98,10 @@ internal static class PythonImportBindingResolver
             if (qualified == binding.LocalName)
                 return binding.IsModule ? referenceName : binding.ImportedName;
             if (qualified.StartsWith(binding.LocalName + ".", StringComparison.Ordinal))
-                return qualified[(binding.LocalName.Length + 1)..].Split('.')[^1];
+            {
+                var leafStart = qualified.LastIndexOf('.') + 1;
+                return qualified[leafStart..];
+            }
         }
         return null;
     }
@@ -106,14 +146,21 @@ internal static class PythonImportBindingResolver
     {
         if (!module.StartsWith(".", StringComparison.Ordinal) || string.IsNullOrWhiteSpace(sourcePath))
             return module.TrimStart('.');
-        var dots = module.TakeWhile(ch => ch == '.').Count();
-        var package = sourcePath.Replace('\\', '/').Split('/').SkipLast(1).ToList();
-        for (var i = 1; i < dots && package.Count > 0; i++)
-            package.RemoveAt(package.Count - 1);
+        var dots = 0;
+        while (dots < module.Length && module[dots] == '.')
+            dots++;
+
+        var normalizedSourcePath = sourcePath.Replace('\\', '/');
+        var packageEnd = normalizedSourcePath.LastIndexOf('/');
+        for (var i = 1; i < dots && packageEnd > 0; i++)
+            packageEnd = normalizedSourcePath.LastIndexOf('/', packageEnd - 1);
         var tail = module[dots..];
-        if (tail.Length > 0)
-            package.AddRange(tail.Split('.'));
-        return string.Join('.', package);
+        var package = packageEnd > 0
+            ? normalizedSourcePath[..packageEnd].Replace('/', '.')
+            : string.Empty;
+        if (tail.Length == 0)
+            return package;
+        return package.Length == 0 ? tail : package + "." + tail;
     }
 
     private static string ModuleNameFromPath(string path)
@@ -149,8 +196,19 @@ internal static class PythonImportBindingResolver
         return context[start..end] + "." + actualName;
     }
 
-    private static bool IsTypeLike(string name) =>
-        name.Length > 1 && char.IsUpper(name[0]) && name.Skip(1).Any(char.IsLower);
+    private static bool IsTypeLike(string name)
+    {
+        if (name.Length <= 1 || !char.IsUpper(name[0]))
+            return false;
+
+        for (var index = 1; index < name.Length; index++)
+        {
+            if (char.IsLower(name[index]))
+                return true;
+        }
+
+        return false;
+    }
 
     private static string? GetReceiver(string line, int callIndex)
     {
@@ -164,4 +222,12 @@ internal static class PythonImportBindingResolver
     }
 
     private readonly record struct Binding(string Module, string ImportedName, string LocalName, bool IsModule);
+
+    internal sealed record ImportedTypeCallLookup(
+        IReadOnlySet<string> ModuleAliases,
+        IReadOnlyDictionary<string, string> ImportedTypesByLocalName);
+
+    private static readonly IReadOnlySet<string> EmptyStringSet = new HashSet<string>(StringComparer.Ordinal);
+    private static readonly IReadOnlyDictionary<string, string> EmptyImportedTypeMap =
+        new Dictionary<string, string>(StringComparer.Ordinal);
 }

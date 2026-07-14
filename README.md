@@ -107,6 +107,9 @@ for the full workflow. Repository-wide refreshes load unchanged-file metadata
 in one batch, then validate each candidate against the live filesystem instead
 of issuing a SQLite lookup for every file. Successful no-op finalization also
 validates folded lookup rows once inside the readiness-stamp transaction.
+During reference extraction, repeated C# property and Python import/class
+membership checks reuse file-local lookup sets instead of rescanning every
+extracted symbol for each call site.
 
 For a faster first pass when you only need text search, `definition`, `symbols`,
 or `map`, run `cdidx . --symbols-only`. Reference graph commands remain degraded
@@ -328,6 +331,8 @@ cdidx lsp --db .cdidx/codeindex.db
 リポジトリ全体の更新では unchanged-file metadata を一括で読み、file ごとの SQLite lookup を
 繰り返さずに各候補を実 filesystem と照合します。成功する no-op の finalization でも、folded
 lookup row の検証を readiness-stamp transaction 内の 1 回にまとめます。
+reference extraction でも、C# property と Python import / class の反復 membership check は
+call site ごとに全 extracted symbol を再走査せず、file-local な lookup set を再利用します。
 
 まず text search、`definition`、`symbols`、`map` だけを速く使いたい場合は
 `cdidx . --symbols-only` を使えます。reference graph 系コマンドは、このフラグなしで

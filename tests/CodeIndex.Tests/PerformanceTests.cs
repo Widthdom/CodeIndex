@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
@@ -174,6 +175,31 @@ public class PerformanceTests : IDisposable
         Assert.True(allocatedBytes < 18_000_000, $"Reference extraction allocated {allocatedBytes:N0} bytes");
     }
 
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void ReferenceExtraction_RepeatedSymbolMembership_StaysWithinAllocationBudget()
+    {
+        var pythonContent = BuildPythonImportedTypeCallFixture(importCount: 120);
+        var pythonSymbols = SymbolExtractor.Extract(1, "python", pythonContent);
+        _ = ReferenceExtractor.Extract(1, "python", pythonContent, pythonSymbols);
+
+        var pythonAllocatedBytes = MeasureAllocatedBytes(
+            () => ReferenceExtractor.Extract(1, "python", pythonContent, pythonSymbols));
+
+        var csharpContent = BuildCSharpPrivatePropertyReceiverFixture(typeCount: 120);
+        var csharpSymbols = SymbolExtractor.Extract(1, "csharp", csharpContent);
+        _ = ReferenceExtractor.Extract(1, "csharp", csharpContent, csharpSymbols);
+
+        var csharpAllocatedBytes = MeasureAllocatedBytes(
+            () => ReferenceExtractor.Extract(1, "csharp", csharpContent, csharpSymbols));
+
+        Assert.True(pythonAllocatedBytes < 2_000_000, $"Python reference extraction allocated {pythonAllocatedBytes:N0} bytes");
+        Assert.True(csharpAllocatedBytes < 6_000_000, $"C# reference extraction allocated {csharpAllocatedBytes:N0} bytes");
+    }
+
     private static long MeasureAllocatedBytes(Action action)
     {
         GC.Collect();
@@ -255,6 +281,38 @@ public class PerformanceTests : IDisposable
                     }
                 }
                 """));
+    }
+
+    private static string BuildPythonImportedTypeCallFixture(int importCount)
+    {
+        var content = new StringBuilder(importCount * 120);
+        for (var index = 0; index < importCount; index++)
+        {
+            content.Append("from models").Append(index).Append(" import Model").Append(index)
+                .Append(" as Alias").Append(index).Append('\n');
+            content.Append("import services").Append(index).Append(" as svc").Append(index).Append('\n');
+        }
+        content.Append("def build_all():\n");
+        for (var index = 0; index < importCount; index++)
+        {
+            content.Append("    Alias").Append(index).Append("()\n");
+            content.Append("    svc").Append(index).Append(".Service").Append(index).Append("()\n");
+        }
+        return content.ToString();
+    }
+
+    private static string BuildCSharpPrivatePropertyReceiverFixture(int typeCount)
+    {
+        var content = new StringBuilder(typeCount * 180);
+        for (var index = 0; index < typeCount; index++)
+        {
+            content.Append("class Service").Append(index).Append(" {\n")
+                .Append("    private Worker").Append(index).Append(" Worker").Append(index).Append(" { get; }\n")
+                .Append("    void Run() { Worker").Append(index).Append(".Execute(); }\n")
+                .Append("}\n")
+                .Append("class Worker").Append(index).Append(" { public void Execute() { } }\n");
+        }
+        return content.ToString();
     }
 
     public void Dispose()

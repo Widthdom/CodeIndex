@@ -374,6 +374,14 @@ per candidate. If scope or delimiter information is needed for many candidates,
 precompute the ranges once per file, function, or block and reuse that structure
 for the per-candidate lookup.
 
+The same rule applies to extracted-symbol membership. When a later per-line or
+per-match decision repeatedly asks whether a class, property, import alias, or
+other symbol exists, build a dictionary or set once and reuse it. A helper that
+hides `symbols.Any(...)`, LINQ enumeration, or signature parsing inside the
+candidate loop is still a repeated scan. Keep uncommon language/feature lookups
+lazy, and preserve source-order or first-match semantics when replacing
+`Distinct`-based scans.
+
 Duplicate detection in hot extraction loops should use a `HashSet` or another
 constant-time structure keyed by the full emitted record identity. Do not add
 `List.Any(...)`, `List.Contains(...)`, nested regex scans, or repeated string
@@ -2822,6 +2830,12 @@ symbol / reference extractor は `cdidx index` 中に実行されるため、言
 前提にする。候補ごとに同じ本文、行範囲、蓄積済み結果リストを再走査する helper 形状は避ける。
 多数の候補に対して scope や delimiter 情報が必要な場合は、file / function / block 単位で
 範囲情報を一度だけ事前計算し、候補ごとの lookup でその構造を再利用する。
+
+同じ規則を extracted symbol の membership にも適用する。後続の per-line / per-match 判定が
+class、property、import alias などの存在を繰り返し確認する場合は、dictionary / set を一度だけ
+構築して再利用する。candidate loop の中で `symbols.Any(...)`、LINQ 列挙、signature parse を
+隠す helper も反復走査である。まれな language / feature 用 lookup は lazy に構築し、
+`Distinct` ベースの走査を置換するときは source order や first-match semantics を維持する。
 
 hot な抽出ループでの重複検出には、出力 record の完全な identity を key にした `HashSet` などの
 定数時間構造を使う。大きな生成ファイルで local variable、parameter、call site、type reference、
