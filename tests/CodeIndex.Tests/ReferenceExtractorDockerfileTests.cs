@@ -107,165 +107,58 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_DockerfileReferences_IndexBracedArgVariables()
+    public void Extract_DockerfileReferences_IndexArgExpansionVariantsAndIgnoreEscapes()
     {
         const string content = """
-            ARG NODE_VERSION=20
-            FROM node:${NODE_VERSION} AS builder
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
-        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
-
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "NODE_VERSION"
-            && reference.ReferenceKind == "reference"));
-    }
-
-    [Fact]
-    public void Extract_DockerfileReferences_IndexDefaultedBracedArgVariables()
-    {
-        const string content = """
-            ARG NODE_VERSION
-            FROM node:${NODE_VERSION:-20} AS builder
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
-        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
-
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "NODE_VERSION"
-            && reference.ReferenceKind == "reference"));
-    }
-
-    [Fact]
-    public void Extract_DockerfileReferences_IndexColonlessDefaultedBracedArgVariables()
-    {
-        const string content = """
-            ARG NODE_VERSION
-            FROM node:${NODE_VERSION-20} AS builder
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
-        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
-
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "NODE_VERSION"
-            && reference.ReferenceKind == "reference"));
-    }
-
-    [Theory]
-    [InlineData(":-")]
-    [InlineData(":?")]
-    [InlineData(":+")]
-    [InlineData(":=")]
-    [InlineData("-")]
-    public void Extract_DockerfileReferences_IndexNestedBracedArgVariablesInsideConditionalExpansion(string modifier)
-    {
-        var content = "ARG PRIMARY\nARG FALLBACK\nRUN echo ${PRIMARY" + modifier + "${FALLBACK}}\n";
-
-        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
-        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
-
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "PRIMARY"
-            && reference.ReferenceKind == "reference"));
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "FALLBACK"
-            && reference.ReferenceKind == "reference"));
-    }
-
-    [Fact]
-    public void Extract_DockerfileReferences_IndexUnbracedArgVariables()
-    {
-        const string content = """
+            ARG BRACED=20
+            ARG DEFAULTED
+            ARG COLONLESS
             ARG APP_HOME=/app
-            WORKDIR $APP_HOME
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
-        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
-
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "APP_HOME"
-            && reference.ReferenceKind == "reference"));
-    }
-
-    [Fact]
-    public void Extract_DockerfileReferences_IndexErrorIfUnsetBracedArgVariables()
-    {
-        const string content = """
             ARG REQUIRED_VAR
-            RUN echo ${REQUIRED_VAR:?must be set}
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
-        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
-
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "REQUIRED_VAR"
-            && reference.ReferenceKind == "reference"));
-    }
-
-    [Fact]
-    public void Extract_DockerfileReferences_IndexUseAlternateBracedArgVariables()
-    {
-        const string content = """
             ARG FEATURE_FLAG
-            RUN echo ${FEATURE_FLAG:+--enable}
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
-        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
-
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "FEATURE_FLAG"
-            && reference.ReferenceKind == "reference"));
-    }
-
-    [Fact]
-    public void Extract_DockerfileReferences_IndexAssignDefaultBracedArgVariables()
-    {
-        const string content = """
             ARG PORT
+            ARG PRIMARY_DEFAULT
+            ARG FALLBACK_DEFAULT
+            ARG PRIMARY_ERROR
+            ARG FALLBACK_ERROR
+            ARG PRIMARY_ALTERNATE
+            ARG FALLBACK_ALTERNATE
+            ARG PRIMARY_ASSIGN
+            ARG FALLBACK_ASSIGN
+            ARG PRIMARY_COLONLESS
+            ARG FALLBACK_COLONLESS
+            FROM node:${BRACED} AS builder
+            FROM node:${DEFAULTED:-20} AS defaulted
+            FROM node:${COLONLESS-20} AS colonless
+            WORKDIR $APP_HOME
+            RUN echo ${REQUIRED_VAR:?must be set}
+            RUN echo ${FEATURE_FLAG:+--enable}
             RUN echo ${PORT:=8080}
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
-        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
-
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "PORT"
-            && reference.ReferenceKind == "reference"));
-    }
-
-    [Fact]
-    public void Extract_DockerfileReferences_IgnoresEscapedUnbracedVariables()
-    {
-        const string content = """
-            ARG APP_HOME=/app
+            RUN echo ${PRIMARY_DEFAULT:-${FALLBACK_DEFAULT}}
+            RUN echo ${PRIMARY_ERROR:?${FALLBACK_ERROR}}
+            RUN echo ${PRIMARY_ALTERNATE:+${FALLBACK_ALTERNATE}}
+            RUN echo ${PRIMARY_ASSIGN:=${FALLBACK_ASSIGN}}
+            RUN echo ${PRIMARY_COLONLESS-${FALLBACK_COLONLESS}}
             RUN echo \$APP_HOME
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
-        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
-
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "APP_HOME");
-    }
-
-    [Fact]
-    public void Extract_DockerfileReferences_IgnoresEscapedBracedVariables()
-    {
-        const string content = """
-            ARG APP_HOME=/app
             RUN echo \${APP_HOME}
             """;
 
         var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
         var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
 
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "APP_HOME");
+        var expectedNames = new[]
+        {
+            "BRACED", "DEFAULTED", "COLONLESS", "APP_HOME", "REQUIRED_VAR", "FEATURE_FLAG", "PORT",
+            "PRIMARY_DEFAULT", "FALLBACK_DEFAULT", "PRIMARY_ERROR", "FALLBACK_ERROR",
+            "PRIMARY_ALTERNATE", "FALLBACK_ALTERNATE", "PRIMARY_ASSIGN", "FALLBACK_ASSIGN",
+            "PRIMARY_COLONLESS", "FALLBACK_COLONLESS",
+        };
+
+        foreach (var expectedName in expectedNames)
+        {
+            Assert.Single(references.Where(reference =>
+                reference.SymbolName == expectedName
+                && reference.ReferenceKind == "reference"));
+        }
     }
 }
