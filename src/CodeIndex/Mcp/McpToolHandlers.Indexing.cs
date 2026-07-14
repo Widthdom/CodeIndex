@@ -384,7 +384,10 @@ public partial class McpServer
         }
         await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
         var reusableIndexedFileStats = !rebuild && !startedWithNoIndexedFiles
-            ? writer.LoadReusableIndexedFileStats(maxSymbolsPerFile, maxReferencesPerFile)
+            ? writer.LoadReusableIndexedFileStats(
+                maxSymbolsPerFile,
+                maxReferencesPerFile,
+                _currentRequestToken.Value)
             : null;
         Dictionary<string, IndexedFileStatReuseResult?>? csharpPrepassStatReuse = null;
         bool IsGeneratedExtractionSuppressed(CSharpStaticInterfacePrepass.FileTarget target)

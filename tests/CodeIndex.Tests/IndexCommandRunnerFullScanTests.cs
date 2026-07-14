@@ -305,6 +305,100 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_IncompleteLegacyStatReindexesFile()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_incomplete_legacy_stat");
+        var loadedPaths = new ConcurrentBag<string>();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var connection = OpenNonPoolingConnection(dbPath))
+            using (var command = connection.CreateCommand())
+            {
+                connection.Open();
+                command.CommandText = "UPDATE files SET size = NULL WHERE path = 'app.cs'";
+                Assert.Equal(1, command.ExecuteNonQuery());
+            }
+
+            lock (FullScanContentLoadHookGate)
+            {
+                try
+                {
+                    IndexCommandRunner.FullScanFileContentLoadForTesting = path => loadedPaths.Add(path);
+
+                    var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
+
+                    Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+                    Assert.Equal("success", refreshJson.GetProperty("status").GetString());
+                    Assert.Contains("app.cs", loadedPaths);
+                }
+                finally
+                {
+                    IndexCommandRunner.FullScanFileContentLoadForTesting = null;
+                }
+            }
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+            using var verifyCommand = verify.CreateCommand();
+            verifyCommand.CommandText = "SELECT size FROM files WHERE path = 'app.cs'";
+            Assert.IsType<long>(verifyCommand.ExecuteScalar());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_StatSnapshotObservesCancellationToken()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_stat_snapshot_cancel");
+        using var cancellation = new CancellationTokenSource();
+        var hookInvoked = false;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            lock (FullScanContentLoadHookGate)
+            {
+                try
+                {
+                    DbWriter.ReusableStatSnapshotReadForTesting = () =>
+                    {
+                        hookInvoked = true;
+                        cancellation.Cancel();
+                    };
+
+                    var (exitCode, json) = RunAndCaptureJson(
+                        [projectRoot, "--json"],
+                        cancellation);
+
+                    Assert.True(hookInvoked);
+                    Assert.Equal(CommandExitCodes.Interrupted, exitCode);
+                    Assert.Equal(CommandErrorCodes.Interrupted, json.GetProperty("error_code").GetString());
+                }
+                finally
+                {
+                    DbWriter.ReusableStatSnapshotReadForTesting = null;
+                }
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScanAfterTypeScriptConfigChange_ReprocessesUnchangedTypeScriptFiles()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_tsconfig_refresh");

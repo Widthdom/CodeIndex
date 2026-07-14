@@ -6154,6 +6154,93 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Index_InvalidLegacyModifiedReindexesFile()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"cdidx_mcp_invalid_legacy_modified_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_invalid_legacy_modified");
+        var loadedPaths = new System.Collections.Concurrent.ConcurrentBag<string>();
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { }\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var firstResponse = CallIndex(server, fixtureDir);
+            Assert.False(firstResponse["result"]?["isError"]?.GetValue<bool>() ?? false, firstResponse.ToJsonString());
+
+            using (var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE files SET modified = 'not-a-timestamp' WHERE path = 'app.cs'";
+                Assert.Equal(1, command.ExecuteNonQuery());
+            }
+
+            McpServer.McpIndexFileContentLoadForTesting = path => loadedPaths.Add(path);
+            var secondResponse = CallIndex(server, fixtureDir);
+
+            Assert.False(secondResponse["result"]?["isError"]?.GetValue<bool>() ?? false, secondResponse.ToJsonString());
+            Assert.Contains("app.cs", loadedPaths);
+        }
+        finally
+        {
+            McpServer.McpIndexFileContentLoadForTesting = null;
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+        }
+    }
+
+    [Fact]
+    public async Task ToolsCall_Index_StatSnapshotObservesRequestCancellationToken()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"cdidx_mcp_stat_snapshot_cancel_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_stat_snapshot_cancel");
+        using var cancellation = new CancellationTokenSource();
+        var hookInvoked = false;
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { }\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var firstResponse = CallIndex(server, fixtureDir);
+            Assert.False(firstResponse["result"]?["isError"]?.GetValue<bool>() ?? false, firstResponse.ToJsonString());
+
+            DbWriter.ReusableStatSnapshotReadForTesting = () =>
+            {
+                hookInvoked = true;
+                cancellation.Cancel();
+            };
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject { ["path"] = fixtureDir },
+                },
+            };
+            var transport = new QueuedFrameTransport(request.ToJsonString());
+
+            await server.RunAsync(transport, cancellation.Token).WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.True(hookInvoked);
+        }
+        finally
+        {
+            DbWriter.ReusableStatSnapshotReadForTesting = null;
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_ReprocessesAfterPartialSymbolKindFilterChange_Issue3543()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_symbol_filter_partial_{Guid.NewGuid():N}");

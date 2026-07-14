@@ -1334,7 +1334,10 @@ public static partial class IndexCommandRunner
         }
 
         var reusableIndexedFileStats = !options.Rebuild && !startedWithNoIndexedFiles
-            ? writer.LoadReusableIndexedFileStats(options.MaxSymbolsPerFile, options.MaxReferencesPerFile)
+            ? writer.LoadReusableIndexedFileStats(
+                options.MaxSymbolsPerFile,
+                options.MaxReferencesPerFile,
+                cancellationToken)
             : null;
         Dictionary<string, IndexedFileStatReuseResult?>? csharpPrepassStatReuse = null;
 

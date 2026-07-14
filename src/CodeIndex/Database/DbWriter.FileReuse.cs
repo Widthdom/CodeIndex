@@ -43,6 +43,10 @@ public partial class DbWriter
                   THEN @modified
                   ELSE modified
               END,
+                  size = CASE
+                      WHEN @size IS NOT NULL THEN @size
+                      ELSE size
+                  END,
                   generated = CASE
                   WHEN @generated IS NOT NULL THEN @generated
                   ELSE generated
@@ -121,6 +125,10 @@ public partial class DbWriter
                   THEN @modified
                   ELSE modified
               END,
+                  size = CASE
+                      WHEN @size IS NOT NULL THEN @size
+                      ELSE size
+                  END,
                   generated = CASE
                   WHEN @generated IS NOT NULL THEN @generated
                   ELSE generated
@@ -366,9 +374,12 @@ public partial class DbWriter
     /// </summary>
     internal IReadOnlyDictionary<string, ReusableIndexedFileStat> LoadReusableIndexedFileStats(
         int maxSymbolsPerFile,
-        int maxReferencesPerFile)
+        int maxReferencesPerFile,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         ReusableStatSnapshotReadForTesting?.Invoke();
+        cancellationToken.ThrowIfCancellationRequested();
         var hasIssuesTable = TableExists("file_issues");
         var hasIssueMetadataColumns = hasIssuesTable && HasIssueMetadataColumns();
         var staleIssuePredicate = hasIssueMetadataColumns
@@ -437,17 +448,37 @@ public partial class DbWriter
             cmd.Parameters["@max_references"].Value = maxReferencesPerFile;
             if (hasIssuesTable)
                 cmd.Parameters["@generated_issue_kind"].Value = FileIndexer.GeneratedCodeExtractionSkippedIssueKind;
+            using var cancellationRegistration = cancellationToken.UnsafeRegister(
+                static state =>
+                {
+                    var connection = (SqliteConnection)state!;
+                    SQLitePCL.raw.sqlite3_interrupt(connection.Handle);
+                },
+                cmd.Connection);
+            cancellationToken.ThrowIfCancellationRequested();
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (reader.GetValue(2) is not string modified
+                    || !TryParseStoredModifiedUtc(modified, out var modifiedUtc)
+                    || reader.GetValue(3) is not long size)
+                {
+                    continue;
+                }
+
                 candidates.Add(new ReusableIndexedFileStat(
                     reader.GetInt64(0),
                     reader.GetString(1),
-                    ParseStoredModifiedUtc(reader.GetString(2)),
-                    reader.GetInt64(3),
+                    modifiedUtc,
+                    size,
                     reader.GetString(4),
                     reader.GetInt64(5) != 0));
             }
+        }
+        catch (SqliteException ex) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException("Reusable file stat snapshot was interrupted.", ex, cancellationToken);
         }
         finally
         {
@@ -458,6 +489,7 @@ public partial class DbWriter
         var reusable = new Dictionary<string, ReusableIndexedFileStat>(candidates.Count, StringComparer.Ordinal);
         foreach (var candidate in candidates)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!currentVersionByLanguage.TryGetValue(candidate.Language, out var versionCurrent))
             {
                 versionCurrent = SymbolExtractorVersionMatchesCurrent(candidate.Language);
@@ -471,12 +503,13 @@ public partial class DbWriter
         return reusable;
     }
 
-    private static DateTime ParseStoredModifiedUtc(string value)
-        => DateTime.Parse(
+    private static bool TryParseStoredModifiedUtc(string value, out DateTime modifiedUtc)
+        => DateTime.TryParse(
             value,
             System.Globalization.CultureInfo.InvariantCulture,
             System.Globalization.DateTimeStyles.AssumeUniversal
-            | System.Globalization.DateTimeStyles.AdjustToUniversal);
+            | System.Globalization.DateTimeStyles.AdjustToUniversal,
+            out modifiedUtc);
 
     private bool HasStaleIssueMetadata(string relativePath)
     {

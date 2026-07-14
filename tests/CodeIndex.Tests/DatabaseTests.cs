@@ -2522,6 +2522,116 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void LoadReusableIndexedFileStats_SkipsIncompleteLegacyStats()
+    {
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/null-size.cs",
+            Lang = "csharp",
+            Size = 20,
+            Lines = 2,
+            Modified = modified,
+            Checksum = "null_size_checksum",
+        });
+        _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/invalid-modified.cs",
+            Lang = "csharp",
+            Size = 20,
+            Lines = 2,
+            Modified = modified,
+            Checksum = "invalid_modified_checksum",
+        });
+
+        using (var command = _db.Connection.CreateCommand())
+        {
+            command.CommandText = """
+                UPDATE files SET size = NULL WHERE path = 'src/null-size.cs';
+                UPDATE files SET modified = 'not-a-timestamp' WHERE path = 'src/invalid-modified.cs';
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        var reusableStats = _writer.LoadReusableIndexedFileStats(
+            maxSymbolsPerFile: 10,
+            maxReferencesPerFile: 10);
+
+        Assert.DoesNotContain("src/null-size.cs", reusableStats.Keys);
+        Assert.DoesNotContain("src/invalid-modified.cs", reusableStats.Keys);
+    }
+
+    [Fact]
+    public void LoadReusableIndexedFileStats_ObservesCancellation()
+    {
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            DbWriter.ReusableStatSnapshotReadForTesting = cancellation.Cancel;
+
+            Assert.Throws<OperationCanceledException>(() =>
+                _writer.LoadReusableIndexedFileStats(
+                    maxSymbolsPerFile: 10,
+                    maxReferencesPerFile: 10,
+                    cancellation.Token));
+        }
+        finally
+        {
+            DbWriter.ReusableStatSnapshotReadForTesting = null;
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ChecksumReuse_RepairsIncompleteLegacySize(bool enforceExtractionLimits)
+    {
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/null-size.cs",
+            Lang = "csharp",
+            Size = 20,
+            Lines = 2,
+            Modified = modified,
+            Checksum = "null_size_checksum",
+        });
+        using (var command = _db.Connection.CreateCommand())
+        {
+            command.CommandText = "UPDATE files SET size = NULL WHERE id = @id";
+            command.Parameters.AddWithValue("@id", fileId);
+            command.ExecuteNonQuery();
+        }
+
+        var reusedFileId = enforceExtractionLimits
+            ? _writer.GetReusableUnchangedFileId(
+                "src/null-size.cs",
+                modified,
+                "null_size_checksum",
+                size: 20,
+                lines: 2,
+                language: "csharp",
+                generated: false,
+                maxSymbolsPerFile: 10,
+                maxReferencesPerFile: 10,
+                generatedExtractionSuppressed: false)
+            : _writer.GetUnchangedFileId(
+                "src/null-size.cs",
+                modified,
+                "null_size_checksum",
+                size: 20,
+                lines: 2,
+                language: "csharp",
+                generated: false);
+
+        Assert.Equal(fileId, reusedFileId);
+        using var verify = _db.Connection.CreateCommand();
+        verify.CommandText = "SELECT size FROM files WHERE id = @id";
+        verify.Parameters.AddWithValue("@id", fileId);
+        Assert.Equal(20L, verify.ExecuteScalar());
+    }
+
+    [Fact]
     public void PurgeStaleFilesSharingChecksum_RemovesDeletedRenameRowsOnly()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_checksum_purge");

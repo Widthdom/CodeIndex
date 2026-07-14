@@ -239,6 +239,9 @@ is still compared with a fresh filesystem size and UTC modification time, and
 language extractor versions, extraction caps, stale issue metadata, and generated
 code suppression must all remain part of the snapshot eligibility contract. Do
 not replace this snapshot with per-file database probes in either CLI or MCP.
+Rows with missing or invalid legacy stat values are excluded so normal checksum
+reuse or reindexing can repair them, and CLI/MCP cancellation must interrupt the
+snapshot query as well as the later extraction pipeline.
 
 `FileIssue` rows may include nullable `origin` and `severity` metadata.
 For `replacement_char`, `origin: source_literal` means the file contains a
@@ -2692,7 +2695,9 @@ value を再設定します。大規模 index で同じ SQLite command を file 
 stat-reuse 候補を 1 回の SQLite statement で読みます。各候補は引き続き最新の filesystem
 size と UTC 更新時刻と照合し、language extractor version、extraction cap、古い issue metadata、
 generated-code suppression も snapshot eligibility contract に含めます。CLI と MCP のどちらでも、
-この snapshot を file ごとの database probe に戻さないでください。
+この snapshot を file ごとの database probe に戻さないでください。旧 DB の欠損または不正な
+stat 値を持つ row は除外して通常の checksum reuse / 再 index で修復し、CLI/MCP の cancellation は
+後続の extraction pipeline だけでなく snapshot query も中断できる状態を保ってください。
 
 `FileIssue` rows には nullable な `origin` / `severity` metadata が入ることがある。
 `replacement_char` では `origin: source_literal` が正規にエンコードされた U+FFFD

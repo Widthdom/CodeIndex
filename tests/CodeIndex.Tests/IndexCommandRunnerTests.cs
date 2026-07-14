@@ -6428,7 +6428,9 @@ public sealed class Caller
         }
     }
 
-    private (int ExitCode, JsonElement Json) RunAndCaptureJson(string[] args)
+    private (int ExitCode, JsonElement Json) RunAndCaptureJson(
+        string[] args,
+        CancellationTokenSource? cancellationForTesting = null)
     {
         lock (TestConsoleLock.Gate)
         {
@@ -6438,7 +6440,7 @@ public sealed class Caller
             try
             {
                 Console.SetOut(writer);
-                var exitCode = IndexCommandRunner.Run(args, _jsonOptions);
+                var exitCode = IndexCommandRunner.Run(args, _jsonOptions, cancellationForTesting);
                 using var document = JsonDocument.Parse(writer.ToString());
                 return (exitCode, document.RootElement.Clone());
             }
