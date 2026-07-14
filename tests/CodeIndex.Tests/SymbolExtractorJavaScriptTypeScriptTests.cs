@@ -1433,7 +1433,7 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScript_IgnoresRegexLiteralBracesAndBlockCommentMethodShapes()
+    public void Extract_JavaScript_RegexLiteralBracesPreserveSiblingMethodsAcrossControlFlow()
     {
         var content = """
             class Example {
@@ -1441,34 +1441,18 @@ public partial class SymbolExtractorTests
                     fake() {
                     }
                 */
-                first() {
+                literalBraces() {
                     const open = /{/;
                     const close = /}/;
                 }
 
-                second() {}
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "fake");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_KeepsSiblingMethodsAfterWrappedControlFlowRegexLiterals()
-    {
-        var content = """
-            class Example {
-                first(value) {
+                wrappedIf(value) {
                     if (
                         ready
                     ) /{/.test(value);
                 }
 
-                second(value) {
+                wrappedElseIf(value) {
                     if (first) {
                     }
                     else if (
@@ -1476,14 +1460,38 @@ public partial class SymbolExtractorTests
                     ) /{/.test(value);
                 }
 
-                third() {}
+                plainElse(value) {
+                    if (cond) {
+                    }
+                    else /{/.test(value);
+                }
+
+                doWhile(value) {
+                    do /{/.test(value); while (cond);
+                }
+
+                finallyBranch(value) {
+                    try {
+                    }
+                    finally /{/.test(value);
+                }
+
+                finalSibling() {}
             }
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "third");
+        AssertSymbolsContain(
+            symbols,
+            "function",
+            "literalBraces",
+            "wrappedIf",
+            "wrappedElseIf",
+            "plainElse",
+            "doWhile",
+            "finallyBranch",
+            "finalSibling");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "fake");
     }
 
     [Fact]
@@ -1512,51 +1520,6 @@ public partial class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Derived");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_KeepsSiblingMethodsAfterElseRegexLiteral()
-    {
-        var content = """
-            class Example {
-                first(value) {
-                    if (cond) {
-                    }
-                    else /{/.test(value);
-                }
-
-                second() {}
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_KeepsSiblingMethodsAfterDoAndFinallyRegexLiterals()
-    {
-        var content = """
-            class Example {
-                first(value) {
-                    do /{/.test(value); while (cond);
-                }
-
-                second(value) {
-                    try {
-                    }
-                    finally /{/.test(value);
-                }
-
-                third() {}
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "third");
     }
 
     [Fact]
