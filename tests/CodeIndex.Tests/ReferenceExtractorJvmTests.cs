@@ -2809,7 +2809,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScriptComparisonBeforePlainTemplate_IsNotCaptured()
+    public void Extract_JavaScriptComparisonBeforePlainTemplateSpacingVariants_AreNotCaptured()
     {
         // Regression guard: `foo < bar > \`plain\`` is a chained comparison expression, not a
         // generic-tagged template. The backward scan behind the backtick must not strip the
@@ -2818,39 +2818,18 @@ public partial class ReferenceExtractorTests
         // テンプレートではない。backtick 直前の `<...>` を generic と誤認して
         // `call foo` を幻発行してはならない。
         const string content = """
-            function check(foo, bar) {
-                return foo < bar > `plain`;
+            function check(fooSpaced, barSpaced, fooTight, barTight) {
+                const spaced = fooSpaced < barSpaced > `plain`;
+                return fooTight<barTight>`plain`;
             }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
         var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
 
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "foo");
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "bar");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptComparisonBeforePlainTemplateWithoutSpaces_IsNotCaptured()
-    {
-        // Regression guard: plain JavaScript has no generics, so `foo<bar>\`plain\`` (no
-        // spaces) is a chained comparison `(foo<bar)>\`plain\``, not a generic-tagged
-        // template. The backtick backward-scan must not strip the `<bar>` range as TS
-        // generics and emit a phantom `call foo`.
-        // 退行防止: JavaScript にはジェネリクスがなく、`foo<bar>\`plain\`` は連鎖比較式
-        // `(foo<bar)>\`plain\`` である。backtick 直前の `<...>` を TypeScript generic と
-        // 誤認して `call foo` を幻発行してはならない。
-        const string content = """
-            function check(foo, bar) {
-                return foo<bar>`plain`;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "foo");
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "bar");
+        var comparisonNames = new[] { "fooSpaced", "barSpaced", "fooTight", "barTight" };
+        Assert.DoesNotContain(references, r =>
+            r.ReferenceKind == "call" && comparisonNames.Contains(r.SymbolName));
     }
 
     [Fact]
