@@ -169,49 +169,16 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_DockerfileCopyFromReferences_IgnoresTaggedExternalImages()
+    public void Extract_DockerfileCopyFromReferences_IndexStageFormsAndIgnoreExternalImages()
     {
         const string content = """
             FROM alpine AS builder
-
-            FROM alpine AS runtime
-            COPY --from=builder:latest /src/app /usr/local/bin/app
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
-        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
-
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "builder"
-            && reference.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_DockerfileCopyFromReferences_IgnoresDigestExternalImages()
-    {
-        const string content = """
-            FROM alpine AS builder
-
-            FROM alpine AS runtime
-            COPY --from=builder@sha256:123abc /src/app /usr/local/bin/app
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
-        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
-
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "builder"
-            && reference.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_DockerfileCopyFromReferences_IndexOnbuildStageDependencies()
-    {
-        const string content = """
-            FROM alpine AS builder
-
+            FROM alpine AS quoted-builder
             FROM alpine AS runtime
             ONBUILD COPY --from=builder /src/app /usr/local/bin/app
+            COPY --from="quoted-builder" /src/quoted /opt/quoted
+            COPY --from=builder:latest /src/app /usr/local/bin/app
+            COPY --from=builder@sha256:123abc /src/app /usr/local/bin/app
             """;
 
         var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
@@ -220,23 +187,8 @@ public partial class ReferenceExtractorTests
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "builder"
             && reference.ReferenceKind == "call"));
-    }
-
-    [Fact]
-    public void Extract_DockerfileCopyFromReferences_IndexQuotedStageDependencies()
-    {
-        const string content = """
-            FROM alpine AS builder
-
-            FROM alpine AS runtime
-            COPY --from="builder" /src/app /usr/local/bin/app
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
-        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
-
         Assert.Single(references.Where(reference =>
-            reference.SymbolName == "builder"
+            reference.SymbolName == "quoted-builder"
             && reference.ReferenceKind == "call"));
     }
 

@@ -63,6 +63,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Use `AssertReferencesDoNotContain(...)` for negative checks over one reference kind; retain direct predicates when the exclusion depends on container, context, line, or other metadata.
   `ReferenceExtractorTests.ExtractSymbolsAndReferences(...)` owns the common symbol-then-reference extraction setup for tests that need both lists; use it instead of repeating the two extractor calls when the fixture does not need a specialized path or workspace symbol setup, and discard the symbol tuple element with `_` instead of keeping an unused `symbols` local when the test only asserts references.
   Dockerfile named-stage reference variants share one multi-stage fixture when ordinary, lowercase, platform-flagged, commented, hyphenated, and dotted forms can be distinguished by exact per-stage call counts; keep external base-image exclusions in that fixture as the negative control.
+  Dockerfile `COPY --from` ONBUILD and quoted-stage forms share a fixture with tagged and digest-qualified external-image controls; assert exact call counts for the genuine stages so false positives cannot hide beside positive edges.
 - `FileIndexerTests.cs`, `FileIndexerContentLoadingTests.cs`, `FileIndexerTestSupport.cs`
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
 - `PathCompatibilityMatrixTests.cs`
@@ -635,6 +636,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   1つの reference kind に対する否定チェックには `AssertReferencesDoNotContain(...)` を使い、container、context、line など他の metadata に依存する除外は直接 predicate を維持します。
   `ReferenceExtractorTests.ExtractSymbolsAndReferences(...)` は symbol 抽出から reference 抽出までの共通 setup を所有します。fixture が特殊な path や workspace symbol setup を必要としない場合は 2 つの extractor 呼び出しを繰り返さずこの helper を使い、reference だけを検証するテストでは未使用の `symbols` local を残さず symbol 側を `_` で捨ててください。
   Dockerfile の named-stage reference variant は、通常、小文字、platform flag、comment、hyphen、dot 形式を stage ごとの厳密な call 数で区別できる場合、1つの multi-stage fixture を共有します。外部 base image の除外も negative control として同じ fixture に残します。
+  Dockerfile の `COPY --from` における ONBUILD と quote 付き stage 形式は、tag および digest 付き外部 image の control と fixture を共有します。正しい stage の call 数を厳密に検証し、正例 edge に紛れた false positive を見逃さないようにします。
 - `FileIndexerTests.cs`、`FileIndexerContentLoadingTests.cs`、`FileIndexerTestSupport.cs`
   ファイル走査、言語判定、scan result 言語の再利用、content loading / canonicalization、checksum、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。共有 `FileIndexerTests` helper は `FileIndexerTestSupport.cs` に置きます。
 - `PathCompatibilityMatrixTests.cs`
