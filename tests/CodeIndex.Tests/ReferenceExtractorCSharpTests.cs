@@ -5841,162 +5841,65 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpClassPrimaryCtor_BaseCall_AttributesToSyntheticCtor()
+    public void Extract_CsharpClassAndStructPrimaryCtors_ReuseHeaderLayoutFixture()
     {
-        // C# 12 introduced primary constructors on plain `class` / `struct` (not just records).
-        // `public class Child(int value) : Parent(value)` must be treated the same as the record
-        // form: the `Parent(...)` base call is attributed to a synthetic function-kind container
-        // named after the child class, so callers/impact can follow the ctor chain.
-        // C# 12 の class primary constructor でも record と同じ合成 function コンテナで扱うことを固定。
+        // Exercise class/struct, generic, split-line, and same-line-body primary constructors
+        // together so their shared joined-header analysis runs once.
         const string content = """
             namespace Demo;
 
-            public class Parent(int value)
+            public class ParentInline(int value)
             {
                 public int Value { get; } = value;
             }
+            public class ChildInline(int value) : ParentInline(value) { }
 
-            public class Child(int value) : Parent(value)
-            {
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var parentRef = Assert.Single(references, r => r.SymbolName == "Parent");
-        Assert.Equal("call", parentRef.ReferenceKind);
-        Assert.Equal("function", parentRef.ContainerKind);
-        Assert.Equal("Child", parentRef.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpClassPrimaryCtor_SplitLineBaseCall_AttributesToSyntheticCtor()
-    {
-        // Split-line variant of C# 12 class primary ctor. The joined-header detector must still
-        // pick it up so the base call is attributed to the synthetic function-kind container.
-        // C# 12 class primary ctor の split-line 形式でも同じ扱いになることを固定。
-        const string content = """
-            namespace Demo;
-
-            public class Parent(int value)
-            {
-            }
-
+            public class ParentSplit(int value) { }
             public class ChildSplit
             (
                 int value
-            ) : Parent(
+            ) : ParentSplit(
                 value
-            )
-            {
-            }
-            """;
+            ) { }
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var parentRef = Assert.Single(references, r => r.SymbolName == "Parent");
-        Assert.Equal("call", parentRef.ReferenceKind);
-        Assert.Equal("function", parentRef.ContainerKind);
-        Assert.Equal("ChildSplit", parentRef.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpGenericClassPrimaryCtor_BaseCall_AttributesToSyntheticCtor()
-    {
-        // Generic class with C# 12 primary ctor: `public class GenericChild<T>(T value) : Parent(42)`.
-        // The generic arity in the type header must not break primary-ctor detection, and the base
-        // call still resolves to the synthetic function-kind container named after the class.
-        // generic class の C# 12 primary ctor でも同じ扱いになることを固定。
-        const string content = """
-            namespace Demo;
-
-            public class Parent(int value)
-            {
-            }
-
-            public class GenericChild<T>(T value) : Parent(42)
+            public class ParentGeneric(int value) { }
+            public class GenericChild<T>(T value) : ParentGeneric(42)
             {
                 public T Item { get; } = value;
             }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var parentRef = Assert.Single(references, r => r.SymbolName == "Parent");
-        Assert.Equal("call", parentRef.ReferenceKind);
-        Assert.Equal("function", parentRef.ContainerKind);
-        Assert.Equal("GenericChild", parentRef.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpClassPrimaryCtor_SameLineBracedBody_DoesNotStealBodyCalls()
-    {
-        // Same-line braced form of C# 12 class primary ctor: header, base call, and a body
-        // expression all on one line. The synthetic function-kind container must cover only the
-        // header portion (before `{`), so body calls stay attributed to their real container.
-        // C# 12 class primary ctor の同一行 braced 形式でも、本体呼び出しが合成 ctor に奪われないことを固定。
-        const string content = """
-            namespace Demo;
 
             public static class Helper
             {
                 public static int Compute(int x) => x + 1;
             }
+            public class ParentBody(int value) { }
+            public class ChildWithBody(int value) : ParentBody(value) { public int Doubled { get; } = Helper.Compute(value); }
 
-            public class Parent(int value)
-            {
-            }
-
-            public class ChildWithBody(int value) : Parent(value) { public int Doubled { get; } = Helper.Compute(value); }
+            public class BaseImpl(int value) { }
+            public struct BoxedValue(int value) : BaseImpl(value) { }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var parentRef = Assert.Single(references, r => r.SymbolName == "Parent");
-        Assert.Equal("function", parentRef.ContainerKind);
-        Assert.Equal("ChildWithBody", parentRef.ContainerName);
+        AssertPrimaryCtorCall("ParentInline", "ChildInline");
+        AssertPrimaryCtorCall("ParentSplit", "ChildSplit");
+        AssertPrimaryCtorCall("ParentGeneric", "GenericChild");
+        AssertPrimaryCtorCall("ParentBody", "ChildWithBody");
+        AssertPrimaryCtorCall("BaseImpl", "BoxedValue");
 
-        // Helper.Compute(value) sits past the header-terminating `{`, so the synthetic ctor
-        // must NOT claim it. The exact inner container depends on SymbolExtractor behavior,
-        // but the call must not be attributed to a `function` kind container named `ChildWithBody`.
-        // 本体側 `Helper.Compute(value)` が合成 ctor に奪われていないことだけを固定する。
         var computeRef = Assert.Single(references, r => r.SymbolName == "Compute");
         Assert.False(
             computeRef.ContainerKind == "function" && computeRef.ContainerName == "ChildWithBody",
             $"Compute(...) was incorrectly attributed to the synthetic class primary ctor (container_kind={computeRef.ContainerKind}, container_name={computeRef.ContainerName}).");
-    }
 
-    [Fact]
-    public void Extract_CsharpStructPrimaryCtor_BaseCall_AttributesToSyntheticCtor()
-    {
-        // C# 12 struct primary ctor with an interface-like base list carrying a call. structs
-        // cannot inherit another class, but the synthetic-ctor code path is still reached when
-        // the base list entry uses the primary-ctor call shape. This exercises the `struct` kind
-        // branch added alongside class generalization.
-        // C# 12 struct primary ctor でも合成 function コンテナに切り替わることを固定（struct 分岐カバー）。
-        const string content = """
-            namespace Demo;
-
-            public class BaseImpl(int value)
-            {
-            }
-
-            public struct BoxedValue(int value) : BaseImpl(value)
-            {
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var baseRef = Assert.Single(references, r => r.SymbolName == "BaseImpl");
-        Assert.Equal("call", baseRef.ReferenceKind);
-        Assert.Equal("function", baseRef.ContainerKind);
-        Assert.Equal("BoxedValue", baseRef.ContainerName);
+        void AssertPrimaryCtorCall(string baseName, string childName)
+        {
+            var baseRef = Assert.Single(references, r => r.SymbolName == baseName);
+            Assert.Equal("call", baseRef.ReferenceKind);
+            Assert.Equal("function", baseRef.ContainerKind);
+            Assert.Equal(childName, baseRef.ContainerName);
+        }
     }
 
     [Fact]
