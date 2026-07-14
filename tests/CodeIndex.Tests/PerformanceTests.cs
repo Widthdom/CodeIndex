@@ -200,6 +200,30 @@ public class PerformanceTests : IDisposable
         Assert.True(csharpAllocatedBytes < 6_000_000, $"C# reference extraction allocated {csharpAllocatedBytes:N0} bytes");
     }
 
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void ReferenceExtraction_RepeatedContainerLookup_StaysWithinAllocationBudget()
+    {
+        var csharpContent = BuildCSharpPrivatePropertyReceiverFixture(typeCount: 240);
+        var csharpSymbols = SymbolExtractor.Extract(1, "csharp", csharpContent);
+        _ = ReferenceExtractor.Extract(1, "csharp", csharpContent, csharpSymbols);
+        var csharpAllocatedBytes = MeasureAllocatedBytes(
+            () => ReferenceExtractor.Extract(1, "csharp", csharpContent, csharpSymbols));
+
+        var yamlContent = BuildGitHubActionsJobFixture(jobCount: 240);
+        var yamlSymbols = SymbolExtractor.Extract(1, "yaml", yamlContent);
+        _ = ReferenceExtractor.Extract(1, "yaml", yamlContent, yamlSymbols);
+        var yamlAllocatedBytes = MeasureAllocatedBytes(
+            () => ReferenceExtractor.Extract(1, "yaml", yamlContent, yamlSymbols));
+
+        Assert.True(
+            csharpAllocatedBytes < 8_000_000 && yamlAllocatedBytes < 2_500_000,
+            $"Container lookup allocated {csharpAllocatedBytes:N0} bytes for C# and {yamlAllocatedBytes:N0} bytes for YAML");
+    }
+
     private static long MeasureAllocatedBytes(Action action)
     {
         GC.Collect();
@@ -311,6 +335,21 @@ public class PerformanceTests : IDisposable
                 .Append("    void Run() { Worker").Append(index).Append(".Execute(); }\n")
                 .Append("}\n")
                 .Append("class Worker").Append(index).Append(" { public void Execute() { } }\n");
+        }
+        return content.ToString();
+    }
+
+    private static string BuildGitHubActionsJobFixture(int jobCount)
+    {
+        var content = new StringBuilder(jobCount * 120);
+        content.Append("name: Dense workflow\njobs:\n");
+        for (var index = 0; index < jobCount; index++)
+        {
+            content.Append("  job").Append(index).Append(":\n");
+            if (index > 0)
+                content.Append("    needs: [job").Append(index - 1).Append("]\n");
+            content.Append("    steps:\n")
+                .Append("      - run: ./scripts/job").Append(index).Append(".sh\n");
         }
         return content.ToString();
     }

@@ -110,6 +110,8 @@ validates folded lookup rows once inside the readiness-stamp transaction.
 During reference extraction, repeated C# property and Python import/class
 membership checks reuse file-local lookup sets instead of rescanning every
 extracted symbol for each call site.
+C# declaration-container resolution and GitHub Actions job ownership likewise
+use name-indexed candidates instead of a full container scan per reference.
 
 For a faster first pass when you only need text search, `definition`, `symbols`,
 or `map`, run `cdidx . --symbols-only`. Reference graph commands remain degraded
@@ -333,6 +335,8 @@ cdidx lsp --db .cdidx/codeindex.db
 lookup row の検証を readiness-stamp transaction 内の 1 回にまとめます。
 reference extraction でも、C# property と Python import / class の反復 membership check は
 call site ごとに全 extracted symbol を再走査せず、file-local な lookup set を再利用します。
+C# declaration-container 解決と GitHub Actions の job ownership も同様に、reference ごとの
+全 container 走査ではなく name-indexed candidate を使います。
 
 まず text search、`definition`、`symbols`、`map` だけを速く使いたい場合は
 `cdidx . --symbols-only` を使えます。reference graph 系コマンドは、このフラグなしで

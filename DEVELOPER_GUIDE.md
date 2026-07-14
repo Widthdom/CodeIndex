@@ -382,6 +382,11 @@ candidate loop is still a repeated scan. Keep uncommon language/feature lookups
 lazy, and preserve source-order or first-match semantics when replacing
 `Distinct`-based scans.
 
+Container ownership follows the same contract. If references repeatedly resolve
+an extracted declaration by name and source range, index candidates by name once
+and scan only that name's ordered range list. Preserve first-candidate behavior
+for duplicate names and keep the index local to one extraction call.
+
 Duplicate detection in hot extraction loops should use a `HashSet` or another
 constant-time structure keyed by the full emitted record identity. Do not add
 `List.Any(...)`, `List.Contains(...)`, nested regex scans, or repeated string
@@ -2836,6 +2841,11 @@ class、property、import alias などの存在を繰り返し確認する場合
 構築して再利用する。candidate loop の中で `symbols.Any(...)`、LINQ 列挙、signature parse を
 隠す helper も反復走査である。まれな language / feature 用 lookup は lazy に構築し、
 `Distinct` ベースの走査を置換するときは source order や first-match semantics を維持する。
+
+container ownership にも同じ契約を適用する。reference が extracted declaration を name と
+source range で繰り返し解決する場合は、candidate を name ごとに一度だけ索引化し、その name の
+ordered range list だけを走査する。duplicate name の first-candidate behavior を維持し、index は
+1 回の extraction call 内だけに保持する。
 
 hot な抽出ループでの重複検出には、出力 record の完全な identity を key にした `HashSet` などの
 定数時間構造を使う。大きな生成ファイルで local variable、parameter、call site、type reference、

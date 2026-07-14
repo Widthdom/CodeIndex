@@ -137,6 +137,7 @@ public static partial class ReferenceExtractor
         PythonImportBindingResolver.ImportedTypeCallLookup? pythonImportedTypeCallLookup = null;
         HashSet<(string Container, string Name)>? csharpPrivateProperties = null;
         var csharpPrivatePropertiesResolved = false;
+        Dictionary<string, List<SymbolRecord>>? csharpContainerCandidatesByName = null;
         var swiftPropertyDefinitionsByLine = language == "swift"
             ? BuildSwiftPropertyDefinitionsByLine(language, symbols, request.ReportDiagnostic)
             : null;
@@ -243,6 +244,37 @@ public static partial class ReferenceExtractor
             }
 
             return csharpPrivateProperties?.Contains((containingType, propertyName)) == true;
+        }
+
+        SymbolRecord? FindCSharpContainerCandidate(string? containerName, int lineNumber)
+        {
+            if (containerName == null)
+                return null;
+
+            if (csharpContainerCandidatesByName == null)
+            {
+                csharpContainerCandidatesByName = new Dictionary<string, List<SymbolRecord>>(StringComparer.Ordinal);
+                foreach (var candidate in containerCandidates)
+                {
+                    if (!csharpContainerCandidatesByName.TryGetValue(candidate.Name, out var candidates))
+                    {
+                        candidates = [];
+                        csharpContainerCandidatesByName.Add(candidate.Name, candidates);
+                    }
+                    candidates.Add(candidate);
+                }
+            }
+
+            if (!csharpContainerCandidatesByName.TryGetValue(containerName, out var namedCandidates))
+                return null;
+
+            foreach (var candidate in namedCandidates)
+            {
+                if (candidate.BodyStartLine <= lineNumber && candidate.BodyEndLine >= lineNumber)
+                    return candidate;
+            }
+
+            return null;
         }
 
         // Workspace-wide same-name type rescue needs cross-file visibility, so the
@@ -3365,10 +3397,7 @@ public static partial class ReferenceExtractor
                 if (tokenEnd >= line.Length || !line.AsSpan(tokenEnd).TrimStart().StartsWith(".", StringComparison.Ordinal))
                     continue;
 
-                var owner = containerCandidates.FirstOrDefault(candidate =>
-                    candidate.Name == reference.ContainerName
-                    && candidate.BodyStartLine <= reference.Line
-                    && candidate.BodyEndLine >= reference.Line);
+                var owner = FindCSharpContainerCandidate(reference.ContainerName, reference.Line);
                 var containingType = GetContainingTypeQualifiedName(owner);
                 if (containingType == null || !HasCSharpPrivateProperty(containingType, reference.SymbolName))
                 {

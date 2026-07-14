@@ -28,6 +28,19 @@ internal static class GitHubActionsReferenceExtractor
         string? currentJob = null;
         SymbolRecord? currentJobSymbol = null;
         int? runIndent = null;
+        Dictionary<string, SymbolRecord>? symbolsByName = null;
+
+        SymbolRecord? FindSymbol(string name)
+        {
+            if (symbolsByName == null)
+            {
+                symbolsByName = new Dictionary<string, SymbolRecord>(StringComparer.Ordinal);
+                foreach (var symbol in symbols)
+                    symbolsByName.TryAdd(symbol.Name, symbol);
+            }
+
+            return symbolsByName.GetValueOrDefault(name);
+        }
 
         for (var index = 0; index < lines.Length && !ReferenceExtractor.ReferenceLimitReached(references); index++)
         {
@@ -65,7 +78,7 @@ internal static class GitHubActionsReferenceExtractor
             {
                 currentJob = key;
                 currentJobIndent = indent;
-                currentJobSymbol = symbols.FirstOrDefault(symbol => symbol.Name == $"jobs.{currentJob}");
+                currentJobSymbol = FindSymbol($"jobs.{currentJob}");
                 continue;
             }
 
