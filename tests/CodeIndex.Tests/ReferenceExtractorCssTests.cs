@@ -66,62 +66,36 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_Css_AnimationShorthand_IgnoresLeadingTimingTokens()
+    public void Extract_Css_AnimationValueForms_CaptureNamesAndIgnoreKeywords()
     {
         const string content = """
-            @keyframes fade-in {
+            @keyframes shorthand-fade {
                 from { opacity: 0; }
                 to   { opacity: 1; }
             }
+            @keyframes list-fade { from { opacity: 0; } to { opacity: 1; } }
+            @keyframes list-slide { from { opacity: 0; } to { opacity: 1; } }
 
             .duration-first {
-                animation: 250ms ease-in fade-in;
+                animation: 250ms ease-in shorthand-fade;
             }
-
             .keyword-only {
                 animation: none;
             }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "css", content);
-        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
-
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "fade-in"
-            && reference.ReferenceKind == "reference"));
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "none"
-            && reference.ReferenceKind == "reference");
-    }
-
-    [Fact]
-    public void Extract_Css_AnimationNameList_CapturesEachKeyframeReference()
-    {
-        const string content = """
-            @keyframes fade-in {
-                from { opacity: 0; }
-                to   { opacity: 1; }
-            }
-
-            @keyframes slide-up {
-                from { transform: translateY(1rem); }
-                to   { transform: translateY(0); }
-            }
-
-            .modal {
-                animation-name: fade-in, none, slide-up;
+            .name-list {
+                animation-name: list-fade, none, list-slide;
             }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "css", content);
         var references = ReferenceExtractor.Extract(1, "css", content, symbols);
 
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "fade-in"
-            && reference.ReferenceKind == "reference"));
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "slide-up"
-            && reference.ReferenceKind == "reference"));
+        foreach (var name in new[] { "shorthand-fade", "list-fade", "list-slide" })
+        {
+            Assert.Single(references.Where(reference =>
+                reference.SymbolName == name
+                && reference.ReferenceKind == "reference"));
+        }
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "none"
             && reference.ReferenceKind == "reference");
