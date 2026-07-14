@@ -1752,28 +1752,46 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScript_DetectsClassFieldArrowWithAsiBetweenFields()
+    public void Extract_JavaScript_DetectsClassFieldArrowAsiBoundaries()
     {
         // ASI (Automatic Semicolon Insertion) between class fields must not swallow
         // the next arrow-property header into the previous expression body.
         // クラスフィールド間の ASI により式本体の後続フィールドを取りこぼさないこと。
         var content = """
-            class Foo {
-                first = () => 42
-                second = () => 43
+            class NumericAsi {
+                numericFirst = () => 42
+                numericSecond = () => 43
+            }
+
+            class MemberContinuation {
+              continued = () => foo
+                [bar];
+              afterContinuation = () => 43;
+            }
+
+            class ClosingLiteral {
+              onlyLiteral = () => "x"
+            }
+
+            class StringAsi {
+              stringFirst = () => "x"
+              afterString = () => 43
+              templateLast = () => `template`
             }
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        var first = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "first");
-        Assert.NotNull(first);
-        Assert.Equal("class", first.ContainerKind);
-        Assert.Equal("Foo", first.ContainerName);
-
-        var second = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "second");
-        Assert.NotNull(second);
-        Assert.Equal("class", second.ContainerKind);
-        Assert.Equal("Foo", second.ContainerName);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "numericFirst" && s.ContainerName == "NumericAsi");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "numericSecond" && s.ContainerName == "NumericAsi");
+        var continued = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "continued"));
+        Assert.Equal("class", continued.ContainerKind);
+        Assert.Equal("MemberContinuation", continued.ContainerName);
+        Assert.Contains("[bar]", continued.Signature);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "afterContinuation" && s.ContainerName == "MemberContinuation");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "onlyLiteral" && s.ContainerName == "ClosingLiteral");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "stringFirst" && s.ContainerName == "StringAsi");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "afterString" && s.ContainerName == "StringAsi");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "templateLast" && s.ContainerName == "StringAsi");
     }
 
     [Theory]
@@ -1810,69 +1828,4 @@ public partial class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "dynamicKey" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
     }
 
-    [Fact]
-    public void Extract_JavaScript_DetectsClassFieldArrowComputedMemberContinuation()
-    {
-        // A bare `[` on the next line is `foo[bar]` member-access continuation per JS ASI rules,
-        // NOT a new computed class method. The scanner must not cut the expression body at `foo`.
-        // JS の ASI 規則では、次行頭の `[` は `foo[bar]` メンバアクセスの継続であり、
-        // computed method 名の開始ではない。式本体を `foo` で打ち切ってはならない。
-        var content = """
-            class Foo {
-              first = () => foo
-                [bar];
-              second = () => 43;
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        var first = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "first");
-        Assert.NotNull(first);
-        Assert.Equal("class", first.ContainerKind);
-        Assert.Equal("Foo", first.ContainerName);
-        Assert.Contains("[bar]", first.Signature);
-
-        var second = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "second");
-        Assert.NotNull(second);
-        Assert.Equal("class", second.ContainerKind);
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DetectsClassFieldArrowStringLiteralBeforeClosingBrace()
-    {
-        // A string-returning arrow without a trailing `;` must be terminated by the class-body `}`.
-        // The lexer preserves opening/closing quote characters in the sanitized header, so the
-        // ASI terminator check must treat `"` / `'` / `` ` `` as valid expression ends.
-        // セミコロンなしで文字列を返す矢印フィールドは、直後のクラス終了 `}` で終端されなければならない。
-        // lexer は開閉クォートを sanitized header 上に残すため、ASI 終端チェックは
-        // `"` / `'` / `` ` `` を有効な式終端として扱わなければならない。
-        var content = """
-            class Foo {
-              only = () => "x"
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        var only = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "only");
-        Assert.NotNull(only);
-        Assert.Equal("class", only.ContainerKind);
-        Assert.Equal("Foo", only.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DetectsClassFieldArrowStringLiteralWithAsiBetweenFields()
-    {
-        var content = """
-            class Foo {
-              first = () => "x"
-              second = () => 43
-              third = () => `template`
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first" && s.ContainerName == "Foo");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second" && s.ContainerName == "Foo");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "third" && s.ContainerName == "Foo");
-    }
 }
