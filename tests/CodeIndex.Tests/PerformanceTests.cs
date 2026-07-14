@@ -224,6 +224,46 @@ public class PerformanceTests : IDisposable
             $"Container lookup allocated {csharpAllocatedBytes:N0} bytes for C# and {yamlAllocatedBytes:N0} bytes for YAML");
     }
 
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void Extraction_DenseDelimitedLists_StayWithinAllocationBudget()
+    {
+        var pythonContent = BuildPythonCommaImportFixture(itemCount: 400);
+        var pythonSymbols = SymbolExtractor.Extract(1, "python", pythonContent);
+        _ = ReferenceExtractor.Extract(1, "python", pythonContent, pythonSymbols);
+        var pythonAllocatedBytes = MeasureAllocatedBytes(
+            () => ReferenceExtractor.Extract(1, "python", pythonContent, pythonSymbols));
+
+        var yamlContent = BuildGitHubActionsNeedsListFixture(dependencyCount: 400);
+        var yamlSymbols = SymbolExtractor.Extract(1, "yaml", yamlContent);
+        _ = ReferenceExtractor.Extract(1, "yaml", yamlContent, yamlSymbols);
+        var yamlAllocatedBytes = MeasureAllocatedBytes(
+            () => ReferenceExtractor.Extract(1, "yaml", yamlContent, yamlSymbols));
+
+        var jsonContent = BuildJsonRepositoryPathFixture(pathCount: 400);
+        var jsonSymbols = SymbolExtractor.Extract(1, "json", jsonContent);
+        _ = ReferenceExtractor.Extract(1, "json", jsonContent, jsonSymbols);
+        var jsonAllocatedBytes = MeasureAllocatedBytes(
+            () => ReferenceExtractor.Extract(1, "json", jsonContent, jsonSymbols));
+
+        var fortranContent = BuildFortranProcedureListFixture(procedureCount: 400);
+        _ = SymbolExtractor.Extract(1, "fortran", fortranContent);
+        var fortranAllocatedBytes = MeasureAllocatedBytes(
+            () => SymbolExtractor.Extract(1, "fortran", fortranContent));
+
+        var totalAllocatedBytes = pythonAllocatedBytes + yamlAllocatedBytes + jsonAllocatedBytes + fortranAllocatedBytes;
+        Assert.True(
+            pythonAllocatedBytes < 1_150_000
+                && yamlAllocatedBytes < 1_400_000
+                && jsonAllocatedBytes < 470_000
+                && fortranAllocatedBytes < 340_000
+                && totalAllocatedBytes < 3_180_000,
+            $"Dense list extraction allocated Python={pythonAllocatedBytes:N0}, YAML={yamlAllocatedBytes:N0}, JSON={jsonAllocatedBytes:N0}, Fortran={fortranAllocatedBytes:N0} bytes");
+    }
+
     private static long MeasureAllocatedBytes(Action action)
     {
         GC.Collect();
@@ -352,6 +392,64 @@ public class PerformanceTests : IDisposable
                 .Append("      - run: ./scripts/job").Append(index).Append(".sh\n");
         }
         return content.ToString();
+    }
+
+    private static string BuildPythonCommaImportFixture(int itemCount)
+    {
+        var content = new StringBuilder(itemCount * 60);
+        content.Append("from models import ");
+        for (var index = 0; index < itemCount; index++)
+        {
+            if (index > 0)
+                content.Append(", ");
+            content.Append("Model").Append(index).Append(" as Alias").Append(index);
+        }
+        content.Append("\ndef build_all():\n");
+        for (var index = 0; index < itemCount; index++)
+            content.Append("    Alias").Append(index).Append("()\n");
+        return content.ToString();
+    }
+
+    private static string BuildGitHubActionsNeedsListFixture(int dependencyCount)
+    {
+        var content = new StringBuilder(dependencyCount * 70);
+        content.Append("name: Dense needs\njobs:\n");
+        for (var index = 0; index < dependencyCount; index++)
+            content.Append("  job").Append(index).Append(":\n    steps:\n      - run: echo ready\n");
+        content.Append("  aggregate:\n    needs: [");
+        for (var index = 0; index < dependencyCount; index++)
+        {
+            if (index > 0)
+                content.Append(", ");
+            content.Append("job").Append(index);
+        }
+        content.Append("]\n    steps:\n      - run: echo done\n");
+        return content.ToString();
+    }
+
+    private static string BuildJsonRepositoryPathFixture(int pathCount)
+    {
+        var content = new StringBuilder(pathCount * 50).Append("{\n");
+        for (var index = 0; index < pathCount; index++)
+        {
+            content.Append("  \"path").Append(index).Append("\": \"src/module")
+                .Append(index).Append("/file").Append(index).Append(".cs\"");
+            content.Append(index + 1 == pathCount ? '\n' : ",\n");
+        }
+        return content.Append("}\n").ToString();
+    }
+
+    private static string BuildFortranProcedureListFixture(int procedureCount)
+    {
+        var content = new StringBuilder(procedureCount * 20)
+            .Append("module dense_mod\n  interface\n    module procedure ");
+        for (var index = 0; index < procedureCount; index++)
+        {
+            if (index > 0)
+                content.Append(", ");
+            content.Append("proc_").Append(index);
+        }
+        return content.Append("\n  end interface\nend module dense_mod\n").ToString();
     }
 
     public void Dispose()

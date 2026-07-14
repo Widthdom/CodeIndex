@@ -87,11 +87,27 @@ internal static class GitHubActionsReferenceExtractor
 
             if (key == "needs")
             {
-                foreach (var need in value.Trim('[', ']').Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                var needs = value.AsSpan();
+                while (needs.Length > 0 && needs[0] == '[')
+                    needs = needs[1..];
+                while (needs.Length > 0 && needs[^1] == ']')
+                    needs = needs[..^1];
+
+                var itemStart = 0;
+                while (itemStart <= needs.Length)
                 {
-                    var target = need.Trim('\'', '"');
-                    if (target.Length > 0)
+                    var separator = needs[itemStart..].IndexOf(',');
+                    var itemEnd = separator >= 0 ? itemStart + separator : needs.Length;
+                    var targetSpan = TrimNeedsItem(needs[itemStart..itemEnd]);
+                    if (targetSpan.Length > 0)
+                    {
+                        var target = targetSpan.ToString();
                         Add(fileId, $"jobs.{target}", line.IndexOf(target, StringComparison.Ordinal), "call", line, index + 1, currentJobSymbol, references, seen);
+                    }
+
+                    if (separator < 0)
+                        break;
+                    itemStart = itemEnd + 1;
                 }
             }
             else if (key == "uses")
@@ -144,6 +160,16 @@ internal static class GitHubActionsReferenceExtractor
     {
         var comment = value.IndexOf(" #", StringComparison.Ordinal);
         return (comment >= 0 ? value[..comment] : value).Trim().Trim('\'', '"');
+    }
+
+    private static ReadOnlySpan<char> TrimNeedsItem(ReadOnlySpan<char> value)
+    {
+        value = value.Trim();
+        while (value.Length > 0 && value[0] is '\'' or '"')
+            value = value[1..];
+        while (value.Length > 0 && value[^1] is '\'' or '"')
+            value = value[..^1];
+        return value;
     }
 
     private static int CountLeadingSpaces(string line)

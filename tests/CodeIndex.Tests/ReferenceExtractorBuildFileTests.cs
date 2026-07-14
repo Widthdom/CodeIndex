@@ -167,11 +167,14 @@ public partial class ReferenceExtractorTests
                   - uses: actions/checkout@0123456789abcdef
                   - run: dotnet build src/App/App.csproj
               test:
-                needs: [build]
+                needs: [build, "lint"]
                 steps:
                   - run: |
                       ./scripts/test.sh
                       echo ignored.txt
+              lint:
+                steps:
+                  - run: echo lint
             deployment:
               uses: actions/setup-node@fedcba9876543210
               run: ./scripts/not-a-job.sh
@@ -181,6 +184,7 @@ public partial class ReferenceExtractorTests
             .ShouldContain("import", "actions/checkout", containerName: "jobs.build")
             .ShouldContain("project_reference", "src/App/App.csproj", containerName: "jobs.build")
             .ShouldContain("call", "jobs.build", containerName: "jobs.test")
+            .ShouldContain("call", "jobs.lint", containerName: "jobs.test")
             .ShouldContain("project_reference", "scripts/test.sh", containerName: "jobs.test")
             .ShouldNotContainSymbol("ignored.txt")
             .ShouldNotContainSymbol("actions/setup-node")

@@ -130,10 +130,21 @@ internal static class JsonReferenceExtractor
         if (path.Length == 0 || path.Length > SymbolExtractor.StructuredDataMaxPathLength || path.StartsWith("/", StringComparison.Ordinal))
             return false;
 
-        foreach (var segment in path.Split('/'))
+        var segmentStart = 0;
+        for (var index = 0; index <= path.Length; index++)
         {
-            if (segment is "" or "." or "..")
+            if (index < path.Length && path[index] != '/')
+                continue;
+
+            var segmentLength = index - segmentStart;
+            if (segmentLength == 0
+                || segmentLength == 1 && path[segmentStart] == '.'
+                || segmentLength == 2 && path[segmentStart] == '.' && path[segmentStart + 1] == '.')
+            {
                 return false;
+            }
+
+            segmentStart = index + 1;
         }
 
         return true;

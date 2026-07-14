@@ -117,7 +117,7 @@ internal static class PythonImportBindingResolver
             if (importIndex < 6)
                 yield break;
             var module = ResolveRelativeModule(text[5..importIndex].Trim(), sourcePath);
-            foreach (var item in text[(importIndex + 8)..].Split(','))
+            foreach (var item in EnumerateCommaSeparatedItems(text, importIndex + 8))
             {
                 var (imported, local) = ParseAlias(item);
                 if (imported.Length > 0 && imported != "*")
@@ -127,19 +127,43 @@ internal static class PythonImportBindingResolver
         }
         if (!text.StartsWith("import ", StringComparison.Ordinal))
             yield break;
-        foreach (var item in text[7..].Split(','))
+        foreach (var item in EnumerateCommaSeparatedItems(text, 7))
         {
             var (module, local) = ParseAlias(item);
             if (module.Length > 0)
-                yield return new Binding(module, module, local.Length > 0 ? local : module.Split('.')[0], IsModule: true);
+            {
+                var separator = module.IndexOf('.');
+                var defaultLocal = separator >= 0 ? module[..separator] : module;
+                yield return new Binding(module, module, local.Length > 0 ? local : defaultLocal, IsModule: true);
+            }
         }
     }
 
     private static (string Imported, string Local) ParseAlias(string value)
     {
-        var parts = value.Trim().Split(" as ", 2, StringSplitOptions.TrimEntries);
-        var imported = parts[0].Trim('(', ')', ' ');
-        return (imported, parts.Length == 2 ? parts[1].Trim('(', ')', ' ') : imported);
+        var trimmed = value.Trim();
+        var aliasSeparator = trimmed.IndexOf(" as ", StringComparison.Ordinal);
+        var imported = (aliasSeparator >= 0 ? trimmed[..aliasSeparator] : trimmed).Trim('(', ')', ' ');
+        var local = aliasSeparator >= 0
+            ? trimmed[(aliasSeparator + 4)..].Trim('(', ')', ' ')
+            : imported;
+        return (imported, local);
+    }
+
+    private static IEnumerable<string> EnumerateCommaSeparatedItems(string text, int startIndex)
+    {
+        while (startIndex <= text.Length)
+        {
+            var separator = text.IndexOf(',', startIndex);
+            if (separator < 0)
+            {
+                yield return text[startIndex..];
+                yield break;
+            }
+
+            yield return text[startIndex..separator];
+            startIndex = separator + 1;
+        }
     }
 
     private static string ResolveRelativeModule(string module, string? sourcePath)

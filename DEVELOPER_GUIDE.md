@@ -393,6 +393,12 @@ constant-time structure keyed by the full emitted record identity. Do not add
 joins to loops that can run once per local variable, parameter, call site, type
 reference, or pattern match in a large generated file.
 
+For delimiter-only parsing in hot extractors, prefer index/span walks when the
+consumer needs only one item at a time or validation can stay on the source
+string. `string.Split` creates an array and substrings for every import,
+dependency, path segment, or declaration item. Preserve the original empty-item,
+trimming, quote, and first-separator semantics when replacing it.
+
 The C# value-receiver path is the reference example: local receiver scopes are
 derived from precomputed block spans for the containing function, and duplicate
 receiver records are tracked with a hash set. Regressions in this area should
@@ -2851,6 +2857,11 @@ hot な抽出ループでの重複検出には、出力 record の完全な iden
 定数時間構造を使う。大きな生成ファイルで local variable、parameter、call site、type reference、
 pattern match ごとに実行され得るループへ、`List.Any(...)`、`List.Contains(...)`、nested regex scan、
 繰り返しの string join を追加してはならない。
+
+hot extractor の delimiter-only parsing では、consumer が item を一度に1つだけ必要とする場合や
+validation を source string 上で完結できる場合、index / span walk を優先する。`string.Split` は
+import、dependency、path segment、declaration item ごとに array と substring を作る。置換時は
+元の empty-item、trim、quote、first-separator semantics を維持する。
 
 C# の value receiver 経路を参照例とする。local receiver の scope は containing function 用に
 事前計算した block span から導出し、重複 receiver record は hash set で追跡する。この領域の
