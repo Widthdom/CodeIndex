@@ -57,115 +57,29 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_DockerfileRunMountReferences_IndexStageDependencies()
-    {
-        const string content = """
-            FROM alpine AS assets
-
-            FROM alpine AS runtime
-            RUN --mount=type=bind,from=assets,target=/mnt/assets cp -r /mnt/assets /app/assets
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
-        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
-
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "assets"
-            && reference.ReferenceKind == "call"));
-    }
-
-    [Fact]
-    public void Extract_DockerfileRunMountReferences_IndexMultipleStageDependencies()
+    public void Extract_DockerfileRunMountReferences_IndexStageFormsAndIgnoreShellArguments()
     {
         const string content = """
             FROM alpine AS assets
             FROM alpine AS cache
-
             FROM alpine AS runtime
+            RUN --mount=type=bind,from=assets,target=/mnt/assets cp -r /mnt/assets /app/assets
             RUN --mount=type=bind,from=assets,target=/assets --mount=type=bind,from=cache,target=/cache true
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
-        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "assets"
-            && reference.ReferenceKind == "call");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "cache"
-            && reference.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_DockerfileRunMountReferences_IndexQuotedStageDependencies()
-    {
-        const string content = """
-            FROM alpine AS assets
-
-            FROM alpine AS runtime
             RUN --mount=type=bind,from="assets",target=/mnt/assets cp -r /mnt/assets /app/assets
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
-        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
-
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "assets"
-            && reference.ReferenceKind == "call"));
-    }
-
-    [Fact]
-    public void Extract_DockerfileRunMountReferences_IndexOnbuildStageDependencies()
-    {
-        const string content = """
-            FROM alpine AS assets
-
-            FROM alpine AS runtime
             ONBUILD RUN --mount=type=bind,from=assets,target=/mnt/assets cp -r /mnt/assets /app/assets
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
-        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
-
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "assets"
-            && reference.ReferenceKind == "call"));
-    }
-
-    [Fact]
-    public void Extract_DockerfileRunMountReferences_IgnoresQuotedShellText()
-    {
-        const string content = """
-            FROM alpine AS assets
-
-            FROM alpine AS runtime
             RUN echo "--mount=type=bind,from=assets,target=/mnt/assets"
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
-        var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
-
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "assets"
-            && reference.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_DockerfileRunMountReferences_IgnoresCommandArguments()
-    {
-        const string content = """
-            FROM alpine AS assets
-
-            FROM alpine AS runtime
             RUN echo --mount=type=bind,from=assets,target=/mnt/assets
             """;
 
         var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
         var references = ReferenceExtractor.Extract(1, "dockerfile", content, symbols);
 
-        Assert.DoesNotContain(references, reference =>
+        Assert.Equal(4, references.Count(reference =>
             reference.SymbolName == "assets"
-            && reference.ReferenceKind == "call");
+            && reference.ReferenceKind == "call"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "cache"
+            && reference.ReferenceKind == "call"));
     }
 
     [Fact]
