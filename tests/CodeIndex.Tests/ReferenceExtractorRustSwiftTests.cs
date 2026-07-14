@@ -1900,11 +1900,23 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_RustExternCrate_CapturesCrateReferences()
+    public void Extract_RustModuleSurface_CapturesExternalModuleReferences()
     {
         const string content = """
             extern crate serde;
             pub extern crate r#async as async_crate;
+
+            mod users;
+            pub(crate) mod r#await;
+            mod inline {
+                fn helper() {}
+            }
+
+            use crate::models::User;
+            use crate::services::{Repository, Store as StoreAlias};
+            use crate::prelude::{self, Widget};
+            pub use r#async::Handler;
+            use crate::glob_prelude::*;
             """;
 
         var symbols = SymbolExtractor.Extract(1, "rust", content);
@@ -1912,47 +1924,18 @@ public partial class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.SymbolName == "serde" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "async" && r.ReferenceKind == "reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "async_crate" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_RustModDeclarations_CaptureModuleReferences()
-    {
-        const string content = """
-            mod users;
-            pub(crate) mod r#async;
-            mod inline {
-                fn helper() {}
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
         Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
-        Assert.Contains(references, r => r.SymbolName == "async" && r.ReferenceKind == "reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "inline" && r.ReferenceKind == "reference");
-    }
-
-    [Fact]
-    public void Extract_RustUseStatements_CaptureImportTargetReferences()
-    {
-        const string content = """
-            use crate::models::User;
-            use crate::services::{Repository, Store as StoreAlias};
-            use crate::prelude::{self, Widget};
-            pub use r#async::Handler;
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
+        Assert.Contains(references, r => r.SymbolName == "await" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "Store" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "prelude" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "glob_prelude" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "inline" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "*" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "async_crate" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "StoreAlias" && r.ReferenceKind == "type_reference");
     }
 
@@ -2177,20 +2160,6 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Error" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "DEFAULT" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "Ok" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_RustGlobImports_CaptureParentModuleReference()
-    {
-        const string content = """
-            use crate::prelude::*;
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "prelude" && r.ReferenceKind == "reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "*" && r.ReferenceKind == "reference");
     }
 
     [Fact]
