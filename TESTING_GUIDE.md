@@ -102,6 +102,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   JavaScript and TypeScript `import.meta` module discovery shares `import.meta.resolve` and `new URL(..., import.meta.url)` positive/negative forms in one theory fixture with retained line and signature checks.
   JavaScript and TypeScript worker-loading coverage shares `importScripts`, `Worker`, and `SharedWorker` variants in one theory fixture, retaining line/signature checks and dynamic/string/method/constructor negatives.
   JavaScript and TypeScript browser module-registration coverage shares service-worker and worklet APIs in one theory fixture with scoped/options signatures and receiver/dynamic/string negatives.
+  JavaScript and TypeScript dynamic-import coverage keeps multiline literals, import attributes/assertions, static templates, and receiver/dynamic/string negatives in one theory fixture with form-specific line and signature checks.
 - `FileIndexerTests.cs`, `FileIndexerContentLoadingTests.cs`, `FileIndexerTestSupport.cs`
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
 - `PathCompatibilityMatrixTests.cs`
@@ -713,6 +714,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   JavaScript/TypeScript の `import.meta` module discovery は `import.meta.resolve` と `new URL(..., import.meta.url)` の正負例を、line/signature 検証を維持した1 theory fixture で共有します。
   JavaScript/TypeScript worker-loading coverage は `importScripts`、`Worker`、`SharedWorker` variants を、line/signature 検証と dynamic/string/method/constructor 負例を維持した1 theory fixture で共有します。
   JavaScript/TypeScript browser module-registration coverage は service-worker/worklet API を、scope/options signature と receiver/dynamic/string 負例を持つ1 theory fixture で共有します。
+  JavaScript/TypeScript dynamic-import coverage は multiline literal、import attributes/assertions、static template と receiver/dynamic/string 負例を、形式別の line/signature 検証を持つ1 theory fixture で共有します。
 - `FileIndexerTests.cs`、`FileIndexerContentLoadingTests.cs`、`FileIndexerTestSupport.cs`
   ファイル走査、言語判定、scan result 言語の再利用、content loading / canonicalization、checksum、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。共有 `FileIndexerTests` helper は `FileIndexerTestSupport.cs` に置きます。
 - `PathCompatibilityMatrixTests.cs`

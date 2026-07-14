@@ -1626,7 +1626,7 @@ public partial class SymbolExtractorTests
     [Theory]
     [InlineData("javascript")]
     [InlineData("typescript")]
-    public void Extract_JavaScriptTypeScript_DetectsMultilineDynamicImportSymbols(string language)
+    public void Extract_JavaScriptTypeScript_DetectsDynamicImportForms(string language)
     {
         var content = """
             const loader = () => import(
@@ -1639,6 +1639,17 @@ public partial class SymbolExtractorTests
             class Loader { #import(path) {} load() { return this.#import("./private"); } }
             const text = "import('./string')";
             // import('./comment')
+
+            const data = await import("./data.json", {
+                with: { type: "json" }
+            });
+            const legacy = await import(
+                "./legacy.json",
+                { assert: { type: "json" } }
+            );
+
+            const view = import(`./view.js`);
+            const computed = import(`./${name}.js`);
             """;
         var symbols = SymbolExtractor.Extract(1, language, content);
 
@@ -1647,54 +1658,25 @@ public partial class SymbolExtractorTests
         Assert.Contains("const loader", importSymbol.Signature);
         Assert.Contains("import(", importSymbol.Signature);
         Assert.Contains("./feature", importSymbol.Signature);
+
+        var dataImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./data.json"));
+        Assert.Equal(12, dataImport.Line);
+        Assert.Contains("with", dataImport.Signature);
+        Assert.Contains("type", dataImport.Signature);
+
+        var legacyImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./legacy.json"));
+        Assert.Equal(16, legacyImport.Line);
+        Assert.Contains("assert", legacyImport.Signature);
+        Assert.Contains("./legacy.json", legacyImport.Signature);
+
+        var viewImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./view.js"));
+        Assert.Equal(20, viewImport.Line);
+        Assert.Contains("`./view.js`", viewImport.Signature);
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./method");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./optional");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./private");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./comment");
-    }
-
-    [Theory]
-    [InlineData("javascript")]
-    [InlineData("typescript")]
-    public void Extract_JavaScriptTypeScript_DetectsDynamicImportSymbolsWithImportOptions(string language)
-    {
-        var content = """
-            const data = await import("./data.json", {
-                with: { type: "json" }
-            });
-            const legacy = await import(
-                "./legacy.json",
-                { assert: { type: "json" } }
-            );
-            """;
-        var symbols = SymbolExtractor.Extract(1, language, content);
-
-        var dataImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./data.json"));
-        Assert.Equal(1, dataImport.Line);
-        Assert.Contains("with", dataImport.Signature);
-        Assert.Contains("type", dataImport.Signature);
-
-        var legacyImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./legacy.json"));
-        Assert.Equal(5, legacyImport.Line);
-        Assert.Contains("assert", legacyImport.Signature);
-        Assert.Contains("./legacy.json", legacyImport.Signature);
-    }
-
-    [Theory]
-    [InlineData("javascript")]
-    [InlineData("typescript")]
-    public void Extract_JavaScriptTypeScript_DetectsTemplateLiteralDynamicImportSymbols(string language)
-    {
-        var content = """
-            const view = import(`./view.js`);
-            const computed = import(`./${name}.js`);
-            """;
-        var symbols = SymbolExtractor.Extract(1, language, content);
-
-        var viewImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./view.js"));
-        Assert.Equal(1, viewImport.Line);
-        Assert.Contains("`./view.js`", viewImport.Signature);
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name.Contains("${", StringComparison.Ordinal));
     }
 
