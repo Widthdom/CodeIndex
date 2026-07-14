@@ -442,29 +442,20 @@ public partial class SymbolExtractorTests
     [Fact]
     public void Extract_TypeScript_DetectsInlineClassMethods()
     {
-        var content = "export class Inline { run(): void {} }";
+        var content = "export class Inline { run(): void {} first(): void {} second(): void {} }";
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Inline");
         var run = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "run"));
-        Assert.Equal("class", run.ContainerKind);
-        Assert.Equal("Inline", run.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_TypeScript_DetectsInlineMultipleMethods()
-    {
-        var content = "export class Inline { first(): void {} second(): void {} }";
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Inline");
         var first = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "first"));
         var second = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "second"));
-        Assert.Equal("class", first.ContainerKind);
-        Assert.Equal("Inline", first.ContainerName);
+        Assert.All([run, first, second], symbol =>
+        {
+            Assert.Equal("class", symbol.ContainerKind);
+            Assert.Equal("Inline", symbol.ContainerName);
+        });
+        Assert.Equal("run(): void {}", run.Signature);
         Assert.Equal("first(): void {}", first.Signature);
-        Assert.Equal("class", second.ContainerKind);
-        Assert.Equal("Inline", second.ContainerName);
         Assert.Equal("second(): void {}", second.Signature);
     }
 
