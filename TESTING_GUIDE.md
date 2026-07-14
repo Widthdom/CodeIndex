@@ -83,6 +83,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   JavaScript multiline `for...of` and `for await...of` plain-template negatives likewise share one source and one phantom-call exclusion.
   JavaScript for-of header negatives share NBSP synchronous/asynchronous and BOM synchronous forms in one source because they assert the same special-whitespace suppression.
   JavaScript reserved-word member tags share one synchronous/asynchronous fixture and exact per-name call counts for `default`, `return`, `finally`, and `await`.
+  CSS selector-form coverage shares one fixture for selector lists, descendants, compound classes/IDs, standalone IDs, quoted-attribute lookalikes, and hex-color negatives, using unique names for exact diagnostics.
 - `FileIndexerTests.cs`, `FileIndexerContentLoadingTests.cs`, `FileIndexerTestSupport.cs`
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
 - `PathCompatibilityMatrixTests.cs`
@@ -675,6 +676,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   JavaScript の multiline `for...of` / `for await...of` plain-template 負例も1つの source と1つの phantom-call 除外を共有します。
   JavaScript の for-of header 負例は、同じ特殊空白抑制を検証する NBSP 同期・非同期形と BOM 同期形を1つの source で共有します。
   JavaScript の予約語 member tag は、`default`、`return`、`finally`、`await` の名前別 call 数を厳密に検証する同期・非同期 fixture を共有します。
+  CSS selector-form coverage は、selector list、descendant、compound class/ID、standalone ID、quoted-attribute の類似文字列、hex-color 負例を、厳密に診断できる固有名付きの1 fixture で共有します。
 - `FileIndexerTests.cs`、`FileIndexerContentLoadingTests.cs`、`FileIndexerTestSupport.cs`
   ファイル走査、言語判定、scan result 言語の再利用、content loading / canonicalization、checksum、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。共有 `FileIndexerTests` helper は `FileIndexerTestSupport.cs` に置きます。
 - `PathCompatibilityMatrixTests.cs`

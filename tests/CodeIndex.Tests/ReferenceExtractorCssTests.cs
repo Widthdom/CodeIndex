@@ -128,22 +128,39 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_Css_MixedSelectorLists_KeepClassReferencesVisible()
+    public void Extract_Css_SelectorForms_KeepReferencesAndIgnoreLiteralLookalikes()
     {
         const string content = """
-            .container {
-                button, .card {
-                    color: red;
-                }
-            }
+            .list-root { button, .list-card { color: red; } }
+            .desc-root { button .desc-card { color: red; } }
+
+            .btn { color: red; }
+            #main { padding: 0; }
+            a.btn { text-decoration: none; }
+            button#main { background: blue; }
+
+            #header { color: blue; }
+            body #header { padding: 0; }
+
+            button[data-state=".quoted-only"] { color: red; }
+            .colors { color: #fff; background: #abc123; }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "css", content);
         var references = ReferenceExtractor.Extract(1, "css", content, symbols);
 
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == ".card"
-            && reference.ReferenceKind == "reference"));
+        foreach (var name in new[] { ".list-card", ".desc-card", ".btn", "#main", "#header" })
+        {
+            Assert.Single(references.Where(reference =>
+                reference.SymbolName == name
+                && reference.ReferenceKind == "reference"));
+        }
+
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "reference"
+            && (reference.SymbolName == ".quoted-only"
+                || reference.SymbolName == "#fff"
+                || reference.SymbolName == "#abc123"));
     }
 
     [Fact]
@@ -157,103 +174,6 @@ public partial class ReferenceExtractorTests
         var exception = Record.Exception(() => ReferenceExtractor.Extract(1, "css", content, symbols));
 
         Assert.Null(exception);
-    }
-
-    [Fact]
-    public void Extract_Css_DescendantSelectors_KeepClassReferencesVisible()
-    {
-        const string content = """
-            .container {
-                button .card {
-                    color: red;
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "css", content);
-        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
-
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == ".card"
-            && reference.ReferenceKind == "reference"));
-    }
-
-    [Fact]
-    public void Extract_Css_CompoundSelectors_KeepClassAndIdReferencesVisible()
-    {
-        const string content = """
-            .btn { color: red; }
-            #main { padding: 0; }
-
-            a.btn {
-                text-decoration: none;
-            }
-
-            button#main {
-                background: blue;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "css", content);
-        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
-
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == ".btn"
-            && reference.ReferenceKind == "reference"));
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "#main"
-            && reference.ReferenceKind == "reference"));
-    }
-
-    [Fact]
-    public void Extract_Css_QuotedAttributeSelectors_DoNotEmitClassReferences()
-    {
-        const string content = """
-            button[data-state=".card"] {
-                color: red;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "css", content);
-        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
-
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == ".card"
-            && reference.ReferenceKind == "reference");
-    }
-
-    [Fact]
-    public void Extract_Css_IdSelectors_AreReferenced()
-    {
-        const string content = """
-            #header { color: blue; }
-            body #header { padding: 0; }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "css", content);
-        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
-
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "#header"
-            && reference.ReferenceKind == "reference"));
-    }
-
-    [Fact]
-    public void Extract_Css_HexColorLiterals_DoNotEmitIdReferences()
-    {
-        const string content = """
-            .card {
-                color: #fff;
-                background: #abc123;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "css", content);
-        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
-
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName.StartsWith("#")
-            && reference.ReferenceKind == "reference");
     }
 
     [Fact]
