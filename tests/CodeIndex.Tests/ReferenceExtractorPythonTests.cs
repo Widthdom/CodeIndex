@@ -92,47 +92,6 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_PythonFString_PreservesInterpolationCalls()
-    {
-        const string content = """
-            def run():
-                return 42
-
-            def use():
-                return f"value = {run()}"
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "run"
-            && reference.ReferenceKind == "call"
-            && reference.ContainerName == "use");
-    }
-
-    [Fact]
-    public void Extract_PythonFString_FormatSpecifier_PreservesFollowingCalls()
-    {
-        const string content = """
-            def real_call():
-                return 1
-
-            def caller(value):
-                msg = f"{value:#x} {real_call()}"
-                return msg
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "real_call"
-            && reference.ReferenceKind == "call"
-            && reference.ContainerName == "caller");
-    }
-
-    [Fact]
     public void Extract_PythonDecorators_CaptureBareAndQualifiedNames()
     {
         const string content = """
@@ -743,6 +702,12 @@ public partial class ReferenceExtractorTests
             def use_nested(format_value):
                 value = f"""{format_value("}") + run_nested()}"""
                 return value
+
+            def run_format():
+                return 1
+
+            def use_format(value):
+                return f"{value:#x} {run_format()}"
             """";
 
         var symbols = SymbolExtractor.Extract(1, "python", content);
@@ -751,6 +716,7 @@ public partial class ReferenceExtractorTests
         AssertInterpolationCalls("use_single", "run_single");
         AssertInterpolationCalls("use_multiline", "run_multiline");
         AssertInterpolationCalls("use_nested", "format_value", "run_nested");
+        AssertInterpolationCalls("use_format", "run_format");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName is "hello" or "goodbye" or "user_name");
 

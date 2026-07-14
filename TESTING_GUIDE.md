@@ -91,6 +91,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   App-manifest DTD coverage combines local and external entity declarations in one document, preserving assembly extraction while asserting external targets never enter signatures.
   Solidity's representative declaration/range fixture also owns comment and string false-positive controls on existing lines, avoiding a second extraction without shifting range assertions.
   Python type-introspection helper coverage keeps bare and qualified `cast` / `assert_type` calls beside other helper APIs, using distinct target types and containers in one extraction.
+  Python f-string interpolation coverage keeps single-line, multiline, nested-expression, and format-specifier-followed calls in one fixture with exact per-container call sets.
 - `FileIndexerTests.cs`, `FileIndexerContentLoadingTests.cs`, `FileIndexerTestSupport.cs`
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
 - `PathCompatibilityMatrixTests.cs`
@@ -691,6 +692,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   App-manifest DTD coverage は local/external entity declaration を1 document にまとめ、assembly 抽出を維持しつつ external target が signature に入らないことを検証します。
   Solidity の代表 declaration/range fixture は既存行上の comment/string false-positive control も担当し、range assertion をずらさず2回目の抽出を省きます。
   Python type-introspection helper coverage は bare/qualified `cast` / `assert_type` を他の helper API と同居させ、固有 target type と container を1回の抽出で検証します。
+  Python f-string interpolation coverage は single-line、multiline、nested-expression、format-specifier 後の call を、container 別 call 集合を厳密に検証する1 fixture で共有します。
 - `FileIndexerTests.cs`、`FileIndexerContentLoadingTests.cs`、`FileIndexerTestSupport.cs`
   ファイル走査、言語判定、scan result 言語の再利用、content loading / canonicalization、checksum、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。共有 `FileIndexerTests` helper は `FileIndexerTestSupport.cs` に置きます。
 - `PathCompatibilityMatrixTests.cs`
