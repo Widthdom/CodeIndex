@@ -250,13 +250,26 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_TypeScriptRuntimeTypeofLayouts_DoNotBecomeTypeReferences()
+    public void Extract_TypeScriptTypeQueries_DistinguishTypeAndRuntimeLayouts()
     {
         const string content = """
-            function caller(valueWrapped: unknown) {
+            class Point {}
+
+            type PointCtor = typeof Point;
+            type PointKeys = keyof Point;
+            type PointCtorMultiline =
+                typeof Point;
+
+            function caller(valueWrapped: unknown, valueMultiline: unknown) {
               const runtime =
                 typeof valueWrapped === "string";
-              return runtime;
+              const another =
+                Promise<
+                  string
+                >;
+              const multilineRuntime =
+                typeof valueMultiline === "string";
+              return runtime && multilineRuntime && another.length > 0;
             }
             const inline = (valueInline: unknown) => typeof valueInline === "string";
             """;
@@ -264,9 +277,14 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
         var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
 
+        Assert.Equal(3, references.Count(reference =>
+            reference.SymbolName == "Point"
+            && reference.ReferenceKind == "type_reference"));
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "type_reference"
-            && (reference.SymbolName == "valueWrapped" || reference.SymbolName == "valueInline"));
+            && (reference.SymbolName == "valueWrapped"
+                || reference.SymbolName == "valueMultiline"
+                || reference.SymbolName == "valueInline"));
     }
 
     [Fact]
@@ -292,29 +310,6 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "import"
             && reference.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_TypeScriptMultilineTypeQueryContext_DoesNotLeakRuntimeReferences()
-    {
-        const string content = """
-            function caller(value: unknown) {
-              const runtime =
-                typeof value === "string";
-              const another =
-                Promise<
-                  string
-                >;
-              return runtime && another.length > 0;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
-
-        Assert.DoesNotContain(references, reference =>
-            reference.ReferenceKind == "type_reference"
-            && reference.SymbolName == "value");
     }
 
     [Fact]
@@ -505,29 +500,6 @@ public partial class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.SymbolName == "outer" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "inner" && r.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_TypeScriptTypeQueries_CaptureTypeReferences()
-    {
-        const string content = """
-            class Point {}
-
-            type PointCtor = typeof Point;
-            type PointKeys = keyof Point;
-            type PointCtorMultiline =
-                typeof Point;
-
-            function runtime(value: unknown) {
-                return typeof value === "string";
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
-
-        Assert.Equal(3, references.Count(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference"));
-        Assert.DoesNotContain(references, r => r.SymbolName == "value" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
