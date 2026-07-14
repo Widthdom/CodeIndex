@@ -392,6 +392,9 @@ constant-time structure keyed by the full emitted record identity. Do not add
 `List.Any(...)`, `List.Contains(...)`, nested regex scans, or repeated string
 joins to loops that can run once per local variable, parameter, call site, type
 reference, or pattern match in a large generated file.
+Reference deduplication specifically uses `ReferenceDedupeSet` with a value-type
+identity. Do not replace it with concatenated string keys: candidate names and
+container names can be long, and the key is created before duplicate rejection.
 
 For delimiter-only parsing in hot extractors, prefer index/span walks when the
 consumer needs only one item at a time or validation can stay on the source
@@ -2857,6 +2860,9 @@ hot な抽出ループでの重複検出には、出力 record の完全な iden
 定数時間構造を使う。大きな生成ファイルで local variable、parameter、call site、type reference、
 pattern match ごとに実行され得るループへ、`List.Any(...)`、`List.Contains(...)`、nested regex scan、
 繰り返しの string join を追加してはならない。
+reference deduplication は特に、value-type identity を持つ `ReferenceDedupeSet` を使う。
+candidate name / container name は長くなり得て、duplicate rejection より前に key が作られるため、
+連結 string key へ戻してはならない。
 
 hot extractor の delimiter-only parsing では、consumer が item を一度に1つだけ必要とする場合や
 validation を source string 上で完結できる場合、index / span walk を優先する。`string.Split` は

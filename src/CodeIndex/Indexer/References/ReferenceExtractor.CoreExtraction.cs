@@ -472,11 +472,11 @@ public static partial class ReferenceExtractor
                 reference.IsSelfReference = IsSameReferenceName(reference.ContainerName, resolvedName);
             }
 
-            var deduped = new HashSet<string>(StringComparer.Ordinal);
+            var deduped = new HashSet<ReferenceDedupeKey>();
             for (var index = 0; index < references.Count;)
             {
                 var reference = references[index];
-                var key = BuildReferenceDedupeKey(
+                var key = CreateReferenceDedupeKey(
                     reference.FileId,
                     language,
                     reference.Line,
@@ -567,7 +567,7 @@ public static partial class ReferenceExtractor
             return null;
         }
 
-        void EmitCSharpBclRegexWithoutTimeoutReferences(List<ReferenceRecord> references, HashSet<string> seen)
+        void EmitCSharpBclRegexWithoutTimeoutReferences(List<ReferenceRecord> references, ReferenceDedupeSet seen)
         {
             if (language != "csharp")
                 return;
@@ -592,7 +592,7 @@ public static partial class ReferenceExtractor
                     Kind = reference.ContainerKind ?? string.Empty,
                     Name = reference.ContainerName ?? string.Empty,
                 };
-                var dedupeKey = BuildReferenceDedupeKey(
+                var dedupeKey = CreateReferenceDedupeKey(
                     reference.FileId,
                     language,
                     reference.Line,

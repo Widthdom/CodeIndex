@@ -195,7 +195,7 @@ internal static class TypeScriptReferenceExtractor
         string preparedLine,
         string rawLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -274,7 +274,7 @@ internal static class TypeScriptReferenceExtractor
     public static void EmitDeclarationTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -329,7 +329,7 @@ internal static class TypeScriptReferenceExtractor
         string preparedLine,
         IReadOnlyList<TypeAliasBinding> aliases,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -375,7 +375,7 @@ internal static class TypeScriptReferenceExtractor
 
                 var column = index + 1;
                 var container = resolveContainerForColumn(index);
-                if (!seen.Contains(ReferenceExtractor.BuildReferenceDedupeKey(
+                if (!seen.Contains(ReferenceExtractor.CreateReferenceDedupeKey(
                         fileId,
                         "typescript",
                         lineNumber,
@@ -621,7 +621,7 @@ internal static class TypeScriptReferenceExtractor
     private static void EmitAsTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -657,7 +657,7 @@ internal static class TypeScriptReferenceExtractor
         string preparedLine,
         string rawLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -706,7 +706,7 @@ internal static class TypeScriptReferenceExtractor
         int preparedAsIndex,
         int asIndex,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
@@ -1254,7 +1254,7 @@ internal static class TypeScriptReferenceExtractor
         int lineIndex,
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1544,7 +1544,7 @@ internal static class TypeScriptReferenceExtractor
     private static void EmitMappedTypeMemberReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1625,7 +1625,7 @@ internal static class TypeScriptReferenceExtractor
     private static void EmitGenericConstraintTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1681,7 +1681,7 @@ internal static class TypeScriptReferenceExtractor
     private static void EmitHeritageTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1705,7 +1705,7 @@ internal static class TypeScriptReferenceExtractor
     private static void EmitTypeAliasTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1789,7 +1789,7 @@ internal static class TypeScriptReferenceExtractor
         int listStart,
         int listEnd,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1829,7 +1829,7 @@ internal static class TypeScriptReferenceExtractor
         string preparedLine,
         string keyword,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1859,7 +1859,7 @@ internal static class TypeScriptReferenceExtractor
     private static void EmitCallableSignatureTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1915,7 +1915,7 @@ internal static class TypeScriptReferenceExtractor
     private static void EmitDecoratedMemberTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1960,7 +1960,7 @@ internal static class TypeScriptReferenceExtractor
     private static void EmitFunctionPropertyTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,

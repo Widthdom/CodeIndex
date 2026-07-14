@@ -25,7 +25,7 @@ internal static class DartReferenceExtractor
     public static void EmitTypePositionReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -49,7 +49,7 @@ internal static class DartReferenceExtractor
     private static void EmitSpecialReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,

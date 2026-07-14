@@ -114,6 +114,8 @@ C# declaration-container resolution and GitHub Actions job ownership likewise
 use name-indexed candidates instead of a full container scan per reference.
 Dense Python import, GitHub Actions dependency, JSON path, and Fortran procedure
 lists are scanned in place instead of allocating temporary split arrays.
+Across all reference languages, duplicate detection stores structured identity
+keys instead of allocating a concatenated key string for every candidate.
 
 For a faster first pass when you only need text search, `definition`, `symbols`,
 or `map`, run `cdidx . --symbols-only`. Reference graph commands remain degraded
@@ -341,6 +343,8 @@ C# declaration-container 解決と GitHub Actions の job ownership も同様に
 全 container 走査ではなく name-indexed candidate を使います。
 密な Python import、GitHub Actions dependency、JSON path、Fortran procedure list は、
 一時的な split array を作らず入力上で直接走査します。
+全 reference language の重複検出でも、candidate ごとの連結 key string を作らず、
+structured identity key を保持します。
 
 まず text search、`definition`、`symbols`、`map` だけを速く使いたい場合は
 `cdidx . --symbols-only` を使えます。reference graph 系コマンドは、このフラグなしで

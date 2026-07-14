@@ -48,7 +48,7 @@ internal static class SwiftReferenceExtractor
     public static void EmitTypePositionReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -135,7 +135,7 @@ internal static class SwiftReferenceExtractor
         string preparedLine,
         IReadOnlyList<TypeAliasBinding> aliases,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -181,7 +181,7 @@ internal static class SwiftReferenceExtractor
 
                 var column = index + 1;
                 var container = resolveContainerForColumn(index);
-                if (!seen.Contains(ReferenceExtractor.BuildReferenceDedupeKey(
+                if (!seen.Contains(ReferenceExtractor.CreateReferenceDedupeKey(
                         fileId,
                         "swift",
                         lineNumber,
@@ -444,7 +444,7 @@ internal static class SwiftReferenceExtractor
     private static void EmitPropertyWrapperTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -487,7 +487,7 @@ internal static class SwiftReferenceExtractor
     private static void EmitKeyPathRootTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -523,7 +523,7 @@ internal static class SwiftReferenceExtractor
     private static void EmitAttributeGenericArgumentReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -593,7 +593,7 @@ internal static class SwiftReferenceExtractor
         string directiveName,
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -662,7 +662,7 @@ internal static class SwiftReferenceExtractor
     private static void EmitSelfMetatypeExpressionReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -760,7 +760,7 @@ internal static class SwiftReferenceExtractor
     private static void EmitCollectionShorthandConstructorTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -809,7 +809,7 @@ internal static class SwiftReferenceExtractor
     private static void EmitCatchPatternTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -871,7 +871,7 @@ internal static class SwiftReferenceExtractor
     private static void EmitGenericInvocationArgumentReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -927,7 +927,7 @@ internal static class SwiftReferenceExtractor
     private static void EmitGenericStaticMemberTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1002,7 +1002,7 @@ internal static class SwiftReferenceExtractor
     private static void EmitMacroGenericArgumentReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1125,7 +1125,7 @@ internal static class SwiftReferenceExtractor
     private static void EmitExtensionTargetReference(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1165,7 +1165,7 @@ internal static class SwiftReferenceExtractor
     private static void EmitGenericBoundReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1201,7 +1201,7 @@ internal static class SwiftReferenceExtractor
     private static void EmitCallableSignatureTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1257,7 +1257,7 @@ internal static class SwiftReferenceExtractor
     private static void EmitClosureSignatureTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1322,7 +1322,7 @@ internal static class SwiftReferenceExtractor
     private static void EmitWhereClauseSameTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1378,7 +1378,7 @@ internal static class SwiftReferenceExtractor
     private static void EmitTypealiasRhsTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1412,7 +1412,7 @@ internal static class SwiftReferenceExtractor
     private static void EmitAssociatedTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1491,7 +1491,7 @@ internal static class SwiftReferenceExtractor
         string preparedLine,
         int searchStart,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1528,7 +1528,7 @@ internal static class SwiftReferenceExtractor
     private static void EmitHeritageTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,

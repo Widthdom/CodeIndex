@@ -286,7 +286,7 @@ internal static class KotlinReferenceExtractor
     public static void EmitMethodReferenceReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -304,7 +304,7 @@ internal static class KotlinReferenceExtractor
     public static void EmitClassLiteralReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -332,7 +332,7 @@ internal static class KotlinReferenceExtractor
         string preparedLine,
         IReadOnlySet<string> constructorTypeNames,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -370,7 +370,7 @@ internal static class KotlinReferenceExtractor
         IReadOnlyList<SymbolRecord> symbols,
         string[] structuralLines,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -433,7 +433,7 @@ internal static class KotlinReferenceExtractor
     public static void EmitTypePositionReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -475,7 +475,7 @@ internal static class KotlinReferenceExtractor
     private static void EmitCallableSignatureTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -546,7 +546,7 @@ internal static class KotlinReferenceExtractor
         int funIndex,
         int openParen,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -593,7 +593,7 @@ internal static class KotlinReferenceExtractor
     private static void EmitExtensionPropertyReceiverTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -692,7 +692,7 @@ internal static class KotlinReferenceExtractor
     private static void EmitHeritageTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -737,7 +737,7 @@ internal static class KotlinReferenceExtractor
     private static void EmitPrimaryConstructorTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -778,7 +778,7 @@ internal static class KotlinReferenceExtractor
     private static void EmitGenericBoundReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,

@@ -9,7 +9,7 @@ internal static partial class PythonReferenceExtractor
     public static void EmitAttrsFieldsReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -42,7 +42,7 @@ internal static partial class PythonReferenceExtractor
     public static void EmitPydanticTypeAdapterReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -75,7 +75,7 @@ internal static partial class PythonReferenceExtractor
     public static void EmitPytestRaisesReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -108,7 +108,7 @@ internal static partial class PythonReferenceExtractor
     public static void EmitContextlibSuppressReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,

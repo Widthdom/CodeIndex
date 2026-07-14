@@ -21,7 +21,7 @@ public static partial class ReferenceExtractor
         string[] structuralLines,
         IReadOnlyList<SymbolRecord> symbols,
         List<ReferenceRecord> references,
-        HashSet<string> seen)
+        ReferenceDedupeSet seen)
     {
         foreach (var symbol in symbols)
         {
@@ -100,7 +100,7 @@ public static partial class ReferenceExtractor
         IReadOnlyList<SymbolRecord> symbols,
         IReadOnlyList<SymbolRecord> workspaceSymbols,
         List<ReferenceRecord> references,
-        HashSet<string> seen)
+        ReferenceDedupeSet seen)
     {
         var staticInterfaceMemberLookups = BuildCSharpStaticInterfaceMemberLookups(workspaceSymbols);
         var interfaceMembersByType = staticInterfaceMemberLookups.ContractsByType;
@@ -699,7 +699,7 @@ public static partial class ReferenceExtractor
 
     internal static void AddTypeReferenceSegment(
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string segment,
         int startInLine,
@@ -715,7 +715,7 @@ public static partial class ReferenceExtractor
             return;
 
         int column = startInLine + 1; // 1-based / 1始まり
-        var dedupeKey = BuildReferenceDedupeKey(fileId, language, lineNumber, column, referenceKind, segment, container);
+        var dedupeKey = CreateReferenceDedupeKey(fileId, language, lineNumber, column, referenceKind, segment, container);
         if (!seen.Add(dedupeKey))
             return;
 
@@ -1857,7 +1857,7 @@ public static partial class ReferenceExtractor
 
     private static void AddChainReference(
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string name,
         int column,
@@ -1866,7 +1866,7 @@ public static partial class ReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        var dedupeKey = BuildReferenceDedupeKey(fileId, null, lineNumber, column, referenceKind, name, container);
+        var dedupeKey = CreateReferenceDedupeKey(fileId, null, lineNumber, column, referenceKind, name, container);
         if (!seen.Add(dedupeKey))
             return;
 
@@ -1888,7 +1888,7 @@ public static partial class ReferenceExtractor
         string preparedLine,
         HashSet<string>? callableDefinitionNames,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -3834,7 +3834,7 @@ public static partial class ReferenceExtractor
         string preparedLine,
         int nameIndex,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -3884,7 +3884,7 @@ public static partial class ReferenceExtractor
 
     private static void AddGenericInvocationTypeArgumentSegments(
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string expression,
         int expressionStartInLine,

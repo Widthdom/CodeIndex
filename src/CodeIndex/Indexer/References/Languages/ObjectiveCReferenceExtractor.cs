@@ -7,7 +7,7 @@ internal static class ObjectiveCReferenceExtractor
     public static void EmitTypePositionReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -31,7 +31,7 @@ internal static class ObjectiveCReferenceExtractor
         string preparedLine,
         Action<string, int> addCallLikeReference,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,

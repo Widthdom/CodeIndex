@@ -49,7 +49,7 @@ internal static class TerraformReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         HashSet<string>? definitionNames,
         SymbolRecord? container)
@@ -64,7 +64,7 @@ internal static class TerraformReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         HashSet<string>? definitionNames,
         SymbolRecord? container)

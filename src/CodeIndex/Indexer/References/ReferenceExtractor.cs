@@ -12,6 +12,37 @@ public sealed record ReferenceExtractionResult(
     List<ReferenceRecord> References,
     IReadOnlyList<ReferenceExtractionDiagnostic> Diagnostics);
 
+internal readonly record struct ReferenceDedupeKey(
+    long FileId,
+    string Language,
+    int LineNumber,
+    int Column,
+    string ReferenceKind,
+    string ContainerKind,
+    string ContainerName,
+    string Name)
+{
+    public override string ToString() =>
+        $"{FileId}:{Language}:{LineNumber}:{Column}:{ReferenceKind}:{ContainerKind}:{ContainerName}:{Name}";
+}
+
+internal sealed class ReferenceDedupeSet
+{
+    // Keep identity components as values/references already owned by extracted records.
+    // Concatenating them into one string per candidate dominates allocations for dense
+    // generated files with long qualified names.
+    private readonly HashSet<ReferenceDedupeKey> _keys;
+
+    internal ReferenceDedupeSet(int capacity = 0)
+    {
+        _keys = capacity > 0 ? new HashSet<ReferenceDedupeKey>(capacity) : [];
+    }
+
+    internal bool Add(ReferenceDedupeKey key) => _keys.Add(key);
+
+    internal bool Contains(ReferenceDedupeKey key) => _keys.Contains(key);
+}
+
 /// <summary>
 /// Extracts lightweight symbol references such as call sites.
 /// 軽量なシンボル参照（呼び出し箇所など）を抽出する。
@@ -1179,12 +1210,10 @@ public static partial class ReferenceExtractor
         return Math.Min(ReferenceListInitialCapacityMax, Math.Max(16, lineCount / 4));
     }
 
-    private static HashSet<string> CreateReferenceSeenSet(int lineCount)
+    private static ReferenceDedupeSet CreateReferenceSeenSet(int lineCount)
     {
         var capacity = EstimateReferenceListInitialCapacity(lineCount);
-        return capacity > 0
-            ? new HashSet<string>(capacity, StringComparer.Ordinal)
-            : new HashSet<string>(StringComparer.Ordinal);
+        return new ReferenceDedupeSet(capacity);
     }
 
     internal static bool ReferenceLimitReached(List<ReferenceRecord> references)
@@ -1589,7 +1618,7 @@ public static partial class ReferenceExtractor
     private static void EmitPhpLinePreambleReferences(
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         int lineNumber,
         Func<SymbolRecord?> getLineContainer,
@@ -1790,7 +1819,7 @@ public static partial class ReferenceExtractor
 
     internal static void AddReference(
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         Match match,
         string referenceKind,
@@ -1814,7 +1843,7 @@ public static partial class ReferenceExtractor
 
     internal static void AddReference(
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string name,
         int nameIndex,
@@ -1825,7 +1854,7 @@ public static partial class ReferenceExtractor
         string? language = null)
     {
         var column = nameIndex + 1;
-        var dedupeKey = BuildReferenceDedupeKey(fileId, language, lineNumber, column, referenceKind, name, container);
+        var dedupeKey = CreateReferenceDedupeKey(fileId, language, lineNumber, column, referenceKind, name, container);
         if (!seen.Add(dedupeKey))
             return;
 
@@ -1851,17 +1880,30 @@ public static partial class ReferenceExtractor
         string referenceKind,
         string name,
         SymbolRecord? container)
-    {
-        var languageSegment = string.IsNullOrWhiteSpace(language) ? "-" : language;
-        var containerKindSegment = string.IsNullOrWhiteSpace(container?.Kind) ? "-" : container.Kind;
-        var containerNameSegment = string.IsNullOrWhiteSpace(container?.Name) ? "-" : container.Name;
-        return $"{fileId}:{languageSegment}:{lineNumber}:{column}:{referenceKind}:{containerKindSegment}:{containerNameSegment}:{name}";
-    }
+        => CreateReferenceDedupeKey(fileId, language, lineNumber, column, referenceKind, name, container).ToString();
+
+    internal static ReferenceDedupeKey CreateReferenceDedupeKey(
+        long fileId,
+        string? language,
+        int lineNumber,
+        int column,
+        string referenceKind,
+        string name,
+        SymbolRecord? container)
+        => new(
+            fileId,
+            string.IsNullOrWhiteSpace(language) ? "-" : language,
+            lineNumber,
+            column,
+            referenceKind,
+            string.IsNullOrWhiteSpace(container?.Kind) ? "-" : container.Kind,
+            string.IsNullOrWhiteSpace(container?.Name) ? "-" : container.Name,
+            name);
 
     private static void EmitCSharpLambdaCaptureReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -2456,7 +2498,7 @@ public static partial class ReferenceExtractor
     /// </summary>
     internal static void AddTypeReferenceSegments(
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string arg,
         int argStartInLine,
@@ -2486,7 +2528,7 @@ public static partial class ReferenceExtractor
             if (!IsIgnoredTypeReferenceSegment(language, normalizedSegment, isEscapedCSharpIdentifier))
             {
                 int column = argStartInLine + offset + 1; // 1-based / 1始まり
-                var dedupeKey = BuildReferenceDedupeKey(fileId, language, lineNumber, column, "type_reference", normalizedSegment, container);
+                var dedupeKey = CreateReferenceDedupeKey(fileId, language, lineNumber, column, "type_reference", normalizedSegment, container);
                 if (seen.Add(dedupeKey))
                 {
                     if (!TryAddReference(
@@ -2549,7 +2591,7 @@ public static partial class ReferenceExtractor
     /// </summary>
     private static void ExtractCSharpTypeKeywordSegments(
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string line,
         int startIndex,
@@ -2679,7 +2721,7 @@ public static partial class ReferenceExtractor
 
     private static void ExtractCSharpReflectionNameLiteralReferences(
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string preparedLine,
         string originalLine,
@@ -2948,7 +2990,7 @@ public static partial class ReferenceExtractor
         IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
         Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -3063,7 +3105,7 @@ public static partial class ReferenceExtractor
         IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
         Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         ref CSharpMultiLineTypePatternState state)
     {
@@ -3188,7 +3230,7 @@ public static partial class ReferenceExtractor
         IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
         Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId)
     {
         if (state.PendingTypeExpression == null || state.PendingContext == null)
@@ -3250,7 +3292,7 @@ public static partial class ReferenceExtractor
         IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
         Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,

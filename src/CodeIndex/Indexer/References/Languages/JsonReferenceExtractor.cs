@@ -27,7 +27,7 @@ internal static class JsonReferenceExtractor
         if (utf8.Length > SymbolExtractor.StructuredDataMaxJsonParseUtf8Bytes)
             return references;
 
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var seen = new ReferenceDedupeSet();
         var lineStarts = BuildUtf8LineStarts(utf8);
         var reader = new Utf8JsonReader(
             utf8,

@@ -9,7 +9,7 @@ internal static partial class LanguageReferenceExtractionSupport
     public static void EmitRazorReferences(
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,

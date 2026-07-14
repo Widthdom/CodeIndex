@@ -8,7 +8,7 @@ internal static class CReferenceExtractor
         string preparedLine,
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,

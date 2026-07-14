@@ -119,7 +119,7 @@ internal static class MarkupSchemaReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         SymbolRecord? container,
         MarkupState? state)
@@ -143,7 +143,7 @@ internal static class MarkupSchemaReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         SymbolRecord? container,
         MarkupState? state = null)
@@ -242,7 +242,7 @@ internal static class MarkupSchemaReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         SymbolRecord? container)
     {
@@ -252,7 +252,7 @@ internal static class MarkupSchemaReferenceExtractor
 
     private static void AddGraphQLTypeReference(
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         Group nameGroup,
         string context,
@@ -282,7 +282,7 @@ internal static class MarkupSchemaReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         SymbolRecord? container,
         MarkupState? state)
@@ -324,7 +324,7 @@ internal static class MarkupSchemaReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         SymbolRecord? container)
     {
@@ -373,7 +373,7 @@ internal static class MarkupSchemaReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         SymbolRecord? container,
         MarkupState? state)
@@ -440,7 +440,7 @@ internal static class MarkupSchemaReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         SymbolRecord? container)
     {
@@ -573,7 +573,7 @@ internal static class MarkupSchemaReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         SymbolRecord? container)
     {
@@ -589,7 +589,7 @@ internal static class MarkupSchemaReferenceExtractor
 
     private static void AddHtmlReference(
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string name,
         int nameIndex,
@@ -768,7 +768,7 @@ internal static class MarkupSchemaReferenceExtractor
 
     private static void AddReference(
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         Match match,
         string referenceKind,

@@ -97,7 +97,7 @@ internal static class CssReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         HashSet<string>? definitionNames,
         SymbolRecord? container)
@@ -182,7 +182,7 @@ internal static class CssReferenceExtractor
     public static void EmitScss(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -202,7 +202,7 @@ internal static class CssReferenceExtractor
         string preparedLine,
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -271,7 +271,7 @@ internal static class CssReferenceExtractor
         string preparedLine,
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -574,7 +574,7 @@ internal static class CssReferenceExtractor
         Regex importRegex,
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -623,7 +623,7 @@ internal static class CssReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         HashSet<string>? definitionNames,
         SymbolRecord? container)
@@ -656,7 +656,7 @@ internal static class CssReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         HashSet<string>? definitionNames,
         SymbolRecord? container)
@@ -691,7 +691,7 @@ internal static class CssReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         HashSet<string>? definitionNames,
         SymbolRecord? container)
@@ -730,7 +730,7 @@ internal static class CssReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         HashSet<string>? definitionNames,
         SymbolRecord? container)
@@ -782,7 +782,7 @@ internal static class CssReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         HashSet<string>? definitionNames,
         SymbolRecord? container)
@@ -815,7 +815,7 @@ internal static class CssReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         HashSet<string>? definitionNames,
         SymbolRecord? container)
@@ -907,7 +907,7 @@ internal static class CssReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         HashSet<string>? definitionNames,
         SymbolRecord? container)

@@ -9,7 +9,7 @@ internal static partial class PythonReferenceExtractor
     public static void EmitDataclassesFieldsReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -43,7 +43,7 @@ internal static partial class PythonReferenceExtractor
         string[] originalLines,
         int lineIndex,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
@@ -132,7 +132,7 @@ internal static partial class PythonReferenceExtractor
         string preparedLine,
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         int lineNumber,
         SymbolRecord? container,
@@ -168,7 +168,7 @@ internal static partial class PythonReferenceExtractor
         string[] originalLines,
         int lineIndex,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)

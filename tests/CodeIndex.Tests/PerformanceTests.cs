@@ -172,7 +172,7 @@ public class PerformanceTests : IDisposable
 
         var allocatedBytes = MeasureAllocatedBytes(() => ReferenceExtractor.Extract(1, "csharp", content, symbols));
 
-        Assert.True(allocatedBytes < 18_000_000, $"Reference extraction allocated {allocatedBytes:N0} bytes");
+        Assert.True(allocatedBytes < 6_000_000, $"Reference extraction allocated {allocatedBytes:N0} bytes");
     }
 
 #if NET8_0
@@ -262,6 +262,40 @@ public class PerformanceTests : IDisposable
                 && fortranAllocatedBytes < 340_000
                 && totalAllocatedBytes < 3_180_000,
             $"Dense list extraction allocated Python={pythonAllocatedBytes:N0}, YAML={yamlAllocatedBytes:N0}, JSON={jsonAllocatedBytes:N0}, Fortran={fortranAllocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void ReferenceDedupe_DenseLongIdentities_StayWithinAllocationBudget()
+    {
+        const int keyCount = 10_000;
+        var name = new string('N', 128);
+        var container = new SymbolRecord
+        {
+            Kind = "function",
+            Name = new string('C', 128),
+        };
+
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            var seen = new ReferenceDedupeSet(keyCount);
+            for (var index = 0; index < keyCount; index++)
+            {
+                seen.Add(ReferenceExtractor.CreateReferenceDedupeKey(
+                    1,
+                    "csharp",
+                    index + 1,
+                    17,
+                    "type_reference",
+                    name,
+                    container));
+            }
+        });
+
+        Assert.True(allocatedBytes < 1_000_000, $"Reference dedupe allocated {allocatedBytes:N0} bytes");
     }
 
     private static long MeasureAllocatedBytes(Action action)

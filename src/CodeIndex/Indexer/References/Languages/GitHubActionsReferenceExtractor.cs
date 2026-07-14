@@ -22,7 +22,7 @@ internal static class GitHubActionsReferenceExtractor
         int? maxReferenceCount)
     {
         var references = ReferenceExtractor.CreateReferenceList(maxReferenceCount, Math.Min(lines.Length, 64));
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var seen = new ReferenceDedupeSet();
         var jobsIndent = -1;
         var currentJobIndent = -1;
         string? currentJob = null;
@@ -133,7 +133,7 @@ internal static class GitHubActionsReferenceExtractor
         int lineNumber,
         SymbolRecord? container,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         int baseIndex = 0)
     {
         foreach (Match match in LocalPathRegex.Matches(text))
@@ -153,7 +153,7 @@ internal static class GitHubActionsReferenceExtractor
         int line,
         SymbolRecord? container,
         List<ReferenceRecord> references,
-        HashSet<string> seen) =>
+        ReferenceDedupeSet seen) =>
         ReferenceExtractor.AddReference(references, seen, fileId, name, Math.Max(0, index), kind, context, line, container, "yaml");
 
     private static string StripValue(string value)

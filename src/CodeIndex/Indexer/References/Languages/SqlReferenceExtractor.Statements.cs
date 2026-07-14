@@ -14,7 +14,7 @@ internal static partial class SqlReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         HashSet<string> establishedTempObjectNames,
         HashSet<int> suppressedCallIndices,

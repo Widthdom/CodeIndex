@@ -13,7 +13,7 @@ internal static class SmalltalkReferenceExtractor
             preparedLine,
             addCallLikeReference,
             [],
-            [],
+            new ReferenceDedupeSet(),
             0,
             string.Empty,
             0,
