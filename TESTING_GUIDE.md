@@ -69,6 +69,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Shell and PowerShell reference fixtures keep a declared-function call and a top-level call together when validating function versus synthetic `<script>` containers, so each language is extracted once for both scope contracts.
   Keep Swift's broad representative declaration fixture as the single owner of basic struct/function, macro, precedence-group, and operator presence; do not add narrow methods that repeat those same kind/name assertions without additional metadata.
   Swift attribute and visibility modifiers such as `@available`, `@discardableResult`, and `package` share one declaration fixture when their contracts are independent kind/name recognition checks.
+  Swift extension coverage keeps escaped members, generic targets, nested generic conformance targets, and qualified targets with special members in one source when unique target names preserve failure diagnosis.
 - `FileIndexerTests.cs`, `FileIndexerContentLoadingTests.cs`, `FileIndexerTestSupport.cs`
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
 - `PathCompatibilityMatrixTests.cs`
@@ -647,6 +648,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   Shell と PowerShell の reference fixture は、function container と synthetic `<script>` container の区別を検証するとき、宣言済み function 内の call と top-level call を同居させ、各言語を両方の scope contract に対して1回だけ抽出します。
   Swift の広範な代表 declaration fixture を、基本的な struct/function、macro、precedence group、operator の存在検証に対する唯一の正本とします。追加 metadata を検証せず同じ kind/name assertion を繰り返す狭いメソッドは追加しません。
   Swift の `@available`、`@discardableResult`、`package` などの attribute / visibility modifier は、契約が独立した kind/name 認識である場合、1つの declaration fixture を共有します。
+  Swift extension coverage は、固有の target 名によって失敗診断を維持できる場合、escaped member、generic target、nested generic conformance target、special member を持つ qualified target を1つの source にまとめます。
 - `FileIndexerTests.cs`、`FileIndexerContentLoadingTests.cs`、`FileIndexerTestSupport.cs`
   ファイル走査、言語判定、scan result 言語の再利用、content loading / canonicalization、checksum、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。共有 `FileIndexerTests` helper は `FileIndexerTestSupport.cs` に置きます。
 - `PathCompatibilityMatrixTests.cs`

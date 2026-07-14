@@ -131,47 +131,19 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Swift_DetectsExtensionsAndEscapedFunctionNames()
+    public void Extract_Swift_DetectsExtensionTargetAndMemberVariants()
     {
         var content = """
             public extension URLSession {
                 func `repeat`() {}
             }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "swift", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "URLSession");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "`repeat`");
-    }
-
-    [Fact]
-    public void Extract_Swift_DetectsGenericExtensionTargets()
-    {
-        var content = """
             extension Array<String> where Element == String {
             }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "swift", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Array<String>");
-    }
-
-    [Fact]
-    public void Extract_Swift_DetectsNestedGenericExtensionTargetsWithConformance()
-    {
-        var content = """
             extension Foundation.Dictionary<String, Array<Int>>: Sendable where Value == Int {
             }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "swift", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Foundation.Dictionary<String, Array<Int>>");
-    }
-
-    [Fact]
-    public void Extract_Swift_DetectsInitDeinitSubscriptStoredPropertyAndAssociatedType()
-    {
-        var content = """
             public extension Foundation.URLSession {
                 public convenience init?(configuration: URLSessionConfiguration) {
                 }
@@ -195,6 +167,10 @@ public partial class SymbolExtractorTests
 
         var symbols = SymbolExtractor.Extract(1, "swift", content);
 
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "URLSession");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "`repeat`");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Array<String>");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Foundation.Dictionary<String, Array<Int>>");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Foundation.URLSession");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "init");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "deinit");
