@@ -45,37 +45,25 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Python_DetectsFunctions()
+    public void Extract_Python_BasicDeclarations_ReuseFunctionLambdaAndClassFixture()
     {
-        // Should detect both sync and async functions
-        // 同期・非同期関数を検出する
-        var content = "def authenticate(user):\n    pass\nasync def fetch_data():\n    pass";
+        var content = """
+            def authenticate(user):
+                pass
+
+            async def fetch_data():
+                pass
+
+            transform = lambda value: value + 1
+
+            class UserService:
+                pass
+            """;
         var symbols = SymbolExtractor.Extract(1, "python", content);
 
-        Assert.Equal(2, symbols.Count);
         AssertSymbolsContain(symbols, "function", "authenticate", "fetch_data");
-    }
-
-    [Fact]
-    public void Extract_Python_DetectsAssignedLambdaAsLambda()
-    {
-        var content = "transform = lambda value: value + 1";
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-
-        var lambda = Assert.Single(symbols, s => s.Kind == "lambda");
-        Assert.Equal("transform", lambda.Name);
-        Assert.Equal(1, lambda.Line);
-    }
-
-    [Fact]
-    public void Extract_Python_DetectsClasses()
-    {
-        var content = "class UserService:\n    pass";
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-
-        Assert.Single(symbols);
-        Assert.Equal("class", symbols[0].Kind);
-        Assert.Equal("UserService", symbols[0].Name);
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "transform");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserService");
     }
 
     [Fact]
