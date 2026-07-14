@@ -281,6 +281,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Rust constructor coverage shares struct literals, generic struct literals, path-qualified false positives, and tuple/enum constructors in one extraction. Keep declaration exclusions and the tuple-constructor-not-call assertion in that fixture.
 - TypeScript class-method range coverage shares regex literals following wrapped `if`/`else if`, direct `else`, `do`, and `finally` control-flow forms in one extraction, with a final sibling method proving that no body range leaked.
 - TypeScript semicolonless blockless-arrow boundary coverage shares following top-level class, expression statement, and CommonJS class-export layouts in one extraction. Preserve each lambda's exact source/body range and hidden-class exclusions when adding another terminator layout.
+- TypeScript tagged-template reference coverage shares member-access tags, generic tags (including function-type arrows), and tags nested inside interpolation holes in one extraction. Keep raw template-text exclusions alongside the positive call assertions.
 - Suggestion store and archive cap tests share one sparse-file helper instead of allocating arrays at either persisted-size limit.
 - Persistent-log rotation tests size existing log fixtures through `FileStream.SetLength(...)` rather than allocating a 1 MiB zero buffer.
 - JSON-depth boundary fixtures use fixed-width character strings instead of `Enumerable.Repeat` pipelines for repeated brackets.
@@ -913,6 +914,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - Rust constructor coverage は struct literal、generic struct literal、path-qualified false positive、tuple/enum constructor を1回の extraction で共有します。declaration 除外と tuple constructor が call にならない assertion を同じ fixture に維持してください。
 - TypeScript class-method range coverage は、wrapped `if`/`else if`、direct `else`、`do`、`finally` の後に続く regex literal を1回の extraction で共有し、最後の sibling method で body range が漏れていないことを確認します。
 - TypeScript の semicolonless blockless-arrow 境界 coverage は、後続する top-level class、expression statement、CommonJS class export の layout を1回の extraction で共有します。terminator layout を追加するときも、各 lambda の正確な source/body range と hidden class 除外を維持してください。
+- TypeScript tagged-template reference coverage は member-access tag、function-type arrow を含む generic tag、interpolation hole 内にネストした tag を1回の extraction で共有します。positive な call assertion とともに raw template text の除外を維持してください。
 - suggestion store と archive cap の test は、どちらの persisted-size limit でも array を割り当てず、1 つの sparse-file helper を共有します。
 - persistent-log rotation test は 1 MiB の zero buffer を割り当てず、`FileStream.SetLength(...)` で既存 log fixture のサイズを設定します。
 - JSON-depth 境界 fixture の繰り返し bracket には、`Enumerable.Repeat` pipeline ではなく固定幅の文字列を使います。

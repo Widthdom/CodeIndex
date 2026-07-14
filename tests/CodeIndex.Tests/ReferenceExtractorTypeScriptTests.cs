@@ -313,52 +313,47 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_TypeScriptStyledTaggedTemplate_CapturesLastSegment()
+    public void Extract_TypeScriptTaggedTemplateLayouts_CaptureCallableTags()
     {
         // issue #268: member-access tags like `styled.button\`...\`` must emit a `call` row on
         // the last segment so the existing CallRegex convention (capture the final identifier)
         // carries over to tagged templates.
         // issue #268: `styled.button\`...\`` のようなメンバアクセスタグは、既存 CallRegex の
         // 規約に揃えて末尾セグメントを `call` として発行する。
+        // Generic tags must skip balanced function types, and nested tags inside an outer
+        // interpolation hole must retain both opener references.
+        // generic tag は function type を正しく読み飛ばし、外側 interpolation hole 内の
+        // nested tag は両方の opener reference を維持する。
         const string content = """
             const Btn = styled.button`
               color: red;
             `;
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
-
-        var button = Assert.Single(references.Where(r => r.SymbolName == "button"));
-        Assert.Equal("call", button.ReferenceKind);
-        Assert.DoesNotContain(references, r => r.SymbolName == "color");
-        Assert.DoesNotContain(references, r => r.SymbolName == "red");
-    }
-
-    [Fact]
-    public void Extract_TypeScriptGenericTaggedTemplateVariants_AreCaptured()
-    {
-        // issue #268: TS generic-tagged forms read past balanced `<...>`, including a `>`
-        // inside a function-type `=>`, so the tag identifier is still captured.
-        // issue #268: `html<User>\`...\`` のようなジェネリクス付きタグは `<...>` を読み飛ばして
-        // function type の `=>` 内の `>` も generic close と誤認せずタグ識別子を捕捉する。
-        const string content = """
             function render(user: User) {
                 return html<User>`<p>${user.name}</p>`;
             }
             function renderFunctionType<U>(value: U) {
                 return tag<(x: number) => U>`value=${value}`;
             }
+            function demo(user: User) {
+                return outer`header ${inner`${user.name}`} footer`;
+            }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
         var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
 
+        var button = Assert.Single(references.Where(r => r.SymbolName == "button"));
         var html = Assert.Single(references.Where(r => r.SymbolName == "html"));
+        Assert.Equal("call", button.ReferenceKind);
         Assert.Equal("call", html.ReferenceKind);
         Assert.Equal("render", html.ContainerName);
         var tag = Assert.Single(references.Where(r => r.SymbolName == "tag" && r.ReferenceKind == "call"));
         Assert.Equal("renderFunctionType", tag.ContainerName);
+        Assert.Contains(references, r => r.SymbolName == "outer" && r.ReferenceKind == "call" && r.ContainerName == "demo");
+        Assert.Contains(references, r => r.SymbolName == "inner" && r.ReferenceKind == "call" && r.ContainerName == "demo");
+        Assert.DoesNotContain(references, r => r.SymbolName == "color");
+        Assert.DoesNotContain(references, r => r.SymbolName == "red");
     }
 
     [Fact]
@@ -481,25 +476,6 @@ public partial class ReferenceExtractorTests
             && r.ReferenceKind == "call"
             && r.Context.StartsWith("<", StringComparison.Ordinal));
         Assert.Contains(references, r => r.SymbolName == "String" && r.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_TypeScriptTaggedTemplateInsideHole_IsCaptured()
-    {
-        // Tagged templates nested in an outer template hole (`\`outer ${inner\`hi\`} rest\``)
-        // should also be recorded because the structural masker detects both opener locations.
-        // 外側テンプレートのホール内にネストしたタグ付きテンプレートも記録できる。
-        const string content = """
-            function demo(user) {
-                return outer`header ${inner`${user.name}`} footer`;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "outer" && r.ReferenceKind == "call");
-        Assert.Contains(references, r => r.SymbolName == "inner" && r.ReferenceKind == "call");
     }
 
     [Fact]
