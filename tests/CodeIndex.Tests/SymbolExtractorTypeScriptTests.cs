@@ -40,7 +40,7 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_TypeScript_DetectsNamedAndTypeReExportSurfaceSymbols()
+    public void Extract_TypeScript_DetectsReExportSurfaceSymbolLayouts()
     {
         var content = """
             export {
@@ -52,31 +52,56 @@ public partial class SymbolExtractorTests
               User,
               Admin,
             } from './types';
+
+            export type * from './type-star';
+            export type * as typeStarNs from './type-star-ns';
+
+            export * from './with-star' with { type: 'json' };
+            export { withValue as withAlias } from './with-named' with { type: 'json' };
+            export * from './assert-star' assert { type: 'json' };
+            export { assertValue as assertAlias } from './assert-named' assert { type: 'json' };
+
+            export * from './multiline-with-star' with {
+              type: 'json'
+            };
+            export * as multilineNs from './multiline-assert-star' assert {
+              type: 'json'
+            };
+            export type * from './multiline-type-star' with {
+              type: 'json'
+            };
+            export type * as multilineTypeNs from './multiline-type-ns' assert {
+              type: 'json'
+            };
+
+            export { nextLineValue as nextLineAlias } from './next-line-with' with
+            {
+              type: 'json'
+            };
+            export type { NextLineType } from './next-line-assert' assert
+            {
+              type: 'json'
+            };
             """;
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./helper");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Helper");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "User");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Admin");
-    }
+        string[] expectedImports =
+        [
+            "./other", "./helper", "./types", "./type-star", "./type-star-ns",
+            "./with-star", "./with-named", "./assert-star", "./assert-named",
+            "./multiline-with-star", "./multiline-assert-star", "./multiline-type-star",
+            "./multiline-type-ns", "./next-line-with", "./next-line-assert"
+        ];
+        Assert.All(expectedImports, module =>
+            Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == module)));
 
-    [Fact]
-    public void Extract_TypeScript_DetectsTypeOnlyStarReExportSurfaceSymbols()
-    {
-        var content = """
-            export type * from './types';
-            export type * as ns from './types-ns';
-            """;
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types-ns");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ns");
+        string[] expectedProperties =
+        [
+            "foo", "bar", "Helper", "User", "Admin", "typeStarNs", "withAlias",
+            "assertAlias", "multilineNs", "multilineTypeNs", "nextLineAlias", "NextLineType"
+        ];
+        Assert.All(expectedProperties, name =>
+            Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == name)));
     }
 
     [Fact]
@@ -90,73 +115,6 @@ public partial class SymbolExtractorTests
 
         Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "node:fs"));
         Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./path-utils"));
-    }
-
-    [Fact]
-    public void Extract_TypeScript_DetectsReExportSurfaceSymbolsWithImportAttributes()
-    {
-        var content = """
-            export * from './util' with { type: 'json' };
-            export { foo as bar } from './other' with { type: 'json' };
-            export * from './legacy' assert { type: 'json' };
-            export { baz as qux } from './older' assert { type: 'json' };
-            """;
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./util");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./legacy");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./older");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "qux");
-    }
-
-    [Fact]
-    public void Extract_TypeScript_DetectsMultilineStarReExportSurfaceSymbolsWithImportAttributes()
-    {
-        var content = """
-            export * from './util' with {
-              type: 'json'
-            };
-            export * as ns from './other' assert {
-              type: 'json'
-            };
-            export type * from './types' with {
-              type: 'json'
-            };
-            export type * as typeNs from './types-ns' assert {
-              type: 'json'
-            };
-            """;
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./util");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types-ns");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ns");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "typeNs");
-    }
-
-    [Fact]
-    public void Extract_TypeScript_DetectsNamedReExportSurfaceSymbolsWhenImportAttributeBraceStartsOnNextLine()
-    {
-        var content = """
-            export { foo as bar } from './other' with
-            {
-              type: 'json'
-            };
-            export type { User } from './types' assert
-            {
-              type: 'json'
-            };
-            """;
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "User");
     }
 
     [Fact]

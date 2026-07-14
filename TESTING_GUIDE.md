@@ -273,6 +273,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Rust attribute reference coverage shares one extraction for direct and `cfg_attr` derive lists, multiline coordinates, and ordinary annotations. Rust mutable-reference coverage likewise keeps type positions, `dyn`/`impl`, and borrow-expression exclusions in one fixture.
 - TypeScript and Swift basic type-alias expansion shares heritage, generic-parameter exclusion, and mixed type/value-position coverage in one fixture per language; scope-shadowing fixtures remain separate because alias binding isolation is their contract.
 - TypeScript generic class-method coverage shares ordinary, function-type default/constraint, multiline-parameter, and inline layouts in one extraction. Class-field arrow coverage likewise shares numeric/string ASI boundaries, parameterized arrows, computed-member continuations, and the final field before the closing brace.
+- TypeScript re-export surface coverage shares named/type-only exports, star/namespace forms, `with`/`assert` attributes, and inline/multiline attribute braces in one extraction. Give each module and exported alias a unique name so one assertion set preserves every layout contract.
 - Suggestion store and archive cap tests share one sparse-file helper instead of allocating arrays at either persisted-size limit.
 - Persistent-log rotation tests size existing log fixtures through `FileStream.SetLength(...)` rather than allocating a 1 MiB zero buffer.
 - JSON-depth boundary fixtures use fixed-width character strings instead of `Enumerable.Repeat` pipelines for repeated brackets.
@@ -897,6 +898,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - Rust attribute reference coverage は direct / `cfg_attr` derive list、multiline 座標、通常 annotation を1回の extraction で共有します。Rust mutable-reference coverage も type position、`dyn` / `impl`、borrow-expression 除外を1つの fixture に維持します。
 - TypeScript と Swift の基本 type-alias expansion は、heritage、generic parameter 除外、type/value position 混在 coverage を言語ごとに1つの fixture で共有します。alias binding の分離自体が契約である scope-shadowing fixture は独立したまま維持します。
 - TypeScript generic class-method coverage は通常形、function-type default/constraint、multiline parameter、inline layout を1回の extraction で共有します。class-field arrow coverage も numeric/string ASI 境界、parameter 付き arrow、computed-member continuation、closing brace 直前の最終fieldを1つの fixtureで共有します。
+- TypeScript re-export surface coverage は named/type-only export、star/namespace form、`with`/`assert` attribute、inline/multiline attribute brace を1回の extraction で共有します。各 layout の契約を1組の assertion で維持できるよう、module と export alias には一意な名前を付けてください。
 - suggestion store と archive cap の test は、どちらの persisted-size limit でも array を割り当てず、1 つの sparse-file helper を共有します。
 - persistent-log rotation test は 1 MiB の zero buffer を割り当てず、`FileStream.SetLength(...)` で既存 log fixture のサイズを設定します。
 - JSON-depth 境界 fixture の繰り返し bracket には、`Enumerable.Repeat` pipeline ではなく固定幅の文字列を使います。
