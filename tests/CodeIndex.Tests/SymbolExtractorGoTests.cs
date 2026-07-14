@@ -331,7 +331,9 @@ public partial class SymbolExtractorTests
         Assert.Equal("Store", unnamedGenericMethod.ContainerName);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Identity");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Run");
-        Assert.Equal("transform", Assert.Single(symbols, s => s.Kind == "lambda").Name);
+        var lambda = Assert.Single(symbols, s => s.Kind == "lambda");
+        Assert.Equal("transform", lambda.Name);
+        Assert.Equal(17, lambda.Line);
     }
 
     [Fact]

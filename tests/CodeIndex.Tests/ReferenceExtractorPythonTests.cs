@@ -718,6 +718,12 @@ public partial class ReferenceExtractorTests
         }
 
         Assert.Contains(references, reference =>
+            reference.SymbolName == "MultiUser" && reference.ReferenceKind == "type_reference" && reference.Line == 3);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "MultiAdmin" && reference.ReferenceKind == "type_reference" && reference.Line == 4);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "VisibleAdmin" && reference.ReferenceKind == "type_reference" && reference.Line == 9);
+        Assert.Contains(references, reference =>
             reference.SymbolName == "P" && reference.ReferenceKind == "type_reference" &&
             reference.ContainerName == "bind");
         Assert.DoesNotContain(references, reference =>
@@ -801,7 +807,7 @@ public partial class ReferenceExtractorTests
             reference.SymbolName is "hello" or "goodbye" or "user_name");
 
         void AssertInterpolationCall(string symbolName, string containerName) =>
-            Assert.Contains(references, reference =>
+            Assert.Single(references, reference =>
                 reference.SymbolName == symbolName
                 && reference.ReferenceKind == "call"
                 && reference.ContainerName == containerName);
@@ -834,12 +840,14 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "python", content);
         var references = ReferenceExtractor.Extract(1, "python", content, symbols);
 
-        var names = references.Select(reference => reference.SymbolName).ToHashSet(StringComparer.Ordinal);
-        foreach (var callName in new[]
-                 { "run", "build", "install", "clean", "help", "print", "require", "notexcluded", "apply", "task" })
-        {
-            Assert.Contains(callName, names);
-        }
+        string[] expectedCallerCalls =
+            ["run", "build", "install", "clean", "help", "print", "require", "notexcluded", "apply", "task"];
+        var callerCalls = references
+            .Where(reference => reference.ReferenceKind == "call" && reference.ContainerName == "caller")
+            .Select(reference => reference.SymbolName)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(expectedCallerCalls.OrderBy(name => name, StringComparer.Ordinal), callerCalls);
 
         Assert.DoesNotContain(references, reference => reference.SymbolName is "raise" or "yield" or "from");
         Assert.Contains(references, reference => reference.SymbolName == "ValueError" && reference.ContainerName == "fail");

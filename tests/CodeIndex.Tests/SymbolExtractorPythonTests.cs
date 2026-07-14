@@ -61,9 +61,13 @@ public partial class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "python", content);
 
+        Assert.Equal(4, symbols.Count);
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function"));
         AssertSymbolsContain(symbols, "function", "authenticate", "fetch_data");
-        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "transform");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserService");
+        var lambda = Assert.Single(symbols, s => s.Kind == "lambda");
+        Assert.Equal("transform", lambda.Name);
+        Assert.Equal(7, lambda.Line);
+        Assert.Equal("UserService", Assert.Single(symbols, s => s.Kind == "class").Name);
     }
 
     [Fact]
