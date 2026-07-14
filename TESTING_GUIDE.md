@@ -81,6 +81,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   JavaScript spaced and unspaced chained comparisons before plain templates share one function fixture with distinct operand names, preventing generic-tag false positives in one extraction.
   JavaScript single-line `for...of` and `for await...of` plain-template negatives share synchronous and asynchronous functions in one source, asserting zero phantom `call of` edges once.
   JavaScript multiline `for...of` and `for await...of` plain-template negatives likewise share one source and one phantom-call exclusion.
+  JavaScript for-of header negatives share NBSP synchronous/asynchronous and BOM synchronous forms in one source because they assert the same special-whitespace suppression.
 - `FileIndexerTests.cs`, `FileIndexerContentLoadingTests.cs`, `FileIndexerTestSupport.cs`
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
 - `PathCompatibilityMatrixTests.cs`
@@ -671,6 +672,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   JavaScript の plain template 前にある空白付き・空白なしの chained comparison は、固有の operand 名を持つ1つの function fixture を共有し、generic tag の false positive を1回の抽出で防ぎます。
   JavaScript の single-line `for...of` / `for await...of` plain-template 負例は、同期・非同期 function を1つの source に置き、phantom `call of` がゼロであることを1回だけ検証します。
   JavaScript の multiline `for...of` / `for await...of` plain-template 負例も1つの source と1つの phantom-call 除外を共有します。
+  JavaScript の for-of header 負例は、同じ特殊空白抑制を検証する NBSP 同期・非同期形と BOM 同期形を1つの source で共有します。
 - `FileIndexerTests.cs`、`FileIndexerContentLoadingTests.cs`、`FileIndexerTestSupport.cs`
   ファイル走査、言語判定、scan result 言語の再利用、content loading / canonicalization、checksum、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。共有 `FileIndexerTests` helper は `FileIndexerTestSupport.cs` に置きます。
 - `PathCompatibilityMatrixTests.cs`

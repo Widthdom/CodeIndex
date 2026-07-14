@@ -2985,36 +2985,25 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScriptForOfHeaderWithNbspSeparator_IsNotCaptured()
+    public void Extract_JavaScriptForOfHeadersWithSpecialWhitespace_AreNotCaptured()
     {
-        // issue #268 regression: the for-of header probe must also accept non-ASCII
-        // whitespace. `for\u00A0(const ch of \`abc\`)` is a valid for-of loop and must not
-        // emit a phantom `call of`.
-        // issue #268 退行防止: for-of ヘッダ判定も非 ASCII 空白を許容する必要がある。
-        // `for\u00A0(const ch of \`abc\`)` は正当な for-of 形なので phantom `call of` を
-        // 出さない。
-        const string content = "function f() {\n" +
+        // issue #268 regression: the for-of header probe must accept NBSP and BOM, including
+        // NBSP around the optional `await` keyword, without emitting a phantom `call of`.
+        // issue #268 退行防止: for-of ヘッダ判定は NBSP と BOM、および任意の `await` 前後の
+        // NBSP を許容し、phantom `call of` を出さない。
+        const string content = "function nbspSync() {\n" +
             "    for\u00A0(const ch of `abc`) {\n" +
             "        use(ch);\n" +
             "    }\n" +
-            "}\n";
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptForAwaitOfHeaderWithNbspSeparator_IsNotCaptured()
-    {
-        // issue #268 regression: the for-await-of header probe must also tolerate non-ASCII
-        // whitespace between `for`, `await`, and `(`.
-        // issue #268 退行防止: for-await-of ヘッダ判定は `for`・`await`・`(` の間の非 ASCII
-        // 空白も許容する。
-        const string content = "async function f(iter) {\n" +
+            "}\n" +
+            "async function nbspAsync(iter) {\n" +
             "    for\u00A0await\u00A0(const x of `abc`) {\n" +
             "        use(x);\n" +
+            "    }\n" +
+            "}\n" +
+            "function bomSync() {\n" +
+            "    for\uFEFF(const ch of `abc`) {\n" +
+            "        use(ch);\n" +
             "    }\n" +
             "}\n";
 
@@ -3040,23 +3029,6 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
 
         Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptForOfHeaderWithBomSeparator_IsNotCaptured()
-    {
-        // issue #268 regression: for-of header probe must tolerate BOM between `for` and `(`.
-        // issue #268 退行防止: for-of ヘッダ判定は `for` と `(` の間の BOM も許容する。
-        const string content = "function f(arr) {\n" +
-            "    for\uFEFF(const ch of `abc`) {\n" +
-            "        use(ch);\n" +
-            "    }\n" +
-            "}\n";
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
     }
 
     [Fact]
