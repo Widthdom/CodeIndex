@@ -1,7 +1,6 @@
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
-using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -16,7 +15,7 @@ namespace CodeIndex.Tests;
 /// To regenerate goldens after an intentional shape change, set <c>UPDATE_SNAPSHOTS=1</c>
 /// and re-run only these tests, then review the diff before committing.
 /// </summary>
-[Collection("SQLite pool sensitive")]
+[Collection("Console sensitive")]
 public class JsonOutputSnapshotTests
 {
     private readonly JsonSerializerOptions _jsonOptions = new()
@@ -82,7 +81,6 @@ public class Probe
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
-            SqliteConnection.ClearAllPools();
         }
     }
 
@@ -110,7 +108,6 @@ public class Probe
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
-            SqliteConnection.ClearAllPools();
         }
     }
 
@@ -139,7 +136,6 @@ public class Probe
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
-            SqliteConnection.ClearAllPools();
         }
     }
 
@@ -169,7 +165,6 @@ public class Probe
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
-            SqliteConnection.ClearAllPools();
         }
     }
 
@@ -197,7 +192,6 @@ public class Probe
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
-            SqliteConnection.ClearAllPools();
         }
     }
 
@@ -234,5 +228,8 @@ public class Probe
     }
 
     private static (int ExitCode, string Stdout, string Stderr) CaptureConsole(Func<int> action)
-        => ConsoleCapture.Capture(action);
+    {
+        lock (TestConsoleLock.Gate)
+            return ConsoleCapture.Capture(action);
+    }
 }

@@ -102,7 +102,7 @@ public partial class SymbolExtractorTests
     [Theory]
     [InlineData("javascript")]
     [InlineData("typescript")]
-    public void Extract_JavaScriptTypeScript_DetectsImportMetaResolveModuleSymbols(string language)
+    public void Extract_JavaScriptTypeScript_DetectsImportMetaModuleSymbols(string language)
     {
         var content = """
             const resolved = import.meta.resolve("./feature.js");
@@ -113,26 +113,7 @@ public partial class SymbolExtractorTests
             client.import.meta.resolve("./method.js");
             const dynamic = import.meta.resolve(path);
             const text = "import.meta.resolve('./string.js')";
-            """;
-        var symbols = SymbolExtractor.Extract(1, language, content);
 
-        var resolvedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./feature.js"));
-        Assert.Equal(1, resolvedImport.Line);
-        Assert.Contains("import.meta.resolve", resolvedImport.Signature);
-        var scopedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./scoped.js"));
-        Assert.Equal(3, scopedImport.Line);
-        Assert.Contains("import.meta.url", scopedImport.Signature);
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./method.js");
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "path");
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string.js");
-    }
-
-    [Theory]
-    [InlineData("javascript")]
-    [InlineData("typescript")]
-    public void Extract_JavaScriptTypeScript_DetectsNewUrlImportMetaModuleSymbols(string language)
-    {
-        var content = """
             const workerUrl = new URL("./worker.js", import.meta.url);
             const imageUrl = new URL(
               "./image.png",
@@ -146,33 +127,52 @@ public partial class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, language, content);
 
+        var resolvedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./feature.js"));
+        Assert.Equal(1, resolvedImport.Line);
+        Assert.Contains("import.meta.resolve", resolvedImport.Signature);
+        var scopedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./scoped.js"));
+        Assert.Equal(3, scopedImport.Line);
+        Assert.Contains("import.meta.url", scopedImport.Signature);
         var workerImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./worker.js"));
-        Assert.Equal(1, workerImport.Line);
+        Assert.Equal(10, workerImport.Line);
         Assert.Contains("new URL", workerImport.Signature);
         var imageImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./image.png"));
-        Assert.Equal(3, imageImport.Line);
+        Assert.Equal(12, imageImport.Line);
         Assert.Contains("import.meta.url", imageImport.Signature);
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./view.js");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name.Contains("${", StringComparison.Ordinal));
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./plain.js");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./other.js");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./href.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name is "./method.js" or "path" or "./string.js");
     }
 
     [Theory]
     [InlineData("javascript")]
     [InlineData("typescript")]
-    public void Extract_JavaScriptTypeScript_DetectsImportScriptsModuleSymbols(string language)
+    public void Extract_JavaScriptTypeScript_DetectsWorkerLoadingModuleSymbols(string language)
     {
         var content = """
             importScripts("./worker-a.js", "/worker-b.js");
             importScripts(
               "./legacy.js",
-              `./template-worker.js`,
+              `./template-script.js`,
               `./${name}.js`
             );
             loader.importScripts("./method.js");
             const text = "importScripts('./string.js')";
+
+            const worker = new Worker("./worker.js");
+            const shared = new SharedWorker(
+              "./shared-worker.js",
+              { type: "module" }
+            );
+            const templatedWorker = new Worker(`./template-worker.js`, { type: "module" });
+            const computedWorker = new Worker(`./${name}.js`);
+            const windowWorker = new window.Worker("./window-worker.js");
+            const globalShared = new globalThis.SharedWorker("./global-shared-worker.js");
+            const plainWorker = Worker("./plain-worker.js");
+            const service = new ServiceWorker("./service-worker.js");
             """;
         var symbols = SymbolExtractor.Extract(1, language, content);
 
@@ -181,16 +181,24 @@ public partial class SymbolExtractorTests
         var legacyImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./legacy.js"));
         Assert.Equal(3, legacyImport.Line);
         Assert.Contains("importScripts", legacyImport.Signature);
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./template-worker.js");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./template-script.js");
+        var workerImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./worker.js"));
+        Assert.Equal(10, workerImport.Line);
+        Assert.Contains("new Worker", workerImport.Signature);
+        var sharedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./shared-worker.js"));
+        Assert.Equal(12, sharedImport.Line);
+        Assert.Contains("type", sharedImport.Signature);
+        foreach (var name in new[] { "./template-worker.js", "./window-worker.js", "./global-shared-worker.js" })
+            Assert.Contains(symbols, s => s.Kind == "import" && s.Name == name);
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name.Contains("${", StringComparison.Ordinal));
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./method.js");
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name is
+            "./method.js" or "./string.js" or "./plain-worker.js" or "./service-worker.js");
     }
 
     [Theory]
     [InlineData("javascript")]
     [InlineData("typescript")]
-    public void Extract_JavaScriptTypeScript_DetectsServiceWorkerRegisterModuleSymbols(string language)
+    public void Extract_JavaScriptTypeScript_DetectsBrowserModuleRegistrationSymbols(string language)
     {
         var content = """
             navigator.serviceWorker.register("./sw.js");
@@ -202,27 +210,7 @@ public partial class SymbolExtractorTests
             globalThis.navigator.serviceWorker.register("./global-sw.js");
             navigator.serviceWorker.register(dynamicPath);
             const text = "navigator.serviceWorker.register('./string-sw.js')";
-            """;
-        var symbols = SymbolExtractor.Extract(1, language, content);
 
-        var serviceWorkerImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./sw.js"));
-        Assert.Equal(1, serviceWorkerImport.Line);
-        Assert.Contains("navigator.serviceWorker.register", serviceWorkerImport.Signature);
-        var scopedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./scoped-sw.js"));
-        Assert.Equal(3, scopedImport.Line);
-        Assert.Contains("scope", scopedImport.Signature);
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./window-sw.js");
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./global-sw.js");
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "dynamicPath");
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string-sw.js");
-    }
-
-    [Theory]
-    [InlineData("javascript")]
-    [InlineData("typescript")]
-    public void Extract_JavaScriptTypeScript_DetectsWorkletAddModuleSymbols(string language)
-    {
-        var content = """
             audioWorklet.addModule("./audio-processor.js");
             CSS.paintWorklet.addModule(
               "./paint-worklet.js",
@@ -236,147 +224,90 @@ public partial class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, language, content);
 
+        var serviceWorkerImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./sw.js"));
+        Assert.Equal(1, serviceWorkerImport.Line);
+        Assert.Contains("navigator.serviceWorker.register", serviceWorkerImport.Signature);
+        var scopedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./scoped-sw.js"));
+        Assert.Equal(3, scopedImport.Line);
+        Assert.Contains("scope", scopedImport.Signature);
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./window-sw.js");
         var audioImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./audio-processor.js"));
-        Assert.Equal(1, audioImport.Line);
+        Assert.Equal(11, audioImport.Line);
         Assert.Contains("audioWorklet.addModule", audioImport.Signature);
         var paintImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./paint-worklet.js"));
-        Assert.Equal(3, paintImport.Line);
+        Assert.Equal(13, paintImport.Line);
         Assert.Contains("credentials", paintImport.Signature);
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./layout-worklet.js");
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./method-audio.js");
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./generic-worklet.js");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "dynamicPath");
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string-audio.js");
-    }
-
-    [Theory]
-    [InlineData("javascript")]
-    [InlineData("typescript")]
-    public void Extract_JavaScriptTypeScript_DetectsWorkerConstructorModuleSymbols(string language)
-    {
-        var content = """
-            const worker = new Worker("./worker.js");
-            const shared = new SharedWorker(
-              "./shared-worker.js",
-              { type: "module" }
-            );
-            const templated = new Worker(`./template-worker.js`, { type: "module" });
-            const computed = new Worker(`./${name}.js`);
-            const windowWorker = new window.Worker("./window-worker.js");
-            const globalShared = new globalThis.SharedWorker("./global-shared-worker.js");
-            const plain = Worker("./plain-worker.js");
-            const service = new ServiceWorker("./service-worker.js");
-            """;
-        var symbols = SymbolExtractor.Extract(1, language, content);
-
-        var workerImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./worker.js"));
-        Assert.Equal(1, workerImport.Line);
-        Assert.Contains("new Worker", workerImport.Signature);
-        var sharedImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./shared-worker.js"));
-        Assert.Equal(3, sharedImport.Line);
-        Assert.Contains("type", sharedImport.Signature);
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./template-worker.js");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./window-worker.js");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./global-shared-worker.js");
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name.Contains("${", StringComparison.Ordinal));
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./plain-worker.js");
-        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./service-worker.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name is
+            "./global-sw.js" or "./string-sw.js" or "./method-audio.js" or "./generic-worklet.js" or "./string-audio.js");
     }
 
     [Fact]
-    public void Extract_JavaScript_StringBraceDoesNotBreakFollowingContainerAssignment()
+    public void Extract_JavaScript_LiteralBracesDoNotBreakFollowingContainerAssignments()
     {
         var content = """"
-            export class Example {
-              foo() {
+            export class StringExample {
+              stringFoo() {
                 const value = "}";
                 return value;
               }
 
-              bar() {
+              stringBar() {
                 return 1;
               }
             }
-            """";
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        var example = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Example"));
-        var foo = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "foo"));
-        var bar = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "bar"));
-
-        Assert.Equal(10, example.EndLine);
-        Assert.Equal(5, foo.EndLine);
-        Assert.Equal("class", bar.ContainerKind);
-        Assert.Equal("Example", bar.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_JavaScript_TemplateLiteralBraceDoesNotBreakFollowingContainerAssignment()
-    {
-        var content = """"
-            export class Example {
-              foo() {
+            export class TemplateExample {
+              templateFoo() {
                 const value = `}`;
                 return value;
               }
 
-              bar() {
+              templateBar() {
                 return 1;
               }
             }
             """";
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        var example = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Example"));
-        var foo = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "foo"));
-        var bar = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "bar"));
+        var stringExample = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "StringExample"));
+        var stringFoo = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "stringFoo"));
+        var stringBar = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "stringBar"));
+        var templateExample = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "TemplateExample"));
+        var templateFoo = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "templateFoo"));
+        var templateBar = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "templateBar"));
 
-        Assert.Equal(10, example.EndLine);
-        Assert.Equal(5, foo.EndLine);
-        Assert.Equal("class", bar.ContainerKind);
-        Assert.Equal("Example", bar.ContainerName);
+        Assert.Equal(10, stringExample.EndLine);
+        Assert.Equal(5, stringFoo.EndLine);
+        Assert.Equal("StringExample", stringBar.ContainerName);
+        Assert.Equal(21, templateExample.EndLine);
+        Assert.Equal(16, templateFoo.EndLine);
+        Assert.Equal("TemplateExample", templateBar.ContainerName);
+        Assert.All([stringBar, templateBar], symbol => Assert.Equal("class", symbol.ContainerKind));
     }
 
     [Fact]
-    public void Extract_JavaScript_DetectsExportDefaultClassMembers()
+    public void Extract_JavaScript_HandlesNamedAndAnonymousDefaultClassMembers()
     {
         var content = """""
             export default class DefaultJs {
-                run() {}
+                namedRun() {}
+            }
+
+            export default class extends Base {
+                baseRun() {}
+            }
+
+            export default class extends mixin(Base) {
+                mixinRun() {}
             }
             """"";
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "DefaultJs");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DoesNotInventExtendsAsAnonymousDefaultClassName()
-    {
-        var content = """
-            export default class extends Base {
-                run() {}
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "extends");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DoesNotInventExtendsAsAnonymousDefaultDerivedClassName()
-    {
-        var content = """
-            export default class extends mixin(Base) {
-                run() {}
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "extends");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
+        AssertSymbolsContain(symbols, "function", "namedRun", "baseRun", "mixinRun");
     }
 
     [Fact]
@@ -424,79 +355,41 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScript_DetectsInlineClassMethods()
+    public void Extract_JavaScript_DetectsInlineMethodsAndSameLineSiblingClasses()
     {
-        var content = "export class Inline { run() {} }";
+        var content = "export class Inline { run() {} first() {} second() {} } class A { alpha() {} } class B { beta() {} } class C { shared() {} } class D { shared() {} }";
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Inline");
+        AssertSymbolsContain(symbols, "class", "Inline", "A", "B", "C", "D");
         var run = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "run"));
-        Assert.Equal("class", run.ContainerKind);
-        Assert.Equal("Inline", run.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DetectsInlineMultipleMethods()
-    {
-        var content = "class Inline { first() {} second() {} }";
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Inline");
         var first = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "first"));
         var second = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "second"));
-        Assert.Equal("class", first.ContainerKind);
-        Assert.Equal("Inline", first.ContainerName);
+        Assert.All([run, first, second], symbol =>
+        {
+            Assert.Equal("class", symbol.ContainerKind);
+            Assert.Equal("Inline", symbol.ContainerName);
+        });
+        Assert.Equal("run() {}", run.Signature);
         Assert.Equal("first() {}", first.Signature);
-        Assert.Equal("class", second.ContainerKind);
-        Assert.Equal("Inline", second.ContainerName);
         Assert.Equal("second() {}", second.Signature);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "alpha" && s.ContainerName == "A");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "beta" && s.ContainerName == "B");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "shared" && s.ContainerName == "C");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "shared" && s.ContainerName == "D");
     }
 
     [Fact]
-    public void Extract_JavaScript_DetectsSameLineSiblingClassesWithDistinctMethodNames()
+    public void Extract_JavaScript_DetectsSameLinePublicClassesAfterStatementAndLocalClass()
     {
-        var content = "class A { first() {} } class B { second() {} }";
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "A");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "B");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first" && s.ContainerName == "A");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second" && s.ContainerName == "B");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DetectsSameLineSiblingClassesWithIdenticalMethodNames()
-    {
-        var content = "class A { run() {} } class B { run() {} }";
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "A");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "B");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "A");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "B");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DetectsSameLinePublicClassAfterStatementPrefix()
-    {
-        var content = "foo(); class Visible { keep() {} }";
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Visible");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DetectsSameLinePublicClassAfterFunctionLocalHiddenClass()
-    {
-        var content = "function outer(){ class Hidden { run() {} } } class Visible { keep() {} }";
+        var content = "foo(); class Prefixed { keep() {} } function outer(){ class Hidden { run() {} } } class AfterLocal { stay() {} }";
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "outer");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Visible");
+        AssertSymbolsContain(symbols, "class", "Prefixed", "AfterLocal");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Prefixed");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "stay" && s.ContainerName == "AfterLocal");
     }
 
     [Fact]
@@ -794,14 +687,34 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScript_DetectsCommonJsExportsClassExpressionMethods()
+    public void Extract_JavaScript_DetectsCommonJsClassExpressionForms()
     {
-        var content = "exports.Service = class NamedService { run() {} };";
+        var content = """
+            exports.Service = class NamedService { serviceRun() {} };
+            module.exports = class { inlineRun() {} };
+            module.exports =
+                class {
+                    multilineRun() {}
+                };
+            module.exports = (class { parenthesizedRun() {} });
+            module.exports.PropertyService = class { propertyRun() {} };
+            if (typeof module !== "undefined") {
+                module.exports = class { conditionalRun() {} };
+            }
+            """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "NamedService");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "Service");
+        Assert.Equal(4, symbols.Count(s => s.Kind == "class" && s.Name == "default"));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "PropertyService");
+        AssertMember("serviceRun", "Service");
+        foreach (var name in new[] { "inlineRun", "multilineRun", "parenthesizedRun", "conditionalRun" })
+            AssertMember(name, "default");
+        AssertMember("propertyRun", "PropertyService");
+
+        void AssertMember(string name, string containerName) =>
+            Assert.Contains(symbols, s => s.Kind == "function" && s.Name == name && s.ContainerName == containerName);
     }
 
     [Fact]
@@ -822,71 +735,6 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "$Service");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "$Handler");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "$Handler");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DetectsCommonJsModuleExportsClassExpressionMethods()
-    {
-        var content = "module.exports = class { run() {} };";
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "default");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DetectsMultilineCommonJsModuleExportsClassExpressionMethods()
-    {
-        var content = """
-            module.exports =
-                class {
-                    run() {}
-                };
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "default");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DetectsParenthesizedCommonJsModuleExportsClassExpressionMethods()
-    {
-        var content = """
-            module.exports = (class {
-                run() {}
-            });
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "default");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DetectsCommonJsModuleExportsPropertyClassExpressionMethods()
-    {
-        var content = "module.exports.Service = class { run() {} };";
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "Service");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DetectsCommonJsClassExpressionInsideTopLevelConditionalBlock()
-    {
-        var content = """
-            if (typeof module !== "undefined") {
-                module.exports = class {
-                    run() {}
-                };
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "default");
     }
 
     [Fact]
@@ -912,92 +760,49 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScript_DoesNotLeakClassMethodLocalClassExpressionMethods()
+    public void Extract_JavaScript_LocalClassForms_DoNotLeakFromCallableScopes()
     {
         var content = """
             export class Outer {
-                method() {
-                    const Inner = class {
-                        run() {}
+                expressionMethod() {
+                    const MethodExpression = class {
+                        methodExpressionMember() {}
                     };
                 }
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Outer");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ContainerName == "Outer");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Inner");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DoesNotLeakClassMethodDirectLocalClasses()
-    {
-        var content = """
-            class Outer {
-                method() {
-                    class Hidden {
-                        run() {}
+                directMethod() {
+                    class MethodDirect {
+                        methodDirectMember() {}
                     }
                 }
             }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Outer");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ContainerName == "Outer");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DoesNotLeakFunctionLocalClassExpressionMethods()
-    {
-        var content = """
-            function outer() {
-                const Service = class {
-                    run() {}
+            function expressionFunction() {
+                const FunctionExpression = class {
+                    functionExpressionMember() {}
                 };
             }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "outer");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DoesNotLeakDirectFunctionLocalClasses()
-    {
-        var content = """
-            function outer() {
-                class Hidden {
-                    run() {}
+            function directFunction() {
+                class FunctionDirect {
+                    functionDirectMember() {}
                 }
             }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "outer");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DoesNotLeakCommonJsFunctionExpressionLocalClassMethods()
-    {
-        var content = """
             exports.handler = function () {
-                const Local = class {
-                    inside() {}
+                const CommonJsExpression = class {
+                    commonJsMember() {}
                 };
             };
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Local");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "inside");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Outer");
+        foreach (var name in new[] { "expressionMethod", "directMethod" })
+            Assert.Contains(symbols, s => s.Kind == "function" && s.Name == name && s.ContainerName == "Outer");
+        foreach (var name in new[] { "expressionFunction", "directFunction" })
+            Assert.Contains(symbols, s => s.Kind == "function" && s.Name == name);
+        Assert.DoesNotContain(symbols, s => s.Name is
+            "MethodExpression" or "methodExpressionMember" or "MethodDirect" or "methodDirectMember"
+            or "FunctionExpression" or "functionExpressionMember" or "FunctionDirect" or "functionDirectMember"
+            or "CommonJsExpression" or "commonJsMember");
     }
 
     [Fact]
@@ -1163,7 +968,7 @@ public partial class SymbolExtractorTests
     [Theory]
     [InlineData("javascript")]
     [InlineData("typescript")]
-    public void Extract_JavaScriptTypeScript_DetectsCommonJsDefinePropertyExports(string language)
+    public void Extract_JavaScriptTypeScript_DetectsCommonJsObjectExportApis(string language)
     {
         var content = """
             Object.defineProperty(exports, "__esModule", { value: true });
@@ -1180,6 +985,27 @@ public partial class SymbolExtractorTests
               { value: serverError }
             );
             Object.defineProperty(local, "hidden", { value: hidden });
+            Object.defineProperties(exports, {
+              bulkFoo: { value: foo },
+              "bulk-bar": { value: bar },
+              ["bulk-computed"]: { value: computed },
+              [dynamicBulk]: { value: hidden },
+              bulkShorthand,
+            });
+            Object.defineProperties(module.exports, { default: { value: api }, 501: { value: bulkError } });
+            Object.defineProperties(exports, { bulkSameLine: { value: sameLine } });
+            Object.assign(module.exports, {
+              default: api,
+              502: assignError,
+              assignFoo,
+              assignAlias: value,
+              "assign-bar": bar,
+              ["assign-computed"]: computed,
+              [dynamicAssign]: hidden,
+            });
+            Object.assign(exports, { assignSameLine: sameLine });
+            Object.defineProperties(local, { hiddenBulk: { value: hidden } });
+            Object.assign(local, { hiddenAssign });
             """;
         var symbols = SymbolExtractor.Extract(1, language, content);
 
@@ -1187,82 +1013,13 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar-baz" && s.Visibility == "export");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "404" && s.Visibility == "export");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "500" && s.Visibility == "export");
+        foreach (var name in new[] { "bulkFoo", "bulk-bar", "bulk-computed", "bulkShorthand", "501", "bulkSameLine", "502", "assignFoo", "assignAlias", "assign-bar", "assign-computed", "assignSameLine" })
+            Assert.Contains(symbols, s => s.Kind == "property" && s.Name == name && s.Visibility == "export");
+        Assert.Equal(2, symbols.Count(s => s.Kind == "property" && s.Name == "default" && s.Visibility == "export"));
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "__esModule");
-        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "hidden" && s.Visibility == "export");
-    }
-
-    [Theory]
-    [InlineData("javascript")]
-    [InlineData("typescript")]
-    public void Extract_JavaScriptTypeScript_DetectsCommonJsDefinePropertiesExports(string language)
-    {
-        var content = """
-            Object.defineProperties(exports, {
-              __esModule: { value: true },
-              foo: { enumerable: true, get: function () { return api.foo; } },
-              "bar-baz": { value: bar },
-              ["computed-key"]: { value: computed },
-              [dynamicKey]: { value: hidden },
-              descriptorRef,
-            });
-            Object.defineProperties(
-              module.exports,
-              {
-                default: { value: api },
-                500: { value: serverError },
-              }
-            );
-            Object.defineProperties(exports, { sameLine: { value: sameLine } });
-            Object.defineProperties(local, { hidden: { value: hidden } });
-            """;
-        var symbols = SymbolExtractor.Extract(1, language, content);
-
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar-baz" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "computed-key" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "descriptorRef" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "default" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "500" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "sameLine" && s.Visibility == "export");
-        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "__esModule");
-        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "dynamicKey" && s.Visibility == "export");
-        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "hidden" && s.Visibility == "export");
-    }
-
-    [Theory]
-    [InlineData("javascript")]
-    [InlineData("typescript")]
-    public void Extract_JavaScriptTypeScript_DetectsCommonJsObjectAssignExports(string language)
-    {
-        var content = """
-            Object.assign(exports, {
-              foo,
-              alias: value,
-              "bar-baz": bar,
-              ["computed-key"]: computed,
-              [dynamicKey]: hidden,
-            });
-            Object.assign(
-              module.exports,
-              {
-                default: api,
-                500: serverError,
-              }
-            );
-            Object.assign(exports, { sameLine: sameLine });
-            Object.assign(local, { hidden });
-            """;
-        var symbols = SymbolExtractor.Extract(1, language, content);
-
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "alias" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar-baz" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "computed-key" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "default" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "500" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "sameLine" && s.Visibility == "export");
-        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "dynamicKey" && s.Visibility == "export");
-        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "hidden" && s.Visibility == "export");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property"
+            && s.Name is "hidden" or "dynamicBulk" or "dynamicAssign" or "hiddenBulk" or "hiddenAssign"
+            && s.Visibility == "export");
     }
 
     [Fact]
@@ -1403,214 +1160,134 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScript_DoesNotLeakBlocklessArrowReturnedClasses()
+    public void Extract_JavaScript_BlocklessArrowReturnShapes_DoNotLeakClasses()
     {
         var content = """
-            const factory = () =>
-                class Hidden {
-                    method() {}
+            const plainFactory = () =>
+                class HiddenPlain {
+                    plainMethod() {}
                 };
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "factory");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "method");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DoesNotLeakWrappedBlocklessArrowReturnedClassesAndKeepsRange()
-    {
-        var content = """
-            const factory = () =>
+            const wrappedFactory = () =>
                 wrap(
-                    class Hidden {
-                        method() {}
+                    class HiddenWrapped {
+                        wrappedMethod() {}
                     }
                 );
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        var factory = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "factory"));
-        Assert.Equal(1, factory.StartLine);
-        Assert.Equal(6, factory.EndLine);
-        Assert.Equal(2, factory.BodyStartLine);
-        Assert.Equal(6, factory.BodyEndLine);
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "method");
+        AssertRange("plainFactory", 1, 2, 4);
+        AssertRange("wrappedFactory", 5, 6, 10);
+        Assert.DoesNotContain(symbols, s => s.Name is "HiddenPlain" or "HiddenWrapped" or "plainMethod" or "wrappedMethod");
+
+        void AssertRange(string name, int startLine, int bodyStartLine, int endLine)
+        {
+            var arrow = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == name));
+            Assert.Equal(startLine, arrow.StartLine);
+            Assert.Equal(bodyStartLine, arrow.BodyStartLine);
+            Assert.Equal(endLine, arrow.EndLine);
+            Assert.Equal(endLine, arrow.BodyEndLine);
+        }
     }
 
     [Fact]
-    public void Extract_JavaScript_BlocklessArrowWithoutSemicolonDoesNotConsumeFollowingTopLevelClass()
+    public void Extract_JavaScript_BlocklessArrowsStopBeforeFollowingTopLevelForms()
     {
         var content = """
-            const factory = () =>
-                class Hidden {
-                    method() {}
+            const classFactory = () =>
+                class HiddenClass {
+                    hiddenClassMethod() {}
                 }
-            class Visible {
-                keep() {}
+            class VisibleClass {
+                keepClass() {}
             }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        var factory = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "factory"));
-        Assert.Equal(1, factory.StartLine);
-        Assert.Equal(4, factory.EndLine);
-        Assert.Equal(2, factory.BodyStartLine);
-        Assert.Equal(4, factory.BodyEndLine);
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Visible");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "method");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_BlocklessArrowWithoutSemicolonDoesNotConsumeFollowingExpressionStatement()
-    {
-        var content = """
-            const factory = () =>
-                class Hidden {
-                    method() {}
+            const expressionFactory = () =>
+                class HiddenExpression {
+                    hiddenExpressionMethod() {}
                 }
             foo();
-            class Visible {
-                keep() {}
+            class VisibleExpression {
+                keepExpression() {}
             }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        var factory = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "factory"));
-        Assert.Equal(4, factory.EndLine);
-        Assert.Equal(4, factory.BodyEndLine);
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Visible");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_BlocklessArrowWithoutSemicolonDoesNotHideFollowingCommonJsClassExport()
-    {
-        var content = """
-            const factory = () =>
-                class Hidden {
-                    method() {}
+            const exportFactory = () =>
+                class HiddenExport {
+                    hiddenExportMethod() {}
                 }
-            exports.Service = class Visible {
-                keep() {}
+            exports.Service = class VisibleExport {
+                keepExport() {}
             };
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        var factory = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "factory"));
-        Assert.Equal(4, factory.EndLine);
-        Assert.Equal(4, factory.BodyEndLine);
+        AssertArrowRange("classFactory", 1, 2, 4);
+        AssertArrowRange("expressionFactory", 8, 9, 11);
+        AssertArrowRange("exportFactory", 16, 17, 19);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "VisibleClass");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keepClass" && s.ContainerName == "VisibleClass");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "VisibleExpression");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keepExpression" && s.ContainerName == "VisibleExpression");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Service");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keepExport" && s.ContainerName == "Service");
+        Assert.DoesNotContain(symbols, s => s.Name is "HiddenClass" or "HiddenExpression" or "HiddenExport"
+            or "hiddenClassMethod" or "hiddenExpressionMethod" or "hiddenExportMethod");
+
+        void AssertArrowRange(string name, int startLine, int bodyStartLine, int endLine)
+        {
+            var arrow = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == name));
+            Assert.Equal(startLine, arrow.StartLine);
+            Assert.Equal(bodyStartLine, arrow.BodyStartLine);
+            Assert.Equal(endLine, arrow.EndLine);
+            Assert.Equal(endLine, arrow.BodyEndLine);
+        }
     }
 
     [Fact]
-    public void Extract_JavaScript_DoesNotLeakIifeLocalClassMethods()
+    public void Extract_JavaScript_LocalClasses_DoNotLeakFromNestedCallableAndStaticScopes()
     {
         var content = """
             (function () {
-                const Local = class {
-                    inside() {}
+                const IifeLocal = class {
+                    iifeMember() {}
                 };
             })();
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Local");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "inside");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DoesNotLeakStaticBlockLocalClassMethods()
-    {
-        var content = """
             class Outer {
                 static {
-                    const Local = class {
-                        inside() {}
+                    const StaticExpression = class {
+                        staticExpressionMember() {}
                     };
-                }
-
-                keep() {}
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Outer");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Local");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "inside");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DoesNotLeakDirectStaticBlockLocalClasses()
-    {
-        var content = """
-            class Outer {
-                static {
-                    class Local {
-                        inside() {}
+                    class StaticDirect {
+                        staticDirectMember() {}
                     }
                 }
-
                 keep() {}
             }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Outer");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Local");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "inside");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DoesNotLeakObjectLiteralConciseMethodLocalClasses()
-    {
-        var content = """
             const obj = {
                 method() {
-                    class Inner {
-                        run() {}
+                    class ConciseLocal {
+                        conciseMember() {}
                     }
-                }
-            };
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Inner");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DoesNotLeakGetterSetterLocalClasses()
-    {
-        var content = """
-            const obj = {
+                },
                 get value() {
-                    class HiddenGetter {
-                        run() {}
+                    class GetterLocal {
+                        getterMember() {}
                     }
                     return 1;
                 },
                 set value(input) {
-                    class HiddenSetter {
-                        run() {}
+                    class SetterLocal {
+                        setterMember() {}
                     }
                 }
             };
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "HiddenGetter");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "HiddenSetter");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Outer");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Outer");
+        Assert.DoesNotContain(symbols, s => s.Name is
+            "IifeLocal" or "iifeMember" or "StaticExpression" or "staticExpressionMember"
+            or "StaticDirect" or "staticDirectMember" or "ConciseLocal" or "conciseMember"
+            or "GetterLocal" or "getterMember" or "SetterLocal" or "setterMember");
     }
 
     [Fact]
@@ -1699,7 +1376,7 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScript_IgnoresRegexLiteralBracesAndBlockCommentMethodShapes()
+    public void Extract_JavaScript_RegexLiteralBracesPreserveSiblingMethodsAcrossControlFlow()
     {
         var content = """
             class Example {
@@ -1707,34 +1384,18 @@ public partial class SymbolExtractorTests
                     fake() {
                     }
                 */
-                first() {
+                literalBraces() {
                     const open = /{/;
                     const close = /}/;
                 }
 
-                second() {}
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "fake");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_KeepsSiblingMethodsAfterWrappedControlFlowRegexLiterals()
-    {
-        var content = """
-            class Example {
-                first(value) {
+                wrappedIf(value) {
                     if (
                         ready
                     ) /{/.test(value);
                 }
 
-                second(value) {
+                wrappedElseIf(value) {
                     if (first) {
                     }
                     else if (
@@ -1742,14 +1403,38 @@ public partial class SymbolExtractorTests
                     ) /{/.test(value);
                 }
 
-                third() {}
+                plainElse(value) {
+                    if (cond) {
+                    }
+                    else /{/.test(value);
+                }
+
+                doWhile(value) {
+                    do /{/.test(value); while (cond);
+                }
+
+                finallyBranch(value) {
+                    try {
+                    }
+                    finally /{/.test(value);
+                }
+
+                finalSibling() {}
             }
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "third");
+        AssertSymbolsContain(
+            symbols,
+            "function",
+            "literalBraces",
+            "wrappedIf",
+            "wrappedElseIf",
+            "plainElse",
+            "doWhile",
+            "finallyBranch",
+            "finalSibling");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "fake");
     }
 
     [Fact]
@@ -1778,51 +1463,6 @@ public partial class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Derived");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_KeepsSiblingMethodsAfterElseRegexLiteral()
-    {
-        var content = """
-            class Example {
-                first(value) {
-                    if (cond) {
-                    }
-                    else /{/.test(value);
-                }
-
-                second() {}
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_KeepsSiblingMethodsAfterDoAndFinallyRegexLiterals()
-    {
-        var content = """
-            class Example {
-                first(value) {
-                    do /{/.test(value); while (cond);
-                }
-
-                second(value) {
-                    try {
-                    }
-                    finally /{/.test(value);
-                }
-
-                third() {}
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "third");
     }
 
     [Fact]
@@ -1882,7 +1522,7 @@ public partial class SymbolExtractorTests
     [Theory]
     [InlineData("javascript")]
     [InlineData("typescript")]
-    public void Extract_JavaScriptTypeScript_DetectsMultilineDynamicImportSymbols(string language)
+    public void Extract_JavaScriptTypeScript_DetectsDynamicImportForms(string language)
     {
         var content = """
             const loader = () => import(
@@ -1895,6 +1535,17 @@ public partial class SymbolExtractorTests
             class Loader { #import(path) {} load() { return this.#import("./private"); } }
             const text = "import('./string')";
             // import('./comment')
+
+            const data = await import("./data.json", {
+                with: { type: "json" }
+            });
+            const legacy = await import(
+                "./legacy.json",
+                { assert: { type: "json" } }
+            );
+
+            const view = import(`./view.js`);
+            const computed = import(`./${name}.js`);
             """;
         var symbols = SymbolExtractor.Extract(1, language, content);
 
@@ -1903,54 +1554,25 @@ public partial class SymbolExtractorTests
         Assert.Contains("const loader", importSymbol.Signature);
         Assert.Contains("import(", importSymbol.Signature);
         Assert.Contains("./feature", importSymbol.Signature);
+
+        var dataImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./data.json"));
+        Assert.Equal(12, dataImport.Line);
+        Assert.Contains("with", dataImport.Signature);
+        Assert.Contains("type", dataImport.Signature);
+
+        var legacyImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./legacy.json"));
+        Assert.Equal(16, legacyImport.Line);
+        Assert.Contains("assert", legacyImport.Signature);
+        Assert.Contains("./legacy.json", legacyImport.Signature);
+
+        var viewImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./view.js"));
+        Assert.Equal(20, viewImport.Line);
+        Assert.Contains("`./view.js`", viewImport.Signature);
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./method");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./optional");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./private");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./string");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./comment");
-    }
-
-    [Theory]
-    [InlineData("javascript")]
-    [InlineData("typescript")]
-    public void Extract_JavaScriptTypeScript_DetectsDynamicImportSymbolsWithImportOptions(string language)
-    {
-        var content = """
-            const data = await import("./data.json", {
-                with: { type: "json" }
-            });
-            const legacy = await import(
-                "./legacy.json",
-                { assert: { type: "json" } }
-            );
-            """;
-        var symbols = SymbolExtractor.Extract(1, language, content);
-
-        var dataImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./data.json"));
-        Assert.Equal(1, dataImport.Line);
-        Assert.Contains("with", dataImport.Signature);
-        Assert.Contains("type", dataImport.Signature);
-
-        var legacyImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./legacy.json"));
-        Assert.Equal(5, legacyImport.Line);
-        Assert.Contains("assert", legacyImport.Signature);
-        Assert.Contains("./legacy.json", legacyImport.Signature);
-    }
-
-    [Theory]
-    [InlineData("javascript")]
-    [InlineData("typescript")]
-    public void Extract_JavaScriptTypeScript_DetectsTemplateLiteralDynamicImportSymbols(string language)
-    {
-        var content = """
-            const view = import(`./view.js`);
-            const computed = import(`./${name}.js`);
-            """;
-        var symbols = SymbolExtractor.Extract(1, language, content);
-
-        var viewImport = Assert.Single(symbols.Where(s => s.Kind == "import" && s.Name == "./view.js"));
-        Assert.Equal(1, viewImport.Line);
-        Assert.Contains("`./view.js`", viewImport.Signature);
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name.Contains("${", StringComparison.Ordinal));
     }
 
@@ -2073,28 +1695,46 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScript_DetectsClassFieldArrowWithAsiBetweenFields()
+    public void Extract_JavaScript_DetectsClassFieldArrowAsiBoundaries()
     {
         // ASI (Automatic Semicolon Insertion) between class fields must not swallow
         // the next arrow-property header into the previous expression body.
         // クラスフィールド間の ASI により式本体の後続フィールドを取りこぼさないこと。
         var content = """
-            class Foo {
-                first = () => 42
-                second = () => 43
+            class NumericAsi {
+                numericFirst = () => 42
+                numericSecond = () => 43
+            }
+
+            class MemberContinuation {
+              continued = () => foo
+                [bar];
+              afterContinuation = () => 43;
+            }
+
+            class ClosingLiteral {
+              onlyLiteral = () => "x"
+            }
+
+            class StringAsi {
+              stringFirst = () => "x"
+              afterString = () => 43
+              templateLast = () => `template`
             }
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        var first = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "first");
-        Assert.NotNull(first);
-        Assert.Equal("class", first.ContainerKind);
-        Assert.Equal("Foo", first.ContainerName);
-
-        var second = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "second");
-        Assert.NotNull(second);
-        Assert.Equal("class", second.ContainerKind);
-        Assert.Equal("Foo", second.ContainerName);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "numericFirst" && s.ContainerName == "NumericAsi");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "numericSecond" && s.ContainerName == "NumericAsi");
+        var continued = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "continued"));
+        Assert.Equal("class", continued.ContainerKind);
+        Assert.Equal("MemberContinuation", continued.ContainerName);
+        Assert.Contains("[bar]", continued.Signature);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "afterContinuation" && s.ContainerName == "MemberContinuation");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "onlyLiteral" && s.ContainerName == "ClosingLiteral");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "stringFirst" && s.ContainerName == "StringAsi");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "afterString" && s.ContainerName == "StringAsi");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "templateLast" && s.ContainerName == "StringAsi");
     }
 
     [Theory]
@@ -2131,69 +1771,4 @@ public partial class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "dynamicKey" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
     }
 
-    [Fact]
-    public void Extract_JavaScript_DetectsClassFieldArrowComputedMemberContinuation()
-    {
-        // A bare `[` on the next line is `foo[bar]` member-access continuation per JS ASI rules,
-        // NOT a new computed class method. The scanner must not cut the expression body at `foo`.
-        // JS の ASI 規則では、次行頭の `[` は `foo[bar]` メンバアクセスの継続であり、
-        // computed method 名の開始ではない。式本体を `foo` で打ち切ってはならない。
-        var content = """
-            class Foo {
-              first = () => foo
-                [bar];
-              second = () => 43;
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        var first = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "first");
-        Assert.NotNull(first);
-        Assert.Equal("class", first.ContainerKind);
-        Assert.Equal("Foo", first.ContainerName);
-        Assert.Contains("[bar]", first.Signature);
-
-        var second = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "second");
-        Assert.NotNull(second);
-        Assert.Equal("class", second.ContainerKind);
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DetectsClassFieldArrowStringLiteralBeforeClosingBrace()
-    {
-        // A string-returning arrow without a trailing `;` must be terminated by the class-body `}`.
-        // The lexer preserves opening/closing quote characters in the sanitized header, so the
-        // ASI terminator check must treat `"` / `'` / `` ` `` as valid expression ends.
-        // セミコロンなしで文字列を返す矢印フィールドは、直後のクラス終了 `}` で終端されなければならない。
-        // lexer は開閉クォートを sanitized header 上に残すため、ASI 終端チェックは
-        // `"` / `'` / `` ` `` を有効な式終端として扱わなければならない。
-        var content = """
-            class Foo {
-              only = () => "x"
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        var only = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "only");
-        Assert.NotNull(only);
-        Assert.Equal("class", only.ContainerKind);
-        Assert.Equal("Foo", only.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DetectsClassFieldArrowStringLiteralWithAsiBetweenFields()
-    {
-        var content = """
-            class Foo {
-              first = () => "x"
-              second = () => 43
-              third = () => `template`
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first" && s.ContainerName == "Foo");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second" && s.ContainerName == "Foo");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "third" && s.ContainerName == "Foo");
-    }
 }

@@ -11,55 +11,25 @@ namespace CodeIndex.Tests;
 public class WorkspaceMetadataEnricherTests
 {
     [Fact]
-    public void Enrich_StatusResult_PopulatesProjectRootHeadAndDirty()
+    public void Enrich_ResultTypes_PopulateProjectRootHeadAndDirty()
     {
-        var (projectRoot, dbPath, expectedHead) = CreateDirtyGitProject("cdidx_workspace_status");
+        var (projectRoot, dbPath, expectedHead) = CreateDirtyGitProject("cdidx_workspace_results");
         try
         {
             var status = new StatusResult();
+            var map = new RepoMapResult();
+            var analysis = new SymbolAnalysisResult();
 
             WorkspaceMetadataEnricher.Enrich(status, dbPath);
+            WorkspaceMetadataEnricher.Enrich(map, dbPath);
+            WorkspaceMetadataEnricher.Enrich(analysis, dbPath);
 
             Assert.Equal(projectRoot, status.ProjectRoot);
             Assert.Equal(expectedHead, status.GitHead);
             Assert.True(status.GitIsDirty);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void Enrich_RepoMapResult_PopulatesProjectRootHeadAndDirty()
-    {
-        var (projectRoot, dbPath, expectedHead) = CreateDirtyGitProject("cdidx_workspace_map");
-        try
-        {
-            var map = new RepoMapResult();
-
-            WorkspaceMetadataEnricher.Enrich(map, dbPath);
-
             Assert.Equal(projectRoot, map.ProjectRoot);
             Assert.Equal(expectedHead, map.GitHead);
             Assert.True(map.GitIsDirty);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void Enrich_SymbolAnalysisResult_PopulatesProjectRootHeadAndDirty()
-    {
-        var (projectRoot, dbPath, expectedHead) = CreateDirtyGitProject("cdidx_workspace_analysis");
-        try
-        {
-            var analysis = new SymbolAnalysisResult();
-
-            WorkspaceMetadataEnricher.Enrich(analysis, dbPath);
-
             Assert.Equal(projectRoot, analysis.ProjectRoot);
             Assert.Equal(expectedHead, analysis.GitHead);
             Assert.True(analysis.GitIsDirty);
@@ -224,7 +194,7 @@ public class WorkspaceMetadataEnricherTests
     }
 
     [Fact]
-    public void Enrich_StatusResult_FlagsWorktreeHeadChangedWhenPersistedHeadDiffersFromRuntimeHead()
+    public void Enrich_StatusResult_TracksPersistedHeadDriftAndRecovery()
     {
         var (projectRoot, dbPath, originalHead) = CreateDirtyGitProject("cdidx_workspace_head_changed");
         try
@@ -247,31 +217,19 @@ public class WorkspaceMetadataEnricherTests
             Assert.Equal(originalHead, status.GitHead);
             Assert.Equal(staleHead, status.IndexedHeadCommit);
             Assert.True(status.WorktreeHeadChanged);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void Enrich_StatusResult_DoesNotFlagWorktreeHeadChangedWhenPersistedHeadMatchesRuntimeHead()
-    {
-        var (projectRoot, dbPath, originalHead) = CreateDirtyGitProject("cdidx_workspace_head_match");
-        try
-        {
             using (var db = new DbContext(dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, originalHead);
             }
 
-            var status = new StatusResult();
+            var recoveredStatus = new StatusResult();
 
-            WorkspaceMetadataEnricher.Enrich(status, dbPath);
+            WorkspaceMetadataEnricher.Enrich(recoveredStatus, dbPath);
 
-            Assert.Equal(originalHead, status.IndexedHeadCommit);
-            Assert.False(status.WorktreeHeadChanged);
+            Assert.Equal(originalHead, recoveredStatus.IndexedHeadCommit);
+            Assert.False(recoveredStatus.WorktreeHeadChanged);
         }
         finally
         {
@@ -280,7 +238,7 @@ public class WorkspaceMetadataEnricherTests
     }
 
     [Fact]
-    public void Enrich_StatusResult_UsesLatestIndexedHeadShaBeforeFullScanHeadForWorktreeHeadChanged()
+    public void Enrich_ResultTypes_UseLatestIndexedHeadShaBeforeFullScanHeadForWorktreeHeadChanged()
     {
         var (projectRoot, dbPath, originalHead) = CreateDirtyGitProject("cdidx_workspace_current_head_preferred");
         try
@@ -294,37 +252,14 @@ public class WorkspaceMetadataEnricherTests
             }
 
             var status = new StatusResult { IndexedHeadSha = originalHead };
+            var analysis = new SymbolAnalysisResult();
 
             WorkspaceMetadataEnricher.Enrich(status, dbPath);
+            WorkspaceMetadataEnricher.Enrich(analysis, dbPath);
 
             Assert.Equal(staleFullScanHead, status.IndexedHeadCommit);
             Assert.False(status.WorktreeHeadChanged);
             Assert.Equal(0, status.CommitsAheadOfIndexedHead);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void Enrich_SymbolAnalysisResult_UsesLatestIndexedHeadShaBeforeFullScanHeadForWorktreeHeadChanged()
-    {
-        var (projectRoot, dbPath, originalHead) = CreateDirtyGitProject("cdidx_workspace_analysis_current_head");
-        try
-        {
-            var staleFullScanHead = new string('c', 40);
-            using (var db = new DbContext(dbPath))
-            {
-                var writer = new DbWriter(db.Connection);
-                writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, staleFullScanHead);
-                writer.SetMeta(DbContext.IndexedHeadShaMetaKey, originalHead);
-            }
-
-            var analysis = new SymbolAnalysisResult();
-
-            WorkspaceMetadataEnricher.Enrich(analysis, dbPath);
-
             Assert.Equal(staleFullScanHead, analysis.IndexedHeadCommit);
             Assert.False(analysis.WorktreeHeadChanged);
         }
@@ -386,7 +321,7 @@ public class WorkspaceMetadataEnricherTests
     }
 
     [Fact]
-    public void Enrich_StatusResult_PopulatesCommitsAheadWhenIndexedHeadShaIsAncestor()
+    public void Enrich_StatusResult_DistinguishesAncestorAndMissingIndexedHeadSha()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_workspace_ahead_count");
         try
@@ -412,25 +347,12 @@ public class WorkspaceMetadataEnricherTests
 
             Assert.Equal(projectRoot, status.ProjectRoot);
             Assert.Equal(2, status.CommitsAheadOfIndexedHead);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void Enrich_StatusResult_LeavesCommitsAheadNullWhenIndexedHeadShaIsMissing()
-    {
-        var (projectRoot, dbPath, _) = CreateDirtyGitProject("cdidx_workspace_ahead_no_sha");
-        try
-        {
-            var status = new StatusResult();
+            var legacyStatus = new StatusResult();
+            WorkspaceMetadataEnricher.Enrich(legacyStatus, dbPath);
 
-            WorkspaceMetadataEnricher.Enrich(status, dbPath);
-
-            Assert.Equal(projectRoot, status.ProjectRoot);
-            Assert.Null(status.CommitsAheadOfIndexedHead);
+            Assert.Equal(projectRoot, legacyStatus.ProjectRoot);
+            Assert.Null(legacyStatus.CommitsAheadOfIndexedHead);
         }
         finally
         {

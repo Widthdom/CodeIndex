@@ -979,8 +979,7 @@ public sealed class Caller
         }
         finally
         {
-            if (File.Exists(auditPath))
-                File.Delete(auditPath);
+            TestProjectHelper.DeleteFile(auditPath);
         }
     }
 

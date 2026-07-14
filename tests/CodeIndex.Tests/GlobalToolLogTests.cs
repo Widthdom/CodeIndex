@@ -37,8 +37,7 @@ public class GlobalToolLogTests
         }
         finally
         {
-            if (File.Exists(path))
-                File.Delete(path);
+            TestProjectHelper.DeleteFile(path);
         }
     }
 
@@ -295,8 +294,7 @@ public class GlobalToolLogTests
         finally
         {
             TestProjectHelper.DeleteDirectory(logRoot);
-            if (File.Exists(capturedLogPath))
-                File.Delete(capturedLogPath);
+            TestProjectHelper.DeleteFile(capturedLogPath);
         }
     }
 

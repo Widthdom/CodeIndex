@@ -102,12 +102,19 @@ jobs:
         shell: pwsh
         run: ./.github/scripts/configure-windows-test-host.ps1 -Workspace "${{ github.workspace }}"
 
-      - name: Set up .NET
+      - name: Set up .NET SDKs
+        if: ${{ !matrix.cross_compile }}
         uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0
         with:
           dotnet-version: |
             8.0.413
             9.0.301
+
+      - name: Set up cross-compile .NET SDK
+        if: matrix.cross_compile
+        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0
+        with:
+          dotnet-version: 9.0.301
       - name: Cache NuGet packages
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
@@ -125,9 +132,15 @@ jobs:
       # bump が公開アーティファクトに紛れ込まず release restore で気付ける。
       # 詳細は issue #1556 参照。
       - name: Restore dependencies
+        if: ${{ !matrix.cross_compile }}
         run: dotnet restore CodeIndex.sln --locked-mode
 
+      - name: Restore publish dependencies
+        if: matrix.cross_compile
+        run: dotnet restore src/CodeIndex/CodeIndex.csproj --locked-mode
+
       - name: Build
+        if: ${{ !matrix.cross_compile }}
         run: dotnet build CodeIndex.sln --configuration Release --no-restore
 
       - name: Test
@@ -184,17 +197,19 @@ jobs:
       # RestorePackagesWithLockFile=true. We deliberately do not pass
       # RestoreLockedMode=true here: publish for a new RID and trimming
       # (Microsoft.NET.ILLink.Tasks) legitimately add lock entries that did
-      # not exist at SLN-restore time, and the security guarantee against
-      # silent SQLitePCLRaw-style transitive drift is already enforced at
-      # the SLN restore above. See issue #1556 / DEVELOPER_GUIDE.md.
+      # not exist at the preceding locked restore (solution restore on native
+      # lanes, production-project restore on cross-compile lanes). The security
+      # guarantee against silent SQLitePCLRaw-style transitive drift is already
+      # enforced by that lane-appropriate restore. See issue #1556 / DEVELOPER_GUIDE.md.
       # publish が target RID 向けに走らせる runtime-specific restore は
       # Directory.Build.props の RestorePackagesWithLockFile=true により
       # lock ファイルで固定された版を解決対象とする。ここで
       # RestoreLockedMode=true を渡さないのは意図的で、publish 時に新規 RID と
-      # trimming（Microsoft.NET.ILLink.Tasks）が SLN restore 時にはなかった
+      # trimming（Microsoft.NET.ILLink.Tasks）が、直前の locked restore（native lane
+      # では solution、cross-compile lane では production project）時にはなかった
       # lock エントリを正当に追加するため。SQLitePCLRaw のような推移依存
-      # ドリフトに対する保証は上の SLN restore で確保済み。詳細は issue #1556 /
-      # DEVELOPER_GUIDE.md。
+      # ドリフトに対する保証は、その lane に対応する restore で確保済み。
+      # 詳細は issue #1556 / DEVELOPER_GUIDE.md。
       - name: Publish (self-contained)
         run: >
           dotnet publish src/CodeIndex/CodeIndex.csproj

@@ -7,11 +7,12 @@ namespace CodeIndex.Tests;
 public class BoundedHttpContentReaderTests
 {
     [Fact]
-    public async Task WriteToPrivateFileAsync_WritesContentWithOwnerOnlyMode()
+    public async Task WriteToPrivateFileAsync_WritesPrivateContentAndRejectsOverflow()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"cdidx-install-test-{Guid.NewGuid():N}.sh");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_install_content");
         try
         {
+            var path = TestProjectHelper.ProjectPath(projectRoot, "install.sh");
             await BoundedHttpContentReader.WriteToPrivateFileAsync(
                 new UnknownLengthContent(Encoding.UTF8.GetBytes("#!/bin/sh\nexit 0\n")),
                 path,
@@ -24,24 +25,12 @@ public class BoundedHttpContentReaderTests
                 var permissions = File.GetUnixFileMode(path) & PermissionBits;
                 Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, permissions);
             }
-        }
-        finally
-        {
-            if (File.Exists(path))
-                File.Delete(path);
-        }
-    }
 
-    [Fact]
-    public async Task WriteToPrivateFileAsync_RejectsStreamOverLimit()
-    {
-        var path = Path.Combine(Path.GetTempPath(), $"cdidx-install-test-{Guid.NewGuid():N}.sh");
-        try
-        {
+            var overflowPath = TestProjectHelper.ProjectPath(projectRoot, "overflow.sh");
             var ex = await Assert.ThrowsAsync<InvalidDataException>(() =>
                 BoundedHttpContentReader.WriteToPrivateFileAsync(
                     new UnknownLengthContent(Encoding.UTF8.GetBytes("12345")),
-                    path,
+                    overflowPath,
                     maxBytes: 4,
                     CancellationToken.None));
 
@@ -49,13 +38,12 @@ public class BoundedHttpContentReaderTests
         }
         finally
         {
-            if (File.Exists(path))
-                File.Delete(path);
+            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
     [Fact]
-    public async Task ReadAsByteArrayAsync_ReadsNormalUnknownLengthPayload_Issue3799()
+    public async Task ReadAsByteArrayAsync_ReadsUnknownLengthAndRejectsDeclaredOverflow_Issue3799()
     {
         var payload = Encoding.UTF8.GetBytes("normal payload");
 
@@ -65,11 +53,7 @@ public class BoundedHttpContentReaderTests
             CancellationToken.None);
 
         Assert.Equal(payload, bytes);
-    }
 
-    [Fact]
-    public async Task ReadAsByteArrayAsync_RejectsDeclaredLengthOverLimit()
-    {
         using var content = new ByteArrayContent([1]);
         content.Headers.ContentLength = 5;
 
@@ -80,7 +64,7 @@ public class BoundedHttpContentReaderTests
     }
 
     [Fact]
-    public async Task ReadAsByteArrayAsync_DoesNotPreallocateHugeDeclaredLength_Issue3964()
+    public async Task MemorySafety_AvoidsHugePreallocationAndClearsPooledBuffer_Issues3799_3964()
     {
         using var content = new DeclaredLengthContent([], int.MaxValue);
 
@@ -90,11 +74,7 @@ public class BoundedHttpContentReaderTests
             CancellationToken.None);
 
         Assert.Empty(bytes);
-    }
 
-    [Fact]
-    public void ClearSensitiveCopyBufferForTests_ClearsWholePooledBuffer_Issue3799()
-    {
         var buffer = Enumerable.Range(1, BoundedHttpContentReader.PooledCopyBufferSize)
             .Select(i => (byte)(i % 251))
             .ToArray();

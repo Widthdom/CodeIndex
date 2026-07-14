@@ -3,32 +3,11 @@ using System.Text.RegularExpressions;
 
 namespace CodeIndex.Tests;
 
-[Collection("SQLite pool sensitive")]
 public class EnvironmentAccessTests
 {
     private static readonly Regex DirectEnvironmentAccessPattern = new(
         @"(?<![A-Za-z0-9_])(?:System\.)?Environment\.GetEnvironmentVariables?\(",
         RegexOptions.CultureInvariant);
-
-    [Fact]
-    public void CdidxEnvironment_Push_DoesNotChangeProcessOnlyReads()
-    {
-        const string name = "CDIDX_ENV_ACCESS_TEST_4126";
-        using var env = EnvironmentVariableScope.Capture(name);
-        env.Set(name, "process");
-
-        using (CdidxEnvironment.Push(
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [name] = "scoped",
-            }))
-        {
-            Assert.Equal("scoped", CdidxEnvironment.GetEnvironmentVariable(name));
-            Assert.Equal("process", CdidxEnvironment.GetProcessEnvironmentVariable(name));
-        }
-
-        Assert.Equal("process", CdidxEnvironment.GetEnvironmentVariable(name));
-    }
 
     [Fact]
     public void ProductionCode_UsesCentralEnvironmentAccessors()
@@ -63,4 +42,28 @@ public class EnvironmentAccessTests
 
     private static string NormalizeRelativePath(string path)
         => path.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
+}
+
+[Collection("SQLite pool sensitive")]
+public class EnvironmentAccessMutationTests
+{
+    [Fact]
+    public void CdidxEnvironment_Push_DoesNotChangeProcessOnlyReads()
+    {
+        const string name = "CDIDX_ENV_ACCESS_TEST_4126";
+        using var env = EnvironmentVariableScope.Capture(name);
+        env.Set(name, "process");
+
+        using (CdidxEnvironment.Push(
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [name] = "scoped",
+            }))
+        {
+            Assert.Equal("scoped", CdidxEnvironment.GetEnvironmentVariable(name));
+            Assert.Equal("process", CdidxEnvironment.GetProcessEnvironmentVariable(name));
+        }
+
+        Assert.Equal("process", CdidxEnvironment.GetEnvironmentVariable(name));
+    }
 }

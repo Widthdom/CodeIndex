@@ -14,7 +14,7 @@ namespace CodeIndex.Tests;
 /// CodeIndexException と、その <c>Code / Category / Path / Hint</c> を一律に出す
 /// CLI / MCP フォーマッタのカバレッジ (#1580)。
 /// </summary>
-[Collection("SQLite pool sensitive")]
+[Collection("Console sensitive")]
 public class CodeIndexExceptionTests
 {
     private readonly JsonSerializerOptions _jsonOptions = new()
@@ -330,21 +330,24 @@ public class CodeIndexExceptionTests
 
     private static (string stdout, string stderr) CaptureConsole(Action body)
     {
-        var stdout = new StringWriter();
-        var stderr = new StringWriter();
-        var originalOut = Console.Out;
-        var originalErr = Console.Error;
-        try
+        lock (TestConsoleLock.Gate)
         {
-            Console.SetOut(stdout);
-            Console.SetError(stderr);
-            body();
+            var stdout = new StringWriter();
+            var stderr = new StringWriter();
+            var originalOut = Console.Out;
+            var originalErr = Console.Error;
+            try
+            {
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+                body();
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+                Console.SetError(originalErr);
+            }
+            return (stdout.ToString(), stderr.ToString());
         }
-        finally
-        {
-            Console.SetOut(originalOut);
-            Console.SetError(originalErr);
-        }
-        return (stdout.ToString(), stderr.ToString());
     }
 }

@@ -26,11 +26,15 @@ Use the full suite by default. Use targeted filters only while iterating locally
 - These test-only packages are separate from the production dependency rule in `src/CodeIndex`, which still allows only `Microsoft.Data.Sqlite` at runtime.
 - `FsCheck.Xunit` is reserved for property-based tests that assert universal invariants (never-throws contracts, idempotence, "output is parseable by downstream consumer") across randomly generated inputs. Use it to complement, not replace, the example-based `[Fact]` / `[Theory]` tests — pick FsCheck when the property is a universally quantified claim, and an example test when a specific concrete case is the contract.
 - Test parallelism: enabled by default across independent test classes. Tests that touch process-global state such as SQLite pool resets, environment variables, or current-directory overrides must use an explicit non-parallel collection, and tests that swap `Console.Out` / `Console.Error` must lock on `TestConsoleLock.Gate`.
-- CI runs the test project through `tests/CodeIndex.Tests/CodeIndex.Tests.runsettings`, enables VSTest blame crash and hang collection, applies a 45-minute session timeout plus 60-second xUnit long-running diagnostics, and reruns the suite once after an initial failure. If the retry passes, CI uploads `TestResults/flaky-retry.txt` with the TRX and blame artifacts so the run is treated as suspect instead of silently trusted. TRX telemetry summaries and test-result artifact uploads run only for failed or pass-on-retry lanes, not for clean first-pass success lanes; streamed test output is also written under `TestResults` only after a failed run needs upload/timeout inspection, and that failure-log directory is created only on the failure path. The telemetry summarizer runs with `--configuration Release` and may build its helper during failure diagnostics so every matrix lane can produce a TRX summary. XPlat Code Coverage collection is limited to the `ubuntu-24.04` / `net8.0` lane so every active CI lane still exercises the full suite without paying collector overhead. OS coverage runs on `net8.0`, the production CLI target, while `net9.0` compatibility coverage runs on `ubuntu-24.04` only. Test execution runs with `--no-build` after locked restore and Release build steps: the primary lane restores the full solution for audit and publish coverage, then builds `tests/CodeIndex.Tests/CodeIndex.Tests.csproj` for the matrix framework; non-primary lanes restore only that test project's matrix framework with `RestoreTargetFrameworks` before the same per-framework build. CI installs both the production `8.0.413` SDK and the pinned `9.0.301` SDK on every lane because `global.json` disables SDK roll-forward before target-framework-specific restore/build filtering can run. `CodeIndex.Tests.runsettings` is the single owner of the `TestResults` output directory; local `dev.sh coverage` follows that same ownership instead of passing a second results-directory argument. The `ubuntu-24.04` / `net8.0` lane no longer builds the test project's unused `net9.0` target; `net9.0` build coverage stays in the Ubuntu compatibility lane. It also uses `make lint` as the single formatting verifier. The NuGet cache key is based on `packages.lock.json` and `global.json` instead of every project file, with an OS-scoped restore key for partial cache reuse; locked restore still catches package-input drift, while test-only project edits no longer evict the package cache. The weekly mutation workflow also caches the pinned Stryker global tool and NuGet packages so scheduled mutation runs avoid reinstalling unchanged test tooling.
+- CI runs the test project through `tests/CodeIndex.Tests/CodeIndex.Tests.runsettings`, enables VSTest blame crash and hang collection, applies a 45-minute session timeout plus 60-second xUnit long-running diagnostics, and reruns the suite once after an initial failure. If the retry passes, CI uploads `TestResults/flaky-retry.txt` with the TRX and blame artifacts so the run is treated as suspect instead of silently trusted. TRX telemetry summaries and test-result artifact uploads run only for failed or pass-on-retry lanes, not for clean first-pass success lanes; streamed test output is also written under `TestResults` only after a failed run needs upload/timeout inspection, and that failure-log directory is created only on the failure path. The telemetry summarizer runs with `--configuration Release` and may build its helper during failure diagnostics so every matrix lane can produce a TRX summary. XPlat Code Coverage collection is limited to the `ubuntu-24.04` / `net8.0` lane so every active CI lane still exercises the full suite without paying collector overhead. OS coverage runs on `net8.0`, the production CLI target, while `net9.0` compatibility coverage runs on `ubuntu-24.04` only. Test execution runs with `--no-build` after locked restore and Release build steps: the primary lane restores the full solution for audit and publish coverage, then builds `tests/CodeIndex.Tests/CodeIndex.Tests.csproj` for the matrix framework; non-primary lanes restore only that test project's matrix framework with `RestoreTargetFrameworks` before the same per-framework build. The `net8.0` lanes retain both pinned SDKs because the 9.0 SDK selected by `global.json` builds the project while the 8.0 SDK supplies the test runtime. The `net9.0` compatibility lane installs only `9.0.301`, avoiding its unused 8.0 SDK/runtime download. `CodeIndex.Tests.runsettings` is the single owner of the `TestResults` output directory; local `dev.sh coverage` follows that same ownership instead of passing a second results-directory argument. The `ubuntu-24.04` / `net8.0` lane no longer builds the test project's unused `net9.0` target; `net9.0` build coverage stays in the Ubuntu compatibility lane. It also uses `make lint` as the single formatting verifier. The NuGet cache key is based on `packages.lock.json` and `global.json` instead of every project file, with an OS-scoped restore key for partial cache reuse; locked restore still catches package-input drift, while test-only project edits no longer evict the package cache. The weekly mutation workflow also caches the pinned Stryker global tool and NuGet packages so scheduled mutation runs avoid reinstalling unchanged test tooling.
+- The C# CodeQL lane only restores and builds; it installs the pinned 9.0 SDK selected by `global.json` without downloading an unused net8 runtime. Runtime test coverage remains in Build/Test and release workflows.
 - Keep the CI initial test run and its single retry routed through one workflow helper so logger, blame, and coverage arguments cannot drift. When a PowerShell helper returns the test exit code, keep streamed test output off the function success stream so assignments capture only the numeric exit code.
 - Coverage collection runs only on the initial primary-lane test attempt; the one flaky-classification retry reuses the same test arguments without rerunning the coverage collector.
 - Matrix test invocations use both `--no-build` and `--no-restore` because each lane completes its scoped locked restore and Release build before entering the shared test helper.
 - Primary-lane publish also uses `--no-build --no-restore`, reusing the production project output and dependency graph built through the Release test project.
+- Release cross-compile lanes skip the RID-agnostic solution build because they do not run tests and the self-contained RID publish necessarily performs the real build; native lanes retain the solution build before testing.
+- Release cross-compile lanes likewise use a locked production-project restore instead of restoring test and tool projects they never build; native test lanes retain the locked solution restore.
+- Release cross-compile lanes install only the repository-selected 9.0 SDK because they publish self-contained binaries and never execute the net8 test host; native lanes retain both pinned SDK lines.
 - Release workflow tests use `--no-build --no-restore` after the solution's locked restore and Release build so each runtime lane does not reevaluate dependencies.
 - Curated release-note generation caches the changelog tool lock file, performs one conditional locked restore, and runs the tool with `--no-restore`.
 - Keep package audit, primary-lane build/lint, coverage collection, coverage artifact upload, publish, and build artifact upload keyed to the matrix `primary_lane` value; define the lane set once with explicit matrix entries instead of recomputing or excluding combinations in later steps.
@@ -58,6 +62,54 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Use `AssertReferencesContainInContext(...)` when several reference names share the same kind and exact source context; keep direct predicates when context is only one part of a richer edge contract.
   Use `AssertReferencesDoNotContain(...)` for negative checks over one reference kind; retain direct predicates when the exclusion depends on container, context, line, or other metadata.
   `ReferenceExtractorTests.ExtractSymbolsAndReferences(...)` owns the common symbol-then-reference extraction setup for tests that need both lists; use it instead of repeating the two extractor calls when the fixture does not need a specialized path or workspace symbol setup, and discard the symbol tuple element with `_` instead of keeping an unused `symbols` local when the test only asserts references.
+  Dockerfile named-stage reference variants share one multi-stage fixture when ordinary, lowercase, platform-flagged, commented, hyphenated, and dotted forms can be distinguished by exact per-stage call counts; keep external base-image exclusions in that fixture as the negative control.
+  Dockerfile `COPY --from` ONBUILD and quoted-stage forms share a fixture with tagged and digest-qualified external-image controls; assert exact call counts for the genuine stages so false positives cannot hide beside positive edges.
+  Dockerfile RUN mount coverage keeps ordinary, multiple, quoted, and ONBUILD stage sources beside quoted-text and command-argument negatives in one fixture; exact per-stage counts make the negative controls observable without separate extraction passes.
+  Dockerfile ARG expansion coverage places braced, unbraced, conditional, nested, and escaped forms in one fixture with distinct ARG names; assert one reference per declared name so escaped controls cannot add hidden edges.
+  Shell and PowerShell reference fixtures keep a declared-function call and a top-level call together when validating function versus synthetic `<script>` containers, so each language is extracted once for both scope contracts.
+  Keep Swift's broad representative declaration fixture as the single owner of basic struct/function, macro, precedence-group, and operator presence; do not add narrow methods that repeat those same kind/name assertions without additional metadata.
+  Swift attribute and visibility modifiers such as `@available`, `@discardableResult`, and `package` share one declaration fixture when their contracts are independent kind/name recognition checks.
+  Swift extension coverage keeps escaped members, generic targets, nested generic conformance targets, and qualified targets with special members in one source when unique target names preserve failure diagnosis.
+  SQL MySQL-definer and PostgreSQL return-field extraction shares one mixed-dialect fixture with comment/string false-positive controls when distinct symbol names keep every contract independently assertable.
+  SQL qualified-name whitespace coverage keeps procedure, view, enum type, schema, sequence, extension, synonym, and other CREATE/ALTER kinds in one fixture so dot normalization is paid for once across the DDL matrix.
+  XAML `x:TypeArguments` coverage keeps scalar, type-markup, nested-generic, and multiline values in one resource dictionary, using distinct wrapped type names to retain failure diagnosis.
+  XAML type-object elements, type-property elements, and type markup extensions share one resource dictionary with form-specific type names so one reader traversal covers all three representations without ambiguous assertions.
+  XAML common event handlers live in the wrapped search-attribute fixture alongside multiline `x:Name` and `x:Key` values; use exact handler counts so ordinary and wrapped attribute forms share one extraction safely.
+  XAML `Binding`, `x:Bind`, `CompiledBinding`, and `ReflectionBinding` paths share one fixture with distinct leaf names; assert source/root and converter-parameter exclusions from the same collected property-name set.
+  XAML `ElementName` and `x:Reference` target forms share one Grid fixture; collect property names once and retain inline, object-element, property-element, and ignored-parameter assertions together.
+  XAML plain and `x:Static`-derived `x:Key` declarations live with static/dynamic resource lookups, including nested `Member={x:Type ...}` syntax, so key production and consumption share one resource dictionary.
+  JavaScript spaced and unspaced chained comparisons before plain templates share one function fixture with distinct operand names, preventing generic-tag false positives in one extraction.
+  JavaScript single-line `for...of` and `for await...of` plain-template negatives share synchronous and asynchronous functions in one source, asserting zero phantom `call of` edges once.
+  JavaScript multiline `for...of` and `for await...of` plain-template negatives likewise share one source and one phantom-call exclusion.
+  JavaScript for-of header negatives share NBSP synchronous/asynchronous and BOM synchronous forms in one source because they assert the same special-whitespace suppression.
+  JavaScript reserved-word member tags share one synchronous/asynchronous fixture and exact per-name call counts for `default`, `return`, `finally`, and `await`.
+  CSS selector-form coverage shares one fixture for selector lists, descendants, compound classes/IDs, standalone IDs, quoted-attribute lookalikes, and hex-color negatives, using unique names for exact diagnostics.
+  CSS animation shorthand and comma-separated `animation-name` coverage share one fixture with distinct keyframe names and a shared `none` exclusion.
+  SCSS quoted, URL, bare-URL, and media-qualified imports share one entry-point fixture with parameterized and parameterless mixin includes, asserting import and call edges together.
+  TypeScript runtime `typeof` negatives keep multiline assignment and inline arrow-function layouts in one source, excluding both operand names from type references at once.
+  TypeScript generic tagged-template coverage keeps ordinary and function-type generic arguments in one source with distinct tags and container assertions.
+  App-manifest DTD coverage combines local and external entity declarations in one document, preserving assembly extraction while asserting external targets never enter signatures.
+  Solidity's representative declaration/range fixture also owns comment and string false-positive controls on existing lines, avoiding a second extraction without shifting range assertions.
+  Python type-introspection helper coverage keeps bare and qualified `cast` / `assert_type` calls beside other helper APIs, using distinct target types and containers in one extraction.
+  Python f-string interpolation coverage keeps single-line, multiline, nested-expression, and format-specifier-followed calls in one fixture with exact per-container call sets.
+  Swift `.self`, `#selector`, and `#keyPath` expression coverage shares one fixture, asserting qualified roots and excluding instance/member tokens together, including every member segment in a multi-segment key path.
+  JavaScript semicolonless blockless-arrow boundaries share one source for following class, expression-plus-class, and CommonJS class-export forms, with distinct hidden/visible names and exact arrow end lines.
+  JavaScript direct and wrapper-call blockless-arrow class returns share one source with exact lambda ranges and distinct hidden class/member exclusions.
+  JavaScript callable-scope local-class coverage shares class methods, ordinary functions, and CommonJS function expressions in one source, with direct/class-expression forms and unique leak sentinels.
+  JavaScript nested local-class coverage shares IIFE, static block, object concise method, getter, and setter scopes in one source, retaining a visible sibling method as the boundary control.
+  JavaScript CommonJS class-expression coverage shares named exports, default inline/multiline/parenthesized/conditional assignments, and property exports in one source with unique members and an exact default-class count.
+  JavaScript and TypeScript CommonJS object-export APIs share `defineProperty`, `defineProperties`, and `Object.assign` forms in one theory fixture with unique exported, computed, dynamic, and non-export target names.
+  JavaScript and TypeScript `import.meta` module discovery shares `import.meta.resolve` and `new URL(..., import.meta.url)` positive/negative forms in one theory fixture with retained line and signature checks.
+  JavaScript and TypeScript worker-loading coverage shares `importScripts`, `Worker`, and `SharedWorker` variants in one theory fixture, retaining line/signature checks and dynamic/string/method/constructor negatives.
+  JavaScript and TypeScript browser module-registration coverage shares service-worker and worklet APIs in one theory fixture with scoped/options signatures and receiver/dynamic/string negatives.
+  JavaScript and TypeScript dynamic-import coverage keeps multiline literals, import attributes/assertions, static templates, and receiver/dynamic/string negatives in one theory fixture with form-specific line and signature checks.
+  JavaScript ordinary-string and template-literal brace masking shares one fixture with distinct classes and members, retaining exact container and range checks after each literal.
+  JavaScript regex-brace masking keeps direct literals, wrapped `if`/`else if`, plain `else`, `do`/`while`, and `finally` forms in one class fixture with a final sibling boundary and a block-comment method-shape negative.
+  JavaScript class-field arrow ASI coverage shares numeric and string field boundaries, computed-member continuation, class-closing literal termination, and final template literals in one fixture with distinct class/member names.
+  JavaScript default-class coverage keeps a named class beside anonymous direct-base and mixin-base forms, proving member retention without inventing `extends` as a class name in one extraction.
+  TypeScript default-class coverage extends the same shared fixture pattern to named, direct-base, mixin-base, and implements-only forms, retaining the anonymous `default` member container check.
+  TypeScript inline-class coverage uses one multi-method declaration for single-member recognition, sibling splitting, exact signatures, and shared class-container metadata.
+  TypeScript same-line sibling-class coverage keeps distinct and identical method-name cases in one source, using four class containers to preserve attribution diagnostics.
 - `FileIndexerTests.cs`, `FileIndexerContentLoadingTests.cs`, `FileIndexerTestSupport.cs`
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
 - `PathCompatibilityMatrixTests.cs`
@@ -121,6 +173,41 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Graph-command kind-semantics warnings reuse one graph-ready database across references, callers, and callees.
   Exact-zero graph hints use one combined Target/Caller fixture per scenario and iterate references, callers, and callees against it.
   C# query-range generic null-comparison regressions place equality and inequality forms in one indexed source when both assert the same absence of leaked enum references.
+  C# query-range collision forms for basic selection, directional ordering, keyword-named members, and object initializers share one indexed source when they assert the same empty inspect reference bundle.
+  C# inspect brace-range regressions place char-literal, raw-string, and verbatim-string forms in one indexed class and query each following method from that shared fixture.
+  C# generic query-range selectors share simple and tuple type arguments in one fixture, while generic type-pattern coverage shares designation and no-designation forms in another fixture.
+  C# switch-expression pattern-variable coverage keeps recursive, declaration, guard, and comment-trivia forms in one extractor fixture when their contract is the set of genuine enum-member references.
+  C# foreach-shadowing coverage shares embedded, same-line, and dangling-else forms in one source and distinguishes the surviving references by container.
+  C# lambda-parameter shadowing coverage shares simple, multiline, after-lambda, and same-line boundary forms in one extraction pass.
+  C# query range-variable members named `select` share plain, escaped, and trivia-separated access forms in one extractor source.
+  C# statement-pattern shadowing shares switch-case, conditional, recursive, multiline-recursive, and recursive-case forms in one extraction pass.
+  C# statement-boundary shadowing shares out-declaration, out-var, catch, and using scopes in one extractor source.
+  C# terminal-select generic type-pattern coverage shares designation and no-designation methods in one extraction pass.
+  C# terminal-select generic `as` null-comparison coverage places equality, inequality, and a later genuine enum reference in one extractor source.
+  C# using-alias coverage places enum and non-enum targets in separate namespaces of one extractor source and asserts only the enum target survives.
+  C# property-receiver shadowing shares instance, instance-from-static, and static-property contexts in one extraction pass.
+  C# indented lexical shadowing shares local, using-var, and property-accessor containers in one extractor source.
+  C# nullable suffix coverage before parenthesized terminal select shares scalar, tuple, and array-rank forms in one extraction pass.
+  C# query range-variable order-by coverage shares comma and directional-comma forms in one extractor source.
+  C# query range-variable scope coverage shares query-only, after-query, and query-argument boundaries in one extraction pass.
+  C# parenthesized keyword-named values before terminal select share parameter and local forms in one extractor source.
+  C# terminal-select generic-call coverage shares single, comma-separated, and tuple type arguments in one extraction pass.
+  C# order-by ternary coverage shares keyword-named local functions after greater-than, less-than, and bang operators in one extractor source.
+  C# awaited order-by coverage shares direct and comment-separated keyword-named local-function calls in one extraction pass.
+  C# throw-expression order-by coverage shares `select`- and `group`-named local functions in one extractor source.
+  C# parenthesized compound order-by coverage shares ternary and coalesce expressions in one extraction pass.
+  C# parenthesized query-terminal argument coverage shares select and group-by forms in one extractor source.
+  C# local-shadowing boundary coverage shares later declarations and nested-block exits in one extraction pass.
+  Property lexical-shadowing coverage keeps getter-only and getter/setter scope boundaries in the shared indented fixture.
+  Lambda parameter shadowing keeps parenthesized same-line and ordinary method-parameter forms in the shared lambda fixture.
+  C# lambda-scoped declaration-pattern coverage shares ordinary, nested, and static lambda forms in one extraction pass.
+  C# declaration-pattern statement coverage shares single-line if, multiline if, and multiline while forms in one extractor source.
+  C# parenthesized terminal-select boundary coverage shares uppercase-constant and generic-close predecessors in one extraction pass.
+  C# nested-query order-by coverage shares plain and parenthesized comma boundaries in one extractor source.
+  C# casted local-select order-by coverage shares object, simple, multiline, and lowercase-alias forms in one extraction pass.
+  Query range-variable order-by coverage keeps anonymous-type and object-initializer comma forms in the shared order-by fixture.
+  C# postfix-expression coverage before parenthesized terminal select shares null-forgiving and increment forms in one extraction pass.
+  Inspect and references command coverage applies the same switch-expression grouping so each surface builds one graph-ready database and validates results by container.
   Apply the same combined null-comparison fixture to inspect reference-bundle coverage instead of indexing each operator separately.
   Production-runtime switch relational-pattern coverage places less-than and greater-than methods in one source and pays one CLI indexing subprocess.
   Generic switch-arm guard and relational predecessors likewise share one production-runtime fixture and run only on the production `net8.0` target.
@@ -168,24 +255,40 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - `IndexCommandRunnerTests` and `FileIndexerTests` also cover `CSharpStaticInterfacePrepass` text, raw-byte, chunked raw-token, and streaming file contract probes. Keep byte-array, chunked, and file-level probe coverage aligned so the prepass can avoid whole-file allocation without losing UTF-8 / UTF-16 static-interface contract candidates.
 - Project-marker budget integration coverage overrides the directory budget to its smallest boundary and enumerates one child; do not materialize the production 8,192-directory cap merely to prove warning propagation.
 - `IndexWatchRunnerTests.RunCore_CancellationToken_StopsImmediately` and `RunCore_EmitsHumanFriendlyStartStop_WhenJsonDisabled`
-  exercise watch-loop startup and shutdown under redirected console output. They call the asynchronous watch core directly without prebuilding an unused index, cancel after its synchronous startup prefix emits the start event, and use a bounded shutdown wait; do not reintroduce index setup, dedicated threads, signal polling, or fixed sleeps for this path.
+  exercise watch-loop startup and shutdown under redirected console output. They call the asynchronous watch core directly without prebuilding an unused index, cancel after its synchronous startup prefix emits the start event, and use a bounded shutdown wait; do not reintroduce index setup, dedicated threads, signal polling, fixed sleeps, or process-wide SQLite pool resets for this path. The temp-project cleanup helper owns any platform-specific SQLite retry, so SQLite pool serialization is unnecessary; redirected process-wide console output still requires the console-sensitive collection.
+  The cancellation contract fixture uses only `git init` plus an explicit case-sensitive setting so `path_comparison` has a deterministic expected value without either a second repository-discovery probe after the watch loop exits or the commit-capable Git fixture's unrelated identity and signing setup.
 - `BackgroundTaskObserverTests`
   relies on `BackgroundTaskObserver`'s fault-only continuation contract: canceled
   tasks are awaited directly and do not need a post-cancellation fixed sleep to
   prove warnings were suppressed.
 - Cancellation-only timeout tests use an infinite cancellable delay so the fixture has no unrelated wall-clock completion path.
 - SQL diagnostic truncation tests cross the character cap with a minimal fixed-width suffix instead of constructing thousands of progressively longer `UNION` clauses.
+- SQLite scalar-reader diagnostics reuse one open in-memory connection and command across overflow and null-result contracts.
 - Oversized file guards create sparse length-only fixtures when content is irrelevant, avoiding a matching managed byte-array allocation.
 - Full-scan and scoped-update oversized-file warning tests share `TestProjectHelper.WriteSparseFile(...)` so both execution modes avoid 10 MiB fixture allocations.
 - Oversized ignore-file rejection uses the same sparse helper because the size preflight rejects the file before rule contents matter.
 - Per-line oversize detection uses four short physical lines; hundreds of repetitions add no boundary coverage because the contract is independent per line.
 - Captured-output overflow tests cross the character budget by one character unless a larger excess is itself part of the contract.
+- JavaScript and TypeScript same-line class scanning shares one fixture per language for inline members, sibling classes with distinct and repeated method names, statement prefixes, and callable-local class masking. Keep the individual container, signature, and hidden-local assertions in the shared extraction instead of adding a method for each layout.
+- Rust attribute reference coverage shares one extraction for direct and `cfg_attr` derive lists, multiline coordinates, and ordinary annotations. Rust mutable-reference coverage likewise keeps type positions, `dyn`/`impl`, and borrow-expression exclusions in one fixture.
+- TypeScript and Swift basic type-alias expansion shares heritage, generic-parameter exclusion, and mixed type/value-position coverage in one fixture per language; scope-shadowing fixtures remain separate because alias binding isolation is their contract.
+- TypeScript generic class-method coverage shares ordinary, function-type default/constraint, multiline-parameter, and inline layouts in one extraction. Class-field arrow coverage likewise shares numeric/string ASI boundaries, parameterized arrows, computed-member continuations, and the final field before the closing brace.
+- TypeScript re-export surface coverage shares named/type-only exports, star/namespace forms, `with`/`assert` attributes, and inline/multiline attribute braces in one extraction. Give each module and exported alias a unique name so one assertion set preserves every layout contract.
+- TypeScript ordinary type-query coverage keeps inline/multiline `typeof` and `keyof` type positions together with inline/multiline runtime `typeof` exclusions in one extraction. Keep import-member and dynamic-import mapping tests separate because their emitted reference counts and symbol mapping are distinct contracts.
+- Rust module-surface reference coverage shares `extern crate`, external and inline `mod`, grouped/aliased/raw-identifier `use`, and glob imports in one extraction. Preserve negative assertions for aliases, inline modules, and the glob token when extending it.
+- Rust associated-access reference coverage shares direct/path-qualified/turbofish calls, qualified trait calls, associated values, and `Self` exclusions in one extraction. Use distinct receiver and argument type names, and retain negative assertions for path segments, associated members, and `Self`.
+- Rust trait declaration coverage shares associated-type bounds/defaults in one extraction and generic/where/supertrait function bounds in another. Assert the exact function-trait occurrence count so every placement remains protected; extend these shared fixtures instead of adding a method for another placement with the same reference contract.
+- Rust constructor coverage shares struct literals, generic struct literals, path-qualified false positives, and tuple/enum constructors in one extraction. Keep declaration exclusions and the tuple-constructor-not-call assertion in that fixture.
+- TypeScript class-method range coverage shares regex literals following wrapped `if`/`else if`, direct `else`, `do`, and `finally` control-flow forms in one extraction, with a final sibling method proving that no body range leaked.
+- TypeScript semicolonless blockless-arrow boundary coverage shares following top-level class, expression statement, and CommonJS class-export layouts in one extraction. Preserve each lambda's exact source/body range and hidden-class exclusions when adding another terminator layout.
+- TypeScript tagged-template reference coverage shares member-access tags, generic tags (including function-type arrows), and tags nested inside interpolation holes in one extraction. Keep raw template-text exclusions alongside the positive call assertions.
 - Suggestion store and archive cap tests share one sparse-file helper instead of allocating arrays at either persisted-size limit.
 - Persistent-log rotation tests size existing log fixtures through `FileStream.SetLength(...)` rather than allocating a 1 MiB zero buffer.
 - JSON-depth boundary fixtures use fixed-width character strings instead of `Enumerable.Repeat` pipelines for repeated brackets.
 - CSV entry-cap tests share `TestProjectHelper.RepeatCsvEntry(...)` across index and query parsers so boundary construction stays consistent.
 - Raw FTS operator boundary tests reuse the same joined-entry builder with their grammar-specific separators.
 - Synchronized console-write coverage uses the smallest repeated slow-writer workload that still exercises both concurrent producers; do not scale iteration counts as a stress test.
+- `TestDeterminism.RunConcurrentlyAsync(...)` starts gate-waiting workers as dedicated long-running tasks. Do not move them back to `Task.Run`: blocked workers can starve the shared pool before the final worker reaches the gate, turning Windows runner load into a five-second false timeout and a full-suite retry.
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
   is a coarse runaway guard for the real `InstallScriptTests.cs` C# extraction fixture. Its wall-clock budget is intentionally broader than a benchmark so slower or noisy CI hosts do not fail the suite for ordinary variance.
 - `SymbolExtractorTests.Extract_JavaScriptLargeExportedObjectLiteralProperties_CompletesWithinPracticalBudget` and `Extract_CSharp_ReferenceExtractorFixture_CompletesWithinPracticalBudget`
@@ -193,6 +296,74 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - `ReferenceExtractorTests.Extract_CSharpLargePlainCallFile_CompletesWithinPracticalBudget`
   is a broad runaway guard for high-volume C# reference extraction on ordinary call lines. Treat its budget as a regression tripwire, not a benchmark target; keep it wide enough for noisy CI unless a focused optimization change justifies tightening it.
 - Broad extractor `*CompletesWithinPracticalBudget` runaway guards run only on the primary `net8.0` test target. Keep focused functional extractor tests cross-target, but do not duplicate the large-fixture budget guards across every target framework unless the guard is specifically proving a target-framework-specific contract.
+- C# reflection-name extraction coverage keeps literal, constant-concatenation, dynamic, comment, and string-decoy cases in one source fixture so those parser boundaries share one symbol/reference pass.
+- C# BOM extraction keeps a simple leading-BOM import fixture plus one mixed-newline fixture that simultaneously covers leading and mid-file BOM handling across CRLF, bare CR, and LF boundaries; do not repeat separate extraction passes for newline subsets already present in the mixed fixture.
+- C# lambda-capture coverage keeps positive enclosing-local capture, parameter shadowing, and same-named-method isolation in one source fixture; a single capture assertion proves the negative regions did not leak.
+- Escaped-brace coverage for regular and verbatim interpolated C# strings shares one extraction fixture because both variants assert the same phantom-call exclusion.
+- Direct and nested interpolations inside C# raw strings share one source fixture and one extraction pass while retaining distinct container assertions.
+- Generic C# attribute classification and custom type-argument references share one fixture across assembly-targeted, single-line, and multi-line forms.
+- Nested generic attribute forms extend that shared fixture instead of running a second parser pass solely for deeper angle-bracket nesting.
+- No-argument parameter attributes on methods, delegates, and lambdas share one C# fixture because all three exercise the same section-local parenthesis-depth rule.
+- Argument-bearing parameter attributes share one method fixture for inline and line-broken declaration layouts.
+- Direct and `global::` static type qualifiers share one C# fixture while retaining per-container reference assertions.
+- Static qualifiers in using statements and field access share one consumer fixture and extraction pass.
+- Namespace-qualified and Pascal-cased instance-member chains share one qualifier fixture with a rightmost static type reference, so positive and negative qualifier outcomes are checked after one parse.
+- Qualified C# type declarations and cast/generic expressions share one fixture because both exclude namespace segments from call references.
+- C# doc-cref masking around delimited-comment markers shares one fixture across a raw string after comment close, raw-string content, and verbatim-string content.
+- C# constructor-chain coverage shares `this`, `base`, and cross-line initializers in one class hierarchy and distinguishes rewritten targets by constructor container.
+- C# record constructor-chain coverage shares inline, multiline, braced, and same-line-body header layouts in one fixture while preserving per-record attribution checks.
+- C# 12 primary-constructor coverage shares class, struct, generic, split-line, and same-line-body layouts in one fixture, with distinct base names preserving case-specific diagnostics.
+- C# constructor base-target coverage shares generic, interface-list, nested-generic, multiline, and constrained layouts in one fixture and asserts each rewritten edge by its unique terminal type.
+- C# multiline member attribution shares expression-bodied method and property layouts, Allman/same-line braces, and intervening block comments in one fixture, using unique member containers for assertions.
+- Python `isinstance`/`issubclass` runtime type checks share single-type and tuple forms in one module fixture, with function containers retaining case-level assertions.
+- Python class-header type references share single-base, multiple-base, and metaclass forms in one module fixture, distinguished by class container.
+- Python annotation coverage shares direct and generic return, parameter, and local-variable forms in one module fixture, with function containers preserving each assertion.
+- Python typing-factory coverage shares `TypeAlias`, `NewType`, bounded `TypeVar`, and constrained `TypeVar` declarations in one module fixture with unique target types.
+- Python advanced-typing coverage shares multiline/commented `TypeVar`, `ParamSpec`, callable annotations, variadic tuple unpacking, and literal unions in one logical-header fixture with unique type names.
+- Python type-introspection helper coverage shares direct/qualified `get_type_hints`, dataclass/attrs field lookup, and Pydantic `TypeAdapter` in one module fixture with unique targets.
+- Python exception type-reference coverage shares bare/chained raises, single/tuple except clauses, `pytest.raises`, and `contextlib.suppress` in one module fixture.
+- Python f-string masking shares single-line, multiline-literal, and nested-string-brace interpolation forms in one module fixture with distinct call containers.
+- Python keyword filtering shares cross-language keyword-like calls with `raise(...)` and `yield` syntax in one module fixture, retaining positive inner-call checks.
+- Python class-property symbol coverage shares annotated/assigned attributes plus slots, augmented slots, match args, and annotations dictionaries in one module fixture.
+- Python property-decorator symbol coverage shares cached, accessor/setter/deleter, and direct/qualified abstract decorators in one module fixture.
+- Python static-import symbol expansion shares aliases, imported names, qualified from-import names, and dotted prefixes in one module fixture.
+- Python package `__all__` export coverage shares assignment, append, inline extend, and split-line extend mutations in one qualified `__init__.py` fixture.
+- Python package-import coverage shares local/external aliases, current-package imports, relative module members, and parent-package members in one `__init__.py` fixture.
+- Python unclosed multiline-import coverage reuses one assertion path for EOF and following-code cases, reducing duplicated test setup while retaining both parses.
+- Python basic symbol coverage shares synchronous/asynchronous functions, assigned lambdas, and classes in one module fixture.
+- Python triple-quoted-string coverage shares the leading module-docstring heading with double/single/raw fixture masking in one extraction.
+- Ruby loading/dependency DSL coverage shares `require`, `require_relative`, `load`, `gem`, and `autoload` in one fixture with container-specific target checks.
+- Ruby metaprogramming declaration coverage shares aliases, constant visibility, and `module_function` exports in one fixture while suppressing DSL keywords.
+- Ruby Rails model/schema DSL coverage shares enum, table creation, typed attributes, serialization, composed values, and nested attributes in one fixture with target/option separation.
+- Ruby exception coverage shares rescue clauses, Rails `rescue_from`, and parenthesized `raise` syntax in one fixture while retaining exception targets and suppressing control/option tokens.
+- Ruby Rails command-target coverage shares associations, validation, callbacks, and `class_name` options in one fixture while excluding keyword-option tokens.
+- Ruby type-composition coverage shares inheritance, mixin/using targets, contextual control keywords, and refinements in one fixture with container-specific references.
+- Ruby call-syntax coverage shares no-parentheses commands, brace blocks, and `do`/`end` blocks in one fixture while retaining container attribution.
+- Ruby framework subject DSL coverage shares RSpec `describe` constants and Rails route resource symbols in one fixture while suppressing DSL/option keywords.
+- Go composite-literal coverage shares generic, array/slice, and map forms in one function fixture with unique element/key/value types.
+- Go type-conversion coverage shares composite, parenthesized pointer/qualified, and parenthesized composite forms in one function fixture with unique converted types.
+- Go method-expression coverage shares plain, pointer, qualified, and generic receivers in one fixture while retaining value-expression negatives.
+- Go type-set coverage shares interface unions and standalone composite approximations in one fixture while retaining bitwise-expression negatives.
+- Go generic type-argument coverage shares called and standalone instantiation forms in one fixture while retaining indexed-value negatives.
+- Go struct-field coverage shares embedded, multi-name, generic, and inline fields in one file fixture while retaining field-name negatives.
+- Go function-signature coverage shares literal, declared function type, function-valued field/variable, and inline interface forms in one file fixture.
+- Go generic-constraint coverage shares function and type declarations in one file fixture.
+- Go value-declaration coverage shares multi-name and generic declarations with local inference in one file fixture.
+- Go method-signature coverage shares concrete receiver and interface member forms in one file fixture.
+- Go runtime-type-check coverage shares direct assertions and type-switch cases in one function fixture while retaining value-switch negatives.
+- Go channel/builtin-type coverage shares directional declarations, named channel types, and `make`/`new` allocations in one file fixture.
+- Go symbol function coverage shares regular/receiver/generic functions and an assigned function literal in one extraction fixture.
+- Go import-symbol coverage shares single/grouped imports, build directives, and cgo classification in one file fixture.
+- Go type-symbol coverage shares named, alias, struct, interface, and generic declarations in one file fixture.
+- Go declaration-symbol coverage shares grouped types, top-level const/var forms, blank identifiers, and local negatives in one file fixture.
+- Go embedded-type symbol coverage shares generic struct fields and interface members in one file fixture with container attribution.
+- Go function-like symbol coverage shares qualified receiver containers and branch labels in one file fixture while excluding switch keywords.
+- Consolidated Python/Go extractor fixtures retain exact symbol/reference cardinality, including complete per-container result sets, and source-line assertions when those were part of the original regression contract.
+- Assembly reference coverage shares direct call/branch forms and tab-separated decorated indirect-target negatives in one exact-cardinality fixture.
+- Solidity reference coverage shares inheritance whitespace variants, library/modifier/event/interface edges, and comment/string negatives in one fixture.
+- Terraform reference coverage shares resource/module/data traversals and raw `var`/`local` object references in one exact-per-name fixture.
+- Language masker copy-on-write coverage pairs unchanged-array reuse and required-clone behavior within the same Lua and Solidity test methods.
+- COBOL target-statement coverage places SQL/CICS, report, sort, queue, file, literal, and external-call variants in one program and checks exact grouped edge counts.
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). Its publish smoke disables NuGet vulnerability auditing because package advisory validation is covered by the normal build/test workflow's package vulnerability check, not by this runtime serialization test. It is reported as skipped on macOS arm64 while SDK/ILLink can crash before exercising `cdidx` (#2586). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
@@ -243,7 +414,8 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Keep the converted coverage boolean in a local whose name differs from the case-insensitive `CollectCoverage` string parameter; otherwise PowerShell coerces the boolean back to a string before invoking typed helpers.
   Pass the repository-root `TestResults` directory explicitly to `dotnet test`; runsettings paths can otherwise resolve relative to the test project, separating TRX and coverage output from workflow telemetry and artifact paths.
   Give the initial attempt and flaky-classification retry distinct TRX filenames so a passing retry cannot overwrite the failure evidence that triggered it.
-  Summarize TRX telemetry on successful and failed matrix lanes so optimization work has comparable slow-test evidence; keep result and dump artifact uploads failure-gated to avoid unnecessary transfer time.
+  Collect crash diagnostics on the initial attempt only. The flaky-classification retry reuses that evidence and skips the crash collector, while retaining blame-hang and its five-minute kill bound in case the retry hangs.
+  Summarize TRX telemetry only when the test helper reports a failed initial attempt (including pass-on-retry); clean first-pass lanes and jobs that failed before testing should not pay for a second project launch and TRX parse. Keep result and dump artifact uploads failure-gated to avoid unnecessary transfer time.
 - `.github/scripts/configure-windows-test-host.ps1`
   The `dotnet.yml` and `release.yml` Windows lanes share TMP/TEMP pinning and Defender exclusion setup here so both workflows keep the same test-host performance assumptions. Update `CiWorkflowTests` when changing this script or its workflow call contract.
 - The `dotnet.yml` SDK setup has one conditional retry for transient SDK download failures. Keep the first attempt marked `continue-on-error` only while the retry is guarded by its failed outcome, so a second failure still fails the job.
@@ -282,7 +454,46 @@ Use the inventory below before adding or moving a test class:
 - SQLite pool resets, direct `SqliteConnection.ClearAllPools()` calls, process current-directory changes, or process-global environment variable mutation: put the class in the `SQLite pool sensitive` non-parallel collection.
 - Environment variables: use `EnvironmentVariableScope.Capture(...)` so setup failures and assertion failures restore the original values through one cleanup path.
 - `Console.Out` or `Console.Error` replacement: lock `TestConsoleLock.Gate` around the whole capture/swap window.
+- Console-only test classes do not need the SQLite-sensitive non-parallel collection once every capture/swap window, including writer-disposal checks, is protected by `TestConsoleLock.Gate`.
+- Pure i18n resolution, self-locking JSON-envelope capture, and isolated LSP request/budget fixtures should remain outside the SQLite-sensitive collection; owning a temporary DB is not itself process-global state when the context is disposed before helper cleanup.
+- Reader issue fixtures with per-instance DB ownership and external-process fixtures with per-instance directories are likewise parallel-safe when their `Dispose` paths release those resources through the shared helpers.
+- Schema-constraint fixtures dispose every `DbContext`, connection, command, and reader before directory cleanup; do not add unconditional pool resets that serialize these independent schema checks.
+- SQLite connection-string and command-policy tests are parallel-safe when every in-memory connection and command is instance-owned and disposed; referencing `Microsoft.Data.Sqlite` alone is not a reason to join the SQLite-sensitive collection.
+- Cross-platform path matrices can run in parallel when cache seeding is guarded by `PathCasingTestLock` and every filesystem/git fixture owns a unique temporary workspace.
+- Exception-formatting contract tests should guard their shared console helper with `TestConsoleLock` and remain parallelizable; their in-memory SQLite retry probes do not mutate the process pool.
+- Split pure pre-cancelled import and bounded-stream checks from import-replacement fixtures that mutate test-only hooks, so only the hook-owning class remains serialized.
+- Release workflow and package-normalizer tests can run outside the SQLite-sensitive collection: xUnit keeps methods in their single class sequential, so its two scoped durability-hook probes cannot overlap each other.
+- Database-diff fixtures own independent left/right projects, lock console capture, and keep their sole row-budget override within the same sequential xUnit class; they do not require process-wide SQLite serialization.
+- Keep `SuggestionStore` environment-boundary and configured-pruning cases in their small non-parallel fixture; hashing, deduplication, archive, and ordinary persistence cases own isolated directories and should remain parallelizable.
+- Separate pure `ProcessStartInfo` construction contracts from subprocess-environment filtering tests; only the latter mutate the parent process environment and require the non-parallel collection.
+- Keep freshness diagnostic classification parallel; isolate only the stamped-case probe test that temporarily replaces `GitHelper` and `FileIndexer` test hooks.
+- Production source-policy scans for direct environment access are read-only and parallel-safe; isolate the separate `CdidxEnvironment` mutation contract that changes a real process variable.
+- The reflection-only SQLite collection registration contract is parallel-safe; keep only fixture lifecycle tests that replace the global pool-clear callback in the sensitive collection.
+- Isolate config CLI cases that change current directory or real environment variables; ordinary config parsing and validation uses injected environment readers and independent temporary roots, so the main suite remains parallelizable.
+- JSON API-version fixtures use locked console capture and scoped project cleanup; deleting the project before an unconditional pool reset makes that reset both redundant and too late, so keep this contract suite parallelizable.
+- Golden JSON snapshot fixtures use the non-parallel console-sensitive collection because empty stderr is part of their contract, while retaining per-instance database cleanup; they should not pay a process-wide pool reset after each of the status, search, references, impact, and excerpt snapshots.
+- Extractor plugin-registry fixtures share that console-sensitive collection because rejected pattern configs emit diagnostics through the process-wide stderr writer.
+- Suites that capture, replace, or intentionally close process-wide console writers use the same console-sensitive collection; removing SQLite pool cleanup does not make console mutation parallel-safe.
 - Temporary repositories and files: create them through `TestProjectHelper` when practical, and do not depend on user-level git config.
+- MCP unit fixtures that instantiate a real server should place its database inside a scoped temporary project and delete the project after server disposal instead of leaving a standalone database in the system temp directory.
+- MCP audit fixtures should co-locate the database, active log, and rotated logs under one temporary project so one resilient directory cleanup replaces per-file cleanup lists.
+- DB lifecycle fixture disposal should call the resilient shared file helper directly after releasing contexts and exclusive pool ownership; do not wrap it in a second catch-all that hides exhausted cleanup retries.
+- Workspace active-status transitions should reuse one manifest/config fixture for inactive, active, missing, and stale assertions instead of rebuilding and re-selecting the same workspace for four independent tests.
+- Workspace metadata result-shape parity should enrich status, map, and analysis objects from one dirty Git fixture instead of initializing and committing three identical repositories.
+- Persisted-HEAD drift and recovery assertions should update metadata within one Git fixture rather than creating a second repository merely to test the matching state.
+- Latest-indexed-HEAD precedence should be asserted for status and analysis result shapes from one seeded repository rather than duplicating identical Git and database setup.
+- Commits-ahead ancestor and missing-stamp behavior should share the same multi-commit repository; the missing case only requires a fresh result object without `IndexedHeadSha`.
+- Shared file-URI escaping and LSP round-trip parity should use one path/root case rather than duplicating equivalent percent-encoding setup in separate tests.
+- No-timeout sentinel coverage should exercise zero and infinite budgets in one contract test; both follow the same caller-cancellation path and do not need duplicate scope setup.
+- Bounded HTTP private-file success and overflow cases should share one temporary project and use distinct child paths instead of allocating and cleaning two standalone system-temp files.
+- Bounded HTTP memory-safety coverage checks huge declared-length allocation avoidance and whole pooled-buffer clearing in one contract test.
+- Environment-variable scope restoration should cover present and missing originals in one serialized test, avoiding duplicate process-variable setup and runner cases.
+- Pure process-launch builder contracts should verify base flags, invariant arguments, worker payloads, and UTF-8 redirects in one test instead of paying four runner cases for allocation-only assertions.
+- SQLite sensitive-fixture initialization, disposal, and boundary clearing should share one replaced callback scope; the boundary assertion can follow lifecycle assertions without rebuilding global hook state.
+- SQLite connection policy builder coverage should verify connection strings, command timeout, and status diagnostics in one test; these allocation-only checks do not need three runner cases.
+- SQLite command parameter builders should verify primitive types, stable dates, and copied parameter shapes on one command fixture rather than allocating three independent test cases.
+- Timeout-origin coverage should exercise timer cancellation and caller cancellation sequentially in one async test so the distinguishing assertion does not duplicate runner setup.
+- Bounded in-memory HTTP reads should cover unknown-length success and declared-length rejection in one async contract rather than splitting two adjacent buffer-policy assertions.
 - Long-running or performance-oriented tests: keep them skipped by default or give them broad deterministic budgets; if CI reports them in xUnit long-running diagnostics, first check runner load before tightening thresholds.
 - When a response-size algorithm needs a large production ceiling, prefer a narrowly scoped test-only budget override and a small representative payload; restore process-global overrides in `finally` and keep the suite non-parallel.
 - Pagination and suppression fixtures should cross the fetched-window boundary with the fewest additional records needed to distinguish full totals from the returned page.
@@ -311,7 +522,9 @@ Prefer the existing helper before writing new setup code.
 - Apply the same direct-call rule to local `DeleteDirectory` wrappers that only delegate to `TestProjectHelper.DeleteDirectory`.
 - Do not reimplement recursive temp-directory cleanup in individual test files, including report/output bundle workspaces, changelog tool repositories, duplicate-preflight fixtures, file-indexer skipped-root and symlink fixtures, import/export archive and rollback fixtures, configured pattern and out-of-tree language workspaces, audit/metrics write-target directories and private/global log workspaces, program-runner extractor/cache/trace log workspaces, temporary dotnet host fixtures, watch runner workspaces, DB purge/temporary cleanup workspaces, reader BOM fixtures, legacy-migration database workspaces, MCP indexing fixtures, suggestion-store and suggestion CLI fixtures, and small traversal/security fixtures; keep local wrappers as thin delegates to `TestProjectHelper.DeleteDirectory` when a shorter call keeps existing tests readable.
 - `DeleteFile(path)` retries standalone temp-DB cleanup and uses the same Windows-specific SQLite pool release fallback when pooled handles block deletion.
-- Prefer `DeleteFile(path)` for temp DB, lock, metadata, cache, script, and outside-fixture file cleanup instead of hand-written `File.Exists(...)` / `File.Delete(...)` pairs.
+- Standalone codec/metadata DB tests that dispose their `DbContext` before cleanup should rely on `DeleteFile(path)` instead of resetting every process SQLite pool; this keeps pure codec classes parallelizable while retaining the Windows retry fallback.
+- Error-taxonomy tests that only open a standalone corrupt DB through a command boundary follow the same rule; console capture stays protected by `TestConsoleLock`, but it does not require serializing the whole test class.
+- Prefer `DeleteFile(path)` for temp DB, lock, metadata, cache, script, HTTP download, audit/metrics log and file-to-directory transitions, filesystem case probes, MCP diagnostics, and outside-fixture file cleanup instead of hand-written `File.Exists(...)` / `File.Delete(...)` pairs.
 - When a test class already has a robust file cleanup wrapper that clears SQLite pools, route temporary DB cleanup through that wrapper and keep non-DB sidecars on `TestProjectHelper.DeleteFile`.
 - DB maintenance test files may keep thin local helpers such as `InitializeEmptyDb`, `ReleaseSqlitePools`, and `DeleteDbFile` when a class owns standalone `.db` files directly; keep those wrappers delegated to `DbContext`, `SqliteConnection.ClearAllPools()`, and `TestProjectHelper.DeleteFile` so pool-release intent remains explicit.
 - ページングや抑制の fixture は、返却ページと全件集計を区別できる最小限の追加レコードで fetch window の境界を超えてください。
@@ -359,6 +572,7 @@ Add or update tests whenever you change:
 - workspace freshness or trust metadata
 
 Prefer extending the closest existing `*Tests.cs` file. Create a new test file only when the area does not fit an existing one cleanly.
+Before adding a test method, check whether the scenario can live in the closest existing method and reuse its setup and execution. Combine related read-only variants when they assert one cohesive contract; keep separate methods when they require isolated mutable state, distinct discovery/skip identity, substantially different setup, or clearer failure diagnosis.
 For boundary tests, use the smallest fixture that still crosses the boundary. If the behavior only needs one page, chunk, cache, query-plan row, or offset overflow, do not scale synthetic data far past that point unless the larger size is part of the contract.
 
 ### CLI and console tests
@@ -446,11 +660,15 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - これらの test-only package は `src/CodeIndex` の本番依存ルールとは別であり、runtime 側は引き続き `Microsoft.Data.Sqlite` のみを許容する。
 - `FsCheck.Xunit` はランダム生成入力に対する普遍的不変条件（never-throws、idempotence、"出力が downstream consumer で parse 可能" 等）を表明する property-based テスト専用です。例ベースの `[Fact]` / `[Theory]` を置き換えるのではなく補完するもので、普遍量化された主張なら FsCheck、特定の具体ケースが契約なら例ベースという形で使い分けてください。
 - テスト並列実行: 独立したテストクラス間ではデフォルトで有効です。SQLite pool の解放、環境変数の変更、カレントディレクトリの上書きのような process-global 状態を触るテストは、明示的な non-parallel collection に入れてください。`Console.Out` / `Console.Error` を差し替えるテストは `TestConsoleLock.Gate` で lock してください。
-- CI は `tests/CodeIndex.Tests/CodeIndex.Tests.runsettings` 経由でテストプロジェクトを実行し、VSTest の blame crash / hang 収集、45分のセッションタイムアウト、60秒の xUnit long-running 診断を有効にします。初回失敗時は suite を1回だけ再実行し、再実行で成功した場合は TRX / blame artifact と一緒に `TestResults/flaky-retry.txt` を upload して、その実行を疑わしい flaky run として扱います。TRX telemetry summary と test-result artifact upload は失敗または retry 成功 lane だけで実行し、初回で clean に成功した lane では実行しません。stream された test output も、失敗後に upload / timeout inspection が必要な場合だけ `TestResults` 配下へ書き、failure log directory もその failure path でだけ作成します。telemetry summarizer は `--configuration Release` で実行し、failure diagnostics 中に必要なら helper を build するため、全 matrix lane で TRX summary を出せます。XPlat Code Coverage の収集は `ubuntu-24.04` / `net8.0` lane に限定し、すべての active CI lane で full suite を実行しつつ collector overhead を避けます。OS coverage は production CLI target の `net8.0` で実行し、`net9.0` compatibility coverage は `ubuntu-24.04` のみに絞ります。テスト実行は locked restore と Release build の後に `--no-build` で走らせます。primary lane は audit / publish coverage のため solution 全体を restore し、その後 `tests/CodeIndex.Tests/CodeIndex.Tests.csproj` を matrix framework 向けに build します。non-primary lane は同じ per-framework build の前に、`RestoreTargetFrameworks` でその test project の matrix framework だけを restore します。CI は production 用の `8.0.413` SDK と pinned `9.0.301` SDK を全 lane に入れます。`global.json` が SDK roll-forward を無効化しており、target framework 別の restore / build 絞り込みより前に SDK 解決が走るためです。`TestResults` 出力ディレクトリは `CodeIndex.Tests.runsettings` だけが管理します。ローカルの `dev.sh coverage` も同じ所有関係に従い、2 つ目の results-directory 引数は渡しません。`ubuntu-24.04` / `net8.0` lane では test project の未使用 `net9.0` target を build しません。`net9.0` build coverage は Ubuntu compatibility lane で維持します。また、formatting verifier は `make lint` だけを使います。NuGet cache key は全 project file ではなく `packages.lock.json` と `global.json` に基づき、OS 単位の restore key で partial cache reuse も許可します。package 入力の drift は locked restore で検出しつつ、テスト用 project だけの変更では package cache を失効させません。weekly mutation workflow も pinned Stryker global tool と NuGet package を cache し、変更のない test tooling を scheduled mutation run で再インストールしないようにします。
-- CI の初回テスト実行と1回だけの retry は同じ workflow helper 経由にし、logger、blame、coverage 引数が drift しないようにしてください。PowerShell helper がテストの exit code を返す場合は、stream されたテスト出力を関数の success stream に載せず、代入で数値の exit code だけを受け取れるようにします。
+- CI は `tests/CodeIndex.Tests/CodeIndex.Tests.runsettings` 経由でテストプロジェクトを実行し、VSTest の blame crash / hang 収集、45分のセッションタイムアウト、60秒の xUnit long-running 診断を有効にします。初回失敗時は suite を1回だけ再実行し、再実行で成功した場合は TRX / blame artifact と一緒に `TestResults/flaky-retry.txt` を upload して、その実行を疑わしい flaky run として扱います。TRX telemetry summary と test-result artifact upload は失敗または retry 成功 lane だけで実行し、初回で clean に成功した lane では実行しません。stream された test output も、失敗後に upload / timeout inspection が必要な場合だけ `TestResults` 配下へ書き、failure log directory もその failure path でだけ作成します。telemetry summarizer は `--configuration Release` で実行し、failure diagnostics 中に必要なら helper を build するため、全 matrix lane で TRX summary を出せます。XPlat Code Coverage の収集は `ubuntu-24.04` / `net8.0` lane に限定し、すべての active CI lane で full suite を実行しつつ collector overhead を避けます。OS coverage は production CLI target の `net8.0` で実行し、`net9.0` compatibility coverage は `ubuntu-24.04` のみに絞ります。テスト実行は locked restore と Release build の後に `--no-build` で走らせます。primary lane は audit / publish coverage のため solution 全体を restore し、その後 `tests/CodeIndex.Tests/CodeIndex.Tests.csproj` を matrix framework 向けに build します。non-primary lane は同じ per-framework build の前に、`RestoreTargetFrameworks` でその test project の matrix framework だけを restore します。`net8.0` lane は、`global.json` が選ぶ 9.0 SDK で project を build し、8.0 SDK が test runtime を供給するため、両方の pinned SDK を維持します。`net9.0` compatibility lane は `9.0.301` だけを導入し、未使用の8.0 SDK/runtime downloadを避けます。`TestResults` 出力ディレクトリは `CodeIndex.Tests.runsettings` だけが管理します。ローカルの `dev.sh coverage` も同じ所有関係に従い、2 つ目の results-directory 引数は渡しません。`ubuntu-24.04` / `net8.0` lane では test project の未使用 `net9.0` target を build しません。`net9.0` build coverage は Ubuntu compatibility lane で維持します。また、formatting verifier は `make lint` だけを使います。NuGet cache key は全 project file ではなく `packages.lock.json` と `global.json` に基づき、OS 単位の restore key で partial cache reuse も許可します。package 入力の drift は locked restore で検出しつつ、テスト用 project だけの変更では package cache を失効させません。weekly mutation workflow も pinned Stryker global tool と NuGet package を cache し、変更のない test tooling を scheduled mutation run で再インストールしないようにします。
+- C# CodeQL lane は restore と build だけを行うため、`global.json` が選ぶ pinned 9.0 SDK だけを導入し、未使用の net8 runtime を download しません。runtime test coverage は Build/Test と release workflow で維持します。
+- CI の初回テスト実行と1回だけの retry は同じ workflow helper 経由にし、logger、blame、coverage 引数が drift しないようにしてください。PowerShell helper がテストの exit code を返す場合は、stream された test output を関数の success stream に載せず、代入で数値の exit code だけを受け取れるようにします。
 - coverage collection は primary lane の初回 test attempt だけで実行し、flaky classification の1回だけの retry では同じ test 引数を再利用しつつ coverage collector を再実行しないでください。
 - matrix test invocation は shared test helper の前に各 lane の scoped locked restore と Release build が完了しているため、`--no-build` と `--no-restore` の両方を使ってください。
 - primary-lane publish も `--no-build --no-restore` を使い、Release test project 経由で build 済みの production project output と dependency graph を再利用してください。
+- release の cross-compile lane は test を実行せず、self-contained RID publish が実 build を必ず行うため、RID 非依存の solution build を省略する。native lane は test 前の solution build を維持する。
+- release の cross-compile lane は build しない test / tool project を復元せず、production project だけを locked restore する。native test lane は locked solution restore を維持する。
+- release の cross-compile lane は self-contained binary を publish し、net8 test host を実行しないため、repository が選択する9.0 SDK だけを install する。native lane はpinされた両 SDK lineを維持する。
 - release workflow の test も solution の locked restore と Release build 後に `--no-build --no-restore` を使い、runtime lane ごとの dependency 再評価を避けてください。
 - curated release-note生成はchangelog toolのlock fileをcacheし、conditional locked restoreを1回行ってからtoolを`--no-restore`で実行してください。
 - package audit、primary-lane build/lint、coverage の収集、coverage artifact upload、publish、build artifact upload は matrix の `primary_lane` 値に揃えてください。lane の組み合わせは明示的な matrix entry で一度だけ定義し、後続 step で再計算したり exclude したりしません。
@@ -478,6 +696,54 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   複数の reference name が同じ kind と完全一致 source context を共有する場合は `AssertReferencesContainInContext(...)` を使い、context がより詳細な edge contract の一部にすぎない場合は直接 predicate を維持します。
   1つの reference kind に対する否定チェックには `AssertReferencesDoNotContain(...)` を使い、container、context、line など他の metadata に依存する除外は直接 predicate を維持します。
   `ReferenceExtractorTests.ExtractSymbolsAndReferences(...)` は symbol 抽出から reference 抽出までの共通 setup を所有します。fixture が特殊な path や workspace symbol setup を必要としない場合は 2 つの extractor 呼び出しを繰り返さずこの helper を使い、reference だけを検証するテストでは未使用の `symbols` local を残さず symbol 側を `_` で捨ててください。
+  Dockerfile の named-stage reference variant は、通常、小文字、platform flag、comment、hyphen、dot 形式を stage ごとの厳密な call 数で区別できる場合、1つの multi-stage fixture を共有します。外部 base image の除外も negative control として同じ fixture に残します。
+  Dockerfile の `COPY --from` における ONBUILD と quote 付き stage 形式は、tag および digest 付き外部 image の control と fixture を共有します。正しい stage の call 数を厳密に検証し、正例 edge に紛れた false positive を見逃さないようにします。
+  Dockerfile の RUN mount coverage は、通常、複数、quote、ONBUILD の stage source と、quote 付き text および command argument の負例を1つの fixture に置きます。stage ごとの厳密な件数により、別々の抽出を行わず negative control を観測可能にします。
+  Dockerfile の ARG expansion coverage は、brace、brace なし、conditional、nested、escape 形式を、固有の ARG 名を持つ1つの fixture に置きます。宣言名ごとに1参照を厳密に検証し、escape の control が隠れた edge を追加できないようにします。
+  Shell と PowerShell の reference fixture は、function container と synthetic `<script>` container の区別を検証するとき、宣言済み function 内の call と top-level call を同居させ、各言語を両方の scope contract に対して1回だけ抽出します。
+  Swift の広範な代表 declaration fixture を、基本的な struct/function、macro、precedence group、operator の存在検証に対する唯一の正本とします。追加 metadata を検証せず同じ kind/name assertion を繰り返す狭いメソッドは追加しません。
+  Swift の `@available`、`@discardableResult`、`package` などの attribute / visibility modifier は、契約が独立した kind/name 認識である場合、1つの declaration fixture を共有します。
+  Swift extension coverage は、固有の target 名によって失敗診断を維持できる場合、escaped member、generic target、nested generic conformance target、special member を持つ qualified target を1つの source にまとめます。
+  SQL の MySQL definer と PostgreSQL return field 抽出は、固有の symbol 名で各契約を独立して検証できる場合、comment/string false-positive control を含む1つの mixed-dialect fixture を共有します。
+  SQL qualified-name の空白 coverage は、procedure、view、enum type、schema、sequence、extension、synonym などの CREATE/ALTER kind を1つの fixture に置き、DDL matrix 全体の dot normalization を1回の抽出で検証します。
+  XAML の `x:TypeArguments` coverage は、scalar、type markup、nested generic、multiline の値を1つの resource dictionary に置き、wrapped type には固有名を使って失敗診断を維持します。
+  XAML の type-object element、type-property element、type markup extension は、形式ごとに固有の型名を持つ1つの resource dictionary を共有し、曖昧な assertion なしで3表現を1回の reader traversal で検証します。
+  XAML の common event handler は、multiline の `x:Name` / `x:Key` 値とともに wrapped search-attribute fixture に置きます。handler の厳密な件数を使い、通常属性と wrapped 属性の形式が1回の抽出を安全に共有するようにします。
+  XAML の `Binding`、`x:Bind`、`CompiledBinding`、`ReflectionBinding` path は、固有の leaf 名を持つ1つの fixture を共有します。同じ property-name 集合から source/root と converter-parameter の除外も検証します。
+  XAML の `ElementName` と `x:Reference` target 形式は1つの Grid fixture を共有します。property 名を一度だけ収集し、inline、object-element、property-element、ignored parameter の assertion をまとめて維持します。
+  XAML の plain および `x:Static` 由来の `x:Key` declaration は、nested `Member={x:Type ...}` 構文も含めて static/dynamic resource lookup と同居させ、key の生成と利用を1つの resource dictionary で検証します。
+  JavaScript の plain template 前にある空白付き・空白なしの chained comparison は、固有の operand 名を持つ1つの function fixture を共有し、generic tag の false positive を1回の抽出で防ぎます。
+  JavaScript の single-line `for...of` / `for await...of` plain-template 負例は、同期・非同期 function を1つの source に置き、phantom `call of` がゼロであることを1回だけ検証します。
+  JavaScript の multiline `for...of` / `for await...of` plain-template 負例も1つの source と1つの phantom-call 除外を共有します。
+  JavaScript の for-of header 負例は、同じ特殊空白抑制を検証する NBSP 同期・非同期形と BOM 同期形を1つの source で共有します。
+  JavaScript の予約語 member tag は、`default`、`return`、`finally`、`await` の名前別 call 数を厳密に検証する同期・非同期 fixture を共有します。
+  CSS selector-form coverage は、selector list、descendant、compound class/ID、standalone ID、quoted-attribute の類似文字列、hex-color 負例を、厳密に診断できる固有名付きの1 fixture で共有します。
+  CSS animation shorthand と comma-separated `animation-name` coverage は、固有の keyframe 名と共通の `none` 除外を持つ1 fixture を共有します。
+  SCSS の quoted、URL、bare-URL、media-qualified import は、引数あり・なしの mixin include と1つの entry-point fixture を共有し、import と call edge を同時に検証します。
+  TypeScript runtime `typeof` 負例は、multiline assignment と inline arrow-function の配置を1つの source に置き、両 operand 名を type reference から一度に除外します。
+  TypeScript generic tagged-template coverage は、通常型引数と function-type 型引数を固有 tag・container assertion 付きの1 source で共有します。
+  App-manifest DTD coverage は local/external entity declaration を1 document にまとめ、assembly 抽出を維持しつつ external target が signature に入らないことを検証します。
+  Solidity の代表 declaration/range fixture は既存行上の comment/string false-positive control も担当し、range assertion をずらさず2回目の抽出を省きます。
+  Python type-introspection helper coverage は bare/qualified `cast` / `assert_type` を他の helper API と同居させ、固有 target type と container を1回の抽出で検証します。
+  Python f-string interpolation coverage は single-line、multiline、nested-expression、format-specifier 後の call を、container 別 call 集合を厳密に検証する1 fixture で共有します。
+  Swift の `.self`、`#selector`、`#keyPath` expression coverage は1 fixture を共有し、multi-segment key path の全 member segment を含め、qualified root と instance/member token の除外をまとめて検証します。
+  JavaScript の semicolonless blockless-arrow boundary は、後続 class、expression＋class、CommonJS class-export 形を、固有 hidden/visible 名と厳密な arrow end line を持つ1 source で共有します。
+  JavaScript の direct/wrapper-call blockless-arrow class return は、厳密な lambda range と固有 hidden class/member 除外を持つ1 source を共有します。
+  JavaScript callable-scope local-class coverage は、class method、通常 function、CommonJS function expression の direct/class-expression 形と固有 leak sentinel を1 source で共有します。
+  JavaScript nested local-class coverage は IIFE、static block、object concise method、getter、setter scope を1 source で共有し、visible sibling method を境界 control として残します。
+  JavaScript CommonJS class-expression coverage は named export、default inline/multiline/parenthesized/conditional assignment、property export を、固有 member と厳密な default-class 件数を持つ1 source で共有します。
+  JavaScript/TypeScript CommonJS object-export API は `defineProperty`、`defineProperties`、`Object.assign` 形を、固有 exported/computed/dynamic/non-export target 名を持つ1 theory fixture で共有します。
+  JavaScript/TypeScript の `import.meta` module discovery は `import.meta.resolve` と `new URL(..., import.meta.url)` の正負例を、line/signature 検証を維持した1 theory fixture で共有します。
+  JavaScript/TypeScript worker-loading coverage は `importScripts`、`Worker`、`SharedWorker` variants を、line/signature 検証と dynamic/string/method/constructor 負例を維持した1 theory fixture で共有します。
+  JavaScript/TypeScript browser module-registration coverage は service-worker/worklet API を、scope/options signature と receiver/dynamic/string 負例を持つ1 theory fixture で共有します。
+  JavaScript/TypeScript dynamic-import coverage は multiline literal、import attributes/assertions、static template と receiver/dynamic/string 負例を、形式別の line/signature 検証を持つ1 theory fixture で共有します。
+  JavaScript の通常文字列と template literal の brace masking は、固有の class/member を持つ1 fixture で共有し、各 literal 後の正確な container/range 検証を維持します。
+  JavaScript regex brace masking は、direct literal、wrapped `if`/`else if`、plain `else`、`do`/`while`、`finally` 形式を、末尾 sibling 境界と block-comment method-shape 負例を持つ1 class fixture で共有します。
+  JavaScript class-field arrow の ASI coverage は、numeric/string field 境界、computed-member continuation、class-closing literal 終端、末尾 template literal を、固有の class/member 名を持つ1 fixture で共有します。
+  JavaScript default-class coverage は、named class と anonymous direct-base/mixin-base 形式を1 extraction にまとめ、member を維持しつつ `extends` を class 名として捏造しないことを検証します。
+  TypeScript default-class coverage も同じ共有 fixture 方針で named、direct-base、mixin-base、implements-only 形式をまとめ、anonymous member の `default` container 検証を維持します。
+  TypeScript inline-class coverage は、single-member recognition、sibling 分割、正確な signature、共通 class-container metadata を1つの multi-method declaration で検証します。
+  TypeScript same-line sibling-class coverage は、distinct/identical method-name case を1 source にまとめ、4つの class container で attribution の診断性を維持します。
 - `FileIndexerTests.cs`、`FileIndexerContentLoadingTests.cs`、`FileIndexerTestSupport.cs`
   ファイル走査、言語判定、scan result 言語の再利用、content loading / canonicalization、checksum、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。共有 `FileIndexerTests` helper は `FileIndexerTestSupport.cs` に置きます。
 - `PathCompatibilityMatrixTests.cs`
@@ -540,6 +806,41 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   graph-command kind-semantics warning は references、callers、callees 全体で1つの graph-ready database を再利用してください。
   exact-zero graph hint はscenarioごとに1つのTarget/Caller統合fixtureを使い、references、callers、calleesを反復してください。
   C# query-range generic null-comparison regression は、どちらもenum reference漏えいがない同じ契約ならequalityとinequality形式を1つのindexed sourceに併置してください。
+  C# query-range collision の basic selection、directional ordering、keyword 名 member、object initializer は、同じ空の inspect reference bundle を検証する場合は1つの indexed source を共有してください。
+  C# inspect の brace-range regression は char literal、raw string、verbatim string を1つの indexed class に併置し、それぞれの後続 method を共有 fixture から query してください。
+  C# generic query-range selector は単純型引数と tuple 型引数を1つの fixture で共有し、generic type-pattern coverage は designation 有無を別の1 fixture で共有してください。
+  C# switch-expression pattern-variable coverage は、真の enum-member reference 集合を同じ contract とする recursive、declaration、guard、comment-trivia 形式を1つの extractor fixture で共有してください。
+  C# foreach shadowing coverage は embedded、same-line、dangling-else 形式を1つの source で共有し、残る reference を container で区別してください。
+  C# lambda parameter shadowing coverage は simple、multiline、after-lambda、same-line boundary 形式を1回の extraction pass で共有してください。
+  C# query range-variable の `select` 名 member は plain、escaped、trivia-separated access 形式を1つの extractor source で共有してください。
+  C# statement-pattern shadowing は switch-case、conditional、recursive、multiline-recursive、recursive-case 形式を1回の extraction pass で共有してください。
+  C# statement-boundary shadowing は out-declaration、out-var、catch、using scope を1つの extractor source で共有してください。
+  C# terminal-select generic type-pattern coverage は designation あり / なしのmethodを1回の extraction pass で共有してください。
+  C# terminal-select generic `as` null-comparison coverage は equality、inequality、後続する真の enum reference を1つの extractor source に併置してください。
+  C# using-alias coverage は enum / non-enum target を1つの extractor source 内の別 namespace に置き、enum target だけが残ることを検証してください。
+  C# property-receiver shadowing は instance、instance-from-static、static-property context を1回の extraction pass で共有してください。
+  C# indented lexical shadowing は local、using-var、property-accessor container を1つの extractor source で共有してください。
+  C# parenthesized terminal select 前のnullable suffix coverage は scalar、tuple、array-rank 形式を1回の extraction pass で共有してください。
+  C# query range-variable order-by coverage は comma / directional-comma 形式を1つの extractor source で共有してください。
+  C# query range-variable scope coverage は query-only、after-query、query-argument boundary を1回の extraction pass で共有してください。
+  C# terminal select 前のparenthesized keyword-named value は parameter / local 形式を1つの extractor source で共有してください。
+  C# terminal-select generic-call coverage は single、comma-separated、tuple type argument を1回の extraction pass で共有してください。
+  C# order-by ternary coverage は greater-than、less-than、bang operator 後のkeyword-named local function を1つの extractor source で共有してください。
+  C# awaited order-by coverage は direct / comment-separated のkeyword-named local-function call を1回の extraction pass で共有してください。
+  C# throw-expression order-by coverage は `select` / `group` 名のlocal function を1つの extractor source で共有してください。
+  C# parenthesized compound order-by coverage は ternary / coalesce expression を1回の extraction pass で共有してください。
+  C# parenthesized query-terminal argument coverage は select / group-by 形式を1つの extractor source で共有してください。
+  C# local-shadowing boundary coverage は後続 declaration と nested-block exit を1回の extraction pass で共有してください。
+  property lexical-shadowing coverage は getter-only と getter/setter のscope boundaryを共有のindented fixtureに併置してください。
+  lambda parameter shadowing は parenthesized same-line と通常のmethod-parameter 形式を共有のlambda fixtureに併置してください。
+  C# lambda-scoped declaration-pattern coverage は ordinary、nested、static lambda 形式を1回の extraction pass で共有してください。
+  C# declaration-pattern statement coverage は single-line if、multiline if、multiline while 形式を1つの extractor source で共有してください。
+  C# parenthesized terminal-select boundary coverage は uppercase-constant / generic-close predecessor を1回の extraction pass で共有してください。
+  C# nested-query order-by coverage は plain / parenthesized comma boundary を1つの extractor source で共有してください。
+  C# casted local-select order-by coverage は object、simple、multiline、lowercase-alias 形式を1回の extraction pass で共有してください。
+  query range-variable order-by coverage は anonymous-type / object-initializer comma 形式を共有のorder-by fixtureに併置してください。
+  C# parenthesized terminal select 前のpostfix-expression coverage は null-forgiving / increment 形式を1回の extraction pass で共有してください。
+  inspect / references command coverage も同じ switch-expression の統合方針を適用し、各 surface で1つの graph-ready database を構築して container ごとに結果を検証してください。
   inspect reference-bundle coverageにも同じnull-comparison統合fixtureを適用し、operatorごとの個別indexingを避けてください。
   production-runtime switch relational-pattern coverage はless-thanとgreater-thanのmethodを1 sourceに置き、CLI indexing subprocessを1回だけ実行してください。
   generic switch-arm のguardとrelational predecessorも同様に1つのproduction-runtime fixtureを共有し、production `net8.0` targetだけで実行してください。
@@ -587,29 +888,113 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `IndexCommandRunnerTests` と `FileIndexerTests` は `CSharpStaticInterfacePrepass` のテキスト判定、raw-byte、chunked raw-token、streaming file 契約 probe も扱います。prepass がファイル全体の割り当てを避けても UTF-8 / UTF-16 の static-interface 契約候補を落とさないよう、byte-array、chunked、file-level probe のカバレッジを揃えてください。
 - project-marker budget の integration coverage は directory budget を最小境界に override し、child を 1 件だけ列挙します。warning 伝播の検証だけのために本番の 8,192-directory cap を実体化しないでください。
 - `IndexWatchRunnerTests.RunCore_CancellationToken_StopsImmediately` と `RunCore_EmitsHumanFriendlyStartStop_WhenJsonDisabled`
-  リダイレクトした console 出力の下で watch loop の起動と停止を検証する。未使用の index を事前構築せず非同期 watch core を直接呼び、同期的な起動 prefix が start event を出力した後に cancel して bounded shutdown wait を行う。この経路に index setup、専用 thread、signal polling、固定 sleep を再導入しないこと。
+  リダイレクトした console 出力の下で watch loop の起動と停止を検証する。未使用の index を事前構築せず非同期 watch core を直接呼び、同期的な起動 prefix が start event を出力した後に cancel して bounded shutdown wait を行う。この経路に index setup、専用 thread、signal polling、固定 sleep、process-wide SQLite pool reset を再導入しないこと。platform 固有の SQLite retry は temp-project cleanup helper が所有するため SQLite pool による直列化は不要だが、redirect した process-wide console 出力には console-sensitive collection が引き続き必要である。
+  cancellation contract fixture は `git init` と明示的な case-sensitive setting だけを使い、watch loop 終了後の2回目の repository-discovery probe と、commit 対応 Git fixture の無関係な identity/signing setup の両方を避けながら `path_comparison` の期待値を決定的にする。
 - `BackgroundTaskObserverTests`
   は `BackgroundTaskObserver` の fault-only continuation 契約に依存します。canceled
   task は直接 await し、warning が抑止されたことを示すための cancellation 後の固定 sleep
   は不要です。
 - cancellation だけを検証する timeout test は、fixture に無関係な wall-clock 完了経路を持たせないよう infinite cancellable delay を使います。
 - SQL diagnostic truncation test は、長さが増え続ける数千個の `UNION` 句を組み立てず、最小の固定幅 suffix で文字数 cap を超えます。
+- SQLite scalar-reader diagnostic は、overflow と null-result の契約で 1 つの open 済み in-memory connection と command を再利用します。
 - 内容が契約に無関係な oversized file guard は sparse な length-only fixture を作り、同サイズの managed byte array 割り当てを避けます。
 - full-scan と scoped-update の oversized-file warning test は `TestProjectHelper.WriteSparseFile(...)` を共有し、両方の実行モードで 10 MiB fixture 割り当てを避けます。
 - oversized ignore-file rejection も同じ sparse helper を使います。size preflight が rule 内容を読む前に拒否するためです。
 - per-line oversize detection は 4 本の短い物理行を使います。契約は各行で独立しており、数百回の反復は境界 coverage を増やしません。
 - captured-output overflow test は、より大きな超過量自体が契約でない限り、文字数 budget を 1 文字だけ超えます。
+- JavaScript と TypeScript の same-line class scan は、inline member、異名/同名 method を持つ sibling class、statement prefix、callable-local class masking を言語ごとに1つの fixture で共有します。layout ごとに method を追加せず、個別の container、signature、hidden-local assertion を共有 extraction 内に維持してください。
+- Rust attribute reference coverage は direct / `cfg_attr` derive list、multiline 座標、通常 annotation を1回の extraction で共有します。Rust mutable-reference coverage も type position、`dyn` / `impl`、borrow-expression 除外を1つの fixture に維持します。
+- TypeScript と Swift の基本 type-alias expansion は、heritage、generic parameter 除外、type/value position 混在 coverage を言語ごとに1つの fixture で共有します。alias binding の分離自体が契約である scope-shadowing fixture は独立したまま維持します。
+- TypeScript generic class-method coverage は通常形、function-type default/constraint、multiline parameter、inline layout を1回の extraction で共有します。class-field arrow coverage も numeric/string ASI 境界、parameter 付き arrow、computed-member continuation、closing brace 直前の最終fieldを1つの fixtureで共有します。
+- TypeScript re-export surface coverage は named/type-only export、star/namespace form、`with`/`assert` attribute、inline/multiline attribute brace を1回の extraction で共有します。各 layout の契約を1組の assertion で維持できるよう、module と export alias には一意な名前を付けてください。
+- TypeScript の通常 type-query coverage は、inline/multiline の `typeof` と `keyof` type position、および inline/multiline の runtime `typeof` 除外を1回の extraction にまとめます。import-member と dynamic-import mapping は、生成される参照数と symbol mapping が別契約なので独立した test のまま維持してください。
+- Rust module-surface reference coverage は `extern crate`、external/inline `mod`、group/alias/raw identifier を含む `use`、glob import を1回の extraction で共有します。拡張時も alias、inline module、glob token に対する negative assertion を維持してください。
+- Rust associated-access reference coverage は direct/path-qualified/turbofish call、qualified trait call、associated value、`Self` 除外を1回の extraction で共有します。receiver と argument の型名は区別し、path segment、associated member、`Self` に対する negative assertion を維持してください。
+- Rust trait declaration coverage は associated-type bound/default を1回の extraction で共有し、generic/where/supertrait の function bound を別の1回で共有します。全配置を保護するため function-trait の正確な出現数を検証し、同じ参照契約の配置を追加するときは method を増やさず共有 fixture を拡張してください。
+- Rust constructor coverage は struct literal、generic struct literal、path-qualified false positive、tuple/enum constructor を1回の extraction で共有します。declaration 除外と tuple constructor が call にならない assertion を同じ fixture に維持してください。
+- TypeScript class-method range coverage は、wrapped `if`/`else if`、direct `else`、`do`、`finally` の後に続く regex literal を1回の extraction で共有し、最後の sibling method で body range が漏れていないことを確認します。
+- TypeScript の semicolonless blockless-arrow 境界 coverage は、後続する top-level class、expression statement、CommonJS class export の layout を1回の extraction で共有します。terminator layout を追加するときも、各 lambda の正確な source/body range と hidden class 除外を維持してください。
+- TypeScript tagged-template reference coverage は member-access tag、function-type arrow を含む generic tag、interpolation hole 内にネストした tag を1回の extraction で共有します。positive な call assertion とともに raw template text の除外を維持してください。
 - suggestion store と archive cap の test は、どちらの persisted-size limit でも array を割り当てず、1 つの sparse-file helper を共有します。
 - persistent-log rotation test は 1 MiB の zero buffer を割り当てず、`FileStream.SetLength(...)` で既存 log fixture のサイズを設定します。
 - JSON-depth 境界 fixture の繰り返し bracket には、`Enumerable.Repeat` pipeline ではなく固定幅の文字列を使います。
 - CSV entry cap test は index / query parser 間で `TestProjectHelper.RepeatCsvEntry(...)` を共有し、境界 fixture の構築を揃えます。
 - raw FTS operator 境界 test も、grammar 固有の separator を指定して同じ joined-entry builder を再利用します。
 - synchronized console write の coverage は、2 つの concurrent producer を検証できる最小の反復 slow-writer workload を使います。stress test として iteration 数を増やさないでください。
+- `TestDeterminism.RunConcurrentlyAsync(...)` は gate 待ち worker を dedicated long-running task として起動します。`Task.Run` に戻さないでください。blocked worker が最後の worker の gate 到達前に shared pool を枯渇させ、Windows runner の負荷を5秒の偽timeoutとfull-suite retryへ変えてしまいます。
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
   は実ファイル `InstallScriptTests.cs` を C# 抽出に通す coarse な runaway guard です。wall-clock の予算は benchmark より意図的に広く取り、遅い / 混雑した CI host で通常の揺れだけにより suite が失敗しないようにしています。
 - `SymbolExtractorTests.Extract_JavaScriptLargeExportedObjectLiteralProperties_CompletesWithinPracticalBudget` と `Extract_CSharp_ReferenceExtractorFixture_CompletesWithinPracticalBudget`
   は既知の大きな symbol extraction fixture に対する広めの runaway guard です。full suite の負荷に耐えるよう budget は十分広く保ち、benchmark 閾値としてではなく、焦点を絞った最適化根拠がある場合にだけ締めてください。
 - extractor の広い `*CompletesWithinPracticalBudget` runaway guard は primary の `net8.0` test target だけで実行します。focused な extractor 機能テストは cross-target のまま維持しますが、その guard が target-framework 固有の契約を証明する場合を除き、大規模 fixture の budget guard をすべての target framework で重複実行しないでください。
+- C# reflection-name 抽出 coverage は、literal、定数連結、dynamic、comment、string decoy を1つの source fixture にまとめ、これらの parser boundary で1回の symbol/reference pass を共有します。
+- C# BOM 抽出は、単純な先頭 BOM import fixture と、CRLF・bare CR・LF 境界で先頭/mid-file BOM を同時に扱う1つの混在改行 fixture を維持します。混在 fixture に含まれる改行 subset ごとに抽出 pass を重複させないでください。
+- C# lambda capture coverage は、外側 local の正例、parameter shadowing、同名 method 間の分離を1つの source fixture にまとめます。capture が1件だけである assertion により、negative region からの漏れも同時に検証します。
+- C# interpolated string の escaped-brace coverage は、通常形式と逐語形式で同じ phantom call 除外を検証するため、1回の抽出 fixture を共有します。
+- C# raw string 内の direct interpolation と nested interpolation は1つの source fixture と抽出 pass を共有し、container assertion は個別に維持します。
+- generic C# attribute の分類と custom type-argument reference は、assembly target、single-line、multi-line の各形式で1つの fixture を共有します。
+- nested generic attribute 形式も同じ共有 fixture に含め、山括弧の深い入れ子だけのために2回目の parser pass を実行しません。
+- method、delegate、lambda の no-argument parameter attribute は、同じ section-local parenthesis-depth 規則を通るため1つの C# fixture を共有します。
+- 引数付き parameter attribute は、inline と改行された declaration layout で1つの method fixture を共有します。
+- direct と `global::` の static type qualifier は、container ごとの reference assertion を維持しながら1つの C# fixture を共有します。
+- using statement と field access の static qualifier は、1つの consumer fixture と抽出 pass を共有します。
+- namespace qualifier と PascalCase の instance-member chain は rightmost static type reference と1つの qualifier fixture を共有し、1回の parse 後に正例と call 除外を検証します。
+- qualified C# type の declaration と cast/generic expression は、どちらも namespace segment を call reference から除外するため1つの fixture を共有します。
+- C# doc-cref masking の delimited-comment marker coverage は、comment close 後の raw string、raw-string content、verbatim-string content で1つの fixture を共有します。
+- C# constructor-chain coverage は `this`、`base`、cross-line initializer を1つの class hierarchy で共有し、書き換え後の target を constructor container で区別します。
+- C# record constructor-chain coverage は inline、multiline、braced、same-line body の各 header layout を1つの fixture で共有し、record ごとの帰属検証を維持します。
+- C# 12 primary constructor coverage は class、struct、generic、split-line、same-line body を1つの fixture で共有し、base 名を分けて case ごとの診断精度を維持します。
+- C# constructor の base-target coverage は generic、interface list、nested generic、multiline、constraint 付き layout を1つの fixture で共有し、一意な末尾型ごとに書き換え後の edge を検証します。
+- C# multiline member 帰属テストは expression-bodied method/property、Allman/same-line brace、途中の block comment を1つの fixture で共有し、一意な member container ごとに検証します。
+- Python の `isinstance`/`issubclass` runtime type check は単一型と tuple 形式を1つの module fixture で共有し、function container ごとの検証を維持します。
+- Python class header の type reference は単一 base、複数 base、metaclass 形式を1つの module fixture で共有し、class container で区別します。
+- Python annotation coverage は direct/generic の return、parameter、local variable 形式を1つの module fixture で共有し、function container ごとの検証を維持します。
+- Python typing factory の coverage は `TypeAlias`、`NewType`、bound 付き `TypeVar`、constraint 付き `TypeVar` を一意な target type を持つ1つの module fixture で共有します。
+- Python advanced typing coverage は multiline/comment 付き `TypeVar`、`ParamSpec`、callable annotation、variadic tuple unpack、literal union を一意な型名を持つ1つの logical-header fixture で共有します。
+- Python type introspection helper coverage は direct/qualified `get_type_hints`、dataclass/attrs field lookup、Pydantic `TypeAdapter` を一意な target を持つ1つの module fixture で共有します。
+- Python exception の type-reference coverage は bare/chained raise、single/tuple except、`pytest.raises`、`contextlib.suppress` を1つの module fixture で共有します。
+- Python f-string masking は single-line、multiline literal、nested string brace の interpolation 形式を一意な call container を持つ1つの module fixture で共有します。
+- Python keyword filtering は他言語の keyword に似た call と `raise(...)`/`yield` 構文を1つの module fixture で共有し、内側の正しい call 検証を維持します。
+- Python class property symbol coverage は annotated/assigned attribute、slots、augmented slots、match args、annotations dictionary を1つの module fixture で共有します。
+- Python property decorator symbol coverage は cached、accessor/setter/deleter、direct/qualified abstract decorator を1つの module fixture で共有します。
+- Python static import の symbol expansion は alias、imported name、qualified from-import name、dotted prefix を1つの module fixture で共有します。
+- Python package の `__all__` export coverage は assignment、append、inline extend、split-line extend を1つの qualified `__init__.py` fixture で共有します。
+- Python package import coverage は local/external alias、current-package import、relative module member、parent-package member を1つの `__init__.py` fixture で共有します。
+- Python の未閉鎖 multiline import coverage は EOF と後続コードありの case で1つの assertion path を共有し、両方の parse を保ったまま test setup の重複を減らします。
+- Python basic symbol coverage は synchronous/asynchronous function、assigned lambda、class を1つの module fixture で共有します。
+- Python triple-quoted string coverage は先頭 module docstring の heading と double/single/raw fixture masking を1回の extraction で共有します。
+- Ruby loading/dependency DSL coverage は `require`、`require_relative`、`load`、`gem`、`autoload` を1つの fixture で共有し、container ごとの target を検証します。
+- Ruby metaprogramming declaration coverage は alias、constant visibility、`module_function` export を1つの fixture で共有し、DSL keyword を抑止します。
+- Ruby Rails model/schema DSL coverage は enum、table creation、typed attribute、serialization、composed value、nested attribute を1つの fixture で共有し、target と option を区別します。
+- Ruby exception coverage は rescue clause、Rails `rescue_from`、parenthesized `raise` 構文を1つの fixture で共有し、exception target を保ちながら control/option token を抑止します。
+- Ruby Rails command-target coverage は association、validation、callback、`class_name` option を1つの fixture で共有し、keyword option token を除外します。
+- Ruby type composition coverage は inheritance、mixin/using target、contextual control keyword、refinement を1つの fixture で共有し、container ごとの reference を検証します。
+- Ruby call syntax coverage は parenthesis なし command、brace block、`do`/`end` block を1つの fixture で共有し、container 帰属を維持します。
+- Ruby framework subject DSL coverage は RSpec `describe` constant と Rails route resource symbol を1つの fixture で共有し、DSL/option keyword を抑止します。
+- Go composite literal coverage は generic、array/slice、map 形式を一意な element/key/value type を持つ1つの function fixture で共有します。
+- Go type conversion coverage は composite、parenthesized pointer/qualified、parenthesized composite 形式を一意な converted type を持つ1つの function fixture で共有します。
+- Go method expression coverage は plain、pointer、qualified、generic receiver を1つの fixture で共有し、value expression の negative assertion を維持します。
+- Go type-set coverage は interface union と standalone composite approximation を1つの fixture で共有し、bitwise expression の negative assertion を維持します。
+- Go generic type-argument coverage は call と standalone instantiation の形式を1つの fixture で共有し、indexed value の negative assertion を維持します。
+- Go struct-field coverage は embedded、multi-name、generic、inline field を1つの file fixture で共有し、field name の negative assertion を維持します。
+- Go function-signature coverage は literal、declared function type、function-valued field/variable、inline interface の形式を1つの file fixture で共有します。
+- Go generic-constraint coverage は function declaration と type declaration を1つの file fixture で共有します。
+- Go value-declaration coverage は multi-name と generic declaration、および local inference を1つの file fixture で共有します。
+- Go method-signature coverage は concrete receiver と interface member の形式を1つの file fixture で共有します。
+- Go runtime-type-check coverage は direct assertion と type-switch case を1つの function fixture で共有し、value-switch の negative assertion を維持します。
+- Go channel/builtin-type coverage は directional declaration、named channel type、`make`/`new` allocation を1つの file fixture で共有します。
+- Go symbol function coverage は regular/receiver/generic function と assigned function literal を1つの extraction fixture で共有します。
+- Go import-symbol coverage は single/grouped import、build directive、cgo classification を1つの file fixture で共有します。
+- Go type-symbol coverage は named、alias、struct、interface、generic declaration を1つの file fixture で共有します。
+- Go declaration-symbol coverage は grouped type、top-level const/var、blank identifier、local negative を1つの file fixture で共有します。
+- Go embedded-type symbol coverage は generic struct field と interface member を container attribution 付きの1つの file fixture で共有します。
+- Go function-like symbol coverage は qualified receiver container と branch label を1つの file fixture で共有し、switch keyword を除外します。
+- 統合した Python/Go extractor fixture でも、container ごとの完全な result set を含む symbol/reference の厳密な件数と、元の回帰契約に含まれていた source line の assertion を維持します。
+- Assembly reference coverage は direct call/branch と tab 区切り decorated indirect-target の negative case を、厳密な件数を持つ1つの fixture で共有します。
+- Solidity reference coverage は inheritance whitespace variant、library/modifier/event/interface edge、comment/string negative を1つの fixture で共有します。
+- Terraform reference coverage は resource/module/data traversal と raw `var`/`local` object reference を、name ごとの厳密な件数を持つ1つの fixture で共有します。
+- Language masker の copy-on-write coverage は、変更不要時の配列再利用と mask 必要時の clone を Lua/Solidity それぞれ同じテストメソッド内で検証します。
+- COBOL target-statement coverage は SQL/CICS、report、sort、queue、file、literal、external-call variant を1つの program に配置し、group ごとの edge 件数を厳密に検証します。
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   は trimmed な RID 固有 CLI を publish し、SDK が生成した entry point（`dotnet` 経由の `cdidx.dll`、または native の `cdidx`/`cdidx.exe` apphost）を実行します。この publish smoke は NuGet 脆弱性監査を無効化します。package advisory の検証は通常の build/test workflow の package vulnerability check が担い、この runtime serialization テストの責務ではないためです。macOS arm64 では SDK/ILLink が `cdidx` に到達する前にクラッシュし得るため、このテストは skipped として報告されます（#2586）。self-contained publish output に常に `cdidx.dll` が出るとは仮定しないでください。
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
@@ -658,7 +1043,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   変換後のcoverage booleanは、大文字小文字を区別しない`CollectCoverage` string parameterとは異なる名前のlocalに保持してください。同名だとPowerShellがtyped helper呼び出し前にbooleanをstringへ戻します。
   repository rootの`TestResults` directoryを`dotnet test`へ明示的に渡してください。そうしないとrunsettingsのpathがtest project相対で解決され、TRX/coverage outputがworkflowのtelemetry/artifact pathから分離することがあります。
   初回attemptとflaky classification retryには別々のTRX filenameを付け、成功したretryが、その契機となったfailure evidenceを上書きしないようにしてください。
-  最適化で比較可能なslow-test evidenceを得るため、成功・失敗どちらのmatrix laneでもTRX telemetryをsummaryしてください。不要な転送時間を避けるため、result/dump artifact uploadは失敗時限定のままにします。
+  crash diagnostics は初回 attempt だけで収集する。flaky classification retry は初回の evidence を再利用して crash collector を省略する一方、retry 自体が hang した場合に備えて blame-hang と5分の kill bound は維持する。
+  TRX telemetry summary は test helper が初回 attempt の失敗を報告した場合（retry 成功を含む）だけ実行する。clean first-pass lane と test 開始前に失敗した job は、2回目の project 起動と TRX parse を支払わない。不要な転送時間を避けるため、result / dump artifact upload も failure-gated のままにする。
 - `.github/scripts/configure-windows-test-host.ps1`
   `dotnet.yml` と `release.yml` の Windows lane は、TMP/TEMP 固定と Defender 除外 setup をこのスクリプトで共有します。両 workflow の test-host performance 前提を揃えるため、スクリプトまたは workflow からの呼び出し contract を変更するときは `CiWorkflowTests` も更新してください。
 - `DbRecoveryTests.cs`
@@ -696,7 +1082,46 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - SQLite pool reset、`SqliteConnection.ClearAllPools()` の直接呼び出し、プロセスの current directory 変更、process-global な環境変数変更: クラスを non-parallel な `SQLite pool sensitive` collection に入れる。
 - 環境変数: `EnvironmentVariableScope.Capture(...)` を使い、setup failure や assertion failure でも単一の cleanup 経路で元の値に戻す。
 - `Console.Out` / `Console.Error` の差し替え: capture / swap 期間全体を `TestConsoleLock.Gate` で lock する。
+- console だけを扱う test class は、writer disposal check を含むすべての capture / swap 期間が `TestConsoleLock.Gate` で保護されていれば、SQLite-sensitive non-parallel collection に入れる必要はない。
+- pure i18n resolution、内部で lock する JSON-envelope capture、独立した LSP request / budget fixture は SQLite-sensitive collection の外に保つ。一時 DB を所有するだけなら、context を helper cleanup 前に dispose している限り process-global state ではない。
+- instance ごとに DB を所有する reader issue fixture と、instance ごとに directory を所有する external-process fixture も、`Dispose` で共有 helper を通して resource を解放する限り parallel-safe である。
+- schema-constraint fixture は directory cleanup 前にすべての `DbContext`、connection、command、reader を dispose する。独立した schema check を直列化する無条件 pool reset を追加しないこと。
+- SQLite connection-string / command-policy test は、各 in-memory connection と command を test instance が所有して dispose する限り parallel-safe である。`Microsoft.Data.Sqlite` を参照するだけでは SQLite-sensitive collection に入れる理由にならない。
+- cross-platform path matrix は、cache seed を `PathCasingTestLock` で保護し、各 filesystem / git fixture が一意な temporary workspace を所有する限り parallel 実行できる。
+- exception-formatting contract test は共有 console helper を `TestConsoleLock` で保護して parallel 実行可能に保つ。in-memory SQLite retry probe は process pool を変更しない。
+- pure な事前 cancellation import / bounded-stream check は test-only hook を変更する import replacement fixture から分離し、hook を所有する class だけを直列化する。
+- release workflow / package-normalizer test は SQLite-sensitive collection の外で実行できる。xUnit は単一 class 内の method を直列に保つため、scope された2件の durability-hook probe は互いに重ならない。
+- database diff fixture は独立した left / right project を所有し、console capture を lock し、唯一の row-budget override を同じ xUnit class の直列実行内に閉じるため、process-wide な SQLite 直列化は不要である。
+- `SuggestionStore` の environment boundary / configured pruning case は小さな non-parallel fixture に隔離する。hash、deduplication、archive、通常の persistence case は独立 directory を所有し、parallel 実行可能に保つ。
+- pure な `ProcessStartInfo` construction contract と subprocess environment filtering test を分離する。parent process environment を変更して non-parallel collection が必要なのは後者だけである。
+- freshness diagnostic classification は parallel 実行し、`GitHelper` / `FileIndexer` test hook を一時的に置き換える stamped-case probe test だけを隔離する。
+- production source の direct environment access policy scan は read-only で parallel-safe である。実 process variable を変更する別の `CdidxEnvironment` mutation contract だけを隔離する。
+- reflection だけを行う SQLite collection registration contract は parallel-safe である。global pool-clear callback を置き換える fixture lifecycle test だけを sensitive collection に残す。
+- current directory または実 environment variable を変更する config CLI case を隔離する。通常の config parse / validation は注入された environment reader と独立 temporary root を使うため、main suite は parallel 実行可能に保つ。
+- JSON API-version fixture は locked console capture と scoped project cleanup を使う。project 削除後の無条件 pool reset は冗長なうえ遅すぎるため、この contract suite は parallel 実行可能な状態を保つ。
+- golden JSON snapshot fixture は空の stderr 自体が契約なので non-parallel な console-sensitive collection を使い、instance ごとの database cleanup を維持する。status、search、references、impact、excerpt の各 snapshot 後に process-wide pool reset を支払わないこと。
+- extractor plugin-registry fixture も、reject された pattern config が process-wide stderr writer 経由で診断を出すため、同じ console-sensitive collection を共有する。
+- process-wide console writer を capture、差し替え、または意図的に close する suite は同じ console-sensitive collection を使う。SQLite pool cleanup を外しても console mutation は parallel-safe にはならない。
 - 一時 repo / file: 可能な限り `TestProjectHelper` 経由で作り、user-level の git config に依存しない。
+- real server を生成する MCP unit fixture は、system temp directory に単独 DB を残さず、scoped temporary project 内へ DB を置き、server dispose 後に project を削除する。
+- MCP audit fixture は database、active log、rotated log を同じ temporary project 配下へ置き、file ごとの cleanup list を1回の resilient directory cleanup に置き換える。
+- DB lifecycle fixture の dispose は context と exclusive pool ownership を解放後、resilient shared file helper を直接呼ぶ。cleanup retry の枯渇を隠す二重の catch-all で包まない。
+- workspace active-status transition は inactive、active、missing、stale assertion で1つの manifest / config fixture を再利用し、同じ workspace を4つの独立 test で再構築・再選択しない。
+- workspace metadata の result-shape parity は1つの dirty Git fixture から status、map、analysis object を enrich し、同一 repo の initialize / commit を3回繰り返さない。
+- persisted HEAD の drift / recovery assertion は1つの Git fixture 内で metadata を更新し、matching state のためだけに2つ目の repo を作成しない。
+- latest indexed HEAD の優先順位は1つの seed 済み repo から status / analysis result shape の両方で検証し、同一 Git / DB setup を重複させない。
+- commits-ahead の ancestor / missing-stamp behavior は同じ multi-commit repo を共有する。missing case は `IndexedHeadSha` のない新しい result object だけで検証できる。
+- shared file-URI escaping と LSP round-trip parity は1つの path / root case で検証し、同等の percent-encoding setup を別 test で重複させない。
+- no-timeout sentinel coverage は zero / infinite budget を1つの contract test で検証する。どちらも同じ caller-cancellation path に従うため scope setup を重複させない。
+- bounded HTTP private-file の success / overflow case は1つの temporary project と別々の child path を共有し、standalone system-temp file を2回確保・cleanup しない。
+- bounded HTTP の memory-safety coverage は、巨大な declared length の allocation 回避と pooled buffer 全体の clear を1つの contract test で検証する。
+- environment-variable scope restoration は present / missing original を1つの serialized test で検証し、process-variable setup と runner case の重複を避ける。
+- pure process-launch builder contract は base flag、invariant argument、worker payload、UTF-8 redirect を1つの test で検証し、allocation-only assertion のために4つの runner case を使わない。
+- SQLite sensitive fixture の initialize、dispose、boundary clear は1つの replaced callback scope を共有する。boundary assertion は global hook state を再構築せず lifecycle assertion に続けて検証できる。
+- SQLite connection policy builder coverage は connection string、command timeout、status diagnostics を1つの test で検証する。allocation-only check に3つの runner case は不要である。
+- SQLite command parameter builder は primitive type、stable date、copied parameter shape を1つの command fixture で検証し、3つの独立 test case を割り当てない。
+- timeout origin coverage は timer cancellation / caller cancellation を1つの async test で順に検証し、区別の assertion のために runner setup を重複させない。
+- bounded in-memory HTTP read は unknown-length success / declared-length rejection を1つの async contract で検証し、隣接する buffer-policy assertion を分割しない。
 - 長時間または performance 系テスト: デフォルト skip にするか、決定的で十分広い budget を与える。CI の xUnit long-running 診断に出た場合は、閾値を締める前に runner 負荷を確認する。
 
 ## 共通ヘルパー
@@ -721,7 +1146,9 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `TestProjectHelper.DeleteDirectory` に委譲するだけの local `DeleteDirectory` wrapper でも、同じく直接呼び出してください。
 - report / output bundle 用 workspace、changelog tool repository、duplicate-preflight fixture、file-indexer skipped-root / symlink fixture、import / export archive / rollback fixture、configured pattern / out-of-tree language workspace、audit / metrics write-target directory と private / global log workspace、program-runner extractor / cache / trace log workspace、temporary dotnet host fixture、watch runner workspace、DB purge / temporary cleanup workspace、reader BOM fixture、legacy-migration database workspace、MCP indexing fixture、suggestion-store / suggestion CLI fixture、小さな traversal / security fixture を含め、個別のテストファイルで再帰的な一時ディレクトリ cleanup を再実装しないでください。短い呼び出し名で既存テストの読みやすさを保ちたい場合も、ローカル wrapper は `TestProjectHelper.DeleteDirectory` への薄い委譲に留めます。
 - `DeleteFile(path)` は standalone な temp DB cleanup をリトライし、pooled handle が削除を妨げる場合は同じ Windows 向け SQLite pool 解放フォールバックを使います。
-- temp DB、lock、metadata、cache、script、outside fixture file の cleanup では、手書きの `File.Exists(...)` / `File.Delete(...)` pair ではなく `DeleteFile(path)` を優先してください。
+- standalone な codec / metadata DB test が cleanup 前に `DbContext` を dispose する場合、process 全体の SQLite pool reset ではなく `DeleteFile(path)` に委譲してください。Windows retry fallback を保ったまま pure codec class を parallel 実行できます。
+- command 境界から standalone な corrupt DB を開くだけの error-taxonomy test も同じ規則に従います。console capture は `TestConsoleLock` で保護しますが、test class 全体を直列化する必要はありません。
+- temp DB、lock、metadata、cache、script、HTTP download、audit / metrics log と file-to-directory transition、filesystem case probe、MCP diagnostics、outside fixture file の cleanup では、手書きの `File.Exists(...)` / `File.Delete(...)` pair ではなく `DeleteFile(path)` を優先してください。
 - テストクラスに SQLite pool を解放する robust file cleanup wrapper が既にある場合、一時 DB cleanup はその wrapper に通し、DB ではない sidecar は `TestProjectHelper.DeleteFile` に留めてください。
 - DB maintenance 系のテストファイルが standalone な `.db` ファイルを直接所有する場合は、`InitializeEmptyDb`、`ReleaseSqlitePools`、`DeleteDbFile` のような薄い local helper を置いて構いません。ただし wrapper は `DbContext`、`SqliteConnection.ClearAllPools()`、`TestProjectHelper.DeleteFile` へ委譲し、pool 解放の意図が見える名前にしてください。
 - `SqlitePoolCleanup` は Windows 向け SQLite pool workaround を集約します。テストの生存期間中ずっと一時 SQLite ファイルを所有するテストは、`SqliteConnection.ClearAllPools()` を直接呼ぶ代わりに exclusive owner lease に入り、削除前に冪等に dispose できます。
@@ -766,6 +1193,7 @@ GitHub workflow、`global.json`、ドキュメントなど、checked-in され�
 - ワークスペース鮮度や trust メタデータ
 
 基本は最も近い既存の `*Tests.cs` を拡張してください。既存ファイルに自然に収まらない場合だけ新しいテストファイルを作ります。
+テストメソッドを追加する前に、最も近い既存メソッドへ同居させて setup と実行を再利用できないか確認してください。同じ一貫した契約を検証する read-only variant は統合し、mutable state の分離、個別の discovery / skip identity、大きく異なる setup、または failure diagnosis の明瞭さが必要な場合は別メソッドを維持します。
 
 - 複数言語で共有する抽出上限のテストは、切り詰めを発生させる最小値だけ境界を超え、言語ごとに任意の余裕値を足さないでください。
 

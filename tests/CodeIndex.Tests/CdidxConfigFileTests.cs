@@ -5,7 +5,7 @@ using System.Text.Json;
 
 namespace CodeIndex.Tests;
 
-[Collection("SQLite pool sensitive")]
+[Collection("Console sensitive")]
 public class CdidxConfigFileTests
 {
     private readonly JsonSerializerOptions _jsonOptions = ProgramRunner.CreateDefaultJsonOptions();
@@ -28,37 +28,6 @@ public class CdidxConfigFileTests
     }
 
     [Fact]
-    public void RunValidate_NoConfigJson_ReturnsExplicitNotFoundStatus_Issue4320()
-    {
-        var dir = CreateTempDir();
-        var previous = Environment.CurrentDirectory;
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(dir, ".git"));
-            Environment.CurrentDirectory = dir;
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => CdidxConfigFile.RunValidate(["--json"], _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Empty(stderr);
-            using var document = JsonDocument.Parse(stdout);
-            var payload = document.RootElement;
-            Assert.Equal("1", payload.GetProperty("api_version").GetString());
-            Assert.True(payload.GetProperty("valid").GetBoolean());
-            Assert.Equal(JsonValueKind.Null, payload.GetProperty("path").ValueKind);
-            Assert.Equal("not_found", payload.GetProperty("status").GetString());
-            Assert.Equal("no supported config file was found", payload.GetProperty("reason").GetString());
-            Assert.False(payload.GetProperty("config_file_found").GetBoolean());
-            Assert.False(payload.GetProperty("validated").GetBoolean());
-        }
-        finally
-        {
-            Environment.CurrentDirectory = previous;
-            TestProjectHelper.DeleteDirectory(dir);
-        }
-    }
-
-    [Fact]
     public void RunValidate_PositionalJson_ReturnsStructuredError_Issue3892()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => CdidxConfigFile.RunValidate(["extra", "--json"], _jsonOptions));
@@ -69,32 +38,6 @@ public class CdidxConfigFileTests
         var payload = document.RootElement;
         Assert.Equal("error", payload.GetProperty("status").GetString());
         Assert.Contains("does not accept positional arguments", payload.GetProperty("message").GetString(), StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void RunValidate_InvalidConfigJson_ReturnsStructuredErrorThroughProgramRunner_Issue3892()
-    {
-        var dir = CreateTempDir();
-        var previous = Environment.CurrentDirectory;
-        try
-        {
-            File.WriteAllText(Path.Combine(dir, CdidxConfigFile.FileName), "{ invalid json");
-            Environment.CurrentDirectory = dir;
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(["validate-config", "--json"], _jsonOptions, appVersion: "test"));
-
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Empty(stderr);
-            using var document = JsonDocument.Parse(stdout);
-            var payload = document.RootElement;
-            Assert.Equal("error", payload.GetProperty("status").GetString());
-            Assert.Contains("Invalid JSON", payload.GetProperty("message").GetString(), StringComparison.Ordinal);
-        }
-        finally
-        {
-            Environment.CurrentDirectory = previous;
-            TestProjectHelper.DeleteDirectory(dir);
-        }
     }
 
     [Fact]
@@ -917,41 +860,6 @@ public class CdidxConfigFileTests
     }
 
     [Fact]
-    public void Run_ConfigFileAppliesScopedDefaultsWithoutMutatingEnvironment()
-    {
-        var dir = CreateTempDir();
-        var sourceEnvName = CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + QueryCommandRunner.DefaultLimitEnvironmentVariable;
-        using var env = EnvironmentVariableScope.Capture(QueryCommandRunner.DefaultLimitEnvironmentVariable, sourceEnvName);
-        env.Set(QueryCommandRunner.DefaultLimitEnvironmentVariable, null);
-        env.Set(sourceEnvName, null);
-        try
-        {
-            File.WriteAllText(Path.Combine(dir, ".cdidxrc.json"), """
-                {
-                  "search": {
-                    "limit": 17
-                  }
-                }
-                """);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
-                ["status", "--config", "--json"],
-                appVersion: "1.30.0",
-                configStartDirectory: dir));
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
-            using var document = JsonDocument.Parse(stdout);
-            var limit = document.RootElement.GetProperty("effective_config").GetProperty("limit");
-            Assert.Equal(17, limit.GetProperty("value").GetInt32());
-            Assert.StartsWith("config:", limit.GetProperty("source").GetString(), StringComparison.Ordinal);
-            Assert.Null(Environment.GetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable));
-            Assert.Null(Environment.GetEnvironmentVariable(sourceEnvName));
-        }
-        finally { TestProjectHelper.DeleteDirectory(dir); }
-    }
-
-    [Fact]
     public void LoadAndApply_OversizedConfigFile_FailsBeforeParsing()
     {
         var dir = CreateTempDir();
@@ -1094,6 +1002,100 @@ public class CdidxConfigFileTests
         {
             _env[name] = value;
             Writes[name] = value;
+        }
+    }
+}
+
+[Collection("SQLite pool sensitive")]
+public sealed class CdidxConfigProcessStateTests
+{
+    private readonly JsonSerializerOptions _jsonOptions = ProgramRunner.CreateDefaultJsonOptions();
+
+    [Fact]
+    public void RunValidate_NoConfigJson_ReturnsExplicitNotFoundStatus_Issue4320()
+    {
+        var dir = TestProjectHelper.CreateTempProject("cdidx_config_no_active");
+        var previous = Environment.CurrentDirectory;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(dir, ".git"));
+            Environment.CurrentDirectory = dir;
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => CdidxConfigFile.RunValidate(["--json"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var payload = document.RootElement;
+            Assert.Equal("1", payload.GetProperty("api_version").GetString());
+            Assert.True(payload.GetProperty("valid").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, payload.GetProperty("path").ValueKind);
+            Assert.Equal("not_found", payload.GetProperty("status").GetString());
+            Assert.Equal("no supported config file was found", payload.GetProperty("reason").GetString());
+            Assert.False(payload.GetProperty("config_file_found").GetBoolean());
+            Assert.False(payload.GetProperty("validated").GetBoolean());
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+            TestProjectHelper.DeleteDirectory(dir);
+        }
+    }
+
+    [Fact]
+    public void RunValidate_InvalidConfigJson_ReturnsStructuredErrorThroughProgramRunner_Issue3892()
+    {
+        var dir = TestProjectHelper.CreateTempProject("cdidx_config_invalid");
+        var previous = Environment.CurrentDirectory;
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, CdidxConfigFile.FileName), "{ invalid json");
+            Environment.CurrentDirectory = dir;
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => ProgramRunner.Run(["validate-config", "--json"], _jsonOptions, appVersion: "test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Empty(stderr);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+            Assert.Contains("Invalid JSON", document.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+            TestProjectHelper.DeleteDirectory(dir);
+        }
+    }
+
+    [Fact]
+    public void Run_ConfigFileAppliesScopedDefaultsWithoutMutatingEnvironment()
+    {
+        var dir = TestProjectHelper.CreateTempProject("cdidx_config_scoped_defaults");
+        var sourceEnvName = CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + QueryCommandRunner.DefaultLimitEnvironmentVariable;
+        using var env = EnvironmentVariableScope.Capture(QueryCommandRunner.DefaultLimitEnvironmentVariable, sourceEnvName);
+        env.Set(QueryCommandRunner.DefaultLimitEnvironmentVariable, null);
+        env.Set(sourceEnvName, null);
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, ".cdidxrc.json"), """{ "search": { "limit": 17 } }""");
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => ProgramRunner.Run(
+                ["status", "--config", "--json"],
+                appVersion: "1.30.0",
+                configStartDirectory: dir));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var limit = document.RootElement.GetProperty("effective_config").GetProperty("limit");
+            Assert.Equal(17, limit.GetProperty("value").GetInt32());
+            Assert.StartsWith("config:", limit.GetProperty("source").GetString(), StringComparison.Ordinal);
+            Assert.Null(Environment.GetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable));
+            Assert.Null(Environment.GetEnvironmentVariable(sourceEnvName));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(dir);
         }
     }
 }

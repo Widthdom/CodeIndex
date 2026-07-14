@@ -3,7 +3,6 @@ using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Models;
-using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -13,7 +12,7 @@ namespace CodeIndex.Tests;
 /// `--json-envelope` metadata block must carry it. Bumping the constant should be a deliberate
 /// breaking-change signal for downstream consumers.
 /// </summary>
-[Collection("SQLite pool sensitive")]
+[Collection("Console sensitive")]
 public class JsonOutputApiVersionTests
 {
     private readonly JsonSerializerOptions _jsonOptions = new()
@@ -73,7 +72,6 @@ public class JsonOutputApiVersionTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
-            SqliteConnection.ClearAllPools();
         }
     }
 
@@ -104,7 +102,6 @@ public class JsonOutputApiVersionTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
-            SqliteConnection.ClearAllPools();
         }
     }
 

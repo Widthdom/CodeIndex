@@ -187,7 +187,7 @@ internal static class TestDeterminism
         using var ready = new ManualResetEventSlim(false);
         var readyCount = 0;
         var tasks = workerArray
-            .Select(worker => Task.Run(
+            .Select(worker => Task.Factory.StartNew(
                 () =>
                 {
                     if (Interlocked.Increment(ref readyCount) == workerArray.Length)
@@ -196,7 +196,9 @@ internal static class TestDeterminism
                     start.Wait(cancellationToken);
                     return worker();
                 },
-                cancellationToken))
+                cancellationToken,
+                TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
+                TaskScheduler.Default))
             .ToArray();
 
         if (!ready.Wait(DefaultTimeout, cancellationToken))

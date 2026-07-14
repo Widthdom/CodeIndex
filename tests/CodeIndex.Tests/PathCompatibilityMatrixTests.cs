@@ -4,7 +4,6 @@ using CodeIndex.Indexer;
 
 namespace CodeIndex.Tests;
 
-[Collection("SQLite pool sensitive")]
 public sealed class PathCompatibilityMatrixTests
 {
     public static TheoryData<string, bool, string, string[], bool> PathBoundaryCases()

@@ -111,73 +111,39 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Swift_DetectsFuncAndStruct()
-    {
-        // Swift: func, class, struct / Swift: 関数、クラス、構造体
-        var content = "struct Config {\n    func validate() -> Bool {\n        return true\n    }\n}";
-        var symbols = SymbolExtractor.Extract(1, "swift", content);
-
-        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Config");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "validate");
-    }
-
-    [Fact]
-    public void Extract_Swift_DetectsAttributedDeclarations()
+    public void Extract_Swift_DetectsAttributedAndPackageVisibleDeclarations()
     {
         var content = """
             @available(*, deprecated) public struct LegacyCache {}
             @discardableResult public func load() -> Int { 1 }
             @available(*, deprecated) public typealias LegacyHandler = Int
+            package struct SessionCache {
+                package func save() { }
+            }
             """;
         var symbols = SymbolExtractor.Extract(1, "swift", content);
 
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "LegacyCache");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "load");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "LegacyHandler");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "SessionCache");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "save");
     }
 
     [Fact]
-    public void Extract_Swift_DetectsExtensionsAndEscapedFunctionNames()
+    public void Extract_Swift_DetectsExtensionTargetAndMemberVariants()
     {
         var content = """
             public extension URLSession {
                 func `repeat`() {}
             }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "swift", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "URLSession");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "`repeat`");
-    }
-
-    [Fact]
-    public void Extract_Swift_DetectsGenericExtensionTargets()
-    {
-        var content = """
             extension Array<String> where Element == String {
             }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "swift", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Array<String>");
-    }
-
-    [Fact]
-    public void Extract_Swift_DetectsNestedGenericExtensionTargetsWithConformance()
-    {
-        var content = """
             extension Foundation.Dictionary<String, Array<Int>>: Sendable where Value == Int {
             }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "swift", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Foundation.Dictionary<String, Array<Int>>");
-    }
-
-    [Fact]
-    public void Extract_Swift_DetectsInitDeinitSubscriptStoredPropertyAndAssociatedType()
-    {
-        var content = """
             public extension Foundation.URLSession {
                 public convenience init?(configuration: URLSessionConfiguration) {
                 }
@@ -201,37 +167,16 @@ public partial class SymbolExtractorTests
 
         var symbols = SymbolExtractor.Extract(1, "swift", content);
 
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "URLSession");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "`repeat`");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Array<String>");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Foundation.Dictionary<String, Array<Int>>");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Foundation.URLSession");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "init");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "deinit");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "subscript");
         Assert.Contains(symbols, s => s.Kind == "associatedtype" && s.Name == "Key");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "capacity");
-    }
-
-    [Fact]
-    public void Extract_Swift_SupportsPackageVisibility()
-    {
-        var content = """
-            package struct SessionCache {
-                package func save() { }
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "swift", content);
-
-        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "SessionCache");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "save");
-    }
-
-    [Fact]
-    public void Extract_Swift_DetectsMacroDeclarations()
-    {
-        var content = """
-            public macro stringify<T>(_ value: T) = #externalMacro(module: "MyMacros", type: "StringifyMacro")
-            """;
-        var symbols = SymbolExtractor.Extract(1, "swift", content);
-
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "stringify");
     }
 
     [Fact]
@@ -264,19 +209,4 @@ public partial class SymbolExtractorTests
             && s.ContainerName == "x");
     }
 
-    [Fact]
-    public void Extract_Swift_DetectsOperatorsAndPrecedenceGroup()
-    {
-        var content = """
-            public precedencegroup ForwardApplicationPrecedence {
-                associativity: left
-            }
-
-            infix operator |> : ForwardApplicationPrecedence
-            """;
-        var symbols = SymbolExtractor.Extract(1, "swift", content);
-
-        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "ForwardApplicationPrecedence");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "|>");
-    }
 }

@@ -2493,71 +2493,23 @@ public partial class ReferenceExtractorTests
 
 
     [Fact]
-    public void Extract_RubyRequireCall_IsNotDropped()
+    public void Extract_RubyLoadingAndDependencyDsl_ReuseSingleFixture()
     {
         const string content = """
-            def load
+            def load_json
               require("json")
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.Contains(references, reference => reference.SymbolName == "require" && reference.ContainerName == "load");
-    }
-
-    [Fact]
-    public void Extract_RubyRequireRelative_IndexesTargetPath()
-    {
-        const string content = """
             def load_user
               require_relative "models/user"
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.Contains(references, reference => reference.SymbolName == "require_relative" && reference.ContainerName == "load_user");
-        Assert.Contains(references, reference => reference.SymbolName == "models/user" && reference.ContainerName == "load_user");
-    }
-
-    [Fact]
-    public void Extract_RubyLoad_IndexesLoadedPath()
-    {
-        const string content = """
             def boot
               load "config/routes.rb"
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.Contains(references, reference => reference.SymbolName == "load" && reference.ContainerName == "boot");
-        Assert.Contains(references, reference => reference.SymbolName == "config/routes.rb" && reference.ContainerName == "boot");
-    }
-
-    [Fact]
-    public void Extract_RubyGem_IndexesDependencyName()
-    {
-        const string content = """
             gem "rails", "~> 8.0"
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "gem");
-        Assert.Contains(references, reference => reference.SymbolName == "rails");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "~> 8.0");
-    }
-
-    [Fact]
-    public void Extract_RubyAutoload_IndexesConstantTarget()
-    {
-        const string content = """
             module Registry
               autoload :User, "models/user"
             end
@@ -2566,13 +2518,20 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "ruby", content);
         var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
 
+        Assert.Contains(references, reference => reference.SymbolName == "require" && reference.ContainerName == "load_json");
+        Assert.Contains(references, reference => reference.SymbolName == "require_relative" && reference.ContainerName == "load_user");
+        Assert.Contains(references, reference => reference.SymbolName == "models/user" && reference.ContainerName == "load_user");
+        Assert.Contains(references, reference => reference.SymbolName == "load" && reference.ContainerName == "boot");
+        Assert.Contains(references, reference => reference.SymbolName == "config/routes.rb" && reference.ContainerName == "boot");
+        Assert.Contains(references, reference => reference.SymbolName == "rails");
         Assert.Contains(references, reference => reference.SymbolName == "autoload" && reference.ContainerName == "Registry");
         Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ContainerName == "Registry");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "models/user");
+        Assert.DoesNotContain(references, reference => reference.SymbolName is "gem" or "~> 8.0");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "models/user" && reference.ContainerName == "Registry");
     }
 
     [Fact]
-    public void Extract_RubyAliasDeclarations_IndexAliasEndpoints()
+    public void Extract_RubyMetaprogrammingDeclarations_ReuseAliasVisibilityAndModuleFunctionFixture()
     {
         const string content = """
             class Person
@@ -2582,43 +2541,14 @@ public partial class ReferenceExtractorTests
               alias_method :full_name, :name
               alias display_name name
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "alias");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "alias_method");
-        Assert.Contains(references, reference => reference.SymbolName == "full_name" && reference.ContainerName == "Person");
-        Assert.Contains(references, reference => reference.SymbolName == "display_name" && reference.ContainerName == "Person");
-        Assert.Equal(2, references.Count(reference => reference.SymbolName == "name" && reference.ContainerName == "Person"));
-    }
-
-    [Fact]
-    public void Extract_RubyConstantVisibilityDeclarations_IndexConstants()
-    {
-        const string content = """
             class Config
               SecretKey = "x"
               Token = "t"
               private_constant :SecretKey
               public_constant :Token
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "private_constant");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "public_constant");
-        Assert.Contains(references, reference => reference.SymbolName == "SecretKey" && reference.ContainerName == "Config");
-        Assert.Contains(references, reference => reference.SymbolName == "Token" && reference.ContainerName == "Config");
-    }
-
-    [Fact]
-    public void Extract_RubyModuleFunction_IndexesExportedMethods()
-    {
-        const string content = """
             module Formatting
               def normalize
               end
@@ -2630,12 +2560,18 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "ruby", content);
         var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "module_function");
+        Assert.DoesNotContain(references, reference => reference.SymbolName is
+            "alias" or "alias_method" or "private_constant" or "public_constant" or "module_function");
+        Assert.Contains(references, reference => reference.SymbolName == "full_name" && reference.ContainerName == "Person");
+        Assert.Contains(references, reference => reference.SymbolName == "display_name" && reference.ContainerName == "Person");
+        Assert.Equal(2, references.Count(reference => reference.SymbolName == "name" && reference.ContainerName == "Person"));
+        Assert.Contains(references, reference => reference.SymbolName == "SecretKey" && reference.ContainerName == "Config");
+        Assert.Contains(references, reference => reference.SymbolName == "Token" && reference.ContainerName == "Config");
         Assert.Contains(references, reference => reference.SymbolName == "normalize" && reference.ContainerName == "Formatting");
     }
 
     [Fact]
-    public void Extract_RubyCommandTargets_StopBeforeKeywordOptions()
+    public void Extract_RubyRailsCommandTargets_ReuseAssociationValidationAndCallbackFixture()
     {
         const string content = """
             class Article
@@ -2643,25 +2579,7 @@ public partial class ReferenceExtractorTests
               validates :title, presence: true
               before_action :load_article, only: :show
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.Contains(references, reference => reference.SymbolName == "comments" && reference.ContainerName == "Article");
-        Assert.Contains(references, reference => reference.SymbolName == "title" && reference.ContainerName == "Article");
-        Assert.Contains(references, reference => reference.SymbolName == "load_article" && reference.ContainerName == "Article");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "dependent");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "destroy");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "presence");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "only");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "show");
-    }
-
-    [Fact]
-    public void Extract_RubyAssociationClassNameOption_IndexesClassNameTarget()
-    {
-        const string content = """
             class Post
               belongs_to :author, class_name: "User"
               has_many :line_items, :class_name => 'Orders::LineItem'
@@ -2675,11 +2593,15 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, reference => reference.SymbolName == "line_items" && reference.ContainerName == "Post");
         Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ContainerName == "Post");
         Assert.Contains(references, reference => reference.SymbolName == "Orders::LineItem" && reference.ContainerName == "Post");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "class_name");
+        Assert.Contains(references, reference => reference.SymbolName == "comments" && reference.ContainerName == "Article");
+        Assert.Contains(references, reference => reference.SymbolName == "title" && reference.ContainerName == "Article");
+        Assert.Contains(references, reference => reference.SymbolName == "load_article" && reference.ContainerName == "Article");
+        Assert.DoesNotContain(references, reference => reference.SymbolName is
+            "dependent" or "destroy" or "presence" or "only" or "show" or "class_name");
     }
 
     [Fact]
-    public void Extract_RubyClassInheritance_IndexesSuperclass()
+    public void Extract_RubyTypeComposition_ReuseInheritanceMixinAndRefinementFixture()
     {
         const string content = """
             class ApplicationJob
@@ -2687,81 +2609,7 @@ public partial class ReferenceExtractorTests
 
             class CleanupJob < ApplicationJob
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "ApplicationJob"
-            && reference.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_RubyRescueClause_IndexesExceptionTypes()
-    {
-        const string content = """
-            def load
-              fetch
-            rescue Network::TimeoutError, ParserError => error
-              nil
-            end
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Network::TimeoutError"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "load");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "ParserError"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "load");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "rescue");
-    }
-
-    [Fact]
-    public void Extract_RubyRescueFrom_IndexesExceptionClassTargets()
-    {
-        const string content = """
-            class ApplicationController
-              rescue_from Payment::Declined, AuthorizationError, with: :render_error
-            end
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "rescue_from");
-        Assert.Contains(references, reference => reference.SymbolName == "Payment::Declined" && reference.ContainerName == "ApplicationController");
-        Assert.Contains(references, reference => reference.SymbolName == "AuthorizationError" && reference.ContainerName == "ApplicationController");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "with");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "render_error");
-    }
-
-    [Fact]
-    public void Extract_RubyRaiseSyntax_IsIgnored()
-    {
-        const string content = """
-            def fail
-              raise("boom")
-              ValueError()
-            end
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "raise");
-        Assert.Contains(references, reference => reference.SymbolName == "ValueError" && reference.ContainerName == "fail");
-    }
-
-    [Fact]
-    public void Extract_RubyContextualKeywords_AreIgnored()
-    {
-        const string content = """
             module Shared
             end
 
@@ -2781,29 +2629,7 @@ public partial class ReferenceExtractorTests
                 yield(item())
               end
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "include");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "prepend");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "using");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "super");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "yield");
-        Assert.Contains(references, reference => reference.SymbolName == "Shared" && reference.ContainerName == "Worker");
-        Assert.Contains(references, reference => reference.SymbolName == "ModName" && reference.ContainerName == "Worker");
-        Assert.Contains(references, reference => reference.SymbolName == "AuditTrail" && reference.ContainerName == "Worker");
-        Assert.Contains(references, reference => reference.SymbolName == "CurrencyFormatting" && reference.ContainerName == "Worker");
-        Assert.Contains(references, reference => reference.SymbolName == "authenticate" && reference.ContainerName == "Worker");
-        Assert.Contains(references, reference => reference.SymbolName == "name" && reference.ContainerName == "Worker");
-        Assert.Contains(references, reference => reference.SymbolName == "item" && reference.ContainerName == "run");
-    }
-
-    [Fact]
-    public void Extract_RubyRefine_IndexesRefinedClass()
-    {
-        const string content = """
             module StringFormatting
               refine String do
                 def titleize
@@ -2815,32 +2641,66 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "ruby", content);
         var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "refine");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ApplicationJob"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Shared" && reference.ContainerName == "Worker");
+        Assert.Contains(references, reference => reference.SymbolName == "ModName" && reference.ContainerName == "Worker");
+        Assert.Contains(references, reference => reference.SymbolName == "AuditTrail" && reference.ContainerName == "Worker");
+        Assert.Contains(references, reference => reference.SymbolName == "CurrencyFormatting" && reference.ContainerName == "Worker");
+        Assert.Contains(references, reference => reference.SymbolName == "authenticate" && reference.ContainerName == "Worker");
+        Assert.Contains(references, reference => reference.SymbolName == "name" && reference.ContainerName == "Worker");
+        Assert.Contains(references, reference => reference.SymbolName == "item" && reference.ContainerName == "run");
         Assert.Contains(references, reference => reference.SymbolName == "String" && reference.ContainerName == "StringFormatting");
+        Assert.DoesNotContain(references, reference => reference.SymbolName is
+            "include" or "prepend" or "using" or "super" or "yield" or "refine");
     }
 
     [Fact]
-    public void Extract_RubyRSpecDescribe_IndexesSubjectConstant()
+    public void Extract_RubyExceptionForms_ReuseRescueDslAndRaiseFixture()
     {
         const string content = """
-            RSpec.describe User do
-              describe Account do
-              end
+            def load
+              fetch
+            rescue Network::TimeoutError, ParserError => error
+              nil
+            end
+
+            class ApplicationController
+              rescue_from Payment::Declined, AuthorizationError, with: :render_error
+            end
+
+            def fail
+              raise("boom")
+              ValueError()
             end
             """;
 
         var symbols = SymbolExtractor.Extract(1, "ruby", content);
         var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "describe");
-        Assert.Contains(references, reference => reference.SymbolName == "User");
-        Assert.Contains(references, reference => reference.SymbolName == "Account");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Network::TimeoutError" && reference.ReferenceKind == "type_reference" &&
+            reference.ContainerName == "load");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ParserError" && reference.ReferenceKind == "type_reference" &&
+            reference.ContainerName == "load");
+        Assert.Contains(references, reference => reference.SymbolName == "Payment::Declined" && reference.ContainerName == "ApplicationController");
+        Assert.Contains(references, reference => reference.SymbolName == "AuthorizationError" && reference.ContainerName == "ApplicationController");
+        Assert.Contains(references, reference => reference.SymbolName == "ValueError" && reference.ContainerName == "fail");
+        Assert.DoesNotContain(references, reference => reference.SymbolName is
+            "rescue" or "rescue_from" or "with" or "render_error" or "raise");
     }
 
     [Fact]
-    public void Extract_RubyRailsRoutes_IndexesResourceNames()
+    public void Extract_RubyFrameworkSubjectDsl_ReuseRSpecAndRailsRouteFixture()
     {
         const string content = """
+            RSpec.describe User do
+              describe Account do
+              end
+            end
+
             Rails.application.routes.draw do
               resources :articles, only: :show
               resource :profile
@@ -2850,8 +2710,9 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "ruby", content);
         var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "resources");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "resource");
+        Assert.DoesNotContain(references, reference => reference.SymbolName is "describe" or "resources" or "resource");
+        Assert.Contains(references, reference => reference.SymbolName == "User");
+        Assert.Contains(references, reference => reference.SymbolName == "Account");
         Assert.Contains(references, reference => reference.SymbolName == "articles");
         Assert.Contains(references, reference => reference.SymbolName == "profile");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "only");
@@ -2859,28 +2720,13 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_RubyRailsEnum_IndexesAttributeName()
+    public void Extract_RubyRailsModelDsl_ReuseEnumAttributeSerializationAndAggregationFixture()
     {
         const string content = """
             class Conversation
               enum :status, { active: 0, archived: 1 }, prefix: true
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "enum");
-        Assert.Contains(references, reference => reference.SymbolName == "status" && reference.ContainerName == "Conversation");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "active");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "archived");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "prefix");
-    }
-
-    [Fact]
-    public void Extract_RubyRailsCreateTable_IndexesTableName()
-    {
-        const string content = """
             class CreateUsers < ActiveRecord::Migration[8.0]
               def change
                 create_table :users, id: :uuid do |t|
@@ -2889,77 +2735,16 @@ public partial class ReferenceExtractorTests
                 end
               end
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "create_table");
-        Assert.Contains(references, reference => reference.SymbolName == "users" && reference.ContainerName == "change");
-        Assert.Contains(references, reference => reference.SymbolName == "audit_logs" && reference.ContainerName == "change");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "id");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "uuid");
-    }
-
-    [Fact]
-    public void Extract_RubyRailsAttribute_IndexesAttributeName()
-    {
-        const string content = """
             class User < ApplicationRecord
               attribute :timezone, :string, default: "UTC"
-            end
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "attribute");
-        Assert.Contains(references, reference => reference.SymbolName == "timezone" && reference.ContainerName == "User");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "string");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "default");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "UTC");
-    }
-
-    [Fact]
-    public void Extract_RubyRailsSerialize_IndexesSerializedAttributeName()
-    {
-        const string content = """
-            class User < ApplicationRecord
               serialize :settings, coder: JSON
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "serialize");
-        Assert.Contains(references, reference => reference.SymbolName == "settings" && reference.ContainerName == "User");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "coder");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "JSON");
-    }
-
-    [Fact]
-    public void Extract_RubyRailsComposedOf_IndexesAggregateAndClassName()
-    {
-        const string content = """
             class Customer < ApplicationRecord
               composed_of :address, class_name: "Address"
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "composed_of");
-        Assert.Contains(references, reference => reference.SymbolName == "address" && reference.ContainerName == "Customer");
-        Assert.Contains(references, reference => reference.SymbolName == "Address" && reference.ContainerName == "Customer");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "class_name");
-    }
-
-    [Fact]
-    public void Extract_RubyRailsNestedAttributes_IndexesAssociationNames()
-    {
-        const string content = """
             class Post < ApplicationRecord
               accepts_nested_attributes_for :comments, :tags, allow_destroy: true
             end
@@ -2968,15 +2753,24 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "ruby", content);
         var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "accepts_nested_attributes_for");
+        Assert.DoesNotContain(references, reference => reference.SymbolName is
+            "enum" or "create_table" or "attribute" or "serialize" or "composed_of" or "accepts_nested_attributes_for");
+        Assert.Contains(references, reference => reference.SymbolName == "status" && reference.ContainerName == "Conversation");
+        Assert.Contains(references, reference => reference.SymbolName == "users" && reference.ContainerName == "change");
+        Assert.Contains(references, reference => reference.SymbolName == "audit_logs" && reference.ContainerName == "change");
+        Assert.Contains(references, reference => reference.SymbolName == "timezone" && reference.ContainerName == "User");
+        Assert.Contains(references, reference => reference.SymbolName == "settings" && reference.ContainerName == "User");
+        Assert.Contains(references, reference => reference.SymbolName == "address" && reference.ContainerName == "Customer");
+        Assert.Contains(references, reference => reference.SymbolName == "Address" && reference.ContainerName == "Customer");
         Assert.Contains(references, reference => reference.SymbolName == "comments" && reference.ContainerName == "Post");
         Assert.Contains(references, reference => reference.SymbolName == "tags" && reference.ContainerName == "Post");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "allow_destroy");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "true");
+        Assert.DoesNotContain(references, reference => reference.SymbolName is
+            "active" or "archived" or "prefix" or "id" or "uuid" or "string" or "default" or "UTC" or "coder" or
+            "JSON" or "class_name" or "allow_destroy" or "true");
     }
 
     [Fact]
-    public void Extract_RubyCommandSyntax_DetectsNoParenCalls()
+    public void Extract_RubyCallSyntax_ReuseCommandAndBlockFormsFixture()
     {
         const string content = """
             def greet(name)
@@ -2996,26 +2790,7 @@ public partial class ReferenceExtractorTests
               end
               raise ArgumentError, "bad"
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.Contains(references, reference => reference.SymbolName == "greet" && reference.ContainerName == "caller");
-        Assert.Contains(references, reference => reference.SymbolName == "puts" && reference.ContainerName == "greet");
-        Assert.Contains(references, reference => reference.SymbolName == "puts" && reference.ContainerName == "caller");
-        Assert.Contains(references, reference => reference.SymbolName == "no_parens_def" && reference.ContainerName == "caller");
-        Assert.Contains(references, reference => reference.SymbolName == "require" && reference.ContainerName == "caller");
-        Assert.Contains(references, reference => reference.SymbolName == "json" && reference.ContainerName == "caller");
-        Assert.Contains(references, reference => reference.SymbolName == "define_method" && reference.ContainerName == "caller");
-        Assert.Contains(references, reference => reference.SymbolName == "dynamic" && reference.ContainerName == "caller");
-        Assert.Contains(references, reference => reference.SymbolName == "ArgumentError" && reference.ContainerName == "caller");
-    }
-
-    [Fact]
-    public void Extract_RubyBlockCall_DetectsBraceAndDoEndForms()
-    {
-        const string content = """
             def count_items(items)
               options = { key: value }
               items.each { |x| log(x) }
@@ -3031,6 +2806,15 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "ruby", content);
         var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
 
+        Assert.Contains(references, reference => reference.SymbolName == "greet" && reference.ContainerName == "caller");
+        Assert.Contains(references, reference => reference.SymbolName == "puts" && reference.ContainerName == "greet");
+        Assert.Contains(references, reference => reference.SymbolName == "puts" && reference.ContainerName == "caller");
+        Assert.Contains(references, reference => reference.SymbolName == "no_parens_def" && reference.ContainerName == "caller");
+        Assert.Contains(references, reference => reference.SymbolName == "require" && reference.ContainerName == "caller");
+        Assert.Contains(references, reference => reference.SymbolName == "json" && reference.ContainerName == "caller");
+        Assert.Contains(references, reference => reference.SymbolName == "define_method" && reference.ContainerName == "caller");
+        Assert.Contains(references, reference => reference.SymbolName == "dynamic" && reference.ContainerName == "caller");
+        Assert.Contains(references, reference => reference.SymbolName == "ArgumentError" && reference.ContainerName == "caller");
         Assert.Contains(references, reference => reference.SymbolName == "each" && reference.ContainerName == "count_items");
         Assert.Contains(references, reference => reference.SymbolName == "each_with_index" && reference.ContainerName == "count_items");
         Assert.Contains(references, reference => reference.SymbolName == "with_transaction" && reference.ContainerName == "count_items");
@@ -5076,7 +4860,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_GoGenericFunctionConstraints_CapturesConstraintTypes()
+    public void Extract_GoGenericConstraints_ReuseFunctionAndTypeFixture()
     {
         const string content = """
             package main
@@ -5084,21 +4868,6 @@ public partial class ReferenceExtractorTests
             func Decode[T WireMessage, K KeyConstraint](value T) Result {
                 return Result{}
             }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "WireMessage" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "KeyConstraint" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoGenericTypeConstraints_CapturesConstraintTypes()
-    {
-        const string content = """
-            package main
 
             type Cache[T EntityConstraint] struct {
                 value T
@@ -5110,9 +4879,11 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "go", content);
         var references = ReferenceExtractor.Extract(1, "go", content, symbols);
 
+        Assert.Contains(references, r => r.SymbolName == "WireMessage" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "EntityConstraint" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "KeyConstraint" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "ValueConstraint" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -5142,13 +4913,18 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_GoMethodReceiverTypes_CapturesReceiverType()
+    public void Extract_GoMethodSignatures_ReuseReceiverAndInterfaceFixture()
     {
         const string content = """
             package main
 
             func (h *Handler) Serve(ctx Context) Result {
                 return Result{}
+            }
+
+            type Contract interface {
+                Handle(ctx InterfaceContext, input Request) (Response, error)
+                Watch() <-chan Event
             }
             """;
 
@@ -5158,37 +4934,24 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Context" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoInterfaceMethodSignatures_CapturesParameterAndReturnTypes()
-    {
-        const string content = """
-            package main
-
-            type Handler interface {
-                Handle(ctx Context, input Request) (Response, error)
-                Watch() <-chan Event
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Context" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "InterfaceContext" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Request" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
-    public void Extract_GoMultiNameValueDeclarations_CapturesSharedType()
+    public void Extract_GoValueDeclarations_ReuseMultiNameAndGenericFixture()
     {
         const string content = """
             package main
 
             var primary, secondary *Client
             const first, second NamedConst = 1, 2
+            var repo Repository[Key, Value]
+            var history []*model.Event
+            const timeout Duration[Seconds, Millis] = 1
+            var inferred = Build[User]()
 
             func configure() {
                 var local, cached *Session
@@ -5202,24 +4965,6 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Client" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "NamedConst" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Session" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "load" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoGenericValueDeclarations_CapturesSpacedTypeArguments()
-    {
-        const string content = """
-            package main
-
-            var repo Repository[Key, Value]
-            var history []*model.Event
-            const timeout Duration[Seconds, Millis] = 1
-            var inferred = Build[User]()
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
         Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
@@ -5227,12 +4972,13 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Duration" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Seconds" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Millis" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "load" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "repo" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "inferred" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
-    public void Extract_GoEmbeddedFieldTypes_CapturesEmbeddedStructFields()
+    public void Extract_GoStructFields_ReuseEmbeddedNamedGenericAndInlineFixture()
     {
         const string content = """
             package main
@@ -5241,73 +4987,47 @@ public partial class ReferenceExtractorTests
                 *BaseStore
                 audit.Logger
                 Cache[Entry]
-                Name string
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "BaseStore" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Logger" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Cache" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Entry" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Name" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoMultiNameStructFields_CapturesSharedType()
-    {
-        const string content = """
-            package main
-
-            type Store struct {
                 Primary, Secondary *Client
-                Cache, Backup Repository[Entry]
-                active, stale bool
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Client" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Entry" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Primary" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Secondary" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "active" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoGenericStructFields_CapturesSpacedTypeArguments()
-    {
-        const string content = """
-            package main
-
-            type Store struct {
-                Owner Repository[Key, Value]
+                Owner, Backup Repository[Key, Value]
                 History []*model.Event
+                active, stale bool
                 Name string
             }
+
+            func build() {
+                payload := struct{ ID UserID; InlineOwner *User; Details model.Detail; Values []InlineValue }{}
+                _ = payload
+            }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "go", content);
         var references = ReferenceExtractor.Extract(1, "go", content, symbols);
 
-        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Owner" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Name" && r.ReferenceKind == "type_reference");
+        foreach (var typeName in new[]
+                 { "BaseStore", "Logger", "Cache", "Entry", "Client", "Repository", "Key", "Value", "Event", "UserID", "User", "Detail", "InlineValue" })
+        {
+            Assert.Contains(references, r => r.SymbolName == typeName && r.ReferenceKind == "type_reference");
+        }
+
+        foreach (var fieldName in new[] { "Name", "Primary", "Secondary", "Owner", "active", "ID", "InlineOwner" })
+        {
+            Assert.DoesNotContain(references, r => r.SymbolName == fieldName && r.ReferenceKind == "type_reference");
+        }
     }
 
     [Fact]
-    public void Extract_GoBuiltinTypeArguments_CapturesAllocatedTypesWithoutBuiltinCalls()
+    public void Extract_GoChannelAndBuiltinTypes_ReuseDeclarationAndAllocationFixture()
     {
         const string content = """
             package main
+
+            var updates <-chan DeclaredEvent
+            var commands chan<- Command
+            type Stream chan Result
+
+            type Broker struct {
+                Inputs chan<- *Payload
+            }
 
             func allocate() {
                 users := make([]User, 0)
@@ -5325,24 +5045,39 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "CacheEntry" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Client" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "DeclaredEvent" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Command" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "chan" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "new" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "make" && r.ReferenceKind == "call");
     }
 
     [Fact]
-    public void Extract_GoTypeAssertions_CapturesAssertedTypes()
+    public void Extract_GoRuntimeTypeChecks_ReuseAssertionAndSwitchFixture()
     {
         const string content = """
             package main
 
-            func classify(value any) {
+            func classify(value any, status Status) {
                 user := value.(User)
-                admin := value.(*Admin)
-                qualified := value.(model.Member)
+                directAdmin := value.(*DirectAdmin)
+                qualified := value.(model.DirectMember)
                 switch value.(type) {
+                case *Admin, *model.Member:
+                    return
+                case []Guest, map[Key]Value:
+                    return
                 case nil:
+                    return
                 }
-                _, _, _ = user, admin, qualified
+
+                switch status {
+                case status.Ready:
+                    return
+                }
+                _, _, _ = user, directAdmin, qualified
             }
             """;
 
@@ -5350,17 +5085,29 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "go", content, symbols);
 
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Admin" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Member" && r.ReferenceKind == "type_reference");
+        foreach (var typeName in new[] { "User", "DirectAdmin", "DirectMember", "Admin", "Member", "Guest", "Key", "Value" })
+        {
+            Assert.Contains(references, r => r.SymbolName == typeName && r.ReferenceKind == "type_reference");
+        }
+
         Assert.DoesNotContain(references, r => r.SymbolName == "type" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "nil" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Ready" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
-    public void Extract_GoFunctionLiteralSignatures_CapturesParameterAndReturnTypes()
+    public void Extract_GoFunctionSignatures_ReuseLiteralDeclarationAndInterfaceFixture()
     {
         const string content = """
             package main
+
+            type Handler func(DeclaredRequest) DeclaredResponse
+
+            type Server struct {
+                Callback func(DeclaredContext, *DeclaredPayload) DeclaredResult
+            }
+
+            var factory func(Config) *Client
 
             func configure() {
                 handler := func(ctx Context, req *Request) (Response, error) {
@@ -5369,7 +5116,9 @@ public partial class ReferenceExtractorTests
                 wrapped := with(func(Event) Result {
                     return Result{}
                 })
-                _, _ = handler, wrapped
+                contract := interface{ Handle(InterfaceContext, *InterfaceRequest) (InterfaceResponse, error); io.Reader }
+                transformer := interface{ Transform(InterfaceEvent) InterfaceResult }
+                _, _, _, _ = handler, wrapped, contract, transformer
             }
             """;
 
@@ -5381,10 +5130,18 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        foreach (var typeName in new[]
+                 { "DeclaredRequest", "DeclaredResponse", "DeclaredContext", "DeclaredPayload", "DeclaredResult", "Config", "Client", "InterfaceContext", "InterfaceRequest", "InterfaceResponse", "Reader", "InterfaceEvent", "InterfaceResult" })
+        {
+            Assert.Contains(references, r => r.SymbolName == typeName && r.ReferenceKind == "type_reference");
+        }
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "Handle" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Transform" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
-    public void Extract_GoGenericCallTypeArguments_CapturesCallSiteTypes()
+    public void Extract_GoGenericTypeArguments_ReuseCallAndInstantiationFixture()
     {
         const string content = """
             package main
@@ -5392,8 +5149,10 @@ public partial class ReferenceExtractorTests
             func use(values []func()) {
                 decoded := Decode[User, *Payload](input)
                 mapped := stream.Map[model.Event, Result](events)
+                decoder := Decode[StandaloneUser]
+                mapper := stream.Map[model.StandaloneEvent, StandaloneResult]
                 values[i]()
-                _, _ = decoded, mapped
+                _, _, _, _ = decoded, mapped, decoder, mapper
             }
             """;
 
@@ -5404,112 +5163,14 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "StandaloneUser" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "StandaloneEvent" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "StandaloneResult" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "i" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
-    public void Extract_GoFunctionTypeDeclarations_CapturesParameterAndReturnTypes()
-    {
-        const string content = """
-            package main
-
-            type Handler func(Request) Response
-
-            type Server struct {
-                Callback func(Context, *Payload) Result
-            }
-
-            var factory func(Config) *Client
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Request" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Context" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Config" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Client" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoInlineStructFields_CapturesFieldTypes()
-    {
-        const string content = """
-            package main
-
-            func build() {
-                payload := struct{ ID UserID; Owner *User; Details model.Detail; Values []Value }{}
-                _ = payload
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "UserID" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Detail" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "ID" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Owner" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoInlineInterfaceMembers_CapturesSignatureTypes()
-    {
-        const string content = """
-            package main
-
-            func bind() {
-                handler := interface{ Handle(Context, *Request) (Response, error); io.Reader }
-                transformer := interface{ Transform(Event) Result }
-                _, _ = handler, transformer
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Context" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Request" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Reader" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Handle" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Transform" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoChannelTypeDeclarations_CapturesElementTypes()
-    {
-        const string content = """
-            package main
-
-            var updates <-chan Event
-            var commands chan<- Command
-            type Stream chan Result
-
-            type Broker struct {
-                Inputs chan<- *Payload
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Command" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "chan" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoGenericCompositeLiterals_CapturesTypeAndArguments()
+    public void Extract_GoCompositeLiterals_ReuseGenericArraySliceAndMapFixture()
     {
         const string content = """
             package main
@@ -5517,8 +5178,14 @@ public partial class ReferenceExtractorTests
             func build(values []func()) {
                 cache := Cache[Entry]{}
                 set := model.Set[Key, Value]{}
+                users := []User{}
+                widgets := [3]*Widget{}
+                events := [...]model.Event{}
+                nested := [][]NestedEntry{}
+                lookup := map[MapKey]MapValue{}
+                qualified := map[model.Tenant]*MapEntry{}
                 values[i]()
-                _, _ = cache, set
+                _, _, _, _, _, _, _, _ = cache, set, users, widgets, events, nested, lookup, qualified
             }
             """;
 
@@ -5527,69 +5194,23 @@ public partial class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.SymbolName == "Cache" && r.ReferenceKind == "instantiate");
         Assert.Contains(references, r => r.SymbolName == "Set" && r.ReferenceKind == "instantiate");
-        Assert.Contains(references, r => r.SymbolName == "Entry" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
+        foreach (var typeName in new[]
+                 { "Entry", "Key", "Value", "User", "Widget", "Event", "NestedEntry", "MapKey", "MapValue", "Tenant", "MapEntry" })
+        {
+            Assert.Contains(references, r => r.SymbolName == typeName && r.ReferenceKind == "type_reference");
+        }
+
         Assert.DoesNotContain(references, r => r.SymbolName == "i" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoArraySliceCompositeLiterals_CapturesElementTypes()
-    {
-        const string content = """
-            package main
-
-            func build(values []func()) {
-                users := []User{}
-                widgets := [3]*Widget{}
-                events := [...]model.Event{}
-                nested := [][]Entry{}
-                values[i]()
-                _, _, _, _ = users, widgets, events, nested
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Entry" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "i" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoMapCompositeLiterals_CapturesKeyAndValueTypes()
-    {
-        const string content = """
-            package main
-
-            func build() {
-                lookup := map[Key]Value{}
-                qualified := map[model.Tenant]*Entry{}
-                _ = lookup
-                _ = qualified
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Tenant" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Entry" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "map" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
-    public void Extract_GoCompositeTypeConversions_CapturesConvertedTypes()
+    public void Extract_GoTypeConversions_ReuseCompositeAndParenthesizedFixture()
     {
         const string content = """
             package main
 
-            func convert(raw any, rawMap any, rawChan any) {
+            func convertDirect(raw any, rawMap any, rawChan any) {
                 users := []User(raw)
                 lookup := map[Key]Value(rawMap)
                 stream := chan Event(rawChan)
@@ -5598,104 +5219,54 @@ public partial class ReferenceExtractorTests
                 }
                 _, _, _, _ = users, lookup, stream, returned
             }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "raw" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoParenthesizedTypeConversions_CapturesConvertedTypes()
-    {
-        const string content = """
-            package main
-
-            func convert(callback func(any) any, raw any) {
+            func convertParenthesized(callback func(any) any, rawParen any) {
                 var _ Interface = (*Concrete)(nil)
                 var _ = (**Node)(nil)
-                id := (model.ID)(raw)
-                value := (callback)(raw)
+                id := (model.ID)(rawParen)
+                value := (callback)(rawParen)
                 _, _ = id, value
             }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Interface" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Concrete" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Node" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "ID" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "callback" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoParenthesizedCompositeTypeConversions_CapturesConvertedTypes()
-    {
-        const string content = """
-            package main
-
-            func convert(callback func(any) any, raw any) {
-                users := ([]User)(raw)
-                lookup := (map[Key]Value)(raw)
-                stream := (chan Event)(raw)
-                value := (callback)(raw)
-                _, _, _, _ = users, lookup, stream, value
+            func convertParenthesizedComposite(callbackComposite func(any) any, rawComposite any) {
+                parenUsers := ([]ParenUser)(rawComposite)
+                parenLookup := (map[ParenKey]ParenValue)(rawComposite)
+                parenStream := (chan ParenEvent)(rawComposite)
+                value := (callbackComposite)(rawComposite)
+                _, _, _, _ = parenUsers, parenLookup, parenStream, value
             }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "go", content);
         var references = ReferenceExtractor.Extract(1, "go", content, symbols);
 
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
+        foreach (var typeName in new[]
+                 { "User", "Key", "Value", "Event", "Result", "Interface", "Concrete", "Node", "ID", "ParenUser", "ParenKey", "ParenValue", "ParenEvent" })
+        {
+            Assert.Contains(references, r => r.SymbolName == typeName && r.ReferenceKind == "type_reference");
+        }
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "raw" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "callback" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "callbackComposite" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
-    public void Extract_GoMethodExpressions_CapturesReceiverTypes()
+    public void Extract_GoMethodExpressions_ReuseGenericReceiverFixture()
     {
         const string content = """
             package main
 
-            func bind(handler Handler) {
+            func bind(handler Handler, repositories []Repository[User]) {
                 serve := Handler.Serve
                 run := (*Worker).Run
                 stringify := model.User.String
                 method := handler.Serve
-                _, _, _, _ = serve, run, stringify, method
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Worker" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "handler" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoGenericMethodExpressions_CapturesReceiverTypesAndArguments()
-    {
-        const string content = """
-            package main
-
-            func bind(repositories []Repository[User]) {
                 find := Repository[User].Find
                 save := (*Store[model.Entry]).Save
-                method := repositories[i].Find
-                _, _, _ = find, save, method
+                genericMethod := repositories[i].Find
+                _, _, _, _, _, _ = serve, run, stringify, method, find, save
+                _ = genericMethod
             }
             """;
 
@@ -5706,35 +5277,13 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Store" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Entry" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "handler" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "repositories" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "i" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
-    public void Extract_GoGenericInstantiations_CapturesTypeArgumentsWithoutCalls()
-    {
-        const string content = """
-            package main
-
-            func bind(values []func()) {
-                decoder := Decode[User]
-                mapper := stream.Map[model.Event, Result]
-                index := values[i]
-                _, _, _ = decoder, mapper, index
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "i" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoInterfaceTypeSetTerms_CapturesUnionTypes()
+    public void Extract_GoTypeSetTerms_ReuseUnionAndApproximationFixture()
     {
         const string content = """
             package main
@@ -5742,6 +5291,11 @@ public partial class ReferenceExtractorTests
             type Identifier interface {
                 ~CustomID | External
                 model.Token | ~Alias
+            }
+
+            type SliceLike interface {
+                ~[]Element
+                ~map[Key]Value
             }
 
             func flags() {
@@ -5757,29 +5311,12 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "External" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Token" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Alias" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "FlagA" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "FlagB" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoStandaloneTypeSetTerms_CapturesApproximationTypes()
-    {
-        const string content = """
-            package main
-
-            type SliceLike interface {
-                ~[]Element
-                ~map[Key]Value
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
         Assert.Contains(references, r => r.SymbolName == "Element" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "map" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "FlagA" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "FlagB" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -5807,41 +5344,6 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Retry" && r.ReferenceKind == "call" && r.Context.Contains("continue Retry", StringComparison.Ordinal));
         Assert.Contains(references, r => r.SymbolName == "Retry" && r.ReferenceKind == "call" && r.Context.Contains("goto Retry", StringComparison.Ordinal));
         Assert.DoesNotContain(references, r => r.SymbolName == "Retry" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoTypeSwitchCases_CapturesPointerAndCompositeCaseTypes()
-    {
-        const string content = """
-            package main
-
-            func classify(value any, status Status) {
-                switch value.(type) {
-                case *Admin, *model.Member:
-                    return
-                case []Guest, map[Key]Value:
-                    return
-                case nil:
-                    return
-                }
-
-                switch status {
-                case status.Ready:
-                    return
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Admin" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Member" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Guest" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Ready" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "nil" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]

@@ -10,7 +10,7 @@ namespace CodeIndex.Tests;
 /// Tests for SuggestionStore (local JSON storage with deduplication).
 /// SuggestionStoreのテスト（ローカルJSON蓄積 + 重複排除）。
 /// </summary>
-[Collection("SQLite pool sensitive")]
+[Collection("Console sensitive")]
 public class SuggestionStoreTests : IDisposable
 {
     private readonly string _tempDir;
@@ -1203,85 +1203,6 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
-    public void TryAdd_PrunesOldestRecordsOverConfiguredMaxCount()
-    {
-        using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxCountEnvironmentVariable);
-        env.Set(SuggestionStore.MaxCountEnvironmentVariable, "2");
-        var first = MakeRecord("other", null, "First suggestion");
-        first.CreatedAt = DateTime.UtcNow.AddMinutes(-3);
-        var second = MakeRecord("other", null, "Second suggestion");
-        second.CreatedAt = DateTime.UtcNow.AddMinutes(-2);
-        var third = MakeRecord("other", null, "Third suggestion");
-        third.CreatedAt = DateTime.UtcNow.AddMinutes(-1);
-
-        Assert.True(_store.TryAdd(first));
-        Assert.True(_store.TryAdd(second));
-        Assert.True(_store.TryAdd(third));
-
-        var all = _store.LoadAll();
-        Assert.Equal(new[] { "Second suggestion", "Third suggestion" }, all.Select(record => record.Description));
-        Assert.Contains("First suggestion", File.ReadAllText(Path.Combine(_tempDir, "suggestions-codeindex.archive.jsonl")));
-    }
-
-    [Fact]
-    public void ResolveMaxAge_AcceptsMaximumConfiguredValue()
-    {
-        using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxAgeDaysEnvironmentVariable);
-        env.Set(SuggestionStore.MaxAgeDaysEnvironmentVariable, SuggestionStore.MaximumMaxAgeDays.ToString(CultureInfo.InvariantCulture));
-
-        Assert.Equal(TimeSpan.FromDays(SuggestionStore.MaximumMaxAgeDays), SuggestionStore.ResolveMaxAge());
-    }
-
-    [Fact]
-    public void ResolveMaxAge_AboveMaximumUsesDefault()
-    {
-        using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxAgeDaysEnvironmentVariable);
-        var tooLarge = SuggestionStore.MaximumMaxAgeDays + 1;
-        env.Set(SuggestionStore.MaxAgeDaysEnvironmentVariable, tooLarge.ToString(CultureInfo.InvariantCulture));
-
-        Assert.Equal(TimeSpan.FromDays(SuggestionStore.DefaultMaxAgeDays), SuggestionStore.ResolveMaxAge());
-    }
-
-    [Fact]
-    public void ResolveMaxAge_IgnoresCurrentCulturePositiveSign_Issue3404()
-    {
-        using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxAgeDaysEnvironmentVariable);
-        using var _ = new CultureScope(TestCultures.BuildCaretPositiveSignCulture());
-        env.Set(SuggestionStore.MaxAgeDaysEnvironmentVariable, "^30");
-
-        Assert.Equal(TimeSpan.FromDays(SuggestionStore.DefaultMaxAgeDays), SuggestionStore.ResolveMaxAge());
-    }
-
-    [Fact]
-    public void ResolveMaxCount_AcceptsMaximumConfiguredValue()
-    {
-        using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxCountEnvironmentVariable);
-        env.Set(SuggestionStore.MaxCountEnvironmentVariable, SuggestionStore.MaximumMaxCount.ToString(CultureInfo.InvariantCulture));
-
-        Assert.Equal(SuggestionStore.MaximumMaxCount, SuggestionStore.ResolveMaxCount());
-    }
-
-    [Fact]
-    public void ResolveMaxCount_AboveMaximumUsesDefault()
-    {
-        using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxCountEnvironmentVariable);
-        var tooLarge = SuggestionStore.MaximumMaxCount + 1;
-        env.Set(SuggestionStore.MaxCountEnvironmentVariable, tooLarge.ToString(CultureInfo.InvariantCulture));
-
-        Assert.Equal(SuggestionStore.DefaultMaxCount, SuggestionStore.ResolveMaxCount());
-    }
-
-    [Fact]
-    public void ResolveMaxCount_IgnoresCurrentCulturePositiveSign_Issue3404()
-    {
-        using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxCountEnvironmentVariable);
-        using var _ = new CultureScope(TestCultures.BuildCaretPositiveSignCulture());
-        env.Set(SuggestionStore.MaxCountEnvironmentVariable, "^42");
-
-        Assert.Equal(SuggestionStore.DefaultMaxCount, SuggestionStore.ResolveMaxCount());
-    }
-
-    [Fact]
     public void TryAdd_DuplicateStillPersistsPrunedRecords()
     {
         var clock = new ManualTimeProvider(new DateTimeOffset(2031, 1, 1, 0, 0, 0, TimeSpan.Zero));
@@ -1377,4 +1298,86 @@ public class SuggestionStoreTests : IDisposable
     {
         TestProjectHelper.DeleteDirectory(_tempDir);
     }
+}
+
+[Collection("SQLite pool sensitive")]
+public sealed class SuggestionStoreEnvironmentTests : IDisposable
+{
+    private readonly string _tempDir = TestProjectHelper.CreateTempProject("suggestion_store_environment");
+
+    [Fact]
+    public void TryAdd_PrunesOldestRecordsOverConfiguredMaxCount()
+    {
+        using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxCountEnvironmentVariable);
+        env.Set(SuggestionStore.MaxCountEnvironmentVariable, "2");
+        var store = new SuggestionStore(_tempDir);
+        var first = MakeRecord("First suggestion", -3);
+        var second = MakeRecord("Second suggestion", -2);
+        var third = MakeRecord("Third suggestion", -1);
+
+        Assert.True(store.TryAdd(first));
+        Assert.True(store.TryAdd(second));
+        Assert.True(store.TryAdd(third));
+
+        var all = store.LoadAll();
+        Assert.Equal(new[] { "Second suggestion", "Third suggestion" }, all.Select(record => record.Description));
+        Assert.Contains("First suggestion", File.ReadAllText(Path.Combine(_tempDir, "suggestions-codeindex.archive.jsonl")));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ResolveMaxAge_EnforcesConfiguredBoundary(bool atMaximum)
+    {
+        using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxAgeDaysEnvironmentVariable);
+        var configured = atMaximum ? SuggestionStore.MaximumMaxAgeDays : SuggestionStore.MaximumMaxAgeDays + 1;
+        env.Set(SuggestionStore.MaxAgeDaysEnvironmentVariable, configured.ToString(CultureInfo.InvariantCulture));
+
+        var expected = atMaximum ? SuggestionStore.MaximumMaxAgeDays : SuggestionStore.DefaultMaxAgeDays;
+        Assert.Equal(TimeSpan.FromDays(expected), SuggestionStore.ResolveMaxAge());
+    }
+
+    [Fact]
+    public void ResolveMaxAge_IgnoresCurrentCulturePositiveSign_Issue3404()
+    {
+        using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxAgeDaysEnvironmentVariable);
+        using var _ = new CultureScope(TestCultures.BuildCaretPositiveSignCulture());
+        env.Set(SuggestionStore.MaxAgeDaysEnvironmentVariable, "^30");
+
+        Assert.Equal(TimeSpan.FromDays(SuggestionStore.DefaultMaxAgeDays), SuggestionStore.ResolveMaxAge());
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ResolveMaxCount_EnforcesConfiguredBoundary(bool atMaximum)
+    {
+        using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxCountEnvironmentVariable);
+        var configured = atMaximum ? SuggestionStore.MaximumMaxCount : SuggestionStore.MaximumMaxCount + 1;
+        env.Set(SuggestionStore.MaxCountEnvironmentVariable, configured.ToString(CultureInfo.InvariantCulture));
+
+        var expected = atMaximum ? SuggestionStore.MaximumMaxCount : SuggestionStore.DefaultMaxCount;
+        Assert.Equal(expected, SuggestionStore.ResolveMaxCount());
+    }
+
+    [Fact]
+    public void ResolveMaxCount_IgnoresCurrentCulturePositiveSign_Issue3404()
+    {
+        using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxCountEnvironmentVariable);
+        using var _ = new CultureScope(TestCultures.BuildCaretPositiveSignCulture());
+        env.Set(SuggestionStore.MaxCountEnvironmentVariable, "^42");
+
+        Assert.Equal(SuggestionStore.DefaultMaxCount, SuggestionStore.ResolveMaxCount());
+    }
+
+    private static SuggestionRecord MakeRecord(string description, int ageMinutes)
+        => new()
+        {
+            Category = "other",
+            Description = description,
+            Hash = SuggestionStore.ComputeHash("other", null, description),
+            CreatedAt = DateTime.UtcNow.AddMinutes(ageMinutes),
+        };
+
+    public void Dispose() => TestProjectHelper.DeleteDirectory(_tempDir);
 }

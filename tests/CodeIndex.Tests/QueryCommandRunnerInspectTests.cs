@@ -2603,15 +2603,15 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunInspect_CSharpBraceCharLiteralKeepsMethodInsideClass()
+    public void RunInspect_CSharpBraceLiteralsKeepFollowingMethodsInsideClass()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_csharp_brace_char");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_csharp_brace_literals");
         try
         {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "fixture.cs"),
-                """""
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/fixture.cs",
+                """"
                 namespace Demo;
 
                 public class FixtureHost
@@ -2624,49 +2624,7 @@ public partial class QueryCommandRunnerTests
                     public void AfterBraceLiteral()
                     {
                     }
-                }
-                """"");
 
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json", "--quiet"],
-                _jsonOptions));
-            var (inspectExitCode, inspectStdout, inspectStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["AfterBraceLiteral", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(inspectStdout);
-            var json = document.RootElement;
-            var definition = Assert.Single(json.GetProperty("definitions").EnumerateArray());
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, inspectExitCode);
-            Assert.Equal(string.Empty, inspectStderr);
-            Assert.Equal("AfterBraceLiteral", definition.GetProperty("name").GetString());
-            Assert.Equal("class", definition.GetProperty("container_kind").GetString());
-            Assert.Equal("FixtureHost", definition.GetProperty("container_name").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunInspect_CSharpMultilineRawStringBraceKeepsMethodInsideClass()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_csharp_raw_string_brace");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "fixture.cs"),
-                """"
-                namespace Demo;
-
-                public class FixtureHost
-                {
                     public string UsesRawFixture()
                     {
                         return """
@@ -2677,49 +2635,7 @@ public partial class QueryCommandRunnerTests
                     public void AfterRawString()
                     {
                     }
-                }
-                """");
 
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json", "--quiet"],
-                _jsonOptions));
-            var (inspectExitCode, inspectStdout, inspectStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["AfterRawString", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(inspectStdout);
-            var json = document.RootElement;
-            var definition = Assert.Single(json.GetProperty("definitions").EnumerateArray());
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, inspectExitCode);
-            Assert.Equal(string.Empty, inspectStderr);
-            Assert.Equal("AfterRawString", definition.GetProperty("name").GetString());
-            Assert.Equal("class", definition.GetProperty("container_kind").GetString());
-            Assert.Equal("FixtureHost", definition.GetProperty("container_name").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunInspect_CSharpMultilineVerbatimStringBraceKeepsMethodInsideClass()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_csharp_verbatim_string_brace");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "fixture.cs"),
-                """"
-                namespace Demo;
-
-                public class FixtureHost
-                {
                     public string UsesVerbatimFixture()
                     {
                         return @"
@@ -2733,25 +2649,29 @@ public partial class QueryCommandRunnerTests
                 }
                 """");
 
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var dbPath = TestProjectHelper.ProjectPath(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
                 [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
-            var (inspectExitCode, inspectStdout, inspectStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["AfterVerbatimString", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(inspectStdout);
-            var json = document.RootElement;
-            var definition = Assert.Single(json.GetProperty("definitions").EnumerateArray());
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, inspectExitCode);
-            Assert.Equal(string.Empty, inspectStderr);
-            Assert.Equal("AfterVerbatimString", definition.GetProperty("name").GetString());
-            Assert.Equal("class", definition.GetProperty("container_kind").GetString());
-            Assert.Equal("FixtureHost", definition.GetProperty("container_name").GetString());
+
+            foreach (var methodName in new[] { "AfterBraceLiteral", "AfterRawString", "AfterVerbatimString" })
+            {
+                var (inspectExitCode, inspectStdout, inspectStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                    [methodName, "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                    _jsonOptions));
+
+                using var document = ParseJsonOutput(inspectStdout);
+                var definition = Assert.Single(document.RootElement.GetProperty("definitions").EnumerateArray());
+
+                Assert.Equal(CommandExitCodes.Success, inspectExitCode);
+                Assert.Equal(string.Empty, inspectStderr);
+                Assert.Equal(methodName, definition.GetProperty("name").GetString());
+                Assert.Equal("class", definition.GetProperty("container_kind").GetString());
+                Assert.Equal("FixtureHost", definition.GetProperty("container_name").GetString());
+            }
         }
         finally
         {
@@ -4410,9 +4330,9 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunInspect_ExactJson_CSharpSwitchExpressionRecursivePatternVariableDoesNotLeakReferenceContext()
+    public void RunInspect_ExactJson_CSharpSwitchExpressionPatternVariablesKeepOnlyGenuineReferenceContext()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_switch_expression_recursive_pattern_collision");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_switch_expression_pattern_collisions");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
@@ -4432,11 +4352,20 @@ public partial class QueryCommandRunnerTests
 
                 public sealed class Uses
                 {
-                    public Demo.Status Read(object value)
+                    public Demo.Status ReadRecursive(object value)
                     {
                         return value switch
                         {
                             Holder { Ready: > 0 } Status => (Demo.Status)Status.Ready,
+                            _ => Demo.Status.Ready
+                        };
+                    }
+
+                    public Demo.Status ReadComment(object value)
+                    {
+                        return value switch
+                        {
+                            Holder Status /* when comment */ => (Demo.Status)Status.Ready,
                             _ => Demo.Status.Ready
                         };
                     }
@@ -4450,9 +4379,10 @@ public partial class QueryCommandRunnerTests
 
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
-            var referenceLines = json.GetProperty("references")
+            var referenceContainers = json.GetProperty("references")
                 .EnumerateArray()
-                .Select(reference => reference.GetProperty("line").GetInt32())
+                .Select(reference => reference.GetProperty("container_name").GetString())
+                .OrderBy(name => name)
                 .ToArray();
             var callerReferenceCounts = json.GetProperty("callers")
                 .EnumerateArray()
@@ -4461,8 +4391,8 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal([20], referenceLines);
-            Assert.Equal([1], callerReferenceCounts);
+            Assert.Equal(["ReadComment", "ReadRecursive"], referenceContainers);
+            Assert.Equal([1, 1], callerReferenceCounts);
             Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
             Assert.True(json.GetProperty("graph_supported").GetBoolean());
         }
@@ -4473,131 +4403,14 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunInspect_ExactJson_CSharpQueryRangeVariableNamedLikeEnumDoesNotLeakReferenceContext()
+    public void RunInspect_ExactJson_CSharpQueryRangeVariableFormsDoNotLeakReferenceContext()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_query_range_collision");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_query_range_forms");
         try
         {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
-                """
-                using System.Collections.Generic;
-                using System.Linq;
-
-                namespace Demo;
-
-                public enum Status
-                {
-                    Ready
-                }
-
-                public sealed class Holder
-                {
-                    public int Ready { get; set; }
-                }
-
-                public sealed class Uses
-                {
-                    public IEnumerable<int> Read(IEnumerable<Holder> items)
-                    {
-                        return from Status in items
-                               select Status.Ready;
-                    }
-                }
-                """);
-            MarkGraphAndFoldReady(dbPath);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Empty(json.GetProperty("references").EnumerateArray());
-            Assert.Empty(json.GetProperty("callers").EnumerateArray());
-            Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
-            Assert.True(json.GetProperty("graph_supported").GetBoolean());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunInspect_ExactJson_CSharpQueryRangeVariableNamedLikeEnum_OrderByDirectionalCommaDoesNotLeakReferenceContext()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_query_orderby_directional_collision");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "cases.cs"),
-                """
-                using System.Collections.Generic;
-                using System.Linq;
-
-                namespace Demo;
-
-                public enum Status
-                {
-                    Ready
-                }
-
-                public sealed class Holder
-                {
-                    public int Ready { get; set; }
-                }
-
-                public sealed class Uses
-                {
-                    public IEnumerable<int> Read(IEnumerable<Holder> items)
-                    {
-                        return from Status in items
-                               orderby Status descending, items.Count() ascending
-                               select Status.Ready;
-                    }
-                }
-                """);
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json", "--quiet"],
-                _jsonOptions));
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.True(string.IsNullOrWhiteSpace(stderr));
-            Assert.Empty(json.GetProperty("references").EnumerateArray());
-            Assert.Empty(json.GetProperty("callers").EnumerateArray());
-            Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
-            Assert.True(json.GetProperty("graph_supported").GetBoolean());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunInspect_ExactJson_CSharpQueryRangeVariableMemberNamedSelectSeparatedBySpacesDoesNotLeakReferenceContext()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_query_orderby_member_named_select_spaced_dot_collision");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "cases.cs"),
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/cases.cs",
                 """
                 using System.Collections.Generic;
                 using System.Linq;
@@ -4615,68 +4428,6 @@ public partial class QueryCommandRunnerTests
                     public int select { get; set; }
                 }
 
-                public sealed class Uses
-                {
-                    public IEnumerable<int> Read(IEnumerable<Holder> items)
-                    {
-                        return from Status in items
-                               orderby Status . select, items.Count()
-                               select Status.Ready;
-                    }
-                }
-                """);
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json", "--quiet"],
-                _jsonOptions));
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.True(string.IsNullOrWhiteSpace(stderr));
-            Assert.Empty(json.GetProperty("references").EnumerateArray());
-            Assert.Empty(json.GetProperty("callers").EnumerateArray());
-            Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
-            Assert.True(json.GetProperty("graph_supported").GetBoolean());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunInspect_ExactJson_CSharpQueryRangeVariableOrderByObjectInitializerCommaDoesNotLeakReferenceContext()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_query_orderby_object_initializer_collision");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "cases.cs"),
-                """
-                using System.Collections.Generic;
-                using System.Linq;
-
-                namespace Demo;
-
-                public enum Status
-                {
-                    Ready
-                }
-
-                public sealed class Holder
-                {
-                    public int Ready { get; set; }
-                }
-
                 public sealed class Key
                 {
                     public int A { get; set; }
@@ -4685,7 +4436,27 @@ public partial class QueryCommandRunnerTests
 
                 public sealed class Uses
                 {
-                    public IEnumerable<int> Read(IEnumerable<Holder> items)
+                    public IEnumerable<int> Basic(IEnumerable<Holder> items)
+                    {
+                        return from Status in items
+                               select Status.Ready;
+                    }
+
+                    public IEnumerable<int> Directional(IEnumerable<Holder> items)
+                    {
+                        return from Status in items
+                               orderby Status descending, items.Count() ascending
+                               select Status.Ready;
+                    }
+
+                    public IEnumerable<int> SelectMember(IEnumerable<Holder> items)
+                    {
+                        return from Status in items
+                               orderby Status . select, items.Count()
+                               select Status.Ready;
+                    }
+
+                    public IEnumerable<int> ObjectInitializer(IEnumerable<Holder> items)
                     {
                         return from Status in items
                                orderby new Key { A = Status.Ready, B = items.Count() }, items.Count()
@@ -4693,7 +4464,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var dbPath = TestProjectHelper.ProjectPath(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
                 [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
@@ -4708,7 +4479,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.True(string.IsNullOrWhiteSpace(stderr));
+            Assert.Equal(string.Empty, stderr);
             Assert.Empty(json.GetProperty("references").EnumerateArray());
             Assert.Empty(json.GetProperty("callers").EnumerateArray());
             Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
@@ -4838,7 +4609,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunInspect_ExactJson_CSharpQueryRangeVariableGenericSelectorDoesNotLeakEnumReferenceBundle()
+    public void RunInspect_ExactJson_CSharpQueryRangeVariableGenericSelectorsDoNotLeakEnumReferenceBundle()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_query_generic_selector");
         try
@@ -4864,14 +4635,21 @@ public partial class QueryCommandRunnerTests
                 public static class Sink
                 {
                     public static int Wrap<TLeft, TRight>(int value) => value;
+                    public static int Wrap<T>(int value) => value;
                 }
 
                 public sealed class Uses
                 {
-                    public IEnumerable<int> Read(IEnumerable<Holder> items)
+                    public IEnumerable<int> ReadSimple(IEnumerable<Holder> items)
                     {
                         return from Status in items
                                select Sink.Wrap<int, int>(Status.Ready);
+                    }
+
+                    public IEnumerable<int> ReadTuple(IEnumerable<Holder> items)
+                    {
+                        return from Status in items
+                               select Sink.Wrap<(int, List<int>)>(Status.Ready);
                     }
                 }
                 """);
@@ -4964,7 +4742,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunInspect_ExactJson_CSharpQueryRangeVariableGenericTypePatternDesignationDoesNotLeakEnumReferenceBundle()
+    public void RunInspect_ExactJson_CSharpQueryRangeVariableGenericTypePatternFormsDoNotLeakEnumReferenceBundle()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_query_generic_type_pattern_designation");
         try
@@ -4989,63 +4767,13 @@ public partial class QueryCommandRunnerTests
 
                 public sealed class Uses
                 {
-                    public int Read(IEnumerable<Holder> items)
+                    public int ReadWithDesignation(IEnumerable<Holder> items)
                     {
                         return (from Status in items
                                 select Status is Dictionary<int, int> dict ? Status.Ready : 0).First();
                     }
-                }
-                """);
-            MarkGraphAndFoldReady(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(2, json.GetProperty("definitions").GetArrayLength());
-            Assert.Empty(json.GetProperty("references").EnumerateArray());
-            Assert.True(json.GetProperty("graph_supported").GetBoolean());
-            Assert.False(json.TryGetProperty("graph_degraded", out _));
-            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunInspect_ExactJson_CSharpQueryRangeVariableGenericTypePatternWithoutDesignationDoesNotLeakEnumReferenceBundle()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_query_generic_type_pattern_without_designation");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
-                """
-                using System.Collections.Generic;
-                using System.Linq;
-
-                namespace Demo;
-
-                public enum Status
-                {
-                    Ready
-                }
-
-                public sealed class Holder
-                {
-                    public int Ready { get; set; }
-                }
-
-                public sealed class Uses
-                {
-                    public int Read(IEnumerable<Holder> items)
+                    public int ReadWithoutDesignation(IEnumerable<Holder> items)
                     {
                         return (from Status in items
                                 select Status is Dictionary<int, int> ? Status.Ready : 0).First();
@@ -5130,130 +4858,6 @@ public partial class QueryCommandRunnerTests
             Assert.True(json.GetProperty("graph_supported").GetBoolean());
             Assert.False(json.TryGetProperty("graph_degraded", out _));
             Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunInspect_ExactJson_CSharpQueryRangeVariableTupleGenericSelectorDoesNotLeakEnumReferenceBundle()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_query_tuple_generic_selector");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
-                """
-                using System.Collections.Generic;
-                using System.Linq;
-
-                namespace Demo;
-
-                public enum Status
-                {
-                    Ready
-                }
-
-                public sealed class Holder
-                {
-                    public int Ready { get; set; }
-                }
-
-                public static class Sink
-                {
-                    public static int Wrap<T>(int value) => value;
-                }
-
-                public sealed class Uses
-                {
-                    public IEnumerable<int> Read(IEnumerable<Holder> items)
-                    {
-                        return from Status in items
-                               select Sink.Wrap<(int, List<int>)>(Status.Ready);
-                    }
-                }
-                """);
-            MarkGraphAndFoldReady(dbPath);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(2, json.GetProperty("definitions").GetArrayLength());
-            Assert.Empty(json.GetProperty("references").EnumerateArray());
-            Assert.True(json.GetProperty("graph_supported").GetBoolean());
-            Assert.False(json.TryGetProperty("graph_degraded", out _));
-            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunInspect_ExactJson_CSharpSwitchExpressionDeclarationPatternWhenInCommentDoesNotLeakReferenceContext()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_switch_expression_declaration_pattern_when_comment_collision");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
-                """
-                namespace Demo;
-
-                public enum Status
-                {
-                    Ready
-                }
-
-                public sealed class Holder
-                {
-                    public int Ready { get; set; }
-                }
-
-                public sealed class Uses
-                {
-                    public Demo.Status Read(object value)
-                    {
-                        return value switch
-                        {
-                            Holder Status /* when comment */ => (Demo.Status)Status.Ready,
-                            _ => Demo.Status.Ready
-                        };
-                    }
-                }
-                """);
-            MarkGraphAndFoldReady(dbPath);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var referenceLines = json.GetProperty("references")
-                .EnumerateArray()
-                .Select(reference => reference.GetProperty("line").GetInt32())
-                .ToArray();
-            var callerReferenceCounts = json.GetProperty("callers")
-                .EnumerateArray()
-                .Select(caller => caller.GetProperty("reference_count").GetInt32())
-                .ToArray();
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal([20], referenceLines);
-            Assert.Equal([1], callerReferenceCounts);
-            Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
-            Assert.True(json.GetProperty("graph_supported").GetBoolean());
         }
         finally
         {

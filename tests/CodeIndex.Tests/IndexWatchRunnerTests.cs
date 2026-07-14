@@ -4,7 +4,6 @@ using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
-using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -12,7 +11,7 @@ namespace CodeIndex.Tests;
 /// Tests for <see cref="IndexWatchRunner"/> (`cdidx index --watch`).
 /// `cdidx index --watch` のテスト。
 /// </summary>
-[Collection("SQLite pool sensitive")]
+[Collection("Console sensitive")]
 public class IndexWatchRunnerTests
 {
     private readonly JsonSerializerOptions _jsonOptions = new()
@@ -620,7 +619,6 @@ public class IndexWatchRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -801,6 +799,8 @@ public class IndexWatchRunnerTests
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
         try
         {
+            TestProjectHelper.RunGit(projectRoot, "init");
+            TestProjectHelper.RunGit(projectRoot, "config", "core.ignorecase", "false");
             File.WriteAllText(Path.Combine(projectRoot, "hello.py"), "print('hi')\n");
 
             var options = new IndexCommandOptions
@@ -862,16 +862,13 @@ public class IndexWatchRunnerTests
             Assert.Equal("[redacted]", watchStarted.RootElement.GetProperty("db").GetString());
             Assert.Equal(50, watchStarted.RootElement.GetProperty("debounce_ms").GetInt32());
             Assert.Equal(123, watchStarted.RootElement.GetProperty("watch_pending_path_limit").GetInt32());
-            var expectedPathComparison = GitHelper.ResolveIgnoreCase(projectRoot, CancellationToken.None)
-                ? "ordinal_ignore_case"
-                : "ordinal";
             var contract = watchStarted.RootElement.GetProperty("watch_contract");
             Assert.Equal("quiet_window", contract.GetProperty("debounce").GetString());
             Assert.Equal(50, contract.GetProperty("debounce_ms").GetInt32());
             Assert.Equal(IndexWatchRunner.MaxDebounceMs, contract.GetProperty("max_debounce_ms").GetInt32());
             Assert.Equal(50, contract.GetProperty("poll_interval_ms").GetInt32());
             Assert.Equal(123, contract.GetProperty("watch_pending_path_limit").GetInt32());
-            Assert.Equal(expectedPathComparison, contract.GetProperty("path_comparison").GetString());
+            Assert.Equal("ordinal", contract.GetProperty("path_comparison").GetString());
             Assert.Equal("distinct_paths_refresh_debounce", contract.GetProperty("change_coalescing").GetString());
             Assert.Equal("old_and_new_paths", contract.GetProperty("rename_events").GetString());
             Assert.Equal("full_rescan_after_debounce", contract.GetProperty("overflow_recovery").GetString());
@@ -883,9 +880,6 @@ public class IndexWatchRunnerTests
         finally
         {
             DeleteDirectory(projectRoot);
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
         }
     }
 
@@ -945,9 +939,6 @@ public class IndexWatchRunnerTests
         finally
         {
             DeleteDirectory(projectRoot);
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
         }
     }
 
@@ -1008,9 +999,6 @@ public class IndexWatchRunnerTests
         finally
         {
             DeleteDirectory(projectRoot);
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
         }
     }
 

@@ -1694,8 +1694,7 @@ perl -e '$|=1; while (1) { print "x" x 4096; select undef, undef, undef, 0.01 }'
         }
         finally
         {
-            if (File.Exists(probePath))
-                File.Delete(probePath);
+            TestProjectHelper.DeleteFile(probePath);
         }
     }
 

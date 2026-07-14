@@ -2809,7 +2809,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScriptComparisonBeforePlainTemplate_IsNotCaptured()
+    public void Extract_JavaScriptComparisonBeforePlainTemplateSpacingVariants_AreNotCaptured()
     {
         // Regression guard: `foo < bar > \`plain\`` is a chained comparison expression, not a
         // generic-tagged template. The backward scan behind the backtick must not strip the
@@ -2818,39 +2818,18 @@ public partial class ReferenceExtractorTests
         // テンプレートではない。backtick 直前の `<...>` を generic と誤認して
         // `call foo` を幻発行してはならない。
         const string content = """
-            function check(foo, bar) {
-                return foo < bar > `plain`;
+            function check(fooSpaced, barSpaced, fooTight, barTight) {
+                const spaced = fooSpaced < barSpaced > `plain`;
+                return fooTight<barTight>`plain`;
             }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
         var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
 
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "foo");
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "bar");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptComparisonBeforePlainTemplateWithoutSpaces_IsNotCaptured()
-    {
-        // Regression guard: plain JavaScript has no generics, so `foo<bar>\`plain\`` (no
-        // spaces) is a chained comparison `(foo<bar)>\`plain\``, not a generic-tagged
-        // template. The backtick backward-scan must not strip the `<bar>` range as TS
-        // generics and emit a phantom `call foo`.
-        // 退行防止: JavaScript にはジェネリクスがなく、`foo<bar>\`plain\`` は連鎖比較式
-        // `(foo<bar)>\`plain\`` である。backtick 直前の `<...>` を TypeScript generic と
-        // 誤認して `call foo` を幻発行してはならない。
-        const string content = """
-            function check(foo, bar) {
-                return foo<bar>`plain`;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "foo");
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "bar");
+        var comparisonNames = new[] { "fooSpaced", "barSpaced", "fooTight", "barTight" };
+        Assert.DoesNotContain(references, r =>
+            r.ReferenceKind == "call" && comparisonNames.Contains(r.SymbolName));
     }
 
     [Fact]
@@ -2874,37 +2853,22 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScriptForOfLoopOverPlainTemplate_IsNotCaptured()
+    public void Extract_JavaScriptForOfLoopVariantsOverPlainTemplates_AreNotCaptured()
     {
         // Regression guard: `for (const ch of \`abc\`)` uses `of` as the for-of iterator
         // keyword, not as a tag identifier. The tag scanner must detect the enclosing
-        // `for (` header and drop the `of` token instead of emitting a phantom `call of`.
+        // `for (` header and drop the `of` token instead of emitting a phantom `call of`;
+        // the same suppression must tolerate `await` between `for` and `(`.
         // 退行防止: `for (const ch of \`abc\`)` の `of` は for-of イテレータキーワードで
-        // あり、タグ識別子ではない。タグ検出は外側の `for (` ヘッダを認識して `of` を落とす。
+        // あり、タグ識別子ではない。タグ検出は外側の `for (` ヘッダを認識して `of` を落とし、
+        // `for` と `(` の間にある `await` も許容する。
         const string content = """
-            function f() {
+            function syncLoop() {
                 for (const ch of `abc`) {
                     use(ch);
                 }
             }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptForAwaitOfLoopOverPlainTemplate_IsNotCaptured()
-    {
-        // Regression guard: `for await (const x of \`...\`)` is the async iterator form. The
-        // `for` / `(` scanner must tolerate the `await` contextual keyword between them so
-        // the phantom `call of` is still suppressed.
-        // 退行防止: `for await (const x of \`...\`)` は非同期イテレータ形。`for` と `(` の間
-        // の `await` を読み飛ばして `of` の幻 `call` を抑制する。
-        const string content = """
-            async function f(iter) {
+            async function asyncLoop(iter) {
                 for await (const x of `abc`) {
                     use(x);
                 }
@@ -2967,37 +2931,23 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScriptMultiLineForOfLoopOverPlainTemplate_IsNotCaptured()
+    public void Extract_JavaScriptMultiLineForOfLoopVariantsOverPlainTemplates_AreNotCaptured()
     {
         // issue #268 regression: the `for (...)` header may span multiple lines. The
         // backward-scan from `of` must cross line boundaries to find the enclosing `(` and
-        // then confirm zero top-level `;` to classify this as the for-of form.
+        // then confirm zero top-level `;` to classify this as the for-of form, including
+        // the optional `await` contextual keyword between `for` and `(`.
         // issue #268 退行防止: `for (...)` ヘッダは複数行に跨ることがある。`of` からの
         // 後方走査は行境界を越えて `(` を見つけ、トップレベル `;` が 0 のとき for-of 形と
-        // 判定する必要がある。
-        const string content = "function f() {\n" +
+        // 判定する必要があり、`for` と `(` の間の `await` も跨いで判定する。
+        const string content = "function syncLoop() {\n" +
             "    for (\n" +
             "        const ch of `abc`\n" +
             "    ) {\n" +
             "        use(ch);\n" +
             "    }\n" +
-            "}\n";
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptMultiLineForAwaitOfLoopOverPlainTemplate_IsNotCaptured()
-    {
-        // issue #268 regression: multi-line `for await (...)` with the iterator on a later
-        // line must still be suppressed. The cross-line scan has to handle the optional
-        // `await` contextual keyword between `for` and `(` too.
-        // issue #268 退行防止: 複数行 `for await (...)` で iterator 行が離れていても抑制する。
-        // `for` と `(` の間の `await` も跨いで判定する。
-        const string content = "async function f(iter) {\n" +
+            "}\n" +
+            "async function asyncLoop(iter) {\n" +
             "    for await (\n" +
             "        const x of `abc`\n" +
             "    ) {\n" +
@@ -3035,36 +2985,25 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScriptForOfHeaderWithNbspSeparator_IsNotCaptured()
+    public void Extract_JavaScriptForOfHeadersWithSpecialWhitespace_AreNotCaptured()
     {
-        // issue #268 regression: the for-of header probe must also accept non-ASCII
-        // whitespace. `for\u00A0(const ch of \`abc\`)` is a valid for-of loop and must not
-        // emit a phantom `call of`.
-        // issue #268 退行防止: for-of ヘッダ判定も非 ASCII 空白を許容する必要がある。
-        // `for\u00A0(const ch of \`abc\`)` は正当な for-of 形なので phantom `call of` を
-        // 出さない。
-        const string content = "function f() {\n" +
+        // issue #268 regression: the for-of header probe must accept NBSP and BOM, including
+        // NBSP around the optional `await` keyword, without emitting a phantom `call of`.
+        // issue #268 退行防止: for-of ヘッダ判定は NBSP と BOM、および任意の `await` 前後の
+        // NBSP を許容し、phantom `call of` を出さない。
+        const string content = "function nbspSync() {\n" +
             "    for\u00A0(const ch of `abc`) {\n" +
             "        use(ch);\n" +
             "    }\n" +
-            "}\n";
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptForAwaitOfHeaderWithNbspSeparator_IsNotCaptured()
-    {
-        // issue #268 regression: the for-await-of header probe must also tolerate non-ASCII
-        // whitespace between `for`, `await`, and `(`.
-        // issue #268 退行防止: for-await-of ヘッダ判定は `for`・`await`・`(` の間の非 ASCII
-        // 空白も許容する。
-        const string content = "async function f(iter) {\n" +
+            "}\n" +
+            "async function nbspAsync(iter) {\n" +
             "    for\u00A0await\u00A0(const x of `abc`) {\n" +
             "        use(x);\n" +
+            "    }\n" +
+            "}\n" +
+            "function bomSync() {\n" +
+            "    for\uFEFF(const ch of `abc`) {\n" +
+            "        use(ch);\n" +
             "    }\n" +
             "}\n";
 
@@ -3090,23 +3029,6 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
 
         Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptForOfHeaderWithBomSeparator_IsNotCaptured()
-    {
-        // issue #268 regression: for-of header probe must tolerate BOM between `for` and `(`.
-        // issue #268 退行防止: for-of ヘッダ判定は `for` と `(` の間の BOM も許容する。
-        const string content = "function f(arr) {\n" +
-            "    for\uFEFF(const ch of `abc`) {\n" +
-            "        use(ch);\n" +
-            "    }\n" +
-            "}\n";
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
     }
 
     [Fact]
@@ -3248,24 +3170,28 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScriptObjectDefaultTaggedTemplate_IsCapturedAsCall()
+    public void Extract_JavaScriptObjectKeywordTaggedTemplates_AreCapturedAsCalls()
     {
-        // issue #268 regression guard: `obj.default\`x\`` is a legal tagged-template call
-        // because reserved words are valid property names in JS/TS. The bare-keyword
-        // denylist (`default` / `finally` / ...) must NOT suppress member-access tags.
-        // issue #268 退行防止: `obj.default\`x\`` は JS/TS で予約語も property 名に
-        // なれるため正当なタグ呼び出し。bare-keyword 除外リスト（`default` / `finally` /
-        // ...）はメンバーアクセスのタグを握り潰してはならない。
+        // issue #268 regression guard: reserved words are valid property names in JS/TS,
+        // so the bare-keyword denylist must not suppress member-access tags.
+        // issue #268 退行防止: JS/TS では予約語も property 名として合法なので、bare-keyword
+        // 除外リストが member-access tag を握り潰してはならない。
         const string content = """
             function run(obj) {
-                return obj.default`x`;
+                obj.default`d`;
+                obj.return`r`;
+                obj.finally`f`;
+            }
+            async function runAsync(obj) {
+                return obj.await`a`;
             }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
         var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
 
-        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "default");
+        foreach (var name in new[] { "default", "return", "finally", "await" })
+            Assert.Single(references.Where(r => r.ReferenceKind == "call" && r.SymbolName == name));
     }
 
     [Fact]
@@ -3291,71 +3217,6 @@ public partial class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "tag");
         Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "comment");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptObjectReturnTaggedTemplate_IsCapturedAsCall()
-    {
-        // issue #268 regression guard: `obj.return\`x\`` is a legal tagged-template call
-        // because `return` is a valid property name in JS/TS. The shared ignore list
-        // (which holds `return` / `throw` / `await` / `typeof` / `yield` for JS/TS to
-        // suppress bare-keyword phantom calls) must NOT suppress member-access tags.
-        // issue #268 退行防止: `obj.return\`x\`` は `return` が property 名として合法
-        // なので正当なタグ呼び出し。bare-keyword の phantom 呼び出しを抑止する共有
-        // ignore list（`return` / `throw` / `await` / `typeof` / `yield`）は
-        // メンバーアクセスのタグを握り潰してはならない。
-        const string content = """
-            function run(obj) {
-                return obj.return`x`;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "return");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptObjectAwaitTaggedTemplate_IsCapturedAsCall()
-    {
-        // issue #268 regression guard: `obj.await\`y\`` is a legal tagged-template call;
-        // `await` is a reserved word in async contexts but is still a valid property
-        // name. Member-access tags must bypass the `IsIgnoredCallName` filter.
-        // issue #268 退行防止: `obj.await\`y\`` は await が async 内で予約語でも
-        // property 名としては合法なので正当なタグ呼び出し。メンバーアクセスのタグは
-        // `IsIgnoredCallName` を迂回する必要がある。
-        const string content = """
-            async function run(obj) {
-                return obj.await`y`;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "await");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptObjectFinallyTaggedTemplate_IsCapturedAsCall()
-    {
-        // issue #268 regression guard: `obj.finally\`y\`` is a legal tagged-template call;
-        // `finally` is a reserved word but a valid property name. Member-access tags must
-        // bypass the bare-keyword denylist that handles `try {} finally \`cleanup\``.
-        // issue #268 退行防止: `obj.finally\`y\`` は `finally` が予約語でも property 名と
-        // して合法なので正当なタグ呼び出し。メンバーアクセスのタグは
-        // `try {} finally \`cleanup\`` 用の bare-keyword 除外リストを迂回する必要がある。
-        const string content = """
-            function run(obj) {
-                return obj.finally`y`;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "finally");
     }
 
     [Fact]

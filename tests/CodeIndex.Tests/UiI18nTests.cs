@@ -7,7 +7,7 @@ namespace CodeIndex.Tests;
 /// Tests for user-facing message catalog and language resolver introduced for #1568.
 /// #1568 で導入したユーザー向けメッセージカタログと言語解決のテスト。
 /// </summary>
-[Collection("SQLite pool sensitive")]
+[Collection("Console sensitive")]
 public class UiI18nTests
 {
     [Theory]

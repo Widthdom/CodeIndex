@@ -51,25 +51,17 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_SQL_MySqlDefinerCreatesDefinerSymbols()
+    public void Extract_SQL_DetectsDefinersAndReturnFieldsWithoutTriviaFalsePositives()
     {
         const string content = """
+            -- CREATE DEFINER='ghost'@'%' PROCEDURE hidden()
+            SELECT 'RETURNS TABLE(fake int)';
             CREATE DEFINER='admin'@'%' PROCEDURE schema.proc()
             BEGIN
               SELECT 1;
             END;
             CREATE DEFINER=`app_user`@`localhost` VIEW `schema`.`v_orders` AS SELECT 1;
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "sql", content);
-
-        AssertSymbolsContain(symbols, "definer", "admin@%", "app_user@localhost");
-    }
-
-    [Fact]
-    public void Extract_SQL_PostgresReturnsTableAndOutParametersCreateFieldSymbols()
-    {
-        const string content = """
             CREATE FUNCTION public.search_orders()
             RETURNS TABLE(id bigint, customer_name text, total numeric(12, 2))
             AS $$
@@ -80,23 +72,7 @@ public partial class SymbolExtractorTests
 
             CREATE FUNCTION public.load_order(OUT order_id int, OUT order_name text) RETURNS RECORD
             AS $$ SELECT 1, 'a' $$ LANGUAGE sql;
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "sql", content);
-
-        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "id" && s.ContainerName == "public.search_orders" && s.ReturnType == "bigint");
-        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "customer_name" && s.ContainerName == "public.search_orders" && s.ReturnType == "text");
-        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "total" && s.ContainerName == "public.search_orders" && s.ReturnType == "numeric(12, 2)");
-        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "order_id" && s.ContainerName == "public.load_order");
-        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "order_name" && s.ContainerName == "public.load_order");
-    }
-
-    [Fact]
-    public void Extract_SQL_DoesNotEmitDefinerOrReturnFieldsFromCommentsAndStrings()
-    {
-        const string content = """
-            -- CREATE DEFINER='ghost'@'%' PROCEDURE hidden()
-            SELECT 'RETURNS TABLE(fake int)';
             CREATE FUNCTION public.real()
             RETURNS TABLE(real_id int)
             AS $$ SELECT 1 $$ LANGUAGE sql;
@@ -104,9 +80,15 @@ public partial class SymbolExtractorTests
 
         var symbols = SymbolExtractor.Extract(1, "sql", content);
 
+        AssertSymbolsContain(symbols, "definer", "admin@%", "app_user@localhost");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "id" && s.ContainerName == "public.search_orders" && s.ReturnType == "bigint");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "customer_name" && s.ContainerName == "public.search_orders" && s.ReturnType == "text");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "total" && s.ContainerName == "public.search_orders" && s.ReturnType == "numeric(12, 2)");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "order_id" && s.ContainerName == "public.load_order");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "order_name" && s.ContainerName == "public.load_order");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "real_id");
         Assert.DoesNotContain(symbols, s => s.Kind == "definer" && s.Name == "ghost@%");
         Assert.DoesNotContain(symbols, s => s.Kind == "field" && s.Name == "fake");
-        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "real_id");
     }
 
     [Fact]
@@ -226,21 +208,6 @@ public partial class SymbolExtractorTests
                     s.ContainerKind != "namespace" || s.ContainerName != "sales",
                     $"{s.Kind} {s.Name} was wrapped under namespace=sales — ALTER/CREATE SCHEMA must not act as a C# file-scoped namespace container."));
         }
-    }
-
-    [Fact]
-    public void Extract_SQL_QualifiedNamesAllowWhitespaceAroundDots()
-    {
-        var content =
-            "CREATE PROCEDURE [sales] . [sp_Report] AS SELECT 1;\n" +
-            "CREATE VIEW dbo . v_Orders AS SELECT 1;\n" +
-            "CREATE TYPE sales . Money AS ENUM ('usd');\n";
-
-        var symbols = SymbolExtractor.Extract(1, "sql", content);
-
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name.Contains("sp_Report", StringComparison.Ordinal));
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name.Contains("v_Orders", StringComparison.Ordinal));
-        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name.Contains("Money", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -717,6 +684,9 @@ public partial class SymbolExtractorTests
     public void Extract_SQL_KeepsQualifiedNamesWhenDotsHaveSurroundingWhitespace()
     {
         var content =
+            "CREATE PROCEDURE [sales] . [sp_Report] AS SELECT 1;\n" +
+            "CREATE VIEW dbo . v_Orders AS SELECT 1;\n" +
+            "CREATE TYPE sales . Money AS ENUM ('usd');\n" +
             "CREATE SCHEMA sales . reporting;\n" +
             "CREATE SCHEMA AUTHORIZATION sales . auth_owner;\n" +
             "CREATE SEQUENCE sales . seq_orders START WITH 1;\n" +
@@ -740,6 +710,9 @@ public partial class SymbolExtractorTests
             "ALTER FULLTEXT CATALOG sales . ft_catalog REORGANIZE;\n";
         var symbols = SymbolExtractor.Extract(1, "sql", content);
 
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name.Contains("sp_Report", StringComparison.Ordinal));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name.Contains("v_Orders", StringComparison.Ordinal));
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name.Contains("Money", StringComparison.Ordinal));
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "sales.reporting");
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "sales.auth_owner");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.seq_orders");

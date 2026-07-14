@@ -4,38 +4,26 @@ namespace CodeIndex.Tests;
 public class EnvironmentVariableScopeTests
 {
     [Fact]
-    public void Dispose_RestoresOriginalValue()
+    public void Dispose_RestoresPresentAndMissingOriginalValues()
     {
-        var name = $"CDIDX_TEST_SCOPE_{Guid.NewGuid():N}";
-        Environment.SetEnvironmentVariable(name, "before");
-        try
+        foreach (var originalValue in new string?[] { "before", null })
         {
-            using (var env = EnvironmentVariableScope.Capture(name))
+            var name = $"CDIDX_TEST_SCOPE_{Guid.NewGuid():N}";
+            Environment.SetEnvironmentVariable(name, originalValue);
+            try
             {
-                env.Set(name, "during");
-                Assert.Equal("during", Environment.GetEnvironmentVariable(name));
+                using (var env = EnvironmentVariableScope.Capture(name))
+                {
+                    env.Set(name, "during");
+                    Assert.Equal("during", Environment.GetEnvironmentVariable(name));
+                }
+
+                Assert.Equal(originalValue, Environment.GetEnvironmentVariable(name));
             }
-
-            Assert.Equal("before", Environment.GetEnvironmentVariable(name));
+            finally
+            {
+                Environment.SetEnvironmentVariable(name, null);
+            }
         }
-        finally
-        {
-            Environment.SetEnvironmentVariable(name, null);
-        }
-    }
-
-    [Fact]
-    public void Dispose_RestoresMissingValue()
-    {
-        var name = $"CDIDX_TEST_SCOPE_{Guid.NewGuid():N}";
-        Environment.SetEnvironmentVariable(name, null);
-
-        using (var env = EnvironmentVariableScope.Capture(name))
-        {
-            env.Set(name, "during");
-            Assert.Equal("during", Environment.GetEnvironmentVariable(name));
-        }
-
-        Assert.Null(Environment.GetEnvironmentVariable(name));
     }
 }

@@ -7,23 +7,17 @@ namespace CodeIndex.Tests;
 public class FileUriPolicyTests
 {
     [Fact]
-    public void PathToFileUri_EscapesPathCharacters_Issue3995()
+    public void PathAndLspFileUris_ShareEscapingAndRoundTrip_Issue3995()
     {
         var root = Path.Combine(Path.GetTempPath(), "cdidx uri root");
-        var uri = FileUriPolicy.PathToFileUri(Path.Combine("src", "a file#name.cs"), root);
+        var relativePath = Path.Combine("src", "a file#name.cs");
+        var uri = FileUriPolicy.PathToFileUri(relativePath, root);
+        var lspUri = LspServer.PathToUri(relativePath, root);
 
         Assert.StartsWith("file:", uri, StringComparison.Ordinal);
         Assert.Contains("a%20file%23name.cs", uri, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void LspPathToUri_UsesSharedFileUriPolicy_Issue3995()
-    {
-        var root = Path.Combine(Path.GetTempPath(), "cdidx lsp uri");
-        var uri = LspServer.PathToUri(Path.Combine("src", "query #1.cs"), root);
-
-        Assert.Contains("query%20%231.cs", uri, StringComparison.Ordinal);
-        Assert.Equal(Path.GetFullPath(Path.Combine(root, "src", "query #1.cs")), LspServer.UriToPath(uri));
+        Assert.Equal(uri, lspUri);
+        Assert.Equal(Path.GetFullPath(Path.Combine(root, relativePath)), LspServer.UriToPath(lspUri));
     }
 
     [Fact]

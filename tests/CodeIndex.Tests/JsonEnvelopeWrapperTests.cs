@@ -4,7 +4,7 @@ using CodeIndex.Cli;
 
 namespace CodeIndex.Tests;
 
-[Collection("SQLite pool sensitive")]
+[Collection("Console sensitive")]
 public class JsonEnvelopeWrapperTests
 {
     private readonly JsonSerializerOptions _jsonOptions = ProgramRunner.CreateDefaultJsonOptions();

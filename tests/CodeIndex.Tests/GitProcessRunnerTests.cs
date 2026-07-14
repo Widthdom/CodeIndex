@@ -3,7 +3,6 @@ using CodeIndex.Cli;
 
 namespace CodeIndex.Tests;
 
-[Collection("SQLite pool sensitive")]
 public sealed class GitProcessRunnerTests : IDisposable
 {
     private readonly string tempDir;

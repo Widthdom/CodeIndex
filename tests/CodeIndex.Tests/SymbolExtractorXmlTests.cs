@@ -238,31 +238,11 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_AppManifest_IgnoresDtdWithSharedReaderPolicy_Issue3981()
+    public void Extract_AppManifest_IgnoresDtdWithoutResolvingExternalEntities_Issues3981And4345()
     {
         const string content = """
             <!DOCTYPE assembly [
-              <!ENTITY local "ignored">
-            ]>
-            <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
-              <assemblyIdentity version="1.0.0.0" name="CodeIndex.App" processorArchitecture="*" type="win32" />
-            </assembly>
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "app_manifest", content);
-
-        Assert.Contains(symbols, symbol =>
-            symbol.Kind == "assembly"
-            && symbol.Name == "CodeIndex.App"
-            && symbol.Line == 5);
-    }
-
-    [Fact]
-    public void Extract_AppManifest_DoesNotResolveExternalEntityWithSharedReaderPolicy_Issue4345()
-    {
-        const string content = """
-            <!DOCTYPE assembly [
-              <!ENTITY xxe SYSTEM "file:///should/not/be/read">
+              <!ENTITY local "ignored"><!ENTITY xxe SYSTEM "file:///should/not/be/read">
             ]>
             <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
               <assemblyIdentity version="1.0.0.0" name="CodeIndex.App" processorArchitecture="*" type="win32" />
@@ -274,7 +254,8 @@ public partial class SymbolExtractorTests
 
         Assert.Contains(symbols, symbol =>
             symbol.Kind == "assembly"
-            && symbol.Name == "CodeIndex.App");
+            && symbol.Name == "CodeIndex.App"
+            && symbol.Line == 5);
         Assert.DoesNotContain(symbols, symbol => symbol.Signature?.Contains("should/not/be/read", StringComparison.Ordinal) == true);
     }
 
@@ -380,25 +361,6 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Xml_XamlCapturesXKey()
-    {
-        var content = """
-            <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-                <SolidColorBrush x:Key="{x:Static Member={x:Type local:Keys}.AccentBrush}" Color="Tomato" />
-                <Style x:Key="PrimaryButtonStyle" TargetType="Button">
-                    <Setter Property="Background" Value="{StaticResource AccentBrush}" />
-                </Style>
-            </ResourceDictionary>
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "xml", content);
-
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "local:Keys.AccentBrush");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PrimaryButtonStyle");
-    }
-
-    [Fact]
     public void Extract_Xml_XamlCapturesTargetTypeAndDataType()
     {
         var content = """
@@ -425,7 +387,7 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Xml_XamlCapturesTypeArgumentsAsClassSymbols()
+    public void Extract_Xml_XamlCapturesTypeArgumentVariantsAsClassSymbols()
     {
         var content = """
             <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -435,30 +397,10 @@ public partial class SymbolExtractorTests
                 <local:Pair x:TypeArguments="x:String, vm:PersonViewModel" />
                 <local:Factory x:TypeArguments="{x:Type vm:CustomButton}" />
                 <local:Nested x:TypeArguments="vm:Outer(x:String, vm:InnerModel)" />
-            </ResourceDictionary>
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "xml", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "x:String");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:PersonViewModel");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:CustomButton");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:Outer");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:InnerModel");
-    }
-
-    [Fact]
-    public void Extract_Xml_XamlCapturesWrappedTypeArgumentsAcrossLines()
-    {
-        var content = """
-            <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                                xmlns:vm="clr-namespace:Sample.ViewModels"
-                                xmlns:local="clr-namespace:Sample.Controls">
                 <local:Pair
-                    x:TypeArguments="x:String,
-                                     vm:Outer(
-                                         vm:InnerModel,
+                    x:TypeArguments="vm:Wrapped,
+                                     vm:Nested(
+                                         vm:WrappedInner,
                                          x:Int32)" />
             </ResourceDictionary>
             """;
@@ -468,6 +410,11 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "x:String");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:Outer");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:InnerModel");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:PersonViewModel");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:CustomButton");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:Wrapped");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:Nested");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:WrappedInner");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "x:Int32");
     }
 
@@ -499,7 +446,7 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Xml_XamlCapturesTypeObjectElementsAcrossLines()
+    public void Extract_Xml_XamlCapturesTypeObjectPropertyAndMarkupForms()
     {
         var content = """
             <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -513,28 +460,14 @@ public partial class SymbolExtractorTests
                     <x:TypeExtension TypeName=
                         "{x:Type vm:CustomButton}" />
                 </Style.TargetType>
-            </ResourceDictionary>
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "xml", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:PersonViewModel");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:CustomButton");
-    }
-
-    [Fact]
-    public void Extract_Xml_XamlCapturesTypePropertyElementsAcrossLines()
-    {
-        var content = """
-            <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                                xmlns:vm="clr-namespace:Sample.ViewModels">
                 <x:Type.TypeName>
-                    vm:PersonViewModel
+                    vm:PropertyPerson
                 </x:Type.TypeName>
                 <x:TypeExtension.TypeName>
-                    {x:Type vm:CustomButton}
+                    {x:Type vm:PropertyButton}
                 </x:TypeExtension.TypeName>
+                <ControlTemplate TargetType="{x:Type vm:MarkupPerson}" />
+                <TextBlock ToolTip="{x:TypeExtension TypeName=vm:MarkupButton}" />
             </ResourceDictionary>
             """;
 
@@ -542,26 +475,10 @@ public partial class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:PersonViewModel");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:CustomButton");
-    }
-
-    [Fact]
-    public void Extract_Xml_XamlCapturesTypeMarkupExtensions()
-    {
-        var content = """
-            <ContentPage xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                         xmlns:vm="clr-namespace:Sample.ViewModels">
-                <ContentPage.Resources>
-                    <ControlTemplate TargetType="{x:Type vm:PersonViewModel}" />
-                    <TextBlock ToolTip="{x:TypeExtension TypeName=vm:CustomButton}" />
-                </ContentPage.Resources>
-            </ContentPage>
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "xml", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:PersonViewModel");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:CustomButton");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:PropertyPerson");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:PropertyButton");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:MarkupPerson");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vm:MarkupButton");
     }
 
     [Fact]
@@ -586,27 +503,6 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Xml_XamlCapturesCommonEventHandlers()
-    {
-        var content = """
-            <ContentPage xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-                <VerticalStackLayout>
-                    <Button Text="Save" Clicked="OnSaveClicked" />
-                    <Entry TextChanged="OnFilterTextChanged" />
-                    <CollectionView SelectionChanged="OnSelectionChanged" />
-                </VerticalStackLayout>
-            </ContentPage>
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "xml", content);
-
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnSaveClicked");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnFilterTextChanged");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnSelectionChanged");
-    }
-
-    [Fact]
     public void Extract_Xml_XamlCapturesWrappedSearchAttributesAcrossLines()
     {
         var content = """
@@ -628,6 +524,7 @@ public partial class SymbolExtractorTests
                     <Entry
                         TextChanged=
                             "OnFilterTextChanged" />
+                    <CollectionView SelectionChanged="OnSelectionChanged" />
                 </VerticalStackLayout>
             </ContentPage>
             """;
@@ -638,10 +535,11 @@ public partial class SymbolExtractorTests
         Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "SaveButton"));
         Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "OnSaveClicked"));
         Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "OnFilterTextChanged"));
+        Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "OnSelectionChanged"));
     }
 
     [Fact]
-    public void Extract_Xml_XamlCapturesBindingPaths()
+    public void Extract_Xml_XamlCapturesBindingPathVariants()
     {
         var content = """
             <ContentPage xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -652,47 +550,32 @@ public partial class SymbolExtractorTests
                         Title}" />
                     <Button Command="{x:Bind
                         ViewModel.SaveCommand}" />
+                    <TextBlock Text="{CompiledBinding CompiledModel.CompiledTitle}" />
+                    <TextBox Text="{ReflectionBinding Path=Search.FilterText}" />
+                    <Button Command="{CompiledBinding Commands.CompiledSave}" />
+                    <TextBlock Tag="{CompiledBinding Path=Profile.DisplayName, ConverterParameter='Path=Ignored'}" />
                 </StackPanel>
             </ContentPage>
             """;
 
         var symbols = SymbolExtractor.Extract(1, "xml", content);
 
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ViewModel");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Title");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "SaveCommand");
-        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Root");
-    }
-
-    [Fact]
-    public void Extract_Xml_XamlCapturesCompiledAndReflectionBindingPaths()
-    {
-        var content = """
-            <Window xmlns="https://github.com/avaloniaui"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-                <StackPanel>
-                    <TextBlock Text="{CompiledBinding ViewModel.Title}" />
-                    <TextBox Text="{ReflectionBinding Path=Search.FilterText}" />
-                    <Button Command="{CompiledBinding
-                        Commands.Save}" />
-                    <TextBlock Tag="{CompiledBinding Path=Profile.DisplayName, ConverterParameter='Path=Ignored'}" />
-                </StackPanel>
-            </Window>
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "xml", content);
         var propertyNames = symbols.Where(s => s.Kind == "property").Select(s => s.Name).ToList();
 
+        Assert.Contains("ViewModel", propertyNames);
         Assert.Contains("Title", propertyNames);
+        Assert.Contains("SaveCommand", propertyNames);
+        Assert.Contains("CompiledTitle", propertyNames);
         Assert.Contains("FilterText", propertyNames);
-        Assert.Contains("Save", propertyNames);
+        Assert.Contains("CompiledSave", propertyNames);
         Assert.Contains("DisplayName", propertyNames);
         Assert.DoesNotContain("Ignored", propertyNames);
-        Assert.DoesNotContain("ViewModel", propertyNames);
+        Assert.DoesNotContain("CompiledModel", propertyNames);
+        Assert.DoesNotContain("Root", propertyNames);
     }
 
     [Fact]
-    public void Extract_Xml_XamlCapturesBindingElementNameReferences()
+    public void Extract_Xml_XamlCapturesNamedObjectReferenceVariants()
     {
         var content = """
             <ContentPage xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -708,6 +591,13 @@ public partial class SymbolExtractorTests
                     <Binding.ElementName>
                         DetailsList
                     </Binding.ElementName>
+                    <TextBlock Text="{Binding Source={x:Reference ReferenceRoot}, Path=ReferenceTitle}" />
+                    <TextBlock Text="{Binding Source={x:Reference Name=NamedTarget}, Path=ReferenceTitle}" />
+                    <TextBlock Text="{Binding Source={x:ReferenceExtension Name=ExtensionTarget}, Path=ReferenceTitle}" />
+                    <x:Reference ToolTip="Name='Ignored'" Name="ObjectTarget" />
+                    <x:Reference.Name>
+                        PropertyTarget
+                    </x:Reference.Name>
                 </Grid>
             </ContentPage>
             """;
@@ -720,27 +610,14 @@ public partial class SymbolExtractorTests
         Assert.Contains("RootPanel", propertyNames);
         Assert.Contains("DetailsList", propertyNames);
         Assert.Contains("Name", propertyNames);
+        Assert.Contains("ReferenceRoot", propertyNames);
+        Assert.Contains("NamedTarget", propertyNames);
+        Assert.Contains("ExtensionTarget", propertyNames);
+        Assert.Contains("ObjectTarget", propertyNames);
+        Assert.Contains("PropertyTarget", propertyNames);
+        Assert.Contains("ReferenceTitle", propertyNames);
         Assert.DoesNotContain("Ignored", propertyNames);
-    }
-
-    [Fact]
-    public void Extract_Xml_XamlCapturesTemplateBindingProperties()
-    {
-        var content = """
-            <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                                xmlns:local="clr-namespace:Sample.Controls">
-                <ControlTemplate TargetType="{x:Type local:ButtonChrome}">
-                    <Border Background="{TemplateBinding Background}"
-                            BorderBrush="{TemplateBinding Property=local:ButtonChrome.BorderBrush}" />
-                </ControlTemplate>
-            </ResourceDictionary>
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "xml", content);
-
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Background");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "BorderBrush");
+        Assert.DoesNotContain("x:Reference", propertyNames);
     }
 
     [Fact]
@@ -777,35 +654,23 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Xml_XamlCapturesXReferenceTargets()
+    public void Extract_Xml_XamlCapturesTemplateBindingProperties()
     {
         var content = """
-            <ContentPage xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                         xmlns:local="clr-namespace:Sample.ViewModels">
-                <Grid>
-                    <TextBlock Text="{Binding Source={x:Reference RootPanel}, Path=Title}" />
-                    <TextBlock Text="{Binding Source={x:Reference Name=NamedTarget}, Path=Title}" />
-                    <TextBlock Text="{Binding Source={x:ReferenceExtension Name=ExtensionTarget}, Path=Title}" />
-                    <x:Reference ToolTip="Name='Ignored'" Name="ObjectTarget" />
-                    <x:Reference.Name>
-                        PropertyTarget
-                    </x:Reference.Name>
-                </Grid>
-            </ContentPage>
+            <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                                xmlns:local="clr-namespace:Sample.Controls">
+                <ControlTemplate TargetType="{x:Type local:ButtonChrome}">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding Property=local:ButtonChrome.BorderBrush}" />
+                </ControlTemplate>
+            </ResourceDictionary>
             """;
 
         var symbols = SymbolExtractor.Extract(1, "xml", content);
-        var propertyNames = symbols.Where(s => s.Kind == "property").Select(s => s.Name).ToList();
 
-        Assert.Contains("RootPanel", propertyNames);
-        Assert.Contains("NamedTarget", propertyNames);
-        Assert.Contains("ExtensionTarget", propertyNames);
-        Assert.Contains("ObjectTarget", propertyNames);
-        Assert.Contains("PropertyTarget", propertyNames);
-        Assert.Contains("Title", propertyNames);
-        Assert.DoesNotContain("Ignored", propertyNames);
-        Assert.DoesNotContain("x:Reference", propertyNames);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Background");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "BorderBrush");
     }
 
     [Fact]
@@ -817,6 +682,8 @@ public partial class SymbolExtractorTests
                                 xmlns:local="clr-namespace:Sample.ViewModels">
                 <SolidColorBrush x:Key="PrimaryBrush" Color="Tomato" />
                 <SolidColorBrush x:Key="{x:Static local:Keys.WarningBrush}" Color="Orange" />
+                <SolidColorBrush x:Key="{x:Static Member={x:Type local:Keys}.AccentBrush}" Color="Red" />
+                <Style x:Key="PrimaryButtonStyle" TargetType="Button" />
                 <TextBlock Foreground="{StaticResource PrimaryBrush}" />
                 <Border BorderBrush="{DynamicResource ResourceKey={x:Static Member={x:Type local:Keys}.AccentBrush}}" />
                 <TextBlock DataContext="{Binding Source={StaticResource ViewModelLocator}, Path=CurrentUser.DisplayName}" />
@@ -831,6 +698,7 @@ public partial class SymbolExtractorTests
         Assert.Contains("PrimaryBrush", propertyNames);
         Assert.Contains("local:Keys.WarningBrush", propertyNames);
         Assert.Contains("local:Keys.AccentBrush", propertyNames);
+        Assert.Contains("PrimaryButtonStyle", propertyNames);
         Assert.Contains("ViewModelLocator", propertyNames);
         Assert.Contains("DisplayName", propertyNames);
         Assert.DoesNotContain("StaticResource", propertyNames);

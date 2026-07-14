@@ -674,6 +674,6 @@ public class ConcurrencyTests : IDisposable
         _disposed = true;
         _db.Dispose();
         _sqlitePoolOwner.Dispose();
-        try { TestProjectHelper.DeleteFile(_dbPath); } catch { }
+        TestProjectHelper.DeleteFile(_dbPath);
     }
 }

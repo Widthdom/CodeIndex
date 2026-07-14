@@ -8,7 +8,7 @@ using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
-[Collection("SQLite pool sensitive")]
+[Collection("Console sensitive")]
 public class DiffCommandRunnerTests
 {
     private readonly JsonSerializerOptions _jsonOptions = new()

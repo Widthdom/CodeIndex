@@ -22,7 +22,6 @@ $testArgs = @(
   "--nologo",
   "--settings", "tests/CodeIndex.Tests/CodeIndex.Tests.runsettings",
   "--results-directory", $resultsDirectory,
-  "--blame-crash",
   "--blame-hang",
   "--blame-hang-timeout", "5m"
 )
@@ -55,13 +54,19 @@ function Invoke-TestRun {
     [string]$ResultFileName,
 
     [Parameter(Mandatory = $true)]
-    [bool]$IncludeCoverage
+    [bool]$IncludeCoverage,
+
+    [Parameter(Mandatory = $true)]
+    [bool]$IncludeCrashDiagnostics
   )
 
   $runArgs = @($testArgs)
   $runArgs += @("--logger", "trx;LogFileName=$ResultFileName")
   if ($IncludeCoverage) {
     $runArgs += @("--collect", "XPlat Code Coverage")
+  }
+  if ($IncludeCrashDiagnostics) {
+    $runArgs += "--blame-crash"
   }
 
   $capturedOutput = [System.Collections.Generic.List[string]]::new()
@@ -82,7 +87,7 @@ function Invoke-TestRun {
 }
 
 $firstLogPath = Join-Path $resultsDirectory "test-output-first.txt"
-$firstExitCode = Invoke-TestRun -LogPath $firstLogPath -ResultFileName "test_results_first.trx" -IncludeCoverage $includeCoverage
+$firstExitCode = Invoke-TestRun -LogPath $firstLogPath -ResultFileName "test_results_first.trx" -IncludeCoverage $includeCoverage -IncludeCrashDiagnostics $true
 if ($firstExitCode -eq 0) {
   exit 0
 }
@@ -98,8 +103,9 @@ Write-Warning "Initial test run failed with exit code $firstExitCode. Rerunning 
 if ($includeCoverage) {
   Write-Host "Skipping XPlat Code Coverage on the flaky-classification retry."
 }
+Write-Host "Reusing initial crash diagnostics; the retry keeps hang collection but skips the crash collector."
 $retryLogPath = Join-Path $resultsDirectory "test-output-retry.txt"
-$retryExitCode = Invoke-TestRun -LogPath $retryLogPath -ResultFileName "test_results_retry.trx" -IncludeCoverage $false
+$retryExitCode = Invoke-TestRun -LogPath $retryLogPath -ResultFileName "test_results_retry.trx" -IncludeCoverage $false -IncludeCrashDiagnostics $false
 if ($retryExitCode -eq 0) {
   "Initial test run failed, but the single retry passed. Treat this run as flaky and inspect TRX/blame artifacts." |
     Set-Content -Encoding UTF8 -Path (Join-Path $resultsDirectory "flaky-retry.txt")

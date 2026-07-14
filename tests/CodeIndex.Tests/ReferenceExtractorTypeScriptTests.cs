@@ -51,46 +51,47 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_TypeScriptTypeAliasHeritage_EmitsUnderlyingTypeReference()
+    public void Extract_TypeScriptTypeAliasExpansion_CoversHeritageGenericAndValuePositions()
     {
         const string content = """
-            class SomeType {}
-            type MyAlias = SomeType;
-            class Derived extends MyAlias {}
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "MyAlias"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "Derived");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "SomeType"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "Derived"
-            && reference.Context == "class Derived extends MyAlias {}");
-    }
-
-    [Fact]
-    public void Extract_TypeScriptTypeAliasMixedValueUse_OnlyExpandsTypePositionOccurrence()
-    {
-        const string content = """
-            class SomeType {}
-            type MyAlias = SomeType;
+            class PlainTarget {}
+            class FunctionTarget {}
+            class Arg {}
+            type PlainAlias = PlainTarget;
+            type FunctionAlias<T> = (value: T) => FunctionTarget;
+            class PlainDerived extends PlainAlias {}
+            class FunctionDerived extends FunctionAlias<Arg> {}
             function get(value: unknown) { return value; }
-            const x: MyAlias = get(MyAlias);
+            const x: PlainAlias = get(PlainAlias);
             """;
 
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
         var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "PlainAlias"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "PlainDerived");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "PlainTarget"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "PlainDerived"
+            && reference.Context == "class PlainDerived extends PlainAlias {}");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "FunctionTarget"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "FunctionDerived"
+            && reference.Context == "class FunctionDerived extends FunctionAlias<Arg> {}");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "T"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "FunctionDerived");
 
         var expanded = references
             .Where(reference =>
-                reference.SymbolName == "SomeType"
+                reference.SymbolName == "PlainTarget"
                 && reference.ReferenceKind == "type_reference"
-                && reference.Context == "const x: MyAlias = get(MyAlias);")
+                && reference.Context == "const x: PlainAlias = get(PlainAlias);")
             .ToList();
 
         Assert.Single(expanded);
@@ -150,31 +151,6 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "DefaultKey"
             && reference.ReferenceKind == "type_reference"
             && reference.Context == "type MyAlias<T = DefaultKey> = SomeType & Box<T>;");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "SomeType"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "Derived"
-            && reference.Context == "class Derived extends MyAlias<Arg> {}");
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "T"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "Derived"
-            && reference.Context == "class Derived extends MyAlias<Arg> {}");
-    }
-
-    [Fact]
-    public void Extract_TypeScriptFunctionTypeAlias_DoesNotEmitTypeParameterAsTarget()
-    {
-        const string content = """
-            class SomeType {}
-            class Arg {}
-            type MyAlias<T> = (value: T) => SomeType;
-            class Derived extends MyAlias<Arg> {}
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
-
         Assert.Contains(references, reference =>
             reference.SymbolName == "SomeType"
             && reference.ReferenceKind == "type_reference"
@@ -274,22 +250,41 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_TypeScriptRuntimeTypeofWrappedAssignment_DoesNotBecomeTypeReference()
+    public void Extract_TypeScriptTypeQueries_DistinguishTypeAndRuntimeLayouts()
     {
         const string content = """
-            function caller(value: unknown) {
+            class Point {}
+
+            type PointCtor = typeof Point;
+            type PointKeys = keyof Point;
+            type PointCtorMultiline =
+                typeof Point;
+
+            function caller(valueWrapped: unknown, valueMultiline: unknown) {
               const runtime =
-                typeof value === "string";
-              return runtime;
+                typeof valueWrapped === "string";
+              const another =
+                Promise<
+                  string
+                >;
+              const multilineRuntime =
+                typeof valueMultiline === "string";
+              return runtime && multilineRuntime && another.length > 0;
             }
+            const inline = (valueInline: unknown) => typeof valueInline === "string";
             """;
 
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
         var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
 
+        Assert.Equal(3, references.Count(reference =>
+            reference.SymbolName == "Point"
+            && reference.ReferenceKind == "type_reference"));
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "type_reference"
-            && reference.SymbolName == "value");
+            && (reference.SymbolName == "valueWrapped"
+                || reference.SymbolName == "valueMultiline"
+                || reference.SymbolName == "valueInline"));
     }
 
     [Fact]
@@ -318,70 +313,47 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_TypeScriptMultilineTypeQueryContext_DoesNotLeakRuntimeReferences()
-    {
-        const string content = """
-            function caller(value: unknown) {
-              const runtime =
-                typeof value === "string";
-              const another =
-                Promise<
-                  string
-                >;
-              return runtime && another.length > 0;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
-
-        Assert.DoesNotContain(references, reference =>
-            reference.ReferenceKind == "type_reference"
-            && reference.SymbolName == "value");
-    }
-
-    [Fact]
-    public void Extract_TypeScriptStyledTaggedTemplate_CapturesLastSegment()
+    public void Extract_TypeScriptTaggedTemplateLayouts_CaptureCallableTags()
     {
         // issue #268: member-access tags like `styled.button\`...\`` must emit a `call` row on
         // the last segment so the existing CallRegex convention (capture the final identifier)
         // carries over to tagged templates.
         // issue #268: `styled.button\`...\`` のようなメンバアクセスタグは、既存 CallRegex の
         // 規約に揃えて末尾セグメントを `call` として発行する。
+        // Generic tags must skip balanced function types, and nested tags inside an outer
+        // interpolation hole must retain both opener references.
+        // generic tag は function type を正しく読み飛ばし、外側 interpolation hole 内の
+        // nested tag は両方の opener reference を維持する。
         const string content = """
             const Btn = styled.button`
               color: red;
             `;
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
-
-        var button = Assert.Single(references.Where(r => r.SymbolName == "button"));
-        Assert.Equal("call", button.ReferenceKind);
-        Assert.DoesNotContain(references, r => r.SymbolName == "color");
-        Assert.DoesNotContain(references, r => r.SymbolName == "red");
-    }
-
-    [Fact]
-    public void Extract_TypeScriptGenericTaggedTemplate_IsCaptured()
-    {
-        // issue #268: TS generic-tagged forms like `html<User>\`...\`` read past the balanced
-        // `<...>` so the tag identifier is still captured.
-        // issue #268: `html<User>\`...\`` のようなジェネリクス付きタグは `<...>` を読み飛ばして
-        // タグ識別子を捕捉する。
-        const string content = """
             function render(user: User) {
                 return html<User>`<p>${user.name}</p>`;
+            }
+            function renderFunctionType<U>(value: U) {
+                return tag<(x: number) => U>`value=${value}`;
+            }
+            function demo(user: User) {
+                return outer`header ${inner`${user.name}`} footer`;
             }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
         var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
 
+        var button = Assert.Single(references.Where(r => r.SymbolName == "button"));
         var html = Assert.Single(references.Where(r => r.SymbolName == "html"));
+        Assert.Equal("call", button.ReferenceKind);
         Assert.Equal("call", html.ReferenceKind);
         Assert.Equal("render", html.ContainerName);
+        var tag = Assert.Single(references.Where(r => r.SymbolName == "tag" && r.ReferenceKind == "call"));
+        Assert.Equal("renderFunctionType", tag.ContainerName);
+        Assert.Contains(references, r => r.SymbolName == "outer" && r.ReferenceKind == "call" && r.ContainerName == "demo");
+        Assert.Contains(references, r => r.SymbolName == "inner" && r.ReferenceKind == "call" && r.ContainerName == "demo");
+        Assert.DoesNotContain(references, r => r.SymbolName == "color");
+        Assert.DoesNotContain(references, r => r.SymbolName == "red");
     }
 
     [Fact]
@@ -504,69 +476,6 @@ public partial class ReferenceExtractorTests
             && r.ReferenceKind == "call"
             && r.Context.StartsWith("<", StringComparison.Ordinal));
         Assert.Contains(references, r => r.SymbolName == "String" && r.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_TypeScriptTaggedTemplateInsideHole_IsCaptured()
-    {
-        // Tagged templates nested in an outer template hole (`\`outer ${inner\`hi\`} rest\``)
-        // should also be recorded because the structural masker detects both opener locations.
-        // 外側テンプレートのホール内にネストしたタグ付きテンプレートも記録できる。
-        const string content = """
-            function demo(user) {
-                return outer`header ${inner`${user.name}`} footer`;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "outer" && r.ReferenceKind == "call");
-        Assert.Contains(references, r => r.SymbolName == "inner" && r.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_TypeScriptFunctionTypeGenericTaggedTemplate_IsCaptured()
-    {
-        // issue #268: a generic type argument containing a function type `(x: T) => U` must
-        // still be read past so the tag identifier (`tag`) is captured. The `>` inside `=>`
-        // does not close the generic bracket.
-        // issue #268: 型引数に関数型 `(x: T) => U` を含むジェネリクス付きタグも読み飛ばして
-        // タグ識別子を捕捉する。`=>` の `>` は generic を閉じない。
-        const string content = """
-            function render<U>(value: U) {
-                return tag<(x: number) => U>`value=${value}`;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
-
-        var tag = Assert.Single(references.Where(r => r.SymbolName == "tag" && r.ReferenceKind == "call"));
-        Assert.Equal("render", tag.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_TypeScriptTypeQueries_CaptureTypeReferences()
-    {
-        const string content = """
-            class Point {}
-
-            type PointCtor = typeof Point;
-            type PointKeys = keyof Point;
-            type PointCtorMultiline =
-                typeof Point;
-
-            function runtime(value: unknown) {
-                return typeof value === "string";
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
-
-        Assert.Equal(3, references.Count(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference"));
-        Assert.DoesNotContain(references, r => r.SymbolName == "value" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -870,19 +779,6 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "prefix" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "suffix" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "id" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_TypeScriptRuntimeTypeof_OnOneLine_IsNotCapturedAsTypeReference()
-    {
-        const string content = """
-            const runtime = (value: unknown) => typeof value === "string";
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.SymbolName == "value" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]

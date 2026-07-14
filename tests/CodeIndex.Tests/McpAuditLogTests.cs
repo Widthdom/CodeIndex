@@ -15,21 +15,22 @@ namespace CodeIndex.Tests;
 /// </summary>
 public class McpAuditLogTests : IDisposable
 {
+    private readonly string _projectRoot;
     private readonly string _dbPath;
     private readonly string _auditPath;
     private AuditLogSink? _activeAuditSink;
 
     public McpAuditLogTests()
     {
-        _dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_audit_{Guid.NewGuid():N}.db");
-        _auditPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_audit_{Guid.NewGuid():N}.jsonl");
+        _projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_audit");
+        _dbPath = TestProjectHelper.ProjectPath(_projectRoot, "codeindex.db");
+        _auditPath = TestProjectHelper.ProjectPath(_projectRoot, "audit.jsonl");
     }
 
     public void Dispose()
     {
-        TestProjectHelper.DeleteFile(_dbPath);
-        foreach (var p in new[] { _auditPath, _auditPath + ".1", _auditPath + ".2", _auditPath + ".3" })
-            TestProjectHelper.DeleteFile(p);
+        _activeAuditSink?.Dispose();
+        TestProjectHelper.DeleteDirectory(_projectRoot);
     }
 
     private McpServer CreateServer(AuditLogSink sink)
