@@ -196,15 +196,20 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CSS_ScssIncludeReferences_AreIndexedAsCall()
+    public void Extract_CSS_ScssImportsAndIncludes_EmitBothEdgeKinds()
     {
-        // issue #1501: SCSS `@include name(args)` is a mixin invocation and must produce a
-        // `call` edge to the mixin definition, otherwise mixins appear as zero-usage symbols
-        // and `callers` / `impact` cannot trace mixin call graphs.
-        // issue #1501: SCSS の `@include name(args)` は mixin 呼び出しであり、定義への `call`
-        // エッジを出さなければ mixin が未使用シンボル扱いになり、`callers` / `impact` でも
-        // mixin の呼び出し関係を辿れない。
+        // issue #1501: one SCSS entry point must expose stylesheet imports and mixin calls
+        // together so both cross-file and call-graph dependencies remain visible.
+        // issue #1501: 1つの SCSS entry point から stylesheet import と mixin call の両方を
+        // 抽出し、file dependency と call graph を同時に維持する。
         const string content = """
+            @import "theme.css";
+            @import 'reset.css';
+            @import url("typography.css");
+            @import url('layout.css');
+            @import url(utilities.css);
+            @import "media.css" screen and (min-width: 600px);
+
             @mixin border-radius($radius) {
               border-radius: $radius;
             }
@@ -222,89 +227,10 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "css", content);
         var references = ReferenceExtractor.Extract(1, "css", content, symbols);
 
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "border-radius"
-            && reference.ReferenceKind == "call"));
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "reset"
-            && reference.ReferenceKind == "call"));
-    }
-
-    [Fact]
-    public void Extract_CSS_AtImportReferences_AreIndexedAsImport()
-    {
-        // issue #1501: stylesheet-level `@import "..."` / `@import url(...)` declarations
-        // express cross-stylesheet dependency edges, so the extractor must emit `import`-kind
-        // edges or `impact` underreports the blast radius of editing a shared theme stylesheet.
-        // issue #1501: stylesheet レベルの `@import "..."` / `@import url(...)` は
-        // 跨ぎ参照のエッジであり、`import` 種別のエッジを出さないと共通テーマ stylesheet を
-        // 編集した際の `impact` が影響範囲を取りこぼす。
-        const string content = """
-            @import "theme.css";
-            @import 'reset.css';
-            @import url("typography.css");
-            @import url('layout.css');
-            @import url(utilities.css);
-            @import "media.css" screen and (min-width: 600px);
-
-            .page {
-              color: black;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "css", content);
-        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
-
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "theme.css"
-            && reference.ReferenceKind == "import"));
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "reset.css"
-            && reference.ReferenceKind == "import"));
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "typography.css"
-            && reference.ReferenceKind == "import"));
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "layout.css"
-            && reference.ReferenceKind == "import"));
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "utilities.css"
-            && reference.ReferenceKind == "import"));
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "media.css"
-            && reference.ReferenceKind == "import"));
-    }
-
-    [Fact]
-    public void Extract_CSS_MixedCssAndScssImportAndInclude_EmitBothEdgeKinds()
-    {
-        // issue #1501 mixed-extension fixture: a `.scss` entry point pulls in a `.css`
-        // partial via `@import` and invokes a mixin via `@include`. Both edge kinds must
-        // surface so the graph captures the cross-file dependency *and* the mixin call.
-        // issue #1501 の mixed-extension fixture: `.scss` のエントリポイントが `@import` で
-        // `.css` パーシャルを取り込み、`@include` で mixin を呼び出す。両エッジを同時に
-        // 出力できないとファイル間依存と mixin 呼び出しの片方が欠落する。
-        const string content = """
-            @import "tokens.css";
-
-            @mixin elevated($depth) {
-              box-shadow: 0 $depth 0 rgba(0, 0, 0, 0.1);
-            }
-
-            .card {
-              @include elevated(2px);
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "css", content);
-        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
-
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "tokens.css"
-            && reference.ReferenceKind == "import"));
-        Assert.Single(references.Where(reference =>
-            reference.SymbolName == "elevated"
-            && reference.ReferenceKind == "call"));
+        foreach (var name in new[] { "theme.css", "reset.css", "typography.css", "layout.css", "utilities.css", "media.css" })
+            Assert.Single(references.Where(reference => reference.SymbolName == name && reference.ReferenceKind == "import"));
+        foreach (var name in new[] { "border-radius", "reset" })
+            Assert.Single(references.Where(reference => reference.SymbolName == name && reference.ReferenceKind == "call"));
     }
 
     [Fact]
