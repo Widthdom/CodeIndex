@@ -1398,73 +1398,48 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_TypeScript_BlocklessArrowWithoutSemicolonDoesNotConsumeFollowingTopLevelClass()
+    public void Extract_TypeScript_BlocklessArrowWithoutSemicolonStopsAtFollowingStatementLayouts()
     {
         var content = """
-            const factory = () =>
-                class Hidden {
+            const topLevelFactory = () =>
+                class HiddenTopLevel {
                     method(): void {}
                 }
             export class Visible {
                 keep(): void {}
             }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-
-        var factory = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "factory"));
-        Assert.Equal(1, factory.StartLine);
-        Assert.Equal(4, factory.EndLine);
-        Assert.Equal(2, factory.BodyStartLine);
-        Assert.Equal(4, factory.BodyEndLine);
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Visible");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "method");
-    }
-
-    [Fact]
-    public void Extract_TypeScript_BlocklessArrowWithoutSemicolonDoesNotConsumeFollowingExpressionStatement()
-    {
-        var content = """
-            const factory = () =>
-                class Hidden {
-                    method(): void {}
+            const expressionFactory = () =>
+                class HiddenExpression {
+                    expressionMethod(): void {}
                 }
             foo();
-            export class Visible {
-                keep(): void {}
+            export class AfterExpression {
+                stay(): void {}
             }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-
-        var factory = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "factory"));
-        Assert.Equal(4, factory.EndLine);
-        Assert.Equal(4, factory.BodyEndLine);
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Visible");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
-    }
-
-    [Fact]
-    public void Extract_TypeScript_BlocklessArrowWithoutSemicolonDoesNotHideFollowingCommonJsClassExport()
-    {
-        var content = """
-            const factory = () =>
-                class Hidden {
-                    method(): void {}
+            const commonJsFactory = () =>
+                class HiddenCommonJs {
+                    commonJsMethod(): void {}
                 }
-            exports.Service = class Visible {
-                keep(): void {}
+            exports.Service = class VisibleService {
+                serve(): void {}
             };
             """;
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
-        var factory = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "factory"));
-        Assert.Equal(4, factory.EndLine);
-        Assert.Equal(4, factory.BodyEndLine);
+        var topLevelFactory = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "topLevelFactory"));
+        var expressionFactory = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "expressionFactory"));
+        var commonJsFactory = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "commonJsFactory"));
+        Assert.Equal((1, 2, 4, 4), (topLevelFactory.StartLine, topLevelFactory.BodyStartLine, topLevelFactory.EndLine, topLevelFactory.BodyEndLine));
+        Assert.Equal((8, 9, 11, 11), (expressionFactory.StartLine, expressionFactory.BodyStartLine, expressionFactory.EndLine, expressionFactory.BodyEndLine));
+        Assert.Equal((16, 17, 19, 19), (commonJsFactory.StartLine, commonJsFactory.BodyStartLine, commonJsFactory.EndLine, commonJsFactory.BodyEndLine));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Visible");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "AfterExpression");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "stay" && s.ContainerName == "AfterExpression");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Service");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "serve" && s.ContainerName == "Service");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name.StartsWith("Hidden", StringComparison.Ordinal));
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && (s.Name == "method" || s.Name == "expressionMethod" || s.Name == "commonJsMethod"));
     }
 
     [Fact]
