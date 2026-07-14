@@ -2931,37 +2931,23 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScriptMultiLineForOfLoopOverPlainTemplate_IsNotCaptured()
+    public void Extract_JavaScriptMultiLineForOfLoopVariantsOverPlainTemplates_AreNotCaptured()
     {
         // issue #268 regression: the `for (...)` header may span multiple lines. The
         // backward-scan from `of` must cross line boundaries to find the enclosing `(` and
-        // then confirm zero top-level `;` to classify this as the for-of form.
+        // then confirm zero top-level `;` to classify this as the for-of form, including
+        // the optional `await` contextual keyword between `for` and `(`.
         // issue #268 退行防止: `for (...)` ヘッダは複数行に跨ることがある。`of` からの
         // 後方走査は行境界を越えて `(` を見つけ、トップレベル `;` が 0 のとき for-of 形と
-        // 判定する必要がある。
-        const string content = "function f() {\n" +
+        // 判定する必要があり、`for` と `(` の間の `await` も跨いで判定する。
+        const string content = "function syncLoop() {\n" +
             "    for (\n" +
             "        const ch of `abc`\n" +
             "    ) {\n" +
             "        use(ch);\n" +
             "    }\n" +
-            "}\n";
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptMultiLineForAwaitOfLoopOverPlainTemplate_IsNotCaptured()
-    {
-        // issue #268 regression: multi-line `for await (...)` with the iterator on a later
-        // line must still be suppressed. The cross-line scan has to handle the optional
-        // `await` contextual keyword between `for` and `(` too.
-        // issue #268 退行防止: 複数行 `for await (...)` で iterator 行が離れていても抑制する。
-        // `for` と `(` の間の `await` も跨いで判定する。
-        const string content = "async function f(iter) {\n" +
+            "}\n" +
+            "async function asyncLoop(iter) {\n" +
             "    for await (\n" +
             "        const x of `abc`\n" +
             "    ) {\n" +
