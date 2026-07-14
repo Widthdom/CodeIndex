@@ -521,105 +521,59 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpExpressionBodiedMultiLine_AttributesToMember()
+    public void Extract_CsharpMultilineMembers_ReuseMethodAndPropertyLayoutFixture()
     {
-        // Multi-line expression body (declaration on one line, `=> expr;` on the next)
-        // must still attribute calls on the expression line to the enclosing member.
-        // 宣言行の次の行に `=> expr;` が来る multi-line 式本体でも、式行の呼び出しが
-        // 外側メンバーに帰属すること。
+        // Parse the related multiline member layouts once; container names distinguish the
+        // expression method and every property brace/comment form.
         const string content = """
             public class Calc
             {
                 public int Compute() => 42;
-                public int MultiLine()
+
+                public int MultiLineMethod()
                     => Compute();
-            }
-            """;
 
-        var (_, references) = ExtractSymbolsAndReferences("csharp", content);
-
-        var computeRef = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
-        Assert.Equal("function", computeRef.ContainerKind);
-        Assert.Equal("MultiLine", computeRef.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpMultiLineExpressionBodiedProperty_AttributesToProperty()
-    {
-        // issue #233 second review follow-up: multi-line expression-bodied property
-        // (`public int Wrap` + newline + `    => Compute();`) must attribute the
-        // Compute() call to the property, not the enclosing class.
-        // issue #233 の再レビュー指摘: 宣言行の次行に `=> expr;` が来る multi-line 式本体
-        // プロパティも、Compute() 呼び出しが外側クラスではなく property に帰属すること。
-        const string content = """
-            public class Calc
-            {
-                public int Compute() => 42;
-                public int Wrap
+                public int ExpressionProperty
                     => Compute();
-            }
-            """;
 
-        var (_, references) = ExtractSymbolsAndReferences("csharp", content);
-
-        var computeRef = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
-        Assert.Equal("property", computeRef.ContainerKind);
-        Assert.Equal("Wrap", computeRef.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpBlockBodiedPropertyAccessor_AttributesToProperty()
-    {
-        // issue #233 review follow-up: Allman-style block-bodied properties (with `{`
-        // on the next line) must have accessor-internal calls attributed to the property,
-        // not the enclosing class.
-        // issue #233 のレビュー指摘: Allman スタイル（次行に `{`）の block-bodied property は、
-        // accessor 内部の呼び出しが外側クラスではなく property に帰属する必要がある。
-        const string content = """
-            public class Calc
-            {
-                public int Compute() => 42;
-
-                public int Wrap
+                public int AllmanProperty
                 {
                     get { return Compute(); }
                 }
-            }
-            """;
 
-        var (_, references) = ExtractSymbolsAndReferences("csharp", content);
-
-        var computeRef = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
-        Assert.Equal("property", computeRef.ContainerKind);
-        Assert.Equal("Wrap", computeRef.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpBraceSameLineAccessorNextLineProperty_AttributesToProperty()
-    {
-        // issue #233 fifth review follow-up: the common Microsoft-style block-bodied
-        // property — `{` on the same line as the declaration and the accessor on the
-        // following line — must have accessor-internal calls attributed to the property,
-        // not the enclosing class.
-        // issue #233 第5次レビュー指摘: `{` が宣言行末にあり、accessor が次行にある
-        // 標準的な block-bodied property でも、accessor 内部の呼び出しが外側クラスでは
-        // なく property に帰属する必要がある。
-        const string content = """
-            public class Calc
-            {
-                public int Compute() => 42;
-
-                public int Wrap {
+                public int SameLineBraceProperty {
                     get { return Compute(); }
                 }
+
+                public int CommentedBlockProperty
+                /* some multi-line
+                   block comment */
+                {
+                    get { return Compute(); }
+                }
+
+                public int CommentedExpressionProperty
+                /* multi-line
+                   comment */
+                    => Compute();
             }
             """;
 
         var (_, references) = ExtractSymbolsAndReferences("csharp", content);
 
-        var computeRef = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
-        Assert.Equal("property", computeRef.ContainerKind);
-        Assert.Equal("Wrap", computeRef.ContainerName);
+        AssertContainer("MultiLineMethod", "function");
+        AssertContainer("ExpressionProperty", "property");
+        AssertContainer("AllmanProperty", "property");
+        AssertContainer("SameLineBraceProperty", "property");
+        AssertContainer("CommentedBlockProperty", "property");
+        AssertContainer("CommentedExpressionProperty", "property");
+
+        void AssertContainer(string name, string kind)
+        {
+            var computeRef = Assert.Single(references.Where(r =>
+                r.SymbolName == "Compute" && r.ContainerName == name));
+            Assert.Equal(kind, computeRef.ContainerKind);
+        }
     }
 
     [Fact]
@@ -650,68 +604,6 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "class"
             && reference.ReferenceKind == "instantiate"));
         Assert.DoesNotContain(references, reference => reference.SymbolName.StartsWith("@", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public void Extract_CsharpAllmanBlockBodiedProperty_WithBlockComment_AttributesToProperty()
-    {
-        // issue #233 fourth review follow-up: a multi-line /* ... */ block comment
-        // between the property header line and its `{` must not prevent the property
-        // from being recognized, so accessor-internal calls still attribute to the
-        // property rather than the enclosing class.
-        // issue #233 の 4 回目レビュー指摘: property のヘッダ行と `{` の間に複数行の
-        // /* ... */ ブロックコメントが入っていても、property として認識され、
-        // accessor 内部の呼び出しは外側クラスではなく property に帰属する必要がある。
-        const string content = """
-            public class Calc
-            {
-                public int Compute() => 42;
-
-                public int Wrap
-                /* some multi-line
-                   block comment */
-                {
-                    get { return Compute(); }
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var computeRef = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
-        Assert.Equal("property", computeRef.ContainerKind);
-        Assert.Equal("Wrap", computeRef.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_CsharpMultiLineExpressionBodiedProperty_WithBlockComment_AttributesToProperty()
-    {
-        // issue #233 fourth review follow-up: a multi-line /* ... */ block comment
-        // between the property header line and its `=>` continuation must not prevent
-        // the property from being recognized, so Compute() still attributes to the
-        // property rather than the enclosing class.
-        // issue #233 の 4 回目レビュー指摘: property のヘッダ行と `=>` 継続行の間に
-        // 複数行の /* ... */ ブロックコメントが入っていても property として認識され、
-        // Compute() 呼び出しは外側クラスではなく property に帰属する必要がある。
-        const string content = """
-            public class Calc
-            {
-                public int Compute() => 42;
-
-                public int Wrap
-                /* multi-line
-                   comment */
-                    => Compute();
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
-
-        var computeRef = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
-        Assert.Equal("property", computeRef.ContainerKind);
-        Assert.Equal("Wrap", computeRef.ContainerName);
     }
 
     [Fact]
