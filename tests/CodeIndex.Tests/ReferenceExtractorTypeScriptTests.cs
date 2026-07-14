@@ -274,14 +274,15 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_TypeScriptRuntimeTypeofWrappedAssignment_DoesNotBecomeTypeReference()
+    public void Extract_TypeScriptRuntimeTypeofLayouts_DoNotBecomeTypeReferences()
     {
         const string content = """
-            function caller(value: unknown) {
+            function caller(valueWrapped: unknown) {
               const runtime =
-                typeof value === "string";
+                typeof valueWrapped === "string";
               return runtime;
             }
+            const inline = (valueInline: unknown) => typeof valueInline === "string";
             """;
 
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
@@ -289,7 +290,7 @@ public partial class ReferenceExtractorTests
 
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "type_reference"
-            && reference.SymbolName == "value");
+            && (reference.SymbolName == "valueWrapped" || reference.SymbolName == "valueInline"));
     }
 
     [Fact]
@@ -870,19 +871,6 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "prefix" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "suffix" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "id" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_TypeScriptRuntimeTypeof_OnOneLine_IsNotCapturedAsTypeReference()
-    {
-        const string content = """
-            const runtime = (value: unknown) => typeof value === "string";
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.SymbolName == "value" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
