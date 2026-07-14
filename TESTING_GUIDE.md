@@ -500,6 +500,7 @@ Add or update tests whenever you change:
 - workspace freshness or trust metadata
 
 Prefer extending the closest existing `*Tests.cs` file. Create a new test file only when the area does not fit an existing one cleanly.
+Before adding a test method, check whether the scenario can live in the closest existing method and reuse its setup and execution. Combine related read-only variants when they assert one cohesive contract; keep separate methods when they require isolated mutable state, distinct discovery/skip identity, substantially different setup, or clearer failure diagnosis.
 For boundary tests, use the smallest fixture that still crosses the boundary. If the behavior only needs one page, chunk, cache, query-plan row, or offset overflow, do not scale synthetic data far past that point unless the larger size is part of the contract.
 
 ### CLI and console tests
@@ -1048,6 +1049,7 @@ GitHub workflow、`global.json`、ドキュメントなど、checked-in され�
 - ワークスペース鮮度や trust メタデータ
 
 基本は最も近い既存の `*Tests.cs` を拡張してください。既存ファイルに自然に収まらない場合だけ新しいテストファイルを作ります。
+テストメソッドを追加する前に、最も近い既存メソッドへ同居させて setup と実行を再利用できないか確認してください。同じ一貫した契約を検証する read-only variant は統合し、mutable state の分離、個別の discovery / skip identity、大きく異なる setup、または failure diagnosis の明瞭さが必要な場合は別メソッドを維持します。
 
 - 複数言語で共有する抽出上限のテストは、切り詰めを発生させる最小値だけ境界を超え、言語ごとに任意の余裕値を足さないでください。
 

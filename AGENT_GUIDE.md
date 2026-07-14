@@ -93,6 +93,7 @@ Do not spend excessive output tokens on planning.
 
 Prefer the smallest correct fix.
 Add or update tests when behavior changes.
+Before adding a test method, check whether the scenario can share the closest existing method's setup and execution without obscuring a distinct contract. Prefer one cohesive method with a shared fixture for related read-only variants; keep separate methods when isolation, discovery identity, mutable state, or failure diagnosis materially benefits.
 Avoid unrelated refactors.
 Preserve public behavior unless the issue explicitly requires a change.
 When editing changelog content, verify that both English and Japanese entries are updated where the repository convention requires both.
