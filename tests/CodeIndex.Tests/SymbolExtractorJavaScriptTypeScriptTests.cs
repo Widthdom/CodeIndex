@@ -244,57 +244,47 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScript_StringBraceDoesNotBreakFollowingContainerAssignment()
+    public void Extract_JavaScript_LiteralBracesDoNotBreakFollowingContainerAssignments()
     {
         var content = """"
-            export class Example {
-              foo() {
+            export class StringExample {
+              stringFoo() {
                 const value = "}";
                 return value;
               }
 
-              bar() {
+              stringBar() {
                 return 1;
               }
             }
-            """";
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        var example = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Example"));
-        var foo = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "foo"));
-        var bar = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "bar"));
-
-        Assert.Equal(10, example.EndLine);
-        Assert.Equal(5, foo.EndLine);
-        Assert.Equal("class", bar.ContainerKind);
-        Assert.Equal("Example", bar.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_JavaScript_TemplateLiteralBraceDoesNotBreakFollowingContainerAssignment()
-    {
-        var content = """"
-            export class Example {
-              foo() {
+            export class TemplateExample {
+              templateFoo() {
                 const value = `}`;
                 return value;
               }
 
-              bar() {
+              templateBar() {
                 return 1;
               }
             }
             """";
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        var example = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Example"));
-        var foo = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "foo"));
-        var bar = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "bar"));
+        var stringExample = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "StringExample"));
+        var stringFoo = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "stringFoo"));
+        var stringBar = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "stringBar"));
+        var templateExample = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "TemplateExample"));
+        var templateFoo = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "templateFoo"));
+        var templateBar = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "templateBar"));
 
-        Assert.Equal(10, example.EndLine);
-        Assert.Equal(5, foo.EndLine);
-        Assert.Equal("class", bar.ContainerKind);
-        Assert.Equal("Example", bar.ContainerName);
+        Assert.Equal(10, stringExample.EndLine);
+        Assert.Equal(5, stringFoo.EndLine);
+        Assert.Equal("StringExample", stringBar.ContainerName);
+        Assert.Equal(21, templateExample.EndLine);
+        Assert.Equal(16, templateFoo.EndLine);
+        Assert.Equal("TemplateExample", templateBar.ContainerName);
+        Assert.All([stringBar, templateBar], symbol => Assert.Equal("class", symbol.ContainerKind));
     }
 
     [Fact]
