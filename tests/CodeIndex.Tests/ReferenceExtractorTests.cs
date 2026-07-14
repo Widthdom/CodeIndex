@@ -2782,7 +2782,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_RubyCommandSyntax_DetectsNoParenCalls()
+    public void Extract_RubyCallSyntax_ReuseCommandAndBlockFormsFixture()
     {
         const string content = """
             def greet(name)
@@ -2802,26 +2802,7 @@ public partial class ReferenceExtractorTests
               end
               raise ArgumentError, "bad"
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.Contains(references, reference => reference.SymbolName == "greet" && reference.ContainerName == "caller");
-        Assert.Contains(references, reference => reference.SymbolName == "puts" && reference.ContainerName == "greet");
-        Assert.Contains(references, reference => reference.SymbolName == "puts" && reference.ContainerName == "caller");
-        Assert.Contains(references, reference => reference.SymbolName == "no_parens_def" && reference.ContainerName == "caller");
-        Assert.Contains(references, reference => reference.SymbolName == "require" && reference.ContainerName == "caller");
-        Assert.Contains(references, reference => reference.SymbolName == "json" && reference.ContainerName == "caller");
-        Assert.Contains(references, reference => reference.SymbolName == "define_method" && reference.ContainerName == "caller");
-        Assert.Contains(references, reference => reference.SymbolName == "dynamic" && reference.ContainerName == "caller");
-        Assert.Contains(references, reference => reference.SymbolName == "ArgumentError" && reference.ContainerName == "caller");
-    }
-
-    [Fact]
-    public void Extract_RubyBlockCall_DetectsBraceAndDoEndForms()
-    {
-        const string content = """
             def count_items(items)
               options = { key: value }
               items.each { |x| log(x) }
@@ -2837,6 +2818,15 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "ruby", content);
         var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
 
+        Assert.Contains(references, reference => reference.SymbolName == "greet" && reference.ContainerName == "caller");
+        Assert.Contains(references, reference => reference.SymbolName == "puts" && reference.ContainerName == "greet");
+        Assert.Contains(references, reference => reference.SymbolName == "puts" && reference.ContainerName == "caller");
+        Assert.Contains(references, reference => reference.SymbolName == "no_parens_def" && reference.ContainerName == "caller");
+        Assert.Contains(references, reference => reference.SymbolName == "require" && reference.ContainerName == "caller");
+        Assert.Contains(references, reference => reference.SymbolName == "json" && reference.ContainerName == "caller");
+        Assert.Contains(references, reference => reference.SymbolName == "define_method" && reference.ContainerName == "caller");
+        Assert.Contains(references, reference => reference.SymbolName == "dynamic" && reference.ContainerName == "caller");
+        Assert.Contains(references, reference => reference.SymbolName == "ArgumentError" && reference.ContainerName == "caller");
         Assert.Contains(references, reference => reference.SymbolName == "each" && reference.ContainerName == "count_items");
         Assert.Contains(references, reference => reference.SymbolName == "each_with_index" && reference.ContainerName == "count_items");
         Assert.Contains(references, reference => reference.SymbolName == "with_transaction" && reference.ContainerName == "count_items");
