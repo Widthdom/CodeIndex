@@ -111,18 +111,23 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Swift_DetectsAttributedDeclarations()
+    public void Extract_Swift_DetectsAttributedAndPackageVisibleDeclarations()
     {
         var content = """
             @available(*, deprecated) public struct LegacyCache {}
             @discardableResult public func load() -> Int { 1 }
             @available(*, deprecated) public typealias LegacyHandler = Int
+            package struct SessionCache {
+                package func save() { }
+            }
             """;
         var symbols = SymbolExtractor.Extract(1, "swift", content);
 
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "LegacyCache");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "load");
         Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "LegacyHandler");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "SessionCache");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "save");
     }
 
     [Fact]
@@ -196,20 +201,6 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "subscript");
         Assert.Contains(symbols, s => s.Kind == "associatedtype" && s.Name == "Key");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "capacity");
-    }
-
-    [Fact]
-    public void Extract_Swift_SupportsPackageVisibility()
-    {
-        var content = """
-            package struct SessionCache {
-                package func save() { }
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "swift", content);
-
-        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "SessionCache");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "save");
     }
 
     [Fact]
