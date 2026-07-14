@@ -1075,7 +1075,7 @@ public partial class SymbolExtractorTests
     [Theory]
     [InlineData("javascript")]
     [InlineData("typescript")]
-    public void Extract_JavaScriptTypeScript_DetectsCommonJsDefinePropertyExports(string language)
+    public void Extract_JavaScriptTypeScript_DetectsCommonJsObjectExportApis(string language)
     {
         var content = """
             Object.defineProperty(exports, "__esModule", { value: true });
@@ -1092,6 +1092,27 @@ public partial class SymbolExtractorTests
               { value: serverError }
             );
             Object.defineProperty(local, "hidden", { value: hidden });
+            Object.defineProperties(exports, {
+              bulkFoo: { value: foo },
+              "bulk-bar": { value: bar },
+              ["bulk-computed"]: { value: computed },
+              [dynamicBulk]: { value: hidden },
+              bulkShorthand,
+            });
+            Object.defineProperties(module.exports, { default: { value: api }, 501: { value: bulkError } });
+            Object.defineProperties(exports, { bulkSameLine: { value: sameLine } });
+            Object.assign(module.exports, {
+              default: api,
+              502: assignError,
+              assignFoo,
+              assignAlias: value,
+              "assign-bar": bar,
+              ["assign-computed"]: computed,
+              [dynamicAssign]: hidden,
+            });
+            Object.assign(exports, { assignSameLine: sameLine });
+            Object.defineProperties(local, { hiddenBulk: { value: hidden } });
+            Object.assign(local, { hiddenAssign });
             """;
         var symbols = SymbolExtractor.Extract(1, language, content);
 
@@ -1099,82 +1120,13 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar-baz" && s.Visibility == "export");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "404" && s.Visibility == "export");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "500" && s.Visibility == "export");
+        foreach (var name in new[] { "bulkFoo", "bulk-bar", "bulk-computed", "bulkShorthand", "501", "bulkSameLine", "502", "assignFoo", "assignAlias", "assign-bar", "assign-computed", "assignSameLine" })
+            Assert.Contains(symbols, s => s.Kind == "property" && s.Name == name && s.Visibility == "export");
+        Assert.Equal(2, symbols.Count(s => s.Kind == "property" && s.Name == "default" && s.Visibility == "export"));
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "__esModule");
-        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "hidden" && s.Visibility == "export");
-    }
-
-    [Theory]
-    [InlineData("javascript")]
-    [InlineData("typescript")]
-    public void Extract_JavaScriptTypeScript_DetectsCommonJsDefinePropertiesExports(string language)
-    {
-        var content = """
-            Object.defineProperties(exports, {
-              __esModule: { value: true },
-              foo: { enumerable: true, get: function () { return api.foo; } },
-              "bar-baz": { value: bar },
-              ["computed-key"]: { value: computed },
-              [dynamicKey]: { value: hidden },
-              descriptorRef,
-            });
-            Object.defineProperties(
-              module.exports,
-              {
-                default: { value: api },
-                500: { value: serverError },
-              }
-            );
-            Object.defineProperties(exports, { sameLine: { value: sameLine } });
-            Object.defineProperties(local, { hidden: { value: hidden } });
-            """;
-        var symbols = SymbolExtractor.Extract(1, language, content);
-
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar-baz" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "computed-key" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "descriptorRef" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "default" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "500" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "sameLine" && s.Visibility == "export");
-        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "__esModule");
-        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "dynamicKey" && s.Visibility == "export");
-        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "hidden" && s.Visibility == "export");
-    }
-
-    [Theory]
-    [InlineData("javascript")]
-    [InlineData("typescript")]
-    public void Extract_JavaScriptTypeScript_DetectsCommonJsObjectAssignExports(string language)
-    {
-        var content = """
-            Object.assign(exports, {
-              foo,
-              alias: value,
-              "bar-baz": bar,
-              ["computed-key"]: computed,
-              [dynamicKey]: hidden,
-            });
-            Object.assign(
-              module.exports,
-              {
-                default: api,
-                500: serverError,
-              }
-            );
-            Object.assign(exports, { sameLine: sameLine });
-            Object.assign(local, { hidden });
-            """;
-        var symbols = SymbolExtractor.Extract(1, language, content);
-
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "alias" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar-baz" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "computed-key" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "default" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "500" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "sameLine" && s.Visibility == "export");
-        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "dynamicKey" && s.Visibility == "export");
-        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "hidden" && s.Visibility == "export");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property"
+            && s.Name is "hidden" or "dynamicBulk" or "dynamicAssign" or "hiddenBulk" or "hiddenAssign"
+            && s.Visibility == "export");
     }
 
     [Fact]
