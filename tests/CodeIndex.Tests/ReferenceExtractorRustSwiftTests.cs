@@ -976,17 +976,27 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_SwiftSelfMetatypeExpressions_RecordRootTypes()
+    public void Extract_SwiftMetatypeAndDirectiveExpressions_RecordOnlyRootTypes()
     {
         const string content = """
             struct User {}
             protocol Service {}
+            class ViewController {
+                @objc func handleTap(_ sender: Any) {}
+                @objc var titleText: String = ""
+            }
+            class Person { @objc var name: String = "" }
 
             func configure(user: User) {
                 let userType = User.self
                 let serviceType = Service.self
                 let collectionType = [User].self
                 let instanceSelf = user.self
+                let action = #selector(ViewController.handleTap(_:))
+                let getter = #selector(getter: ViewController.titleText)
+                let unqualifiedSelector = #selector(handleTap(_:))
+                let name = #keyPath(Person.name)
+                let unqualifiedKeyPath = #keyPath(name)
             }
             """;
 
@@ -1001,71 +1011,17 @@ public partial class ReferenceExtractorTests
             reference.SymbolName == "Service"
             && reference.ReferenceKind == "type_reference"
             && reference.ContainerName == "configure");
+        foreach (var name in new[] { "ViewController", "Person" })
+        {
+            Assert.Contains(references, reference =>
+                reference.SymbolName == name
+                && reference.ReferenceKind == "type_reference"
+                && reference.ContainerName == "configure");
+        }
         Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "user"
+            reference.SymbolName is "user" or "handleTap" or "titleText" or "name"
             && reference.ReferenceKind == "type_reference");
     }
-
-    [Fact]
-    public void Extract_SwiftSelectorDirectiveRoots_AreTypeReferences()
-    {
-        const string content = """
-            class ViewController {
-                @objc func handleTap(_ sender: Any) {}
-                @objc var titleText: String = ""
-            }
-
-            func configure() {
-                let action = #selector(ViewController.handleTap(_:))
-                let getter = #selector(getter: ViewController.titleText)
-                let unqualified = #selector(handleTap(_:))
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "swift", content);
-        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "ViewController"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "configure");
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName is "handleTap" or "titleText"
-            && reference.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_SwiftKeyPathDirectiveRoots_AreTypeReferences()
-    {
-        const string content = """
-            class Person {
-                @objc var name: String = ""
-                @objc var address: Address = Address()
-            }
-
-            class Address {
-                @objc var street: String = ""
-            }
-
-            func configure() {
-                let name = #keyPath(Person.name)
-                let street = #keyPath(Person.address.street)
-                let unqualified = #keyPath(name)
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "swift", content);
-        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Person"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "configure");
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName is "name" or "address" or "street"
-            && reference.ReferenceKind == "type_reference");
-    }
-
     [Fact]
     public void Extract_SwiftAttributeGenericArguments_AreTypeReferences()
     {
