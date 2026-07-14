@@ -315,7 +315,7 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Go_DetectsEmbeddedGenericStructTypes()
+    public void Extract_Go_DetectsEmbeddedStructAndInterfaceTypesTogether()
     {
         var content = """
             package demo
@@ -327,12 +327,31 @@ public partial class SymbolExtractorTests
                 *pkg.Writer[U]
                 Named Field[T]
             }
+
+            type ContractReader interface {
+                io.Reader
+                Close() error
+            }
+
+            type StoreContract interface { io.Writer }
             """;
         var symbols = SymbolExtractor.Extract(1, "go", content);
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Reader" && s.Signature == "Reader[T]");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "pkg.Writer" && s.Signature == "*pkg.Writer[U]");
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "Named");
+        var close = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "Close");
+        Assert.Equal("protocol", close.ContainerKind);
+        Assert.Equal("ContractReader", close.ContainerName);
+
+        var reader = Assert.Single(symbols, s => s.Kind == "import" && s.Name == "io.Reader");
+        Assert.Equal("protocol", reader.ContainerKind);
+        Assert.Equal("ContractReader", reader.ContainerName);
+
+        var writer = Assert.Single(symbols, s => s.Kind == "import" && s.Name == "io.Writer");
+        Assert.Equal("protocol", writer.ContainerKind);
+        Assert.Equal("StoreContract", writer.ContainerName);
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name is "ContractReader" or "StoreContract");
     }
 
     [Fact]
@@ -382,33 +401,4 @@ public partial class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name is "case" or "default");
     }
 
-    [Fact]
-    public void Extract_Go_IndexesEmbeddedInterfaceTypesInsideInterfaceBodies()
-    {
-        var content = """
-            package demo
-
-            type Reader interface {
-                io.Reader
-                Close() error
-            }
-
-            type Store interface { io.Writer }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-
-        var close = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "Close");
-        Assert.Equal("protocol", close.ContainerKind);
-        Assert.Equal("Reader", close.ContainerName);
-
-        var reader = Assert.Single(symbols, s => s.Kind == "import" && s.Name == "io.Reader");
-        Assert.Equal("protocol", reader.ContainerKind);
-        Assert.Equal("Reader", reader.ContainerName);
-
-        var writer = Assert.Single(symbols, s => s.Kind == "import" && s.Name == "io.Writer");
-        Assert.Equal("protocol", writer.ContainerKind);
-        Assert.Equal("Store", writer.ContainerName);
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Reader");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Store");
-    }
 }
