@@ -3170,24 +3170,28 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScriptObjectDefaultTaggedTemplate_IsCapturedAsCall()
+    public void Extract_JavaScriptObjectKeywordTaggedTemplates_AreCapturedAsCalls()
     {
-        // issue #268 regression guard: `obj.default\`x\`` is a legal tagged-template call
-        // because reserved words are valid property names in JS/TS. The bare-keyword
-        // denylist (`default` / `finally` / ...) must NOT suppress member-access tags.
-        // issue #268 退行防止: `obj.default\`x\`` は JS/TS で予約語も property 名に
-        // なれるため正当なタグ呼び出し。bare-keyword 除外リスト（`default` / `finally` /
-        // ...）はメンバーアクセスのタグを握り潰してはならない。
+        // issue #268 regression guard: reserved words are valid property names in JS/TS,
+        // so the bare-keyword denylist must not suppress member-access tags.
+        // issue #268 退行防止: JS/TS では予約語も property 名として合法なので、bare-keyword
+        // 除外リストが member-access tag を握り潰してはならない。
         const string content = """
             function run(obj) {
-                return obj.default`x`;
+                obj.default`d`;
+                obj.return`r`;
+                obj.finally`f`;
+            }
+            async function runAsync(obj) {
+                return obj.await`a`;
             }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
         var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
 
-        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "default");
+        foreach (var name in new[] { "default", "return", "finally", "await" })
+            Assert.Single(references.Where(r => r.ReferenceKind == "call" && r.SymbolName == name));
     }
 
     [Fact]
@@ -3213,71 +3217,6 @@ public partial class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "tag");
         Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "comment");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptObjectReturnTaggedTemplate_IsCapturedAsCall()
-    {
-        // issue #268 regression guard: `obj.return\`x\`` is a legal tagged-template call
-        // because `return` is a valid property name in JS/TS. The shared ignore list
-        // (which holds `return` / `throw` / `await` / `typeof` / `yield` for JS/TS to
-        // suppress bare-keyword phantom calls) must NOT suppress member-access tags.
-        // issue #268 退行防止: `obj.return\`x\`` は `return` が property 名として合法
-        // なので正当なタグ呼び出し。bare-keyword の phantom 呼び出しを抑止する共有
-        // ignore list（`return` / `throw` / `await` / `typeof` / `yield`）は
-        // メンバーアクセスのタグを握り潰してはならない。
-        const string content = """
-            function run(obj) {
-                return obj.return`x`;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "return");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptObjectAwaitTaggedTemplate_IsCapturedAsCall()
-    {
-        // issue #268 regression guard: `obj.await\`y\`` is a legal tagged-template call;
-        // `await` is a reserved word in async contexts but is still a valid property
-        // name. Member-access tags must bypass the `IsIgnoredCallName` filter.
-        // issue #268 退行防止: `obj.await\`y\`` は await が async 内で予約語でも
-        // property 名としては合法なので正当なタグ呼び出し。メンバーアクセスのタグは
-        // `IsIgnoredCallName` を迂回する必要がある。
-        const string content = """
-            async function run(obj) {
-                return obj.await`y`;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "await");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptObjectFinallyTaggedTemplate_IsCapturedAsCall()
-    {
-        // issue #268 regression guard: `obj.finally\`y\`` is a legal tagged-template call;
-        // `finally` is a reserved word but a valid property name. Member-access tags must
-        // bypass the bare-keyword denylist that handles `try {} finally \`cleanup\``.
-        // issue #268 退行防止: `obj.finally\`y\`` は `finally` が予約語でも property 名と
-        // して合法なので正当なタグ呼び出し。メンバーアクセスのタグは
-        // `try {} finally \`cleanup\`` 用の bare-keyword 除外リストを迂回する必要がある。
-        const string content = """
-            function run(obj) {
-                return obj.finally`y`;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "finally");
     }
 
     [Fact]
