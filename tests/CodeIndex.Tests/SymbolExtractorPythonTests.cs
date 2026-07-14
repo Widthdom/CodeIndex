@@ -156,107 +156,63 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Python_DetectsAnnotatedClassAttributesAsProperties()
+    public void Extract_Python_ClassPropertyDeclarations_ReuseAssignmentAndMetadataFixture()
     {
         var content = """
-            class User:
+            class AnnotatedUser:
                 name: str
                 age: int = 0
 
                 def hydrate(self) -> None:
-                    local_value: str = "ignored"
-            """;
+                    annotated_local: str = "ignored"
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name" && s.ContainerName == "User");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "age" && s.ContainerName == "User");
-        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "local_value");
-    }
-
-    [Fact]
-    public void Extract_Python_DetectsAssignedClassAttributesAsProperties()
-    {
-        var content = """
             class Settings:
                 DEFAULT_TIMEOUT = 30
                 endpoint = "https://example.invalid"
 
                 def configure(self) -> None:
-                    local_value = 1
-            """;
+                    assigned_local = 1
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DEFAULT_TIMEOUT" && s.ContainerName == "Settings");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "endpoint" && s.ContainerName == "Settings");
-        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "local_value");
-    }
-
-    [Fact]
-    public void Extract_Python_ExpandsSlotsAsClassProperties()
-    {
-        var content = """
-            class User:
+            class SlottedUser:
                 __slots__ = (
-                    "name",
-                    "age",
+                    "slot_name",
+                    "slot_age",
                 )
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
+            class AugmentedSlots:
+                __slots__ = ("initial_slot",)
+                __slots__ += ("extra_slot",)
 
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name" && s.ContainerName == "User");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "age" && s.ContainerName == "User");
-        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "__slots__");
-    }
-
-    [Fact]
-    public void Extract_Python_ExpandsAugmentedSlotsAsClassProperties()
-    {
-        var content = """
-            class User:
-                __slots__ = ("name",)
-                __slots__ += ("email",)
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name" && s.ContainerName == "User");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "email" && s.ContainerName == "User");
-    }
-
-    [Fact]
-    public void Extract_Python_ExpandsMatchArgsAsClassProperties()
-    {
-        var content = """
             class Point:
                 __match_args__ = ("x", "y")
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "x" && s.ContainerName == "Point");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "y" && s.ContainerName == "Point");
-        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "__match_args__");
-    }
-
-    [Fact]
-    public void Extract_Python_ExpandsAnnotationsDictionaryAsClassProperties()
-    {
-        var content = """
-            class User:
+            class DictionaryUser:
                 __annotations__ = {
-                    "name": str,
-                    "age": int,
+                    "dictionary_name": str,
+                    "dictionary_age": int,
                 }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "python", content);
 
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name" && s.ContainerName == "User");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "age" && s.ContainerName == "User");
-        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "__annotations__");
+        AssertProperty("name", "AnnotatedUser");
+        AssertProperty("age", "AnnotatedUser");
+        AssertProperty("DEFAULT_TIMEOUT", "Settings");
+        AssertProperty("endpoint", "Settings");
+        AssertProperty("slot_name", "SlottedUser");
+        AssertProperty("slot_age", "SlottedUser");
+        AssertProperty("initial_slot", "AugmentedSlots");
+        AssertProperty("extra_slot", "AugmentedSlots");
+        AssertProperty("x", "Point");
+        AssertProperty("y", "Point");
+        AssertProperty("dictionary_name", "DictionaryUser");
+        AssertProperty("dictionary_age", "DictionaryUser");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name is
+            "annotated_local" or "assigned_local" or "__slots__" or "__match_args__" or "__annotations__");
+
+        void AssertProperty(string name, string containerName) =>
+            Assert.Contains(symbols, s =>
+                s.Kind == "property" && s.Name == name && s.ContainerName == containerName);
     }
 
     [Fact]
