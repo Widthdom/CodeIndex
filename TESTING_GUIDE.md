@@ -297,6 +297,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Go function-like symbol coverage shares qualified receiver containers and branch labels in one file fixture while excluding switch keywords.
 - Consolidated Python/Go extractor fixtures retain exact symbol/reference cardinality, including complete per-container result sets, and source-line assertions when those were part of the original regression contract.
 - Assembly reference coverage shares direct call/branch forms and tab-separated decorated indirect-target negatives in one exact-cardinality fixture.
+- Solidity reference coverage shares inheritance whitespace variants, library/modifier/event/interface edges, and comment/string negatives in one fixture.
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). Its publish smoke disables NuGet vulnerability auditing because package advisory validation is covered by the normal build/test workflow's package vulnerability check, not by this runtime serialization test. It is reported as skipped on macOS arm64 while SDK/ILLink can crash before exercising `cdidx` (#2586). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
@@ -861,6 +862,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - Go function-like symbol coverage は qualified receiver container と branch label を1つの file fixture で共有し、switch keyword を除外します。
 - 統合した Python/Go extractor fixture でも、container ごとの完全な result set を含む symbol/reference の厳密な件数と、元の回帰契約に含まれていた source line の assertion を維持します。
 - Assembly reference coverage は direct call/branch と tab 区切り decorated indirect-target の negative case を、厳密な件数を持つ1つの fixture で共有します。
+- Solidity reference coverage は inheritance whitespace variant、library/modifier/event/interface edge、comment/string negative を1つの fixture で共有します。
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   は trimmed な RID 固有 CLI を publish し、SDK が生成した entry point（`dotnet` 経由の `cdidx.dll`、または native の `cdidx`/`cdidx.exe` apphost）を実行します。この publish smoke は NuGet 脆弱性監査を無効化します。package advisory の検証は通常の build/test workflow の package vulnerability check が担い、この runtime serialization テストの責務ではないためです。macOS arm64 では SDK/ILLink が `cdidx` に到達する前にクラッシュし得るため、このテストは skipped として報告されます（#2586）。self-contained publish output に常に `cdidx.dll` が出るとは仮定しないでください。
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
