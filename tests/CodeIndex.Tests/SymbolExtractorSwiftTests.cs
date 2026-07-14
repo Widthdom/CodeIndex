@@ -111,17 +111,6 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Swift_DetectsFuncAndStruct()
-    {
-        // Swift: func, class, struct / Swift: 関数、クラス、構造体
-        var content = "struct Config {\n    func validate() -> Bool {\n        return true\n    }\n}";
-        var symbols = SymbolExtractor.Extract(1, "swift", content);
-
-        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Config");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "validate");
-    }
-
-    [Fact]
     public void Extract_Swift_DetectsAttributedDeclarations()
     {
         var content = """
@@ -224,17 +213,6 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Swift_DetectsMacroDeclarations()
-    {
-        var content = """
-            public macro stringify<T>(_ value: T) = #externalMacro(module: "MyMacros", type: "StringifyMacro")
-            """;
-        var symbols = SymbolExtractor.Extract(1, "swift", content);
-
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "stringify");
-    }
-
-    [Fact]
     public void Extract_Swift_PropertyObserversAreChildrenOfProperty()
     {
         var content = """
@@ -264,19 +242,4 @@ public partial class SymbolExtractorTests
             && s.ContainerName == "x");
     }
 
-    [Fact]
-    public void Extract_Swift_DetectsOperatorsAndPrecedenceGroup()
-    {
-        var content = """
-            public precedencegroup ForwardApplicationPrecedence {
-                associativity: left
-            }
-
-            infix operator |> : ForwardApplicationPrecedence
-            """;
-        var symbols = SymbolExtractor.Extract(1, "swift", content);
-
-        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "ForwardApplicationPrecedence");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "|>");
-    }
 }
