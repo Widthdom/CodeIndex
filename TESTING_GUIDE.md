@@ -292,6 +292,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Go symbol function coverage shares regular/receiver/generic functions and an assigned function literal in one extraction fixture.
 - Go import-symbol coverage shares single/grouped imports, build directives, and cgo classification in one file fixture.
 - Go type-symbol coverage shares named, alias, struct, interface, and generic declarations in one file fixture.
+- Go declaration-symbol coverage shares grouped types, top-level const/var forms, blank identifiers, and local negatives in one file fixture.
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). Its publish smoke disables NuGet vulnerability auditing because package advisory validation is covered by the normal build/test workflow's package vulnerability check, not by this runtime serialization test. It is reported as skipped on macOS arm64 while SDK/ILLink can crash before exercising `cdidx` (#2586). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
@@ -851,6 +852,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - Go symbol function coverage は regular/receiver/generic function と assigned function literal を1つの extraction fixture で共有します。
 - Go import-symbol coverage は single/grouped import、build directive、cgo classification を1つの file fixture で共有します。
 - Go type-symbol coverage は named、alias、struct、interface、generic declaration を1つの file fixture で共有します。
+- Go declaration-symbol coverage は grouped type、top-level const/var、blank identifier、local negative を1つの file fixture で共有します。
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   は trimmed な RID 固有 CLI を publish し、SDK が生成した entry point（`dotnet` 経由の `cdidx.dll`、または native の `cdidx`/`cdidx.exe` apphost）を実行します。この publish smoke は NuGet 脆弱性監査を無効化します。package advisory の検証は通常の build/test workflow の package vulnerability check が担い、この runtime serialization テストの責務ではないためです。macOS arm64 では SDK/ILLink が `cdidx` に到達する前にクラッシュし得るため、このテストは skipped として報告されます（#2586）。self-contained publish output に常に `cdidx.dll` が出るとは仮定しないでください。
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`

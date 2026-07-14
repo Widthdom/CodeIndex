@@ -149,21 +149,39 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Go_DetectsTopLevelConstsAndVarsAsProperties()
+    public void Extract_Go_DetectsGroupedTopLevelDeclarationsAndBlankIdentifiers()
     {
         var content = """
             package demo
+
+            type (
+                Stack[T any] struct { items []T }
+                Container[T comparable, U any] interface {
+                    io.Reader
+                    Get() U
+                }
+                GroupAlias[T any] string
+            )
 
             const MaxRetries = 3
             const Timeout int = 30
             const PrimaryStatus, SecondaryStatus = 1, 2
             const (
                 StatusActive = "active"
+                DefaultTimeout int = 30
+                Named, Other = 1, 2
             )
+            const _, exported = 1, 2
 
             var ErrNotFound = errors.New("not found")
             var DefaultConfig *Config = &Config{}
             var Primary, Secondary *Config
+            var (
+                GroupPrimary, GroupSecondary *Client
+                _ int
+                _unused string
+                _, err = open()
+            )
 
             func build() {
                 var local, cached *Config
@@ -204,6 +222,17 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Secondary");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "AfterText");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "AfterTextConfig");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Stack");
+        Assert.Contains(symbols, s => s.Kind == "protocol" && s.Name == "Container");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "GroupAlias");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "io.Reader");
+        foreach (var propertyName in new[] { "DefaultTimeout", "Named", "Other", "exported", "GroupPrimary", "GroupSecondary", "_unused", "err" })
+        {
+            Assert.Contains(symbols, s => s.Kind == "property" && s.Name == propertyName);
+        }
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "_");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "local");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "cached");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "localStatus");
@@ -323,28 +352,6 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Go_DoesNotIndexBlankIdentifierDeclarations()
-    {
-        var content = """
-            package demo
-
-            const _, exported = 1, 2
-
-            var (
-                _ int
-                _unused string
-                _, err = open()
-            )
-            """;
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-
-        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "_");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "exported");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "_unused");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "err");
-    }
-
-    [Fact]
     public void Extract_Go_DetectsLabels()
     {
         var content = """
@@ -373,49 +380,6 @@ public partial class SymbolExtractorTests
         var label = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "Retry");
         Assert.Equal(4, label.Line);
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name is "case" or "default");
-    }
-
-    [Fact]
-    public void Extract_Go_DetectsGroupedTypeConstAndVarDeclarations()
-    {
-        var content = """
-            package demo
-
-            type (
-                Stack[T any] struct {
-                    items []T
-                }
-                Container[T comparable, U any] interface {
-                    io.Reader
-                    Get() U
-                }
-                Alias[T any] string
-            )
-
-            const (
-                MaxRetries = 3
-                DefaultTimeout int = 30
-                Named, Other = 1, 2
-            )
-
-            var (
-                Primary, Secondary *Client
-            )
-        """;
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-
-        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Stack");
-        Assert.Contains(symbols, s => s.Kind == "protocol" && s.Name == "Container");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Alias");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "MaxRetries");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DefaultTimeout");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Named");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Other");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Primary");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Secondary");
-        Assert.DoesNotContain(symbols, s => s.Name == "items");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "io.Reader");
     }
 
     [Fact]
