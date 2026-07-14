@@ -75,6 +75,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   XAML `x:TypeArguments` coverage keeps scalar, type-markup, nested-generic, and multiline values in one resource dictionary, using distinct wrapped type names to retain failure diagnosis.
   XAML type-object elements, type-property elements, and type markup extensions share one resource dictionary with form-specific type names so one reader traversal covers all three representations without ambiguous assertions.
   XAML common event handlers live in the wrapped search-attribute fixture alongside multiline `x:Name` and `x:Key` values; use exact handler counts so ordinary and wrapped attribute forms share one extraction safely.
+  XAML `Binding`, `x:Bind`, `CompiledBinding`, and `ReflectionBinding` paths share one fixture with distinct leaf names; assert source/root and converter-parameter exclusions from the same collected property-name set.
 - `FileIndexerTests.cs`, `FileIndexerContentLoadingTests.cs`, `FileIndexerTestSupport.cs`
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
 - `PathCompatibilityMatrixTests.cs`
@@ -659,6 +660,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   XAML の `x:TypeArguments` coverage は、scalar、type markup、nested generic、multiline の値を1つの resource dictionary に置き、wrapped type には固有名を使って失敗診断を維持します。
   XAML の type-object element、type-property element、type markup extension は、形式ごとに固有の型名を持つ1つの resource dictionary を共有し、曖昧な assertion なしで3表現を1回の reader traversal で検証します。
   XAML の common event handler は、multiline の `x:Name` / `x:Key` 値とともに wrapped search-attribute fixture に置きます。handler の厳密な件数を使い、通常属性と wrapped 属性の形式が1回の抽出を安全に共有するようにします。
+  XAML の `Binding`、`x:Bind`、`CompiledBinding`、`ReflectionBinding` path は、固有の leaf 名を持つ1つの fixture を共有します。同じ property-name 集合から source/root と converter-parameter の除外も検証します。
 - `FileIndexerTests.cs`、`FileIndexerContentLoadingTests.cs`、`FileIndexerTestSupport.cs`
   ファイル走査、言語判定、scan result 言語の再利用、content loading / canonicalization、checksum、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。共有 `FileIndexerTests` helper は `FileIndexerTestSupport.cs` に置きます。
 - `PathCompatibilityMatrixTests.cs`

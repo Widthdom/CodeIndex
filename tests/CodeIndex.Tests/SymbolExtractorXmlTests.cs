@@ -577,7 +577,7 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Xml_XamlCapturesBindingPaths()
+    public void Extract_Xml_XamlCapturesBindingPathVariants()
     {
         var content = """
             <ContentPage xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -588,43 +588,28 @@ public partial class SymbolExtractorTests
                         Title}" />
                     <Button Command="{x:Bind
                         ViewModel.SaveCommand}" />
+                    <TextBlock Text="{CompiledBinding CompiledModel.CompiledTitle}" />
+                    <TextBox Text="{ReflectionBinding Path=Search.FilterText}" />
+                    <Button Command="{CompiledBinding Commands.CompiledSave}" />
+                    <TextBlock Tag="{CompiledBinding Path=Profile.DisplayName, ConverterParameter='Path=Ignored'}" />
                 </StackPanel>
             </ContentPage>
             """;
 
         var symbols = SymbolExtractor.Extract(1, "xml", content);
 
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ViewModel");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Title");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "SaveCommand");
-        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Root");
-    }
-
-    [Fact]
-    public void Extract_Xml_XamlCapturesCompiledAndReflectionBindingPaths()
-    {
-        var content = """
-            <Window xmlns="https://github.com/avaloniaui"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-                <StackPanel>
-                    <TextBlock Text="{CompiledBinding ViewModel.Title}" />
-                    <TextBox Text="{ReflectionBinding Path=Search.FilterText}" />
-                    <Button Command="{CompiledBinding
-                        Commands.Save}" />
-                    <TextBlock Tag="{CompiledBinding Path=Profile.DisplayName, ConverterParameter='Path=Ignored'}" />
-                </StackPanel>
-            </Window>
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "xml", content);
         var propertyNames = symbols.Where(s => s.Kind == "property").Select(s => s.Name).ToList();
 
+        Assert.Contains("ViewModel", propertyNames);
         Assert.Contains("Title", propertyNames);
+        Assert.Contains("SaveCommand", propertyNames);
+        Assert.Contains("CompiledTitle", propertyNames);
         Assert.Contains("FilterText", propertyNames);
-        Assert.Contains("Save", propertyNames);
+        Assert.Contains("CompiledSave", propertyNames);
         Assert.Contains("DisplayName", propertyNames);
         Assert.DoesNotContain("Ignored", propertyNames);
-        Assert.DoesNotContain("ViewModel", propertyNames);
+        Assert.DoesNotContain("CompiledModel", propertyNames);
+        Assert.DoesNotContain("Root", propertyNames);
     }
 
     [Fact]
