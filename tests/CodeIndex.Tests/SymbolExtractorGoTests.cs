@@ -80,7 +80,7 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Go_QualifiedPointerReceiverUsesBareTypeContainer()
+    public void Extract_Go_QualifiedReceiverAndLabelSymbolsShareFunctionFixture()
     {
         const string content = """
             package demo
@@ -88,6 +88,23 @@ public partial class SymbolExtractorTests
             type Widget struct {}
 
             func (w *pkg.Widget) Run() {}
+
+            func run() {
+            Retry:
+                for {
+                    break Retry
+                }
+
+                item := User{
+                    Retry: true,
+                }
+                value := 1
+                _ = item
+                switch value {
+                case 1:
+                default:
+                }
+            }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "go", content);
@@ -97,6 +114,9 @@ public partial class SymbolExtractorTests
             && symbol.Name == "Run"
             && symbol.ContainerName == "Widget"
             && symbol.ContainerKind == "struct");
+        var label = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "Retry");
+        Assert.Equal(8, label.Line);
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name is "case" or "default");
     }
 
     [Fact]
@@ -368,37 +388,6 @@ public partial class SymbolExtractorTests
 
         var method = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "Method");
         Assert.Equal("Method[T constraints.Ordered](x T) T", method.Signature);
-    }
-
-    [Fact]
-    public void Extract_Go_DetectsLabels()
-    {
-        var content = """
-            package demo
-
-            func run() {
-            Retry:
-                for {
-                    break Retry
-                }
-
-                item := User{
-                    Retry: true,
-                }
-                value := 1
-                _ = item
-                switch value {
-                case 1:
-                default:
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-
-        var label = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "Retry");
-        Assert.Equal(4, label.Line);
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name is "case" or "default");
     }
 
 }
