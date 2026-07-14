@@ -613,47 +613,15 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_PythonClassBase_CapturesBaseTypeReference()
+    public void Extract_PythonClassHeaders_ReuseSingleMultipleAndMetaclassFixture()
     {
         const string content = """
-            class UserView(views.BaseView):
+            class SingleView(views.BaseView):
                 pass
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "BaseView"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "UserView");
-    }
-
-    [Fact]
-    public void Extract_PythonClassMultipleBases_CapturesEachBaseTypeReference()
-    {
-        const string content = """
-            class UserView(views.BaseView, mixins.AuditedMixin):
+            class MultipleView(views.BaseView, mixins.AuditedMixin):
                 pass
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "BaseView"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "UserView");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "AuditedMixin"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "UserView");
-    }
-
-    [Fact]
-    public void Extract_PythonClassMetaclass_CapturesMetaclassTypeReference()
-    {
-        const string content = """
             class Model(metaclass=orm.ModelMeta):
                 pass
             """;
@@ -661,10 +629,16 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "python", content);
         var references = ReferenceExtractor.Extract(1, "python", content, symbols);
 
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "ModelMeta"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "Model");
+        AssertClassType("BaseView", "SingleView");
+        AssertClassType("BaseView", "MultipleView");
+        AssertClassType("AuditedMixin", "MultipleView");
+        AssertClassType("ModelMeta", "Model");
+
+        void AssertClassType(string symbolName, string containerName) =>
+            Assert.Contains(references, reference =>
+                reference.SymbolName == symbolName
+                && reference.ReferenceKind == "type_reference"
+                && reference.ContainerName == containerName);
     }
 
     [Fact]
