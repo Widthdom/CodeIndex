@@ -265,6 +265,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Python property-decorator symbol coverage shares cached, accessor/setter/deleter, and direct/qualified abstract decorators in one module fixture.
 - Python static-import symbol expansion shares aliases, imported names, qualified from-import names, and dotted prefixes in one module fixture.
 - Python package `__all__` export coverage shares assignment, append, inline extend, and split-line extend mutations in one qualified `__init__.py` fixture.
+- Python package-import coverage shares local/external aliases, current-package imports, relative module members, and parent-package members in one `__init__.py` fixture.
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). Its publish smoke disables NuGet vulnerability auditing because package advisory validation is covered by the normal build/test workflow's package vulnerability check, not by this runtime serialization test. It is reported as skipped on macOS arm64 while SDK/ILLink can crash before exercising `cdidx` (#2586). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
@@ -796,6 +797,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - Python property decorator symbol coverage は cached、accessor/setter/deleter、direct/qualified abstract decorator を1つの module fixture で共有します。
 - Python static import の symbol expansion は alias、imported name、qualified from-import name、dotted prefix を1つの module fixture で共有します。
 - Python package の `__all__` export coverage は assignment、append、inline extend、split-line extend を1つの qualified `__init__.py` fixture で共有します。
+- Python package import coverage は local/external alias、current-package import、relative module member、parent-package member を1つの `__init__.py` fixture で共有します。
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   は trimmed な RID 固有 CLI を publish し、SDK が生成した entry point（`dotnet` 経由の `cdidx.dll`、または native の `cdidx`/`cdidx.exe` apphost）を実行します。この publish smoke は NuGet 脆弱性監査を無効化します。package advisory の検証は通常の build/test workflow の package vulnerability check が担い、この runtime serialization テストの責務ではないためです。macOS arm64 では SDK/ILLink が `cdidx` に到達する前にクラッシュし得るため、このテストは skipped として報告されます（#2586）。self-contained publish output に常に `cdidx.dll` が出るとは仮定しないでください。
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`

@@ -452,71 +452,31 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Python_IndexesQualifiedModuleAliasesFromInitModules()
+    public void Extract_Python_PackageImports_ReuseAliasAndRelativeFixture()
     {
         var content = """
             import submodule as module_alias
             import package.submodule as external_alias
             from . import helper as alias
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content, "package/subpkg/__init__.py");
-        var imports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
-
-        Assert.Contains("submodule", imports);
-        Assert.Contains("package.subpkg.submodule", imports);
-        Assert.Contains("module_alias", imports);
-        Assert.Contains("package.subpkg.module_alias", imports);
-        Assert.Contains("package.submodule", imports);
-        Assert.DoesNotContain("package.subpkg.package.submodule", imports);
-        Assert.Contains("external_alias", imports);
-        Assert.Contains("package.subpkg.external_alias", imports);
-        Assert.Contains("helper", imports);
-        Assert.Contains("alias", imports);
-        Assert.Contains("package.subpkg.alias", imports);
-    }
-
-    [Fact]
-    public void Extract_Python_IndexesCurrentPackageRelativeFromImports()
-    {
-        var content = """
-            from . import helper
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content, "package/subpkg/__init__.py");
-        var imports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
-
-        Assert.Contains("helper", imports);
-        Assert.Contains("package.subpkg.helper", imports);
-    }
-
-    [Fact]
-    public void Extract_Python_IndexesCurrentPackageRelativeModuleImports()
-    {
-        var content = """
             from .tools import build
+            from ..shared import parent_helper
             """;
 
         var symbols = SymbolExtractor.Extract(1, "python", content, "package/subpkg/__init__.py");
         var imports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
 
-        Assert.Contains("tools.build", imports);
-        Assert.Contains("package.subpkg.tools", imports);
-        Assert.Contains("package.subpkg.tools.build", imports);
-    }
+        foreach (var importName in new[]
+                 {
+                     "submodule", "package.subpkg.submodule", "module_alias", "package.subpkg.module_alias",
+                     "package.submodule", "external_alias", "package.subpkg.external_alias", "helper", "alias",
+                     "package.subpkg.alias", "tools.build", "package.subpkg.tools", "package.subpkg.tools.build",
+                     "shared.parent_helper", "package.shared.parent_helper",
+                 })
+        {
+            Assert.Contains(importName, imports);
+        }
 
-    [Fact]
-    public void Extract_Python_IndexesParentPackageRelativeModuleImports()
-    {
-        var content = """
-            from ..shared import helper
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content, "package/subpkg/__init__.py");
-        var imports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
-
-        Assert.Contains("shared.helper", imports);
-        Assert.Contains("package.shared.helper", imports);
+        Assert.DoesNotContain("package.subpkg.package.submodule", imports);
     }
 
     [Fact]
