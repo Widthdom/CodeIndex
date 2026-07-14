@@ -624,7 +624,7 @@ Operators can override the defaults with environment variables:
 | `CDIDX_SQLITE_CACHE_KB` | `65536` | Positive cache size in KiB, up to `1048576`; cdidx applies it as a negative SQLite `cache_size` value so SQLite interprets it as KiB. Invalid or oversized values fall back to the default. |
 | `CDIDX_SQLITE_MMAP_BYTES` | `268435456` | Non-negative memory-map window in bytes on 64-bit processes, up to `1073741824`. Use `0` to disable mmap. Invalid or oversized values fall back to the default. |
 | `CDIDX_SQLITE_BUSY_TIMEOUT_MS` | `5000` | Non-negative SQLite busy timeout in milliseconds, up to `3600000`. Use a higher value for slow disks or concurrent MCP/index workflows; invalid or oversized values fall back to the default. |
-| `CDIDX_PREPARED_COMMAND_CACHE_CAPACITY` | `32` | Positive prepared SQLite command cache capacity per connection, up to `512`. Invalid or oversized values fall back to the default. |
+| `CDIDX_PREPARED_COMMAND_CACHE_CAPACITY` | `64` | Positive prepared SQLite command cache capacity per connection, up to `512`. Invalid or oversized values fall back to the default. |
 
 After a successful `cdidx index` run, the writer refreshes SQLite planner statistics so large repositories do not rely on default selectivity estimates for `search`, `references`, `callers`, and related joins. A brand-new index database runs full `ANALYZE` once after the initial population; later successful index runs use SQLite's lighter `PRAGMA optimize`. This maintenance is best-effort and never changes the schema contract.
 
@@ -3113,7 +3113,7 @@ operator は environment variable で既定値を上書きできる。
 | `CDIDX_SQLITE_CACHE_KB` | `65536` | KiB 単位の正の cache size。上限は `1048576`。cdidx は SQLite が KiB として解釈するよう負の `cache_size` 値として適用する。invalid / oversized value は既定値に戻る。 |
 | `CDIDX_SQLITE_MMAP_BYTES` | `268435456` | 64-bit process で使う memory-map window の byte 数。`0` 以上、上限 `1073741824`。`0` で mmap を無効化する。invalid / oversized value は既定値に戻る。 |
 | `CDIDX_SQLITE_BUSY_TIMEOUT_MS` | `5000` | SQLite busy timeout の millisecond 値。`0` 以上、上限 `3600000`。低速 disk や concurrent MCP/index workflow では大きい値を使える。invalid / oversized value は既定値に戻る。 |
-| `CDIDX_PREPARED_COMMAND_CACHE_CAPACITY` | `32` | connection ごとの prepared SQLite command cache capacity。正の整数、上限 `512`。invalid / oversized value は既定値に戻る。 |
+| `CDIDX_PREPARED_COMMAND_CACHE_CAPACITY` | `64` | connection ごとの prepared SQLite command cache capacity。正の整数、上限 `512`。invalid / oversized value は既定値に戻る。 |
 
 `cdidx index` が成功すると、writer は SQLite planner statistics を更新し、大規模 repository で `search`、`references`、`callers` などの join が default selectivity estimate に依存しないようにする。新規 index database は初回 population 後に full `ANALYZE` を一度実行し、それ以降の成功した index run では軽量な `PRAGMA optimize` を使う。この maintenance は best-effort であり、schema contract は変更しない。
 

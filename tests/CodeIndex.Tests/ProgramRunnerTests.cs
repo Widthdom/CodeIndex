@@ -592,6 +592,15 @@ public class ProgramRunnerTests
         var defaultLimit = Assert.Contains(QueryCommandRunner.DefaultLimitEnvironmentVariable, byName);
         Assert.Equal(EnvironmentVariableInventory.DomainIndexingQuery, defaultLimit.Domain);
 
+        var preparedCommandCache = Assert.Contains(PreparedCommandCache.CapacityEnvironmentVariable, byName);
+        Assert.Equal(
+            PreparedCommandCache.DefaultCapacity.ToString(CultureInfo.InvariantCulture),
+            preparedCommandCache.DefaultBehavior);
+        var preparedCommandCacheLocation = Assert.Single(preparedCommandCache.Locations);
+        Assert.Equal("src/CodeIndex/Database/PreparedCommandCache.cs", preparedCommandCacheLocation.Path);
+        Assert.Equal(33, preparedCommandCacheLocation.Line);
+        Assert.Equal(nameof(PreparedCommandCache), preparedCommandCacheLocation.Member);
+
         var toolAllowlist = Assert.Contains(McpToolFilter.AllowEnvVarName, byName);
         Assert.Equal(EnvironmentVariableInventory.DomainTrustBoundary, toolAllowlist.Domain);
         Assert.Contains("fail closed", toolAllowlist.InvalidValueBehavior, StringComparison.OrdinalIgnoreCase);
