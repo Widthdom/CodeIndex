@@ -2795,28 +2795,13 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_RubyRailsEnum_IndexesAttributeName()
+    public void Extract_RubyRailsModelDsl_ReuseEnumAttributeSerializationAndAggregationFixture()
     {
         const string content = """
             class Conversation
               enum :status, { active: 0, archived: 1 }, prefix: true
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "enum");
-        Assert.Contains(references, reference => reference.SymbolName == "status" && reference.ContainerName == "Conversation");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "active");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "archived");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "prefix");
-    }
-
-    [Fact]
-    public void Extract_RubyRailsCreateTable_IndexesTableName()
-    {
-        const string content = """
             class CreateUsers < ActiveRecord::Migration[8.0]
               def change
                 create_table :users, id: :uuid do |t|
@@ -2825,77 +2810,16 @@ public partial class ReferenceExtractorTests
                 end
               end
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "create_table");
-        Assert.Contains(references, reference => reference.SymbolName == "users" && reference.ContainerName == "change");
-        Assert.Contains(references, reference => reference.SymbolName == "audit_logs" && reference.ContainerName == "change");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "id");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "uuid");
-    }
-
-    [Fact]
-    public void Extract_RubyRailsAttribute_IndexesAttributeName()
-    {
-        const string content = """
             class User < ApplicationRecord
               attribute :timezone, :string, default: "UTC"
-            end
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "attribute");
-        Assert.Contains(references, reference => reference.SymbolName == "timezone" && reference.ContainerName == "User");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "string");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "default");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "UTC");
-    }
-
-    [Fact]
-    public void Extract_RubyRailsSerialize_IndexesSerializedAttributeName()
-    {
-        const string content = """
-            class User < ApplicationRecord
               serialize :settings, coder: JSON
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "serialize");
-        Assert.Contains(references, reference => reference.SymbolName == "settings" && reference.ContainerName == "User");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "coder");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "JSON");
-    }
-
-    [Fact]
-    public void Extract_RubyRailsComposedOf_IndexesAggregateAndClassName()
-    {
-        const string content = """
             class Customer < ApplicationRecord
               composed_of :address, class_name: "Address"
             end
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "ruby", content);
-        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
-
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "composed_of");
-        Assert.Contains(references, reference => reference.SymbolName == "address" && reference.ContainerName == "Customer");
-        Assert.Contains(references, reference => reference.SymbolName == "Address" && reference.ContainerName == "Customer");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "class_name");
-    }
-
-    [Fact]
-    public void Extract_RubyRailsNestedAttributes_IndexesAssociationNames()
-    {
-        const string content = """
             class Post < ApplicationRecord
               accepts_nested_attributes_for :comments, :tags, allow_destroy: true
             end
@@ -2904,11 +2828,20 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "ruby", content);
         var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "accepts_nested_attributes_for");
+        Assert.DoesNotContain(references, reference => reference.SymbolName is
+            "enum" or "create_table" or "attribute" or "serialize" or "composed_of" or "accepts_nested_attributes_for");
+        Assert.Contains(references, reference => reference.SymbolName == "status" && reference.ContainerName == "Conversation");
+        Assert.Contains(references, reference => reference.SymbolName == "users" && reference.ContainerName == "change");
+        Assert.Contains(references, reference => reference.SymbolName == "audit_logs" && reference.ContainerName == "change");
+        Assert.Contains(references, reference => reference.SymbolName == "timezone" && reference.ContainerName == "User");
+        Assert.Contains(references, reference => reference.SymbolName == "settings" && reference.ContainerName == "User");
+        Assert.Contains(references, reference => reference.SymbolName == "address" && reference.ContainerName == "Customer");
+        Assert.Contains(references, reference => reference.SymbolName == "Address" && reference.ContainerName == "Customer");
         Assert.Contains(references, reference => reference.SymbolName == "comments" && reference.ContainerName == "Post");
         Assert.Contains(references, reference => reference.SymbolName == "tags" && reference.ContainerName == "Post");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "allow_destroy");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "true");
+        Assert.DoesNotContain(references, reference => reference.SymbolName is
+            "active" or "archived" or "prefix" or "id" or "uuid" or "string" or "default" or "UTC" or "coder" or
+            "JSON" or "class_name" or "allow_destroy" or "true");
     }
 
     [Fact]

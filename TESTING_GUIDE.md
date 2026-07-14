@@ -271,6 +271,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Python triple-quoted-string coverage shares the leading module-docstring heading with double/single/raw fixture masking in one extraction.
 - Ruby loading/dependency DSL coverage shares `require`, `require_relative`, `load`, `gem`, and `autoload` in one fixture with container-specific target checks.
 - Ruby metaprogramming declaration coverage shares aliases, constant visibility, and `module_function` exports in one fixture while suppressing DSL keywords.
+- Ruby Rails model/schema DSL coverage shares enum, table creation, typed attributes, serialization, composed values, and nested attributes in one fixture with target/option separation.
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). Its publish smoke disables NuGet vulnerability auditing because package advisory validation is covered by the normal build/test workflow's package vulnerability check, not by this runtime serialization test. It is reported as skipped on macOS arm64 while SDK/ILLink can crash before exercising `cdidx` (#2586). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
@@ -808,6 +809,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - Python triple-quoted string coverage は先頭 module docstring の heading と double/single/raw fixture masking を1回の extraction で共有します。
 - Ruby loading/dependency DSL coverage は `require`、`require_relative`、`load`、`gem`、`autoload` を1つの fixture で共有し、container ごとの target を検証します。
 - Ruby metaprogramming declaration coverage は alias、constant visibility、`module_function` export を1つの fixture で共有し、DSL keyword を抑止します。
+- Ruby Rails model/schema DSL coverage は enum、table creation、typed attribute、serialization、composed value、nested attribute を1つの fixture で共有し、target と option を区別します。
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   は trimmed な RID 固有 CLI を publish し、SDK が生成した entry point（`dotnet` 経由の `cdidx.dll`、または native の `cdidx`/`cdidx.exe` apphost）を実行します。この publish smoke は NuGet 脆弱性監査を無効化します。package advisory の検証は通常の build/test workflow の package vulnerability check が担い、この runtime serialization テストの責務ではないためです。macOS arm64 では SDK/ILLink が `cdidx` に到達する前にクラッシュし得るため、このテストは skipped として報告されます（#2586）。self-contained publish output に常に `cdidx.dll` が出るとは仮定しないでください。
 - `QueryCommandRunnerTests.RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases`
