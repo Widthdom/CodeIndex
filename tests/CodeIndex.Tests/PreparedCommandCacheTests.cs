@@ -42,6 +42,12 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
+    public void DefaultCapacity_CoversDiverseIndexBatchShapes()
+    {
+        Assert.Equal(64, PreparedCommandCache.DefaultCapacity);
+    }
+
+    [Fact]
     public void DbWriter_WithCache_BulkInsertShapesReusePreparedCommands()
     {
         var writer = new DbWriter(_db);
