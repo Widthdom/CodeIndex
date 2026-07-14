@@ -365,15 +365,18 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_TypeScriptGenericTaggedTemplate_IsCaptured()
+    public void Extract_TypeScriptGenericTaggedTemplateVariants_AreCaptured()
     {
-        // issue #268: TS generic-tagged forms like `html<User>\`...\`` read past the balanced
-        // `<...>` so the tag identifier is still captured.
+        // issue #268: TS generic-tagged forms read past balanced `<...>`, including a `>`
+        // inside a function-type `=>`, so the tag identifier is still captured.
         // issue #268: `html<User>\`...\`` のようなジェネリクス付きタグは `<...>` を読み飛ばして
-        // タグ識別子を捕捉する。
+        // function type の `=>` 内の `>` も generic close と誤認せずタグ識別子を捕捉する。
         const string content = """
             function render(user: User) {
                 return html<User>`<p>${user.name}</p>`;
+            }
+            function renderFunctionType<U>(value: U) {
+                return tag<(x: number) => U>`value=${value}`;
             }
             """;
 
@@ -383,6 +386,8 @@ public partial class ReferenceExtractorTests
         var html = Assert.Single(references.Where(r => r.SymbolName == "html"));
         Assert.Equal("call", html.ReferenceKind);
         Assert.Equal("render", html.ContainerName);
+        var tag = Assert.Single(references.Where(r => r.SymbolName == "tag" && r.ReferenceKind == "call"));
+        Assert.Equal("renderFunctionType", tag.ContainerName);
     }
 
     [Fact]
@@ -524,27 +529,6 @@ public partial class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.SymbolName == "outer" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "inner" && r.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_TypeScriptFunctionTypeGenericTaggedTemplate_IsCaptured()
-    {
-        // issue #268: a generic type argument containing a function type `(x: T) => U` must
-        // still be read past so the tag identifier (`tag`) is captured. The `>` inside `=>`
-        // does not close the generic bracket.
-        // issue #268: 型引数に関数型 `(x: T) => U` を含むジェネリクス付きタグも読み飛ばして
-        // タグ識別子を捕捉する。`=>` の `>` は generic を閉じない。
-        const string content = """
-            function render<U>(value: U) {
-                return tag<(x: number) => U>`value=${value}`;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
-
-        var tag = Assert.Single(references.Where(r => r.SymbolName == "tag" && r.ReferenceKind == "call"));
-        Assert.Equal("render", tag.ContainerName);
     }
 
     [Fact]
