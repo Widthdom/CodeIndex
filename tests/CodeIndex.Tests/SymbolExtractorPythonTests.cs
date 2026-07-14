@@ -480,43 +480,26 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Python_HandlesUnclosedMultilineImportBlocksWithoutPhantomSymbols()
+    public void Extract_Python_UnclosedMultilineImports_ReuseAssertionsAcrossEofAndFollowingCode()
     {
-        var content = """
-            from itertools import (
-                chain,
-                zip_longest as zipl,
-            """;
+        var cases = new[]
+        {
+            "from itertools import (\n    chain,\n    zip_longest as zipl,\n",
+            "from itertools import (\n    chain,\n    zip_longest as zipl,\n\nvalue = 1\n",
+        };
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var imports = symbols.Where(symbol => symbol.Kind == "import").ToList();
+        foreach (var content in cases)
+        {
+            var symbols = SymbolExtractor.Extract(1, "python", content);
+            var imports = symbols.Where(symbol => symbol.Kind == "import").ToList();
 
-        Assert.Contains(imports, symbol => symbol.Name == "itertools");
-        Assert.Contains(imports, symbol => symbol.Name == "chain");
-        Assert.Contains(imports, symbol => symbol.Name == "zip_longest");
-        Assert.Contains(imports, symbol => symbol.Name == "zipl");
-        Assert.DoesNotContain(imports, symbol => symbol.Name == "(");
-    }
+            foreach (var importName in new[] { "itertools", "chain", "zip_longest", "zipl" })
+            {
+                Assert.Contains(imports, symbol => symbol.Name == importName);
+            }
 
-    [Fact]
-    public void Extract_Python_StopsAtUnclosedMultilineImportBlocksBeforeUnrelatedCode()
-    {
-        var content = """
-            from itertools import (
-                chain,
-                zip_longest as zipl,
-
-            value = 1
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var imports = symbols.Where(symbol => symbol.Kind == "import").ToList();
-
-        Assert.Contains(imports, symbol => symbol.Name == "itertools");
-        Assert.Contains(imports, symbol => symbol.Name == "chain");
-        Assert.Contains(imports, symbol => symbol.Name == "zip_longest");
-        Assert.Contains(imports, symbol => symbol.Name == "zipl");
-        Assert.DoesNotContain(imports, symbol => symbol.Name == "value = 1");
+            Assert.DoesNotContain(imports, symbol => symbol.Name is "(" or "value = 1");
+        }
     }
 
     [Fact]
