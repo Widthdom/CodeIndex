@@ -97,6 +97,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   JavaScript direct and wrapper-call blockless-arrow class returns share one source with exact lambda ranges and distinct hidden class/member exclusions.
   JavaScript callable-scope local-class coverage shares class methods, ordinary functions, and CommonJS function expressions in one source, with direct/class-expression forms and unique leak sentinels.
   JavaScript nested local-class coverage shares IIFE, static block, object concise method, getter, and setter scopes in one source, retaining a visible sibling method as the boundary control.
+  JavaScript CommonJS class-expression coverage shares named exports, default inline/multiline/parenthesized/conditional assignments, and property exports in one source with unique members and an exact default-class count.
 - `FileIndexerTests.cs`, `FileIndexerContentLoadingTests.cs`, `FileIndexerTestSupport.cs`
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
 - `PathCompatibilityMatrixTests.cs`
@@ -703,6 +704,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   JavaScript の direct/wrapper-call blockless-arrow class return は、厳密な lambda range と固有 hidden class/member 除外を持つ1 source を共有します。
   JavaScript callable-scope local-class coverage は、class method、通常 function、CommonJS function expression の direct/class-expression 形と固有 leak sentinel を1 source で共有します。
   JavaScript nested local-class coverage は IIFE、static block、object concise method、getter、setter scope を1 source で共有し、visible sibling method を境界 control として残します。
+  JavaScript CommonJS class-expression coverage は named export、default inline/multiline/parenthesized/conditional assignment、property export を、固有 member と厳密な default-class 件数を持つ1 source で共有します。
 - `FileIndexerTests.cs`、`FileIndexerContentLoadingTests.cs`、`FileIndexerTestSupport.cs`
   ファイル走査、言語判定、scan result 言語の再利用、content loading / canonicalization、checksum、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。共有 `FileIndexerTests` helper は `FileIndexerTestSupport.cs` に置きます。
 - `PathCompatibilityMatrixTests.cs`

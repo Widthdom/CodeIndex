@@ -794,14 +794,34 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScript_DetectsCommonJsExportsClassExpressionMethods()
+    public void Extract_JavaScript_DetectsCommonJsClassExpressionForms()
     {
-        var content = "exports.Service = class NamedService { run() {} };";
+        var content = """
+            exports.Service = class NamedService { serviceRun() {} };
+            module.exports = class { inlineRun() {} };
+            module.exports =
+                class {
+                    multilineRun() {}
+                };
+            module.exports = (class { parenthesizedRun() {} });
+            module.exports.PropertyService = class { propertyRun() {} };
+            if (typeof module !== "undefined") {
+                module.exports = class { conditionalRun() {} };
+            }
+            """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "NamedService");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "Service");
+        Assert.Equal(4, symbols.Count(s => s.Kind == "class" && s.Name == "default"));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "PropertyService");
+        AssertMember("serviceRun", "Service");
+        foreach (var name in new[] { "inlineRun", "multilineRun", "parenthesizedRun", "conditionalRun" })
+            AssertMember(name, "default");
+        AssertMember("propertyRun", "PropertyService");
+
+        void AssertMember(string name, string containerName) =>
+            Assert.Contains(symbols, s => s.Kind == "function" && s.Name == name && s.ContainerName == containerName);
     }
 
     [Fact]
@@ -822,71 +842,6 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "$Service");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "$Handler");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "$Handler");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DetectsCommonJsModuleExportsClassExpressionMethods()
-    {
-        var content = "module.exports = class { run() {} };";
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "default");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DetectsMultilineCommonJsModuleExportsClassExpressionMethods()
-    {
-        var content = """
-            module.exports =
-                class {
-                    run() {}
-                };
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "default");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DetectsParenthesizedCommonJsModuleExportsClassExpressionMethods()
-    {
-        var content = """
-            module.exports = (class {
-                run() {}
-            });
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "default");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DetectsCommonJsModuleExportsPropertyClassExpressionMethods()
-    {
-        var content = "module.exports.Service = class { run() {} };";
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "Service");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DetectsCommonJsClassExpressionInsideTopLevelConditionalBlock()
-    {
-        var content = """
-            if (typeof module !== "undefined") {
-                module.exports = class {
-                    run() {}
-                };
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "default");
     }
 
     [Fact]
