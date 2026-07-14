@@ -800,17 +800,22 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "python", content);
         var references = ReferenceExtractor.Extract(1, "python", content, symbols);
 
-        AssertInterpolationCall("run_single", "use_single");
-        AssertInterpolationCall("run_multiline", "use_multiline");
-        AssertInterpolationCall("run_nested", "use_nested");
+        AssertInterpolationCalls("use_single", "run_single");
+        AssertInterpolationCalls("use_multiline", "run_multiline");
+        AssertInterpolationCalls("use_nested", "format_value", "run_nested");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName is "hello" or "goodbye" or "user_name");
 
-        void AssertInterpolationCall(string symbolName, string containerName) =>
-            Assert.Single(references, reference =>
-                reference.SymbolName == symbolName
-                && reference.ReferenceKind == "call"
-                && reference.ContainerName == containerName);
+        void AssertInterpolationCalls(string containerName, params string[] symbolNames)
+        {
+            var containerReferences = references
+                .Where(candidate => candidate.ContainerName == containerName)
+                .ToArray();
+            Assert.All(containerReferences, reference => Assert.Equal("call", reference.ReferenceKind));
+            Assert.Equal(
+                symbolNames.OrderBy(name => name, StringComparer.Ordinal),
+                containerReferences.Select(reference => reference.SymbolName).OrderBy(name => name, StringComparer.Ordinal));
+        }
     }
 
     [Fact]
