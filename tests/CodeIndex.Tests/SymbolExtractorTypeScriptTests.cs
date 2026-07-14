@@ -359,17 +359,34 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_TypeScript_DetectsExportDefaultClassMembers()
+    public void Extract_TypeScript_HandlesNamedAndAnonymousDefaultClassMembers()
     {
         var content = """
             export default class DefaultTs {
-                run(): void {}
+                namedRun(): void {}
+            }
+
+            export default class extends Base {
+                baseRun(): void {}
+            }
+
+            export default class extends mixin(Base) {
+                mixinRun(): void {}
+            }
+
+            export default class implements Runnable {
+                interfaceRun(): void {}
             }
             """;
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "DefaultTs");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "extends");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "implements");
+        AssertSymbolsContain(symbols, "function", "namedRun", "baseRun", "mixinRun", "interfaceRun");
+        var interfaceRun = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "interfaceRun"));
+        Assert.Equal("class", interfaceRun.ContainerKind);
+        Assert.Equal("default", interfaceRun.ContainerName);
     }
 
     [Fact]
@@ -402,50 +419,6 @@ public partial class SymbolExtractorTests
 
         Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "./types");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./runtime");
-    }
-
-    [Fact]
-    public void Extract_TypeScript_DoesNotInventExtendsAsAnonymousDefaultClassName()
-    {
-        var content = """
-            export default class extends Base {
-                run(): void {}
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "extends");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
-    }
-
-    [Fact]
-    public void Extract_TypeScript_DoesNotInventExtendsAsAnonymousDefaultDerivedClassName()
-    {
-        var content = """
-            export default class extends mixin(Base) {
-                run(): void {}
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "extends");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
-    }
-
-    [Fact]
-    public void Extract_TypeScript_DoesNotInventImplementsAsAnonymousDefaultClassName()
-    {
-        var content = """
-            export default class implements Runnable {
-                run(): void {}
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "implements");
-        var run = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "run"));
-        Assert.Equal("class", run.ContainerKind);
-        Assert.Equal("default", run.ContainerName);
     }
 
     [Fact]
