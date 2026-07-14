@@ -79,6 +79,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   XAML `ElementName` and `x:Reference` target forms share one Grid fixture; collect property names once and retain inline, object-element, property-element, and ignored-parameter assertions together.
   XAML plain and `x:Static`-derived `x:Key` declarations live with static/dynamic resource lookups, including nested `Member={x:Type ...}` syntax, so key production and consumption share one resource dictionary.
   JavaScript spaced and unspaced chained comparisons before plain templates share one function fixture with distinct operand names, preventing generic-tag false positives in one extraction.
+  JavaScript single-line `for...of` and `for await...of` plain-template negatives share synchronous and asynchronous functions in one source, asserting zero phantom `call of` edges once.
 - `FileIndexerTests.cs`, `FileIndexerContentLoadingTests.cs`, `FileIndexerTestSupport.cs`
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
 - `PathCompatibilityMatrixTests.cs`
@@ -667,6 +668,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   XAML の `ElementName` と `x:Reference` target 形式は1つの Grid fixture を共有します。property 名を一度だけ収集し、inline、object-element、property-element、ignored parameter の assertion をまとめて維持します。
   XAML の plain および `x:Static` 由来の `x:Key` declaration は、nested `Member={x:Type ...}` 構文も含めて static/dynamic resource lookup と同居させ、key の生成と利用を1つの resource dictionary で検証します。
   JavaScript の plain template 前にある空白付き・空白なしの chained comparison は、固有の operand 名を持つ1つの function fixture を共有し、generic tag の false positive を1回の抽出で防ぎます。
+  JavaScript の single-line `for...of` / `for await...of` plain-template 負例は、同期・非同期 function を1つの source に置き、phantom `call of` がゼロであることを1回だけ検証します。
 - `FileIndexerTests.cs`、`FileIndexerContentLoadingTests.cs`、`FileIndexerTestSupport.cs`
   ファイル走査、言語判定、scan result 言語の再利用、content loading / canonicalization、checksum、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。共有 `FileIndexerTests` helper は `FileIndexerTestSupport.cs` に置きます。
 - `PathCompatibilityMatrixTests.cs`

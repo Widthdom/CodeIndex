@@ -2853,37 +2853,22 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScriptForOfLoopOverPlainTemplate_IsNotCaptured()
+    public void Extract_JavaScriptForOfLoopVariantsOverPlainTemplates_AreNotCaptured()
     {
         // Regression guard: `for (const ch of \`abc\`)` uses `of` as the for-of iterator
         // keyword, not as a tag identifier. The tag scanner must detect the enclosing
-        // `for (` header and drop the `of` token instead of emitting a phantom `call of`.
+        // `for (` header and drop the `of` token instead of emitting a phantom `call of`;
+        // the same suppression must tolerate `await` between `for` and `(`.
         // 退行防止: `for (const ch of \`abc\`)` の `of` は for-of イテレータキーワードで
-        // あり、タグ識別子ではない。タグ検出は外側の `for (` ヘッダを認識して `of` を落とす。
+        // あり、タグ識別子ではない。タグ検出は外側の `for (` ヘッダを認識して `of` を落とし、
+        // `for` と `(` の間にある `await` も許容する。
         const string content = """
-            function f() {
+            function syncLoop() {
                 for (const ch of `abc`) {
                     use(ch);
                 }
             }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
-    }
-
-    [Fact]
-    public void Extract_JavaScriptForAwaitOfLoopOverPlainTemplate_IsNotCaptured()
-    {
-        // Regression guard: `for await (const x of \`...\`)` is the async iterator form. The
-        // `for` / `(` scanner must tolerate the `await` contextual keyword between them so
-        // the phantom `call of` is still suppressed.
-        // 退行防止: `for await (const x of \`...\`)` は非同期イテレータ形。`for` と `(` の間
-        // の `await` を読み飛ばして `of` の幻 `call` を抑制する。
-        const string content = """
-            async function f(iter) {
+            async function asyncLoop(iter) {
                 for await (const x of `abc`) {
                     use(x);
                 }
