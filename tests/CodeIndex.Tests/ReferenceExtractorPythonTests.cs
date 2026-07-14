@@ -763,69 +763,48 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_PythonFString_KeepsSingleLineInterpolationCallReferences()
-    {
-        const string content = """
-            def run():
-                return 42
-
-            def use():
-                value = f"value = {run()}"
-                return value
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        var runReference = Assert.Single(references);
-        Assert.Equal("run", runReference.SymbolName);
-        Assert.Equal("call", runReference.ReferenceKind);
-        Assert.Equal("use", runReference.ContainerName);
-    }
-
-    [Fact]
-    public void Extract_PythonFString_MasksMultilineLiteralTextButKeepsInterpolationReferences()
+    public void Extract_PythonFStrings_ReuseSingleMultilineAndNestedFixture()
     {
         const string content = """"
-            def run():
+            def run_single():
                 return 42
 
-            def use(user_name):
+            def use_single():
+                value = f"value = {run_single()}"
+                return value
+
+            def run_multiline():
+                return 42
+
+            def use_multiline(user_name):
                 value = f"""hello
-                {run()}
+                {run_multiline()}
                 goodbye user_name
                 """
                 return value
-            """";
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        var runReference = Assert.Single(references, reference => reference.SymbolName == "run");
-        Assert.Equal("call", runReference.ReferenceKind);
-        Assert.Equal("use", runReference.ContainerName);
-        Assert.DoesNotContain(references, reference => reference.SymbolName is "hello" or "goodbye" or "user_name");
-    }
-
-    [Fact]
-    public void Extract_PythonFString_KeepsReferencesAfterNestedExpressionStringBrace()
-    {
-        const string content = """"
-            def run():
+            def run_nested():
                 return 42
 
-            def use(format_value):
-                value = f"""{format_value("}") + run()}"""
+            def use_nested(format_value):
+                value = f"""{format_value("}") + run_nested()}"""
                 return value
             """";
 
         var symbols = SymbolExtractor.Extract(1, "python", content);
         var references = ReferenceExtractor.Extract(1, "python", content, symbols);
 
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "run"
-            && reference.ReferenceKind == "call"
-            && reference.ContainerName == "use");
+        AssertInterpolationCall("run_single", "use_single");
+        AssertInterpolationCall("run_multiline", "use_multiline");
+        AssertInterpolationCall("run_nested", "use_nested");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "hello" or "goodbye" or "user_name");
+
+        void AssertInterpolationCall(string symbolName, string containerName) =>
+            Assert.Contains(references, reference =>
+                reference.SymbolName == symbolName
+                && reference.ReferenceKind == "call"
+                && reference.ContainerName == containerName);
     }
 
     [Fact]
