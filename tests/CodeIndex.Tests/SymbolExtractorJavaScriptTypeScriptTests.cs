@@ -1442,106 +1442,52 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScript_DoesNotLeakIifeLocalClassMethods()
+    public void Extract_JavaScript_LocalClasses_DoNotLeakFromNestedCallableAndStaticScopes()
     {
         var content = """
             (function () {
-                const Local = class {
-                    inside() {}
+                const IifeLocal = class {
+                    iifeMember() {}
                 };
             })();
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Local");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "inside");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DoesNotLeakStaticBlockLocalClassMethods()
-    {
-        var content = """
             class Outer {
                 static {
-                    const Local = class {
-                        inside() {}
+                    const StaticExpression = class {
+                        staticExpressionMember() {}
                     };
-                }
-
-                keep() {}
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Outer");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Local");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "inside");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DoesNotLeakDirectStaticBlockLocalClasses()
-    {
-        var content = """
-            class Outer {
-                static {
-                    class Local {
-                        inside() {}
+                    class StaticDirect {
+                        staticDirectMember() {}
                     }
                 }
-
                 keep() {}
             }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Outer");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Local");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "inside");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DoesNotLeakObjectLiteralConciseMethodLocalClasses()
-    {
-        var content = """
             const obj = {
                 method() {
-                    class Inner {
-                        run() {}
+                    class ConciseLocal {
+                        conciseMember() {}
                     }
-                }
-            };
-            """;
-        var symbols = SymbolExtractor.Extract(1, "javascript", content);
-
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Inner");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
-    }
-
-    [Fact]
-    public void Extract_JavaScript_DoesNotLeakGetterSetterLocalClasses()
-    {
-        var content = """
-            const obj = {
+                },
                 get value() {
-                    class HiddenGetter {
-                        run() {}
+                    class GetterLocal {
+                        getterMember() {}
                     }
                     return 1;
                 },
                 set value(input) {
-                    class HiddenSetter {
-                        run() {}
+                    class SetterLocal {
+                        setterMember() {}
                     }
                 }
             };
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "HiddenGetter");
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "HiddenSetter");
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Outer");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Outer");
+        Assert.DoesNotContain(symbols, s => s.Name is
+            "IifeLocal" or "iifeMember" or "StaticExpression" or "staticExpressionMember"
+            or "StaticDirect" or "staticDirectMember" or "ConciseLocal" or "conciseMember"
+            or "GetterLocal" or "getterMember" or "SetterLocal" or "setterMember");
     }
 
     [Fact]
