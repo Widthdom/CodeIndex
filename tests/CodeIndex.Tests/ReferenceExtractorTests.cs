@@ -5042,19 +5042,29 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_GoTypeAssertions_CapturesAssertedTypes()
+    public void Extract_GoRuntimeTypeChecks_ReuseAssertionAndSwitchFixture()
     {
         const string content = """
             package main
 
-            func classify(value any) {
+            func classify(value any, status Status) {
                 user := value.(User)
-                admin := value.(*Admin)
-                qualified := value.(model.Member)
+                directAdmin := value.(*DirectAdmin)
+                qualified := value.(model.DirectMember)
                 switch value.(type) {
+                case *Admin, *model.Member:
+                    return
+                case []Guest, map[Key]Value:
+                    return
                 case nil:
+                    return
                 }
-                _, _, _ = user, admin, qualified
+
+                switch status {
+                case status.Ready:
+                    return
+                }
+                _, _, _ = user, directAdmin, qualified
             }
             """;
 
@@ -5062,10 +5072,14 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "go", content, symbols);
 
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Admin" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Member" && r.ReferenceKind == "type_reference");
+        foreach (var typeName in new[] { "User", "DirectAdmin", "DirectMember", "Admin", "Member", "Guest", "Key", "Value" })
+        {
+            Assert.Contains(references, r => r.SymbolName == typeName && r.ReferenceKind == "type_reference");
+        }
+
         Assert.DoesNotContain(references, r => r.SymbolName == "type" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "nil" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Ready" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -5342,41 +5356,6 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Retry" && r.ReferenceKind == "call" && r.Context.Contains("continue Retry", StringComparison.Ordinal));
         Assert.Contains(references, r => r.SymbolName == "Retry" && r.ReferenceKind == "call" && r.Context.Contains("goto Retry", StringComparison.Ordinal));
         Assert.DoesNotContain(references, r => r.SymbolName == "Retry" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_GoTypeSwitchCases_CapturesPointerAndCompositeCaseTypes()
-    {
-        const string content = """
-            package main
-
-            func classify(value any, status Status) {
-                switch value.(type) {
-                case *Admin, *model.Member:
-                    return
-                case []Guest, map[Key]Value:
-                    return
-                case nil:
-                    return
-                }
-
-                switch status {
-                case status.Ready:
-                    return
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "go", content);
-        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Admin" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Member" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Guest" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Value" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Ready" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "nil" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
