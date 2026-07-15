@@ -373,6 +373,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   MCP JSON-RPC behavior and tool outputs. Large server coverage is split into focused partial suites for tool calls, tool listing, protocol/session handling, and error handling while the root `McpServerTests` part keeps shared seeded fixture state. Request-timeout tests use signal-gated delay hooks instead of fixed sleeps: start the request, confirm the hook has begun, then await the timeout response with a bounded wait so they pay only the configured timeout while still proving in-flight actions drain after the timeout response.
   Stdio response-order tests use the same signal-gated pattern: make the synthetic transport signal the parse-error path instead of sleeping in the response serializer.
   Rate-limit-disabled coverage uses the lightweight `languages` tool for repeated successful calls; do not pay repeated `status` database aggregation cost when the assertion only concerns limiter bypass.
+  State-changing notification authentication coverage stays table-driven across cancellation, roots, shutdown, and exit methods; every denied notification must remain response-free, emit only a bounded diagnostic, and leave cancellation, roots, and lifecycle state unchanged.
 - `DependencyPackageExtractorTests.cs`
   Dependency-lock graph fixtures assert explicit parent-package to child-package references and the absence of synthetic top-level package references. Keep NuGet and npm coverage aligned so shared resolved package sets cannot recreate lock-file-to-lock-file similarity edges while `callers` retains the requiring package as its container.
 - `HttpMcpTransportTests.cs`
@@ -1005,6 +1006,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   MCP の JSON-RPC 挙動とツール出力のテスト。大きな server coverage は tool call、tool listing、protocol/session handling、error handling ごとの focused partial suite に分割し、共有の seed 済み fixture 状態は root 側の `McpServerTests` に残します。request-timeout test は固定 sleep ではなく signal-gated delay hook を使います。request を開始し、hook が始まったことを確認してから timeout response を bounded wait で待つことで、timeout response 後に in-flight action が drain されることは保ったまま、設定した timeout 分だけを待つようにします。
   stdio response-order test も同じ signal-gated pattern を使い、response serializer で sleep する代わりに synthetic transport が parse-error path を signal するようにします。
   rate-limit-disabled coverage の繰り返し成功 call には軽量な `languages` tool を使い、limiter bypass だけの assertion で `status` の database aggregation cost を繰り返し支払わないでください。
+  state-changing notification の認証 coverage は cancellation、roots、shutdown、exit の各 method を table-driven のまま検証し、拒否されたすべての notification が応答を返さず bounded な診断だけを出力し、cancellation、roots、lifecycle state を変更しないことを確認してください。
 - `HttpMcpTransportTests.cs`
   HTTP MCP transport の挙動。認証レスポンス、warm server reuse、並行リクエスト、リクエストログを含みます。リクエストログの assertion は、独立に処理される HTTP リクエスト間の callback 順序を仮定せず、記録内容を検証してください。
   request-log metadata の long path、long JSON-RPC ID、over-depth ID 境界は1つの sequential logger harness を共有し、callback 順序ではなく record 内容で対象を選んでください。

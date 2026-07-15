@@ -2705,7 +2705,7 @@ Security defaults:
 - A request without `Origin` is accepted for native/local clients. When `Origin` is present, its scheme, host, and port must match the configured listener origin exactly; `null`, malformed, duplicated, comma-folded, or cross-origin values return `403`. CORS preflight is always rejected, and the listener emits no `Access-Control-Allow-*` headers.
 - The configured token's SHA-256 digest is precomputed at start-up; per-request authentication only hashes the supplied input and compares against the stored digest in constant time, so neither the configured token's length nor its bytes leak through timing. Any configured HTTP bearer token must be 1-4096 characters and must not contain whitespace, control characters, or commas. Supplied HTTP bearer values use the exact bytes after `Bearer ` and are not trimmed before comparison; duplicate or comma-joined `Authorization` headers, oversized values, whitespace-containing values, and control-character-bearing values are rejected before hashing.
 
-The stdio transport stays byte-for-byte unchanged, so existing client configs keep working without modification.
+The stdio framing and default permissive setup remain unchanged, so clients that leave `CDIDX_MCP_AUTH_TOKEN` unset need no configuration changes. Token-protected clients must now include `params.auth.token` on state-changing notifications as well as responded requests; a denied notification intentionally has no JSON-RPC response.
 
 #### Optional MCP authentication: `CDIDX_MCP_AUTH_TOKEN`
 
@@ -5508,7 +5508,7 @@ HTTP の `POST /` 1 件が JSON-RPC フレーム 1 件に対応し、応答は�
 - `Origin` がない request は native / local client 向けとして受理します。`Origin` がある場合は scheme・host・port が設定済み listener origin と完全一致する必要があり、`null`、malformed、重複、comma-folded、cross-origin 値は `403` です。CORS preflight は常に拒否し、`Access-Control-Allow-*` header は出力しません。
 - 設定トークンの SHA-256 digest はサーバー起動時に一度だけ計算してメモリ保持し、リクエスト毎の認証では受信トークンのみハッシュ計算して FixedTimeEquals で比較します。設定トークン側はリクエスト毎にハッシュしないため、長さやバイト列が timing から漏れません。HTTP bearer の設定 token は 1-4096 文字で、空白、制御文字、comma を含められません。受信 token は 4096 文字を超える場合、hash 前に拒否します。重複または comma 結合された `Authorization` ヘッダーも bearer 比較前に拒否します。
 
-stdio トランスポートはバイト単位で挙動が変わらないため、既存クライアント設定はそのまま動作します。
+stdio の framing と既定の permissive setup は変わらないため、`CDIDX_MCP_AUTH_TOKEN` を未設定のまま使うクライアントは設定変更不要です。token で保護したクライアントは、応答を伴う request だけでなく state-changing notification にも `params.auth.token` を含める必要があり、拒否された notification には意図的に JSON-RPC 応答を返しません。
 
 #### MCP 認証（任意）: `CDIDX_MCP_AUTH_TOKEN`
 
