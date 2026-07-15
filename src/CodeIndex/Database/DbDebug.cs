@@ -47,23 +47,13 @@ public static class DbDebug
     private const string DiagnosticTruncationMarker = "...<truncated>";
     private static readonly byte[] s_hashSalt = RandomNumberGenerator.GetBytes(16);
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<SqliteDataReader, ActiveProfile> s_activeProfiles = new();
-
-    [ThreadStatic]
-    private static string? _lastSql;
-    [ThreadStatic]
-    private static List<(string Name, string Value)>? _lastParams;
-    [ThreadStatic]
-    private static List<(string Name, string Value)>? _lastRow;
-    [ThreadStatic]
-    private static List<string>? _lastRowReadExceptionChains;
-    [ThreadStatic]
-    private static List<Exception>? _lastRowReadExceptions;
-    [ThreadStatic]
-    private static bool _hasContext;
-    [ThreadStatic]
-    private static List<QueryProfileEntry>? _profileEntries;
-    [ThreadStatic]
-    private static long? _slowQueryThresholdMs;
+    // Request diagnostics must follow async continuations instead of the physical pool thread
+    // that happens to execute them. Independent MCP requests replace this context at their
+    // ResetContext boundary, while child work in the same request intentionally inherits it.
+    // request 診断は実行中の物理 pool thread ではなく async continuation に追随させる。
+    // 独立した MCP request は ResetContext 境界で context を入れ替え、同一 request の child
+    // work には意図的に継承する。
+    private static readonly AsyncLocal<FlowContext?> CurrentContext = new();
 
     // Process-wide gate that must be flipped by an explicit CLI flag before
     // CDIDX_DEBUG=unsafe is honored. Defaults to false so an env var alone
@@ -98,20 +88,24 @@ public static class DbDebug
         EndProfile();
     }
 
-    public static bool IsProfileEnabled => _profileEntries != null;
+    public static bool IsProfileEnabled => CurrentContext.Value?.Profile is not null;
 
     public static void BeginProfile(long? slowQueryThresholdMs = null)
     {
-        _profileEntries = new List<QueryProfileEntry>();
-        _slowQueryThresholdMs = slowQueryThresholdMs;
+        var current = CurrentContext.Value;
+        CurrentContext.Value = new FlowContext(
+            current?.Diagnostics ?? new RequestDiagnosticState(),
+            new ProfileState(slowQueryThresholdMs));
     }
 
     public static List<QueryProfileEntry> EndProfile()
     {
-        var entries = _profileEntries ?? new List<QueryProfileEntry>();
-        _profileEntries = null;
-        _slowQueryThresholdMs = null;
-        return entries;
+        var current = CurrentContext.Value;
+        if (current?.Profile is null)
+            return [];
+
+        CurrentContext.Value = new FlowContext(current.Diagnostics, null);
+        return current.Profile.SnapshotEntries();
     }
 
     private enum DebugMode { Off, Redacted, Unsafe }
@@ -178,20 +172,17 @@ public static class DbDebug
     }
 
     /// <summary>
-    /// Clear tracked SQL/params/row for the current thread. Must be called at
+    /// Clear tracked SQL/params/row for the current async request flow. Must be called at
     /// the start of each request/command so a later unrelated exception does
     /// not dump stale state from a previous query.
-    /// スレッド単位で追跡中の SQL/パラメータ/行をリセットする。リクエスト開始時に必ず呼び、
+    /// async request flow 単位で追跡中の SQL/パラメータ/行をリセットする。リクエスト開始時に必ず呼び、
     /// 別リクエストで発生した無関係な例外に過去の状態を流用しないこと。
     /// </summary>
     public static void ResetContext()
     {
-        _lastSql = null;
-        _lastParams = null;
-        _lastRow = null;
-        _lastRowReadExceptionChains = null;
-        _lastRowReadExceptions = null;
-        _hasContext = false;
+        CurrentContext.Value = new FlowContext(
+            new RequestDiagnosticState(),
+            CurrentContext.Value?.Profile);
     }
 
     internal static void TrackCommand(SqliteCommand cmd)
@@ -199,13 +190,17 @@ public static class DbDebug
         if (!IsEnabled)
             return;
         var mode = ResolveMode();
-        _lastSql = cmd.CommandText;
         var ps = new List<(string, string)>(cmd.Parameters.Count);
         foreach (SqliteParameter p in cmd.Parameters)
             ps.Add((p.ParameterName, FormatValue(p.Value, mode, p.ParameterName)));
-        _lastParams = ps;
-        _lastRow = null;
-        _hasContext = true;
+        var diagnostics = GetOrCreateContext().Diagnostics;
+        lock (diagnostics.Gate)
+        {
+            diagnostics.LastSql = cmd.CommandText;
+            diagnostics.LastParams = ps;
+            diagnostics.LastRow = null;
+            diagnostics.HasContext = true;
+        }
     }
 
     internal static SqliteDataReader ExecuteReader(SqliteCommand cmd)
@@ -215,7 +210,8 @@ public static class DbDebug
         activity?.SetTag("db.operation", GetStatementOperation(cmd.CommandText));
         activity?.SetTag("db.statement_hash", ShortHash(cmd.CommandText ?? string.Empty));
 
-        if (!IsProfileEnabled)
+        var profile = CurrentContext.Value?.Profile;
+        if (profile is null)
         {
             var threshold = ReadSlowQueryThresholdFromEnvironment();
             var executeStopwatch = Stopwatch.StartNew();
@@ -232,7 +228,7 @@ public static class DbDebug
         }
 
         var entry = new QueryProfileEntry(cmd.CommandText ?? string.Empty, CaptureQueryPlan(cmd));
-        _profileEntries!.Add(entry);
+        profile.Add(entry);
 
         var sw = Stopwatch.StartNew();
         var reader = cmd.ExecuteReader();
@@ -240,7 +236,7 @@ public static class DbDebug
 
         entry.AddElapsed(sw.Elapsed);
         activity?.SetTag("db.elapsed_ms", sw.Elapsed.TotalMilliseconds);
-        entry.MarkCompletedIfSlow(_slowQueryThresholdMs);
+        entry.MarkCompletedIfSlow(profile.SlowQueryThresholdMs);
         s_activeProfiles.Add(reader, new ActiveProfile(entry));
         return reader;
     }
@@ -259,7 +255,7 @@ public static class DbDebug
         {
             WriteSlowQueryToStderr(active.Command!, active.Entry.ElapsedMs, active.Entry.RowsScanned);
         }
-        active.Entry.MarkCompletedIfSlow(_slowQueryThresholdMs);
+        active.Entry.MarkCompletedIfSlow(CurrentContext.Value?.Profile?.SlowQueryThresholdMs);
     }
 
     private static long? ReadSlowQueryThresholdFromEnvironment()
@@ -360,6 +356,8 @@ public static class DbDebug
             return;
         var mode = ResolveMode();
         var row = new List<(string, string)>(reader.FieldCount);
+        List<Exception>? rowReadExceptions = null;
+        List<string>? rowReadExceptionChains = null;
         for (int i = 0; i < reader.FieldCount; i++)
         {
             var name = reader.GetName(i);
@@ -372,59 +370,93 @@ public static class DbDebug
             {
                 var message = mode == DebugMode.Unsafe ? ex.Message : DiagnosticRedactor.ClassifyException(ex);
                 row.Add((name, $"<error: {ex.GetType().Name}: {message}>"));
-                (_lastRowReadExceptions ??= new List<Exception>()).Add(ex);
-                (_lastRowReadExceptionChains ??= new List<string>())
+                (rowReadExceptions ??= []).Add(ex);
+                (rowReadExceptionChains ??= [])
                     .Add($"[{name}]\n{GlobalToolLog.FormatExceptionChain(ex, includeStacks: mode == DebugMode.Unsafe)}");
             }
         }
-        _lastRow = row;
-        _hasContext = true;
+        var diagnostics = GetOrCreateContext().Diagnostics;
+        lock (diagnostics.Gate)
+        {
+            diagnostics.LastRow = row;
+            diagnostics.HasContext = true;
+            if (rowReadExceptions is not null)
+            {
+                diagnostics.LastRowReadExceptions ??= [];
+                diagnostics.LastRowReadExceptions.AddRange(rowReadExceptions);
+            }
+            if (rowReadExceptionChains is not null)
+            {
+                diagnostics.LastRowReadExceptionChains ??= [];
+                diagnostics.LastRowReadExceptionChains.AddRange(rowReadExceptionChains);
+            }
+        }
     }
 
     /// <summary>
-    /// When debug is enabled and the current thread has tracked a reader
+    /// When debug is enabled and the current async request flow has tracked a reader
     /// context since the last ResetContext(), append SQL/params/row info to
     /// stderr. No-op otherwise — never dumps stale state from a previous
     /// request.
-    /// デバッグ有効で、直近の ResetContext() 以降にこのスレッドで reader コンテキストを
+    /// デバッグ有効で、直近の ResetContext() 以降にこの async request flow で reader コンテキストを
     /// 追跡していた場合のみ stderr に追記する。それ以外は何もせず、過去リクエストの状態を流出させない。
     /// </summary>
     public static void DumpToStderr(Exception ex)
+        => WriteCapturedDumpToStderr(CaptureDump(ex));
+
+    internal static void WriteCapturedDumpToStderr(string? dump)
     {
-        if (!IsEnabled || !_hasContext)
-            return;
+        if (dump is not null)
+            Console.Error.Write(dump);
+    }
+
+    /// <summary>
+    /// Capture an immutable, already-redacted dump for deferred request logging. MCP resets the
+    /// AsyncLocal request context before flushing deferred logs, so the closure must own the dump
+    /// instead of consulting whichever request context is current later (#4536).
+    /// deferred request log 用に redaction 済みの immutable dump を取得する。MCP は deferred log
+    /// flush 前に AsyncLocal request context を reset するため、closure は後の current context を
+    /// 参照せず dump 自体を保持する (#4536)。
+    /// </summary>
+    internal static string? CaptureDump(Exception ex)
+    {
+        if (!IsEnabled || CurrentContext.Value?.Diagnostics is not { } diagnostics)
+            return null;
+        var snapshot = diagnostics.Snapshot();
+        if (!snapshot.HasContext)
+            return null;
         var mode = ResolveMode();
         var sb = new StringBuilder();
         sb.AppendLine("--- CDIDX_DEBUG ---");
         sb.AppendLine($"Mode: {(mode == DebugMode.Unsafe ? "unsafe (raw content)" : "redacted (salted text hashes; path shape only)")}");
         sb.AppendLine("Exception chain:");
         sb.AppendLine(GlobalToolLog.FormatExceptionChain(ex, includeStacks: mode == DebugMode.Unsafe));
-        if (_lastSql != null)
+        if (snapshot.LastSql != null)
         {
             sb.AppendLine("Last SQL:");
-            foreach (var line in _lastSql.Split('\n'))
+            foreach (var line in snapshot.LastSql.Split('\n'))
                 sb.AppendLine($"  {line.TrimEnd()}");
         }
-        if (_lastParams is { Count: > 0 })
+        if (snapshot.LastParams is { Count: > 0 })
         {
             sb.AppendLine("Parameters:");
-            foreach (var (name, value) in _lastParams)
+            foreach (var (name, value) in snapshot.LastParams)
                 sb.AppendLine($"  {name} = {value}");
         }
-        if (_lastRow is { Count: > 0 })
+        if (snapshot.LastRow is { Count: > 0 })
         {
             sb.AppendLine("Last row read:");
-            foreach (var (name, value) in _lastRow)
+            foreach (var (name, value) in snapshot.LastRow)
                 sb.AppendLine($"  [{name}] = {value}");
         }
-        if (_lastRowReadExceptionChains is { Count: > 0 })
+        if (snapshot.LastRowReadExceptionChains is { Count: > 0 })
         {
             sb.AppendLine("Row read exception chains:");
-            foreach (var chain in _lastRowReadExceptionChains)
+            foreach (var chain in snapshot.LastRowReadExceptionChains)
                 sb.AppendLine(chain);
         }
-        var rootCause = GetDeepestExceptionIncludingRowReads(ex);
-        if (_lastRowReadExceptionChains is { Count: > 0 })
+        var rootCause = GetDeepestExceptionIncludingRowReads(ex, snapshot.LastRowReadExceptions);
+        if (snapshot.LastRowReadExceptionChains is { Count: > 0 })
         {
             var message = mode == DebugMode.Unsafe ? rootCause.Message : DiagnosticRedactor.ClassifyException(rootCause);
             sb.AppendLine($"Root cause: {rootCause.GetType().Name}: {message}");
@@ -436,7 +468,7 @@ public static class DbDebug
                 sb.AppendLine(DiagnosticRedactor.FormatExceptionStackLine(line.TrimEnd('\r')));
         }
         sb.AppendLine("--- END CDIDX_DEBUG ---");
-        Console.Error.Write(sb.ToString());
+        return sb.ToString();
     }
 
     private static Exception GetDeepestException(Exception ex)
@@ -447,15 +479,80 @@ public static class DbDebug
         return current;
     }
 
-    private static Exception GetDeepestExceptionIncludingRowReads(Exception ex)
+    private static Exception GetDeepestExceptionIncludingRowReads(Exception ex, IReadOnlyList<Exception>? rowReadExceptions)
     {
         var deepest = GetDeepestException(ex);
-        if (_lastRowReadExceptions is not { Count: > 0 })
+        if (rowReadExceptions is not { Count: > 0 })
             return deepest;
 
-        foreach (var rowException in _lastRowReadExceptions)
+        foreach (var rowException in rowReadExceptions)
             deepest = GetDeepestException(rowException);
         return deepest;
+    }
+
+    private static FlowContext GetOrCreateContext()
+    {
+        if (CurrentContext.Value is { } current)
+            return current;
+
+        current = new FlowContext(new RequestDiagnosticState(), null);
+        CurrentContext.Value = current;
+        return current;
+    }
+
+    private sealed record FlowContext(RequestDiagnosticState Diagnostics, ProfileState? Profile);
+
+    private sealed class RequestDiagnosticState
+    {
+        internal object Gate { get; } = new();
+        internal string? LastSql { get; set; }
+        internal List<(string Name, string Value)>? LastParams { get; set; }
+        internal List<(string Name, string Value)>? LastRow { get; set; }
+        internal List<string>? LastRowReadExceptionChains { get; set; }
+        internal List<Exception>? LastRowReadExceptions { get; set; }
+        internal bool HasContext { get; set; }
+
+        internal RequestDiagnosticSnapshot Snapshot()
+        {
+            lock (Gate)
+            {
+                return new RequestDiagnosticSnapshot(
+                    LastSql,
+                    LastParams is null ? null : [.. LastParams],
+                    LastRow is null ? null : [.. LastRow],
+                    LastRowReadExceptionChains is null ? null : [.. LastRowReadExceptionChains],
+                    LastRowReadExceptions is null ? null : [.. LastRowReadExceptions],
+                    HasContext);
+            }
+        }
+    }
+
+    private sealed record RequestDiagnosticSnapshot(
+        string? LastSql,
+        List<(string Name, string Value)>? LastParams,
+        List<(string Name, string Value)>? LastRow,
+        List<string>? LastRowReadExceptionChains,
+        List<Exception>? LastRowReadExceptions,
+        bool HasContext);
+
+    private sealed class ProfileState(long? slowQueryThresholdMs)
+    {
+        private readonly object _gate = new();
+        private readonly List<QueryProfileEntry> _entries = [];
+
+        internal long? SlowQueryThresholdMs { get; } = slowQueryThresholdMs;
+
+        internal void Add(QueryProfileEntry entry)
+        {
+            lock (_gate)
+                _entries.Add(entry);
+        }
+
+        internal List<QueryProfileEntry> SnapshotEntries()
+        {
+            lock (_gate)
+                return [.. _entries];
+        }
     }
 
     private static string FormatValue(object? value, DebugMode mode, string? valueName = null)

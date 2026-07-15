@@ -1328,34 +1328,48 @@ public partial class McpServer
 
     private async Task RefreshClientRootsIfNeededAsync()
     {
-        if (!_clientRootsStale || !HasClientCapability("roots"))
-            return;
+        long sessionGeneration;
+        lock (_sessionStateGate)
+        {
+            if (!_clientRootsStale || !_clientSupportsRoots)
+                return;
+            sessionGeneration = _clientSessionGeneration;
+        }
 
         var result = await SendClientRequestAsync("roots/list", null, _currentRequestToken.Value).ConfigureAwait(false);
         if (result?["roots"] is not JsonArray roots)
             return;
 
-        ResetClientRoots();
-        foreach (var root in roots)
+        lock (_sessionStateGate)
         {
-            var uri = TryReadStringValue(root?["uri"]) ?? TryReadStringValue(root);
-            if (!string.IsNullOrWhiteSpace(uri))
-                CaptureClientRoot(uri);
+            if (sessionGeneration != _clientSessionGeneration)
+                return;
+            ResetClientRoots();
+            foreach (var root in roots)
+            {
+                var uri = TryReadStringValue(root?["uri"]) ?? TryReadStringValue(root);
+                if (!string.IsNullOrWhiteSpace(uri))
+                    CaptureClientRoot(uri);
+            }
+            _clientRootsStale = false;
         }
-        _clientRootsStale = false;
     }
 
     private bool IsPathWithinClientRoots(string path)
     {
-        if (!HasClientCapability("roots"))
-            return true;
+        string[] rootPaths;
+        lock (_sessionStateGate)
+        {
+            if (!_clientSupportsRoots)
+                return true;
 
-        var rootPaths = _clientRoots
-            .Select(root => TryReadStringValue(root))
-            .Select(McpPathBoundary.TryResolveRootPath)
-            .Where(root => !string.IsNullOrWhiteSpace(root))
-            .Cast<string>()
-            .ToArray();
+            rootPaths = _clientRoots
+                .Select(root => TryReadStringValue(root))
+                .Select(McpPathBoundary.TryResolveRootPath)
+                .Where(root => !string.IsNullOrWhiteSpace(root))
+                .Cast<string>()
+                .ToArray();
+        }
         if (rootPaths.Length == 0)
             return false;
 

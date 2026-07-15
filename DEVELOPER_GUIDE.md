@@ -2002,6 +2002,19 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   (#4468). When a finite stdio input reaches EOF, already accepted requests are
   drained to completion rather than cancelled after a fixed grace period
   (#4434), and cancellation diagnostics count only unfinished tasks (#4435).
+- Independent stdio requests and HTTP POSTs execute concurrently up to the
+  configured MCP request limit (#4536). The read loop continues accepting
+  cancellation and client-response frames while execution slots are full. The
+  accepted-frame backlog is separately bounded at the execution limit plus 64;
+  overflow requests receive retry-safe `-32003` / `server_busy`. Request ids are
+  registered before protocol/gate waits, execution timeout starts only after a
+  slot is acquired, and a timed-out cancellation-insensitive action retains its
+  slot until it truly drains. Initialize and other session mutations retain
+  receive order through protocol barriers, mutable request state lives in
+  `AsyncLocal` or request-scoped snapshots, and shared writer tools remain
+  serialized. Base `IMcpTransport` loops do not reserve an outer frame slot,
+  so a single request at `maxConcurrency: 1` acquires `_concurrencyGate`
+  exactly once; requests consume execution slots only at dispatch.
 - The advertised capability surface includes `tools`, `resources`, and
   `prompts`. `resources/list` pages indexed files as `cdidx://file/<path>`
   URIs and `resources/read` reconstructs file text from indexed chunks.
@@ -2074,9 +2087,13 @@ is:
 - `Task WriteFrameAsync(string?, CancellationToken)` writes one response
   frame. `null` means "this was a notification" — stdio drops it; HTTP
   closes the in-flight request with `204 No Content`.
-- The contract is strictly one read followed by one write. Transports
-  reject re-entrancy explicitly so the request/response pairing
-  invariant the rest of the server depends on is enforced at the seam.
+- The base contract is strictly one read followed by one write. Transports
+  reject re-entrancy explicitly unless they implement
+  `IConcurrentMcpTransport`, whose `McpTransportFrame` captures the response
+  writer for exactly one input frame. This lets multiple requests complete out
+  of order without attaching an HTTP response to a different POST (#4536).
+  The base loop does not acquire an outer concurrency permit; dispatch owns the
+  one global execution permit.
 - `IAsyncDisposable` lets each transport release its kernel-side
   resources (file handles, listener prefixes) without coupling to
   `McpServer`.
@@ -2210,6 +2227,7 @@ cdidx-specific categories.
 | --- | --- | --- | --- |
 | `-32000` | `rate_limited` | `true` | Token-bucket throttle denied the call (#1560). Legacy fields `error_category`, `tool`, `caller`, `retry_after_ms` are kept alongside the canonical envelope for backward compatibility. |
 | `-32001` | `permission_denied` | `false` | Token auth failure (`TokenMcpAuthenticator`, #1559). The wire stays generic; stderr carries the detailed reason. |
+| `-32003` | `server_busy` | `true` | The bounded concurrent-frame admission backlog is full (#4536). Retry after the advertised `data.retry_after_ms`. |
 | `-32010` | `index_missing` | `true` | DB path does not exist or could not be opened for the requested tool call. The same request becomes safe to retry once the operator runs `cdidx index <projectPath>`. |
 | `-32011` | `index_stale` | `true` | SQLite reported `no such table` / `no such column`; the DB was written by an older cdidx and needs `cdidx index <projectPath> --rebuild`. |
 | `-32012` | `index_corrupted` | `false` | SQLite reported `database disk image is malformed` / `file is not a database` / `file is encrypted`. The DB cannot be read; the operator must delete it and reindex. |
@@ -4288,6 +4306,7 @@ sequenceDiagram
 - レスポンス構築は `JsonSerializer.Serialize<T>(...)` ではなく、`System.Text.Json.Nodes.JsonObject` / `JsonArray` を**手組み**する。これが、トリミング済みバイナリでリフレクションベースのシリアライズが無効でも MCP パスが動き続ける理由。
 - `initialize` レスポンスは `protocolVersion`、`capabilities`、`serverInfo.name`、`serverInfo.version`（`ConsoleUi.LoadVersion()` — `version.json` が源）、および AI クライアントにツール選択を案内する長い `instructions` 文字列を返す。その後 client が `notifications/initialized` を送信し、cdidx は client-to-server 通知として no-op で受理するが、server 側から同じ通知を生成しない（#4433）。HTTP session は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` を設定した場合、opt-in の keep-alive notification を `/events` で受け取れる。HTTP transport では out-of-band 通知は接続済みの `/events` SSE stream にだけ配送され、POST のみのクライアントは initialize response だけを受け取り、別通知 frame は受け取らない。
 - すべての request frame は厳密な `"jsonrpc":"2.0"` member を持つ必要があり、`initialize` 以外の応答対象 method は初期化成功まで拒否される（#4468）。有限の stdio input が EOF に達した場合、受理済み request は固定 grace period 後に cancel せず完了まで drain し（#4434）、cancellation diagnostic は未完了 task だけを数える（#4435）。
+- 独立した stdio request と HTTP POST は、設定された MCP request 上限まで並行実行する（#4536）。実行 slot が全て使用中でも read loop は cancellation/client-response frame を受け続ける。accepted-frame backlog は execution 上限 + 64 に別途制限し、超過 request には retry-safe な `-32003` / `server_busy` を返す。request id は protocol/gate 待機前に登録し、execution timeout は slot 取得後に開始し、timeout 後も cancellation を無視して動く action は実際に drain するまで slot を保持する。initialize など session mutation の受信順は protocol barrier で維持し、可変な request state は `AsyncLocal` または request-scoped snapshot に置き、shared writer tool は直列化する。基本 `IMcpTransport` loop は outer frame slot を確保しないため、`maxConcurrency: 1` の single request は `_concurrencyGate` を1回だけ取得し、request は dispatch 時だけ slot を消費する。
 - advertised capability には `tools`、`resources`、`prompts`、`logging` が含まれる。`logging` は MCP `notifications/message` を示し、`logging/setLevel` は `debug`、`info`、`notice`、`warning`、`error`、`critical`、`alert`、`emergency` を受け付ける。
 - `protocolVersion` は**ハードコードではなく交渉**で決まる（#1554）。サーバーは `McpServer.SupportedProtocolVersions`（新しい順: `2025-03-26`, `2024-11-05`）を保持し、`initialize` パラメータからクライアント要求バージョンを読み取って、対応集合にあればそれを返し（合意）、未指定／非文字列なら既定の最新バージョンに fallback し、対応外なら `error.data` に `requestedVersion` と `supportedVersions` を入れた JSON-RPC `-32602` で拒否する。これにより将来 MCP 仕様が改訂されても、wire format が黙ってずれるのではなく actionable な handshake 失敗として表面化する。配列を新バージョンで更新する際は `ProtocolVersion` を先頭エントリと揃えて意図的に bump する。
 - **認証ミドルウェア**（#1559）。`McpServer` はパース済み JSON-RPC リクエストごとに、メソッド抽出 *後*・dispatch *前* で `IMcpAuthenticator` を呼ぶ。既定の `LocalStdioAuthenticator` は permissive で（従来の stdio 動作を維持し、呼び出し元を `stdio` / `local` でタグ付けする）、stdio では `CDIDX_MCP_AUTH_TOKEN` を設定すると `TokenMcpAuthenticator` に切り替わる。未設定または空文字の token だけが permissive で、空白のみ・空白文字入り・制御文字入り・4096 文字超の token は設定値として拒否する。`TokenMcpAuthenticator` は応答が必要な全リクエストに対し、`params.auth.token` が一致することを要求し、比較は `CryptographicOperations.FixedTimeEquals` による定数時間比較で行う。HTTP はこの body token ゲートを重ねず、`ProgramRunner` が `CDIDX_MCP_HTTP_TOKEN` を優先し、未設定なら `CDIDX_MCP_AUTH_TOKEN` を fallback として bearer secret に解決して、`Authorization: Bearer ...` の transport check に一本化する（#3156）。HTTP bearer 値は `Bearer ` の後ろを trim せず完全一致で扱い、空白文字・制御文字・4096 文字超は hash 前に拒否する。JSON-RPC body token ゲートの失敗は統一された JSON-RPC `-32001 "Unauthorized"` を返し（#1530 の sanitization 方針に従い、ワイヤでは未提示と不一致を区別しない）、`BuildAuthFailureLog` が詳細を stderr に書き出す。副作用のない `notifications/initialized` は認証せず short-circuit できる。一方、state-changing notification（`$/cancelRequest`、`notifications/cancelled`、`notifications/roots/list_changed`、`notifications/shutdown`、`notifications/exit`）は cancellation / roots / lifecycle state を変更する前に認証する。認証失敗時も notification は応答を返さず、bounded な stderr 診断だけを残す（#4537）。このミドルウェアが将来 transport の差し替え seam になる — ネットワーク listener は別の `IMcpAuthenticator` を提供しつつ、`McpCallerIdentity`（`Source` + `Subject`）の形を保ち、監査ログ（#1562）から再利用できる。
@@ -4300,7 +4319,7 @@ MCP は独立したシリアライズ戦略（オブジェクトを JSON など�
 
 - `Task<string?> ReadFrameAsync(CancellationToken)` はリクエストフレームを 1 つ文字列で返すか、ストリーム終端を示す `null` を返す（stdin クローズ、HTTP listener キャンセル等）。正常な stdio EOF では、MCP ループは受理済み request をすべて drain してから終了する。
 - `Task WriteFrameAsync(string?, CancellationToken)` は応答フレームを 1 件書く。`null` は「これは通知だった」を意味し、stdio は何も書かず、HTTP は処理中のリクエストを `204 No Content` でクローズする。
-- 契約は厳密に「1 read → 1 write」。再入は明示的に拒否し、サーバーの他部分が依存している request/response 順序不変条件をシーム部で強制する。
+- 基本契約は厳密に「1 read → 1 write」。transport は `IConcurrentMcpTransport` を実装しない限り再入を明示的に拒否する。並行対応 transport の `McpTransportFrame` は入力 frame 1 件専用の response writer を保持するため、複数 request の完了順が前後しても HTTP 応答が別の POST に結び付かない（#4536）。base loop は outer concurrency permit を取得せず、dispatch が global execution permit を1つだけ取得する。
 - `IAsyncDisposable` により、各トランスポートが自身のカーネル側リソース（ファイルハンドル、listener プレフィックス）を `McpServer` と結合せずに解放できる。
 
 `StdioMcpTransport` は #1558 以前と同じ stdio framing を維持しつつ、入力を strict UTF-8 として検証する（BOM 自動検出は無効にし、UTF-16/UTF-32 フレームが encoding を切り替えられないようにする。出力は BOM なし UTF-8、64 KiB バッファ、`AutoFlush = true`）。不正な UTF-8 バイトは transport decode failure として表面化し、MCP ループはバイトを U+FFFD に黙って置換せず、invalid UTF-8 のヒント付き JSON-RPC `-32700` に変換する。
@@ -4334,6 +4353,7 @@ JSON-RPC 2.0 は `-32700` と `-32600..-32603` を仕様自身、`-32000..-32099
 | --- | --- | --- | --- |
 | `-32000` | `rate_limited` | `true` | トークンバケットによるスロットルで拒否（#1560）。後方互換のため legacy フィールド `error_category` / `tool` / `caller` / `retry_after_ms` も canonical envelope と並べて維持する。 |
 | `-32001` | `permission_denied` | `false` | トークン認証失敗（`TokenMcpAuthenticator`、#1559）。ワイヤは汎用のまま、stderr に詳細を書く。 |
+| `-32003` | `server_busy` | `true` | bounded concurrent-frame admission backlog が満杯（#4536）。`data.retry_after_ms` の後に再送する。 |
 | `-32010` | `index_missing` | `true` | DB パスが無いか、対象ツール呼び出しのためにオープンできなかった。オペレータが `cdidx index <projectPath>` を実行した後は同じリクエストを安全に再送できる。 |
 | `-32011` | `index_stale` | `true` | SQLite が `no such table` / `no such column` を返した。古い cdidx で書かれた DB に新しい binary を当てた状態で、`cdidx index <projectPath> --rebuild` が必要。 |
 | `-32012` | `index_corrupted` | `false` | SQLite が `database disk image is malformed` / `file is not a database` / `file is encrypted` を返した。読めないので運用側で削除して再構築。 |

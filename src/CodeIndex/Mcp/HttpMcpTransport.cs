@@ -17,17 +17,16 @@ namespace CodeIndex.Mcp;
 /// <summary>
 /// HTTP MCP transport (issue #1558). Each HTTP POST carries one JSON-RPC request frame in the
 /// body and the matching JSON-RPC response is returned as the response body (or 204 No Content
-/// for notifications). The implementation is intentionally single-session — one in-flight request
-/// at a time — to mirror the existing stdio loop's request/response pairing and to keep the
-/// JSON-RPC ordering invariant the rest of the MCP server depends on. Server-initiated JSON-RPC
+/// for notifications). Concurrent POSTs carry request-scoped response writers so completion order
+/// cannot attach a response to the wrong HTTP request. Server-initiated JSON-RPC
 /// notifications are exposed through `/events` as a bounded, multi-client SSE fan-out channel.
 /// HTTP MCP トランスポート (issue #1558)。HTTP POST 1 件が JSON-RPC リクエスト 1 件と対応し、
-/// 応答も同じ HTTP レスポンスのボディに乗せる（通知の場合は 204 No Content）。stdio ループと
-/// 同様にシングルセッションで「リクエスト 1 件 → レスポンス 1 件」の順序不変条件を維持する。
+/// 応答も同じ HTTP レスポンスのボディに乗せる（通知の場合は 204 No Content）。並行 POST は
+/// request-scoped response writer を持つため、完了順が前後しても別 request に応答が結び付かない。
 /// サーバー起点の JSON-RPC 通知は `/events` で bounded な multi-client SSE fan-out channel
 /// として公開する。
 /// </summary>
-internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
+internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport, IConcurrentMcpTransport
 {
     internal const int DefaultMaxRequestBodyBytes = 1_000_000;
     internal const int DefaultMaxResponseBodyBytes = 1_000_000;
@@ -514,13 +513,30 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         if (_pendingRequest is not null)
             throw new InvalidOperationException("HttpMcpTransport: ReadFrameAsync called twice without an intervening WriteFrameAsync.");
 
+        _pendingRequest = await ReadPendingRequestAsync(cancellationToken).ConfigureAwait(false);
+        return _pendingRequest?.Body;
+    }
+
+    public async Task<McpTransportFrame?> ReadConcurrentFrameAsync(CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
+        var request = await ReadPendingRequestAsync(cancellationToken).ConfigureAwait(false);
+        if (request is null)
+            return null;
+
+        return new McpTransportFrame(
+            request.Body ?? string.Empty,
+            (frame, writeToken) => WriteFrameAsync(request, frame, writeToken));
+    }
+
+    private async Task<PendingRequest?> ReadPendingRequestAsync(CancellationToken cancellationToken)
+    {
         try
         {
             var request = await _requestQueue.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
             Interlocked.Decrement(ref _queuedRequestCount);
             _queueSlots.Release();
-            _pendingRequest = request;
-            return request.Body;
+            return request;
         }
         catch (ChannelClosedException)
         {
@@ -897,6 +913,12 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         var request = _pendingRequest
             ?? throw new InvalidOperationException("HttpMcpTransport: WriteFrameAsync called without a pending ReadFrameAsync.");
         _pendingRequest = null;
+        await WriteFrameAsync(request, frame, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task WriteFrameAsync(PendingRequest request, string? frame, CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
         var context = request.Context;
 
         try

@@ -143,6 +143,50 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public async Task ConcurrentReinitialize_PublishesOneCoherentSessionSnapshot_Issue4536()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        _ = server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"client-a","version":"1"},"capabilities":{"experimental":{"generation":"a"}},"roots":[{"uri":"file:///a"}]}}""")!);
+
+        using var mutationEntered = new ManualResetEventSlim(false);
+        using var releaseMutation = new ManualResetEventSlim(false);
+        server.SessionStateMutationForTests = () =>
+        {
+            mutationEntered.Set();
+            Assert.True(releaseMutation.Wait(TestDeterminism.DefaultTimeout));
+        };
+
+        var reinitializeTask = Task.Run(() => server.HandleMessageAsync(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"clientInfo":{"name":"client-b","version":"2"},"capabilities":{"roots":{},"sampling":{},"experimental":{"generation":"b"}},"roots":[{"uri":"file:///b"}]}}""")!));
+        try
+        {
+            Assert.True(mutationEntered.Wait(TestDeterminism.DefaultTimeout));
+            var statusTask = Task.Run(() => server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!));
+
+            await TestDeterminism.AssertTaskRemainsBlockedAsync(statusTask);
+            releaseMutation.Set();
+
+            _ = await reinitializeTask.WaitAsync(TestDeterminism.DefaultTimeout);
+            var response = await statusTask.WaitAsync(TestDeterminism.DefaultTimeout);
+            var session = response!["result"]!["structuredContent"]!["mcp_session"]!;
+            Assert.Equal("client-b", session["client_info"]!["name"]!.GetValue<string>());
+            Assert.Equal("2", session["client_info"]!["version"]!.GetValue<string>());
+            Assert.Equal("b", session["client_capabilities"]!["experimental"]!["generation"]!.GetValue<string>());
+            Assert.True(session["client_capabilities_summary"]!["roots"]!.GetValue<bool>());
+            Assert.True(session["client_capabilities_summary"]!["sampling"]!.GetValue<bool>());
+            Assert.Equal("file:///b", Assert.Single(session["roots"]!.AsArray())!.GetValue<string>());
+        }
+        finally
+        {
+            releaseMutation.Set();
+            server.SessionStateMutationForTests = null;
+            _ = await reinitializeTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+    }
+
+    [Fact]
     public void Initialize_CapturesClientCapabilitiesAsDetachedClone_Issue3055()
     {
         var capabilities = new JsonObject

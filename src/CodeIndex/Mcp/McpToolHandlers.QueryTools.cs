@@ -1768,56 +1768,59 @@ public partial class McpServer
 
     private JsonObject BuildMcpSessionStatus()
     {
-        var roots = new JsonArray();
-        foreach (var root in _clientRootDiagnostics)
-            roots.Add(root?.DeepClone());
+        lock (_sessionStateGate)
+        {
+            var roots = new JsonArray();
+            foreach (var root in _clientRootDiagnostics)
+                roots.Add(root?.DeepClone());
 
-        var session = new JsonObject
-        {
-            ["log_level"] = _mcpLogLevel,
-            ["roots"] = roots,
-        };
-        if (_clientRootsTruncated)
-        {
-            session["roots_truncated"] = true;
-            session["root_count"] = _clientRootCount;
-            session["root_limit"] = MaxClientRootCount;
-            session["root_uri_length_limit"] = MaxClientRootUriChars;
-        }
-        if (_clientName is not null || _clientVersion is not null)
-        {
-            var clientInfo = new JsonObject();
-            if (_clientNameDisplay is not null)
+            var session = new JsonObject
             {
-                clientInfo["name"] = _clientName;
-                _clientNameDisplay.Value.AddMetadata(clientInfo, "name");
-            }
-            if (_clientVersionDisplay is not null)
+                ["log_level"] = _mcpLogLevel,
+                ["roots"] = roots,
+            };
+            if (_clientRootsTruncated)
             {
-                clientInfo["version"] = _clientVersion;
-                _clientVersionDisplay.Value.AddMetadata(clientInfo, "version");
+                session["roots_truncated"] = true;
+                session["root_count"] = _clientRootCount;
+                session["root_limit"] = MaxClientRootCount;
+                session["root_uri_length_limit"] = MaxClientRootUriChars;
             }
-            session["client_info"] = clientInfo;
-        }
-        if (_clientCapabilities is not null)
-        {
-            session["client_capabilities_summary"] = BuildClientCapabilitiesSummary(_clientCapabilities);
-            session["client_capabilities"] = _clientCapabilities.DeepClone();
-        }
-        if (_clientCapabilitiesTruncationReason is not null)
-        {
-            session["client_capabilities_truncated"] = true;
-            session["client_capabilities_truncation_reason"] = _clientCapabilitiesTruncationReason;
-            if (_clientCapabilitiesSerializedBytes is { } serializedBytes)
-                session["client_capabilities_serialized_bytes"] = serializedBytes;
-            session["client_capabilities_byte_limit"] = MaxClientCapabilitiesJsonBytes;
-            session["client_capabilities_depth_limit"] = MaxClientCapabilitiesDepth;
-            if (!session.ContainsKey("client_capabilities_summary"))
+            if (_clientName is not null || _clientVersion is not null)
+            {
+                var clientInfo = new JsonObject();
+                if (_clientNameDisplay is not null)
+                {
+                    clientInfo["name"] = _clientName;
+                    _clientNameDisplay.Value.AddMetadata(clientInfo, "name");
+                }
+                if (_clientVersionDisplay is not null)
+                {
+                    clientInfo["version"] = _clientVersion;
+                    _clientVersionDisplay.Value.AddMetadata(clientInfo, "version");
+                }
+                session["client_info"] = clientInfo;
+            }
+            if (_clientCapabilities is not null)
+            {
                 session["client_capabilities_summary"] = BuildClientCapabilitiesSummary(_clientCapabilities);
+                session["client_capabilities"] = _clientCapabilities.DeepClone();
+            }
+            if (_clientCapabilitiesTruncationReason is not null)
+            {
+                session["client_capabilities_truncated"] = true;
+                session["client_capabilities_truncation_reason"] = _clientCapabilitiesTruncationReason;
+                if (_clientCapabilitiesSerializedBytes is { } serializedBytes)
+                    session["client_capabilities_serialized_bytes"] = serializedBytes;
+                session["client_capabilities_byte_limit"] = MaxClientCapabilitiesJsonBytes;
+                session["client_capabilities_depth_limit"] = MaxClientCapabilitiesDepth;
+                if (!session.ContainsKey("client_capabilities_summary"))
+                    session["client_capabilities_summary"] = BuildClientCapabilitiesSummary(_clientCapabilities);
+            }
+            if (_auditLog is not null)
+                session["audit_log"] = BuildAuditLogStatus(_auditLog.SnapshotDiagnostics());
+            return session;
         }
-        if (_auditLog is not null)
-            session["audit_log"] = BuildAuditLogStatus(_auditLog.SnapshotDiagnostics());
-        return session;
     }
 
     private JsonObject BuildClientCapabilitiesSummary(JsonNode? capabilities)

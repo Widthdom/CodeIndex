@@ -141,6 +141,13 @@ public partial class McpServer
         // スコープ付き提案蓄積のため DB identity を導出。
         var dbName = Path.GetFileNameWithoutExtension(_dbPath);
         var store = new SuggestionStore(cdidxDir, dbName, _timeProvider);
+        string? mcpClientName;
+        string? mcpClientVersion;
+        lock (_sessionStateGate)
+        {
+            mcpClientName = _clientName;
+            mcpClientVersion = _clientVersion;
+        }
         var record = new SuggestionRecord
         {
             Category = category,
@@ -151,8 +158,8 @@ public partial class McpServer
             CreatedByAgent = ResolveSuggestionAgent(),
             SessionId = _sessionId,
             ClientVersion = _version,
-            McpClientName = _clientName,
-            McpClientVersion = _clientVersion,
+            McpClientName = mcpClientName,
+            McpClientVersion = mcpClientVersion,
             ToolInvocationContext = toolInvocationContext,
             SampledTitle = sampling?.Title,
             SampledTags = sampling?.Tags,
@@ -609,14 +616,19 @@ public partial class McpServer
     }
 
     private bool HasClientCapability(string name)
-        => name switch
+    {
+        lock (_sessionStateGate)
         {
-            "roots" => _clientSupportsRoots,
-            "sampling" => _clientSupportsSampling,
-            _ => _clientCapabilities is JsonObject obj
-                && obj.TryGetPropertyValue(name, out var node)
-                && node is not null,
-        };
+            return name switch
+            {
+                "roots" => _clientSupportsRoots,
+                "sampling" => _clientSupportsSampling,
+                _ => _clientCapabilities is JsonObject obj
+                    && obj.TryGetPropertyValue(name, out var node)
+                    && node is not null,
+            };
+        }
+    }
 
     private SuggestionSamplingDecision ResolveSuggestionSamplingDecision()
     {
@@ -748,7 +760,8 @@ public partial class McpServer
 
     private string ResolveSuggestionAgent()
     {
-        return string.IsNullOrWhiteSpace(_caller) ? "unknown" : _caller;
+        var caller = GetCallerSnapshot();
+        return string.IsNullOrWhiteSpace(caller) ? "unknown" : caller;
     }
 
 }

@@ -2825,6 +2825,548 @@ public sealed class Caller
     }
 
     [Fact]
+    public async Task RunAsync_StdioNormalRequestsOverlapWithinConcurrencyLimit_Issue4536()
+    {
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            maxConcurrency: 2);
+        var initializeResponse = await server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":"issue-4536-init","method":"initialize","params":{}}""");
+        Assert.NotNull(initializeResponse);
+
+        var releaseRequests = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var twoRequestsStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var threeRequestsStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var counterGate = new object();
+        var startedCount = 0;
+        var activeCount = 0;
+        var maxActiveCount = 0;
+        server.RequestDelayForTests = async cancellationToken =>
+        {
+            lock (counterGate)
+            {
+                startedCount++;
+                activeCount++;
+                maxActiveCount = Math.Max(maxActiveCount, activeCount);
+                if (startedCount == 2)
+                    twoRequestsStarted.TrySetResult();
+                if (startedCount == 3)
+                    threeRequestsStarted.TrySetResult();
+            }
+
+            try
+            {
+                await releaseRequests.Task.WaitAsync(cancellationToken);
+            }
+            finally
+            {
+                lock (counterGate)
+                    activeCount--;
+            }
+        };
+        var transport = QueuedFrameTransport.FromExactFrames(
+            """{"jsonrpc":"2.0","id":453601,"method":"ping"}""",
+            """{"jsonrpc":"2.0","id":453602,"method":"ping"}""",
+            """{"jsonrpc":"2.0","id":453603,"method":"ping"}""");
+
+        var runTask = server.RunAsync(transport, CancellationToken.None);
+        try
+        {
+            await Task.WhenAll(transport.EndOfInputRead, twoRequestsStarted.Task)
+                .WaitAsync(TestDeterminism.DefaultTimeout);
+
+            lock (counterGate)
+            {
+                Assert.Equal(2, startedCount);
+                Assert.Equal(2, activeCount);
+                Assert.Equal(2, maxActiveCount);
+            }
+            Assert.False(threeRequestsStarted.Task.IsCompleted);
+
+            releaseRequests.TrySetResult();
+            await threeRequestsStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+        finally
+        {
+            releaseRequests.TrySetResult();
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+
+        lock (counterGate)
+        {
+            Assert.Equal(3, startedCount);
+            Assert.Equal(0, activeCount);
+            Assert.Equal(2, maxActiveCount);
+        }
+        var responseIds = transport.WrittenFrames
+            .Where(static frame => frame is not null)
+            .Select(static frame => JsonNode.Parse(frame!)?["id"]?.GetValue<int>())
+            .Where(static id => id.HasValue)
+            .Select(static id => id!.Value)
+            .Order()
+            .ToArray();
+        Assert.Equal([453601, 453602, 453603], responseIds);
+    }
+
+    [Fact]
+    public async Task RunAsync_StdioCancellationBypassesSaturatedConcurrencyGate_Issue4536()
+    {
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            maxConcurrency: 2);
+        var initializeResponse = await server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":"issue-4536-cancel-init","method":"initialize","params":{}}""");
+        Assert.NotNull(initializeResponse);
+
+        var releaseRequests = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var targetRegistered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var twoRequestsRegistered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var threeRequestsRegistered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registrationGate = new object();
+        var registeredIds = new HashSet<int>();
+        server.RequestRegisteredForTests = id =>
+        {
+            var requestId = id!.GetValue<int>();
+            lock (registrationGate)
+            {
+                registeredIds.Add(requestId);
+                if (requestId == 453611)
+                    targetRegistered.TrySetResult();
+                if (registeredIds.Count == 2)
+                    twoRequestsRegistered.TrySetResult();
+                if (registeredIds.Count == 3)
+                    threeRequestsRegistered.TrySetResult();
+            }
+        };
+        server.RequestDelayForTests = cancellationToken => releaseRequests.Task.WaitAsync(cancellationToken);
+
+        var registeredWhenCancellationWasRead = 0;
+        var cancellationWasRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelledResponseWriteStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var transport = QueuedFrameTransport.FromExactFrames(
+            """{"jsonrpc":"2.0","id":453611,"method":"ping"}""",
+            """{"jsonrpc":"2.0","id":453612,"method":"ping"}""",
+            """{"jsonrpc":"2.0","id":453613,"method":"ping"}""",
+            """{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":453611}}""");
+        transport.BeforeFrameReturnedAsync = async (frame, cancellationToken) =>
+        {
+            if (frame?.Contains("\"method\":\"notifications/cancelled\"", StringComparison.Ordinal) != true)
+                return;
+
+            await Task.WhenAll(targetRegistered.Task, threeRequestsRegistered.Task)
+                .WaitAsync(TestDeterminism.DefaultTimeout, cancellationToken);
+            lock (registrationGate)
+                registeredWhenCancellationWasRead = registeredIds.Count;
+            cancellationWasRead.TrySetResult();
+        };
+        transport.BeforeFrameWrittenAsync = (frame, _) =>
+        {
+            if (frame?.Contains("\"id\":453611", StringComparison.Ordinal) == true)
+                cancelledResponseWriteStarted.TrySetResult();
+            return Task.CompletedTask;
+        };
+
+        var runTask = server.RunAsync(transport, CancellationToken.None);
+        try
+        {
+            await Task.WhenAll(
+                    threeRequestsRegistered.Task,
+                    cancellationWasRead.Task,
+                    cancelledResponseWriteStarted.Task)
+                .WaitAsync(TestDeterminism.DefaultTimeout);
+            lock (registrationGate)
+            {
+                Assert.Equal(3, registeredWhenCancellationWasRead);
+                Assert.Equal(3, registeredIds.Count);
+            }
+
+            releaseRequests.TrySetResult();
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+        finally
+        {
+            releaseRequests.TrySetResult();
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+
+        Assert.Contains(transport.WrittenFrames, static frame => frame is null);
+        var cancelledResponseText = Assert.Single(
+            transport.WrittenFrames,
+            static frame => frame?.Contains("\"id\":453611", StringComparison.Ordinal) == true);
+        var cancelledResponse = JsonNode.Parse(cancelledResponseText!)!;
+        Assert.Equal("request_cancelled", cancelledResponse["error"]!["data"]!["category"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task RunAsync_ConcurrentFrameAdmissionIsBoundedAndRejectsOverflow_Issue4536()
+    {
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            maxConcurrency: 1)
+        {
+            MaxAcceptedConcurrentFrames = 2,
+        };
+        Assert.NotNull(await server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":"issue-4536-capacity-init","method":"initialize","params":{}}"""));
+
+        var releaseRequests = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var twoRequestsRegistered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registeredCount = 0;
+        server.RequestRegisteredForTests = _ =>
+        {
+            if (Interlocked.Increment(ref registeredCount) == 2)
+                twoRequestsRegistered.TrySetResult();
+        };
+        server.RequestDelayForTests = cancellationToken => releaseRequests.Task.WaitAsync(cancellationToken);
+
+        var acceptedWhenCancellationWasRead = -1;
+        var cancelledResponseWriteStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var transport = QueuedFrameTransport.FromExactFrames(
+            """{"jsonrpc":"2.0","id":453641,"method":"ping"}""",
+            """{"jsonrpc":"2.0","id":453642,"method":"ping"}""",
+            """{"jsonrpc":"2.0","id":453643,"method":"ping"}""",
+            """{"jsonrpc":"2.0","id":453644,"method":"ping"}""",
+            """{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":453641}}""");
+        transport.BeforeFrameReturnedAsync = async (frame, cancellationToken) =>
+        {
+            if (frame?.Contains("\"method\":\"notifications/cancelled\"", StringComparison.Ordinal) != true)
+                return;
+
+            await twoRequestsRegistered.Task.WaitAsync(TestDeterminism.DefaultTimeout, cancellationToken);
+            acceptedWhenCancellationWasRead = server.AcceptedConcurrentFrameCountForTests;
+        };
+        transport.BeforeFrameWrittenAsync = (frame, _) =>
+        {
+            if (frame?.Contains("\"id\":453641", StringComparison.Ordinal) == true)
+                cancelledResponseWriteStarted.TrySetResult();
+            return Task.CompletedTask;
+        };
+
+        var runTask = server.RunAsync(transport, CancellationToken.None);
+        try
+        {
+            await cancelledResponseWriteStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            Assert.Equal(2, acceptedWhenCancellationWasRead);
+            Assert.Equal(2, Volatile.Read(ref registeredCount));
+
+            releaseRequests.TrySetResult();
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+        finally
+        {
+            releaseRequests.TrySetResult();
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+
+        Assert.Equal(0, server.AcceptedConcurrentFrameCountForTests);
+        var responses = transport.WrittenFrames
+            .Where(static frame => frame is not null)
+            .Select(static frame => JsonNode.Parse(frame!)!)
+            .ToDictionary(static response => response["id"]!.GetValue<int>());
+        Assert.Equal("request_cancelled", responses[453641]["error"]!["data"]!["category"]!.GetValue<string>());
+        Assert.Null(responses[453642]["error"]);
+        foreach (var rejectedId in new[] { 453643, 453644 })
+        {
+            Assert.Equal(McpErrorEnvelope.CodeServerBusy, responses[rejectedId]["error"]!["code"]!.GetValue<int>());
+            Assert.Equal("server_busy", responses[rejectedId]["error"]!["data"]!["category"]!.GetValue<string>());
+            Assert.True(responses[rejectedId]["error"]!["data"]!["retry_safe"]!.GetValue<bool>());
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_MoreThanPendingCancellationLimitQueuedRequestsRemainCancellable_Issue4536()
+    {
+        const int firstRequestId = 453700;
+        const int queuedRequestCount = 65;
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            maxConcurrency: 1)
+        {
+            MaxAcceptedConcurrentFrames = queuedRequestCount + 1,
+        };
+        Assert.NotNull(await server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":"issue-4536-queued-cancel-init","method":"initialize","params":{}}"""));
+
+        var releaseRequests = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allRequestsRegistered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registeredCount = 0;
+        server.RequestRegisteredForTests = _ =>
+        {
+            if (Interlocked.Increment(ref registeredCount) == queuedRequestCount + 1)
+                allRequestsRegistered.TrySetResult();
+        };
+        server.RequestDelayForTests = cancellationToken => releaseRequests.Task.WaitAsync(cancellationToken);
+
+        var frames = new List<string>(1 + queuedRequestCount * 2);
+        for (var id = firstRequestId; id <= firstRequestId + queuedRequestCount; id++)
+            frames.Add("""{"jsonrpc":"2.0","id":""" + id.ToString(CultureInfo.InvariantCulture) + """, "method":"ping"}""");
+        for (var id = firstRequestId + 1; id <= firstRequestId + queuedRequestCount; id++)
+            frames.Add("""{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"""
+                + id.ToString(CultureInfo.InvariantCulture)
+                + """}}""");
+
+        var acceptedWhenFirstCancellationWasRead = -1;
+        var cancelledResponsesWritten = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelledResponseCount = 0;
+        var transport = QueuedFrameTransport.FromExactFrames(frames.ToArray());
+        transport.BeforeFrameReturnedAsync = async (frame, cancellationToken) =>
+        {
+            if (frame?.Contains("\"method\":\"notifications/cancelled\"", StringComparison.Ordinal) != true
+                || acceptedWhenFirstCancellationWasRead >= 0)
+                return;
+
+            await allRequestsRegistered.Task.WaitAsync(TestDeterminism.DefaultTimeout, cancellationToken);
+            acceptedWhenFirstCancellationWasRead = server.AcceptedConcurrentFrameCountForTests;
+        };
+        transport.BeforeFrameWrittenAsync = (frame, _) =>
+        {
+            if (frame?.Contains("\"category\":\"request_cancelled\"", StringComparison.Ordinal) == true
+                && Interlocked.Increment(ref cancelledResponseCount) == queuedRequestCount)
+                cancelledResponsesWritten.TrySetResult();
+            return Task.CompletedTask;
+        };
+
+        var runTask = server.RunAsync(transport, CancellationToken.None);
+        try
+        {
+            await cancelledResponsesWritten.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            Assert.Equal(queuedRequestCount + 1, acceptedWhenFirstCancellationWasRead);
+            Assert.Equal(queuedRequestCount + 1, Volatile.Read(ref registeredCount));
+
+            releaseRequests.TrySetResult();
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+        finally
+        {
+            releaseRequests.TrySetResult();
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+
+        Assert.Equal(queuedRequestCount, Volatile.Read(ref cancelledResponseCount));
+        Assert.Equal(0, server.AcceptedConcurrentFrameCountForTests);
+        Assert.DoesNotContain(
+            transport.WrittenFrames,
+            static frame => frame?.Contains("\"category\":\"server_busy\"", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
+    public async Task ProcessFrameAsync_TimedOutActionRetainsConcurrencyLeaseUntilItDrains_Issue4536()
+    {
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            maxConcurrency: 1)
+        {
+            RequestTimeout = TimeSpan.FromMilliseconds(100),
+        };
+        Assert.NotNull(await server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":"issue-4536-timeout-init","method":"initialize","params":{}}"""));
+
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondRegistered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.RequestRegisteredForTests = id =>
+        {
+            if (id?.GetValue<int>() == 453652)
+                secondRegistered.TrySetResult();
+        };
+        server.RequestDelayForTestsWithId = (id, _) =>
+        {
+            if (id?.GetValue<int>() == 453651)
+            {
+                firstStarted.TrySetResult();
+                return releaseFirst.Task;
+            }
+
+            secondStarted.TrySetResult();
+            return Task.CompletedTask;
+        };
+
+        var firstResponseTask = server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":453651,"method":"ping"}""");
+        await firstStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+        var firstResponseText = await firstResponseTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        Assert.Equal("Request timed out", JsonNode.Parse(firstResponseText!)!["error"]!["message"]!.GetValue<string>());
+        Assert.Equal(0, server.AvailableConcurrencySlotsForTests);
+
+        var secondResponseTask = server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":453652,"method":"ping"}""");
+        await secondRegistered.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+        Assert.False(secondStarted.Task.IsCompleted);
+        Assert.Equal(0, server.AvailableConcurrencySlotsForTests);
+
+        releaseFirst.TrySetResult();
+        await secondStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+        var secondResponseText = await secondResponseTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        Assert.Equal("ok", JsonNode.Parse(secondResponseText!)!["result"]!["status"]!.GetValue<string>());
+        Assert.Equal(1, server.AvailableConcurrencySlotsForTests);
+    }
+
+    [Fact]
+    public async Task RunAsync_BaseTransportAtSingleConcurrencyDoesNotDoubleAcquireGate_Issue4536()
+    {
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            maxConcurrency: 1);
+        var transport = new QueueMcpTransport(
+            """{"jsonrpc":"2.0","id":453699,"method":"ping"}""");
+
+        await server.RunAsync(transport, CancellationToken.None)
+            .WaitAsync(TestDeterminism.DefaultTimeout);
+
+        var responseText = Assert.Single(transport.WrittenFrames);
+        var response = JsonNode.Parse(responseText)!;
+        Assert.Equal(453699, response["id"]!.GetValue<int>());
+        Assert.Equal("ok", response["result"]!["status"]!.GetValue<string>());
+        Assert.Equal(server.MaxConcurrency, server.AvailableConcurrencySlotsForTests);
+    }
+
+    [Fact]
+    public async Task RunAsync_StdioInitializeBarrierLetsFollowingPingObserveInitializedState_Issue4536()
+    {
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            maxConcurrency: 2);
+        var initializeDelayStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseInitialize = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.RequestDelayForTests = async cancellationToken =>
+        {
+            initializeDelayStarted.TrySetResult();
+            await releaseInitialize.Task.WaitAsync(cancellationToken);
+        };
+        var transport = QueuedFrameTransport.FromExactFrames(
+            """{"jsonrpc":"2.0","id":453621,"method":"initialize","params":{}}""",
+            """{"jsonrpc":"2.0","id":453622,"method":"ping"}""");
+
+        var runTask = server.RunAsync(transport, CancellationToken.None);
+        try
+        {
+            await Task.WhenAll(initializeDelayStarted.Task, transport.EndOfInputRead)
+                .WaitAsync(TestDeterminism.DefaultTimeout);
+            Assert.Empty(transport.WrittenFrames);
+
+            releaseInitialize.TrySetResult();
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+        finally
+        {
+            releaseInitialize.TrySetResult();
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+
+        var initializeResponseText = Assert.Single(
+            transport.WrittenFrames,
+            static frame => frame?.Contains("\"id\":453621", StringComparison.Ordinal) == true);
+        var initializeResponse = JsonNode.Parse(initializeResponseText!)!;
+        Assert.NotNull(initializeResponse["result"]);
+
+        var pingResponseText = Assert.Single(
+            transport.WrittenFrames,
+            static frame => frame?.Contains("\"id\":453622", StringComparison.Ordinal) == true);
+        var pingResponse = JsonNode.Parse(pingResponseText!)!;
+        Assert.Null(pingResponse["error"]);
+        Assert.Equal("ok", pingResponse["result"]!["status"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task RunAsync_StdioPreInitializePingCannotBeReorderedBehindInitialize_Issue4536()
+    {
+        var pingWriteStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releasePingWrite = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            maxConcurrency: 2);
+        var initializeDelayStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.RequestDelayForTestsWithId = (id, _) =>
+        {
+            if (id is null)
+                initializeDelayStarted.TrySetResult();
+            return Task.CompletedTask;
+        };
+        var transport = QueuedFrameTransport.FromExactFrames(
+            """{"jsonrpc":"2.0","id":453631,"method":"ping"}""",
+            """{"jsonrpc":"2.0","id":null,"method":"initialize","params":{}}""");
+        transport.BeforeFrameWrittenAsync = async (frame, cancellationToken) =>
+        {
+            if (frame?.Contains("\"id\":453631", StringComparison.Ordinal) != true)
+                return;
+
+            pingWriteStarted.TrySetResult();
+            await releasePingWrite.Task.WaitAsync(cancellationToken);
+        };
+
+        var runTask = server.RunAsync(transport, CancellationToken.None);
+        try
+        {
+            await Task.WhenAll(pingWriteStarted.Task, transport.EndOfInputRead)
+                .WaitAsync(TestDeterminism.DefaultTimeout);
+
+            // The later initialize frame has been accepted, but its id:null dispatch hook must
+            // remain behind the earlier ping task until that pre-initialize response is complete.
+            Assert.False(initializeDelayStarted.Task.IsCompleted);
+
+            releasePingWrite.TrySetResult();
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+        finally
+        {
+            releasePingWrite.TrySetResult();
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+
+        Assert.True(initializeDelayStarted.Task.IsCompletedSuccessfully);
+        Assert.Equal(2, transport.WrittenFrames.Count);
+        var pingResponse = JsonNode.Parse(transport.WrittenFrames[0]!)!;
+        Assert.Equal(453631, pingResponse["id"]!.GetValue<int>());
+        Assert.Equal(-32002, pingResponse["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("Server not initialized", pingResponse["error"]!["message"]!.GetValue<string>());
+        var initializeResponse = JsonNode.Parse(transport.WrittenFrames[1]!)!;
+        Assert.Null(initializeResponse["id"]);
+        Assert.NotNull(initializeResponse["result"]);
+    }
+
+    [Fact]
     public async Task CancellationNotificationBeforeRequestRegistration_CancelsMatchingRequest()
     {
         using var server = new McpServer(_dbPath, "test");
@@ -6241,29 +6783,51 @@ public sealed class Caller
     {
         private const string TestInitializeId = "__test_initialize__";
         private readonly Queue<string?> _frames;
+        private readonly TaskCompletionSource _endOfInputRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public QueuedFrameTransport(params string[] frames)
+            : this(frames, prependInitialization: true)
+        {
+        }
+
+        private QueuedFrameTransport(string[] frames, bool prependInitialization)
         {
             var scriptedFrames = frames.Cast<string?>().ToList();
-            if (scriptedFrames.Count > 0
+            if (prependInitialization
+                && scriptedFrames.Count > 0
                 && scriptedFrames[0]?.Contains("\"method\":\"initialize\"", StringComparison.Ordinal) != true)
                 scriptedFrames.Insert(0, "{\"jsonrpc\":\"2.0\",\"id\":\"" + TestInitializeId + "\",\"method\":\"initialize\",\"params\":{}}");
             _frames = new Queue<string?>(scriptedFrames.Append(null));
         }
 
+        public static QueuedFrameTransport FromExactFrames(params string[] frames)
+            => new(frames, prependInitialization: false);
+
         public string Name => "stdio";
         public string Endpoint => "memory://queued";
         public List<string?> WrittenFrames { get; } = [];
+        public Task EndOfInputRead => _endOfInputRead.Task;
+        public Func<string?, CancellationToken, Task>? BeforeFrameReturnedAsync { get; set; }
+        public Func<string?, CancellationToken, Task>? BeforeFrameWrittenAsync { get; set; }
 
-        public Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
-            => Task.FromResult(_frames.Count == 0 ? null : _frames.Dequeue());
+        public async Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var frame = _frames.Count == 0 ? null : _frames.Dequeue();
+            if (BeforeFrameReturnedAsync is { } beforeFrameReturned)
+                await beforeFrameReturned(frame, cancellationToken);
+            if (frame is null)
+                _endOfInputRead.TrySetResult();
+            return frame;
+        }
 
-        public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
+        public async Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
         {
             if (frame?.Contains(TestInitializeId, StringComparison.Ordinal) == true)
-                return Task.CompletedTask;
+                return;
+            if (BeforeFrameWrittenAsync is { } beforeFrameWritten)
+                await beforeFrameWritten(frame, cancellationToken);
             WrittenFrames.Add(frame);
-            return Task.CompletedTask;
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;

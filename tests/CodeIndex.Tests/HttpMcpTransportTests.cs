@@ -807,6 +807,83 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_NormalRequestsOverlapUpToServerMaxConcurrency_Issue4536()
+    {
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, maxConcurrency: 2);
+
+        using (var initialize = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"""))
+            Assert.Equal(HttpStatusCode.OK, initialize.StatusCode);
+
+        var releaseRequests = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var twoRequestsStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var activeRequestCount = 0;
+        var peakActiveRequestCount = 0;
+        var startedRequestCount = 0;
+        harness.RequestDelayForTests = async cancellationToken =>
+        {
+            var active = Interlocked.Increment(ref activeRequestCount);
+            var observedPeak = Volatile.Read(ref peakActiveRequestCount);
+            while (active > observedPeak)
+            {
+                var previous = Interlocked.CompareExchange(ref peakActiveRequestCount, active, observedPeak);
+                if (previous == observedPeak)
+                    break;
+                observedPeak = previous;
+            }
+
+            if (Interlocked.Increment(ref startedRequestCount) == 2)
+                twoRequestsStarted.TrySetResult();
+
+            try
+            {
+                await releaseRequests.Task.WaitAsync(cancellationToken);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref activeRequestCount);
+            }
+        };
+
+        var requests = new[]
+        {
+            (Id: 21, Response: harness.PostJsonAsync("""{"jsonrpc":"2.0","id":21,"method":"ping"}""")),
+            (Id: 22, Response: harness.PostJsonAsync("""{"jsonrpc":"2.0","id":22,"method":"ping"}""")),
+            (Id: 23, Response: harness.PostJsonAsync("""{"jsonrpc":"2.0","id":23,"method":"ping"}""")),
+        };
+
+        try
+        {
+            await twoRequestsStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            await TestDeterminism.AssertTaskRemainsBlockedAsync(Task.WhenAll(requests.Select(request => request.Response)));
+
+            Assert.Equal(2, Volatile.Read(ref activeRequestCount));
+            Assert.Equal(2, Volatile.Read(ref peakActiveRequestCount));
+            Assert.Equal(2, Volatile.Read(ref startedRequestCount));
+
+            releaseRequests.TrySetResult();
+            var responses = await Task.WhenAll(requests.Select(request => request.Response))
+                .WaitAsync(TestDeterminism.DefaultTimeout);
+
+            Assert.Equal(3, Volatile.Read(ref startedRequestCount));
+            Assert.Equal(2, Volatile.Read(ref peakActiveRequestCount));
+            Assert.Equal(0, Volatile.Read(ref activeRequestCount));
+            for (var i = 0; i < responses.Length; i++)
+            {
+                using var response = responses[i];
+                Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+                var body = await response.Content.ReadAsStringAsync();
+                using var document = JsonDocument.Parse(body);
+                Assert.Equal(requests[i].Id, document.RootElement.GetProperty("id").GetInt32());
+            }
+        }
+        finally
+        {
+            releaseRequests.TrySetResult();
+            harness.RequestDelayForTests = null;
+        }
+    }
+
+    [Fact]
     public async Task HttpTransport_NonOutOfBandPayloads_AreQueuedForNormalHandling_Issue3711()
     {
         var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
@@ -1815,6 +1892,12 @@ public class HttpMcpTransportTests : IDisposable
             set => _transport.BeforeEventStreamWriteForTests = value;
         }
 
+        public Func<CancellationToken, Task>? RequestDelayForTests
+        {
+            get => _server.RequestDelayForTests;
+            set => _server.RequestDelayForTests = value;
+        }
+
         public void RecordResponseCleanupFailure(string kind, string operation, Exception exception)
             => _transport.RecordResponseCleanupFailure(kind, operation, exception);
 
@@ -1836,7 +1919,8 @@ public class HttpMcpTransportTests : IDisposable
             int? maxResponseBodyBytes = null,
             int? maxQueuedRequests = null,
             int? requestLogQueueCapacity = null,
-            TimeSpan? eventStreamWriteTimeout = null)
+            TimeSpan? eventStreamWriteTimeout = null,
+            int? maxConcurrency = null)
         {
             var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
             var transport = new HttpMcpTransport(
@@ -1851,9 +1935,14 @@ public class HttpMcpTransportTests : IDisposable
                 requestLogQueueCapacity: requestLogQueueCapacity,
                 eventStreamWriteTimeout: eventStreamWriteTimeout,
                 allowUnauthenticatedLoopback: bearerToken is null);
-            var server = authenticator is null
-                ? new McpServer(dbPath, ConsoleUi.LoadVersion())
-                : new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, authenticator);
+            var server = new McpServer(
+                dbPath,
+                ConsoleUi.LoadVersion(),
+                dbPathExplicit: false,
+                serializeResponse: null,
+                authenticator: authenticator,
+                toolFilter: null,
+                maxConcurrency: maxConcurrency ?? McpServer.DefaultMaxConcurrency);
             var cts = new CancellationTokenSource();
             var loopTask = Task.Run(() => server.RunAsync(transport, cts.Token));
             // Give the listener a tick to start accepting; HttpListener.Start is synchronous but the
