@@ -75,6 +75,7 @@ public partial class McpServer : IDisposable
     // を渡せるようにするため (#1567)。
     private readonly AsyncLocal<CancellationToken> _currentRequestToken = new();
     private readonly AsyncLocal<int?> _currentTransportResponseByteLimit = new();
+    private readonly AsyncLocal<int?> _currentBatchResourceResponseByteLimit = new();
     private readonly AsyncLocal<bool> _isolateDbForCurrentRequest = new();
     private readonly AsyncLocal<Func<string, CancellationToken, Task>?> _currentOutOfBandFrameWriter = new();
     private readonly AsyncLocal<bool> _canAwaitClientResponses = new();
@@ -1691,40 +1692,140 @@ public partial class McpServer : IDisposable
                 retrySafe: false);
 
         var responses = new JsonArray();
+        var useDefaultBatchBudget = _usesDefaultResponseSerializer;
+        var remainingResponseSlots = useDefaultBatchBudget
+            ? batch.Count(BatchItemProducesResponse)
+            : 0;
+        var batchFrameLimit = useDefaultBatchBudget
+            ? GetEffectiveResponseFrameLimit()
+            : 0;
+        var batchBytesUsed = 1; // opening '['; reserve the closing ']' below.
         foreach (var item in batch)
         {
-            JsonNode? response;
-            if (item is null)
+            var responseSlot = useDefaultBatchBudget && BatchItemProducesResponse(item);
+            var batchItemResponseLimit = int.MaxValue;
+            var previousBatchLimit = _currentBatchResourceResponseByteLimit.Value;
+            if (responseSlot)
             {
-                response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: expected JSON object",
-                    category: McpErrorEnvelope.CategoryInvalidRequest,
-                    suggestion: "Each JSON-RPC batch item must be a request object.",
-                    retrySafe: false);
-            }
-            else if (item is JsonArray)
-            {
-                response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: nested batches are not supported",
-                    category: McpErrorEnvelope.CategoryInvalidRequest,
-                    suggestion: "JSON-RPC batch items must be request objects, not nested arrays.",
-                    retrySafe: false);
-            }
-            else if (item is not JsonObject)
-            {
-                response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: expected JSON object",
-                    category: McpErrorEnvelope.CategoryInvalidRequest,
-                    suggestion: "Each JSON-RPC batch item must be a request object.",
-                    retrySafe: false);
-            }
-            else
-            {
-                response = await HandleMessageAsync(item, isolateRequestDb).ConfigureAwait(false);
+                var separatorReserve = responses.Count == 0
+                    ? Math.Max(0, remainingResponseSlots - 1)
+                    : remainingResponseSlots;
+                var availablePayloadBytes = Math.Max(
+                    0,
+                    batchFrameLimit - batchBytesUsed - 1 - separatorReserve);
+                batchItemResponseLimit = remainingResponseSlots > 0
+                    ? availablePayloadBytes / remainingResponseSlots
+                    : 0;
+                _currentBatchResourceResponseByteLimit.Value = batchItemResponseLimit;
             }
 
+            JsonNode? response;
+            try
+            {
+                if (item is null)
+                {
+                    response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: expected JSON object",
+                        category: McpErrorEnvelope.CategoryInvalidRequest,
+                        suggestion: "Each JSON-RPC batch item must be a request object.",
+                        retrySafe: false);
+                }
+                else if (item is JsonArray)
+                {
+                    response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: nested batches are not supported",
+                        category: McpErrorEnvelope.CategoryInvalidRequest,
+                        suggestion: "JSON-RPC batch items must be request objects, not nested arrays.",
+                        retrySafe: false);
+                }
+                else if (item is not JsonObject)
+                {
+                    response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: expected JSON object",
+                        category: McpErrorEnvelope.CategoryInvalidRequest,
+                        suggestion: "Each JSON-RPC batch item must be a request object.",
+                        retrySafe: false);
+                }
+                else
+                {
+                    response = await HandleMessageAsync(item, isolateRequestDb).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                _currentBatchResourceResponseByteLimit.Value = previousBatchLimit;
+            }
+
+            if (responseSlot)
+                remainingResponseSlots--;
             if (response != null)
+            {
+                if (useDefaultBatchBudget)
+                {
+                    _ = TryMeasureJsonUtf8BytesWithinLimit(
+                        response,
+                        _jsonOptions,
+                        int.MaxValue,
+                        out var responseBytes);
+                    if (responseSlot && responseBytes > batchItemResponseLimit)
+                    {
+                        var budgetError = CreateBatchResponseBudgetError(item);
+                        _ = TryMeasureJsonUtf8BytesWithinLimit(
+                            budgetError,
+                            _jsonOptions,
+                            int.MaxValue,
+                            out var budgetErrorBytes);
+                        if (budgetErrorBytes < responseBytes)
+                        {
+                            response = budgetError;
+                            responseBytes = budgetErrorBytes;
+                        }
+                    }
+                    if (responses.Count > 0)
+                        batchBytesUsed++; // comma
+                    batchBytesUsed += responseBytes;
+                }
                 responses.Add(response);
+            }
+        }
+
+        if (useDefaultBatchBudget && batchBytesUsed + 1 > batchFrameLimit)
+        {
+            return CreateResponseTooLargeError(
+                hasId: true,
+                id: null,
+                responseBytes: batchBytesUsed + 1,
+                responseLimit: batchFrameLimit);
         }
 
         return responses.Count == 0 ? null : responses;
+    }
+
+    private static bool BatchItemProducesResponse(JsonNode? item)
+        => item is not JsonObject obj
+           || obj.ContainsKey("id")
+           || !string.Equals(TryGetStringMember(obj, "jsonrpc"), "2.0", StringComparison.Ordinal)
+           || TryGetStringMember(obj, "method") is null;
+
+    private static JsonObject CreateBatchResponseBudgetError(JsonNode? request)
+    {
+        JsonNode? id = null;
+        if (request is JsonObject requestObject
+            && TryGetRequestId(requestObject, out var hasId, out var requestId)
+            && hasId)
+        {
+            id = requestId;
+        }
+
+        return CreateErrorResponse(
+            hasId: true,
+            id: id,
+            code: -32603,
+            message: "Batch response budget too small.",
+            category: McpErrorEnvelope.CategoryInternalError,
+            suggestion: "Use a smaller JSON-RPC batch and retry.",
+            retrySafe: false,
+            extraData: new JsonObject
+            {
+                ["reason"] = "batch_response_budget_too_small",
+            });
     }
 
     private async Task<JsonNode> DispatchWithRequestCancellationAsync(JsonNode? id, bool isolateRequestDb, Func<Task<JsonNode>> action)
@@ -2518,7 +2619,7 @@ public partial class McpServer : IDisposable
                 return CreateErrorResponse(hasId: true, id: id, code: -32603,
                     message: "The configured MCP response limit is too small for a resources/read page.",
                     category: McpErrorEnvelope.CategoryInternalError,
-                    suggestion: "Increase CDIDX_MCP_RESPONSE_MAX_BYTES or CDIDX_MCP_HTTP_MAX_RESPONSE_BYTES, then retry.",
+                    suggestion: "Use a smaller JSON-RPC batch, or increase CDIDX_MCP_RESPONSE_MAX_BYTES or CDIDX_MCP_HTTP_MAX_RESPONSE_BYTES, then retry.",
                     retrySafe: false,
                     extraData: new JsonObject
                     {
@@ -2702,6 +2803,14 @@ public partial class McpServer : IDisposable
 
     private int GetEffectiveResourceReadResponseLimit()
     {
+        var responseLimit = GetEffectiveResponseFrameLimit();
+        if (_currentBatchResourceResponseByteLimit.Value is { } batchLimit)
+            responseLimit = Math.Min(responseLimit, Math.Max(0, batchLimit));
+        return responseLimit;
+    }
+
+    private int GetEffectiveResponseFrameLimit()
+    {
         var serverLimit = GetMaxResponseBytes();
         return _currentTransportResponseByteLimit.Value is > 0 and var transportLimit
             ? Math.Min(serverLimit, transportLimit)
@@ -2770,7 +2879,7 @@ public partial class McpServer : IDisposable
             || !int.TryParse(parts[3], NumberStyles.None, CultureInfo.InvariantCulture, out var endLine)
             || line <= 0
             || byteOffset < 0
-            || byteOffset > MaxLineByteLength
+            || byteOffset > DbReader.MaxBoundedFileReadScannedUtf8Bytes
             || endLine < line
             || parts[4].Length != 16)
         {

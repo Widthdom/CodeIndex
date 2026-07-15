@@ -1214,6 +1214,25 @@ public sealed class Caller
     }
 
     [Fact]
+    public void ResourcesRead_GuessedGeneratedResourceRemainsExcluded_Issue4544()
+    {
+        const string path = "generated/secret.g.cs";
+        InsertIndexedFile(path, "csharp", "generated secret", generated: true);
+
+        var listed = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}""")!)!;
+        Assert.DoesNotContain(
+            listed["result"]!["resources"]!.AsArray(),
+            resource => resource!["uri"]!.GetValue<string>() == $"cdidx://file/{path}");
+
+        var read = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"cdidx://file/generated/secret.g.cs"}}""")!)!;
+        Assert.Equal(-32602, read["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("invalid_argument", read["error"]!["data"]!["category"]!.GetValue<string>());
+        Assert.Contains("Resource not found", read["error"]!["message"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ResourcesRead_RangesAndContinuesOnUtf8Boundaries_Issue4544()
     {
         const string expected = "second\n🙂🙂🙂\nfourth";
@@ -1291,6 +1310,53 @@ public sealed class Caller
     }
 
     [Fact]
+    public void ResourcesRead_AcceptsEmittedCursorBeyondOneMiBLineOffset_Issue4544()
+    {
+        var source = new string(
+            'z',
+            McpServer.MaxLineByteLength + (2 * McpServer.MaxResourceReadMaxBytes) + 17);
+        InsertIndexedFile("src/legacy-megabyte-line.txt", "text", source);
+        var actual = new StringBuilder(source.Length);
+        string? cursor = null;
+        var acceptedBeyondInputFrameLimit = false;
+        var completed = false;
+
+        for (var page = 0; page < 20; page++)
+        {
+            var readParams = new JsonObject
+            {
+                ["uri"] = "cdidx://file/src/legacy-megabyte-line.txt",
+                ["maxBytes"] = McpServer.MaxResourceReadMaxBytes,
+            };
+            if (cursor != null)
+                readParams["cursor"] = cursor;
+
+            var response = _server.HandleMessage(new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = page + 1,
+                ["method"] = "resources/read",
+                ["params"] = readParams,
+            })!;
+            var metadata = response["result"]!["_meta"]!;
+            actual.Append(response["result"]!["contents"]![0]!["text"]!.GetValue<string>());
+            if (metadata["startLineByteOffset"]!.GetValue<int>() > McpServer.MaxLineByteLength)
+                acceptedBeyondInputFrameLimit = true;
+            if (!metadata["truncated"]!.GetValue<bool>())
+            {
+                completed = true;
+                break;
+            }
+
+            cursor = metadata["nextCursor"]!.GetValue<string>();
+        }
+
+        Assert.True(completed);
+        Assert.True(acceptedBeyondInputFrameLimit);
+        Assert.Equal(source, actual.ToString());
+    }
+
+    [Fact]
     public void ResourcesRead_ReassemblesRangesAcrossOverlappingChunks_Issue4544()
     {
         var lines = Enumerable.Range(1, 120).Select(line => $"line-{line:D3}").ToArray();
@@ -1340,10 +1406,11 @@ public sealed class Caller
     [Fact]
     public void ResourcesRead_DefaultLineCapBoundsEmptyLineResources_Issue4544()
     {
+        var source = new string('\n', McpServer.MaxResourceReadLinesPerPage + 1) + "tail";
         InsertIndexedFile(
             "src/many-empty-lines.txt",
             "text",
-            new string('\n', McpServer.MaxResourceReadLinesPerPage + 1) + "tail",
+            source,
             splitIntoProductionChunks: true);
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":4544,"method":"resources/read","params":{"uri":"cdidx://file/src/many-empty-lines.txt"}}""")!;
 
@@ -1355,6 +1422,24 @@ public sealed class Caller
         Assert.Equal("maxLines", metadata["truncationReason"]!.GetValue<string>());
         Assert.Equal(McpServer.MaxResourceReadLinesPerPage + 1, metadata["nextLine"]!.GetValue<int>());
         Assert.False(string.IsNullOrWhiteSpace(metadata["nextCursor"]!.GetValue<string>()));
+
+        var continuation = _server.HandleMessage(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 4545,
+            ["method"] = "resources/read",
+            ["params"] = new JsonObject
+            {
+                ["uri"] = "cdidx://file/src/many-empty-lines.txt",
+                ["cursor"] = metadata["nextCursor"]!.GetValue<string>(),
+            },
+        })!;
+        var continuationMetadata = continuation["result"]!["_meta"]!;
+        Assert.False(continuationMetadata["truncated"]!.GetValue<bool>());
+        Assert.Equal(
+            source,
+            response["result"]!["contents"]![0]!["text"]!.GetValue<string>()
+            + continuation["result"]!["contents"]![0]!["text"]!.GetValue<string>());
     }
 
     [Fact]
@@ -1689,6 +1774,136 @@ public sealed class Caller
     }
 
     [Fact]
+    public void ResourcesRead_ReadOnlyImmutableLegacyLayoutWithoutRangeIndexes_Issue4544()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_mcp_resource_legacy_ro");
+        var dbPath = Path.Combine(project.Root, "legacy.db");
+        var source = string.Join('\n', Enumerable.Range(1, 400).Select(line => $"line-{line:D3}"));
+        using (var db = new DbContext(dbPath))
+        {
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            var fileId = writer.UpsertFile(new FileRecord
+            {
+                Path = "src/legacy-read-only.txt",
+                Lang = "text",
+                Size = Encoding.UTF8.GetByteCount(source),
+                Lines = 400,
+                Checksum = FileContentLoader.ComputeChecksumFromNormalizedContent(source),
+                Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+            });
+            writer.InsertChunks(ChunkSplitter.Split(fileId, source));
+            using (var dropIndexes = db.Connection.CreateCommand())
+            {
+                dropIndexes.CommandText = $"""
+                    DROP INDEX {DbReader.BoundedResourceReadChunkIndexName};
+                    DROP INDEX {DbReader.BoundedResourceReadChunkEndIndexName};
+                    """;
+                dropIndexes.ExecuteNonQuery();
+            }
+            using var checkpoint = db.Connection.CreateCommand();
+            checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
+            checkpoint.ExecuteNonQuery();
+        }
+        SqliteConnection.ClearAllPools();
+
+        var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+        long schemaVersion;
+        using (var baseline = new DbContext(readOnlyUri))
+        using (var version = baseline.Connection.CreateCommand())
+        {
+            version.CommandText = "PRAGMA schema_version";
+            schemaVersion = Convert.ToInt64(version.ExecuteScalar(), CultureInfo.InvariantCulture);
+        }
+        SqliteConnection.ClearAllPools();
+
+        using (var server = new McpServer(readOnlyUri, "test"))
+        {
+            var response = server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":4544,"method":"resources/read","params":{"uri":"cdidx://file/src/legacy-read-only.txt","startLine":281,"endLine":300}}""")!)!;
+            Assert.Equal(
+                string.Join('\n', Enumerable.Range(281, 20).Select(line => $"line-{line:D3}")),
+                response["result"]!["contents"]![0]!["text"]!.GetValue<string>());
+        }
+        SqliteConnection.ClearAllPools();
+
+        using var verify = new DbContext(readOnlyUri);
+        using (var version = verify.Connection.CreateCommand())
+        {
+            version.CommandText = "PRAGMA schema_version";
+            Assert.Equal(schemaVersion, Convert.ToInt64(version.ExecuteScalar(), CultureInfo.InvariantCulture));
+        }
+        using var indexes = verify.Connection.CreateCommand();
+        indexes.CommandText = $"""
+            SELECT COUNT(*)
+            FROM sqlite_master
+            WHERE type = 'index'
+              AND name IN ('{DbReader.BoundedResourceReadChunkIndexName}', '{DbReader.BoundedResourceReadChunkEndIndexName}')
+            """;
+        Assert.Equal(0L, indexes.ExecuteScalar());
+    }
+
+    [Fact]
+    public void GetBoundedFileContent_LegacyVmBudgetAbortsAndConnectionRemainsUsable_Issue4544()
+    {
+        const string path = "src/legacy-vm-budget.txt";
+        var fileId = InsertIndexedFile(path, "text", "x", lineCountOverride: 5_000);
+        DeleteIndexedChunks(path);
+        using (var insert = _db.Connection.CreateCommand())
+        {
+            insert.CommandText = """
+                WITH digits(value) AS (
+                    VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)
+                ), numbered(line) AS (
+                    SELECT 1 + ones.value + (10 * tens.value) + (100 * hundreds.value) + (1000 * thousands.value)
+                    FROM digits ones
+                    CROSS JOIN digits tens
+                    CROSS JOIN digits hundreds
+                    CROSS JOIN digits thousands
+                )
+                INSERT INTO chunks(file_id, chunk_index, start_line, end_line, content)
+                SELECT @fileId, line, line, line, 'x'
+                FROM numbered
+                WHERE line <= 5000;
+                """;
+            insert.Parameters.AddWithValue("@fileId", fileId);
+            insert.ExecuteNonQuery();
+        }
+        using (var dropIndexes = _db.Connection.CreateCommand())
+        {
+            dropIndexes.CommandText = $"""
+                DROP INDEX {DbReader.BoundedResourceReadChunkIndexName};
+                DROP INDEX {DbReader.BoundedResourceReadChunkEndIndexName};
+                """;
+            dropIndexes.ExecuteNonQuery();
+        }
+
+        using var reader = new DbReader(_db);
+        var metadata = reader.GetResourceFileMetadata(path)!;
+        DbReader.LegacyResourceReadSqliteVmStepLimitForTesting = 100;
+        BoundedFileReadResult page;
+        try
+        {
+            page = reader.RunInReadSnapshot(() => reader.GetBoundedFileContent(
+                metadata,
+                5_000,
+                5_000,
+                McpServer.DefaultResourceReadMaxBytes,
+                McpServer.MaxResourceReadLinesPerPage));
+        }
+        finally
+        {
+            DbReader.LegacyResourceReadSqliteVmStepLimitForTesting = null;
+        }
+
+        Assert.Equal(BoundedFileReadStatus.ContentUnavailable, page.Status);
+        Assert.Equal("resource_bounded_read_index_unavailable", page.FailureReason);
+        using var retry = _db.Connection.CreateCommand();
+        retry.CommandText = "SELECT 1";
+        Assert.Equal(1L, retry.ExecuteScalar());
+    }
+
+    [Fact]
     public void ResourcesRead_RejectsChunkCountAndAggregateScanLimitViolations_Issue4544()
     {
         const string chunkCapPath = "src/chunk-cap-resource.txt";
@@ -1752,7 +1967,7 @@ public sealed class Caller
                 INSERT INTO chunks(file_id, chunk_index, start_line, end_line, content)
                 SELECT @fileId, line, line, line, 'x'
                 FROM numbered
-                WHERE line <= 5000;
+                WHERE line <= 500;
 
                 INSERT INTO chunks(file_id, chunk_index, start_line, end_line, content)
                 VALUES (@fileId, 10000, 10000, 10000, 'target');
@@ -1776,34 +1991,9 @@ public sealed class Caller
             return string.Join('\n', details);
         }
 
-        var predecessorPlan = Explain($"""
-            SELECT c.id, c.start_line, c.end_line, c.chunk_index
-            FROM chunks c INDEXED BY {DbReader.BoundedResourceReadChunkIndexName}
-            WHERE c.file_id = @fileId
-              AND c.content IS NOT NULL
-              AND c.start_line <= @startLine
-            ORDER BY c.start_line DESC, c.chunk_index DESC
-            LIMIT @chunkLimit
-            """);
-        var endPlan = Explain($"""
-            SELECT c.id, c.start_line, c.end_line, c.chunk_index
-            FROM chunks c INDEXED BY {DbReader.BoundedResourceReadChunkEndIndexName}
-            WHERE c.file_id = @fileId
-              AND c.content IS NOT NULL
-              AND c.end_line >= @startLine
-            ORDER BY c.end_line, c.start_line, c.chunk_index
-            LIMIT @chunkLimit
-            """);
-        var forwardPlan = Explain($"""
-            SELECT c.id, c.start_line, c.end_line, c.chunk_index
-            FROM chunks c INDEXED BY {DbReader.BoundedResourceReadChunkIndexName}
-            WHERE c.file_id = @fileId
-              AND c.content IS NOT NULL
-              AND c.start_line > @startLine
-              AND c.start_line <= @endLine
-            ORDER BY c.start_line, c.chunk_index
-            LIMIT @chunkLimit
-            """);
+        var predecessorPlan = Explain(DbReader.BoundedResourceReadPredecessorSql);
+        var endPlan = Explain(DbReader.BoundedResourceReadEndSql);
+        var forwardPlan = Explain(DbReader.BoundedResourceReadForwardSql);
         Assert.Contains(DbReader.BoundedResourceReadChunkIndexName, predecessorPlan);
         Assert.Contains("start_line<?", predecessorPlan);
         Assert.DoesNotContain("USE TEMP B-TREE", predecessorPlan);
@@ -1813,6 +2003,64 @@ public sealed class Caller
         Assert.Contains(DbReader.BoundedResourceReadChunkIndexName, forwardPlan);
         Assert.Contains("start_line>? AND start_line<?", forwardPlan);
         Assert.DoesNotContain("USE TEMP B-TREE", forwardPlan);
+
+        int MeasureLateReadVmCallbacks()
+        {
+            using var reader = new DbReader(_db);
+            var metadata = reader.GetResourceFileMetadata(path)!;
+            var callbackCount = 0;
+            SQLitePCL.delegate_progress progress = _ =>
+            {
+                callbackCount++;
+                return 0;
+            };
+            SQLitePCL.raw.sqlite3_progress_handler(_db.Connection.Handle, 100, progress, null!);
+            try
+            {
+                var page = reader.RunInReadSnapshot(() => reader.GetBoundedFileContent(
+                    metadata,
+                    10_000,
+                    10_000,
+                    McpServer.DefaultResourceReadMaxBytes,
+                    McpServer.MaxResourceReadLinesPerPage));
+                Assert.Equal(BoundedFileReadStatus.Success, page.Status);
+                Assert.Equal("target", page.Content);
+            }
+            finally
+            {
+                SQLitePCL.raw.sqlite3_progress_handler(_db.Connection.Handle, 0, null!, null!);
+                GC.KeepAlive(progress);
+            }
+
+            return callbackCount;
+        }
+
+        var callbacksWithFiveHundredDecoys = MeasureLateReadVmCallbacks();
+        using (var addMoreDecoys = _db.Connection.CreateCommand())
+        {
+            addMoreDecoys.CommandText = """
+                WITH digits(value) AS (
+                    VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)
+                ), numbered(line) AS (
+                    SELECT 1 + ones.value + (10 * tens.value) + (100 * hundreds.value) + (1000 * thousands.value)
+                    FROM digits ones
+                    CROSS JOIN digits tens
+                    CROSS JOIN digits hundreds
+                    CROSS JOIN digits thousands
+                )
+                INSERT INTO chunks(file_id, chunk_index, start_line, end_line, content)
+                SELECT @fileId, line, line, line, 'x'
+                FROM numbered
+                WHERE line BETWEEN 501 AND 5000;
+                """;
+            addMoreDecoys.Parameters.AddWithValue("@fileId", fileId);
+            addMoreDecoys.ExecuteNonQuery();
+        }
+        var callbacksWithFiveThousandDecoys = MeasureLateReadVmCallbacks();
+        Assert.InRange(
+            callbacksWithFiveThousandDecoys,
+            0,
+            callbacksWithFiveHundredDecoys + 20);
 
         var lateRange = _server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"cdidx://file/src/late-range-resource.txt","startLine":10000,"endLine":10000}}""")!)!;
@@ -1939,6 +2187,102 @@ public sealed class Caller
         Assert.True(metadata["truncated"]!.GetValue<bool>());
         Assert.Equal("maxResponseBytes", metadata["truncationReason"]!.GetValue<string>());
         Assert.False(string.IsNullOrWhiteSpace(metadata["nextCursor"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task RunAsync_StdioBatchResourcesReadSharesFrameBudgetAndPreservesIds_Issue4544()
+    {
+        const int responseLimit = 131_072;
+        const int requestedMaxBytes = 30_000;
+        const int budgetErrorCount = 64;
+        const int budgetErrorFirstId = 100;
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_RESPONSE_MAX_BYTES");
+        env.Set("CDIDX_MCP_RESPONSE_MAX_BYTES", responseLimit.ToString(CultureInfo.InvariantCulture));
+        InsertIndexedFile("src/stdio-batch-first.txt", "text", new string('<', 60_000));
+        InsertIndexedFile("src/stdio-batch-second.txt", "text", new string('<', 60_000));
+        var initialize = """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}""";
+        var batch = """[{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"cdidx://file/src/stdio-batch-first.txt","maxBytes":30000}},{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"cdidx://file/src/stdio-batch-second.txt","maxBytes":30000}}]""";
+        const string missingUriPrefix = "cdidx://file/missing/";
+        var longMissingUris = Enumerable.Range(0, budgetErrorCount)
+            .Select(index =>
+            {
+                var suffix = index.ToString("D2", CultureInfo.InvariantCulture);
+                return missingUriPrefix
+                    + new string('x', McpBoundedText.MaxResourceUriChars - missingUriPrefix.Length - suffix.Length)
+                    + suffix;
+            })
+            .ToArray();
+        Assert.All(longMissingUris, uri => Assert.Equal(McpBoundedText.MaxResourceUriChars, uri.Length));
+        var budgetErrorBatch = JsonSerializer.Serialize(longMissingUris.Select((uri, index) => new
+        {
+            jsonrpc = "2.0",
+            id = budgetErrorFirstId + index,
+            method = "resources/read",
+            @params = new { uri },
+        }));
+        Assert.True(Encoding.UTF8.GetByteCount(budgetErrorBatch) < McpServer.MaxLineByteLength);
+        await using var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            initialize + "\n" + batch + "\n" + budgetErrorBatch + "\n"));
+        await using var output = new MemoryStream();
+        await using var transport = new StdioMcpTransport(input, output, bufferSize: 1024);
+        using var server = new McpServer(_dbPath, "test");
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        var batchFrames = Encoding.UTF8.GetString(output.ToArray())
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Where(frame => JsonNode.Parse(frame) is JsonArray)
+            .ToArray();
+        Assert.Equal(2, batchFrames.Length);
+        var batchFrame = batchFrames.Single(frame =>
+            JsonNode.Parse(frame)!.AsArray()[0]!["id"]!.GetValue<int>() == 1);
+        Assert.InRange(Encoding.UTF8.GetByteCount(batchFrame), 1, responseLimit);
+        var responses = JsonNode.Parse(batchFrame)!.AsArray();
+        Assert.Equal(2, responses.Count);
+        Assert.Equal([1, 2], responses.Select(response => response!["id"]!.GetValue<int>()).ToArray());
+        foreach (var response in responses)
+        {
+            var metadata = response!["result"]!["_meta"]!;
+            Assert.Equal(requestedMaxBytes, metadata["maxBytes"]!.GetValue<int>());
+            Assert.InRange(
+                metadata["effectiveMaxBytes"]!.GetValue<int>(),
+                McpServer.MinResourceReadMaxBytes,
+                requestedMaxBytes - 1);
+            Assert.True(metadata["truncated"]!.GetValue<bool>());
+            Assert.Equal("maxResponseBytes", metadata["truncationReason"]!.GetValue<string>());
+            Assert.False(string.IsNullOrWhiteSpace(metadata["nextCursor"]!.GetValue<string>()));
+        }
+
+        var budgetErrorFrame = batchFrames.Single(frame =>
+            JsonNode.Parse(frame)!.AsArray()[0]!["id"]!.GetValue<int>() == budgetErrorFirstId);
+        Assert.InRange(Encoding.UTF8.GetByteCount(budgetErrorFrame), 1, responseLimit);
+        var budgetErrors = JsonNode.Parse(budgetErrorFrame)!.AsArray();
+        Assert.Equal(budgetErrorCount, budgetErrors.Count);
+        Assert.Equal(
+            Enumerable.Range(budgetErrorFirstId, budgetErrorCount),
+            budgetErrors.Select(response => response!["id"]!.GetValue<int>()));
+        var batchBudgetErrorCount = 0;
+        foreach (var response in budgetErrors)
+        {
+            var error = response!["error"]!;
+            var data = error["data"]!;
+            var code = error["code"]!.GetValue<int>();
+            if (code == -32603)
+            {
+                batchBudgetErrorCount++;
+                Assert.Equal("batch_response_budget_too_small", data["reason"]!.GetValue<string>());
+                Assert.Equal(McpErrorEnvelope.CategoryInternalError, data["category"]!.GetValue<string>());
+                Assert.False(data["retry_safe"]!.GetValue<bool>());
+            }
+            else
+            {
+                Assert.Equal(-32602, code);
+                Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, data["category"]!.GetValue<string>());
+                Assert.True(data["retry_safe"]!.GetValue<bool>());
+            }
+            Assert.False(string.IsNullOrWhiteSpace(data["suggestion"]!.GetValue<string>()));
+        }
+        Assert.InRange(batchBudgetErrorCount, budgetErrorCount / 2, budgetErrorCount);
     }
 
     [Fact]
