@@ -3621,19 +3621,11 @@ public static partial class SymbolExtractor
            && IsJavaScriptTypeScriptIdentifierStart(name[3])
            && char.IsUpper(name[3]);
 
-    private static HashSet<string> BuildSymbolLineKeySet(IReadOnlyList<SymbolRecord> symbols)
+    private static HashSet<SymbolKindNameIdentity> BuildSymbolKindNameIdentities(IReadOnlyList<SymbolRecord> symbols)
     {
-        var existing = new HashSet<string>(symbols.Count, StringComparer.Ordinal);
+        var existing = new HashSet<SymbolKindNameIdentity>(symbols.Count);
         foreach (var symbol in symbols)
-            existing.Add($"{symbol.Kind}:{symbol.Name}:{symbol.Line}");
-        return existing;
-    }
-
-    private static HashSet<string> BuildSymbolKindNameKeySet(IReadOnlyList<SymbolRecord> symbols)
-    {
-        var existing = new HashSet<string>(symbols.Count, StringComparer.Ordinal);
-        foreach (var symbol in symbols)
-            existing.Add($"{symbol.Kind}:{symbol.Name}");
+            existing.Add(new SymbolKindNameIdentity(symbol.Kind, symbol.Name));
         return existing;
     }
 
@@ -3666,7 +3658,7 @@ public static partial class SymbolExtractor
         if (properties.Count == 0)
             return;
 
-        var existing = BuildSymbolLineKeySet(symbols);
+        var existing = BuildSymbolLineIdentities(symbols);
 
         foreach (var property in properties)
         {
@@ -3688,8 +3680,8 @@ public static partial class SymbolExtractor
 
                 var accessorName = accessorMatch.Groups["name"].Value;
                 var symbolName = $"{property.Name}.{accessorName}";
-                var key = $"accessor:{symbolName}:{accessorLine + 1}";
-                if (!existing.Add(key))
+                var identity = new SymbolLineIdentity(fileId, accessorLine + 1, "accessor", symbolName);
+                if (!existing.Add(identity))
                     continue;
 
                 var accessorBodyEndLine = accessorLine;
@@ -3741,7 +3733,7 @@ public static partial class SymbolExtractor
         if (properties.Count == 0)
             return;
 
-        var existing = BuildSymbolLineKeySet(symbols);
+        var existing = BuildSymbolLineIdentities(symbols);
 
         foreach (var property in properties)
         {
@@ -3788,8 +3780,8 @@ public static partial class SymbolExtractor
 
                     var accessorName = accessorMatch.Groups["name"].Value;
                     var symbolName = $"{property.Name}.{accessorName}";
-                    var key = $"accessor:{symbolName}:{accessorLine + 1}";
-                    if (!existing.Add(key))
+                    var identity = new SymbolLineIdentity(fileId, accessorLine + 1, "accessor", symbolName);
+                    if (!existing.Add(identity))
                         continue;
 
                     sawAccessor = true;
@@ -3830,13 +3822,13 @@ public static partial class SymbolExtractor
         long fileId,
         string[] lines,
         List<SymbolRecord> symbols,
-        HashSet<string> existing,
+        HashSet<SymbolLineIdentity> existing,
         SymbolRecord property,
         string propertyLine)
     {
         var projectedName = "$" + property.Name.Trim('`');
-        var key = $"property:{projectedName}:{property.Line}";
-        if (!existing.Add(key))
+        var identity = new SymbolLineIdentity(fileId, property.Line, "property", projectedName);
+        if (!existing.Add(identity))
             return;
 
         symbols.Add(new SymbolRecord
@@ -3962,7 +3954,7 @@ public static partial class SymbolExtractor
         if (!LinesContain(lines, "friend", StringComparison.Ordinal))
             return;
 
-        var declared = BuildSymbolKindNameKeySet(symbols);
+        var declared = BuildSymbolKindNameIdentities(symbols);
         var inBlockComment = false;
 
         for (var i = 0; i < lines.Length; i++)
@@ -4125,14 +4117,14 @@ public static partial class SymbolExtractor
         long fileId,
         List<SymbolRecord> symbols,
         SymbolExtractionState extractionState,
-        HashSet<string> declared,
+        HashSet<SymbolKindNameIdentity> declared,
         string kind,
         string name,
         int lineNumber,
         int startColumn,
         string line)
     {
-        if (name.Length == 0 || !declared.Add($"{kind}:{name}"))
+        if (name.Length == 0 || !declared.Add(new SymbolKindNameIdentity(kind, name)))
             return;
 
         AddSymbolRecord(
@@ -4369,6 +4361,7 @@ public static partial class SymbolExtractor
     }
 
     private readonly record struct SymbolLineIdentity(long FileId, int Line, string Kind, string Name);
+    private readonly record struct SymbolKindNameIdentity(string Kind, string Name);
 
     private sealed class SymbolLineIdentityState
     {
@@ -4545,7 +4538,7 @@ public static partial class SymbolExtractor
 
     private static void AddSymbolRecord(
         List<SymbolRecord> symbols,
-        HashSet<string>? cssSeenSymbols,
+        HashSet<SymbolLineIdentity>? cssSeenSymbols,
         int lineNumber,
         SymbolRecord symbol,
         string? rawLine = null) =>
@@ -4554,7 +4547,7 @@ public static partial class SymbolExtractor
     private static void AddSymbolRecord(
         List<SymbolRecord> symbols,
         SymbolExtractionState extractionState,
-        HashSet<string>? cssSeenSymbols,
+        HashSet<SymbolLineIdentity>? cssSeenSymbols,
         int lineNumber,
         SymbolRecord symbol,
         string? rawLine = null)
@@ -4564,8 +4557,8 @@ public static partial class SymbolExtractor
 
         if (cssSeenSymbols != null)
         {
-            var key = $"{lineNumber}:{symbol.Kind}:{symbol.Name}";
-            if (!cssSeenSymbols.Add(key))
+            var identity = new SymbolLineIdentity(symbol.FileId, lineNumber, symbol.Kind, symbol.Name);
+            if (!cssSeenSymbols.Add(identity))
                 return;
         }
 

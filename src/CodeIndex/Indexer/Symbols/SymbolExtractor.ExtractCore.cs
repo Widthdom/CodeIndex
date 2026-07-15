@@ -214,7 +214,7 @@ public static partial class SymbolExtractor
         var extractionState = symbols.ExtractionState;
         List<PendingRecordPrimaryComponents>? pendingRecordPrimaryComponents = null;
         var cssSeenSymbols = lang == "css"
-            ? new HashSet<string>(StringComparer.Ordinal)
+            ? new HashSet<SymbolLineIdentity>()
             : null;
         var dockerfileStageNames = lang == "dockerfile"
             ? new HashSet<string>(StringComparer.Ordinal)

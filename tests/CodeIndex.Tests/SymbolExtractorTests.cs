@@ -1873,7 +1873,10 @@ public partial class SymbolExtractorTests
         var content = """
             class Widget {
               friend class Inspector;
+              friend class Inspector;
+              friend void Inspector();
               friend struct ns::Peer;
+              friend void freeFn(Widget&);
               friend void freeFn(Widget&);
               friend bool operator==(const Widget&, const Widget&);
               template <typename U> friend class Container;
@@ -1898,9 +1901,10 @@ public partial class SymbolExtractorTests
 
         var symbols = SymbolExtractor.Extract(1, "cpp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Inspector" && s.Signature == "friend class Inspector;");
+        Assert.Single(symbols, s => s.Kind == "class" && s.Name == "Inspector" && s.Signature == "friend class Inspector;");
+        Assert.Single(symbols, s => s.Kind == "function" && s.Name == "Inspector" && s.Signature == "friend void Inspector();");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Peer" && s.Signature == "friend struct ns::Peer;");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "freeFn" && s.Signature == "friend void freeFn(Widget&);");
+        Assert.Single(symbols, s => s.Kind == "function" && s.Name == "freeFn" && s.Signature == "friend void freeFn(Widget&);");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator==" && s.Signature == "friend bool operator==(const Widget&, const Widget&);");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Container" && s.Signature == "template <typename U> friend class Container;");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "BoxInspector");
@@ -4232,8 +4236,8 @@ public partial class SymbolExtractorTests
         Assert.Equal(8, property.EndLine);
         Assert.Equal(3, property.BodyStartLine);
         Assert.Equal(8, property.BodyEndLine);
-        Assert.Contains(symbols, s => s.Kind == "accessor" && s.Name == "displayName.get" && s.ContainerKind == "property" && s.ContainerName == "displayName");
-        Assert.Contains(symbols, s => s.Kind == "accessor" && s.Name == "displayName.set" && s.ContainerKind == "property" && s.ContainerName == "displayName" && s.BodyEndLine == 7);
+        Assert.Single(symbols, s => s.Kind == "accessor" && s.Name == "displayName.get" && s.ContainerKind == "property" && s.ContainerName == "displayName");
+        Assert.Single(symbols, s => s.Kind == "accessor" && s.Name == "displayName.set" && s.ContainerKind == "property" && s.ContainerName == "displayName" && s.BodyEndLine == 7);
     }
 
     [Fact]
@@ -5242,11 +5246,11 @@ public partial class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "rust", content);
 
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std::collections::HashMap");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "HashMap");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std::collections::HashSet as Set");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "HashSet");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Set");
+        Assert.Single(symbols, s => s.Kind == "import" && s.Name == "std::collections::HashMap");
+        Assert.Single(symbols, s => s.Kind == "import" && s.Name == "HashMap");
+        Assert.Single(symbols, s => s.Kind == "import" && s.Name == "std::collections::HashSet as Set");
+        Assert.Single(symbols, s => s.Kind == "import" && s.Name == "HashSet");
+        Assert.Single(symbols, s => s.Kind == "import" && s.Name == "Set");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "crate::io::Result as IoResult");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "crate::io::Write");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "crate::io");
@@ -11380,16 +11384,16 @@ public partial class SymbolExtractorTests
 
         var symbols = SymbolExtractor.Extract(1, "css", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".btn");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".link");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "#nav");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "#header");
+        Assert.Single(symbols, s => s.Kind == "class" && s.Name == ".btn");
+        Assert.Single(symbols, s => s.Kind == "class" && s.Name == ".link");
+        Assert.Single(symbols, s => s.Kind == "class" && s.Name == "#nav");
+        Assert.Single(symbols, s => s.Kind == "class" && s.Name == "#header");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "circled");
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "reset");
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "base");
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "theme");
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "svg");
-        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == ":first");
+        Assert.Single(symbols, s => s.Kind == "namespace" && s.Name == ":first");
     }
 
     [Fact]

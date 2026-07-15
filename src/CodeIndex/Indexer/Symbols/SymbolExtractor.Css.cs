@@ -36,7 +36,7 @@ public static partial class SymbolExtractor
         int lineIndex,
         IReadOnlyList<SymbolPattern> patterns,
         List<SymbolRecord> symbols,
-        HashSet<string>? cssSeenSymbols)
+        HashSet<SymbolLineIdentity>? cssSeenSymbols)
     {
         var groupingDepth = 0;
         var qualifiedDepth = 0;
@@ -89,7 +89,7 @@ public static partial class SymbolExtractor
         int openingBraceIndex,
         IReadOnlyList<SymbolPattern> patterns,
         List<SymbolRecord> symbols,
-        HashSet<string>? cssSeenSymbols)
+        HashSet<SymbolLineIdentity>? cssSeenSymbols)
     {
         if (string.IsNullOrWhiteSpace(maskedSegment))
             return;
@@ -141,7 +141,7 @@ public static partial class SymbolExtractor
         int openingBraceIndex,
         IReadOnlyList<SymbolPattern> patterns,
         List<SymbolRecord> symbols,
-        HashSet<string>? cssSeenSymbols)
+        HashSet<SymbolLineIdentity>? cssSeenSymbols)
     {
         foreach (var (rawPart, maskedPart) in EnumerateCssCommaSeparatedSegments(rawSegment, maskedSegment))
         {
@@ -164,7 +164,7 @@ public static partial class SymbolExtractor
         string maskedSegment,
         int lineIndex,
         List<SymbolRecord> symbols,
-        HashSet<string>? cssSeenSymbols)
+        HashSet<SymbolLineIdentity>? cssSeenSymbols)
     {
         var trimmedMaskedSegment = maskedSegment.AsSpan().TrimStart();
         if (!trimmedMaskedSegment.StartsWith("@layer", StringComparison.OrdinalIgnoreCase))
@@ -299,7 +299,7 @@ public static partial class SymbolExtractor
         string maskedLine,
         int lineIndex,
         List<SymbolRecord> symbols,
-        HashSet<string>? cssSeenSymbols)
+        HashSet<SymbolLineIdentity>? cssSeenSymbols)
     {
         var trimmedMaskedLine = maskedLine.AsSpan().TrimStart();
         if (!trimmedMaskedLine.StartsWith("@media", StringComparison.OrdinalIgnoreCase))

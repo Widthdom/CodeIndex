@@ -79,7 +79,7 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserStore");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "currentUser" && s.ContainerName == "UserStore");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "count" && s.SubKind == "swift_wrapped_property");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "$count" && s.SubKind == "swift_projected_value");
+        Assert.Single(symbols, s => s.Kind == "property" && s.Name == "$count" && s.SubKind == "swift_projected_value");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "scheme" && s.SubKind == "swift_wrapped_property");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "$scheme" && s.SubKind == "swift_projected_value");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value" && s.SubKind == "swift_wrapped_property");
@@ -92,8 +92,8 @@ public partial class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name is "$titleLabel" or "$persistedName" or "$exposedName");
         Assert.DoesNotContain(symbols, s => s.Kind == "accessor" && s.Name == "implicitName.set");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "fullName" && s.SubKind == "swift_computed_property");
-        Assert.Contains(symbols, s => s.Kind == "accessor" && s.Name == "fullName.get" && s.ContainerName == "fullName");
-        Assert.Contains(symbols, s => s.Kind == "accessor" && s.Name == "fullName.set" && s.ContainerName == "fullName");
+        Assert.Single(symbols, s => s.Kind == "accessor" && s.Name == "fullName.get" && s.ContainerName == "fullName");
+        Assert.Single(symbols, s => s.Kind == "accessor" && s.Name == "fullName.set" && s.ContainerName == "fullName");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "init" && s.ContainerName == "UserStore");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "loadUser" && s.ContainerName == "UserStore");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "deinit" && s.ContainerName == "UserStore");
@@ -197,12 +197,12 @@ public partial class SymbolExtractorTests
         Assert.Equal(2, property.BodyStartLine);
         Assert.Equal(5, property.BodyEndLine);
 
-        Assert.Contains(symbols, s =>
+        Assert.Single(symbols, s =>
             s.Kind == "accessor"
             && s.Name == "x.didSet"
             && s.ContainerKind == "property"
             && s.ContainerName == "x");
-        Assert.Contains(symbols, s =>
+        Assert.Single(symbols, s =>
             s.Kind == "accessor"
             && s.Name == "x.willSet"
             && s.ContainerKind == "property"
