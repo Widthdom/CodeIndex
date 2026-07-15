@@ -8,11 +8,22 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
+    private readonly record struct CppSameLineClassKey(
+        int Line,
+        string ContainerKind,
+        string ContainerName);
+
+    private readonly record struct CppSameLineClassMemberIdentity(
+        CppSameLineClassKey ClassKey,
+        string MemberName);
+
     private static void ExtractCppSameLineClassBodyMembers(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
         var classSymbols = BuildCppSameLineClassSymbolSnapshot(symbols);
         if (classSymbols is null)
             return;
+
+        var existingMembers = BuildCppSameLineClassMemberIndex(symbols, classSymbols);
 
         foreach (var classSymbol in classSymbols)
         {
@@ -30,9 +41,12 @@ public static partial class SymbolExtractor
             if (body.Length == 0)
                 continue;
 
-            var existingMemberNames = BuildCppSameLineClassMemberNameSet(symbols, classSymbol);
+            var classKey = new CppSameLineClassKey(
+                classSymbol.StartLine,
+                classSymbol.Kind,
+                classSymbol.Name);
             foreach (var segment in EnumerateTrimmedCppSegments(body))
-                TryAddCppSameLineClassMemberSymbol(fileId, classSymbol, segment, lineIndex + 1, symbols, ref existingMemberNames);
+                TryAddCppSameLineClassMemberSymbol(fileId, classSymbol, classKey, segment, lineIndex + 1, symbols, ref existingMembers);
         }
     }
 
@@ -54,21 +68,39 @@ public static partial class SymbolExtractor
         return classSymbols;
     }
 
-    private static HashSet<string>? BuildCppSameLineClassMemberNameSet(IReadOnlyList<SymbolRecord> symbols, SymbolRecord classSymbol)
+    private static HashSet<CppSameLineClassMemberIdentity>? BuildCppSameLineClassMemberIndex(
+        IReadOnlyList<SymbolRecord> symbols,
+        IReadOnlyList<SymbolRecord> classSymbols)
     {
-        HashSet<string>? existingMemberNames = null;
+        var classKeys = new HashSet<CppSameLineClassKey>();
+        foreach (var classSymbol in classSymbols)
+        {
+            classKeys.Add(new CppSameLineClassKey(
+                classSymbol.StartLine,
+                classSymbol.Kind,
+                classSymbol.Name));
+        }
+
+        HashSet<CppSameLineClassMemberIdentity>? existingMembers = null;
         foreach (var symbol in symbols)
         {
             if (symbol.Kind == "function"
-                && symbol.Line == classSymbol.StartLine
-                && symbol.ContainerKind == classSymbol.Kind
-                && symbol.ContainerName == classSymbol.Name)
+                && symbol.ContainerKind != null
+                && symbol.ContainerName != null)
             {
-                (existingMemberNames ??= new HashSet<string>(StringComparer.Ordinal)).Add(symbol.Name);
+                var classKey = new CppSameLineClassKey(
+                    symbol.Line,
+                    symbol.ContainerKind,
+                    symbol.ContainerName);
+                if (classKeys.Contains(classKey))
+                {
+                    (existingMembers ??= []).Add(
+                        new CppSameLineClassMemberIdentity(classKey, symbol.Name));
+                }
             }
         }
 
-        return existingMemberNames;
+        return existingMembers;
     }
 
     private static IEnumerable<string> EnumerateTrimmedCppSegments(string body)
@@ -99,10 +131,11 @@ public static partial class SymbolExtractor
     private static bool TryAddCppSameLineClassMemberSymbol(
         long fileId,
         SymbolRecord classSymbol,
+        CppSameLineClassKey classKey,
         string segment,
         int lineNumber,
         List<SymbolRecord> symbols,
-        ref HashSet<string>? existingMemberNames)
+        ref HashSet<CppSameLineClassMemberIdentity>? existingMembers)
     {
         foreach (var pattern in PatternCache["cpp"])
         {
@@ -119,8 +152,8 @@ public static partial class SymbolExtractor
             if (string.IsNullOrWhiteSpace(name))
                 continue;
 
-            existingMemberNames ??= new HashSet<string>(StringComparer.Ordinal);
-            if (!existingMemberNames.Add(name))
+            existingMembers ??= [];
+            if (!existingMembers.Add(new CppSameLineClassMemberIdentity(classKey, name)))
                 return true;
 
             symbols.Add(new SymbolRecord
