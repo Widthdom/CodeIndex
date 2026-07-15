@@ -1129,7 +1129,7 @@ public partial class McpServerTests
         {
             RefillTokensPerSecond = 1.0,
             BurstCapacity = 16.0,
-            MaxBucketCount = 3,
+            MaxBucketCount = 4,
         });
         var queries = new JsonArray();
         for (var i = 0; i < 8; i++)
@@ -1164,7 +1164,7 @@ public partial class McpServerTests
             Assert.Equal(McpErrorEnvelope.CategoryToolUnknown, results[i]!["category"]!.GetValue<string>());
         }
         Assert.True(results[8]!["ok"]!.GetValue<bool>());
-        Assert.Equal(3, _server.RateLimiter.BucketCount);
+        Assert.Equal(4, _server.RateLimiter.BucketCount);
     }
 
     [Fact]

@@ -180,12 +180,12 @@ fields, including readiness fields and runtime diagnostics such as
 | Remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`. |
 | MCP-only session diagnostics | `mcp_session`, `mcp.rate_limit.bucket_limit`, `mcp.rate_limit.bucket_limit_rejection_count`. |
 
-When MCP rate limiting is enabled, direct `tools/call` requests acquire quota
-before detailed tool-name, enablement, and argument validation. Canonical known
-tool names retain independent per-caller buckets; missing, malformed, empty,
-oversized, case-variant, and unknown names share one fixed invalid-tool bucket
-per caller. `batch_query` applies the same bounded normalization to unknown
-inner-slot names. At the process-local bucket cap, cdidx first prunes expired
+When MCP rate limiting is enabled, every direct `tools/call` first consumes one
+caller-wide coarse bucket before detailed tool-name, enablement, and argument
+validation. Canonical known tool names additionally retain secondary per-tool
+buckets; missing, malformed, empty, oversized, case-variant, and unknown names
+create no name-derived buckets. `batch_query` maps unknown inner-slot names to
+one fixed bounded bucket. At the process-local bucket cap, cdidx first prunes expired
 buckets and otherwise reports the interval until the earliest idle-bucket
 expiry in `retry_after_ms`, so legitimate bucket creation can recover at the
 advertised time (#4547).
@@ -418,11 +418,11 @@ readiness field に加えて、`path_case_sensitive` などの runtime diagnosti
 | remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`。 |
 | MCP-only session diagnostics | `mcp_session`, `mcp.rate_limit.bucket_limit`, `mcp.rate_limit.bucket_limit_rejection_count`。 |
 
-MCP rate limiting が有効な場合、direct な `tools/call` request は tool 名、enablement、
-argument の詳細検証前に quota を取得します。canonical な既知 tool 名は caller ごとの
-独立 bucket を維持し、missing、malformed、empty、oversized、case-variant、unknown な
-名前は caller ごとの 1 つの固定 invalid-tool bucket を共有します。`batch_query` の
-unknown inner-slot 名にも同じ bounded normalization を適用します。process-local bucket
+MCP rate limiting が有効な場合、direct な `tools/call` request はすべて tool 名、
+enablement、argument の詳細検証前に caller-wide の coarse bucket を 1 つ消費します。
+canonical な既知 tool 名は secondary per-tool bucket も維持し、missing、malformed、
+empty、oversized、case-variant、unknown な名前は名前由来 bucket を作成しません。
+`batch_query` の unknown inner-slot 名は 1 つの固定 bounded bucket へ集約します。process-local bucket
 上限到達時は期限切れ bucket を先に prune し、それでも空きがなければ最も早い
 idle-bucket expiry までの時間を `retry_after_ms` として返すため、正規の bucket 作成は
 通知された時刻に回復できます（#4547）。

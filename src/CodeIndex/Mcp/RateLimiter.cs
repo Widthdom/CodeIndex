@@ -13,6 +13,7 @@ namespace CodeIndex.Mcp;
 internal sealed class RateLimiter
 {
     internal const long MaxDiagnosticIntervalMilliseconds = int.MaxValue;
+    internal const string ToolsCallPreValidationBucketName = "(tools/call pre-validation)";
     internal const string InvalidToolBucketName = "(invalid tools/call)";
     private readonly object _gate = new();
     private readonly Dictionary<RateLimiterBucketKey, TokenBucket> _buckets = new();

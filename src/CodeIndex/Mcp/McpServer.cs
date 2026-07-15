@@ -3936,14 +3936,15 @@ public partial class McpServer : IDisposable
     private static BoundedMcpText BoundClientIdentityForDisplay(string value)
         => McpBoundedText.ForDisplay(value, McpBoundedText.MaxClientIdentityChars);
 
-    private static string ResolveRateLimitBucketName(string? toolName)
+    private static string? ResolveKnownRateLimitBucketName(string? toolName)
     {
-        // Only canonical known-tool names receive independent buckets. Missing, malformed,
-        // oversized, case-variant aliases, and unknown names collapse into one bounded key
-        // per caller so untrusted names cannot consume the global bucket budget (#4547).
-        // canonical な既知ツール名だけに独立 bucket を割り当てる。missing / malformed /
-        // oversized / 大文字小文字 variant / unknown は caller ごとの固定キーへ集約し、
-        // 未信頼の名前で global bucket budget を消費できないようにする（#4547）。
+        // Only canonical known-tool names receive a secondary per-tool bucket. Missing,
+        // malformed, oversized, case-variant, and unknown names are covered solely by the
+        // fixed caller-wide pre-validation bucket, so they cannot create name-derived keys
+        // (#4547).
+        // canonical な既知ツール名だけに secondary per-tool bucket を割り当てる。missing /
+        // malformed / oversized / 大文字小文字 variant / unknown は caller-wide の固定
+        // pre-validation bucket だけで扱い、名前由来キーを作成させない（#4547）。
         if (toolName is not null)
         {
             foreach (var knownToolName in McpToolFilter.KnownToolNames)
@@ -3953,7 +3954,7 @@ public partial class McpServer : IDisposable
             }
         }
 
-        return RateLimiter.InvalidToolBucketName;
+        return null;
     }
 
     /// <summary>
@@ -4033,8 +4034,16 @@ public partial class McpServer : IDisposable
         try
         {
             var caller = CurrentInitializeState.Caller;
-            var rateLimitBucketName = ResolveRateLimitBucketName(toolName);
-            var decision = RateLimiter.TryAcquire(rateLimitBucketName, caller);
+            // Charge every direct tools/call to one caller-wide bucket before detailed
+            // name, enablement, or argument validation. Canonical known tools then retain
+            // their existing secondary per-tool limit. This prevents a caller from rotating
+            // malformed requests across known names to multiply its effective burst (#4547).
+            // direct tools/call はすべて、名前・enablement・argument の詳細検証前に caller-wide
+            // bucket へ課金する。canonical な既知 tool は既存の secondary per-tool 制限も維持し、
+            // malformed request の既知名ローテーションによる burst 増幅を防ぐ（#4547）。
+            var decision = RateLimiter.TryAcquire(RateLimiter.ToolsCallPreValidationBucketName, caller);
+            if (decision.Allowed && ResolveKnownRateLimitBucketName(toolName) is { } knownToolBucketName)
+                decision = RateLimiter.TryAcquire(knownToolBucketName, caller);
             if (!decision.Allowed)
             {
                 metricsError = "rate_limited";

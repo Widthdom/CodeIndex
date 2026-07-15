@@ -9503,7 +9503,10 @@ public partial class McpServerTests
             ["params"] = createParams(),
         })!;
 
-        void AssertSecondCallIsRateLimited(Func<JsonObject> createParams, Action<JsonNode> assertFirstResponse)
+        void AssertSecondCallIsRateLimited(
+            Func<JsonObject> createParams,
+            Action<JsonNode> assertFirstResponse,
+            int expectedBucketCount = 1)
         {
             InstallRateLimiter(_server, new RateLimiterOptions
             {
@@ -9516,7 +9519,7 @@ public partial class McpServerTests
 
             Assert.Equal(McpErrorEnvelope.CodeRateLimited, throttled["error"]!["code"]!.GetValue<int>());
             Assert.Equal(McpErrorEnvelope.CategoryRateLimited, throttled["error"]!["data"]!["category"]!.GetValue<string>());
-            Assert.Equal(1, _server.RateLimiter.BucketCount);
+            Assert.Equal(expectedBucketCount, _server.RateLimiter.BucketCount);
         }
 
         // Missing/non-string names, empty/oversized/unknown names, and known-tool argument
@@ -9544,7 +9547,34 @@ public partial class McpServerTests
                 ["name"] = "search",
                 ["arguments"] = new JsonObject { ["query"] = "abc", ["limt"] = 1 },
             },
-            first => Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, first["result"]!["structuredContent"]!["category"]!.GetValue<string>()));
+            first => Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, first["result"]!["structuredContent"]!["category"]!.GetValue<string>()),
+            expectedBucketCount: 2);
+    }
+
+    [Fact]
+    public void ToolsCall_CoarsePreValidationQuotaSpansCanonicalNames_Issue4547()
+    {
+        InstallRateLimiter(_server, new RateLimiterOptions
+        {
+            RefillTokensPerSecond = 1.0,
+            BurstCapacity = 1.0,
+        });
+
+        var malformedSearch = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"abc","limt":1}}}""")!)!;
+        var malformedDefinition = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"definition","arguments":{"symbol":"Thing","limt":1}}}""")!)!;
+
+        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument,
+            malformedSearch["result"]!["structuredContent"]!["category"]!.GetValue<string>());
+        Assert.Equal(McpErrorEnvelope.CodeRateLimited, malformedDefinition["error"]!["code"]!.GetValue<int>());
+        Assert.Equal(McpErrorEnvelope.CategoryRateLimited,
+            malformedDefinition["error"]!["data"]!["category"]!.GetValue<string>());
+        // Only the caller-wide bucket and the admitted canonical search bucket exist;
+        // the rejected definition call must not allocate another per-tool key (#4547).
+        // caller-wide bucket と許可済み canonical search bucket だけが存在し、拒否された
+        // definition call は追加の per-tool key を確保してはならない（#4547）。
+        Assert.Equal(2, _server.RateLimiter.BucketCount);
     }
 
     [Fact]
@@ -9591,7 +9621,7 @@ public partial class McpServerTests
             """{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"status"}}""")!)!;
         Assert.Equal(McpErrorEnvelope.CodeRateLimited, saturated["error"]!["code"]!.GetValue<int>());
         var retryAfterMs = saturated["error"]!["data"]!["retry_after_ms"]!.GetValue<long>();
-        Assert.Equal(1000, retryAfterMs);
+        Assert.Equal(2000, retryAfterMs);
 
         clock.Now = clock.Now.AddMilliseconds(retryAfterMs);
         var recovered = _server.HandleMessage(JsonNode.Parse(
@@ -9615,7 +9645,7 @@ public partial class McpServerTests
         Assert.Equal(-32601, disabled["error"]!["code"]!.GetValue<int>());
         Assert.Equal(McpErrorEnvelope.CategoryToolDisabled, disabled["error"]!["data"]!["category"]!.GetValue<string>());
         Assert.Equal(McpErrorEnvelope.CodeRateLimited, throttled["error"]!["code"]!.GetValue<int>());
-        Assert.Equal(1, server.RateLimiter.BucketCount);
+        Assert.Equal(2, server.RateLimiter.BucketCount);
     }
 
     [Fact]
@@ -9680,21 +9710,24 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsCall_RateLimit_KeysByTool()
+    public void ToolsCall_RateLimit_LayersCallerWideAndKnownToolBuckets_Issue4547()
     {
-        // Different tools have independent buckets, so once `status` is throttled the
-        // sibling tool `languages` still goes through (#1560).
-        // 別ツールは独立バケットを持つため、`status` がスロットルされても `languages` は通る（#1560）。
-        InstallRateLimiter(_server, new RateLimiterOptions { RefillTokensPerSecond = 1.0, BurstCapacity = 1.0 });
+        // Known tools retain secondary per-tool buckets while all calls also consume the
+        // shared caller-wide quota (#1560 / #4547).
+        // 既知 tool は secondary per-tool bucket を維持しつつ、全 call が共有 caller-wide
+        // quota も消費する（#1560 / #4547）。
+        InstallRateLimiter(_server, new RateLimiterOptions { RefillTokensPerSecond = 1.0, BurstCapacity = 2.0 });
 
         Assert.Null(_server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!["error"]);
-        Assert.NotNull(_server.HandleMessage(JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status"}}""")!)!["error"]);
-
         var languages = _server.HandleMessage(JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"languages"}}""")!)!;
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"languages"}}""")!)!;
         Assert.Null(languages["error"]);
+        Assert.Equal(3, _server.RateLimiter.BucketCount);
+
+        var throttled = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"status"}}""")!)!;
+        Assert.Equal(McpErrorEnvelope.CodeRateLimited, throttled["error"]!["code"]!.GetValue<int>());
     }
 
     [Fact]
