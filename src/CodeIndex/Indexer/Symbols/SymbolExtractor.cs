@@ -7047,17 +7047,45 @@ public static partial class SymbolExtractor
         return -1;
     }
 
+    private readonly record struct DeclaredContainerIdentity(long FileId, string Kind, string Name);
+
     private static void PopulateDeclaredContainerQualifiedNames(List<SymbolRecord> symbols)
     {
+        var requestedContainers = new HashSet<DeclaredContainerIdentity>();
         foreach (var symbol in symbols)
         {
-            if (symbol.ContainerKind == null
-                || symbol.ContainerName == null)
-            {
-                continue;
-            }
+            if (symbol.ContainerKind != null && symbol.ContainerName != null)
+                requestedContainers.Add(new DeclaredContainerIdentity(symbol.FileId, symbol.ContainerKind, symbol.ContainerName));
+        }
 
-            var container = FindDeclaredContainerSymbol(symbols, symbol);
+        if (requestedContainers.Count == 0)
+            return;
+
+        var declaredContainers = new Dictionary<DeclaredContainerIdentity, List<SymbolRecord>>(requestedContainers.Count);
+        foreach (var candidate in symbols)
+        {
+            var identity = new DeclaredContainerIdentity(candidate.FileId, candidate.Kind, candidate.Name);
+            if (!requestedContainers.Contains(identity))
+                continue;
+
+            if (!declaredContainers.TryGetValue(identity, out var candidates))
+            {
+                candidates = [];
+                declaredContainers.Add(identity, candidates);
+            }
+            candidates.Add(candidate);
+        }
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.ContainerKind == null || symbol.ContainerName == null)
+                continue;
+
+            var identity = new DeclaredContainerIdentity(symbol.FileId, symbol.ContainerKind, symbol.ContainerName);
+            if (!declaredContainers.TryGetValue(identity, out var candidates))
+                continue;
+
+            var container = FindDeclaredContainerSymbol(candidates, symbol);
             if (container == null)
                 continue;
 
@@ -7067,15 +7095,12 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static SymbolRecord? FindDeclaredContainerSymbol(IReadOnlyList<SymbolRecord> symbols, SymbolRecord symbol)
+    private static SymbolRecord? FindDeclaredContainerSymbol(IReadOnlyList<SymbolRecord> candidates, SymbolRecord symbol)
     {
         SymbolRecord? best = null;
-        foreach (var candidate in symbols)
+        foreach (var candidate in candidates)
         {
-            if (candidate.FileId != symbol.FileId
-                || candidate.Kind != symbol.ContainerKind
-                || candidate.Name != symbol.ContainerName
-                || candidate.StartLine > symbol.StartLine
+            if (candidate.StartLine > symbol.StartLine
                 || candidate.EndLine < symbol.EndLine)
             {
                 continue;
