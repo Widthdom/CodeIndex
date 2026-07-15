@@ -3313,7 +3313,8 @@ public sealed class Caller
             $"http://127.0.0.1:{port}/",
             "127.0.0.1",
             port,
-            bearerToken: null);
+            bearerToken: null,
+            allowUnauthenticatedLoopback: true);
 
         await transport.WriteOutOfBandFrameAsync("""{"jsonrpc":"2.0","method":"notifications/initialized"}""", CancellationToken.None);
 
