@@ -83,6 +83,11 @@ public partial class McpServer : IDisposable
     private volatile bool _running = true;
     private volatile bool _initialized;
     private volatile bool _enforceInitializationLifecycle;
+    // Zero outside a transport loop. HTTP publishes its configured body cap here so handlers
+    // can shape a valid response before the transport would otherwise reject it.
+    // transport loop 外では 0。HTTP の body 上限を handler に渡し、transport 側の拒否前に
+    // 有効な大きさへ response を整形する。
+    private int _activeTransportMaxResponseBytes;
     private long _timedOutIsolatedActionDrainingCount;
     private long _timedOutIsolatedActionDrainedCount;
     private RequestTimeoutDrainDiagnostic? _lastRequestTimeoutDrainDiagnostic;
@@ -496,6 +501,10 @@ public partial class McpServer : IDisposable
         // stdoutをJSON-RPC用にクリーンに保つため、ログはstderrに出力
         ConsoleUi.TryWriteErrorLine($"[cdidx-mcp] Starting MCP server v{_version} (db: {FormatDbPathForLog(_dbPath)}, transport: {transport.Name} @ {transport.Endpoint}, max in-flight: {MaxConcurrency})");
 
+        Volatile.Write(
+            ref _activeTransportMaxResponseBytes,
+            transport is HttpMcpTransport activeHttpTransport ? activeHttpTransport.MaxResponseBodyBytes : 0);
+
         if (transport is HttpMcpTransport httpTransport)
         {
             httpTransport.OutOfBandFrameHandler = (frame, _) => ProcessFrameAsync(frame);
@@ -591,6 +600,7 @@ public partial class McpServer : IDisposable
         }
         finally
         {
+            Volatile.Write(ref _activeTransportMaxResponseBytes, 0);
             if (transport is HttpMcpTransport httpTransportToClear)
             {
                 httpTransportToClear.OutOfBandFrameHandler = null;
@@ -2341,6 +2351,9 @@ public partial class McpServer : IDisposable
             }
         }
         var effectiveMaxBytes = Math.Min(requestedMaxBytes, GetMaxResponseBytes());
+        var activeTransportMaxResponseBytes = Volatile.Read(ref _activeTransportMaxResponseBytes);
+        if (activeTransportMaxResponseBytes > 0)
+            effectiveMaxBytes = Math.Min(effectiveMaxBytes, activeTransportMaxResponseBytes);
 
         long? afterFileId = null;
         long? expectedGeneration = null;

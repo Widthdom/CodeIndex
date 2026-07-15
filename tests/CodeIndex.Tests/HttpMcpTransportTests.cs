@@ -915,8 +915,10 @@ public class HttpMcpTransportTests : IDisposable
         Assert.Equal(2, doc.RootElement.GetProperty("id").GetInt32());
     }
 
-    [Fact]
-    public async Task HttpTransport_ResourcesListHonorsRequestedResponseBudget_Issue4542()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(500_000)]
+    public async Task HttpTransport_ResourcesListHonorsConfiguredTransportBudget_Issue4542(int requestedMaxBytes)
     {
         const int responseBudget = 100_000;
         var writer = new DbWriter(_db.Connection);
@@ -946,9 +948,11 @@ public class HttpMcpTransportTests : IDisposable
             Assert.Equal(HttpStatusCode.OK, initialize.StatusCode);
         }
 
-        var requestBody = """{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{"maxBytes":"""
-            + responseBudget.ToString(CultureInfo.InvariantCulture)
-            + "}}";
+        var requestBody = requestedMaxBytes == 0
+            ? """{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}"""
+            : """{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{"maxBytes":"""
+                + requestedMaxBytes.ToString(CultureInfo.InvariantCulture)
+                + "}}";
         using var response = await harness.PostJsonAsync(requestBody);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -956,11 +960,12 @@ public class HttpMcpTransportTests : IDisposable
         Assert.InRange(body.Length, 90_000, responseBudget);
         using var document = JsonDocument.Parse(body);
         var result = document.RootElement.GetProperty("result");
-        Assert.Equal("byte_budget", result
-            .GetProperty("_meta")
-            .GetProperty("response_controls")
-            .GetProperty("continuation_reason")
-            .GetString());
+        var controls = result.GetProperty("_meta").GetProperty("response_controls");
+        Assert.Equal(
+            requestedMaxBytes == 0 ? McpServer.DefaultResourceListMaxBytes : requestedMaxBytes,
+            controls.GetProperty("requested_max_bytes").GetInt32());
+        Assert.Equal(responseBudget, controls.GetProperty("effective_max_bytes").GetInt32());
+        Assert.Equal("byte_budget", controls.GetProperty("continuation_reason").GetString());
         Assert.True(result.TryGetProperty("nextCursor", out _));
     }
 
