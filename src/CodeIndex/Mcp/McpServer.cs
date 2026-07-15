@@ -40,13 +40,13 @@ public partial class McpServer : IDisposable
     private readonly IMcpAuthenticator _authenticator;
     private readonly McpToolFilter _toolFilter;
     private readonly TimeProvider _timeProvider;
-    // Bounds the number of MCP tool calls in flight at once so an unbounded burst of
-    // requests cannot exhaust memory or wedge the SQLite reader lock (#1567). The
-    // stdio / HTTP loop today only ever has one frame in flight, but the gate
-    // documents the contract and is the seam future async dispatch will use.
-    // 同時 in-flight ツール呼び出しの上限 (#1567)。stdio / HTTP ループは現状単一スレッド
-    // だが、将来の並列ディスパッチに備えて契約を明示し、testable な seam を残す。
+    // Bounds the number of MCP operations actually executing at once. A separate frame-admission
+    // bound prevents work waiting for this gate from growing without limit (#1567, #4536).
+    // 実際に実行中の MCP operation 数を制限する。別の frame admission 上限により、この gate を
+    // 待つ work が無制限に増えないようにする (#1567, #4536)。
     private readonly SemaphoreSlim _concurrencyGate;
+    private int _maxAcceptedConcurrentFrames;
+    private int _acceptedConcurrentFrameCount;
     // Server-wide shutdown signal. Cancelled by `notifications/shutdown` (and the
     // `notifications/exit` alias) so the read loop unblocks and exits cleanly even
     // when the transport itself has not closed (#1567).
@@ -54,12 +54,23 @@ public partial class McpServer : IDisposable
     // `notifications/exit`) を受けると cancel され、トランスポート未クローズでも
     // 読み取りループが unblock して正常終了する (#1567)。
     private readonly CancellationTokenSource _shutdownCts = new();
+    private readonly object _shutdownCancellationGate = new();
+    private Task? _shutdownCancellationTask;
+    private int _shutdownCtsDisposed;
     // Active JSON-RPC requests keyed by their serialized `id`, so MCP `$/cancelRequest`
     // notifications can cancel the exact in-flight tool instead of only shutting down the
     // whole server (#1418).
     // JSON-RPC request id ごとの実行中 CTS。MCP `$/cancelRequest` 通知でサーバー全体ではなく
     // 対象ツール呼び出しだけを cancel するため (#1418)。
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _activeRequests = new(StringComparer.Ordinal);
+    // Batch workers can leave valid items queued behind the execution gate. Keep their
+    // cancellation sources in a separate durable registry until dispatch moves them into
+    // `_activeRequests`, so cancellation never depends on the short scheduler-race tombstone
+    // below (#4545).
+    // batch worker 待ちの valid item は execution gate の後ろに滞留し得る。dispatch が
+    // `_activeRequests` へ移すまで専用 registry で cancellation source を保持し、短命な
+    // scheduler-race tombstone に依存せず cancel できるようにする (#4545)。
+    private readonly ConcurrentDictionary<string, QueuedBatchRequestRegistration> _queuedBatchRequests = new(StringComparer.Ordinal);
     // A stdio cancellation frame can win the scheduler race against the request task that
     // read the preceding request frame. Keep a tiny, short-lived tombstone so registration
     // consumes that cancellation instead of silently dropping it (#1418).
@@ -68,6 +79,12 @@ public partial class McpServer : IDisposable
     private readonly ConcurrentDictionary<string, DateTimeOffset> _pendingRequestCancellations = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonNode?>> _pendingClientRequests = new(StringComparer.Ordinal);
     private readonly object _requestTimeoutDiagnosticsGate = new();
+    private readonly object _healthStateGate = new();
+    // Shared writer operations must not use the session DbContext concurrently. This gate is
+    // intentionally not disposed: bounded teardown may leave a late task that still releases it.
+    // shared writer は session DbContext を同時使用しない。bounded teardown 後の late task が
+    // release し得るため、この gate は意図的に dispose しない。
+    private readonly SemaphoreSlim _sharedDbWriteGate = new(1, 1);
     // Token observed by the currently executing tool call. Set just before
     // `ProcessFrame` runs and reset afterwards so `WithDbReader` can hand a live
     // cancellation token to `DbReader` for SQLite work (#1567).
@@ -85,7 +102,12 @@ public partial class McpServer : IDisposable
     private readonly AsyncLocal<int?> _currentBatchResponseItemMaxBytes = new();
     private readonly AsyncLocal<Func<string, CancellationToken, Task>?> _currentOutOfBandFrameWriter = new();
     private readonly AsyncLocal<bool> _canAwaitClientResponses = new();
-    private readonly AsyncLocal<List<Action>?> _deferredFrameLogs = new();
+    private readonly AsyncLocal<DeferredFrameLogBuffer?> _deferredFrameLogs = new();
+    // A successful initialize inside a JSON-RPC batch must order later items in that same
+    // frame without publishing the new session globally before the exact response serializes.
+    // JSON-RPC batch 内で成功した initialize は、対応 response の serialize 前に global 公開せず、
+    // 同一 frame の後続 item にだけ新しい session snapshot を見せる。
+    private readonly AsyncLocal<FrameInitializeState?> _frameInitializeState = new();
     private static readonly AsyncLocal<RequestCorrelationContext?> CurrentCorrelationContext = new();
     private readonly object _initializeStateGate = new();
     private volatile bool _running = true;
@@ -120,12 +142,11 @@ public partial class McpServer : IDisposable
     // (ファイルハンドル / rotation) は ProgramRunner 側で所有する。
     private readonly AuditLogSink? _auditLog;
     private readonly TimeSpan _requestTimeout;
+    private readonly TimeSpan _inFlightDrainGracePeriod = DefaultEofDrainTimeout;
+    private readonly TimeSpan _inFlightPostCancelGracePeriod = DefaultEofPostCancelDrainTimeout;
     private readonly TimeSpan? _keepAliveInterval;
     private readonly DateTimeOffset _startedAt;
     private DateTimeOffset _lastRequestAt;
-    private DateTimeOffset? _lastDbCheckAt;
-    private bool? _lastDbCheckOk;
-    private string? _lastDbCheckError;
     private readonly SemaphoreSlim _textWriterGate = new(1, 1);
     // `initialize.clientInfo` echoed into every audit record so the trail can answer
     // "which client issued this call?" without a second log source. Updated on every
@@ -230,6 +251,7 @@ public partial class McpServer : IDisposable
     // tool calls wedge the SQLite reader lock or balloon memory (#1567).
     // 同時 in-flight ツール呼び出し数の既定上限 (#1567)。
     internal const int DefaultMaxConcurrency = 8;
+    internal const int DefaultMaxConcurrentFrameBacklog = 64;
     private const int MaxPendingRequestCancellationCount = 64;
     internal static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(60);
     internal static readonly TimeSpan DefaultEofDrainTimeout = TimeSpan.FromSeconds(5);
@@ -326,6 +348,9 @@ public partial class McpServer : IDisposable
         RateLimiter = new RateLimiter(RateLimiterOptions.FromEnvironment());
         _concurrencyGate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
         MaxConcurrency = maxConcurrency;
+        _maxAcceptedConcurrentFrames = maxConcurrency > int.MaxValue - DefaultMaxConcurrentFrameBacklog
+            ? int.MaxValue
+            : maxConcurrency + DefaultMaxConcurrentFrameBacklog;
         _requestTimeout = DefaultRequestTimeout;
         _keepAliveInterval = ReadKeepAliveIntervalFromEnvironment();
     }
@@ -359,7 +384,10 @@ public partial class McpServer : IDisposable
     /// 直近の `initialize` の `clientInfo.name` から取得した呼び出し元 ID（#1560）。
     /// テストがレート制限のキーを検証するために公開する。
     /// </summary>
-    private InitializeSessionState CurrentInitializeState => Volatile.Read(ref _initializeState);
+    private InitializeSessionState PublishedInitializeState => Volatile.Read(ref _initializeState);
+
+    private InitializeSessionState CurrentInitializeState
+        => _frameInitializeState.Value?.Current ?? PublishedInitializeState;
 
     internal string CurrentCaller => CurrentInitializeState.Caller;
 
@@ -370,10 +398,13 @@ public partial class McpServer : IDisposable
     internal string CurrentSessionId => _sessionId;
 
     internal Action<JsonNode?>? RequestRegisteredForTests { get; set; }
+    internal Action? CancellationRegistriesMissedForTests { get; set; }
     internal Func<CancellationToken, Task>? RequestDelayForTests { get; set; }
+    internal Func<JsonNode?, CancellationToken, Task>? RequestDelayForTestsWithId { get; set; }
     internal Action? ResourceReadMetadataLoadedForTests { get; set; }
     internal Action? McpSessionSnapshotCapturedForTests { get; set; }
     internal bool ShutdownRequestedForTests => _shutdownCts.IsCancellationRequested;
+    internal CancellationToken ShutdownTokenForTests => _shutdownCts.Token;
 
     /// <summary>
     /// Cap configured for concurrent in-flight tool calls (#1567). Surfaced for tests so
@@ -381,6 +412,17 @@ public partial class McpServer : IDisposable
     /// 現在設定されている in-flight ツール呼び出し上限 (#1567)。テスト向けに公開。
     /// </summary>
     internal int MaxConcurrency { get; }
+    internal int AvailableConcurrencySlotsForTests => _concurrencyGate.CurrentCount;
+    internal int AcceptedConcurrentFrameCountForTests => Volatile.Read(ref _acceptedConcurrentFrameCount);
+    internal int QueuedBatchRequestCountForTests => _queuedBatchRequests.Count;
+
+    internal int MaxAcceptedConcurrentFrames
+    {
+        get => _maxAcceptedConcurrentFrames;
+        init => _maxAcceptedConcurrentFrames = value < MaxConcurrency
+            ? throw new ArgumentOutOfRangeException(nameof(value), value, "MCP accepted-frame capacity cannot be lower than max concurrency.")
+            : value;
+    }
 
     private DateTime GetUtcNow() => _timeProvider.GetUtcNow().UtcDateTime;
 
@@ -389,6 +431,22 @@ public partial class McpServer : IDisposable
         get => _requestTimeout;
         init => _requestTimeout = value <= TimeSpan.Zero
             ? throw new ArgumentOutOfRangeException(nameof(value), value, "MCP request timeout must be greater than zero.")
+            : value;
+    }
+
+    internal TimeSpan InFlightDrainGracePeriod
+    {
+        get => _inFlightDrainGracePeriod;
+        init => _inFlightDrainGracePeriod = value < TimeSpan.Zero
+            ? throw new ArgumentOutOfRangeException(nameof(value), value, "MCP in-flight drain grace period cannot be negative.")
+            : value;
+    }
+
+    internal TimeSpan InFlightPostCancelGracePeriod
+    {
+        get => _inFlightPostCancelGracePeriod;
+        init => _inFlightPostCancelGracePeriod = value < TimeSpan.Zero
+            ? throw new ArgumentOutOfRangeException(nameof(value), value, "MCP in-flight post-cancel grace period cannot be negative.")
             : value;
     }
 
@@ -486,11 +544,12 @@ public partial class McpServer : IDisposable
     }
 
     /// <summary>
-    /// Run the MCP server loop on the supplied transport (issue #1558). The contract is one
-    /// read followed by one write — the loop honours notifications (write-null) and ends when
-    /// the transport reports end-of-stream.
-    /// 指定トランスポート上で MCP ループを動かす (issue #1558)。「読み 1 回 → 書き 1 回」を
-    /// 守り、通知は null 書き込みで吸収し、EOS でループを終える。
+    /// Run the MCP server loop on the supplied transport (issue #1558). Base transports use one
+    /// read followed by one write; concurrent-capable transports bind a response writer to each
+    /// frame. Notifications write null and end-of-stream terminates the loop.
+    /// 指定トランスポート上で MCP ループを動かす (issue #1558)。基本 transport は「読み 1 回 →
+    /// 書き 1 回」、並行対応 transport は frame ごとに response writer を紐付ける。通知は null を
+    /// 書き、EOS でループを終える。
     /// </summary>
     internal async Task RunAsync(IMcpTransport transport, CancellationToken cancellationToken)
     {
@@ -525,87 +584,124 @@ public partial class McpServer : IDisposable
 
         try
         {
-            if (string.Equals(transport.Name, "stdio", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(transport.Name, "stdio", StringComparison.OrdinalIgnoreCase)
+                || transport is IConcurrentMcpTransport)
             {
-                await RunConcurrentFrameLoopAsync(transport, loopToken).ConfigureAwait(false);
+                await RunConcurrentFrameLoopAsync(transport, loopToken, cancellationToken).ConfigureAwait(false);
                 return;
             }
 
-            while (_running)
+            Task? terminalTransportWriteTask = null;
+            try
             {
-                // The full read/process/write iteration is wrapped in the same cancellation guard so
-                // a Ctrl+C that lands mid-iteration (e.g. while WriteFrameAsync is flushing) still
-                // exits the loop cleanly instead of bubbling OperationCanceledException out of the
-                // server and past ProgramRunner.RunMcpHttp's graceful-shutdown handler.
-                // Ctrl+C が WriteFrameAsync flush 中に来ても OperationCanceledException を呼び元に
-                // 漏らさず正常終了するよう、read/process/write 全体を同じ cancellation guard で囲む。
-                try
+                while (_running)
                 {
-                    var frame = await transport.ReadFrameAsync(loopToken).ConfigureAwait(false);
-                    if (frame == null)
-                        break; // transport closed / トランスポートが閉じられた
-
-                    // Acquire the concurrency gate before doing any work so a future async dispatch
-                    // mode (multiple frames in flight) can never run more than `MaxConcurrency` tool
-                    // calls at once. Today the loop is sequential so the gate is effectively a no-op
-                    // at runtime, but it documents the contract and gives tests a verifiable bound
-                    // (#1567).
-                    // 並列ディスパッチ時に in-flight 数が `MaxConcurrency` を超えないよう、ProcessFrame
-                    // の手前で gate を取得する (#1567)。
-                    await _concurrencyGate.WaitAsync(loopToken).ConfigureAwait(false);
-                    string? response;
+                    // The full read/process/write iteration is wrapped in the same cancellation guard so
+                    // a Ctrl+C that lands mid-iteration (e.g. while WriteFrameAsync is flushing) still
+                    // exits the loop cleanly instead of bubbling OperationCanceledException out of the
+                    // server and past ProgramRunner.RunMcpHttp's graceful-shutdown handler.
+                    // Ctrl+C が WriteFrameAsync flush 中に来ても OperationCanceledException を呼び元に
+                    // 漏らさず正常終了するよう、read/process/write 全体を同じ cancellation guard で囲む。
                     try
                     {
-                        // Hand the per-request token to `WithDbReader` so SQLite work the tool kicks
-                        // off can observe shutdown / client-disconnect cancellation through
-                        // `DbReader.Cancellation` (#1567).
-                        // ツールが起動する SQLite 作業が shutdown / 切断を観測できるよう per-request
-                        // token を `WithDbReader` に渡す (#1567)。
-                        _currentRequestToken.Value = loopToken;
-                        _currentOutOfBandFrameWriter.Value = transport is IOutOfBandMcpTransport outOfBandTransport
-                            ? (frameToWrite, writeToken) => outOfBandTransport.WriteOutOfBandFrameAsync(frameToWrite, writeToken)
-                            : null;
-                        _canAwaitClientResponses.Value = transport is IOutOfBandMcpTransport
-                            && (transport is not HttpMcpTransport httpResponseTransport || httpResponseTransport.HasEventStreams);
-                        BeginDeferredFrameLogs();
-                        response = await ProcessFrameAsync(frame).ConfigureAwait(false);
+                        var frame = await transport.ReadFrameAsync(loopToken).ConfigureAwait(false);
+                        if (frame == null)
+                            break; // transport closed / トランスポートが閉じられた
+
+                        string? response;
+                        try
+                        {
+                            // Hand the per-request token to `WithDbReader` so SQLite work the tool kicks
+                            // off can observe shutdown / client-disconnect cancellation through
+                            // `DbReader.Cancellation` (#1567).
+                            // ツールが起動する SQLite 作業が shutdown / 切断を観測できるよう per-request
+                            // token を `WithDbReader` に渡す (#1567)。
+                            _currentRequestToken.Value = loopToken;
+                            _currentOutOfBandFrameWriter.Value = transport is IOutOfBandMcpTransport outOfBandTransport
+                                ? (frameToWrite, writeToken) => outOfBandTransport.WriteOutOfBandFrameAsync(frameToWrite, writeToken)
+                                : null;
+                            _canAwaitClientResponses.Value = transport is IOutOfBandMcpTransport
+                                && (transport is not HttpMcpTransport httpResponseTransport || httpResponseTransport.HasEventStreams);
+                            BeginDeferredFrameLogs();
+                            response = await ProcessFrameAsync(frame).ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            _currentRequestToken.Value = CancellationToken.None;
+                            _currentOutOfBandFrameWriter.Value = null;
+                            _canAwaitClientResponses.Value = false;
+                        }
+
+                        // Internal shutdown cancels `loopToken` to stop reads and request actions, but
+                        // the initiating notification still owns one transport completion (HTTP 204).
+                        // Use only the caller token for that completion; bounded teardown below still
+                        // limits a writer that does not finish (#4543).
+                        // internal shutdown では read/action 用 loopToken を cancel するが、起点の
+                        // notification に対応する transport completion (HTTP 204) は完了させる。
+                        // write は caller token のみを使い、停止しない writer は下の bounded teardown
+                        // で制限する (#4543)。
+                        var responseWriteTask = WriteFrameSafelyAsync(transport, response, cancellationToken);
+                        if (!_running)
+                        {
+                            // Do not await an uncooperative base-transport shutdown completion inline:
+                            // the common finally must own its bounded deadline (#4543).
+                            // 応答しない base transport の shutdown completion を inline await せず、
+                            // common finally の bounded deadline に委ねる (#4543)。
+                            terminalTransportWriteTask = responseWriteTask;
+                            break;
+                        }
+
+                        await responseWriteTask.ConfigureAwait(false);
+                        FlushDeferredFrameLogs();
+
+                        // `notifications/shutdown` flips `_running` inside `HandleMessage`; exit the loop
+                        // immediately so a subsequent slow `ReadFrameAsync` does not extend the lifetime
+                        // of a server that has been asked to stop.
+                        // `notifications/shutdown` が `_running` を倒した直後にループを抜ける (#1567)。
+                        if (!_running)
+                            break;
                     }
-                    finally
+                    catch (OperationCanceledException) when (loopToken.IsCancellationRequested)
                     {
-                        _currentRequestToken.Value = CancellationToken.None;
-                        _currentOutOfBandFrameWriter.Value = null;
-                        _canAwaitClientResponses.Value = false;
-                        _concurrencyGate.Release();
-                    }
-
-                    await WriteFrameSafelyAsync(transport, response, loopToken).ConfigureAwait(false);
-                    FlushDeferredFrameLogs();
-
-                    // `notifications/shutdown` flips `_running` inside `HandleMessage`; exit the loop
-                    // immediately so a subsequent slow `ReadFrameAsync` does not extend the lifetime
-                    // of a server that has been asked to stop.
-                    // `notifications/shutdown` が `_running` を倒した直後にループを抜ける (#1567)。
-                    if (!_running)
                         break;
+                    }
+                    catch (DecoderFallbackException ex)
+                    {
+                        BeginDeferredFrameLogs();
+                        terminalTransportWriteTask = WriteTerminalProtocolErrorAsync(
+                            writeGate: null,
+                            transport,
+                            BuildInvalidUtf8ParseErrorResponse(ex),
+                            cancellationToken);
+                        break;
+                    }
+                    catch (BoundedLineLengthException ex)
+                    {
+                        BeginDeferredFrameLogs();
+                        terminalTransportWriteTask = WriteTerminalProtocolErrorAsync(
+                            writeGate: null,
+                            transport,
+                            BuildOversizedLineErrorResponse(ex),
+                            cancellationToken);
+                        break;
+                    }
                 }
-                catch (OperationCanceledException) when (loopToken.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (DecoderFallbackException ex)
-                {
-                    BeginDeferredFrameLogs();
-                    await WriteFrameSafelyAsync(transport, BuildInvalidUtf8ParseErrorResponse(ex), loopToken).ConfigureAwait(false);
-                    FlushDeferredFrameLogs();
-                    break;
-                }
-                catch (BoundedLineLengthException ex)
-                {
-                    BeginDeferredFrameLogs();
-                    await WriteFrameSafelyAsync(transport, BuildOversizedLineErrorResponse(ex), loopToken).ConfigureAwait(false);
-                    FlushDeferredFrameLogs();
-                    break;
-                }
+            }
+            finally
+            {
+                // Base transports have no detached request list, but shutdown cancellation
+                // callbacks and malformed-input writes still participate in the same bounded
+                // teardown contract as concurrent transports (#4543).
+                // base transport に detached request list は無いが、shutdown callback と
+                // malformed-input write は concurrent transport と同じ bounded teardown
+                // 契約へ必ず流す (#4543)。
+                await DrainInFlightTasksAsync(
+                    [],
+                    InFlightDrainGracePeriod,
+                    InFlightPostCancelGracePeriod,
+                    cancellationToken,
+                    terminalTransportWriteTask).ConfigureAwait(false);
+                FlushDeferredFrameLogs();
             }
         }
         finally
@@ -623,174 +719,278 @@ public partial class McpServer : IDisposable
         CommandErrorWriter.WriteStderr("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
     }
 
-    private async Task RunConcurrentFrameLoopAsync(IMcpTransport transport, CancellationToken loopToken)
+    private async Task RunConcurrentFrameLoopAsync(
+        IMcpTransport transport,
+        CancellationToken loopToken,
+        CancellationToken externalCancellationToken)
     {
         var writeGate = new SemaphoreSlim(1, 1);
-        var normalFrameGate = new SemaphoreSlim(1, 1);
+        var admissionGate = new SemaphoreSlim(MaxAcceptedConcurrentFrames, MaxAcceptedConcurrentFrames);
         var tasks = new List<Task>();
+        Task protocolBarrier = Task.CompletedTask;
+        Task? terminalTransportWriteTask = null;
 
-        while (_running)
+        try
         {
-            PruneCompletedRequestTasks(tasks);
-            string? frame;
-            try
+            while (_running)
             {
-                frame = await transport.ReadFrameAsync(loopToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (loopToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (DecoderFallbackException ex)
-            {
-                await Task.WhenAll(tasks).ConfigureAwait(false);
-                await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
+                PruneCompletedRequestTasks(tasks);
+                McpTransportFrame? transportFrame;
                 try
+                {
+                    if (transport is IConcurrentMcpTransport concurrentTransport)
+                    {
+                        transportFrame = await concurrentTransport.ReadConcurrentFrameAsync(loopToken).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        var readFrame = await transport.ReadFrameAsync(loopToken).ConfigureAwait(false);
+                        transportFrame = readFrame is null
+                            ? null
+                            : new McpTransportFrame(readFrame, transport.WriteFrameAsync);
+                    }
+                }
+                catch (OperationCanceledException) when (loopToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (DecoderFallbackException ex)
                 {
                     BeginDeferredFrameLogs();
-                    await WriteFrameSafelyAsync(transport, BuildInvalidUtf8ParseErrorResponse(ex), loopToken).ConfigureAwait(false);
-                    FlushDeferredFrameLogs();
+                    terminalTransportWriteTask = WriteTerminalProtocolErrorAsync(
+                        writeGate,
+                        transport,
+                        BuildInvalidUtf8ParseErrorResponse(ex),
+                        externalCancellationToken);
+                    break;
                 }
-                finally
-                {
-                    writeGate.Release();
-                }
-                break;
-            }
-            catch (BoundedLineLengthException ex)
-            {
-                await Task.WhenAll(tasks).ConfigureAwait(false);
-                await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
-                try
+                catch (BoundedLineLengthException ex)
                 {
                     BeginDeferredFrameLogs();
-                    await WriteFrameSafelyAsync(transport, BuildOversizedLineErrorResponse(ex), loopToken).ConfigureAwait(false);
-                    FlushDeferredFrameLogs();
+                    terminalTransportWriteTask = WriteTerminalProtocolErrorAsync(
+                        writeGate,
+                        transport,
+                        BuildOversizedLineErrorResponse(ex),
+                        externalCancellationToken);
+                    break;
                 }
-                finally
-                {
-                    writeGate.Release();
-                }
-                break;
-            }
-            if (frame == null)
-                break;
+                if (transportFrame is null)
+                    break;
+                var frame = transportFrame.Frame;
+                var writeResponseAsync = transportFrame.WriteResponseAsync;
 
-            if (IsCancellationFrame(frame))
-            {
-                BeginDeferredFrameLogs();
-                var response = await ProcessFrameAsync(frame).ConfigureAwait(false);
-                await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
-                try
+                if (IsCancellationFrame(frame))
                 {
-                    await WriteFrameSafelyAsync(transport, response, loopToken).ConfigureAwait(false);
-                    FlushDeferredFrameLogs();
-                }
-                finally
-                {
-                    writeGate.Release();
-                }
-                continue;
-            }
-
-            if (IsServerResponseFrame(frame))
-            {
-                BeginDeferredFrameLogs();
-                var response = await ProcessFrameAsync(frame).ConfigureAwait(false);
-                await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
-                try
-                {
-                    await WriteFrameSafelyAsync(transport, response, loopToken).ConfigureAwait(false);
-                    FlushDeferredFrameLogs();
-                }
-                finally
-                {
-                    writeGate.Release();
-                }
-                continue;
-            }
-
-            await _concurrencyGate.WaitAsync(loopToken).ConfigureAwait(false);
-            var requestTaskStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            // Intentional bounded dispatch (#3774): normal request work can await SQLite,
-            // sampling, or transport callbacks while the read loop still needs to accept
-            // cancellation / response frames. `_concurrencyGate` caps thread-pool exposure;
-            // the scheduling token stays uncancelled because the gate slot is already owned
-            // and the task's finally block must release it even during shutdown.
-            // 意図的な bounded dispatch (#3774)。通常 request は SQLite / sampling /
-            // transport callback を await し得る一方、read loop は cancellation / response
-            // frame を受け続ける必要がある。`_concurrencyGate` で thread-pool 使用量を上限化し、
-            // gate slot 解放の finally を必ず走らせるため scheduling token は未キャンセルにする。
-            var requestTask = Task.Run(async () =>
-            {
-                try
-                {
-                    requestTaskStarted.TrySetResult();
-                    await normalFrameGate.WaitAsync(loopToken).ConfigureAwait(false);
-                    string? response;
+                    BeginDeferredFrameLogs();
+                    var response = await ProcessFrameAsync(frame).ConfigureAwait(false);
+                    await writeGate.WaitAsync(externalCancellationToken).ConfigureAwait(false);
                     try
                     {
-                        _currentRequestToken.Value = loopToken;
-                        _canAwaitClientResponses.Value = true;
-                        _currentOutOfBandFrameWriter.Value = async (frameToWrite, writeToken) =>
-                        {
-                            await writeGate.WaitAsync(writeToken).ConfigureAwait(false);
-                            try
-                            {
-                                await transport.WriteFrameAsync(frameToWrite, writeToken).ConfigureAwait(false);
-                            }
-                            finally
-                            {
-                                writeGate.Release();
-                            }
-                        };
-                        BeginDeferredFrameLogs();
-                        response = await ProcessFrameAsync(frame).ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        _currentRequestToken.Value = CancellationToken.None;
-                        _canAwaitClientResponses.Value = false;
-                        _currentOutOfBandFrameWriter.Value = null;
-                        normalFrameGate.Release();
-                    }
-
-                    await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
-                    try
-                    {
-                        await WriteFrameSafelyAsync(transport, response, loopToken).ConfigureAwait(false);
+                        await WriteFrameSafelyAsync(writeResponseAsync, response, externalCancellationToken).ConfigureAwait(false);
                         FlushDeferredFrameLogs();
                     }
                     finally
                     {
                         writeGate.Release();
                     }
+                    continue;
                 }
-                finally
-                {
-                    _concurrencyGate.Release();
-                }
-            }, CancellationToken.None);
-            tasks.Add(requestTask);
-            await requestTaskStarted.Task.ConfigureAwait(false);
-        }
 
-        await DrainInFlightTasksAsync(tasks, DefaultEofDrainTimeout, DefaultEofPostCancelDrainTimeout, loopToken, drainToCompletion: true).ConfigureAwait(false);
-        if (tasks.All(static task => task.IsCompleted))
-        {
-            writeGate.Dispose();
-            normalFrameGate.Dispose();
+                if (IsServerResponseFrame(frame))
+                {
+                    BeginDeferredFrameLogs();
+                    var response = await ProcessFrameAsync(frame).ConfigureAwait(false);
+                    await writeGate.WaitAsync(externalCancellationToken).ConfigureAwait(false);
+                    try
+                    {
+                        await WriteFrameSafelyAsync(writeResponseAsync, response, externalCancellationToken).ConfigureAwait(false);
+                        FlushDeferredFrameLogs();
+                    }
+                    finally
+                    {
+                        writeGate.Release();
+                    }
+                    continue;
+                }
+
+                // Admission is deliberately non-blocking: waiting here would prevent a later
+                // cancellation/client-response frame from being read while execution is saturated.
+                // Excess ordinary work receives a retry-safe JSON-RPC overload response instead of
+                // retaining another frame/task/HTTP context without bound (#4536).
+                // admission は non-blocking にする。ここで待つと execution 飽和中に後続の
+                // cancellation/client-response frame を読めなくなるため。上限超過 work は task や
+                // HTTP context を保持し続けず、retry-safe overload response を返す (#4536)。
+                if (!admissionGate.Wait(0))
+                {
+                    // Keep every response-bearing id registered until its retry-safe overload
+                    // response has reached the transport. A cancellation before or during that
+                    // write then belongs to this rejected occurrence instead of poisoning a later
+                    // same-id retry (#4536, #4545).
+                    // retry-safe overload 応答が transport へ届くまで response-bearing id を登録する。
+                    // reject 前または write 中の cancel をこの occurrence に束縛し、同じ id の後続
+                    // retry へ持ち越さない (#4536, #4545)。
+                    using var capacityRejectedRegistrations = new CapacityRejectedFrameRegistrations(this);
+                    BeginDeferredFrameLogs();
+                    var response = await ProcessFrameAsync(
+                        frame,
+                        beforeDispatchAsync: null,
+                        rejectForCapacity: true,
+                        capacityRejectedRegistrations: capacityRejectedRegistrations).ConfigureAwait(false);
+                    await writeGate.WaitAsync(externalCancellationToken).ConfigureAwait(false);
+                    try
+                    {
+                        await WriteFrameSafelyAsync(writeResponseAsync, response, externalCancellationToken).ConfigureAwait(false);
+                        FlushDeferredFrameLogs();
+                    }
+                    finally
+                    {
+                        writeGate.Release();
+                    }
+                    continue;
+                }
+                Interlocked.Increment(ref _acceptedConcurrentFrameCount);
+
+                var requestTaskStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var isProtocolBarrier = IsProtocolOrderingBarrierFrame(frame);
+                var precedingBarrier = protocolBarrier;
+                var tasksAcceptedBeforeBarrier = isProtocolBarrier ? tasks.ToArray() : [];
+                Func<CancellationToken, Task> awaitPredecessorsAsync = isProtocolBarrier
+                    ? token => AwaitProtocolPredecessorsAsync(tasksAcceptedBeforeBarrier, token)
+                    : token => AwaitProtocolPredecessorsAsync([precedingBarrier], token);
+                var predecessorTask = new Lazy<Task>(
+                    () => awaitPredecessorsAsync(loopToken),
+                    LazyThreadSafetyMode.ExecutionAndPublication);
+                Task BeforeDispatchAsync(CancellationToken token)
+                    => predecessorTask.Value.WaitAsync(token);
+                // Accepted frames are bounded independently from executing operations. The request
+                // registers its id/cancellation state before awaiting protocol predecessors and the
+                // execution gate, so a cancellation cannot expire while queued (#4536).
+                // accepted frame と executing operation は別々に上限化する。request は protocol
+                // predecessor / execution gate を待つ前に id と cancellation state を登録するため、
+                // queue 中に cancellation が失効しない (#4536)。
+                var requestTask = Task.Run(async () =>
+                {
+                    try
+                    {
+                        requestTaskStarted.TrySetResult();
+                        string? response;
+                        try
+                        {
+                            _currentRequestToken.Value = loopToken;
+                            _currentOutOfBandFrameWriter.Value = transport is IOutOfBandMcpTransport outOfBandTransport
+                                ? (frameToWrite, writeToken) => outOfBandTransport.WriteOutOfBandFrameAsync(frameToWrite, writeToken)
+                                : string.Equals(transport.Name, "stdio", StringComparison.OrdinalIgnoreCase)
+                                    ? async (frameToWrite, writeToken) =>
+                                {
+                                    await writeGate.WaitAsync(writeToken).ConfigureAwait(false);
+                                    try
+                                    {
+                                        await transport.WriteFrameAsync(frameToWrite, writeToken).ConfigureAwait(false);
+                                    }
+                                    finally
+                                    {
+                                        writeGate.Release();
+                                    }
+                                }
+                            : null;
+                            _canAwaitClientResponses.Value = _currentOutOfBandFrameWriter.Value is not null
+                                && (transport is not HttpMcpTransport httpResponseTransport || httpResponseTransport.HasEventStreams);
+                            BeginDeferredFrameLogs();
+                            response = await ProcessFrameAsync(
+                                frame,
+                                BeforeDispatchAsync,
+                                rejectForCapacity: false).ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            _currentRequestToken.Value = CancellationToken.None;
+                            _canAwaitClientResponses.Value = false;
+                            _currentOutOfBandFrameWriter.Value = null;
+                        }
+
+                        // Malformed/unauthorized frames can return before normal dispatch. Start their
+                        // predecessor wait here so such a frame cannot collapse a protocol barrier.
+                        // malformed / unauthorized frame が dispatch 前に return しても protocol
+                        // barrier を消してしまわないよう、未開始ならここで predecessor を待つ。
+                        if (!predecessorTask.IsValueCreated)
+                            await predecessorTask.Value.ConfigureAwait(false);
+
+                        await writeGate.WaitAsync(externalCancellationToken).ConfigureAwait(false);
+                        try
+                        {
+                            await WriteFrameSafelyAsync(writeResponseAsync, response, externalCancellationToken).ConfigureAwait(false);
+                            FlushDeferredFrameLogs();
+                        }
+                        finally
+                        {
+                            writeGate.Release();
+                        }
+                        await predecessorTask.Value.ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        Interlocked.Decrement(ref _acceptedConcurrentFrameCount);
+                        admissionGate.Release();
+                    }
+                }, CancellationToken.None);
+                tasks.Add(requestTask);
+                if (isProtocolBarrier)
+                    protocolBarrier = requestTask;
+                await requestTaskStarted.Task.ConfigureAwait(false);
+            }
         }
-        else
+        catch (OperationCanceledException) when (loopToken.IsCancellationRequested)
         {
-            // The bounded EOF drain can intentionally leave late request tasks running. Those
-            // tasks still own these gates until their finally blocks run, so disposing here would
-            // turn late completion into ObjectDisposedException (#3999).
-            // bounded EOF drain は late request task を残すことがある。finally が走るまで gate は
-            // その task が使うため、ここで dispose すると late completion が ObjectDisposedException
-            // になってしまう (#3999)。
+            // Every loop exit, including cancellation during inline control/overload writes,
+            // reaches the bounded drain in finally (#4543).
+        }
+        finally
+        {
+            try
+            {
+                await DrainInFlightTasksAsync(
+                    tasks,
+                    InFlightDrainGracePeriod,
+                    InFlightPostCancelGracePeriod,
+                    externalCancellationToken,
+                    terminalTransportWriteTask).ConfigureAwait(false);
+            }
+            finally
+            {
+                // The bounded EOF drain can intentionally leave late request tasks running. Those
+                // tasks can still own the write gate or reach the stdio writer until their finally
+                // blocks run. Publish that aggregate even if draining itself exits unexpectedly,
+                // then clean up the gates only after every accepted task is done (#3999, #4543).
+                // bounded EOF drain は late request task を残すことがある。finally が走るまで gate や
+                // stdio writer を使い得るため、drain 自体が異常終了しても aggregate を公開し、全
+                // accepted task 完了後に gate を dispose する (#3999, #4543)。
+                var transportWork = BuildDrainOperationsTask(tasks, terminalTransportWriteTask);
+                if (transport is StdioMcpTransport stdioTransport)
+                    stdioTransport.DeferDisposalUntil(transportWork);
+                _ = DisposeConcurrentLoopGatesAfterAsync(transportWork, writeGate, admissionGate);
+            }
         }
         CommandErrorWriter.WriteStderr("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
+    }
+
+    private static async Task DisposeConcurrentLoopGatesAfterAsync(
+        Task transportWork,
+        SemaphoreSlim writeGate,
+        SemaphoreSlim admissionGate)
+    {
+        try
+        {
+            await transportWork.ConfigureAwait(false);
+        }
+        catch
+        {
+            // Request faults are reported by the bounded drain; gate cleanup must still run.
+        }
+        finally
+        {
+            writeGate.Dispose();
+            admissionGate.Dispose();
+        }
     }
 
     internal static int PruneCompletedRequestTasks(List<Task> tasks)
@@ -821,7 +1021,56 @@ public partial class McpServer : IDisposable
         }
         catch (Exception ex)
         {
-            CommandErrorWriter.WriteStderr($"[cdidx-mcp] In-flight request ended before EOF drain ({ex.GetType().Name}).");
+            CommandErrorWriter.WriteStderr($"[cdidx-mcp] In-flight request ended during transport teardown ({ex.GetType().Name}).");
+        }
+    }
+
+    private static async Task AwaitProtocolPredecessorsAsync(
+        IReadOnlyCollection<Task> predecessors,
+        CancellationToken cancellationToken)
+    {
+        if (predecessors.Count == 0)
+            return;
+
+        try
+        {
+            await Task.WhenAll(predecessors).WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            // A predecessor owns its own wire response and is observed by task pruning. An
+            // unrelated fault must not permanently wedge the ordered session lane (#4536).
+            // predecessor の fault は個別 response と task pruning で観測する。無関係な fault
+            // により ordered session lane を永続停止させない (#4536)。
+        }
+    }
+
+    private async Task WriteTerminalProtocolErrorAsync(
+        SemaphoreSlim? writeGate,
+        IMcpTransport transport,
+        string response,
+        CancellationToken cancellationToken)
+    {
+        var gateAcquired = false;
+        try
+        {
+            if (writeGate is not null)
+            {
+                await writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                gateAcquired = true;
+            }
+
+            await WriteFrameSafelyAsync(transport, response, cancellationToken).ConfigureAwait(false);
+            FlushDeferredFrameLogs();
+        }
+        finally
+        {
+            if (gateAcquired)
+                writeGate!.Release();
         }
     }
 
@@ -829,60 +1078,227 @@ public partial class McpServer : IDisposable
         List<Task> tasks,
         TimeSpan gracePeriod,
         TimeSpan postCancelGracePeriod,
-        CancellationToken cancellationToken = default,
-        bool drainToCompletion = false)
+        CancellationToken externalCancellationToken = default,
+        Task? terminalTransportWriteTask = null)
     {
-        tasks.RemoveAll(task => task.IsCompleted);
-        if (tasks.Count == 0)
-            return;
+        PruneCompletedRequestTasks(tasks);
+        var shutdownCancellationTask = GetShutdownCancellationTask();
+        var drainOperations = BuildDrainOperationsTask(tasks, terminalTransportWriteTask);
 
-        var allTasks = Task.WhenAll(tasks);
-        if (drainToCompletion && !cancellationToken.IsCancellationRequested)
+        // A shutdown notification may already have started cancellation before EOF reached this
+        // method. In that case the post-cancel deadline begins immediately and includes callback
+        // completion; running another pre-cancel grace window would extend teardown incorrectly.
+        // shutdown notification が EOF より先に cancellation を開始済みなら、callback 完了も
+        // post-cancel deadline に含め、pre-cancel grace を重ねない (#4543)。
+        if (shutdownCancellationTask is not null)
         {
-            await ObserveInFlightTasksAsync(allTasks).ConfigureAwait(false);
+            await AwaitPostCancellationDrainAsync(
+                tasks,
+                drainOperations,
+                terminalTransportWriteTask,
+                shutdownCancellationTask,
+                postCancelGracePeriod,
+                externalCancellationToken).ConfigureAwait(false);
             return;
         }
-        var graceDelay = Task.Delay(gracePeriod, cancellationToken);
-        var completed = await Task.WhenAny(allTasks, graceDelay).ConfigureAwait(false);
-        if (completed == allTasks)
+
+        if (drainOperations.IsCompleted)
         {
-            await ObserveInFlightTasksAsync(allTasks).ConfigureAwait(false);
+            await ObserveCompletedDrainAndShutdownAsync(
+                tasks,
+                drainOperations,
+                terminalTransportWriteTask,
+                postCancelGracePeriod,
+                externalCancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var graceDelay = Task.Delay(gracePeriod, externalCancellationToken);
+        var completed = await Task.WhenAny(drainOperations, graceDelay).ConfigureAwait(false);
+        if (completed == drainOperations)
+        {
+            await ObserveCompletedDrainAndShutdownAsync(
+                tasks,
+                drainOperations,
+                terminalTransportWriteTask,
+                postCancelGracePeriod,
+                externalCancellationToken).ConfigureAwait(false);
             return;
         }
         if (graceDelay.IsCanceled)
+        {
+            ObserveLateInFlightTasks(drainOperations);
             return;
+        }
 
         PruneCompletedRequestTasks(tasks);
-        CommandErrorWriter.WriteStderr($"[cdidx-mcp] EOF reached with {tasks.Count} in-flight request(s); cancelling after {gracePeriod.TotalMilliseconds:0}ms grace period.");
-        try
+        if (tasks.Count > 0)
         {
-            if (!_shutdownCts.IsCancellationRequested)
-                _shutdownCts.Cancel();
+            CommandErrorWriter.WriteStderr(
+                $"[cdidx-mcp] Transport teardown has {tasks.Count} in-flight request(s); cancelling after {gracePeriod.TotalMilliseconds:0}ms grace period.");
         }
-        catch (ObjectDisposedException)
+        if (terminalTransportWriteTask is { IsCompleted: false })
         {
-            // Disposal raced EOF drain; no further action is possible.
+            CommandErrorWriter.WriteStderr(
+                $"[cdidx-mcp] Transport response/completion write is still pending after {gracePeriod.TotalMilliseconds:0}ms grace period; cancelling transport teardown.");
         }
 
-        var postCancelDelay = Task.Delay(postCancelGracePeriod, cancellationToken);
-        completed = await Task.WhenAny(allTasks, postCancelDelay).ConfigureAwait(false);
-        if (completed == allTasks)
+        shutdownCancellationTask = RequestShutdownCancellation();
+        await AwaitPostCancellationDrainAsync(
+            tasks,
+            drainOperations,
+            terminalTransportWriteTask,
+            shutdownCancellationTask,
+            postCancelGracePeriod,
+            externalCancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task ObserveCompletedDrainAndShutdownAsync(
+        List<Task> tasks,
+        Task drainOperations,
+        Task? terminalTransportWriteTask,
+        TimeSpan postCancelGracePeriod,
+        CancellationToken externalCancellationToken)
+    {
+        await ObserveInFlightTasksAsync(drainOperations).ConfigureAwait(false);
+
+        // A queued shutdown frame can start cancellation while the request drain is completing.
+        // Re-read the task after all accepted work has finished; the original snapshot may have
+        // been null even though a slow cancellation callback is now running (#4543).
+        // queued shutdown frame は request drain 完了直前に cancellation を開始できるため、accepted
+        // work 完了後に task を再取得する。初回 snapshot が null でも slow callback が実行中の
+        // race を bounded post-cancel deadline へ含める (#4543)。
+        var shutdownCancellationTask = GetShutdownCancellationTask();
+        if (shutdownCancellationTask is null)
+            return;
+
+        await AwaitPostCancellationDrainAsync(
+            tasks,
+            drainOperations,
+            terminalTransportWriteTask,
+            shutdownCancellationTask,
+            postCancelGracePeriod,
+            externalCancellationToken).ConfigureAwait(false);
+    }
+
+    private static Task BuildDrainOperationsTask(IReadOnlyCollection<Task> tasks, Task? terminalTransportWriteTask)
+    {
+        if (terminalTransportWriteTask is null)
+            return tasks.Count == 0 ? Task.CompletedTask : Task.WhenAll(tasks);
+
+        var operations = new Task[tasks.Count + 1];
+        var operationIndex = 0;
+        foreach (var task in tasks)
+            operations[operationIndex++] = task;
+        operations[^1] = terminalTransportWriteTask;
+        return Task.WhenAll(operations);
+    }
+
+    private async Task AwaitPostCancellationDrainAsync(
+        List<Task> tasks,
+        Task drainOperations,
+        Task? terminalTransportWriteTask,
+        Task shutdownCancellationTask,
+        TimeSpan postCancelGracePeriod,
+        CancellationToken externalCancellationToken)
+    {
+        // Internal shutdown cancels the linked loop token. Use the original caller token so it
+        // cannot collapse this deadline, while Ctrl+C/SIGTERM/transport cancellation can still
+        // interrupt it (#3400, #4543).
+        // internal shutdown では post-cancel deadline を潰さず、外部 cancellation では中断可能にする。
+        var postCancelWork = Task.WhenAll(drainOperations, shutdownCancellationTask);
+        var postCancelDelay = Task.Delay(postCancelGracePeriod, externalCancellationToken);
+        var completed = await Task.WhenAny(postCancelWork, postCancelDelay).ConfigureAwait(false);
+        if (completed == postCancelWork)
         {
-            await ObserveInFlightTasksAsync(allTasks).ConfigureAwait(false);
+            await ObserveInFlightTasksAsync(drainOperations).ConfigureAwait(false);
+            _ = shutdownCancellationTask.Exception;
             return;
         }
         if (postCancelDelay.IsCanceled)
+        {
+            ObserveLateInFlightTasks(postCancelWork);
             return;
+        }
 
-        // The shutdown token is already canceled in this path. Use an uncancelled observer so
-        // late task faults are still observed after the client-visible drain window (#3774).
-        // この経路では shutdown token はキャンセル済み。client-visible な drain window 後でも
-        // late fault を観測できるよう、未キャンセルの observer を使う (#3774)。
-        _ = allTasks.ContinueWith(task =>
+        PruneCompletedRequestTasks(tasks);
+        if (tasks.Count > 0)
+        {
+            CommandErrorWriter.WriteStderr(
+                $"[cdidx-mcp] Transport teardown final deadline expired with {tasks.Count} in-flight request(s) remaining after {postCancelGracePeriod.TotalMilliseconds:0}ms post-cancel grace period.");
+        }
+        if (terminalTransportWriteTask is { IsCompleted: false })
+        {
+            CommandErrorWriter.WriteStderr(
+                $"[cdidx-mcp] Transport response/completion write is still pending after {postCancelGracePeriod.TotalMilliseconds:0}ms post-cancel grace period.");
+        }
+        if (!shutdownCancellationTask.IsCompleted)
+        {
+            CommandErrorWriter.WriteStderr(
+                $"[cdidx-mcp] Shutdown cancellation callbacks are still running after {postCancelGracePeriod.TotalMilliseconds:0}ms post-cancel grace period.");
+        }
+
+        // Use an uncancelled observer so late faults are still observed after the bounded,
+        // client-visible drain window (#3774, #4543).
+        // bounded drain window 後の late fault も未キャンセル observer で観測する。
+        ObserveLateInFlightTasks(postCancelWork);
+    }
+
+    private Task? GetShutdownCancellationTask()
+    {
+        lock (_shutdownCancellationGate)
+            return _shutdownCancellationTask;
+    }
+
+    private Task RequestShutdownCancellation()
+    {
+        TaskCompletionSource completion;
+        lock (_shutdownCancellationGate)
+        {
+            if (_shutdownCancellationTask is not null)
+                return _shutdownCancellationTask;
+
+            completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _shutdownCancellationTask = completion.Task;
+        }
+
+        _ = CompleteShutdownCancellationAsync(completion);
+        return completion.Task;
+    }
+
+    private async Task CompleteShutdownCancellationAsync(TaskCompletionSource completion)
+    {
+        try
+        {
+            await _shutdownCts.CancelAsync().ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposal won the race; cancellation can no longer be requested.
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                CommandErrorWriter.WriteStderr(
+                    $"[cdidx-mcp] Shutdown cancellation callback failed during transport teardown ({ex.GetType().Name}).");
+            }
+            catch
+            {
+                // Diagnostics must never abort bounded teardown.
+            }
+        }
+        finally
+        {
+            completion.TrySetResult();
+        }
+    }
+
+    private static void ObserveLateInFlightTasks(Task tasks)
+        => _ = tasks.ContinueWith(task =>
         {
             _ = task.Exception;
         }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-    }
 
     private static async Task ObserveInFlightTasksAsync(Task tasks)
     {
@@ -892,7 +1308,7 @@ public partial class McpServer : IDisposable
         }
         catch (Exception ex)
         {
-            CommandErrorWriter.WriteStderr($"[cdidx-mcp] In-flight request ended during EOF drain ({ex.GetType().Name}).");
+            CommandErrorWriter.WriteStderr($"[cdidx-mcp] In-flight request ended during transport teardown ({ex.GetType().Name}).");
         }
     }
 
@@ -938,10 +1354,16 @@ public partial class McpServer : IDisposable
     }
 
     private static async Task WriteFrameSafelyAsync(IMcpTransport transport, string? response, CancellationToken cancellationToken)
+        => await WriteFrameSafelyAsync(transport.WriteFrameAsync, response, cancellationToken).ConfigureAwait(false);
+
+    private static async Task WriteFrameSafelyAsync(
+        Func<string?, CancellationToken, Task> writeFrameAsync,
+        string? response,
+        CancellationToken cancellationToken)
     {
         try
         {
-            await transport.WriteFrameAsync(response, cancellationToken).ConfigureAwait(false);
+            await writeFrameAsync(response, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -1005,7 +1427,14 @@ public partial class McpServer : IDisposable
         // transport loops use ProcessFrameAsync directly so request handling stays async.
         => ProcessFrameAsync(line).GetAwaiter().GetResult();
 
-    internal async Task<string?> ProcessFrameAsync(string line)
+    internal Task<string?> ProcessFrameAsync(string line)
+        => ProcessFrameAsync(line, beforeDispatchAsync: null, rejectForCapacity: false);
+
+    private async Task<string?> ProcessFrameAsync(
+        string line,
+        Func<CancellationToken, Task>? beforeDispatchAsync,
+        bool rejectForCapacity,
+        CapacityRejectedFrameRegistrations? capacityRejectedRegistrations = null)
     {
         if (string.IsNullOrWhiteSpace(line))
             return null;
@@ -1030,6 +1459,7 @@ public partial class McpServer : IDisposable
             if (TryCompletePendingClientRequest(request))
                 return null;
 
+            capacityRejectedRegistrations?.Register(request);
             ExtractResponseId(request, out responseHasId, out responseId);
             if (responseHasId && CurrentCorrelationContext.Value is null)
                 frameCorrelationScope = BeginRequestCorrelation(responseId);
@@ -1037,6 +1467,9 @@ public partial class McpServer : IDisposable
             var response = await HandleMessageAsync(
                 request,
                 isolateRequestDb: true,
+                beforeDispatchAsync,
+                rejectForCapacity,
+                queuedBatchRegistration: null,
                 deferredInitializeCommits).ConfigureAwait(false);
             activity?.SetTag("rpc.result", response is null ? "notification" : "response");
             if (response is null)
@@ -1149,6 +1582,15 @@ public partial class McpServer : IDisposable
             pending.TrySetResult(resultClone);
         }
         return true;
+    }
+
+    internal Task<JsonNode?> RegisterPendingClientRequestForTests(string id)
+    {
+        var key = JsonSerializer.Serialize(id);
+        var pending = new TaskCompletionSource<JsonNode?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_pendingClientRequests.TryAdd(key, pending))
+            throw new InvalidOperationException($"Pending MCP client request already registered: {id}");
+        return pending.Task;
     }
 
     private async Task<JsonNode?> SendClientRequestAsync(string method, JsonObject? @params, CancellationToken cancellationToken)
@@ -1315,7 +1757,7 @@ public partial class McpServer : IDisposable
     }
 
     private void BeginDeferredFrameLogs()
-        => _deferredFrameLogs.Value = [];
+        => _deferredFrameLogs.Value = new DeferredFrameLogBuffer();
 
     private void FlushDeferredFrameLogs()
     {
@@ -1324,8 +1766,153 @@ public partial class McpServer : IDisposable
             return;
 
         _deferredFrameLogs.Value = null;
-        foreach (var log in logs)
-            log();
+        logs.ForwardTo(static log => log());
+    }
+
+    private sealed class DeferredFrameLogBuffer
+    {
+        private readonly object _gate = new();
+        private List<Action>? _logs = [];
+        private Action<Action>? _lateLogForwarder;
+
+        public void Add(Action log)
+        {
+            Action<Action>? lateLogForwarder;
+            lock (_gate)
+            {
+                if (_logs is not null)
+                {
+                    _logs.Add(log);
+                    return;
+                }
+
+                lateLogForwarder = _lateLogForwarder;
+            }
+
+            (lateLogForwarder ?? (static lateLog => lateLog()))(log);
+        }
+
+        public void ForwardTo(Action<Action> lateLogForwarder)
+        {
+            lock (_gate)
+            {
+                if (_logs is null)
+                    return;
+
+                foreach (var log in _logs)
+                    lateLogForwarder(log);
+                _logs = null;
+                _lateLogForwarder = lateLogForwarder;
+            }
+        }
+    }
+
+    private sealed class CapacityRejectedFrameRegistrations : IDisposable
+    {
+        private readonly McpServer _owner;
+        private readonly HashSet<string> _requestKeys = new(StringComparer.Ordinal);
+        private readonly List<QueuedBatchRequestRegistration> _registrations = [];
+        private bool _disposed;
+
+        internal CapacityRejectedFrameRegistrations(McpServer owner)
+        {
+            _owner = owner;
+        }
+
+        internal void Register(JsonNode request)
+        {
+            if (request is JsonArray batch)
+            {
+                foreach (var item in batch)
+                    RegisterItem(item);
+                return;
+            }
+
+            RegisterItem(request);
+        }
+
+        private void RegisterItem(JsonNode? item)
+        {
+            if (!BatchItemRequiresResponse(item, out var responseId)
+                || SerializeRequestId(responseId) is not { } requestKey
+                || !_requestKeys.Add(requestKey))
+            {
+                return;
+            }
+
+            if (_owner.TryRegisterQueuedBatchRequest(requestKey) is { } registration)
+                _registrations.Add(registration);
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+
+            foreach (var registration in _registrations)
+                registration.DisposeIfUnclaimed();
+        }
+    }
+
+    private sealed class QueuedBatchRequestRegistration
+    {
+        private readonly McpServer _owner;
+        private readonly string _requestKey;
+        private readonly CancellationTokenSource _cancellation;
+        // 0 = queued, 1 = claimed by normal dispatch, 2 = cleaned before dispatch.
+        private int _state;
+
+        internal QueuedBatchRequestRegistration(
+            McpServer owner,
+            string requestKey,
+            CancellationTokenSource cancellation)
+        {
+            _owner = owner;
+            _requestKey = requestKey;
+            _cancellation = cancellation;
+        }
+
+        internal CancellationToken Token => _cancellation.Token;
+
+        internal bool TryCancel()
+        {
+            try
+            {
+                _cancellation.Cancel();
+                return true;
+            }
+            catch (ObjectDisposedException)
+            {
+                // Dispatch won the move into `_activeRequests`; the caller will retry there.
+                return false;
+            }
+        }
+
+        internal bool TryClaim()
+        {
+            if (Interlocked.CompareExchange(ref _state, 1, 0) != 0)
+                return false;
+            RemoveAndDispose();
+            return true;
+        }
+
+        internal void DisposeIfUnclaimed()
+        {
+            if (Interlocked.CompareExchange(ref _state, 2, 0) != 0)
+                return;
+            RemoveAndDispose();
+        }
+
+        private void RemoveAndDispose()
+        {
+            if (_owner._queuedBatchRequests.TryGetValue(_requestKey, out var current)
+                && ReferenceEquals(current, this))
+            {
+                _owner._queuedBatchRequests.TryRemove(_requestKey, out _);
+            }
+            _cancellation.Dispose();
+        }
     }
 
     private static void WriteMcpLogLine(string message)
@@ -1416,26 +2003,87 @@ public partial class McpServer : IDisposable
     internal JsonNode? HandleMessage(JsonNode request)
         // Keep this sync wrapper for existing in-process callers; async transports call
         // HandleMessageAsync so server loops do not need a sync-over-async bridge.
-        => HandleMessageAsync(request, isolateRequestDb: false, deferredInitializeCommits: null).GetAwaiter().GetResult();
+        => HandleMessageAsync(
+            request,
+            isolateRequestDb: false,
+            beforeDispatchAsync: null,
+            rejectForCapacity: false,
+            queuedBatchRegistration: null,
+            deferredInitializeCommits: null).GetAwaiter().GetResult();
 
     internal Task<JsonNode?> HandleMessageAsync(JsonNode request)
-        => HandleMessageAsync(request, isolateRequestDb: false, deferredInitializeCommits: null);
+        => HandleMessageAsync(
+            request,
+            isolateRequestDb: false,
+            beforeDispatchAsync: null,
+            rejectForCapacity: false,
+            queuedBatchRegistration: null,
+            deferredInitializeCommits: null);
 
     private async Task<JsonNode?> HandleMessageAsync(
         JsonNode request,
         bool isolateRequestDb,
+        Func<CancellationToken, Task>? beforeDispatchAsync,
+        bool rejectForCapacity,
+        QueuedBatchRequestRegistration? queuedBatchRegistration,
         DeferredInitializeCommits? deferredInitializeCommits)
     {
         if (request is JsonArray batch)
-            return await HandleBatchMessageAsync(
-                batch,
-                isolateRequestDb,
-                deferredInitializeCommits).ConfigureAwait(false);
+        {
+            if (deferredInitializeCommits is null)
+            {
+                return await HandleBatchMessageAsync(
+                    batch,
+                    isolateRequestDb,
+                    beforeDispatchAsync,
+                    rejectForCapacity,
+                    deferredInitializeCommits).ConfigureAwait(false);
+            }
+
+            var previousFrameInitializeState = _frameInitializeState.Value;
+            var initialFrameInitializeState = CurrentInitializeState;
+            var frameInitializeState = new FrameInitializeState(
+                initialFrameInitializeState,
+                isProvisionalGeneration: false);
+            _frameInitializeState.Value = frameInitializeState;
+            var batchBeforeDispatchAsync = beforeDispatchAsync;
+            if (beforeDispatchAsync is not null)
+            {
+                batchBeforeDispatchAsync = async cancellationToken =>
+                {
+                    await beforeDispatchAsync(cancellationToken).ConfigureAwait(false);
+                    // The concurrent loop accepts and pre-registers a batch before its protocol
+                    // predecessor finishes. Advance only this batch's original generation after
+                    // that predecessor commits; timed-out older frames retain their own holders,
+                    // and an in-batch initialize replaces this holder instead of being overwritten.
+                    // concurrent loop は protocol predecessor 完了前に batch を受理・事前登録する。
+                    // predecessor の commit 後、この batch の元 generation だけを進める。timeout
+                    // 後の旧 frame は別 holder を保持し、batch 内 initialize は holder 自体を置換する。
+                    frameInitializeState.TryAdvanceToPublishedGeneration(
+                        initialFrameInitializeState,
+                        PublishedInitializeState);
+                };
+            }
+            try
+            {
+                return await HandleBatchMessageAsync(
+                    batch,
+                    isolateRequestDb,
+                    batchBeforeDispatchAsync,
+                    rejectForCapacity,
+                    deferredInitializeCommits).ConfigureAwait(false);
+            }
+            finally
+            {
+                _frameInitializeState.Value = previousFrameInitializeState;
+            }
+        }
 
         if (request is not JsonObject obj)
             return CreateExpectedJsonObjectErrorResponse();
 
-        _lastRequestAt = _timeProvider.GetUtcNow();
+        lock (_healthStateGate)
+            _lastRequestAt = _timeProvider.GetUtcNow();
 
         // Extract `method` defensively: a non-string `method` (e.g. `"method":42`) must not
         // throw before the auth gate runs, otherwise a token-protected server would surface
@@ -1484,6 +2132,37 @@ public partial class McpServer : IDisposable
             return null;
         }
 
+        if (rejectForCapacity && IsStateChangingNotification(method))
+        {
+            // Eager cancellation is handled above. Other state notifications are dropped on
+            // admission overflow regardless of a malformed id, matching the normal no-id
+            // overload contract without mutating roots or lifecycle state (#4536, #4545).
+            // eager cancellation は上で処理済み。それ以外の state notification は malformed
+            // id の有無に関係なく admission overflow 時に drop し、roots/lifecycle を変更しない。
+            return null;
+        }
+
+        var protocolPredecessorAwaited = false;
+        if (IsStateChangingNotification(method) && beforeDispatchAsync is not null)
+        {
+            // Cancellation controls intentionally bypass protocol barriers, but roots/lifecycle
+            // notifications must not mutate state before an earlier initialize commits. Apply the
+            // method semantic even when a malformed client attaches an id to the notification.
+            // cancellation control は protocol barrier を bypass する一方、roots/lifecycle
+            // notification は先行 initialize の commit 前に state を変更してはならない。
+            // malformed client が id を付けた場合も method semantics に基づいて待機する。
+            await beforeDispatchAsync(_currentRequestToken.Value).ConfigureAwait(false);
+            protocolPredecessorAwaited = true;
+        }
+
+        if (!hasId)
+        {
+            if (rejectForCapacity)
+                return null;
+            if (!protocolPredecessorAwaited && beforeDispatchAsync is not null)
+                await beforeDispatchAsync(_currentRequestToken.Value).ConfigureAwait(false);
+        }
+
         // Notifications (no id) don't get a response / 通知（idなし）にはレスポンスなし
         if (method == "notifications/initialized")
             return null;
@@ -1491,6 +2170,7 @@ public partial class McpServer : IDisposable
         if (method == "notifications/roots/list_changed")
         {
             MarkClientRootsStale();
+            _frameInitializeState.Value?.MarkRootsChangeAccepted();
             return null;
         }
 
@@ -1499,25 +2179,16 @@ public partial class McpServer : IDisposable
         // listener stop), which races with in-flight work and forces clients to send SIGINT.
         // Treating both `notifications/shutdown` (the MCP spec-aligned name) and the legacy
         // LSP-style `notifications/exit` alias as graceful-stop signals lets clients drain the
-        // current request and exit cleanly. Cancelling `_shutdownCts` unblocks any pending
-        // `ReadFrameAsync` in the loop.
-        // JSON-RPC 通知による graceful shutdown (#1567)。`_shutdownCts.Cancel()` でループ側の
-        // `ReadFrameAsync` を unblock し、`_running = false` で次のイテレーション開始を抑止する。
+        // current request and exit cleanly. Asynchronous cancellation unblocks any pending
+        // `ReadFrameAsync` without letting a slow user callback hold the dispatch thread (#4543).
+        // JSON-RPC 通知による graceful shutdown (#1567)。非同期 cancellation で slow callback に
+        // dispatch thread を塞がせず `ReadFrameAsync` を unblock する (#4543)。
         if (string.Equals(method, "notifications/shutdown", StringComparison.Ordinal)
             || string.Equals(method, "notifications/exit", StringComparison.Ordinal))
         {
             WriteMcpLogLine($"[cdidx-mcp] Received {method}; draining in-flight work and shutting down.");
             _running = false;
-            try
-            {
-                if (!_shutdownCts.IsCancellationRequested)
-                    _shutdownCts.Cancel();
-            }
-            catch (ObjectDisposedException)
-            {
-                // Server is already disposing — nothing more to cancel.
-                // dispose 中なので追加 cancel は不要。
-            }
+            _ = RequestShutdownCancellation();
             return null;
         }
 
@@ -1548,6 +2219,9 @@ public partial class McpServer : IDisposable
                 retrySafe: false);
         }
 
+        if (rejectForCapacity)
+            return CreateServerBusyResponse(id);
+
         if (method == null)
         {
             return CreateErrorResponse(hasId: true, id: id, code: -32600, message: "Invalid request: missing method",
@@ -1556,32 +2230,35 @@ public partial class McpServer : IDisposable
                 retrySafe: false);
         }
 
-        if (_enforceInitializationLifecycle && !CurrentInitializeState.Initialized && method != "initialize")
+        return await DispatchWithRequestCancellationAsync(id, isolateRequestDb, beforeDispatchAsync, queuedBatchRegistration, () =>
         {
-            return CreateErrorResponse(hasId: true, id: id, code: -32002, message: "Server not initialized",
-                category: McpErrorEnvelope.CategoryInvalidRequest,
-                suggestion: "Send a successful `initialize` request before calling other MCP methods.",
-                retrySafe: true);
-        }
+            if (_enforceInitializationLifecycle && !CurrentInitializeState.Initialized && method != "initialize")
+            {
+                return Task.FromResult<JsonNode>(CreateErrorResponse(hasId: true, id: id, code: -32002, message: "Server not initialized",
+                    category: McpErrorEnvelope.CategoryInvalidRequest,
+                    suggestion: "Send a successful `initialize` request before calling other MCP methods.",
+                    retrySafe: true));
+            }
 
-        return await DispatchWithRequestCancellationAsync(id, isolateRequestDb, () => method switch
-        {
-            "initialize" => Task.FromResult<JsonNode>(HandleInitialize(
-                id,
-                request["params"],
-                deferredInitializeCommits)),
-            "tools/list" => Task.FromResult<JsonNode>(HandleToolsList(id, request["params"])),
-            "tools/call" => HandleToolsCallAsync(id, request["params"]),
-            "resources/list" => Task.FromResult<JsonNode>(HandleResourcesList(id, request["params"])),
-            "resources/read" => Task.FromResult<JsonNode>(HandleResourcesRead(id, request["params"])),
-            "prompts/list" => Task.FromResult<JsonNode>(HandlePromptsList(id)),
-            "prompts/get" => Task.FromResult<JsonNode>(HandlePromptsGet(id, request["params"])),
-            "logging/setLevel" => HandleLoggingSetLevelAsync(id, request["params"]),
-            "ping" => Task.FromResult<JsonNode>(CreateSuccessResponse(hasId, id, BuildHealthResult())),
-            _ => Task.FromResult<JsonNode>(CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Method not found: {method}",
-                category: McpErrorEnvelope.CategoryMethodNotFound,
-                suggestion: "Supported methods: initialize, tools/list, tools/call, resources/list, resources/read, prompts/list, prompts/get, logging/setLevel, ping, notifications/initialized, notifications/cancelled, notifications/shutdown.",
-                retrySafe: false)),
+            return method switch
+            {
+                "initialize" => Task.FromResult<JsonNode>(HandleInitialize(
+                    id,
+                    request["params"],
+                    deferredInitializeCommits)),
+                "tools/list" => Task.FromResult<JsonNode>(HandleToolsList(id, request["params"])),
+                "tools/call" => HandleToolsCallAsync(id, request["params"]),
+                "resources/list" => Task.FromResult<JsonNode>(HandleResourcesList(id, request["params"])),
+                "resources/read" => Task.FromResult<JsonNode>(HandleResourcesRead(id, request["params"])),
+                "prompts/list" => Task.FromResult<JsonNode>(HandlePromptsList(id)),
+                "prompts/get" => Task.FromResult<JsonNode>(HandlePromptsGet(id, request["params"])),
+                "logging/setLevel" => HandleLoggingSetLevelAsync(id, request["params"]),
+                "ping" => Task.FromResult<JsonNode>(CreateSuccessResponse(hasId, id, BuildHealthResult())),
+                _ => Task.FromResult<JsonNode>(CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Method not found: {method}",
+                    category: McpErrorEnvelope.CategoryMethodNotFound,
+                    suggestion: "Supported methods: initialize, tools/list, tools/call, resources/list, resources/read, prompts/list, prompts/get, logging/setLevel, ping, notifications/initialized, notifications/cancelled, notifications/shutdown.",
+                    retrySafe: false)),
+            };
         }).ConfigureAwait(false);
     }
 
@@ -1597,6 +2274,17 @@ public partial class McpServer : IDisposable
             or "notifications/roots/list_changed"
             or "notifications/shutdown"
             or "notifications/exit";
+
+    private static JsonObject CreateServerBusyResponse(JsonNode? id)
+        => CreateErrorResponse(
+            hasId: true,
+            id,
+            McpErrorEnvelope.CodeServerBusy,
+            "Server busy: MCP request backlog is full",
+            category: McpErrorEnvelope.CategoryServerBusy,
+            suggestion: "Retry after one or more in-flight MCP requests complete.",
+            retrySafe: true,
+            extraData: new JsonObject { ["retry_after_ms"] = 1000 });
 
     private string BuildHealthJson(HttpMcpTransport? httpTransport = null)
         => BuildHealthResult(httpTransport).ToJsonString(_jsonOptions);
@@ -1638,18 +2326,21 @@ public partial class McpServer : IDisposable
     private JsonObject BuildHealthResult(HttpMcpTransport? httpTransport = null)
     {
         var now = _timeProvider.GetUtcNow();
-        var dbOpen = ProbeDbHealth(now, out var dbError);
+        var dbOpen = ProbeDbHealth(out var dbError);
         var httpResponseCleanupDegraded = httpTransport?.ResponseCleanupDegraded ?? false;
         var httpRequestLogDegraded = httpTransport?.RequestLogDegraded ?? false;
         var auditLogDiagnostics = _auditLog?.SnapshotDiagnostics();
         var auditLogDegraded = IsAuditLogDegraded(auditLogDiagnostics);
+        DateTimeOffset lastRequestAt;
+        lock (_healthStateGate)
+            lastRequestAt = _lastRequestAt;
         var result = new JsonObject
         {
             ["status"] = dbOpen && !httpResponseCleanupDegraded && !httpRequestLogDegraded && !auditLogDegraded ? "ok" : "degraded",
             ["uptime_s"] = Math.Max(0, (long)Math.Floor((now - _startedAt).TotalSeconds)),
-            ["last_request_at"] = _lastRequestAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+            ["last_request_at"] = lastRequestAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
             ["db_open"] = dbOpen,
-            ["last_db_check_at"] = _lastDbCheckAt?.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+            ["last_db_check_at"] = now.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
             ["transport_ready"] = _running,
         };
         if (httpTransport is not null)
@@ -1702,8 +2393,10 @@ public partial class McpServer : IDisposable
         return result;
     }
 
-    private bool ProbeDbHealth(DateTimeOffset now, out string? error)
+    private bool ProbeDbHealth(out string? error)
     {
+        var ok = false;
+        string? probeError = null;
         try
         {
             var connectionString = SqliteConnectionPolicy.BuildConnectionString(_dbPath, SqliteConnectionPolicyMode.ReadOnly);
@@ -1712,24 +2405,22 @@ public partial class McpServer : IDisposable
             using var command = SqliteConnectionPolicy.CreateCommand(connection);
             command.CommandText = "SELECT 1;";
             _ = command.ExecuteScalar();
-            _lastDbCheckAt = now;
-            _lastDbCheckOk = true;
-            _lastDbCheckError = null;
+            ok = true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException or InvalidOperationException)
         {
-            _lastDbCheckAt = now;
-            _lastDbCheckOk = false;
-            _lastDbCheckError = ex.GetType().Name;
+            probeError = ex.GetType().Name;
         }
 
-        error = _lastDbCheckError;
-        return _lastDbCheckOk == true;
+        error = probeError;
+        return ok;
     }
 
     private async Task<JsonNode?> HandleBatchMessageAsync(
         JsonArray batch,
         bool isolateRequestDb,
+        Func<CancellationToken, Task>? beforeDispatchAsync,
+        bool rejectForCapacity,
         DeferredInitializeCommits? deferredInitializeCommits)
     {
         if (batch.Count == 0)
@@ -1744,137 +2435,351 @@ public partial class McpServer : IDisposable
                 suggestion: $"JSON-RPC batch requests are limited to {MaxBatchRequestCount} items.",
                 retrySafe: false);
 
+        // Client replies complete server-initiated requests and never produce a response item.
+        // Consume matched replies before reserving response bytes; unmatched response-shaped
+        // objects remain ordinary invalid requests and retain their budget slot.
+        // client reply は server 起点 request を完了し response item を生成しないため、response
+        // budget 予約前に matched reply を consume する。unmatched object は invalid request として残す。
+        var completed = new bool[batch.Count];
+        for (var index = 0; index < batch.Count; index++)
+        {
+            if (batch[index] is JsonObject itemObject
+                && TryCompletePendingClientRequest(itemObject))
+            {
+                completed[index] = true;
+            }
+        }
+
         BatchResponseBudgetSlot?[]? budgetSlots = null;
+        int?[]? batchResponseItemLimits = null;
+        JsonObject? batchBudgetPreflightError = null;
         var batchResponseLimit = 0;
-        long remainingPayloadBytes = 0;
-        long remainingReservedErrorBytes = 0;
-        var remainingResponseCount = 0;
         var activeTransportMaxResponseBytes = Volatile.Read(ref _activeTransportMaxResponseBytes);
         if (_usesDefaultResponseSerializer)
         {
-            // JSON arrays add two brackets plus one comma between response-bearing items.
-            // Notifications reserve nothing because they never appear in the response array.
-            // JSON 配列の bracket 2 bytes と応答 item 間の comma を先に予約する。
-            // notification は response 配列へ現れないため budget を消費しない。
+            // The complete JSON array owns one response budget. Reserve brackets, commas, and a
+            // bounded error for every response-bearing item, then divide the remaining bytes
+            // deterministically before concurrent dispatch. JSON 配列全体で 1 つの response
+            // budget を共有する。bracket、comma、各 response item の bounded error を予約し、
+            // 残りを concurrent dispatch 前に決定的に分配する。
             batchResponseLimit = GetMaxResponseBytes();
             if (activeTransportMaxResponseBytes > 0)
                 batchResponseLimit = Math.Min(activeTransportMaxResponseBytes, batchResponseLimit);
             budgetSlots = new BatchResponseBudgetSlot?[batch.Count];
+            batchResponseItemLimits = new int?[batch.Count];
+            long reservedErrorBytes = 0;
+            var responseCount = 0;
             for (var index = 0; index < batch.Count; index++)
             {
+                if (completed[index])
+                    continue;
                 if (!TryCreateBatchResponseBudgetSlot(batch[index], out var slot))
                     continue;
 
                 budgetSlots[index] = slot;
-                remainingReservedErrorBytes += slot.ErrorResponseBytes;
-                remainingResponseCount++;
+                reservedErrorBytes += slot.ErrorResponseBytes;
+                responseCount++;
             }
 
-            if (remainingResponseCount > 0)
+            if (responseCount > 0)
             {
-                remainingPayloadBytes = batchResponseLimit - 2L - (remainingResponseCount - 1L);
-                if (remainingPayloadBytes < remainingReservedErrorBytes)
-                    return CreateBatchEnvelopeBudgetError(batchResponseLimit, retrySafe: true);
+                var payloadBytes = batchResponseLimit - 2L - (responseCount - 1L);
+                if (payloadBytes < reservedErrorBytes)
+                {
+                    // Defer the terminal budget error until request IDs are durably registered
+                    // and cancellation controls have run. No ordinary or state-changing work is
+                    // dispatched on this path (#4544, #4545).
+                    // terminal budget error は request ID の durable 登録と cancellation control
+                    // 実行後まで保留し、通常処理や他の state mutation は開始しない。
+                    batchBudgetPreflightError = CreateBatchEnvelopeBudgetError(
+                        batchResponseLimit,
+                        retrySafe: true);
+                }
+                else
+                {
+                    var distributableBytes = payloadBytes - reservedErrorBytes;
+                    var fairShareBytes = distributableBytes / responseCount;
+                    var remainderBytes = distributableBytes % responseCount;
+                    for (var index = 0; index < batch.Count; index++)
+                    {
+                        if (budgetSlots[index] is not { } slot)
+                            continue;
+
+                        var itemExtraBytes = fairShareBytes;
+                        if (remainderBytes > 0)
+                        {
+                            itemExtraBytes++;
+                            remainderBytes--;
+                        }
+                        batchResponseItemLimits[index] = checked((int)(slot.ErrorResponseBytes + itemExtraBytes));
+                    }
+
+                    // Equal caps can strand the same resource-serialization fragment in every slot.
+                    // Move one minimum page quantum from the first resources/list slot to the last so
+                    // one concurrent page can consume that deterministic slack without exceeding the
+                    // aggregate cap. 等分時に各 slot へ同じ serialization 断片が残るのを避けるため、
+                    // 最初の resources/list から最後へ最小 page 予算 1 単位を移す。
+                    var firstResourceIndex = -1;
+                    var lastResourceIndex = -1;
+                    for (var index = 0; index < batch.Count; index++)
+                    {
+                        if (budgetSlots[index]?.CanShapeResourcesListResponse != true)
+                            continue;
+                        if (firstResourceIndex < 0)
+                            firstResourceIndex = index;
+                        lastResourceIndex = index;
+                    }
+                    if (firstResourceIndex >= 0 && lastResourceIndex != firstResourceIndex)
+                    {
+                        var donorSlot = budgetSlots[firstResourceIndex]!.Value;
+                        var donorLimit = batchResponseItemLimits[firstResourceIndex]!.Value;
+                        var transferableBytes = Math.Min(
+                            MinResourceListMaxBytes,
+                            donorLimit - donorSlot.ErrorResponseBytes);
+                        batchResponseItemLimits[firstResourceIndex] = donorLimit - transferableBytes;
+                        batchResponseItemLimits[lastResourceIndex] = checked(
+                            batchResponseItemLimits[lastResourceIndex]!.Value + transferableBytes);
+                    }
+                }
             }
         }
 
-        var responses = new JsonArray();
-        for (var batchIndex = 0; batchIndex < batch.Count; batchIndex++)
+        // A batch is one wire frame but each item is an independently bounded JSON-RPC
+        // operation (#4545). Invalid items are materialized immediately, cancellation controls
+        // run eagerly, and state-changing items split the remaining work into ordered segments.
+        // Response nodes are retained by input index so completion timing cannot reorder the wire
+        // response. バッチは 1 wire frame だが、各 item を独立した bounded operation として扱う。
+        // 不正 item は即時確定し、cancel control は先行処理し、状態変更 item で順序 segment を区切る。
+        var responsesByIndex = new JsonNode?[batch.Count];
+        var logsByIndex = new DeferredFrameLogBuffer?[batch.Count];
+        var orderingFences = new bool[batch.Count];
+        var cancellationItems = new bool[batch.Count];
+        var queuedRegistrations = new QueuedBatchRequestRegistration?[batch.Count];
+        var seenRequestIds = new HashSet<string>(StringComparer.Ordinal);
+        var isolateBatchItems = isolateRequestDb || batch.Count > 1;
+
+        for (var index = 0; index < batch.Count; index++)
         {
-            var item = batch[batchIndex];
-            var budgetSlot = budgetSlots?[batchIndex];
-            int? itemResponseLimit = null;
-            if (budgetSlot is { } plannedSlot)
+            if (completed[index])
+                continue;
+
+            var item = batch[index];
+            if (item is null || item is not JsonObject and not JsonArray)
             {
-                var distributableBytes = Math.Max(0, remainingPayloadBytes - remainingReservedErrorBytes);
-                var fairShareBytes = distributableBytes / remainingResponseCount;
-                itemResponseLimit = checked((int)(plannedSlot.ErrorResponseBytes + fairShareBytes));
+                using (BeginBatchItemCorrelation(id: null, index))
+                    responsesByIndex[index] = CreateInvalidBatchItemResponse(nestedBatch: false);
+                completed[index] = true;
+                continue;
+            }
+            if (item is JsonArray)
+            {
+                using (BeginBatchItemCorrelation(id: null, index))
+                    responsesByIndex[index] = CreateInvalidBatchItemResponse(nestedBatch: true);
+                completed[index] = true;
+                continue;
+            }
+            var itemObject = (JsonObject)item;
+            if (IsCancellationItem(itemObject))
+            {
+                // Execute controls only after this pass has durably registered every unique
+                // request ID. This preserves eager cancellation even when the control precedes
+                // its target and the short tombstone cache is full (#4545).
+                // 全 unique request ID を durable 登録してから control を実行する。cancel が target
+                // より先でも、短命 tombstone cache が満杯でも eager cancellation を保つ。
+                cancellationItems[index] = true;
+                continue;
             }
 
-            var previousBatchResponseItemMaxBytes = _currentBatchResponseItemMaxBytes.Value;
-            _currentBatchResponseItemMaxBytes.Value = itemResponseLimit;
-            JsonNode? response;
-            try
+            orderingFences[index] = IsProtocolOrderingBarrierItem(itemObject);
+            if (TryGetRequestId(itemObject, out var hasId, out var id)
+                && hasId
+                && SerializeRequestId(id) is { } requestKey)
             {
-                if (item is null)
+                if (!seenRequestIds.Add(requestKey))
                 {
-                    response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: expected JSON object",
-                        category: McpErrorEnvelope.CategoryInvalidRequest,
-                        suggestion: "Each JSON-RPC batch item must be a request object.",
-                        retrySafe: false);
+                    // Preserve the pre-concurrency behavior for duplicate ids in one batch: the
+                    // later occurrence starts only after the earlier occurrence has completed.
+                    // 同一 batch 内の重複 id は、後続を fence にして従来の逐次 semantics を保つ。
+                    orderingFences[index] = true;
                 }
-                else if (item is JsonArray)
+                else if (!rejectForCapacity)
                 {
-                    response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: nested batches are not supported",
-                        category: McpErrorEnvelope.CategoryInvalidRequest,
-                        suggestion: "JSON-RPC batch items must be request objects, not nested arrays.",
-                        retrySafe: false);
-                }
-                else if (item is not JsonObject)
-                {
-                    response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: expected JSON object",
-                        category: McpErrorEnvelope.CategoryInvalidRequest,
-                        suggestion: "Each JSON-RPC batch item must be a request object.",
-                        retrySafe: false);
-                }
-                else
-                {
-                    response = await HandleMessageAsync(
-                        item,
-                        isolateRequestDb,
-                        deferredInitializeCommits).ConfigureAwait(false);
+                    queuedRegistrations[index] = TryRegisterQueuedBatchRequest(requestKey);
                 }
             }
-            finally
-            {
-                _currentBatchResponseItemMaxBytes.Value = previousBatchResponseItemMaxBytes;
-            }
+        }
 
-            if (budgetSlot is { } consumedSlot)
-            {
-                remainingReservedErrorBytes -= consumedSlot.ErrorResponseBytes;
-                remainingResponseCount--;
+        for (var index = 0; index < batch.Count; index++)
+        {
+            if (!cancellationItems[index])
+                continue;
 
-                if (response is null)
+            var cancellationResult = await ExecuteBatchItemAsync(
+                batch[index]!,
+                index,
+                isolateRequestDb: true,
+                beforeDispatchAsync: null,
+                rejectForCapacity: false,
+                queuedBatchRegistration: null,
+                responseItemMaxBytes: batchResponseItemLimits?[index],
+                deferredInitializeCommits).ConfigureAwait(false);
+            responsesByIndex[index] = cancellationResult.Response;
+            logsByIndex[index] = cancellationResult.Logs;
+            completed[index] = true;
+        }
+
+        if (batchBudgetPreflightError is not null)
+        {
+            foreach (var registration in queuedRegistrations)
+                registration?.DisposeIfUnclaimed();
+            MergeBatchItemLogs(logsByIndex);
+            return batchBudgetPreflightError;
+        }
+
+        if (rejectForCapacity)
+        {
+            for (var index = 0; index < batch.Count; index++)
+            {
+                if (completed[index])
                     continue;
-
-                var responseFitsItemBudget = TryMeasureJsonUtf8BytesWithinLimit(
-                    response,
-                    _jsonOptions,
-                    itemResponseLimit!.Value,
-                    out var responseBytes);
-                var canReplaceWithBudgetError = consumedSlot.CanShapeResourcesReadResponse
-                    || (consumedSlot.CanShapeResourcesListResponse
-                        && IsResourcesListSuccessResponse(response));
-                if (!responseFitsItemBudget && canReplaceWithBudgetError)
-                {
-                    response = consumedSlot.ErrorResponse;
-                    responseBytes = consumedSlot.ErrorResponseBytes;
-                }
-                if (responseFitsItemBudget || canReplaceWithBudgetError)
-                {
-                    remainingPayloadBytes -= responseBytes;
-                }
-                else if (TryMeasureJsonUtf8BytesWithinLimit(
-                    response,
-                    _jsonOptions,
-                    checked((int)Math.Max(0, remainingPayloadBytes)),
-                    out responseBytes))
-                {
-                    remainingPayloadBytes -= responseBytes;
-                }
-                else
-                {
-                    // Preserve generic/state-changing results verbatim. If they consume more than
-                    // the remaining envelope, the canonical aggregate error below reports an
-                    // unknown completion state instead of inviting an unsafe retry.
-                    // generic/state-changing result は置換しない。残余を超える場合は下で
-                    // completion unknown の aggregate error にし、危険な再試行を促さない。
-                    remainingPayloadBytes = 0;
-                }
+                var result = await ExecuteBatchItemAsync(
+                    batch[index]!,
+                    index,
+                    isolateBatchItems,
+                    beforeDispatchAsync: null,
+                    rejectForCapacity: true,
+                    queuedBatchRegistration: null,
+                    responseItemMaxBytes: batchResponseItemLimits?[index],
+                    deferredInitializeCommits).ConfigureAwait(false);
+                responsesByIndex[index] = result.Response;
+                logsByIndex[index] = result.Logs;
+                completed[index] = true;
             }
 
-            if (response != null)
+            MergeBatchItemLogs(logsByIndex);
+            return BuildBatchResponse(
+                responsesByIndex,
+                budgetSlots,
+                batchResponseItemLimits,
+                batchResponseLimit);
+        }
+
+        var independentSegment = new List<int>();
+        for (var index = 0; index < batch.Count; index++)
+        {
+            if (completed[index])
+                continue;
+
+            if (!orderingFences[index])
+            {
+                independentSegment.Add(index);
+                continue;
+            }
+
+            await ExecuteBatchSegmentAsync(
+                batch,
+                independentSegment,
+                isolateBatchItems,
+                responsesByIndex,
+                logsByIndex,
+                queuedRegistrations,
+                batchResponseItemLimits,
+                deferredInitializeCommits,
+                beforeDispatchAsync).ConfigureAwait(false);
+            independentSegment.Clear();
+            await ExecuteBatchItemAsync(
+                batch[index]!,
+                index,
+                isolateBatchItems,
+                responsesByIndex,
+                logsByIndex,
+                beforeDispatchAsync,
+                queuedRegistrations[index],
+                batchResponseItemLimits?[index],
+                deferredInitializeCommits).ConfigureAwait(false);
+
+            var fenceResponse = responsesByIndex[index];
+            if (fenceResponse is not null
+                && deferredInitializeCommits?.TryGetRegisteredState(fenceResponse, out var initializeState) == true)
+            {
+                _frameInitializeState.Value = new FrameInitializeState(
+                    BuildCommittedInitializeState(CurrentInitializeState, initializeState, logCallerSwap: false),
+                    isProvisionalGeneration: true);
+            }
+            else if (_frameInitializeState.Value is { } currentFrameState
+                && currentFrameState.TryConsumeAcceptedRootsChange())
+            {
+                var nextState = currentFrameState.IsProvisionalGeneration
+                    ? currentFrameState.Current with { ClientRootsStale = true }
+                    : PublishedInitializeState;
+                _frameInitializeState.Value = new FrameInitializeState(
+                    nextState,
+                    currentFrameState.IsProvisionalGeneration);
+            }
+        }
+
+        await ExecuteBatchSegmentAsync(
+            batch,
+            independentSegment,
+            isolateBatchItems,
+            responsesByIndex,
+            logsByIndex,
+            queuedRegistrations,
+            batchResponseItemLimits,
+            deferredInitializeCommits,
+            beforeDispatchAsync).ConfigureAwait(false);
+        MergeBatchItemLogs(logsByIndex);
+
+        return BuildBatchResponse(
+            responsesByIndex,
+            budgetSlots,
+            batchResponseItemLimits,
+            batchResponseLimit);
+    }
+
+    private QueuedBatchRequestRegistration? TryRegisterQueuedBatchRequest(string requestKey)
+    {
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            _currentRequestToken.Value,
+            _shutdownCts.Token);
+        var registration = new QueuedBatchRequestRegistration(this, requestKey, cancellation);
+        if (!_queuedBatchRequests.TryAdd(requestKey, registration))
+        {
+            registration.DisposeIfUnclaimed();
+            return null;
+        }
+
+        if (TryConsumePendingRequestCancellation(requestKey))
+            registration.TryCancel();
+        return registration;
+    }
+
+    private JsonNode? BuildBatchResponse(
+        IReadOnlyList<JsonNode?> responsesByIndex,
+        IReadOnlyList<BatchResponseBudgetSlot?>? budgetSlots,
+        IReadOnlyList<int?>? responseItemLimits,
+        int batchResponseLimit)
+    {
+        var responses = new JsonArray();
+        for (var index = 0; index < responsesByIndex.Count; index++)
+        {
+            var response = responsesByIndex[index];
+            if (response is not null
+                && budgetSlots?[index] is { } slot
+                && responseItemLimits?[index] is { } itemResponseLimit
+                && !TryMeasureJsonUtf8BytesWithinLimit(
+                    response,
+                    _jsonOptions,
+                    itemResponseLimit,
+                    out _)
+                && (slot.CanShapeResourcesReadResponse
+                    || (slot.CanShapeResourcesListResponse
+                        && IsResourcesListSuccessResponse(response))))
+            {
+                response = slot.ErrorResponse;
+            }
+
+            if (response is not null)
                 responses.Add(response);
         }
 
@@ -1883,9 +2788,160 @@ public partial class McpServer : IDisposable
         if (batchResponseLimit > 0
             && !TryMeasureJsonUtf8BytesWithinLimit(responses, _jsonOptions, batchResponseLimit, out _))
         {
+            // Generic and state-changing responses are never rewritten item-by-item. If their
+            // aggregate exceeds the cap, report an unknown completion state so clients do not
+            // retry effects unsafely. generic / state-changing response は item ごとに書き換えず、
+            // aggregate 超過時は completion unknown を返して危険な retry を防ぐ。
             return CreateBatchEnvelopeBudgetError(batchResponseLimit, retrySafe: false);
         }
         return responses;
+    }
+
+    private static JsonObject CreateInvalidBatchItemResponse(bool nestedBatch)
+        => CreateErrorResponse(
+            hasId: true,
+            id: null,
+            code: -32600,
+            message: nestedBatch ? "Invalid request: nested batches are not supported" : "Invalid request: expected JSON object",
+            category: McpErrorEnvelope.CategoryInvalidRequest,
+            suggestion: nestedBatch
+                ? "JSON-RPC batch items must be request objects, not nested arrays."
+                : "Each JSON-RPC batch item must be a request object.",
+            retrySafe: false);
+
+    private static bool IsCancellationItem(JsonObject item)
+        => TryGetStringMember(item, "method") is "$/cancelRequest" or "notifications/cancelled";
+
+    private async Task ExecuteBatchSegmentAsync(
+        JsonArray batch,
+        IReadOnlyList<int> indexes,
+        bool isolateRequestDb,
+        JsonNode?[] responsesByIndex,
+        DeferredFrameLogBuffer?[] logsByIndex,
+        QueuedBatchRequestRegistration?[] queuedRegistrations,
+        int?[]? responseItemMaxBytes,
+        DeferredInitializeCommits? deferredInitializeCommits,
+        Func<CancellationToken, Task>? beforeDispatchAsync)
+    {
+        if (indexes.Count == 0)
+            return;
+
+        var nextIndex = -1;
+        var workers = new Task[Math.Min(indexes.Count, MaxConcurrency)];
+        for (var workerIndex = 0; workerIndex < workers.Length; workerIndex++)
+        {
+            workers[workerIndex] = Task.Run(async () =>
+            {
+                while (true)
+                {
+                    var segmentIndex = Interlocked.Increment(ref nextIndex);
+                    if (segmentIndex >= indexes.Count)
+                        return;
+
+                    var batchIndex = indexes[segmentIndex];
+                    await ExecuteBatchItemAsync(
+                        batch[batchIndex]!,
+                        batchIndex,
+                        isolateRequestDb,
+                        responsesByIndex,
+                        logsByIndex,
+                        beforeDispatchAsync,
+                        queuedRegistrations[batchIndex],
+                        responseItemMaxBytes?[batchIndex],
+                        deferredInitializeCommits).ConfigureAwait(false);
+                }
+            }, CancellationToken.None);
+        }
+
+        await Task.WhenAll(workers).ConfigureAwait(false);
+    }
+
+    private async Task ExecuteBatchItemAsync(
+        JsonNode item,
+        int index,
+        bool isolateRequestDb,
+        JsonNode?[] responsesByIndex,
+        DeferredFrameLogBuffer?[] logsByIndex,
+        Func<CancellationToken, Task>? beforeDispatchAsync,
+        QueuedBatchRequestRegistration? queuedBatchRegistration,
+        int? responseItemMaxBytes,
+        DeferredInitializeCommits? deferredInitializeCommits)
+    {
+        var result = await ExecuteBatchItemAsync(
+            item,
+            index,
+            isolateRequestDb,
+            beforeDispatchAsync,
+            rejectForCapacity: false,
+            queuedBatchRegistration,
+            responseItemMaxBytes,
+            deferredInitializeCommits).ConfigureAwait(false);
+        responsesByIndex[index] = result.Response;
+        logsByIndex[index] = result.Logs;
+    }
+
+    private async Task<(JsonNode? Response, DeferredFrameLogBuffer Logs)> ExecuteBatchItemAsync(
+        JsonNode item,
+        int index,
+        bool isolateRequestDb,
+        Func<CancellationToken, Task>? beforeDispatchAsync,
+        bool rejectForCapacity,
+        QueuedBatchRequestRegistration? queuedBatchRegistration,
+        int? responseItemMaxBytes,
+        DeferredInitializeCommits? deferredInitializeCommits)
+    {
+        var parentLogs = _deferredFrameLogs.Value;
+        var previousBatchResponseItemMaxBytes = _currentBatchResponseItemMaxBytes.Value;
+        var itemLogs = new DeferredFrameLogBuffer();
+        _deferredFrameLogs.Value = itemLogs;
+        _currentBatchResponseItemMaxBytes.Value = responseItemMaxBytes;
+        Database.DbDebug.ResetContext();
+        ExtractResponseId(item, out var hasId, out var id);
+        using var correlationScope = BeginBatchItemCorrelation(id, index);
+        try
+        {
+            var response = await HandleMessageAsync(
+                item,
+                isolateRequestDb,
+                beforeDispatchAsync,
+                rejectForCapacity,
+                queuedBatchRegistration,
+                deferredInitializeCommits).ConfigureAwait(false);
+            return (response, itemLogs);
+        }
+        catch (Exception ex)
+        {
+            DeferFrameLog(BuildUnhandledLoopErrorLog(DiagnosticRedactor.FormatExceptionMessage(ex)));
+            if (!hasId)
+                return (null, itemLogs);
+
+            var classification = McpErrorEnvelope.ClassifyException(ex);
+            return (CreateErrorResponse(
+                hasId: true,
+                id,
+                classification.JsonRpcCode,
+                BuildSanitizedLoopErrorMessage(ex),
+                category: classification.Category,
+                suggestion: classification.Suggestion,
+                retrySafe: classification.RetrySafe), itemLogs);
+        }
+        finally
+        {
+            Database.DbDebug.ResetContext();
+            _currentBatchResponseItemMaxBytes.Value = previousBatchResponseItemMaxBytes;
+            _deferredFrameLogs.Value = parentLogs;
+            queuedBatchRegistration?.DisposeIfUnclaimed();
+        }
+    }
+
+    private void MergeBatchItemLogs(IReadOnlyList<DeferredFrameLogBuffer?> logsByIndex)
+    {
+        var parentLogs = _deferredFrameLogs.Value;
+        Action<Action> forward = parentLogs is null
+            ? static log => log()
+            : parentLogs.Add;
+        foreach (var itemLogs in logsByIndex)
+            itemLogs?.ForwardTo(forward);
     }
 
     private bool TryCreateBatchResponseBudgetSlot(JsonNode? item, out BatchResponseBudgetSlot slot)
@@ -2012,38 +3068,69 @@ public partial class McpServer : IDisposable
         bool CanShapeResourcesListResponse,
         bool CanShapeResourcesReadResponse);
 
-    private async Task<JsonNode> DispatchWithRequestCancellationAsync(JsonNode? id, bool isolateRequestDb, Func<Task<JsonNode>> action)
+    private async Task<JsonNode> DispatchWithRequestCancellationAsync(
+        JsonNode? id,
+        bool isolateRequestDb,
+        Func<CancellationToken, Task>? beforeDispatchAsync,
+        QueuedBatchRequestRegistration? queuedBatchRegistration,
+        Func<Task<JsonNode>> action)
     {
         var requestKey = SerializeRequestId(id);
-        if (requestKey == null)
-            return await action().ConfigureAwait(false);
-
-        var requestCts = CancellationTokenSource.CreateLinkedTokenSource(_currentRequestToken.Value, _shutdownCts.Token);
-        if (!_activeRequests.TryAdd(requestKey, requestCts))
+        var requestCts = queuedBatchRegistration is null
+            ? CancellationTokenSource.CreateLinkedTokenSource(_currentRequestToken.Value, _shutdownCts.Token)
+            : CancellationTokenSource.CreateLinkedTokenSource(
+                _currentRequestToken.Value,
+                _shutdownCts.Token,
+                queuedBatchRegistration.Token);
+        var registeredRequest = false;
+        if (requestKey is not null)
         {
-            requestCts.Dispose();
-            return CreateErrorResponse(hasId: true, id: id, code: -32600, message: "Duplicate in-flight request id",
-                category: McpErrorEnvelope.CategoryInvalidRequest,
-                suggestion: "JSON-RPC request ids must be unique while a previous request with the same id is still running.",
-                retrySafe: true);
+            if (!_activeRequests.TryAdd(requestKey, requestCts))
+            {
+                requestCts.Dispose();
+                return CreateErrorResponse(hasId: true, id: id, code: -32600, message: "Duplicate in-flight request id",
+                    category: McpErrorEnvelope.CategoryInvalidRequest,
+                    suggestion: "JSON-RPC request ids must be unique while a previous request with the same id is still running.",
+                    retrySafe: true);
+            }
+            registeredRequest = true;
+            if (queuedBatchRegistration is not null && !queuedBatchRegistration.TryClaim())
+                CancelRequestCts(requestCts);
+            if (TryConsumePendingRequestCancellation(requestKey))
+                CancelRequestCts(requestCts);
+            RequestRegisteredForTests?.Invoke(id);
         }
-        if (TryConsumePendingRequestCancellation(requestKey))
-            CancelRequestCts(requestCts);
-        RequestRegisteredForTests?.Invoke(id);
 
         var previousToken = _currentRequestToken.Value;
-        var stopwatch = Stopwatch.StartNew();
+        Stopwatch? stopwatch = null;
         var cleanupNow = true;
+        var executionSlotAcquired = false;
+        var releaseExecutionSlotNow = true;
         try
         {
             _currentRequestToken.Value = requestCts.Token;
-            requestCts.CancelAfter(_requestTimeout);
             requestCts.Token.ThrowIfCancellationRequested();
+            if (beforeDispatchAsync is not null)
+                await beforeDispatchAsync(requestCts.Token).ConfigureAwait(false);
+            await _concurrencyGate.WaitAsync(requestCts.Token).ConfigureAwait(false);
+            executionSlotAcquired = true;
+            requestCts.Token.ThrowIfCancellationRequested();
+            stopwatch = Stopwatch.StartNew();
+            requestCts.CancelAfter(_requestTimeout);
+
             if (!isolateRequestDb)
             {
-                if (RequestDelayForTests is { } delay)
-                    await delay(requestCts.Token).ConfigureAwait(false);
-                return await action().ConfigureAwait(false);
+                var previousIsolation = _isolateDbForCurrentRequest.Value;
+                _isolateDbForCurrentRequest.Value = false;
+                try
+                {
+                    await DelayRequestForTestsAsync(id, requestCts.Token).ConfigureAwait(false);
+                    return await action().ConfigureAwait(false);
+                }
+                finally
+                {
+                    _isolateDbForCurrentRequest.Value = previousIsolation;
+                }
             }
 
             var actionTask = Task.Run(async () =>
@@ -2052,8 +3139,7 @@ public partial class McpServer : IDisposable
                 _isolateDbForCurrentRequest.Value = isolateRequestDb;
                 try
                 {
-                    if (RequestDelayForTests is { } delay)
-                        await delay(requestCts.Token).ConfigureAwait(false);
+                    await DelayRequestForTestsAsync(id, requestCts.Token).ConfigureAwait(false);
                     return await action().ConfigureAwait(false);
                 }
                 finally
@@ -2062,26 +3148,42 @@ public partial class McpServer : IDisposable
                 }
             }, requestCts.Token);
             using var timeoutDelayCts = new CancellationTokenSource();
-            var timeoutTask = Task.Delay(_requestTimeout, timeoutDelayCts.Token);
+            var remainingTimeout = _requestTimeout - stopwatch.Elapsed;
+            var timeoutTask = remainingTimeout <= TimeSpan.Zero
+                ? Task.CompletedTask
+                : Task.Delay(remainingTimeout, timeoutDelayCts.Token);
             var completed = await Task.WhenAny(actionTask, timeoutTask).ConfigureAwait(false);
             if (completed != actionTask)
             {
                 try { requestCts.Cancel(); }
                 catch (ObjectDisposedException) { /* completed while timeout cancellation was being delivered. */ }
                 var elapsed = stopwatch.Elapsed;
-                RecordTimedOutIsolatedActionDraining(requestKey, elapsed);
+                var diagnosticRequestKey = requestKey ?? "null";
+                RecordTimedOutIsolatedActionDraining(diagnosticRequestKey, elapsed);
                 cleanupNow = false;
+                releaseExecutionSlotNow = false;
                 // This cleanup must run even after request timeout/shutdown cancellation;
-                // otherwise `_activeRequests` and the linked CTS would leak when an isolated
-                // action eventually observes cancellation and exits (#3722).
+                // otherwise `_activeRequests`, the linked CTS, and the execution lease would leak
+                // when an isolated action eventually observes cancellation and exits. The lease
+                // intentionally remains held until the underlying action actually ends so timeout
+                // responses cannot let live handlers exceed MaxConcurrency (#3722, #4536, #4545).
                 // request timeout / shutdown cancellation 後でも cleanup は必ず実行する。
-                // isolated action が後で終了した時に `_activeRequests` と linked CTS を漏らさないため (#3722)。
+                // underlying action が実際に終了するまで execution lease も保持し、timeout response
+                // の後に live handler が MaxConcurrency を超えないようにする (#3722, #4536, #4545)。
                 _ = actionTask.ContinueWith(task =>
                 {
-                    _ = task.Exception;
-                    _activeRequests.TryRemove(requestKey, out _);
-                    RecordTimedOutIsolatedActionDrained(requestKey, task);
-                    requestCts.Dispose();
+                    try
+                    {
+                        _ = task.Exception;
+                        if (registeredRequest)
+                            _activeRequests.TryRemove(requestKey!, out _);
+                        RecordTimedOutIsolatedActionDrained(diagnosticRequestKey, task);
+                    }
+                    finally
+                    {
+                        requestCts.Dispose();
+                        _concurrencyGate.Release();
+                    }
                 }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
                 return CreateRequestTimeoutResponse(id, elapsed, isolatedActionDraining: true);
             }
@@ -2091,19 +3193,34 @@ public partial class McpServer : IDisposable
         }
         catch (OperationCanceledException) when (requestCts.IsCancellationRequested)
         {
-            if (!previousToken.IsCancellationRequested && !_shutdownCts.IsCancellationRequested && stopwatch.Elapsed >= _requestTimeout)
+            if (stopwatch is not null
+                && !previousToken.IsCancellationRequested
+                && !_shutdownCts.IsCancellationRequested
+                && stopwatch.Elapsed >= _requestTimeout)
                 return CreateRequestTimeoutResponse(id, stopwatch.Elapsed);
             return CreateCancelledResponse(id);
         }
         finally
         {
             _currentRequestToken.Value = previousToken;
+            if (executionSlotAcquired && releaseExecutionSlotNow)
+                _concurrencyGate.Release();
             if (cleanupNow)
             {
-                _activeRequests.TryRemove(requestKey, out _);
+                if (registeredRequest)
+                    _activeRequests.TryRemove(requestKey!, out _);
                 requestCts.Dispose();
             }
         }
+    }
+
+    private Task DelayRequestForTestsAsync(JsonNode? id, CancellationToken cancellationToken)
+    {
+        if (RequestDelayForTestsWithId is { } delayWithId)
+            return delayWithId(McpJsonNode.Clone(id), cancellationToken);
+        return RequestDelayForTests is { } delay
+            ? delay(cancellationToken)
+            : Task.CompletedTask;
     }
 
     private static JsonObject CreateRequestTimeoutResponse(JsonNode? id, TimeSpan elapsed, bool isolatedActionDraining = false)
@@ -2185,6 +3302,16 @@ public partial class McpServer : IDisposable
         return new CorrelationScope(previous);
     }
 
+    private static IDisposable BeginBatchItemCorrelation(JsonNode? id, int itemIndex)
+    {
+        var previous = CurrentCorrelationContext.Value;
+        var correlationId = previous is null
+            ? Guid.NewGuid().ToString("D")
+            : $"{previous.CorrelationId}.{itemIndex.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+        CurrentCorrelationContext.Value = new RequestCorrelationContext(SerializeRequestId(id), correlationId);
+        return new CorrelationScope(previous);
+    }
+
     private static IDisposable BeginChildCorrelation(int childIndex)
     {
         var previous = CurrentCorrelationContext.Value;
@@ -2229,10 +3356,37 @@ public partial class McpServer : IDisposable
             CancelRequestCts(cts);
             return;
         }
+        if (_queuedBatchRequests.TryGetValue(requestKey, out var queuedRequest)
+            && queuedRequest.TryCancel())
+        {
+            return;
+        }
 
+        CancellationRegistriesMissedForTests?.Invoke();
         RememberPendingRequestCancellation(requestKey);
-        if (_activeRequests.TryGetValue(requestKey, out cts) && TryConsumePendingRequestCancellation(requestKey))
+        if (_activeRequests.TryGetValue(requestKey, out cts))
+        {
+            _ = TryConsumePendingRequestCancellation(requestKey);
             CancelRequestCts(cts);
+            return;
+        }
+        if (_queuedBatchRequests.TryGetValue(requestKey, out queuedRequest))
+        {
+            // The target can enter the durable registry after the first lookup but before the
+            // bounded tombstone insertion. Recheck it independently of tombstone capacity so a
+            // full cache cannot discard cancellation for an already-queued batch item (#4545).
+            // target は初回 lookup 後、bounded tombstone 挿入前に durable registry へ入り得る。
+            // tombstone capacity と独立して再確認し、満杯でも登録済み batch item の cancel を
+            // 失わないようにする (#4545)。
+            _ = TryConsumePendingRequestCancellation(requestKey);
+            if (queuedRequest.TryCancel())
+                return;
+            if (_activeRequests.TryGetValue(requestKey, out cts))
+            {
+                CancelRequestCts(cts);
+                return;
+            }
+        }
     }
 
     private void RememberPendingRequestCancellation(string requestKey)
@@ -2282,6 +3436,33 @@ public partial class McpServer : IDisposable
         var method = TryGetStringMember(obj, "method");
         return string.Equals(method, "$/cancelRequest", StringComparison.Ordinal)
             || string.Equals(method, "notifications/cancelled", StringComparison.Ordinal);
+    }
+
+    private static bool IsProtocolOrderingBarrierFrame(string frame)
+    {
+        if (!JsonFrameParser.TryParseNode(frame, MaxJsonDepth, out var node, out _))
+            return false;
+
+        if (node is JsonArray batch)
+            return batch.Any(IsProtocolOrderingBarrierItem);
+        return IsProtocolOrderingBarrierItem(node);
+    }
+
+    private static bool IsProtocolOrderingBarrierItem(JsonNode? node)
+    {
+        if (node is not JsonObject obj)
+            return false;
+
+        return TryGetStringMember(obj, "method") switch
+        {
+            "initialize" or
+            "logging/setLevel" or
+            "notifications/initialized" or
+            "notifications/roots/list_changed" or
+            "notifications/shutdown" or
+            "notifications/exit" => true,
+            _ => false,
+        };
     }
 
     // Safe accessor that returns null instead of throwing when `name` is missing OR present
@@ -2364,10 +3545,13 @@ public partial class McpServer : IDisposable
             // No overlap between the client's requested version and this server's supported
             // set. Issue #1554: respond with structured `-32602` (invalid params) carrying the
             // requested + supported versions in `error.data` so clients can branch on it
-            // instead of guessing why the handshake silently failed.
+            // instead of guessing why the handshake silently failed. Reject before committing
+            // any client/session snapshot so a failed re-initialize cannot corrupt the active
+            // session (#4536, #4540).
             // クライアント要求バージョンとサーバー対応集合に重なりがない場合。Issue #1554:
             // クライアントが分岐判定できるよう、`error.data` に要求バージョンと対応バージョン
-            // を入れた -32602 (invalid params) を返す。
+            // を入れた -32602 (invalid params) を返す。client/session snapshot の commit 前に
+            // 拒否し、失敗した re-initialize で有効 session を壊さない (#4536, #4540)。
             DeferFrameLog(BuildUnsupportedProtocolLog(requestedVersion));
             return CreateUnsupportedProtocolError(id, requestedVersion);
         }
@@ -2529,36 +3713,10 @@ public partial class McpServer : IDisposable
     {
         lock (_initializeStateGate)
         {
-            var previous = CurrentInitializeState;
-            var caller = previous.Caller;
-
-            // Caller stickiness: allow upgrading from the default "unknown" bucket to a named
-            // identity, but reject successful re-initialize attempts that swap named identities.
-            // caller の sticky 制御: "unknown" から名前付き ID への昇格だけを許可し、成功した
-            // re-initialize による名前付き ID 同士のスワップは拒否する。
-            if (caller == "unknown")
-            {
-                caller = state.ResolvedCaller;
-            }
-            else if (state.ResolvedCaller != caller && state.ResolvedCaller != "unknown")
-            {
-                DeferFrameLog(BuildCallerSwapRejectionLog(caller, state.ResolvedCaller));
-            }
-
-            var committed = new InitializeSessionState(
-                true,
-                caller,
-                state.ClientNameDisplay,
-                state.ClientVersionDisplay,
-                state.ClientCapabilities,
-                state.ClientCapabilitiesSerializedBytes,
-                state.ClientCapabilitiesTruncationReason,
-                state.ClientSupportsRoots,
-                state.ClientSupportsSampling,
-                state.ClientRoots.ToArray(),
-                state.ClientRootDiagnostics.ToArray(),
-                state.ClientRootsTruncated,
-                state.MarkClientRootsStale || previous.ClientRootsStale);
+            var committed = BuildCommittedInitializeState(
+                PublishedInitializeState,
+                state,
+                logCallerSwap: true);
 
             // One release publication makes lifecycle and all negotiated metadata visible
             // together; no reader can observe initialized=true with a partial state (#4540).
@@ -2566,6 +3724,42 @@ public partial class McpServer : IDisposable
             // initialized=true と部分的な state の組み合わせを reader に見せない (#4540)。
             Volatile.Write(ref _initializeState, committed);
         }
+    }
+
+    private InitializeSessionState BuildCommittedInitializeState(
+        InitializeSessionState previous,
+        PendingInitializeState state,
+        bool logCallerSwap)
+    {
+        var caller = previous.Caller;
+
+        // Caller stickiness: allow upgrading from the default "unknown" bucket to a named
+        // identity, but reject successful re-initialize attempts that swap named identities.
+        // caller の sticky 制御: "unknown" から名前付き ID への昇格だけを許可し、成功した
+        // re-initialize による名前付き ID 同士のスワップは拒否する。
+        if (caller == "unknown")
+        {
+            caller = state.ResolvedCaller;
+        }
+        else if (state.ResolvedCaller != caller && state.ResolvedCaller != "unknown" && logCallerSwap)
+        {
+            DeferFrameLog(BuildCallerSwapRejectionLog(caller, state.ResolvedCaller));
+        }
+
+        return new InitializeSessionState(
+            true,
+            caller,
+            state.ClientNameDisplay,
+            state.ClientVersionDisplay,
+            state.ClientCapabilities,
+            state.ClientCapabilitiesSerializedBytes,
+            state.ClientCapabilitiesTruncationReason,
+            state.ClientSupportsRoots,
+            state.ClientSupportsSampling,
+            state.ClientRoots.ToArray(),
+            state.ClientRootDiagnostics.ToArray(),
+            state.ClientRootsTruncated,
+            state.MarkClientRootsStale || previous.ClientRootsStale);
     }
 
     private sealed record InitializeSessionState(
@@ -2617,6 +3811,69 @@ public partial class McpServer : IDisposable
         string[] ClientRootDiagnostics,
         bool ClientRootsTruncated);
 
+    private sealed class FrameInitializeState
+    {
+        private readonly object _gate = new();
+        private InitializeSessionState _current;
+        private int _acceptedRootsChange;
+
+        internal FrameInitializeState(
+            InitializeSessionState current,
+            bool isProvisionalGeneration)
+        {
+            _current = current;
+            IsProvisionalGeneration = isProvisionalGeneration;
+        }
+
+        internal bool IsProvisionalGeneration { get; }
+        internal InitializeSessionState Current => Volatile.Read(ref _current);
+
+        internal void MarkRootsChangeAccepted()
+            => Volatile.Write(ref _acceptedRootsChange, 1);
+
+        internal bool TryConsumeAcceptedRootsChange()
+            => Interlocked.Exchange(ref _acceptedRootsChange, 0) != 0;
+
+        internal bool TryAdvanceToPublishedGeneration(
+            InitializeSessionState expectedState,
+            InitializeSessionState publishedState)
+        {
+            if (IsProvisionalGeneration)
+                return false;
+
+            lock (_gate)
+            {
+                if (!ReferenceEquals(Current, expectedState))
+                    return false;
+
+                Volatile.Write(ref _current, publishedState);
+                return true;
+            }
+        }
+
+        internal bool TryRefreshClientRoots(
+            InitializeSessionState expectedState,
+            ClientRootSnapshot refreshedRoots)
+        {
+            lock (_gate)
+            {
+                if (!ReferenceEquals(Current, expectedState))
+                    return false;
+
+                Volatile.Write(
+                    ref _current,
+                    expectedState with
+                    {
+                        ClientRoots = refreshedRoots.Roots.ToArray(),
+                        ClientRootDiagnostics = refreshedRoots.Diagnostics.ToArray(),
+                        ClientRootsTruncated = refreshedRoots.Truncated,
+                        ClientRootsStale = false,
+                    });
+                return true;
+            }
+        }
+    }
+
     /// <summary>
     /// Tracks initialize drafts for one wire frame until the exact success response that owns
     /// each draft has been serialized. The collection is frame-local but synchronized because
@@ -2633,6 +3890,24 @@ public partial class McpServer : IDisposable
         {
             lock (_gate)
                 _entries.Add(new Entry(response, state));
+        }
+
+        internal bool TryGetRegisteredState(JsonNode response, out PendingInitializeState state)
+        {
+            lock (_gate)
+            {
+                foreach (var entry in _entries)
+                {
+                    if (!ReferenceEquals(entry.Response, response))
+                        continue;
+
+                    state = entry.State;
+                    return true;
+                }
+            }
+
+            state = null!;
+            return false;
         }
 
         internal PendingInitializeState[] GetIncludedStates(JsonNode serializedResponse)
@@ -2722,7 +3997,7 @@ public partial class McpServer : IDisposable
     {
         lock (_initializeStateGate)
         {
-            var current = CurrentInitializeState;
+            var current = PublishedInitializeState;
             // Always replace the reference, even when already stale, so a notification that
             // races an in-flight roots/list refresh invalidates that refresh's expected state.
             // 既に stale でも必ず reference を置き換え、進行中の roots/list refresh と競合した
@@ -2762,7 +4037,7 @@ public partial class McpServer : IDisposable
         {
             lock (_initializeStateGate)
             {
-                var current = CurrentInitializeState;
+                var current = PublishedInitializeState;
                 Volatile.Write(ref _initializeState, current with { ClientRootsStale = value });
             }
         }
@@ -3724,9 +4999,8 @@ public partial class McpServer : IDisposable
                 suggestion: "logging/setLevel requires params.level to be one of: debug, info, notice, warning, error, critical, alert, emergency.",
                 retrySafe: false);
 
-        var previous = _mcpLogLevel;
-        _mcpLogLevel = level!;
-        await EmitLogNotificationAsync("info", $"MCP logging level changed from {previous} to {_mcpLogLevel}.").ConfigureAwait(false);
+        var previous = Interlocked.Exchange(ref _mcpLogLevel, level!);
+        await EmitLogNotificationAsync("info", $"MCP logging level changed from {previous} to {level}.").ConfigureAwait(false);
         return CreateSuccessResponse(true, id, new JsonObject());
     }
 
@@ -4115,34 +5389,12 @@ public partial class McpServer : IDisposable
                 }
                 else
                 {
-                    response = toolName switch
-                    {
-                        "search" => ExecuteSearch(id, args),
-                        "definition" => ExecuteDefinition(id, args),
-                        "references" => ExecuteReferences(id, args),
-                        "callers" => ExecuteCallers(id, args),
-                        "callees" => ExecuteCallees(id, args),
-                        "symbols" => ExecuteSymbols(id, args),
-                        "files" => ExecuteFiles(id, args),
-                        "find_in_file" => ExecuteFindInFile(id, args),
-                        "excerpt" => ExecuteExcerpt(id, args),
-                        "map" => ExecuteMap(id, args),
-                        "analyze_symbol" => ExecuteAnalyzeSymbol(id, args),
-                        "status" => ExecuteStatus(id, args),
-                        "outline" => ExecuteOutline(id, args),
-                        "batch_query" => ExecuteBatchQuery(id, args),
-                        "deps" => ExecuteDeps(id, args),
-                        "impact_analysis" => ExecuteImpactAnalysis(id, args),
-                        "languages" => ExecuteLanguages(id, args),
-                        "validate" => ExecuteValidate(id, args),
-                        "unused_symbols" => ExecuteUnusedSymbols(id, args),
-                        "symbol_hotspots" => ExecuteSymbolHotspots(id, args),
-                        "ping" => ExecutePing(id),
-                        "index" => await ExecuteIndexAsync(id, args, progressToken).ConfigureAwait(false),
-                        "backfill_fold" => await ExecuteBackfillFoldAsync(id, args, progressToken).ConfigureAwait(false),
-                        "suggest_improvement" => await ExecuteSuggestImprovementAsync(id, args).ConfigureAwait(false),
-                        _ => CreateUnknownToolResponseForMetrics(),
-                    };
+                    response = await DispatchToolCallAsync(
+                        toolName,
+                        id,
+                        args,
+                        progressToken,
+                        CreateUnknownToolResponseForMetrics).ConfigureAwait(false);
                 }
             }
         }
@@ -4162,10 +5414,11 @@ public partial class McpServer : IDisposable
             // tool 名 + 例外型に絞る。SQLite 例外などの生メッセージはバインド値、
             // 該当リテラル、パス、索引内容を含み得るため、MCP transcript へ流さない
             // (#1530 / #4124)。
+            var dbDebugDump = Database.DbDebug.CaptureDump(ex);
             DeferFrameLog(() =>
             {
                 WriteMcpLogLine(BuildToolErrorLog(toolName, ex));
-                Database.DbDebug.DumpToStderr(ex);
+                Database.DbDebug.WriteCapturedDumpToStderr(dbDebugDump);
             });
             metricsError = ex.GetType().Name;
             var classification = McpErrorEnvelope.ClassifyException(ex);
@@ -4204,6 +5457,56 @@ public partial class McpServer : IDisposable
         TryEmitAudit(toolName, id, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, errorType: auditErrorType);
         EmitToolInvocationTelemetry(toolName, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, metricsError);
         return response;
+    }
+
+    private async Task<JsonNode> DispatchToolCallAsync(
+        string toolName,
+        JsonNode? id,
+        JsonNode? args,
+        JsonNode? progressToken,
+        Func<JsonObject> createUnknownToolResponse)
+    {
+        if (toolName is "index" or "backfill_fold")
+        {
+            await _sharedDbWriteGate.WaitAsync(_currentRequestToken.Value).ConfigureAwait(false);
+            try
+            {
+                return toolName == "index"
+                    ? await ExecuteIndexAsync(id, args, progressToken).ConfigureAwait(false)
+                    : await ExecuteBackfillFoldAsync(id, args, progressToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                _sharedDbWriteGate.Release();
+            }
+        }
+
+        return toolName switch
+        {
+            "search" => ExecuteSearch(id, args),
+            "definition" => ExecuteDefinition(id, args),
+            "references" => ExecuteReferences(id, args),
+            "callers" => ExecuteCallers(id, args),
+            "callees" => ExecuteCallees(id, args),
+            "symbols" => ExecuteSymbols(id, args),
+            "files" => ExecuteFiles(id, args),
+            "find_in_file" => ExecuteFindInFile(id, args),
+            "excerpt" => ExecuteExcerpt(id, args),
+            "map" => ExecuteMap(id, args),
+            "analyze_symbol" => ExecuteAnalyzeSymbol(id, args),
+            "status" => ExecuteStatus(id, args),
+            "outline" => ExecuteOutline(id, args),
+            "batch_query" => ExecuteBatchQuery(id, args),
+            "deps" => ExecuteDeps(id, args),
+            "impact_analysis" => ExecuteImpactAnalysis(id, args),
+            "languages" => ExecuteLanguages(id, args),
+            "validate" => ExecuteValidate(id, args),
+            "unused_symbols" => ExecuteUnusedSymbols(id, args),
+            "symbol_hotspots" => ExecuteSymbolHotspots(id, args),
+            "ping" => ExecutePing(id),
+            "suggest_improvement" => await ExecuteSuggestImprovementAsync(id, args).ConfigureAwait(false),
+            _ => createUnknownToolResponse(),
+        };
     }
 
     private void EmitToolInvocationTelemetry(string toolName, JsonNode? args, JsonNode response, DateTimeOffset startedAt, double elapsedMs, string? errorType)
@@ -4808,6 +6111,7 @@ public partial class McpServer : IDisposable
 
     private JsonNode WithDbReader(JsonNode? id, JsonNode? args, Func<DbReader, JsonNode> action)
     {
+        var isolateRequestDb = _isolateDbForCurrentRequest.Value;
         // Accept SQLite file: URIs the same way the CLI does (QueryCommandRunner.WithDb),
         // so AI agents on read-only mounts can pass `--db file:///abs/path?immutable=1` and
         // reach the read-only escape hatch in DbContext. File.Exists is skipped for URI-
@@ -4820,7 +6124,8 @@ public partial class McpServer : IDisposable
             // creates the DB (e.g. via an external `cdidx index`). Without this, a missed
             // file lookup would leave a closed/disposed handle blocking later open attempts.
             // ユーザーが後から DB を作った場合に再オープンできるよう、キャッシュをここで破棄。
-            CloseSharedDb();
+            if (!isolateRequestDb)
+                CloseSharedDb();
             return CreateToolErrorResponse(true, id, $"Database not found: {_dbPath}. Run 'cdidx index <projectPath>' first.",
                 category: McpErrorEnvelope.CategoryIndexMissing,
                 suggestion: "Run `cdidx index <projectPath>` to build the index before retrying. The DB lives at `.cdidx/codeindex.db` by default.",
@@ -4829,7 +6134,7 @@ public partial class McpServer : IDisposable
 
         var requestToken = _currentRequestToken.Value;
         requestToken.ThrowIfCancellationRequested();
-        if (_isolateDbForCurrentRequest.Value)
+        if (isolateRequestDb)
         {
             using var isolatedDb = new DbContext(_dbPath, requestToken);
             isolatedDb.TryMigrateForRead();
@@ -4899,19 +6204,33 @@ public partial class McpServer : IDisposable
             return;
         _disposed = true;
         CloseSharedDb();
-        try
+        var shutdownCancellationTask = RequestShutdownCancellation();
+        if (shutdownCancellationTask.IsCompleted)
         {
-            if (!_shutdownCts.IsCancellationRequested)
-                _shutdownCts.Cancel();
+            DisposeShutdownCtsOnce();
         }
-        catch (ObjectDisposedException)
+        else
         {
-            // already disposed / 既に dispose 済み
+            _ = shutdownCancellationTask.ContinueWith(
+                static (_, state) => ((McpServer)state!).DisposeShutdownCtsOnce(),
+                this,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
         }
-        _shutdownCts.Dispose();
-        _concurrencyGate.Dispose();
+        // Bounded transport teardown can intentionally leave a late task that still releases
+        // this gate. As with `_sharedDbWriteGate`, keep the managed semaphore undisposed so
+        // eventual completion cannot fail with ObjectDisposedException (#3999, #4543).
+        // bounded transport teardown 後も late task がこの gate を release し得るため、
+        // `_sharedDbWriteGate` と同様に dispose せず、遅延完了時の例外を防ぐ (#3999, #4543)。
         _textWriterGate.Dispose();
         GC.SuppressFinalize(this);
+    }
+
+    private void DisposeShutdownCtsOnce()
+    {
+        if (Interlocked.Exchange(ref _shutdownCtsDisposed, 1) == 0)
+            _shutdownCts.Dispose();
     }
 
     // --- JSON-RPC helpers / JSON-RPCヘルパー ---

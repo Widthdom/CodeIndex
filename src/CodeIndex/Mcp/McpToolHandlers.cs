@@ -1347,7 +1347,14 @@ public partial class McpServer
         var refreshedRoots = BuildClientRootSnapshot(rootUris);
         lock (_initializeStateGate)
         {
-            var current = CurrentInitializeState;
+            var frameInitializeState = _frameInitializeState.Value;
+            if (frameInitializeState?.IsProvisionalGeneration == true)
+            {
+                _ = frameInitializeState.TryRefreshClientRoots(expectedState, refreshedRoots);
+                return;
+            }
+
+            var current = PublishedInitializeState;
             if (!ReferenceEquals(current, expectedState))
                 return;
 
@@ -1360,6 +1367,7 @@ public partial class McpServer
                     ClientRootsTruncated = refreshedRoots.Truncated,
                     ClientRootsStale = false,
                 });
+            _ = frameInitializeState?.TryRefreshClientRoots(expectedState, refreshedRoots);
         }
     }
 

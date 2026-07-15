@@ -5,16 +5,16 @@ namespace CodeIndex.Mcp;
 /// (issue #1558). Each <see cref="ReadFrameAsync"/> call returns one client-to-server JSON-RPC
 /// message (or null when the transport has closed); the matching <see cref="WriteFrameAsync"/>
 /// call carries the server's response, or null when the request was a notification that yields
-/// no response. The contract is strictly one read followed by one write — the MCP loop is
-/// single-threaded today, and pluggable transports rely on that pairing to map a request body
-/// to its response on connection-oriented transports such as HTTP. Implementations must make
+/// no response. The base contract is strictly one read followed by one write. Transports that
+/// can safely bind multiple simultaneous pairs implement <see cref="IConcurrentMcpTransport"/>
+/// and return a request-scoped response writer for each frame. Implementations must make
 /// <see cref="IAsyncDisposable.DisposeAsync"/> idempotent and use it to release/cancel pending
 /// transport work without requiring additional server-loop calls.
 /// MCP サーバーが扱う JSON-RPC フレームの読み書きを抽象化する (issue #1558)。<see cref="ReadFrameAsync"/>
 /// で 1 件のクライアント→サーバーメッセージを受け取り（クローズで null）、対応する
-/// <see cref="WriteFrameAsync"/> でサーバー応答を返す（通知の場合は null）。MCP ループは現状
-/// 単一スレッドであり、HTTP のようにリクエストとレスポンスを紐付ける必要があるため、
-/// 「読み 1 回 → 書き 1 回」のペアリングを厳密に守る。実装は
+/// <see cref="WriteFrameAsync"/> でサーバー応答を返す（通知の場合は null）。基本契約では
+/// 「読み 1 回 → 書き 1 回」のペアリングを厳密に守る。複数 pair を安全に紐付けられる transport は
+/// <see cref="IConcurrentMcpTransport"/> を実装し、frame ごとの response writer を返す。実装は
 /// <see cref="IAsyncDisposable.DisposeAsync"/> を冪等にし、追加の server loop 呼び出しなしに
 /// 未完了の transport 作業を解放またはキャンセルする。
 /// </summary>
@@ -42,6 +42,34 @@ internal interface IMcpTransport : IAsyncDisposable
 internal interface IOutOfBandMcpTransport
 {
     Task WriteOutOfBandFrameAsync(string frame, CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// Optional transport capability for request/response pairs that can be processed concurrently.
+/// Each returned context owns the response writer for exactly one input frame, so completion order
+/// cannot make an HTTP response attach to a different request (#4536).
+/// 並行処理できる request/response pair 向けの任意 transport capability。各 context は入力
+/// frame 1 件専用の response writer を所有するため、完了順が変わっても HTTP 応答が別 request
+/// に結び付くことはない (#4536)。
+/// </summary>
+internal interface IConcurrentMcpTransport
+{
+    Task<McpTransportFrame?> ReadConcurrentFrameAsync(CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// Request-scoped transport state captured at read time. The server may execute several contexts
+/// concurrently, but must call <see cref="WriteResponseAsync"/> exactly once for each context.
+/// read 時に取得する request scope の transport state。server は複数 context を並行実行できるが、
+/// 各 context の <see cref="WriteResponseAsync"/> は必ず 1 回だけ呼び出す。
+/// </summary>
+internal sealed class McpTransportFrame(
+    string frame,
+    Func<string?, CancellationToken, Task> writeResponseAsync)
+{
+    internal string Frame { get; } = frame;
+
+    internal Func<string?, CancellationToken, Task> WriteResponseAsync { get; } = writeResponseAsync;
 }
 
 /// <summary>

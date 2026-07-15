@@ -559,6 +559,54 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public async Task Initialize_BatchProvisionalStateDoesNotPublishWhenSerializationFails_Issue4540()
+    {
+        var serializerCalls = 0;
+        JsonNode? attemptedBatchResponse = null;
+        using var server = new McpServer(
+            _dbPath,
+            ConsoleUi.LoadVersion(),
+            false,
+            response =>
+            {
+                if (Interlocked.Increment(ref serializerCalls) != 1)
+                    return response.ToJsonString();
+
+                attemptedBatchResponse = JsonNode.Parse(response.ToJsonString());
+                throw new JsonException("batch initialize serializer failed");
+            });
+        var transport = new QueueMcpTransport(
+            prependInitialize: false,
+            """
+            [
+              {"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+                "clientInfo":{"name":"batch-provisional","version":"1.0"},
+                "capabilities":{"roots":{},"experimental":{"generation":"provisional"}},
+                "roots":[{"uri":"file:///batch-provisional"}]
+              }},
+              {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}
+            ]
+            """);
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        var failedResponse = JsonNode.Parse(Assert.Single(transport.WrittenFrames))!;
+        Assert.Equal(-32603, failedResponse["error"]!["code"]!.GetValue<int>());
+        var attemptedResponses = Assert.IsType<JsonArray>(attemptedBatchResponse);
+        var provisionalSession = attemptedResponses[1]!["result"]!["structuredContent"]!["mcp_session"]!;
+        Assert.Equal("batch-provisional", provisionalSession["client_info"]!["name"]!.GetValue<string>());
+        Assert.Equal(
+            "provisional",
+            provisionalSession["client_capabilities"]!["experimental"]!["generation"]!.GetValue<string>());
+        Assert.Equal("file:///batch-provisional", Assert.Single(provisionalSession["roots"]!.AsArray())!.GetValue<string>());
+
+        Assert.Equal("unknown", server.CurrentCaller);
+        Assert.Null(server.ClientCapabilitiesForTests);
+        Assert.Empty(server.ClientRootsForTests);
+        Assert.False(server.ClientSupportsRootsForTests);
+    }
+
+    [Fact]
     public async Task Initialize_ResponseByteLimitFailureLeavesStateUnchangedThenSuccessCommits_Issue4540()
     {
         using var responseLimit = EnvironmentVariableScope.Capture("CDIDX_MCP_RESPONSE_MAX_BYTES");
