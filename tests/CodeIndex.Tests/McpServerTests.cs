@@ -441,6 +441,39 @@ public partial class McpServerTests : IDisposable
         transaction.Commit();
     }
 
+    private static string CreateLegacyResourceDatabase(string projectRoot, int fileCount = 205)
+    {
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        using (var transaction = writer.BeginTransaction())
+        {
+            for (var i = 0; i < fileCount; i++)
+            {
+                writer.UpsertFile(new FileRecord
+                {
+                    Path = $"src/legacy-resource-{i:D5}.cs",
+                    Lang = "csharp",
+                    Size = 1,
+                    Lines = 1,
+                    Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+                    Checksum = $"legacy-resource-{i}",
+                });
+            }
+            transaction.Commit();
+        }
+
+        using var stripTracking = db.Connection.CreateCommand();
+        stripTracking.CommandText = """
+            DROP TRIGGER IF EXISTS files_resource_generation_ai;
+            DROP TRIGGER IF EXISTS files_resource_generation_ad;
+            DROP TRIGGER IF EXISTS files_resource_generation_au;
+            DELETE FROM codeindex_meta WHERE key = 'resource_list_generation';
+            """;
+        stripTracking.ExecuteNonQuery();
+        return dbPath;
+    }
+
     private JsonNode CallResourcesList(string cursor, int id, int? maxBytes = null)
     {
         var listParams = new JsonObject
@@ -1289,6 +1322,108 @@ public sealed class Caller
             JsonNode.Parse("""{"jsonrpc":"2.0","id":3,"method":"resources/list","params":{}}""")!)!;
         Assert.DoesNotContain(restarted["result"]!["resources"]!.AsArray(),
             resource => resource!["name"]!.GetValue<string>() == "src/app.cs");
+    }
+
+    [Fact]
+    public void ResourcesList_FreshDatabaseSeedsGenerationAndMutationTriggers_Issue4541()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_resources_generation_fresh");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        using var db = new DbContext(dbPath);
+
+        using (var generation = db.Connection.CreateCommand())
+        {
+            generation.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'resource_list_generation'";
+            Assert.Equal("0", generation.ExecuteScalar() as string);
+        }
+
+        var writer = new DbWriter(db.Connection);
+        writer.UpsertFile(new FileRecord
+        {
+            Path = "src/fresh-generation.cs",
+            Lang = "csharp",
+            Size = 1,
+            Lines = 1,
+            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+            Checksum = "fresh-generation",
+        });
+
+        using var incremented = db.Connection.CreateCommand();
+        incremented.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'resource_list_generation'";
+        Assert.Equal("1", incremented.ExecuteScalar() as string);
+    }
+
+    [Fact]
+    public void ResourcesList_WritableLegacyDatabaseMigratesBeforeIssuingCursor_Issue4541()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_resources_generation_writable_legacy");
+        var dbPath = CreateLegacyResourceDatabase(project.Root);
+        using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+        var first = server.HandleMessage(
+            JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}""")!)!;
+        var cursor = first["result"]!["nextCursor"]!.GetValue<string>();
+
+        using (var externalDb = new DbContext(dbPath))
+        {
+            var writer = new DbWriter(externalDb.Connection);
+            Assert.True(writer.DeleteFileByPath("src/legacy-resource-00000.cs"));
+        }
+
+        var stale = server.HandleMessage(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 2,
+            ["method"] = "resources/list",
+            ["params"] = new JsonObject { ["cursor"] = cursor },
+        })!;
+        AssertResourcesListRestartRequired(stale);
+    }
+
+    [Fact]
+    public void ResourcesList_MutableReadOnlyLegacyDatabaseRequiresMigration_Issue4541()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_resources_generation_readonly_legacy");
+        var dbPath = CreateLegacyResourceDatabase(project.Root);
+        var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?mode=ro";
+        using var server = new McpServer(readOnlyUri, ConsoleUi.LoadVersion());
+
+        var response = server.HandleMessage(
+            JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}""")!)!;
+
+        Assert.Equal(-32011, response["error"]!["code"]!.GetValue<int>());
+        var data = response["error"]!["data"]!;
+        Assert.Equal("resources_list_generation_unavailable", data["reason"]!.GetValue<string>());
+        Assert.True(data["migration_required"]!.GetValue<bool>());
+        Assert.False(data["restart_required"]!.GetValue<bool>());
+        Assert.False(data["retry_safe"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ResourcesList_ImmutableLegacyDatabaseUsesStableSnapshotCursor_Issue4541()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_resources_generation_immutable_legacy");
+        var dbPath = CreateLegacyResourceDatabase(project.Root);
+        var immutableUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+        using var server = new McpServer(immutableUri, ConsoleUi.LoadVersion());
+
+        var first = server.HandleMessage(
+            JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}""")!)!;
+        var firstResources = first["result"]!["resources"]!.AsArray();
+        var cursor = first["result"]!["nextCursor"]!.GetValue<string>();
+        var second = server.HandleMessage(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 2,
+            ["method"] = "resources/list",
+            ["params"] = new JsonObject { ["cursor"] = cursor },
+        })!;
+        var secondResources = second["result"]!["resources"]!.AsArray();
+
+        Assert.Equal(200, firstResources.Count);
+        Assert.Equal(5, secondResources.Count);
+        var firstNames = firstResources.Select(resource => resource!["name"]!.GetValue<string>()).ToHashSet(StringComparer.Ordinal);
+        Assert.DoesNotContain(secondResources, resource => firstNames.Contains(resource!["name"]!.GetValue<string>()));
+        Assert.Null(second["result"]!["nextCursor"]);
     }
 
     [Fact]

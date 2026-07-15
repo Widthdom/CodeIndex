@@ -52,6 +52,7 @@ public partial class DbReader : IDisposable
     private readonly bool _walCheckpointAttempted;
     private readonly bool _walCheckpointSucceeded;
     private readonly bool _readOnlyImmutableFallback;
+    private readonly bool _immutableReadOnly;
     private readonly string? _walCheckpointSkippedReason;
     private readonly string? _walCheckpointFailureReason;
     private readonly DbSchemaCache? _schemaCache;
@@ -360,6 +361,7 @@ public partial class DbReader : IDisposable
                context.WalCheckpointAttempted,
                context.WalCheckpointSucceeded,
                context.ReadOnlyImmutableFallback,
+               context.ImmutableReadOnly,
                context.WalCheckpointSkippedReason,
                context.WalCheckpointFailureReason)
     {
@@ -381,6 +383,7 @@ public partial class DbReader : IDisposable
                context.WalCheckpointAttempted,
                context.WalCheckpointSucceeded,
                context.ReadOnlyImmutableFallback,
+               context.ImmutableReadOnly,
                context.WalCheckpointSkippedReason,
                context.WalCheckpointFailureReason)
     {
@@ -418,6 +421,7 @@ public partial class DbReader : IDisposable
         bool walCheckpointAttempted = false,
         bool walCheckpointSucceeded = false,
         bool readOnlyImmutableFallback = false,
+        bool immutableReadOnly = false,
         string? walCheckpointSkippedReason = null,
         string? walCheckpointFailureReason = null)
     {
@@ -434,6 +438,7 @@ public partial class DbReader : IDisposable
         _walCheckpointAttempted = walCheckpointAttempted;
         _walCheckpointSucceeded = walCheckpointSucceeded;
         _readOnlyImmutableFallback = readOnlyImmutableFallback;
+        _immutableReadOnly = immutableReadOnly;
         _walCheckpointSkippedReason = walCheckpointSkippedReason;
         _walCheckpointFailureReason = walCheckpointFailureReason;
         _schemaCache = schemaCache;

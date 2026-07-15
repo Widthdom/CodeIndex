@@ -152,7 +152,7 @@ public class DbContext : IDisposable
         "idx_symbol_refs_symbol_name_folded_file",
         "idx_symbol_refs_container_name_folded_kind",
     ];
-    private static readonly string[] ReadMigrationRequiredTriggers =
+    internal static readonly string[] ResourceListGenerationTriggerNames =
     [
         "files_resource_generation_ai",
         "files_resource_generation_ad",
@@ -165,6 +165,7 @@ public class DbContext : IDisposable
     private bool _walCheckpointAttempted;
     private bool _walCheckpointSucceeded;
     private bool _readOnlyImmutableFallback;
+    private bool _immutableReadOnly;
     private string? _walCheckpointSkippedReason;
     private string? _walCheckpointFailureReason;
     private readonly string? _schemaCacheKey;
@@ -240,6 +241,7 @@ public class DbContext : IDisposable
     public bool WalCheckpointAttempted => _walCheckpointAttempted;
     public bool WalCheckpointSucceeded => _walCheckpointSucceeded;
     public bool ReadOnlyImmutableFallback => _readOnlyImmutableFallback;
+    internal bool ImmutableReadOnly => _immutableReadOnly;
     public string? WalCheckpointSkippedReason => _walCheckpointSkippedReason;
     public string? WalCheckpointFailureReason => _walCheckpointFailureReason;
 
@@ -472,6 +474,7 @@ public class DbContext : IDisposable
                     ApplyConnectionPerformancePragmas();
                     RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
                     _isReadOnly = true;
+                    _immutableReadOnly = SqliteFileUri.RequestsImmutable(dbPath);
                     WarnIfBatchInProgress();
                     return;
                 }
@@ -607,6 +610,7 @@ public class DbContext : IDisposable
     {
         cancellationToken.ThrowIfCancellationRequested();
         _connection = OpenReadOnly(dbPath, out _readOnlyImmutableFallback);
+        _immutableReadOnly = _readOnlyImmutableFallback;
         ApplyBusyTimeoutPragma();
         ApplyConnectionPerformancePragmas();
         RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
@@ -2959,7 +2963,7 @@ public class DbContext : IDisposable
                 return false;
         }
 
-        foreach (var trigger in ReadMigrationRequiredTriggers)
+        foreach (var trigger in ResourceListGenerationTriggerNames)
         {
             if (!TriggerExists(trigger))
                 return false;

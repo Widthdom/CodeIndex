@@ -8,7 +8,8 @@ internal readonly record struct ResourceFileEntry(long Id, string Path, string? 
 internal sealed record ResourceFilePage(
     long Generation,
     IReadOnlyList<ResourceFileEntry> Files,
-    bool CursorRestartRequired);
+    bool CursorRestartRequired,
+    bool GenerationTrackingUnavailable = false);
 
 public partial class DbReader
 {
@@ -32,11 +33,21 @@ public partial class DbReader
             throw new ArgumentException("A keyset anchor and legacy offset cannot be combined.", nameof(legacyOffset));
 
         using var transaction = _conn.BeginTransaction(deferred: true);
-        var generation = ReadResourceListGeneration(transaction);
-        if (expectedGeneration is not null && expectedGeneration.Value != generation)
+        var generation = TryReadResourceListGeneration(transaction);
+        if (generation is null)
         {
             transaction.Commit();
-            return new ResourceFilePage(generation, [], CursorRestartRequired: true);
+            return new ResourceFilePage(
+                Generation: 0,
+                Files: [],
+                CursorRestartRequired: false,
+                GenerationTrackingUnavailable: true);
+        }
+        var trustedGeneration = generation.Value;
+        if (expectedGeneration is not null && expectedGeneration.Value != trustedGeneration)
+        {
+            transaction.Commit();
+            return new ResourceFilePage(trustedGeneration, [], CursorRestartRequired: true);
         }
 
         int? afterBucket = null;
@@ -63,7 +74,7 @@ public partial class DbReader
             if (afterPath is null)
             {
                 transaction.Commit();
-                return new ResourceFilePage(generation, [], CursorRestartRequired: true);
+                return new ResourceFilePage(trustedGeneration, [], CursorRestartRequired: true);
             }
         }
 
@@ -109,28 +120,45 @@ public partial class DbReader
         }
 
         transaction.Commit();
-        return new ResourceFilePage(generation, files, CursorRestartRequired: false);
+        return new ResourceFilePage(trustedGeneration, files, CursorRestartRequired: false);
     }
 
-    private long ReadResourceListGeneration(SqliteTransaction transaction)
+    private long? TryReadResourceListGeneration(SqliteTransaction transaction)
     {
-        try
+        using var schemaCommand = _conn.CreateCommand();
+        schemaCommand.Transaction = transaction;
+        schemaCommand.CommandText = """
+            SELECT
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'codeindex_meta'),
+                (SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'trigger'
+                   AND name IN ('files_resource_generation_ai', 'files_resource_generation_ad', 'files_resource_generation_au'))
+            """;
+        using var schemaReader = schemaCommand.ExecuteTrackedReader();
+        if (!schemaReader.TrackedRead())
+            return _immutableReadOnly ? 0 : null;
+
+        var hasMetaTable = schemaReader.GetInt64(0) != 0;
+        var hasAllGenerationTriggers = schemaReader.GetInt64(1) == DbContext.ResourceListGenerationTriggerNames.Length;
+        if (!hasMetaTable)
+            return _immutableReadOnly ? 0 : null;
+
+        using var command = _conn.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
+        SqliteCommandPolicy.Add(command, "@key", DbContext.ResourceListGenerationMetaKey);
+        var raw = command.ExecuteScalar() as string;
+        if (long.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out var generation)
+            && generation >= 0
+            && (hasAllGenerationTriggers || _immutableReadOnly))
         {
-            using var command = _conn.CreateCommand();
-            command.Transaction = transaction;
-            command.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
-            SqliteCommandPolicy.Add(command, "@key", DbContext.ResourceListGenerationMetaKey);
-            var raw = command.ExecuteScalar() as string;
-            return long.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out var generation)
-                && generation >= 0
-                    ? generation
-                    : 0;
+            return generation;
         }
-        catch (SqliteException)
-        {
-            // Legacy immutable DBs may not have codeindex_meta or generation triggers yet.
-            // legacy immutable DB では codeindex_meta / generation trigger が未導入の場合がある。
-            return 0;
-        }
+
+        // An immutable snapshot cannot change between pages, so legacy databases may use a
+        // connection-local generation zero even when the persisted tracking schema is absent.
+        // immutable snapshot はページ間で変化しないため、永続世代 schema がない legacy DB でも
+        // connection-local な世代 0 を安全に利用できる。
+        return _immutableReadOnly ? 0 : null;
     }
 }

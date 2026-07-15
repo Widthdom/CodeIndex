@@ -2381,6 +2381,8 @@ public partial class McpServer : IDisposable
                 afterFileId: afterFileId,
                 expectedGeneration: expectedGeneration,
                 legacyOffset: legacyOffset);
+            if (resourcePage.GenerationTrackingUnavailable)
+                return CreateResourcesListGenerationUnavailableError(id);
             if (resourcePage.CursorRestartRequired)
                 return CreateResourcesListRestartError(id);
 
@@ -2596,6 +2598,19 @@ public partial class McpServer : IDisposable
             {
                 ["reason"] = "resources_list_generation_changed",
                 ["restart_required"] = true,
+            });
+
+    private static JsonObject CreateResourcesListGenerationUnavailableError(JsonNode? id)
+        => CreateErrorResponse(hasId: true, id: id, code: McpErrorEnvelope.CodeIndexStale,
+            message: "This database cannot prove a stable resources/list generation.",
+            category: McpErrorEnvelope.CategoryIndexStale,
+            suggestion: "Open the database on writable storage and run `cdidx index <projectPath>` with the current cdidx to install generation tracking. Use an `immutable=1` URI only for a snapshot guaranteed not to change.",
+            retrySafe: false,
+            extraData: new JsonObject
+            {
+                ["reason"] = "resources_list_generation_unavailable",
+                ["migration_required"] = true,
+                ["restart_required"] = false,
             });
 
     private static string EncodeResourceListCursor(long generation, long afterFileId)

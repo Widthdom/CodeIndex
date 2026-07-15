@@ -42,35 +42,12 @@ internal static class SqliteFileUri
 
     internal static bool RequestsReadOnly(string uriText)
     {
-        if (!StartsWithFileScheme(uriText))
-            return false;
-
-        if (!TryValidateBounds(uriText, out var queryIndex, out _))
-            return false;
-
-        if (queryIndex < 0)
-            return false;
-
-        var query = uriText.AsSpan(queryIndex + 1);
-        while (!query.IsEmpty)
-        {
-            var ampersandIndex = query.IndexOf('&');
-            var segment = ampersandIndex >= 0 ? query[..ampersandIndex] : query;
-            segment = segment.Trim();
-            if (segment.Equals("immutable=1".AsSpan(), StringComparison.OrdinalIgnoreCase) ||
-                segment.Equals("mode=ro".AsSpan(), StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-
-            if (ampersandIndex < 0)
-                break;
-
-            query = query[(ampersandIndex + 1)..];
-        }
-
-        return false;
+        return HasQuerySegment(uriText, "immutable=1")
+            || HasQuerySegment(uriText, "mode=ro");
     }
+
+    internal static bool RequestsImmutable(string uriText)
+        => HasQuerySegment(uriText, "immutable=1");
 
     internal static string TruncateDiagnosticValue(string value)
     {
@@ -110,5 +87,29 @@ internal static class SqliteFileUri
 
         parseError = null;
         return true;
+    }
+
+    private static bool HasQuerySegment(string uriText, string expectedSegment)
+    {
+        if (!StartsWithFileScheme(uriText)
+            || !TryValidateBounds(uriText, out var queryIndex, out _)
+            || queryIndex < 0)
+        {
+            return false;
+        }
+
+        var query = uriText.AsSpan(queryIndex + 1);
+        while (!query.IsEmpty)
+        {
+            var ampersandIndex = query.IndexOf('&');
+            var segment = ampersandIndex >= 0 ? query[..ampersandIndex] : query;
+            if (segment.Trim().Equals(expectedSegment.AsSpan(), StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (ampersandIndex < 0)
+                break;
+            query = query[(ampersandIndex + 1)..];
+        }
+
+        return false;
     }
 }
