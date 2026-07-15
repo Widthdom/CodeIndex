@@ -166,6 +166,89 @@ public class RateLimiterTests
     }
 
     [Fact]
+    public void HierarchyRetry_CoversChargedPrimaryRefillAndSecondaryCapRecovery_Issue4547()
+    {
+        var clock = new TestClock();
+        var limiter = new RateLimiter(new RateLimiterOptions
+        {
+            RefillTokensPerSecond = 0.1,
+            BurstCapacity = 1.0,
+            MaxBucketCount = 2,
+            BucketIdleTtl = TimeSpan.FromSeconds(11),
+        }, clock.Read);
+        const string caller = "client-a";
+
+        Assert.True(limiter.TryAcquire(RateLimiter.ToolsCallPreValidationBucketName, caller).Allowed);
+        Assert.True(limiter.TryAcquire("unrelated", "other-client").Allowed);
+        clock.Now = clock.Now.AddSeconds(10);
+
+        var denied = limiter.TryAcquireHierarchy(
+            RateLimiter.ToolsCallPreValidationBucketName,
+            "status",
+            caller);
+
+        Assert.False(denied.Allowed);
+        // The unrelated bucket frees capacity at t=11, but the charged primary token does
+        // not recover until t=20. The advertised boundary must cover both constraints.
+        // unrelated bucket は t=11 に capacity を空けるが、消費済み primary token は t=20
+        // まで回復しない。通知境界は両方の制約を満たす必要がある。
+        Assert.Equal(10_000, denied.RetryAfterMs);
+        Assert.Equal(2, limiter.BucketCount);
+
+        clock.Now = clock.Now.AddMilliseconds(denied.RetryAfterMs);
+        Assert.True(limiter.TryAcquireHierarchy(
+            RateLimiter.ToolsCallPreValidationBucketName,
+            "status",
+            caller).Allowed);
+        Assert.Equal(2, limiter.BucketCount);
+    }
+
+    [Fact]
+    public void HierarchyRetry_UsesEarlierRequestedBucketExpiryReset_Issue4547()
+    {
+        var clock = new TestClock();
+        var limiter = new RateLimiter(new RateLimiterOptions
+        {
+            RefillTokensPerSecond = 0.01,
+            BurstCapacity = 2.0,
+            MaxBucketCount = 3,
+            BucketIdleTtl = TimeSpan.FromSeconds(4),
+        }, clock.Read);
+        const string caller = "client-a";
+
+        Assert.True(limiter.TryAcquire(RateLimiter.ToolsCallPreValidationBucketName, caller).Allowed);
+        Assert.True(limiter.TryAcquire("status", caller).Allowed);
+        Assert.True(limiter.TryAcquire("status", caller).Allowed);
+        Assert.True(limiter.TryAcquire("unrelated", "other-client").Allowed);
+
+        var denied = limiter.TryAcquireHierarchy(
+            RateLimiter.ToolsCallPreValidationBucketName,
+            "status",
+            caller);
+
+        Assert.False(denied.Allowed);
+        // Token refill would take about 100 seconds, but both requested buckets reset at
+        // their 4-second idle expiry and can be recreated within the cap.
+        // token refill は約 100 秒だが、要求した両 bucket は 4 秒の idle expiry で reset され、
+        // cap 内で再作成できる。
+        Assert.Equal(4_000, denied.RetryAfterMs);
+
+        // Advance the amortized global prune schedule without touching either requested key;
+        // exact-boundary recovery must still eagerly remove those expired keys.
+        // 要求キーに触れず償却 global prune schedule だけを進めても、正確な境界で対象の
+        // expired key を eager に除去して回復する必要がある。
+        clock.Now = clock.Now.AddMilliseconds(3_500);
+        Assert.True(limiter.TryAcquire("unrelated", "other-client").Allowed);
+        clock.Now = clock.Now.AddMilliseconds(500);
+
+        Assert.True(limiter.TryAcquireHierarchy(
+            RateLimiter.ToolsCallPreValidationBucketName,
+            "status",
+            caller).Allowed);
+        Assert.Equal(3, limiter.BucketCount);
+    }
+
+    [Fact]
     public void RetryAfterMs_ApproximatesTimeUntilNextToken()
     {
         var clock = new TestClock();

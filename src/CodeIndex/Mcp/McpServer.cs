@@ -4041,9 +4041,10 @@ public partial class McpServer : IDisposable
             // direct tools/call はすべて、名前・enablement・argument の詳細検証前に caller-wide
             // bucket へ課金する。canonical な既知 tool は既存の secondary per-tool 制限も維持し、
             // malformed request の既知名ローテーションによる burst 増幅を防ぐ（#4547）。
-            var decision = RateLimiter.TryAcquire(RateLimiter.ToolsCallPreValidationBucketName, caller);
-            if (decision.Allowed && ResolveKnownRateLimitBucketName(toolName) is { } knownToolBucketName)
-                decision = RateLimiter.TryAcquire(knownToolBucketName, caller);
+            var decision = RateLimiter.TryAcquireHierarchy(
+                RateLimiter.ToolsCallPreValidationBucketName,
+                ResolveKnownRateLimitBucketName(toolName),
+                caller);
             if (!decision.Allowed)
             {
                 metricsError = "rate_limited";

@@ -9631,6 +9631,37 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_HierarchyRetryIncludesChargedCoarseRefillAfterCapDenial_Issue4547()
+    {
+        var clock = InstallRateLimiter(_server, new RateLimiterOptions
+        {
+            RefillTokensPerSecond = 0.1,
+            BurstCapacity = 1.0,
+            MaxBucketCount = 2,
+            BucketIdleTtl = TimeSpan.FromSeconds(11),
+        });
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"clientInfo":{"name":"client-a","version":"1.0"}}}""")!);
+        const string caller = "client-a/1.0";
+        Assert.True(_server.RateLimiter.TryAcquire(RateLimiter.ToolsCallPreValidationBucketName, caller).Allowed);
+        Assert.True(_server.RateLimiter.TryAcquire("unrelated", "other-client").Allowed);
+        clock.Now = clock.Now.AddSeconds(10);
+
+        var denied = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!;
+
+        Assert.Equal(McpErrorEnvelope.CodeRateLimited, denied["error"]!["code"]!.GetValue<int>());
+        var retryAfterMs = denied["error"]!["data"]!["retry_after_ms"]!.GetValue<long>();
+        Assert.Equal(10_000, retryAfterMs);
+
+        clock.Now = clock.Now.AddMilliseconds(retryAfterMs);
+        var recovered = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status"}}""")!)!;
+        Assert.Null(recovered["error"]);
+        Assert.Equal(2, _server.RateLimiter.BucketCount);
+    }
+
+    [Fact]
     public void ToolsCall_DisabledKnownToolConsumesQuotaBeforeEnablementCheck_Issue4547()
     {
         var deny = McpToolFilter.Parse(null, "status");

@@ -4,11 +4,11 @@ using CodeIndex.Cli;
 namespace CodeIndex.Mcp;
 
 /// <summary>
-/// Token-bucket rate limiter keyed by (tool, caller). MCP tool calls consume one token from
-/// the bucket; over-quota callers receive a structured `-32000` JSON-RPC error including
-/// `retry_after_ms` (issue #1560).
-/// (tool, caller) ごとのトークンバケット型レート制限。MCP ツール呼び出しはバケットから 1 トークンを
-/// 消費し、超過した呼び出しには `retry_after_ms` を含む `-32000` の JSON-RPC エラーを返す（#1560）。
+/// Token-bucket rate limiter keyed by (partition, caller). MCP tool calls consume tokens from
+/// their required partitions; over-quota callers receive a structured `-32000` JSON-RPC error
+/// including `retry_after_ms` (issues #1560 and #4547).
+/// (partition, caller) ごとのトークンバケット型レート制限。MCP ツール呼び出しは必須 partition の
+/// token を消費し、超過時は `retry_after_ms` を含む `-32000` JSON-RPC error を返す（#1560、#4547）。
 /// </summary>
 internal sealed class RateLimiter
 {
@@ -72,29 +72,83 @@ internal sealed class RateLimiter
             // 算出せず、並行 call が判定順に clock 値を観測するようにする。
             var now = _clock();
             PruneIdleBuckets(now);
-            if (!_buckets.TryGetValue(key, out var bucket))
+            return TryAcquireLocked(key, now);
+        }
+    }
+
+    /// <summary>
+    /// Acquire a required caller-wide bucket and, when supplied, a secondary known-tool
+    /// bucket under one lock. If the secondary layer rejects after the primary token was
+    /// charged, retry timing covers the earliest point at which both layers and bucket-cap
+    /// capacity can admit the retry (#4547).
+    /// caller-wide の必須 bucket と、指定時は secondary known-tool bucket を 1 lock 内で
+    /// 取得する。primary token 消費後に secondary layer が拒否した場合も、両 layer と
+    /// bucket cap capacity が再試行を許可できる最短時刻を retry として返す（#4547）。
+    /// </summary>
+    public RateLimiterDecision TryAcquireHierarchy(string primaryTool, string? secondaryTool, string caller)
+    {
+        if (!_options.IsEnabled)
+            return RateLimiterDecision.Allow;
+
+        var primaryKey = BuildKey(primaryTool, caller);
+        var secondaryKey = secondaryTool is null ? (RateLimiterBucketKey?)null : BuildKey(secondaryTool, caller);
+        if (secondaryKey == primaryKey)
+            secondaryKey = null;
+
+        lock (_gate)
+        {
+            var now = _clock();
+            PruneIdleBuckets(now);
+            // The advertised hierarchy boundary may be an exact requested-bucket expiry.
+            // Remove those keys eagerly even when the amortized global sweep is not due, so
+            // the retry observes the same reset modeled by the recovery calculation (#4547).
+            // 通知した hierarchy 境界が要求 bucket の正確な expiry の場合がある。償却された
+            // global sweep の時刻前でも対象キーを除去し、回復計算と同じ reset を観測させる。
+            RemoveRequestedBucketIfExpired(primaryKey, now);
+            if (secondaryKey is { } requestedSecondaryKey)
+                RemoveRequestedBucketIfExpired(requestedSecondaryKey, now);
+
+            var primaryDecision = TryAcquireLocked(primaryKey, now);
+            if (!primaryDecision.Allowed || secondaryKey is null)
+                return primaryDecision;
+
+            var secondaryDecision = TryAcquireLocked(secondaryKey.Value, now);
+            if (secondaryDecision.Allowed)
+                return secondaryDecision;
+
+            var hierarchyRetryAfterMs = ComputeHierarchyRetryAfterMilliseconds(
+                now,
+                primaryKey,
+                secondaryKey.Value,
+                secondaryDecision.RetryAfterMs);
+            return RateLimiterDecision.Deny(hierarchyRetryAfterMs);
+        }
+    }
+
+    private RateLimiterDecision TryAcquireLocked(RateLimiterBucketKey key, DateTimeOffset now)
+    {
+        if (!_buckets.TryGetValue(key, out var bucket))
+        {
+            if (_buckets.Count >= _options.MaxBucketCount)
             {
+                // The scheduled sweep is an amortization detail, not a reason to keep an
+                // already-expired bucket when capacity is exhausted. Re-check expiry now
+                // before denying a legitimate new key (#4547).
+                // 定期 sweep は償却のための実装詳細。容量枯渇時に期限切れ bucket を保持して
+                // 正常な新規キーを拒否しないよう、拒否前に現在時刻で再確認する（#4547）。
+                if (_lastPruneAt != now)
+                    PruneIdleBuckets(now, force: true);
                 if (_buckets.Count >= _options.MaxBucketCount)
                 {
-                    // The scheduled sweep is an amortization detail, not a reason to keep an
-                    // already-expired bucket when capacity is exhausted. Re-check expiry now
-                    // before denying a legitimate new key (#4547).
-                    // 定期 sweep は償却のための実装詳細。容量枯渇時に期限切れ bucket を保持して
-                    // 正常な新規キーを拒否しないよう、拒否前に現在時刻で再確認する（#4547）。
-                    if (_lastPruneAt != now)
-                        PruneIdleBuckets(now, force: true);
-                    if (_buckets.Count >= _options.MaxBucketCount)
-                    {
-                        _bucketLimitRejectionCount++;
-                        return RateLimiterDecision.Deny(ComputeBucketLimitRetryAfterMilliseconds(now));
-                    }
+                    _bucketLimitRejectionCount++;
+                    return RateLimiterDecision.Deny(ComputeBucketLimitRetryAfterMilliseconds(now));
                 }
-
-                bucket = new TokenBucket(_options.BurstCapacity, now);
-                _buckets[key] = bucket;
             }
-            return bucket.TryAcquire(now, _options.RefillTokensPerSecond, _options.BurstCapacity);
+
+            bucket = new TokenBucket(_options.BurstCapacity, now);
+            _buckets[key] = bucket;
         }
+        return bucket.TryAcquire(now, _options.RefillTokensPerSecond, _options.BurstCapacity);
     }
 
     internal RateLimiterDiagnostics SnapshotDiagnostics()
@@ -114,6 +168,154 @@ internal sealed class RateLimiter
     }
 
     internal static RateLimiterBucketKey BuildKey(string tool, string caller) => new(tool, caller);
+
+    private long ComputeHierarchyRetryAfterMilliseconds(
+        DateTimeOffset now,
+        RateLimiterBucketKey primaryKey,
+        RateLimiterBucketKey secondaryKey,
+        long fallbackRetryAfterMs)
+    {
+        // A secondary denial can happen after the primary token has already been charged.
+        // Evaluate every state-change boundary (requested-token refill and idle expiry) and
+        // return the first millisecond at which a no-intervening-traffic retry can acquire
+        // both requested partitions without exceeding the bucket cap (#4547).
+        // secondary 拒否時には primary token が消費済みの場合がある。要求 bucket の refill と
+        // 全 idle expiry の各境界を評価し、途中 traffic が無い場合に両 partition を cap 内で
+        // 取得できる最初の millisecond を返す（#4547）。
+        var candidateDelays = new SortedSet<long>();
+        foreach (var bucket in _buckets.Values)
+            candidateDelays.Add(ComputeDelayUntilIdleExpiryMilliseconds(now, bucket));
+
+        AddNextTokenCandidate(primaryKey);
+        AddNextTokenCandidate(secondaryKey);
+
+        // Eligibility is monotonic without intervening traffic: tokens only refill, idle
+        // buckets only expire, and requested expired buckets are modeled as fresh. Binary
+        // search therefore avoids an O(bucket-count^2) scan on an abuse-sensitive path.
+        // 途中 traffic が無ければ token は補充され、idle bucket は減るだけで、expired request
+        // bucket は fresh として扱うため許可可否は単調になる。二分探索で濫用対象経路の
+        // O(bucket-count^2) scan を避ける。
+        var orderedCandidateDelays = candidateDelays.ToArray();
+        var firstAllowedIndex = -1;
+        var low = 0;
+        var high = orderedCandidateDelays.Length - 1;
+        while (low <= high)
+        {
+            var middle = low + ((high - low) / 2);
+            var delayMs = orderedCandidateDelays[middle];
+            var candidateTime = AddMillisecondsClamped(now, Math.Max(1, delayMs));
+            if (CanAcquireHierarchyAt(candidateTime, primaryKey, secondaryKey))
+            {
+                firstAllowedIndex = middle;
+                high = middle - 1;
+            }
+            else
+            {
+                low = middle + 1;
+            }
+        }
+        if (firstAllowedIndex >= 0)
+            return Math.Max(1, orderedCandidateDelays[firstAllowedIndex]);
+
+        return Math.Max(MaxDiagnosticIntervalMilliseconds, fallbackRetryAfterMs);
+
+        void AddNextTokenCandidate(RateLimiterBucketKey key)
+        {
+            if (_buckets.TryGetValue(key, out var bucket)
+                && bucket.TryGetNextTokenDelayMilliseconds(
+                    now,
+                    _options.RefillTokensPerSecond,
+                    _options.BurstCapacity) is { } delayMs)
+            {
+                candidateDelays.Add(delayMs);
+            }
+        }
+    }
+
+    private bool CanAcquireHierarchyAt(
+        DateTimeOffset candidateTime,
+        RateLimiterBucketKey primaryKey,
+        RateLimiterBucketKey secondaryKey)
+    {
+        var retainedBucketCount = 0;
+        foreach (var bucket in _buckets.Values)
+        {
+            if (!IsExpiredAt(bucket, candidateTime))
+                retainedBucketCount++;
+        }
+
+        var primaryRetained = IsRetained(primaryKey, candidateTime, out var primaryBucket);
+        var secondaryRetained = IsRetained(secondaryKey, candidateTime, out var secondaryBucket);
+        var requiredNewBuckets = (primaryRetained ? 0 : 1) + (secondaryRetained ? 0 : 1);
+        if (retainedBucketCount + requiredNewBuckets > _options.MaxBucketCount)
+            return false;
+        if ((!primaryRetained || primaryBucket!.WouldAllowAt(candidateTime, _options.RefillTokensPerSecond, _options.BurstCapacity))
+            && (!secondaryRetained || secondaryBucket!.WouldAllowAt(candidateTime, _options.RefillTokensPerSecond, _options.BurstCapacity)))
+        {
+            return _options.BurstCapacity >= 1.0 || requiredNewBuckets == 0;
+        }
+        return false;
+    }
+
+    private bool IsRetained(RateLimiterBucketKey key, DateTimeOffset candidateTime, out TokenBucket? bucket)
+    {
+        if (_buckets.TryGetValue(key, out bucket) && !IsExpiredAt(bucket, candidateTime))
+            return true;
+        bucket = null;
+        return false;
+    }
+
+    private void RemoveRequestedBucketIfExpired(RateLimiterBucketKey key, DateTimeOffset now)
+    {
+        if (_buckets.TryGetValue(key, out var bucket) && IsExpiredAt(bucket, now))
+            _buckets.Remove(key);
+    }
+
+    private bool IsExpiredAt(TokenBucket bucket, DateTimeOffset candidateTime)
+    {
+        var cutoff = ComputeIdleCutoff(candidateTime, _options.BucketIdleTtl);
+        return bucket.LastTouched <= cutoff;
+    }
+
+    private long ComputeDelayUntilIdleExpiryMilliseconds(DateTimeOffset now, TokenBucket bucket)
+    {
+        DateTimeOffset expiresAt;
+        try
+        {
+            expiresAt = bucket.LastTouched + _options.BucketIdleTtl;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            expiresAt = DateTimeOffset.MaxValue;
+        }
+        return ComputePositiveDelayMilliseconds(now, expiresAt);
+    }
+
+    private static long ComputePositiveDelayMilliseconds(DateTimeOffset now, DateTimeOffset target)
+    {
+        if (target <= now)
+            return 1;
+        try
+        {
+            return Math.Max(1, (long)Math.Ceiling((target - now).TotalMilliseconds));
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return Math.Max(1, (long)Math.Ceiling((DateTimeOffset.MaxValue - now).TotalMilliseconds));
+        }
+    }
+
+    private static DateTimeOffset AddMillisecondsClamped(DateTimeOffset value, long milliseconds)
+    {
+        try
+        {
+            return value.AddMilliseconds(milliseconds);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return DateTimeOffset.MaxValue;
+        }
+    }
 
     private long ComputeBucketLimitRetryAfterMilliseconds(DateTimeOffset now)
     {
@@ -259,6 +461,27 @@ internal sealed class RateLimiter
         }
 
         public DateTimeOffset LastTouched => _lastTouched;
+
+        public bool WouldAllowAt(DateTimeOffset candidateTime, double refillRate, double capacity) =>
+            ProjectTokens(candidateTime, refillRate, capacity) >= 1.0;
+
+        public long? TryGetNextTokenDelayMilliseconds(DateTimeOffset now, double refillRate, double capacity)
+        {
+            if (capacity < 1.0 || refillRate <= 0)
+                return null;
+            var projectedTokens = ProjectTokens(now, refillRate, capacity);
+            if (projectedTokens >= 1.0)
+                return 1;
+            return Math.Max(1, (long)Math.Ceiling(((1.0 - projectedTokens) / refillRate) * 1000.0));
+        }
+
+        private double ProjectTokens(DateTimeOffset candidateTime, double refillRate, double capacity)
+        {
+            var elapsedSeconds = (candidateTime - _lastUpdate).TotalSeconds;
+            return elapsedSeconds > 0
+                ? Math.Min(capacity, _tokens + elapsedSeconds * refillRate)
+                : _tokens;
+        }
 
         public RateLimiterDecision TryAcquire(DateTimeOffset now, double refillRate, double capacity)
         {

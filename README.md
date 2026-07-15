@@ -185,10 +185,11 @@ caller-wide coarse bucket before detailed tool-name, enablement, and argument
 validation. Canonical known tool names additionally retain secondary per-tool
 buckets; missing, malformed, empty, oversized, case-variant, and unknown names
 create no name-derived buckets. `batch_query` maps unknown inner-slot names to
-one fixed bounded bucket. At the process-local bucket cap, cdidx first prunes expired
-buckets and otherwise reports the interval until the earliest idle-bucket
-expiry in `retry_after_ms`, so legitimate bucket creation can recover at the
-advertised time (#4547).
+one fixed bounded bucket. At the process-local bucket cap, cdidx first prunes
+expired buckets. If a charged coarse token and secondary bucket-cap denial overlap,
+`retry_after_ms` reports the earliest point when every required token and capacity
+constraint can admit the retry, so legitimate calls recover at the advertised time
+(#4547).
 
 `worktree_head_changed` compares the runtime HEAD with the latest successful
 index stamp from `indexed_head_sha` when available, and falls back to the older
@@ -422,10 +423,11 @@ MCP rate limiting が有効な場合、direct な `tools/call` request はすべ
 enablement、argument の詳細検証前に caller-wide の coarse bucket を 1 つ消費します。
 canonical な既知 tool 名は secondary per-tool bucket も維持し、missing、malformed、
 empty、oversized、case-variant、unknown な名前は名前由来 bucket を作成しません。
-`batch_query` の unknown inner-slot 名は 1 つの固定 bounded bucket へ集約します。process-local bucket
-上限到達時は期限切れ bucket を先に prune し、それでも空きがなければ最も早い
-idle-bucket expiry までの時間を `retry_after_ms` として返すため、正規の bucket 作成は
-通知された時刻に回復できます（#4547）。
+`batch_query` の unknown inner-slot 名は 1 つの固定 bounded bucket へ集約します。
+process-local bucket 上限到達時は期限切れ bucket を先に prune します。消費済み coarse
+token と secondary bucket-cap 拒否が重なる場合、`retry_after_ms` は必要なすべての token
+と capacity 制約が再試行を許可できる最短時刻を返すため、正規 call は通知時刻に回復できます
+（#4547）。
 
 `worktree_head_changed` は、利用可能な場合は最新の成功 index stamp である
 `indexed_head_sha` と runtime HEAD を比較し、legacy DB だけで従来の
