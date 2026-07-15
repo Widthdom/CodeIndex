@@ -550,7 +550,7 @@ public static partial class SymbolExtractor
         JavaScriptLexMode Mode = JavaScriptLexMode.Code,
         bool EscapeNext = false,
         JavaScriptPrevTokenKind PreviousTokenKind = JavaScriptPrevTokenKind.None,
-        string? PreviousIdentifier = null,
+        bool PreviousIdentifierAllowsRegex = false,
         bool ExpectingControlFlowOpenParen = false,
         int ControlFlowParenDepth = 0,
         bool RegexAllowedAfterControlFlowParen = false);

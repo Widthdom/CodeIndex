@@ -164,6 +164,29 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void SymbolExtraction_JavaScriptTypeScriptDenseIdentifiers_StaysWithinAllocationBudget()
+    {
+        var content = BuildJavaScriptTypeScriptDenseIdentifierFixture(functionCount: 180);
+        _ = SymbolExtractor.Extract(1, "javascript", content);
+        _ = SymbolExtractor.Extract(1, "typescript", content);
+
+        var javaScriptAllocatedBytes = MeasureAllocatedBytes(
+            () => SymbolExtractor.Extract(1, "javascript", content));
+        var typeScriptAllocatedBytes = MeasureAllocatedBytes(
+            () => SymbolExtractor.Extract(1, "typescript", content));
+
+        Assert.True(
+            javaScriptAllocatedBytes < 3_300_000
+                && typeScriptAllocatedBytes < 4_000_000
+                && javaScriptAllocatedBytes + typeScriptAllocatedBytes < 7_100_000,
+            $"Dense JS/TS identifier extraction allocated JavaScript={javaScriptAllocatedBytes:N0}, TypeScript={typeScriptAllocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void ReferenceExtraction_CsharpHotPath_StaysWithinAllocationBudget()
     {
         var content = BuildCSharpHotPathFixture(typeCount: 80);
@@ -379,6 +402,24 @@ public class PerformanceTests : IDisposable
                     }
                 }
                 """));
+    }
+
+    private static string BuildJavaScriptTypeScriptDenseIdentifierFixture(int functionCount)
+    {
+        var builder = new StringBuilder();
+        for (var index = 0; index < functionCount; index++)
+        {
+            builder.Append("export function handler").Append(index)
+                .Append("(inputValue").Append(index).Append(", divisorValue").Append(index).AppendLine(") {")
+                .Append("  const normalizedValue").Append(index).Append(" = inputValue").Append(index).AppendLine(";")
+                .Append("  if (normalizedValue").Append(index).Append(") return /[{}]/.test(normalizedValue").Append(index).AppendLine(");")
+                .Append("  const quotientValue").Append(index).Append(" = normalizedValue").Append(index)
+                .Append(" / divisorValue").Append(index).AppendLine(";")
+                .Append("  return quotientValue").Append(index).AppendLine(";")
+                .AppendLine("}");
+        }
+
+        return builder.ToString();
     }
 
     private static string BuildPythonImportedTypeCallFixture(int importCount)
