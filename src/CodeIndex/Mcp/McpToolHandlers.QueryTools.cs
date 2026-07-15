@@ -1768,71 +1768,70 @@ public partial class McpServer
 
     private JsonObject BuildMcpSessionStatus()
     {
-        lock (_sessionStateGate)
-        {
-            var roots = new JsonArray();
-            foreach (var root in _clientRootDiagnostics)
-                roots.Add(root?.DeepClone());
+        var state = CurrentInitializeState;
+        McpSessionSnapshotCapturedForTests?.Invoke();
+        var roots = new JsonArray();
+        foreach (var root in state.ClientRootDiagnostics)
+            roots.Add(root);
 
-            var session = new JsonObject
-            {
-                ["log_level"] = _mcpLogLevel,
-                ["roots"] = roots,
-            };
-            if (_clientRootsTruncated)
-            {
-                session["roots_truncated"] = true;
-                session["root_count"] = _clientRootCount;
-                session["root_limit"] = MaxClientRootCount;
-                session["root_uri_length_limit"] = MaxClientRootUriChars;
-            }
-            if (_clientName is not null || _clientVersion is not null)
-            {
-                var clientInfo = new JsonObject();
-                if (_clientNameDisplay is not null)
-                {
-                    clientInfo["name"] = _clientName;
-                    _clientNameDisplay.Value.AddMetadata(clientInfo, "name");
-                }
-                if (_clientVersionDisplay is not null)
-                {
-                    clientInfo["version"] = _clientVersion;
-                    _clientVersionDisplay.Value.AddMetadata(clientInfo, "version");
-                }
-                session["client_info"] = clientInfo;
-            }
-            if (_clientCapabilities is not null)
-            {
-                session["client_capabilities_summary"] = BuildClientCapabilitiesSummary(_clientCapabilities);
-                session["client_capabilities"] = _clientCapabilities.DeepClone();
-            }
-            if (_clientCapabilitiesTruncationReason is not null)
-            {
-                session["client_capabilities_truncated"] = true;
-                session["client_capabilities_truncation_reason"] = _clientCapabilitiesTruncationReason;
-                if (_clientCapabilitiesSerializedBytes is { } serializedBytes)
-                    session["client_capabilities_serialized_bytes"] = serializedBytes;
-                session["client_capabilities_byte_limit"] = MaxClientCapabilitiesJsonBytes;
-                session["client_capabilities_depth_limit"] = MaxClientCapabilitiesDepth;
-                if (!session.ContainsKey("client_capabilities_summary"))
-                    session["client_capabilities_summary"] = BuildClientCapabilitiesSummary(_clientCapabilities);
-            }
-            if (_auditLog is not null)
-                session["audit_log"] = BuildAuditLogStatus(_auditLog.SnapshotDiagnostics());
-            return session;
+        var session = new JsonObject
+        {
+            ["log_level"] = _mcpLogLevel,
+            ["roots"] = roots,
+        };
+        if (state.ClientRootsTruncated)
+        {
+            session["roots_truncated"] = true;
+            session["root_count"] = state.ClientRootCount;
+            session["root_limit"] = MaxClientRootCount;
+            session["root_uri_length_limit"] = MaxClientRootUriChars;
         }
+        if (state.ClientName is not null || state.ClientVersion is not null)
+        {
+            var clientInfo = new JsonObject();
+            if (state.ClientNameDisplay is not null)
+            {
+                clientInfo["name"] = state.ClientName;
+                state.ClientNameDisplay.Value.AddMetadata(clientInfo, "name");
+            }
+            if (state.ClientVersionDisplay is not null)
+            {
+                clientInfo["version"] = state.ClientVersion;
+                state.ClientVersionDisplay.Value.AddMetadata(clientInfo, "version");
+            }
+            session["client_info"] = clientInfo;
+        }
+        if (state.ClientCapabilities is not null)
+        {
+            session["client_capabilities_summary"] = BuildClientCapabilitiesSummary(state, state.ClientCapabilities);
+            session["client_capabilities"] = state.ClientCapabilities.DeepClone();
+        }
+        if (state.ClientCapabilitiesTruncationReason is not null)
+        {
+            session["client_capabilities_truncated"] = true;
+            session["client_capabilities_truncation_reason"] = state.ClientCapabilitiesTruncationReason;
+            if (state.ClientCapabilitiesSerializedBytes is { } serializedBytes)
+                session["client_capabilities_serialized_bytes"] = serializedBytes;
+            session["client_capabilities_byte_limit"] = MaxClientCapabilitiesJsonBytes;
+            session["client_capabilities_depth_limit"] = MaxClientCapabilitiesDepth;
+            if (!session.ContainsKey("client_capabilities_summary"))
+                session["client_capabilities_summary"] = BuildClientCapabilitiesSummary(state, state.ClientCapabilities);
+        }
+        if (_auditLog is not null)
+            session["audit_log"] = BuildAuditLogStatus(_auditLog.SnapshotDiagnostics());
+        return session;
     }
 
-    private JsonObject BuildClientCapabilitiesSummary(JsonNode? capabilities)
+    private JsonObject BuildClientCapabilitiesSummary(InitializeSessionState state, JsonNode? capabilities)
     {
         var summary = new JsonObject
         {
-            ["roots"] = _clientSupportsRoots,
-            ["sampling"] = _clientSupportsSampling,
-            ["truncated"] = _clientCapabilitiesTruncationReason is not null,
-            ["truncation_reason"] = _clientCapabilitiesTruncationReason,
+            ["roots"] = state.ClientSupportsRoots,
+            ["sampling"] = state.ClientSupportsSampling,
+            ["truncated"] = state.ClientCapabilitiesTruncationReason is not null,
+            ["truncation_reason"] = state.ClientCapabilitiesTruncationReason,
         };
-        if (_clientCapabilitiesSerializedBytes is { } serializedBytes)
+        if (state.ClientCapabilitiesSerializedBytes is { } serializedBytes)
             summary["serialized_bytes"] = serializedBytes;
         if (capabilities is JsonObject obj)
         {

@@ -143,50 +143,6 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public async Task ConcurrentReinitialize_PublishesOneCoherentSessionSnapshot_Issue4536()
-    {
-        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
-        _ = server.HandleMessage(JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"client-a","version":"1"},"capabilities":{"experimental":{"generation":"a"}},"roots":[{"uri":"file:///a"}]}}""")!);
-
-        using var mutationEntered = new ManualResetEventSlim(false);
-        using var releaseMutation = new ManualResetEventSlim(false);
-        server.SessionStateMutationForTests = () =>
-        {
-            mutationEntered.Set();
-            Assert.True(releaseMutation.Wait(TestDeterminism.DefaultTimeout));
-        };
-
-        var reinitializeTask = Task.Run(() => server.HandleMessageAsync(JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"clientInfo":{"name":"client-b","version":"2"},"capabilities":{"roots":{},"sampling":{},"experimental":{"generation":"b"}},"roots":[{"uri":"file:///b"}]}}""")!));
-        try
-        {
-            Assert.True(mutationEntered.Wait(TestDeterminism.DefaultTimeout));
-            var statusTask = Task.Run(() => server.HandleMessage(JsonNode.Parse(
-                """{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!));
-
-            await TestDeterminism.AssertTaskRemainsBlockedAsync(statusTask);
-            releaseMutation.Set();
-
-            _ = await reinitializeTask.WaitAsync(TestDeterminism.DefaultTimeout);
-            var response = await statusTask.WaitAsync(TestDeterminism.DefaultTimeout);
-            var session = response!["result"]!["structuredContent"]!["mcp_session"]!;
-            Assert.Equal("client-b", session["client_info"]!["name"]!.GetValue<string>());
-            Assert.Equal("2", session["client_info"]!["version"]!.GetValue<string>());
-            Assert.Equal("b", session["client_capabilities"]!["experimental"]!["generation"]!.GetValue<string>());
-            Assert.True(session["client_capabilities_summary"]!["roots"]!.GetValue<bool>());
-            Assert.True(session["client_capabilities_summary"]!["sampling"]!.GetValue<bool>());
-            Assert.Equal("file:///b", Assert.Single(session["roots"]!.AsArray())!.GetValue<string>());
-        }
-        finally
-        {
-            releaseMutation.Set();
-            server.SessionStateMutationForTests = null;
-            _ = await reinitializeTask.WaitAsync(TestDeterminism.DefaultTimeout);
-        }
-    }
-
-    [Fact]
     public void Initialize_CapturesClientCapabilitiesAsDetachedClone_Issue3055()
     {
         var capabilities = new JsonObject
@@ -468,6 +424,410 @@ public partial class McpServerTests
         Assert.Equal("invalid_argument", data["category"]!.GetValue<string>());
         Assert.False(string.IsNullOrWhiteSpace(data["suggestion"]!.GetValue<string>()));
         Assert.False(data["retry_safe"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public async Task Initialize_FailedNegotiationLeavesSessionStateUnchangedThenSuccessCommits_Issue4540()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        var sessionId = server.CurrentSessionId;
+        var failedInitialize = JsonNode.Parse("""
+        {"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+          "protocolVersion":"2099-01-01",
+          "clientInfo":{"name":"poison-client","version":"0.0"},
+          "capabilities":{"roots":{},"sampling":{},"experimental":{"poison":true}},
+          "rootUri":"file:///poison",
+          "roots":[{"uri":"file:///poison/src"}]
+        }}
+        """)!;
+        var transport = new QueueMcpTransport(
+            prependInitialize: false,
+            failedInitialize.ToJsonString());
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        var failedResponse = JsonNode.Parse(Assert.Single(transport.WrittenFrames))!;
+        Assert.Equal(-32602, failedResponse["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("unknown", server.CurrentCaller);
+        Assert.Null(server.ClientCapabilitiesForTests);
+        Assert.Empty(server.ClientRootsForTests);
+        Assert.False(server.ClientSupportsRootsForTests);
+        Assert.False(server.ClientSupportsSamplingForTests);
+        Assert.Equal(sessionId, server.CurrentSessionId);
+
+        var beforeSuccess = server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"ping"}""")!)!;
+        Assert.Equal(-32002, beforeSuccess["error"]!["code"]!.GetValue<int>());
+
+        var successfulInitialize = JsonNode.Parse("""
+        {"jsonrpc":"2.0","id":3,"method":"initialize","params":{
+          "protocolVersion":"2025-03-26",
+          "clientInfo":{"name":"valid-client","version":"2.0"},
+          "capabilities":{"roots":{},"sampling":{},"experimental":{"valid":true}},
+          "rootUri":"file:///valid",
+          "roots":[{"uri":"file:///valid/src"}]
+        }}
+        """)!;
+        var successfulResponse = server.HandleMessage(successfulInitialize)!;
+
+        Assert.NotNull(successfulResponse["result"]);
+        Assert.Equal("valid-client/2.0", server.CurrentCaller);
+        Assert.True(server.ClientCapabilitiesForTests!["experimental"]!["valid"]!.GetValue<bool>());
+        Assert.Equal(["file:///valid", "file:///valid/src"], server.ClientRootsForTests);
+        Assert.True(server.ClientSupportsRootsForTests);
+        Assert.True(server.ClientSupportsSamplingForTests);
+        Assert.Equal(sessionId, server.CurrentSessionId);
+
+        var statusResponse = server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!)!;
+        var statusJson = statusResponse.ToJsonString();
+        var session = statusResponse["result"]!["structuredContent"]!["mcp_session"]!;
+        Assert.Equal("valid-client", session["client_info"]!["name"]!.GetValue<string>());
+        Assert.DoesNotContain("poison-client", statusJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("file:///poison", statusJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Initialize_SerializationFailureLeavesSessionStateUnchangedThenSuccessCommits_Issue4540()
+    {
+        var serializerCalls = 0;
+        using var server = new McpServer(
+            _dbPath,
+            ConsoleUi.LoadVersion(),
+            false,
+            response => Interlocked.Increment(ref serializerCalls) == 1
+                ? throw new JsonException("initialize serializer failed")
+                : response.ToJsonString());
+        var sessionId = server.CurrentSessionId;
+        var failedTransport = new QueueMcpTransport(
+            prependInitialize: false,
+            """
+            {"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+              "protocolVersion":"2025-03-26",
+              "clientInfo":{"name":"serialization-poison","version":"0.0"},
+              "capabilities":{"roots":{},"sampling":{},"experimental":{"poison":true}},
+              "rootUri":"file:///serialization-poison",
+              "roots":[{"uri":"file:///serialization-poison/src"}]
+            }}
+            """);
+
+        await server.RunAsync(failedTransport, CancellationToken.None);
+
+        var failedResponse = JsonNode.Parse(Assert.Single(failedTransport.WrittenFrames))!;
+        Assert.Equal(-32603, failedResponse["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("unknown", server.CurrentCaller);
+        Assert.Null(server.ClientCapabilitiesForTests);
+        Assert.Empty(server.ClientRootsForTests);
+        Assert.False(server.ClientSupportsRootsForTests);
+        Assert.False(server.ClientSupportsSamplingForTests);
+        Assert.Equal(sessionId, server.CurrentSessionId);
+
+        var beforeSuccess = server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"ping"}""")!)!;
+        Assert.Equal(-32002, beforeSuccess["error"]!["code"]!.GetValue<int>());
+
+        var successfulTransport = new QueueMcpTransport(
+            prependInitialize: false,
+            """
+            {"jsonrpc":"2.0","id":3,"method":"initialize","params":{
+              "protocolVersion":"2025-03-26",
+              "clientInfo":{"name":"serialization-valid","version":"2.0"},
+              "capabilities":{"roots":{},"sampling":{},"experimental":{"valid":true}},
+              "rootUri":"file:///serialization-valid",
+              "roots":[{"uri":"file:///serialization-valid/src"}]
+            }}
+            """);
+
+        await server.RunAsync(successfulTransport, CancellationToken.None);
+
+        var successfulResponse = JsonNode.Parse(Assert.Single(successfulTransport.WrittenFrames))!;
+        Assert.NotNull(successfulResponse["result"]);
+        Assert.Equal("serialization-valid/2.0", server.CurrentCaller);
+        Assert.True(server.ClientCapabilitiesForTests!["experimental"]!["valid"]!.GetValue<bool>());
+        Assert.Equal(
+            ["file:///serialization-valid", "file:///serialization-valid/src"],
+            server.ClientRootsForTests);
+        Assert.True(server.ClientSupportsRootsForTests);
+        Assert.True(server.ClientSupportsSamplingForTests);
+        Assert.Equal(sessionId, server.CurrentSessionId);
+
+        var statusResponse = server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!)!;
+        var statusJson = statusResponse.ToJsonString();
+        Assert.DoesNotContain("serialization-poison", statusJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("file:///serialization-poison", statusJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Initialize_BatchProvisionalStateDoesNotPublishWhenSerializationFails_Issue4540()
+    {
+        var serializerCalls = 0;
+        JsonNode? attemptedBatchResponse = null;
+        using var server = new McpServer(
+            _dbPath,
+            ConsoleUi.LoadVersion(),
+            false,
+            response =>
+            {
+                if (Interlocked.Increment(ref serializerCalls) != 1)
+                    return response.ToJsonString();
+
+                attemptedBatchResponse = JsonNode.Parse(response.ToJsonString());
+                throw new JsonException("batch initialize serializer failed");
+            });
+        var transport = new QueueMcpTransport(
+            prependInitialize: false,
+            """
+            [
+              {"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+                "clientInfo":{"name":"batch-provisional","version":"1.0"},
+                "capabilities":{"roots":{},"experimental":{"generation":"provisional"}},
+                "roots":[{"uri":"file:///batch-provisional"}]
+              }},
+              {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}
+            ]
+            """);
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        var failedResponse = JsonNode.Parse(Assert.Single(transport.WrittenFrames))!;
+        Assert.Equal(-32603, failedResponse["error"]!["code"]!.GetValue<int>());
+        var attemptedResponses = Assert.IsType<JsonArray>(attemptedBatchResponse);
+        var provisionalSession = attemptedResponses[1]!["result"]!["structuredContent"]!["mcp_session"]!;
+        Assert.Equal("batch-provisional", provisionalSession["client_info"]!["name"]!.GetValue<string>());
+        Assert.Equal(
+            "provisional",
+            provisionalSession["client_capabilities"]!["experimental"]!["generation"]!.GetValue<string>());
+        Assert.Equal("file:///batch-provisional", Assert.Single(provisionalSession["roots"]!.AsArray())!.GetValue<string>());
+
+        Assert.Equal("unknown", server.CurrentCaller);
+        Assert.Null(server.ClientCapabilitiesForTests);
+        Assert.Empty(server.ClientRootsForTests);
+        Assert.False(server.ClientSupportsRootsForTests);
+    }
+
+    [Fact]
+    public async Task Initialize_ResponseByteLimitFailureLeavesStateUnchangedThenSuccessCommits_Issue4540()
+    {
+        using var responseLimit = EnvironmentVariableScope.Capture("CDIDX_MCP_RESPONSE_MAX_BYTES");
+        Environment.SetEnvironmentVariable("CDIDX_MCP_RESPONSE_MAX_BYTES", "1024");
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        var sessionId = server.CurrentSessionId;
+        var failedTransport = new QueueMcpTransport(
+            prependInitialize: false,
+            """
+            {"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+              "protocolVersion":"2025-03-26",
+              "clientInfo":{"name":"response-limit-poison","version":"0.0"},
+              "capabilities":{"roots":{},"sampling":{},"experimental":{"poison":true}},
+              "roots":[{"uri":"file:///response-limit-poison"}]
+            }}
+            """);
+
+        await server.RunAsync(failedTransport, CancellationToken.None);
+
+        var failedResponse = JsonNode.Parse(Assert.Single(failedTransport.WrittenFrames))!;
+        Assert.Equal(-32603, failedResponse["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("response_too_large", failedResponse["error"]!["data"]!["reason"]!.GetValue<string>());
+        Assert.Equal("unknown", server.CurrentCaller);
+        Assert.Null(server.ClientCapabilitiesForTests);
+        Assert.Empty(server.ClientRootsForTests);
+        Assert.False(server.ClientSupportsRootsForTests);
+        Assert.False(server.ClientSupportsSamplingForTests);
+        Assert.Equal(sessionId, server.CurrentSessionId);
+
+        var beforeSuccess = server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"ping"}""")!)!;
+        Assert.Equal(-32002, beforeSuccess["error"]!["code"]!.GetValue<int>());
+
+        Environment.SetEnvironmentVariable("CDIDX_MCP_RESPONSE_MAX_BYTES", "10485760");
+        var successfulTransport = new QueueMcpTransport(
+            prependInitialize: false,
+            """
+            {"jsonrpc":"2.0","id":3,"method":"initialize","params":{
+              "protocolVersion":"2025-03-26",
+              "clientInfo":{"name":"response-limit-valid","version":"2.0"},
+              "capabilities":{"roots":{},"sampling":{},"experimental":{"valid":true}},
+              "roots":[{"uri":"file:///response-limit-valid"}]
+            }}
+            """);
+
+        await server.RunAsync(successfulTransport, CancellationToken.None);
+
+        var successfulResponse = JsonNode.Parse(Assert.Single(successfulTransport.WrittenFrames))!;
+        Assert.NotNull(successfulResponse["result"]);
+        Assert.Equal("response-limit-valid/2.0", server.CurrentCaller);
+        Assert.True(server.ClientCapabilitiesForTests!["experimental"]!["valid"]!.GetValue<bool>());
+        Assert.Equal(["file:///response-limit-valid"], server.ClientRootsForTests);
+        Assert.True(server.ClientSupportsRootsForTests);
+        Assert.True(server.ClientSupportsSamplingForTests);
+        Assert.Equal(sessionId, server.CurrentSessionId);
+    }
+
+    [Fact]
+    public async Task Initialize_ReinitializePublishesCoherentSnapshotToConcurrentStatus_Issue4540()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        var initialResponse = server.HandleMessage(JsonNode.Parse("""
+        {"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+          "protocolVersion":"2025-03-26",
+          "clientInfo":{"name":"snapshot-old","version":"1.0"},
+          "capabilities":{"roots":{},"experimental":{"old":true}},
+          "rootUri":"file:///snapshot-old"
+        }}
+        """)!)!;
+        Assert.NotNull(initialResponse["result"]);
+
+        using var snapshotCaptured = new ManualResetEventSlim(false);
+        using var releaseSnapshotReader = new ManualResetEventSlim(false);
+        server.McpSessionSnapshotCapturedForTests = () =>
+        {
+            snapshotCaptured.Set();
+            if (!releaseSnapshotReader.Wait(TimeSpan.FromSeconds(10)))
+                throw new TimeoutException("Timed out waiting to release the captured MCP session snapshot.");
+        };
+
+        var statusTask = Task.Run(() => server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!));
+        JsonNode reinitializeResponse;
+        try
+        {
+            Assert.True(snapshotCaptured.Wait(TimeSpan.FromSeconds(10)), "Status did not capture its MCP session snapshot.");
+            reinitializeResponse = server.HandleMessage(JsonNode.Parse("""
+            {"jsonrpc":"2.0","id":3,"method":"initialize","params":{
+              "protocolVersion":"2025-03-26",
+              "clientInfo":{"name":"snapshot-new","version":"2.0"},
+              "capabilities":{"sampling":{},"experimental":{"new":true}},
+              "rootUri":"file:///snapshot-new"
+            }}
+            """)!)!;
+        }
+        finally
+        {
+            server.McpSessionSnapshotCapturedForTests = null;
+            releaseSnapshotReader.Set();
+        }
+
+        Assert.NotNull(reinitializeResponse["result"]);
+        var concurrentStatus = await statusTask.WaitAsync(TimeSpan.FromSeconds(10));
+        var oldSession = concurrentStatus!["result"]!["structuredContent"]!["mcp_session"]!;
+        Assert.Equal("snapshot-old", oldSession["client_info"]!["name"]!.GetValue<string>());
+        Assert.Equal("1.0", oldSession["client_info"]!["version"]!.GetValue<string>());
+        Assert.Equal("file:///snapshot-old", Assert.Single(oldSession["roots"]!.AsArray())!.GetValue<string>());
+        Assert.True(oldSession["client_capabilities"]!["experimental"]!["old"]!.GetValue<bool>());
+        Assert.DoesNotContain("snapshot-new", concurrentStatus.ToJsonString(), StringComparison.Ordinal);
+
+        var laterStatus = server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!)!;
+        var newSession = laterStatus["result"]!["structuredContent"]!["mcp_session"]!;
+        Assert.Equal("snapshot-new", newSession["client_info"]!["name"]!.GetValue<string>());
+        Assert.Equal("2.0", newSession["client_info"]!["version"]!.GetValue<string>());
+        Assert.Equal("file:///snapshot-new", Assert.Single(newSession["roots"]!.AsArray())!.GetValue<string>());
+        Assert.True(newSession["client_capabilities"]!["experimental"]!["new"]!.GetValue<bool>());
+        Assert.DoesNotContain("snapshot-old", laterStatus.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Initialize_ReinitializeInvalidatesInFlightRootRefresh_Issue4540()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        server.HandleMessage(JsonNode.Parse("""
+        {"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+          "protocolVersion":"2025-03-26",
+          "clientInfo":{"name":"root-refresh-old","version":"1.0"},
+          "capabilities":{"roots":{}},
+          "rootUri":"file:///root-refresh-initial"
+        }}
+        """)!);
+
+        using var rootsRequestStarted = new ManualResetEventSlim(false);
+        using var releaseRootsResponse = new ManualResetEventSlim(false);
+        server.ClientRequestHandlerForTests = (method, _) =>
+        {
+            Assert.Equal("roots/list", method);
+            rootsRequestStarted.Set();
+            if (!releaseRootsResponse.Wait(TimeSpan.FromSeconds(10)))
+                throw new TimeoutException("Timed out waiting to release the roots/list response.");
+            return new JsonObject
+            {
+                ["roots"] = new JsonArray(new JsonObject { ["uri"] = "file:///stale-root-refresh" }),
+            };
+        };
+
+        var indexTask = Task.Run(() => server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"index","arguments":{"path":"."}}}""")!));
+        try
+        {
+            Assert.True(rootsRequestStarted.Wait(TimeSpan.FromSeconds(10)), "The roots/list request did not start.");
+            var reinitializeResponse = server.HandleMessage(JsonNode.Parse("""
+            {"jsonrpc":"2.0","id":3,"method":"initialize","params":{
+              "protocolVersion":"2025-03-26",
+              "clientInfo":{"name":"root-refresh-new","version":"2.0"},
+              "capabilities":{"roots":{}},
+              "rootUri":"file:///root-refresh-new"
+            }}
+            """)!)!;
+            Assert.NotNull(reinitializeResponse["result"]);
+        }
+        finally
+        {
+            releaseRootsResponse.Set();
+        }
+
+        var indexResponse = await indexTask.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(indexResponse!["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal(["file:///root-refresh-new"], server.ClientRootsForTests);
+        Assert.DoesNotContain("stale-root-refresh", indexResponse.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RootsChangedNotification_InvalidatesInFlightRootRefreshBeforeAuthorization_Issue4540()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        var workspaceRootUri = new Uri(Path.GetFullPath(".") + Path.DirectorySeparatorChar).AbsoluteUri;
+        var initializeRequest = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject
+            {
+                ["protocolVersion"] = "2025-03-26",
+                ["capabilities"] = new JsonObject { ["roots"] = new JsonObject() },
+                ["rootUri"] = workspaceRootUri,
+            },
+        };
+        Assert.NotNull(server.HandleMessage(initializeRequest)?["result"]);
+
+        using var rootsRequestStarted = new ManualResetEventSlim(false);
+        using var releaseRootsResponse = new ManualResetEventSlim(false);
+        server.ClientRequestHandlerForTests = (method, _) =>
+        {
+            Assert.Equal("roots/list", method);
+            rootsRequestStarted.Set();
+            if (!releaseRootsResponse.Wait(TimeSpan.FromSeconds(10)))
+                throw new TimeoutException("Timed out waiting to release the roots/list response.");
+            return new JsonObject { ["roots"] = new JsonArray() };
+        };
+
+        var indexTask = Task.Run(() => server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"index","arguments":{"path":"."}}}""")!));
+        try
+        {
+            Assert.True(rootsRequestStarted.Wait(TimeSpan.FromSeconds(10)), "The roots/list request did not start.");
+            Assert.Null(server.HandleMessage(JsonNode.Parse(
+                """{"jsonrpc":"2.0","method":"notifications/roots/list_changed"}""")!));
+        }
+        finally
+        {
+            releaseRootsResponse.Set();
+        }
+
+        var indexResponse = await indexTask.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(indexResponse!["result"]!["isError"]!.GetValue<bool>());
+        Assert.Contains("MCP client root", indexResponse["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal([workspaceRootUri], server.ClientRootsForTests);
+        Assert.True(server.ClientRootsStaleForTests);
     }
 
     [Fact]

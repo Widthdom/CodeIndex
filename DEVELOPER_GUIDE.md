@@ -1432,6 +1432,7 @@ Process exit codes are coarse (`0` success including valid zero-row queries, `1`
 - **MCP envelope response cap** — `CDIDX_MCP_RESPONSE_MAX_BYTES` defaults to 10 MiB and clamps at 64 MiB. Invalid values fall back to the default; values above the cap are clamped with a stderr warning so operators cannot accidentally disable the JSON-RPC response guard.
 - **MCP `batch_query` response cap** — `batch_query` estimates the UTF-8 JSON size of aggregate slot results and stops appending once the response would exceed `CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES` (default: 1 MiB / 1,048,576 bytes; maximum: 10 MiB). Truncated responses include `truncated: true`, `truncated_queries`, and byte-limit metadata so clients can split the batch or lower per-slot limits without parsing prose (#1416). Invalid values fall back to the default, values above the maximum are clamped with a stderr warning, and MCP `status` exposes the effective value under `mcp.limits.batch_response_bytes`.
 - **HTTP MCP response and stream caps** — `HttpMcpTransport` caps ordinary JSON response bodies with `CDIDX_MCP_HTTP_MAX_RESPONSE_BYTES` (default: 1,000,000 bytes; maximum: 16,777,216 bytes). Oversized JSON-RPC responses return HTTP 500 with a bounded text diagnostic instead of streaming the payload, while request-loop diagnostics record `request_body_length_unknown` for unknown-length request bodies and `request_body_limit_exceeded` for bodies that cross the request cap. Response and SSE write timeouts use stable diagnostics such as `timeout:http_response_write` and `timeout:sse_write`, and timeout expiry actively aborts the HTTP response so a non-cooperative output stream cannot hold the request or SSE gate indefinitely. JSON-RPC request timeouts carry `timeout_category: "mcp_request"` so callers can distinguish them from caller cancellation.
+- **HTTP initialize delivery is fail-closed** — `McpServer` commits initialize state after server-side JSON-RPC serialization, and `HttpMcpTransport` publishes the session before HTTP delivery. If `CDIDX_MCP_HTTP_MAX_RESPONSE_BYTES` rejects that already serialized initialize response, the transport returns HTTP 500 with the new `Mcp-Session-Id` and retains the committed session so no second client can inherit the server state (#4539). This transport limit is intentionally distinct from the pre-commit `CDIDX_MCP_RESPONSE_MAX_BYTES` fallback (#4540).
 - **MCP bounded queues and concurrency gates** — HTTP request queue slots are acquired before `TryWrite`; once full, requests are rejected with HTTP 429, `Retry-After: 1`, `X-Cdidx-Mcp-Rejection: request_queue_limit`, and `http_request_queue_rejection_count` rather than blocking an HTTP handler. The request-log queue is best-effort and increments `http_request_log_queue_full_drop_count` / `http_request_log_dropped_count` on saturation. Concurrent handler and event-stream gates likewise report `concurrent_handler_limit` and `event_stream_limit`. Event-stream gates are disposed by the stream owner when the stream is removed. Transport queue/handler semaphores intentionally live for the transport lifetime because bounded shutdown can leave late handlers finishing after listener teardown. Frame-loop gates are disposed only after EOF drain observes all request tasks, because bounded drain can intentionally leave late tasks running.
 - **MCP pagination offset cap** — `references`, `callers`, and `callees` clamp `offset` to 10,000 before executing SQL queries. `tools/list` advertises the maximum in each offset schema, and MCP `status` mirrors it under `mcp.limits.max_pagination_offset`.
 - **MCP resource-list cursor stability** — `resources/list` emits a fixed-size opaque keyset cursor that binds the last consumed file id to a persisted indexed-file generation. The reader resolves that id back to the existing source/test/docs bucket plus path ordering inside the same SQLite snapshot. Any file insertion, deletion, or update changes the generation; a later page then returns `-32011` / `index_stale` with `restart_required: true`, and the client must omit `params.cursor` to restart instead of continuing across mixed snapshots. Writable legacy databases install the generation row and triggers through the normal read migration before a cursor is issued. A mutable read-only legacy database that cannot prove generation tracking returns `resources_list_generation_unavailable` with `migration_required: true`; a canonical, unambiguous `immutable=1` legacy URI (optionally paired with `mode=ro`) may safely use connection-local generation zero because it cannot change between pages. Encoded, case-variant, whitespace-padded, duplicated, conflicting, or extra query parameters are not trusted as that immutable guarantee. The legacy decimal zero remains a first-page upgrade input, but nonzero decimal offsets cannot prove their source generation and therefore return the same restart-required error; decimal cursors are never emitted.
@@ -2051,7 +2052,18 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   carries `requestedVersion` and `supportedVersions`. This keeps future
   MCP spec bumps visible as actionable handshake failures instead of
   silently desynced wire formats. Bump the array deliberately and keep
-  `ProtocolVersion` aligned with its first entry.
+  `ProtocolVersion` aligned with its first entry. Client identity, caller,
+  roots, and capabilities are parsed into a detached initialize draft and
+  committed only after negotiation and complete success-response serialization
+  finish (#4540); a rejected handshake, `CDIDX_MCP_RESPONSE_MAX_BYTES`
+  fallback, or serializer failure leaves all established session state
+  unchanged. A successful commit publishes initialization lifecycle, caller,
+  client info, capabilities, and roots through one immutable snapshot, so a
+  concurrent or draining request observes one complete generation. A
+  `roots/list` refresh publishes only if no newer initialize or roots-change
+  notification replaced the snapshot while the client response was in flight.
+  This guarantee covers the server-side JSON-RPC serialization
+  boundary; HTTP delivery has a separate fail-closed boundary described below.
 - **Authentication middleware** (#1559). `McpServer` runs every parsed
   JSON-RPC request through an `IMcpAuthenticator` *after* the method is
   extracted but *before* dispatch. The default `LocalStdioAuthenticator`
@@ -2140,26 +2152,42 @@ malformed, or too-deep frames return `-32700` with `id: null`; MCP `status`
   registration for safe ID reuse. Each item keeps its own cancellation/error
   context, and response items are emitted in input order regardless of completion
   order. Notification-only batches produce no response; empty or nested batches
-  return `-32600`. HTTP bearer authorization runs before out-of-band cancellation
-  handling. Cross-frame controls are extracted once before queue admission, while
+  return `-32600`. HTTP bearer authorization and session validation run before
+  out-of-band cancellation handling. Cross-frame controls are extracted once before queue admission, while
   a control targeting an ID in the same batch remains in the raw batch for the
   server's durable preregistration pass (#4545).
 
 `HttpMcpTransport` (also #1558) wraps `System.Net.HttpListener`:
 
+- The transport deliberately implements one logical MCP client session per
+  server process. The first successful `initialize` may arrive without a
+  `Mcp-Session-Id`; its response issues a fresh identifier in that standard
+  header. Every subsequent POST and `GET /events` must present the exact same
+  value. Missing or incorrect identifiers are rejected at the transport
+  boundary before they can reach `McpServer` caller, roots, or capability
+  state, so another client cannot replace the established session. The
+  identifier is process-scoped and changes after restart. Clients must keep it
+  private as an opaque session selector; it is not a substitute for
+  authentication and remains independent of the bearer-token gate. Missing
+  identifiers return `400` / `session_required`, invalid or ambiguous values
+  return `404` / `session_not_found`, and a competing headerless initialize
+  while the first is pending returns `409` /
+  `session_initialization_in_progress` in `X-Cdidx-Mcp-Rejection`.
 - One JSON-RPC frame per HTTP POST; the matching response is the HTTP
   response body (`200 OK` / `application/json; charset=utf-8`) or
   `204 No Content` for notifications. `GET /events` opens an independent
   `text/event-stream` subscription for future server→client frames; the
-  server emits no unsolicited frames unless keep-alive notifications are opted
-  in with `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S`. A long-lived event stream does not
-  block normal POST requests. POST accepts exactly one `application/json`
+  established session may hold multiple subscriptions and receives each
+  server notification on all of them. The server emits no unsolicited frames
+  unless keep-alive notifications are opted in with
+  `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S`. A long-lived event stream does not block
+  normal POST requests. POST accepts exactly one `application/json`
   Content-Type with an omitted or UTF-8 charset and decodes with strict UTF-8;
   unsupported media types/charsets return `415`, and malformed UTF-8 returns
   `400` before queueing. Non-POST verbs on `/` return `405 Method Not Allowed`.
-  Empty / whitespace
-  bodies are treated like a closed stdio line and return `204 No Content`
-  *without* killing the loop, so a misbehaving client cannot pin the server
+  After session validation, empty / whitespace bodies are treated like a
+  closed stdio line and return `204 No Content` *without* killing the loop, so
+  a misbehaving client cannot pin the server
   on a junk frame. Request bodies are capped by
   `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES` (default: 1,000,000 bytes, maximum:
   16,777,216 bytes) and oversized bodies return `413 Payload Too Large`
@@ -2167,7 +2195,7 @@ malformed, or too-deep frames return `-32700` with `id: null`; MCP `status`
   pending request queue is bounded by `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`
   (default: 64, maximum: 1,024); full queues return `429 Too Many Requests`
   with `Retry-After: 1` instead of retaining unbounded work. After bearer
-  authorization, cross-frame cancellation notifications inside mixed batches are
+  authorization and session validation, cross-frame cancellation notifications inside mixed batches are
   handled out of band before this queue check; same-batch target controls stay in
   the raw batch, and only the remaining raw items consume queue capacity. Accepted context
   handler tasks are bounded by `CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS`
@@ -2203,6 +2231,8 @@ malformed, or too-deep frames return `-32700` with `id: null`; MCP `status`
   cannot contain whitespace, control characters, or commas (#3505, #3756). Supplied HTTP
   bearer values are compared exactly after the `Bearer ` prefix: they are not
   trimmed, and invalid-shape or oversized values are rejected before hashing.
+  Bearer authentication is evaluated separately from the `Mcp-Session-Id`
+  contract; after initialization, deployments with auth enabled require both.
 - Optional request-loop logging: `ProgramRunner` connects `HttpMcpTransport`
   to `GlobalToolLog`, so persistent logging records one `mcp_http_request`
   line per HTTP request when the lifecycle log is enabled. The record includes
@@ -2396,7 +2426,7 @@ Contract guarantees that downstream consumers can rely on:
 - **Error code semantics.** `0` = success, `1` = MCP tool error (`isError: true`), negative = the verbatim JSON-RPC error code (e.g. `-32602` for invalid params, `-32603` for internal error). The companion `error` string is one of `jsonrpc_error`, `tool_error`, `missing_tool_name`, or the sanitized exception type name (`McpServer.BuildSanitizedToolErrorMessage` keeps `ex.Message` out of the wire and out of the audit, #1530).
 - **Result count.** `ExtractResultCount` prefers `structuredContent.count` over `structuredContent.results.length`; tool errors and JSON-RPC errors omit the field. Tools that return no count-shaped payload (e.g. `ping`) leave `result_count` absent rather than emitting `0`.
 - **Argument privacy.** `arg_keys` and `arg_lengths` are always recorded so query *shape* is recoverable, but argument-key count and displayed key length are capped and marked with `arg_keys_truncated`. `arg_values` is gated behind `--audit-log-include-values` because cdidx queries can carry literal source snippets or secret-shaped strings. The echo is a sanitized, budgeted clone: secret-like keys classified by the shared diagnostic/audit taxonomy and known token patterns are replaced with `[REDACTED]`, and depth, object-property, array-item, total-node, string-length, serialized-byte, and event-byte limits can mark `arg_values_truncated` before values are written.
-- **Caller identity.** `_clientName` / `_clientVersion` are captured from every `initialize.clientInfo` and overwrite on reconnection within the same session, so a long-running MCP loop with multiple `initialize` handshakes attributes records to the *currently connected* client rather than the first one.
+- **Caller identity.** The published initialize snapshot captures the bounded client name/version from every successful `initialize.clientInfo` and replaces them on successful reconnection within the same session, so a long-running MCP loop with multiple accepted `initialize` handshakes attributes records to the *currently connected* client rather than the first one. Failed protocol negotiation never overwrites audit attribution or other session state (#4540).
 - **Rotation.** Writes go through an open-append-close cycle so external `tail -F` consumers follow rotations and so the file is closed during the rename. When `_bytesWritten >= MaxBytes`, `RotateLocked` drops `<path>.(RotationKeep-1)` (currently `<path>.2`), cascades surviving slots up by one, and moves `<path>` to `<path>.1`. `RotationKeep = 3`, so `<path>.3` is never created — exercised by `AuditLogSinkTests.Record_KeepsAtMostThreeFiles_DropsOldestOnRotationOverflow`.
 - **Best effort.** Serialization failures, IO failures, and rotation failures are swallowed (the audit must not crash the underlying tool call). The constructor still fails fast on impossible paths so the operator sees the misconfiguration before any tool dispatch happens.
 
@@ -3216,7 +3246,13 @@ HTTP MCP `/events` stream は opt-in の server-initiated `notifications/keep_al
 JSON-RPC response は payload を stream せず、bounded な text diagnostic を持つ HTTP 500
 として返します。request-loop diagnostics は、長さ不明の request body を
 `request_body_length_unknown`、request body 上限超過を `request_body_limit_exceeded`
-として記録します。response write と SSE write の timeout は `timeout:http_response_write`、
+として記録します。server-side JSON-RPC serialization 後、`McpServer` は initialize state を
+commit し、`HttpMcpTransport` は HTTP 配送前に session を公開します。そのため、すでに
+serialization 済みの initialize response を `CDIDX_MCP_HTTP_MAX_RESPONSE_BYTES` が拒否する
+場合、transport は新しい `Mcp-Session-Id` を付けた HTTP 500 を返し、別 client に server
+state を継承させないよう committed session を fail-closed で保持します（#4539）。この
+transport 上限は commit 前の `CDIDX_MCP_RESPONSE_MAX_BYTES` fallback（#4540）とは別です。
+response write と SSE write の timeout は `timeout:http_response_write`、
 `timeout:sse_write` のような stable diagnostics を使います。timeout 期限に達した場合は
 HTTP response を能動的に abort するため、非協調的な output stream が request や SSE gate
 を無期限に保持できません。JSON-RPC request timeout は `timeout_category: "mcp_request"` を
@@ -4338,6 +4374,8 @@ sequenceDiagram
 
 ### フェーズ5 — MCP パス: `cdidx mcp`
 
+`initialize` の client identity、caller、roots、capabilities は frame-local な draft に保持し、protocol 交渉と success response の serialization が完了した後だけ commit する（#4540）。拒否された handshake、`CDIDX_MCP_RESPONSE_MAX_BYTES` fallback、serializer failure は確立済み session state を変更せず、修正した retry に失敗 request の metadata を引き継がせない。成功した commit は initialization lifecycle、caller、client info、capabilities、roots を単一の immutable snapshot として公開するため、並行中または drain 中の request は完全な 1 世代だけを参照する。`roots/list` refresh は client response の待機中に新しい initialize または roots-change notification が snapshot を置き換えていない場合だけ公開される。この保証は server-side JSON-RPC serialization の境界に適用され、HTTP 配送には後述する別の fail-closed 境界がある。
+
 `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` を `cdidx mcp` にパイプすると別のコードパスが走る:
 
 - `McpServer` が stdin/stdout を持ち、JSON-RPC 2.0 フレームを解析する。
@@ -4346,7 +4384,7 @@ sequenceDiagram
 - すべての request frame は厳密な `"jsonrpc":"2.0"` member を持つ必要があり、`initialize` 以外の応答対象 method は初期化成功まで拒否される（#4468）。stdio の EOF、不正 UTF-8、oversized input は、grace period、cancellation、post-cancel deadline の共通 bounded teardown を使う（#4543）。不正入力の protocol-error write と非同期 shutdown-cancellation callback も同じ deadline に含めるため、writer、write gate、callback の停止で teardown が無期限に残らない。`notifications/shutdown` は read と request action を cancel するが、起点の transport completion（HTTP では `204 No Content`）は cancel しない。初回 drain snapshot 後に開始した callback と concurrent loop の全終了経路も bounded drain に含める。stdio input は速やかに close し、output dispose は response writer に到達し得る accepted task の完了まで defer する。最終 diagnostic には未完了カテゴリごとの状態を記録し、外部 transport または process cancellation はどちらの cleanup window も中断できる。
 - 独立した stdio request と HTTP POST は、設定された MCP request 上限まで並行実行する（#4536）。実行 slot が全て使用中でも read loop は cancellation/client-response frame を受け続ける。accepted-frame backlog は execution 上限 + 64 に別途制限し、超過 request には retry-safe な `-32003` / `server_busy` を返す。request id は protocol/gate 待機前に登録し、execution timeout は slot 取得後に開始し、timeout 後も cancellation を無視して動く action は実際に drain するまで slot を保持する。initialize など session mutation の受信順は protocol barrier で維持し、可変な request state は `AsyncLocal` または request-scoped snapshot に置き、shared writer tool は直列化する。JSON-RPC batch の各 item も同じ global execution slot を個別に消費する（#4545）。基本 `IMcpTransport` loop は outer frame slot を確保しないため、`maxConcurrency: 1` の single request は `_concurrencyGate` を1回だけ取得し、single request と batch item は dispatch 時だけ slot を消費する。
 - advertised capability には `tools`、`resources`、`prompts`、`logging` が含まれる。`resources/list` はインデックス済みファイルを `cdidx://file/<path>` URI としてページングし、世代対応の不透明 keyset cursor を返す。ページ間でインデックス済みファイルが変わった場合は、再開必須の stale-index error を明示的に返す。任意の `maxBytes`（4,096〜1,000,000、既定 1,000,000）で JSON-RPC envelope 全体を制限し、省略件数と継続理由を `_meta.response_controls` に有界な形で返す。`resources/read` は indexed chunk からファイル本文を再構成する。`logging` は MCP `notifications/message` を示し、`logging/setLevel` は `debug`、`info`、`notice`、`warning`、`error`、`critical`、`alert`、`emergency` を受け付ける。
-- `protocolVersion` は**ハードコードではなく交渉**で決まる（#1554）。サーバーは `McpServer.SupportedProtocolVersions`（新しい順: `2025-03-26`, `2024-11-05`）を保持し、`initialize` パラメータからクライアント要求バージョンを読み取って、対応集合にあればそれを返し（合意）、未指定／非文字列なら既定の最新バージョンに fallback し、対応外なら `error.data` に `requestedVersion` と `supportedVersions` を入れた JSON-RPC `-32602` で拒否する。これにより将来 MCP 仕様が改訂されても、wire format が黙ってずれるのではなく actionable な handshake 失敗として表面化する。配列を新バージョンで更新する際は `ProtocolVersion` を先頭エントリと揃えて意図的に bump する。
+- `protocolVersion` は**ハードコードではなく交渉**で決まる（#1554）。サーバーは `McpServer.SupportedProtocolVersions`（新しい順: `2025-03-26`, `2024-11-05`）を保持し、`initialize` パラメータからクライアント要求バージョンを読み取って、対応集合にあればそれを返し（合意）、未指定／非文字列なら既定の最新バージョンに fallback し、対応外なら `error.data` に `requestedVersion` と `supportedVersions` を入れた JSON-RPC `-32602` で拒否する。これにより将来 MCP 仕様が改訂されても、wire format が黙ってずれるのではなく actionable な handshake 失敗として表面化する。配列を新バージョンで更新する際は `ProtocolVersion` を先頭エントリと揃えて意図的に bump する。client identity、caller、roots、capabilities は切り離した initialize draft へ解析し、protocol 交渉と success response の serialization が完了した後だけ commit する（#4540）。拒否された handshake、`CDIDX_MCP_RESPONSE_MAX_BYTES` fallback、serializer failure は確立済み session state を変更しない。成功時は lifecycle とすべての metadata を単一の immutable snapshot として同時に公開し、進行中の古い `roots/list` response は新しい initialize を上書きできない。この保証は server-side JSON-RPC serialization の境界に適用され、HTTP 配送には別の fail-closed 境界がある。
 - **認証ミドルウェア**（#1559）。`McpServer` はパース済み JSON-RPC リクエストごとに、メソッド抽出 *後*・dispatch *前* で `IMcpAuthenticator` を呼ぶ。既定の `LocalStdioAuthenticator` は permissive で（従来の stdio 動作を維持し、呼び出し元を `stdio` / `local` でタグ付けする）、stdio では `CDIDX_MCP_AUTH_TOKEN` を設定すると `TokenMcpAuthenticator` に切り替わる。未設定または空文字の token だけが permissive で、空白のみ・空白文字入り・制御文字入り・4096 文字超の token は設定値として拒否する。`TokenMcpAuthenticator` は応答が必要な全リクエストに対し、`params.auth.token` が一致することを要求し、比較は `CryptographicOperations.FixedTimeEquals` による定数時間比較で行う。HTTP はこの body token ゲートを重ねず、`ProgramRunner` が `CDIDX_MCP_HTTP_TOKEN` を優先し、未設定なら `CDIDX_MCP_AUTH_TOKEN` を fallback として bearer secret に解決して、`Authorization: Bearer ...` の transport check に一本化する（#3156）。HTTP bearer 値は `Bearer ` の後ろを trim せず完全一致で扱い、空白文字・制御文字・4096 文字超は hash 前に拒否する。JSON-RPC body token ゲートの失敗は統一された JSON-RPC `-32001 "Unauthorized"` を返し（#1530 の sanitization 方針に従い、ワイヤでは未提示と不一致を区別しない）、`BuildAuthFailureLog` が詳細を stderr に書き出す。副作用のない `notifications/initialized` は認証せず short-circuit できる。一方、state-changing notification（`$/cancelRequest`、`notifications/cancelled`、`notifications/roots/list_changed`、`notifications/shutdown`、`notifications/exit`）は cancellation / roots / lifecycle state を変更する前に認証する。認証失敗時も notification は応答を返さず、bounded な stderr 診断だけを残す（#4537）。このミドルウェアが将来 transport の差し替え seam になる — ネットワーク listener は別の `IMcpAuthenticator` を提供しつつ、`McpCallerIdentity`（`Source` + `Subject`）の形を保ち、監査ログ（#1562）から再利用できる。
 
 MCP は独立したシリアライズ戦略（オブジェクトを JSON などの転送形式に変換する方式のこと。CLI の `--json` 側は .NET 標準の `JsonSerializer` に任せる方式、MCP 側は `JsonObject` を手で組み立てる方式と、別の手段を採っている）を採るため、「そもそもバイナリは走るのか?」を確かめる最も頑健なスモークテスト（デプロイや起動直後に行う、基本動作だけを短時間で確認する簡易テストのこと。詳細な正しさではなく「煙が出ていないか＝致命的に壊れていないか」を見るためこの名で呼ばれる）となる — .NET ホスト、`Program.Main`、CLI ルーティング、`ConsoleUi.LoadVersion()` に負荷をかけるが、SQLite には触れない（`search` など MCP の*ツール呼び出し*は SQLite に触れるが、`initialize` 単独では触れない）。
@@ -4362,15 +4400,16 @@ MCP は独立したシリアライズ戦略（オブジェクトを JSON など�
 
 `StdioMcpTransport` は #1558 以前と同じ stdio framing を維持しつつ、入力を strict UTF-8 として検証する（BOM 自動検出は無効にし、UTF-16/UTF-32 フレームが encoding を切り替えられないようにする。出力は BOM なし UTF-8、64 KiB バッファ、`AutoFlush = true`）。不正な UTF-8 バイトは transport decode failure として表面化し、MCP ループはバイトを U+FFFD に黙って置換せず、invalid UTF-8 のヒント付き JSON-RPC `-32700` に変換する。teardown では read を unblock するため input を即時 close し、output dispose は write に到達し得る accepted task の aggregate 完了まで defer する。
 
-JSON-RPC batch array は最大 100 item を受け付ける。独立 item は global request 上限の範囲で並行実行し、initialize/session mutation と重複 request ID は入力順 fence になる。cancellation control の実行前に、server は通常 batch request の全 unique ID を durable に事前登録する。このため queue 待ち target も 64 件 / 5 秒の短命な scheduler-race tombstone cache に依存せず cancellation でき、dispatch 前に return した item は登録を解放して ID を安全に再利用できる。item ごとに cancellation/error context を分離し、完了順が前後しても response item は入力順で出力する。notification-only batch は response を返さず、空 batch と nested batch は `-32600` を返す。HTTP bearer 認証は out-of-band cancellation より先に行う。cross-frame control は queue admission 前に一度だけ抽出し、同じ batch 内 ID を対象にする control は raw batch に残して server の durable 事前登録で解決する（#4545）。
+JSON-RPC batch array は最大 100 item を受け付ける。独立 item は global request 上限の範囲で並行実行し、initialize/session mutation と重複 request ID は入力順 fence になる。cancellation control の実行前に、server は通常 batch request の全 unique ID を durable に事前登録する。このため queue 待ち target も 64 件 / 5 秒の短命な scheduler-race tombstone cache に依存せず cancellation でき、dispatch 前に return した item は登録を解放して ID を安全に再利用できる。item ごとに cancellation/error context を分離し、完了順が前後しても response item は入力順で出力する。notification-only batch は response を返さず、空 batch と nested batch は `-32600` を返す。HTTP bearer 認証と session 検証は out-of-band cancellation より先に行う。cross-frame control は queue admission 前に一度だけ抽出し、同じ batch 内 ID を対象にする control は raw batch に残して server の durable 事前登録で解決する（#4545）。
 
 `HttpMcpTransport`（同じく #1558）は `System.Net.HttpListener` をラップする:
 
-- HTTP POST 1 件 = JSON-RPC フレーム 1 件で、対応する応答は HTTP レスポンスのボディ（`200 OK` / `application/json; charset=utf-8`）に乗る。通知は `204 No Content`。`GET /events` は将来のサーバー→クライアント frame 用に独立した `text/event-stream` subscription を開く。サーバーは `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification が opt-in された場合を除き、自発的な frame を送信しない。長寿命の event stream は通常の POST リクエストを塞がない。`/` への POST 以外は `405 Method Not Allowed`。空 / 空白のみのボディは stdio の空行と同じ扱いで `204 No Content` を返し、ループは殺さない — クライアントの誤動作で junk フレームに引っかからないため。リクエスト本文は `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`（既定: 1,000,000 bytes、最大: 16,777,216 bytes）で制限し、超過時は全量を buffer する前に `413 Payload Too Large` を返す。保留中 request queue は `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`（既定: 64、最大: 1,024）、受理済み context handler task は `CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS`（既定: 64、最大: 1,024）、同時 `/events` stream は `CDIDX_MCP_HTTP_MAX_EVENT_STREAMS`（既定: 16、最大: 1,024）で制限し、満杯時は無制限に work を保持せず `Retry-After: 1` 付きの `429 Too Many Requests` を返す。bearer 認証後、mixed batch の cross-frame cancellation notification は queue 判定より先に out-of-band 処理し、same-batch target の control は raw batch に残す。残りの raw item だけが queue capacity を消費する。正でない値や数値でない環境変数値は既定にフォールバックし、最大値を超える値は listener 起動前に拒否する。
+- transport は server process ごとに論理 MCP client session を 1 つだけ扱う。最初に成功する `initialize` は `Mcp-Session-Id` なしで受理でき、その response が標準 `Mcp-Session-Id` header に新しい identifier を返す。以後のすべての POST と `GET /events` は完全に同じ値を提示する必要がある。欠落または誤った identifier は transport 境界で拒否し、`McpServer` の caller、roots、capability state へ到達させないため、別 client は確立済み session を置き換えられない。identifier は process scope で、再起動後に変わる。client は opaque な session selector として非公開に保つ必要があるが、認証の代替ではなく bearer-token gate とは独立している。identifier 欠落は `400` / `session_required`、不正・曖昧値は `404` / `session_not_found`、最初の initialize が pending 中の競合 headerless initialize は `409` / `session_initialization_in_progress` を返し、分類は `X-Cdidx-Mcp-Rejection` に入る。
+- HTTP POST 1 件 = JSON-RPC フレーム 1 件で、対応する応答は HTTP レスポンスのボディ（`200 OK` / `application/json; charset=utf-8`）に乗る。通知は `204 No Content`。`GET /events` は独立した `text/event-stream` subscription を開き、確立済み session は複数 subscription を保持して各 server notification をすべてで受信する。サーバーは `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification が opt-in された場合を除き、自発的な frame を送信しない。長寿命の event stream は通常の POST リクエストを塞がない。`/` への POST 以外は `405 Method Not Allowed`。session 検証後、空 / 空白のみのボディは stdio の空行と同じ扱いで `204 No Content` を返し、ループは殺さない。リクエスト本文は `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`（既定: 1,000,000 bytes、最大: 16,777,216 bytes）で制限し、超過時は全量を buffer する前に `413 Payload Too Large` を返す。保留中 request queue は `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`（既定: 64、最大: 1,024）、受理済み context handler task は `CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS`（既定: 64、最大: 1,024）、同時 `/events` stream は `CDIDX_MCP_HTTP_MAX_EVENT_STREAMS`（既定: 16、最大: 1,024）で制限し、満杯時は無制限に work を保持せず `Retry-After: 1` 付きの `429 Too Many Requests` を返す。bearer 認証とsession検証後、mixed batch の cross-frame cancellation notification は queue 判定より先に out-of-band 処理し、same-batch target の control は raw batch に残す。残りの raw item だけが queue capacity を消費する。正でない値や数値でない環境変数値は既定にフォールバックし、最大値を超える値は listener 起動前に拒否する。
 - POST は `application/json` Content-Type を 1 件だけ受理し、charset は省略または UTF-8 のみとする。strict UTF-8 decode を使うため、未対応 media type / charset は queueing 前に `415`、不正 UTF-8 は `400` で拒否する。native client 向けに `Origin` 欠落は受理するが、present Origin は listener の scheme・host・port と完全一致する単一値だけを許可する。malformed、`null`、ambiguous、cross-origin 値は認証前に `403` とし、CORS preflight は `Access-Control-Allow-*` header を出さず拒否する（#4549）。
 - SSE stream lifetime は active stream registry と上限付き active-stream counter だけで表現する。idle stream には最小限の SSE comment heartbeat を送り、切断済み client を検出して stream slot を解放する。その registry entry が削除された後に完了済み stream task を保持しない。
 - `ResolveListenSpec("host:port")` は prefix を事前に解決するため、CLI が stderr に `Listening on http://...` を出せる。ポート `0` は一時 `TcpListener` を probe して空きポートを取得する。probe から `HttpListener.Start()` までの TOCTOU window は、本トランスポートが local-only / single-tenant 想定であるため許容する。ワイルドカードホスト `+` / `*` はパース時点で拒否する。
-- 共有秘密認証は secure by default: loopback を含むすべての HTTP listener が `Authorization: Bearer <token>` を要求し、定数時間で比較する。`CDIDX_MCP_HTTP_TOKEN` が未設定なら `CDIDX_MCP_AUTH_TOKEN` を bearer secret として fallback し、両方が設定されている場合は前者を優先する。HTTP クライアントが `params.auth.token` も送る必要はない。token 未指定／空文字では loopback も起動を拒否し、明示的な `--allow-unauthenticated-http` だけが unsafe な loopback 例外となる。この flag は non-loopback では拒否する。設定 token は 1-4096 文字で、空白文字・制御文字・カンマを含んではならない。受信 bearer token は `Bearer ` 接頭辞の後を trim せず完全一致で扱い、空白文字・制御文字・カンマを含む値または 4096 文字超の値は hash 前に拒否する。
+- 共有秘密認証は secure by default: loopback を含むすべての HTTP listener が `Authorization: Bearer <token>` を要求し、定数時間で比較する。`CDIDX_MCP_HTTP_TOKEN` が未設定なら `CDIDX_MCP_AUTH_TOKEN` を bearer secret として fallback し、両方が設定されている場合は前者を優先する。HTTP クライアントが `params.auth.token` も送る必要はない。token 未指定／空文字では loopback も起動を拒否し、明示的な `--allow-unauthenticated-http` だけが unsafe な loopback 例外となる。この flag は non-loopback では拒否する。設定 token は 1-4096 文字で、空白文字・制御文字・カンマを含んではならない。受信 bearer token は `Bearer ` 接頭辞の後を trim せず完全一致で扱い、空白文字・制御文字・カンマを含む値または 4096 文字超の値は hash 前に拒否する。bearer 認証は `Mcp-Session-Id` 契約とは別に評価され、確立済み session では両方が必要になる。
 - 任意のリクエストループログ: `ProgramRunner` は `HttpMcpTransport` を `GlobalToolLog` に接続するため、lifecycle log が有効な場合は HTTP リクエストごとに `mcp_http_request` 行を 1 件記録する。記録内容は method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id で、caller-controlled な method、path、remote peer、request id は 256 文字を上限に `...<truncated>` marker 付きで切り詰める。リクエスト/レスポンス本文は含めない。
 - キャンセルは `_listener.Stop()` に接続するため、シャットダウン時に `GetContextAsync()` が unblock する。`HttpListenerException` / `ObjectDisposedException` は EOS と同じ扱いで MCP ループを stdin クローズと同じ経路で終了させる。
 
@@ -4483,7 +4522,7 @@ Regex timeout の挙動は `RegexTimeoutPolicy` (`src/CodeIndex/Diagnostics/Rege
 - **エラーコード意味論。** `0`=成功、`1`=MCP ツールエラー (`isError: true`)、負値=JSON-RPC エラーコードそのまま（例: invalid params なら `-32602`、internal error なら `-32603`）。同伴する `error` 文字列は `jsonrpc_error` / `tool_error` / `missing_tool_name` / サニタイズ済み例外型名のいずれか。`McpServer.BuildSanitizedToolErrorMessage` が `ex.Message` をワイヤーと audit から除外している（#1530）。
 - **result count。** `ExtractResultCount` は `structuredContent.count` を優先し、無ければ `structuredContent.results.length`、いずれも無ければ省略する。ツールエラー / JSON-RPC エラー時も省略する（`0` ではなく欠落）。
 - **引数のプライバシー。** `arg_keys` / `arg_lengths` は常に記録するので呼び出しの *形状* は復元できるが、引数キー数と表示キー長は capped され `arg_keys_truncated` で明示される。`arg_values` は `--audit-log-include-values` に gated（cdidx クエリにはソース片や secret 風文字列が混入しうる）。echo は sanitize と budget を適用した clone として作り、diagnostic / audit 共有 taxonomy で分類された secret 風キーや既知 token pattern は `[REDACTED]` に置換し、depth / object property / array item / total node / string length / serialized byte / event byte の上限に達した場合は値を書き出す前に `arg_values_truncated` を記録する。
-- **呼び出し元の特定。** `_clientName` / `_clientVersion` は `initialize.clientInfo` から毎回キャプチャし、同一セッション内で再 `initialize` があれば上書きされる。複数 handshake が走る長寿命 MCP ループでも、*現在接続中の*クライアントに対して記録が紐付く。
+- **呼び出し元の特定。** 公開済み initialize snapshot は、成功した `initialize.clientInfo` の bounded な client name/version を保持し、同一セッション内で再 `initialize` が成功すれば置き換える。複数の受理済み handshake が走る長寿命 MCP ループでも、*現在接続中の*クライアントに対して記録が紐付く。protocol 交渉に失敗した initialize は audit attribution や他の session state を上書きしない（#4540）。
 - **ローテーション。** 1 レコードごとに open-append-close する。外部 `tail -F` の追従と rename 時の close-state 維持のため。`_bytesWritten >= MaxBytes` を超えた時点で `RotateLocked` が `<path>.(RotationKeep-1)`（現在は `<path>.2`）を破棄し、生存スロットを 1 つ古い側へ寄せ、`<path>` を `<path>.1` へ移す。`RotationKeep = 3` なので `<path>.3` は決して生成されない（`AuditLogSinkTests.Record_KeepsAtMostThreeFiles_DropsOldestOnRotationOverflow` で常時検証）。
 - **ベストエフォート。** シリアライズ失敗・IO 失敗・rotation 失敗はすべて握り潰す（監査の失敗で本体ツール呼び出しを壊さない）。一方、構築時の不正パスはコンストラクタが早期失敗させ、ディスパッチ前にオペレーターに気付かせる。
 

@@ -2580,10 +2580,7 @@ public sealed class Caller
         // 拒否された各 notification が応答も state 変更も残さないことをまとめて検証する。
         using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
             new TokenMcpAuthenticator("s3cret"));
-        var rootsStaleField = typeof(McpServer).GetField(
-            "_clientRootsStale",
-            BindingFlags.Instance | BindingFlags.NonPublic)!;
-        rootsStaleField.SetValue(server, false);
+        server.ClientRootsStaleForTests = false;
         var notification = new JsonObject
         {
             ["jsonrpc"] = "2.0",
@@ -2616,7 +2613,7 @@ public sealed class Caller
         Assert.Null(response);
         Assert.NotNull(ping?["result"]);
         Assert.True(ping!["result"]!["transport_ready"]!.GetValue<bool>());
-        Assert.False((bool)rootsStaleField.GetValue(server)!);
+        Assert.False(server.ClientRootsStaleForTests);
     }
 
     [Fact]
@@ -4276,7 +4273,7 @@ public sealed class Caller
             }
         };
         var transport = QueuedFrameTransport.FromExactFrames(
-            """[{"jsonrpc":"2.0","id":454520,"method":"ping"},{"jsonrpc":"2.0","id":454521,"method":"initialize","params":{"clientInfo":{"name":"batch-fence-client"}}},{"jsonrpc":"2.0","id":454522,"method":"ping"}]""");
+            """[{"jsonrpc":"2.0","id":454520,"method":"ping"},{"jsonrpc":"2.0","id":454521,"method":"initialize","params":{"clientInfo":{"name":"batch-fence-client"}}},{"jsonrpc":"2.0","id":454522,"method":"tools/call","params":{"name":"status","arguments":{}}}]""");
         using var cancellation = new CancellationTokenSource();
 
         var runTask = server.RunAsync(transport, cancellation.Token);
@@ -4308,7 +4305,27 @@ public sealed class Caller
         var responses = Assert.IsType<JsonArray>(JsonNode.Parse(responseText!));
         Assert.Equal([454520, 454521, 454522], responses.Select(static response => response!["id"]!.GetValue<int>()).ToArray());
         Assert.All(responses, static response => Assert.NotNull(response!["result"]));
+        Assert.Equal(
+            "batch-fence-client",
+            responses[2]!["result"]!["structuredContent"]!["mcp_session"]!["client_info"]!["name"]!.GetValue<string>());
         Assert.Equal("batch-fence-client", server.CurrentCaller);
+    }
+
+    [Fact]
+    public async Task RunAsync_StdioBatchFirstInitializeMakesFollowingPingInitialized_Issue4540()
+    {
+        using var server = new McpServer(_dbPath, "test");
+        var transport = QueuedFrameTransport.FromExactFrames(
+            """[{"jsonrpc":"2.0","id":"batch-first-init","method":"initialize","params":{"clientInfo":{"name":"batch-first-client"}}},{"jsonrpc":"2.0","id":"batch-first-ping","method":"ping"}]""");
+
+        await server.RunAsync(transport, CancellationToken.None).WaitAsync(TestDeterminism.DefaultTimeout);
+
+        var responseText = Assert.Single(transport.WrittenFrames, static frame => frame is not null);
+        var responses = Assert.IsType<JsonArray>(JsonNode.Parse(responseText!));
+        Assert.Equal(2, responses.Count);
+        Assert.NotNull(responses[0]!["result"]);
+        Assert.Equal("ok", responses[1]!["result"]!["status"]!.GetValue<string>());
+        Assert.Equal("batch-first-client", server.CurrentCaller);
     }
 
     [Fact]
@@ -5032,6 +5049,102 @@ public sealed class Caller
         Assert.Equal("Request timed out", responses[0]!["error"]!["message"]!.GetValue<string>());
         Assert.Equal("ok", responses[1]!["result"]!["status"]!.GetValue<string>());
         Assert.Equal(1, server.AvailableConcurrencySlotsForTests);
+    }
+
+    [Fact]
+    public async Task ProcessFrameAsync_BatchInitializeDoesNotFlowBackIntoTimedOutPriorGeneration_Issue4540_Issue4545()
+    {
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            maxConcurrency: 2)
+        {
+            RequestTimeout = TimeSpan.FromMilliseconds(250),
+        };
+        Assert.NotNull(await server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":"batch-generation-init","method":"initialize","params":{}}"""));
+
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var followingPingStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFollowingPing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var observedDrainingCaller = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.RequestDelayForTestsWithId = async (id, _) =>
+        {
+            switch (id?.GetValue<int>())
+            {
+                case 454031:
+                    firstStarted.TrySetResult();
+                    await releaseFirst.Task;
+                    observedDrainingCaller.TrySetResult(server.CurrentCaller);
+                    break;
+                case 454033:
+                    followingPingStarted.TrySetResult();
+                    await releaseFollowingPing.Task;
+                    break;
+                default:
+                    break;
+            }
+        };
+
+        var batchTask = server.ProcessFrameAsync(
+            """[{"jsonrpc":"2.0","id":454031,"method":"tools/call","params":{"name":"status","arguments":{}}},{"jsonrpc":"2.0","id":454032,"method":"initialize","params":{"clientInfo":{"name":"later-generation"}}},{"jsonrpc":"2.0","id":454033,"method":"ping"}]""");
+        try
+        {
+            await firstStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            await followingPingStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+
+            releaseFirst.TrySetResult();
+            Assert.Equal(
+                "unknown",
+                await observedDrainingCaller.Task.WaitAsync(TestDeterminism.DefaultTimeout));
+
+            releaseFollowingPing.TrySetResult();
+            var responseText = await batchTask.WaitAsync(TestDeterminism.DefaultTimeout);
+            var responses = Assert.IsType<JsonArray>(JsonNode.Parse(responseText!));
+            Assert.Equal("Request timed out", responses[0]!["error"]!["message"]!.GetValue<string>());
+            Assert.NotNull(responses[1]!["result"]);
+            Assert.Equal("ok", responses[2]!["result"]!["status"]!.GetValue<string>());
+            Assert.Equal("later-generation", server.CurrentCaller);
+        }
+        finally
+        {
+            releaseFirst.TrySetResult();
+            releaseFollowingPing.TrySetResult();
+            await batchTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+    }
+
+    [Fact]
+    public async Task ProcessFrameAsync_BatchRejectedRootsNotificationDoesNotMutateProvisionalGeneration_Issue4537_Issue4540()
+    {
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: new DenyMethodAuthenticator("notifications/roots/list_changed"),
+            toolFilter: null,
+            maxConcurrency: 2);
+        Assert.NotNull(server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":"rejected-roots-initial","method":"initialize","params":{}}""")!));
+        server.ClientRootsStaleForTests = false;
+
+        var observedRootsStale = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.McpSessionSnapshotCapturedForTests = () =>
+            observedRootsStale.TrySetResult(server.ClientRootsStaleForTests);
+
+        var responseText = await server.ProcessFrameAsync(
+            """[{"jsonrpc":"2.0","id":454041,"method":"initialize"},{"jsonrpc":"2.0","method":"notifications/roots/list_changed"},{"jsonrpc":"2.0","id":454042,"method":"tools/call","params":{"name":"status","arguments":{}}}]""");
+
+        var responses = Assert.IsType<JsonArray>(JsonNode.Parse(responseText!));
+        Assert.Equal([454041, 454042], responses.Select(static response => response!["id"]!.GetValue<int>()).ToArray());
+        Assert.False(await observedRootsStale.Task.WaitAsync(TestDeterminism.DefaultTimeout));
+        Assert.False(server.ClientRootsStaleForTests);
     }
 
     [Fact]
@@ -8894,6 +9007,20 @@ public sealed class Caller
 
         public override Task WriteLineAsync(string? value) =>
             throw new IOException("pipe closed");
+    }
+
+    private sealed class DenyMethodAuthenticator(string deniedMethod) : IMcpAuthenticator
+    {
+        public McpAuthenticationResult Authenticate(JsonNode request)
+        {
+            var method = request["method"] is JsonValue value
+                && value.TryGetValue<string>(out var parsedMethod)
+                    ? parsedMethod
+                    : null;
+            return string.Equals(method, deniedMethod, StringComparison.Ordinal)
+                ? McpAuthenticationResult.Deny("method denied for test")
+                : McpAuthenticationResult.Allow(McpCallerIdentity.LocalStdio);
+        }
     }
 
     private sealed class AssertingTextWriter : TextWriter

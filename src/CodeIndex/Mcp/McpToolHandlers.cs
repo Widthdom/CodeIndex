@@ -1328,48 +1328,67 @@ public partial class McpServer
 
     private async Task RefreshClientRootsIfNeededAsync()
     {
-        long sessionGeneration;
-        lock (_sessionStateGate)
-        {
-            if (!_clientRootsStale || !_clientSupportsRoots)
-                return;
-            sessionGeneration = _clientSessionGeneration;
-        }
+        var expectedState = CurrentInitializeState;
+        if (!expectedState.ClientRootsStale || !HasClientCapability(expectedState, "roots"))
+            return;
 
         var result = await SendClientRequestAsync("roots/list", null, _currentRequestToken.Value).ConfigureAwait(false);
         if (result?["roots"] is not JsonArray roots)
             return;
 
-        lock (_sessionStateGate)
+        var rootUris = new List<string>();
+        foreach (var root in roots)
         {
-            if (sessionGeneration != _clientSessionGeneration)
-                return;
-            ResetClientRoots();
-            foreach (var root in roots)
+            var uri = TryReadStringValue(root?["uri"]) ?? TryReadStringValue(root);
+            if (!string.IsNullOrWhiteSpace(uri))
+                rootUris.Add(uri);
+        }
+
+        var refreshedRoots = BuildClientRootSnapshot(rootUris);
+        lock (_initializeStateGate)
+        {
+            var frameInitializeState = _frameInitializeState.Value;
+            if (frameInitializeState?.IsProvisionalGeneration == true)
             {
-                var uri = TryReadStringValue(root?["uri"]) ?? TryReadStringValue(root);
-                if (!string.IsNullOrWhiteSpace(uri))
-                    CaptureClientRoot(uri);
+                _ = frameInitializeState.TryRefreshClientRoots(expectedState, refreshedRoots);
+                return;
             }
-            _clientRootsStale = false;
+
+            var current = PublishedInitializeState;
+            if (!ReferenceEquals(current, expectedState))
+                return;
+
+            Volatile.Write(
+                ref _initializeState,
+                current with
+                {
+                    ClientRoots = refreshedRoots.Roots,
+                    ClientRootDiagnostics = refreshedRoots.Diagnostics,
+                    ClientRootsTruncated = refreshedRoots.Truncated,
+                    ClientRootsStale = false,
+                });
+            _ = frameInitializeState?.TryRefreshClientRoots(expectedState, refreshedRoots);
         }
     }
 
     private bool IsPathWithinClientRoots(string path)
     {
-        string[] rootPaths;
-        lock (_sessionStateGate)
-        {
-            if (!_clientSupportsRoots)
-                return true;
+        var state = CurrentInitializeState;
+        if (!HasClientCapability(state, "roots"))
+            return true;
 
-            rootPaths = _clientRoots
-                .Select(root => TryReadStringValue(root))
-                .Select(McpPathBoundary.TryResolveRootPath)
-                .Where(root => !string.IsNullOrWhiteSpace(root))
-                .Cast<string>()
-                .ToArray();
-        }
+        // A completed roots/list_changed notification invalidates the previous authorization
+        // boundary immediately. Fail closed until a refresh publishes a non-stale snapshot.
+        // roots/list_changed notification の完了時点で以前の認可境界を直ちに無効化し、
+        // refresh が non-stale snapshot を公開するまでは fail closed にする。
+        if (state.ClientRootsStale)
+            return false;
+
+        var rootPaths = state.ClientRoots
+            .Select(McpPathBoundary.TryResolveRootPath)
+            .Where(root => !string.IsNullOrWhiteSpace(root))
+            .Cast<string>()
+            .ToArray();
         if (rootPaths.Length == 0)
             return false;
 
