@@ -2037,15 +2037,13 @@ public sealed class Caller
     }
 
     [Fact]
-    public void TokenAuthenticator_NotificationsBypassAuthCheck()
+    public void TokenAuthenticator_SideEffectFreeNotificationBypassesAuthCheck()
     {
-        // Notifications (no id) produce no response so the auth check would have nothing to
-        // signal on; the existing notification short-circuit must stay BEFORE the auth gate
-        // so a token-protected server still tolerates `notifications/initialized` without
-        // synthesising an error response.
-        // 通知 (id 無し) は応答が無いので認証チェックがエラーを返す手段を持たない。通知の
-        // ショートサーキットを認証ゲートより前に置き続け、token 保護サーバーでも
-        // `notifications/initialized` を黙って受け入れられるようにする。
+        // The initialized notification is side-effect free, so a token-protected server can
+        // still tolerate it without synthesising an error response. State-changing
+        // notifications have a separate auth gate below (#4537).
+        // initialized notification は副作用がないため、token 保護サーバーでもエラー応答を
+        // 合成せず受理できる。state-changing notification は別の認証ゲートを通る (#4537)。
         using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
             new TokenMcpAuthenticator("s3cret"));
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","method":"notifications/initialized"}""")!;
@@ -2053,6 +2051,62 @@ public sealed class Caller
         var response = server.HandleMessage(request);
 
         Assert.Null(response);
+    }
+
+    [Theory]
+    [InlineData("$/cancelRequest")]
+    [InlineData("notifications/cancelled")]
+    [InlineData("notifications/roots/list_changed")]
+    [InlineData("notifications/shutdown")]
+    [InlineData("notifications/exit")]
+    public void TokenAuthenticator_StateChangingNotificationWithoutToken_DoesNotMutateState(string method)
+    {
+        // An unauthenticated cancellation would poison the following ping, roots/list_changed
+        // would flip the fresh marker, and shutdown or exit would make transport_ready false.
+        // One authenticated ping therefore proves that each denied notification remained
+        // response-free and left all protected state intact.
+        // 未認証 cancellation なら後続 ping を cancel し、roots/list_changed なら fresh marker
+        // を反転し、shutdown / exit なら transport_ready を false にする。認証済み ping により、
+        // 拒否された各 notification が応答も state 変更も残さないことをまとめて検証する。
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("s3cret"));
+        var rootsStaleField = typeof(McpServer).GetField(
+            "_clientRootsStale",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        rootsStaleField.SetValue(server, false);
+        var notification = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["method"] = method,
+            ["params"] = new JsonObject { ["requestId"] = 4537 },
+        };
+
+        JsonNode? response;
+        JsonNode? ping;
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var errorWriter = new StringWriter();
+            Console.SetError(errorWriter);
+            try
+            {
+                response = server.HandleMessage(notification);
+                ping = server.HandleMessage(JsonNode.Parse(
+                    """{"jsonrpc":"2.0","id":4537,"method":"ping","params":{"auth":{"token":"s3cret"}}}""")!);
+
+                Assert.Contains("Auth failed", errorWriter.ToString(), StringComparison.Ordinal);
+                Assert.Contains(method, errorWriter.ToString(), StringComparison.Ordinal);
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+
+        Assert.Null(response);
+        Assert.NotNull(ping?["result"]);
+        Assert.True(ping!["result"]!["transport_ready"]!.GetValue<bool>());
+        Assert.False((bool)rootsStaleField.GetValue(server)!);
     }
 
     [Fact]
@@ -3519,7 +3573,8 @@ public sealed class Caller
             $"http://127.0.0.1:{port}/",
             "127.0.0.1",
             port,
-            bearerToken: null);
+            bearerToken: null,
+            allowUnauthenticatedLoopback: true);
 
         await transport.WriteOutOfBandFrameAsync("""{"jsonrpc":"2.0","method":"notifications/initialized"}""", CancellationToken.None);
 

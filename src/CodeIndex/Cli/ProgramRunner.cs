@@ -25,6 +25,7 @@ internal static partial class ProgramRunner
     internal const int QueryTraceValueMaxChars = 128;
     internal const int QueryTraceArrayMaxItems = 8;
     internal const string QuietEnvironmentVariable = "CDIDX_QUIET";
+    internal const string AllowUnauthenticatedHttpFlag = "--allow-unauthenticated-http";
     private const string ReleaseAssetUrlTemplate = "https://github.com/Widthdom/CodeIndex/releases/download/{0}/{1}";
     private const string ReleasePageUrlTemplate = "https://github.com/Widthdom/CodeIndex/releases/tag/{0}";
     private const string InstallerScriptAssetName = "install.sh";
@@ -2562,6 +2563,7 @@ internal static partial class ProgramRunner
         QueryCommandOptions QueryOptions,
         string Transport,
         string? ListenSpec,
+        bool AllowUnauthenticatedHttp,
         AuditLogOptions AuditOptions,
         IReadOnlyDictionary<string, string> EnvironmentOverrides);
 
@@ -2603,7 +2605,7 @@ internal static partial class ProgramRunner
             }
 
             using var server = new McpServer(runOptions.QueryOptions.DbPath, appVersion, runOptions.QueryOptions.DbPathExplicit, authenticator, auditLog);
-            return RunMcpServer(server, runOptions.Transport, runOptions.ListenSpec);
+            return RunMcpServer(server, runOptions.Transport, runOptions.ListenSpec, runOptions.AllowUnauthenticatedHttp);
         }
         finally
         {
@@ -2634,7 +2636,12 @@ internal static partial class ProgramRunner
             return false;
         }
 
-        if (!TryExtractMcpTransportFlags(cmdArgs, out var transportSpec, out var listenSpec, out var transportError))
+        if (!TryExtractMcpTransportFlags(
+                cmdArgs,
+                out var transportSpec,
+                out var listenSpec,
+                out var allowUnauthenticatedHttp,
+                out var transportError))
         {
             CommandErrorWriter.WriteStderr(transportError);
             PrintMcpUsage();
@@ -2659,14 +2666,25 @@ internal static partial class ProgramRunner
         if (!TryValidateMcpResidualArgs(residualArgs, out exitCode))
             return false;
 
-        if (!TryResolveMcpTransport(transportSpec, listenSpec, out var transport, out exitCode))
+        if (!TryResolveMcpTransport(
+                transportSpec,
+                listenSpec,
+                allowUnauthenticatedHttp,
+                out var transport,
+                out exitCode))
             return false;
 
         var environmentOverrides = new Dictionary<string, string>(StringComparer.Ordinal);
         if (suggestionDedupThreshold is not null)
             environmentOverrides[SuggestionStore.DedupThresholdEnvironmentVariable] = suggestionDedupThreshold;
 
-        runOptions = new McpRunOptions(options, transport, listenSpec, auditOptions, environmentOverrides);
+        runOptions = new McpRunOptions(
+            options,
+            transport,
+            listenSpec,
+            allowUnauthenticatedHttp,
+            auditOptions,
+            environmentOverrides);
         return true;
     }
 
@@ -2687,7 +2705,7 @@ internal static partial class ProgramRunner
                 CommandErrorWriter.WriteStderr("Error: --json is not supported for mcp; MCP already speaks JSON-RPC over the selected transport.");
             else
                 CommandErrorWriter.WriteStderr($"Error: {residualArgs[i]} is not supported for mcp.");
-            CommandErrorWriter.WriteStderr("Hint: use `--db <path>` to point at a specific index, `--transport stdio|http` to pick a transport, `--http-listen host:port` for HTTP, or `--audit-log <path>` to enable per-call auditing.");
+            CommandErrorWriter.WriteStderr($"Hint: use `--db <path>` to point at a specific index, `--transport stdio|http` to pick a transport, `--http-listen host:port` for HTTP, `{AllowUnauthenticatedHttpFlag}` for explicit unsafe loopback operation, or `--audit-log <path>` to enable per-call auditing.");
             PrintMcpUsage();
             exitCode = CommandExitCodes.UsageError;
             return false;
@@ -2697,7 +2715,12 @@ internal static partial class ProgramRunner
         return true;
     }
 
-    private static bool TryResolveMcpTransport(string? transportSpec, string? listenSpec, out string transport, out int exitCode)
+    private static bool TryResolveMcpTransport(
+        string? transportSpec,
+        string? listenSpec,
+        bool allowUnauthenticatedHttp,
+        out string transport,
+        out int exitCode)
     {
         transport = transportSpec ?? "stdio";
         if (!string.Equals(transport, "stdio", StringComparison.OrdinalIgnoreCase)
@@ -2712,6 +2735,14 @@ internal static partial class ProgramRunner
         if (listenSpec != null && !string.Equals(transport, "http", StringComparison.OrdinalIgnoreCase))
         {
             CommandErrorWriter.WriteStderr("Error: --http-listen requires `--transport http`.");
+            PrintMcpUsage();
+            exitCode = CommandExitCodes.UsageError;
+            return false;
+        }
+
+        if (allowUnauthenticatedHttp && !string.Equals(transport, "http", StringComparison.OrdinalIgnoreCase))
+        {
+            CommandErrorWriter.WriteStderr($"Error: {AllowUnauthenticatedHttpFlag} requires `--transport http`.");
             PrintMcpUsage();
             exitCode = CommandExitCodes.UsageError;
             return false;
@@ -2756,10 +2787,14 @@ internal static partial class ProgramRunner
     private static bool IsExpectedAuditLogOpenException(Exception ex)
         => ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException;
 
-    private static int RunMcpServer(McpServer server, string transport, string? listenSpec)
+    private static int RunMcpServer(
+        McpServer server,
+        string transport,
+        string? listenSpec,
+        bool allowUnauthenticatedHttp)
     {
         if (string.Equals(transport, "http", StringComparison.OrdinalIgnoreCase))
-            return RunMcpHttp(server, listenSpec ?? DefaultMcpHttpListen);
+            return RunMcpHttp(server, listenSpec ?? DefaultMcpHttpListen, allowUnauthenticatedHttp);
 
         try
         {
@@ -2796,7 +2831,7 @@ internal static partial class ProgramRunner
         return McpEnvironment.GetOptionalToken(McpAuthenticatorFactory.AuthTokenEnvVar);
     }
 
-    private static int RunMcpHttp(McpServer server, string listenSpec)
+    private static int RunMcpHttp(McpServer server, string listenSpec, bool allowUnauthenticatedHttp)
     {
         HttpMcpTransport.HttpListenSpec resolved;
         try
@@ -2810,19 +2845,18 @@ internal static partial class ProgramRunner
             return CommandExitCodes.UsageError;
         }
 
-        // Require a shared-secret bearer token when the user opts into a non-loopback bind so the
-        // MCP catalog is not exposed to the local network unauthenticated. HTTP resolves that
+        // Require a shared-secret bearer token for every HTTP listener by default. HTTP resolves that
         // bearer token from `CDIDX_MCP_HTTP_TOKEN` first, then falls back to the generic
         // `CDIDX_MCP_AUTH_TOKEN` so setting the generic auth token also protects HTTP without
-        // forcing clients to send both `Authorization` and `params.auth.token` (#3156). Loopback
-        // binds skip the requirement because they're indistinguishable from the existing stdio
-        // threat model when neither token is configured.
-        // 非 loopback への bind 時は共有秘密 bearer token を必須にし、認証なしの LAN 露出を
-        // 防ぐ。HTTP はまず `CDIDX_MCP_HTTP_TOKEN` を使い、未設定なら汎用の
+        // forcing clients to send both `Authorization` and `params.auth.token` (#3156). Only the
+        // explicit CLI opt-in permits an unauthenticated loopback listener; non-loopback binds
+        // always require the token (#4549).
+        // すべての HTTP listener で既定では共有秘密 bearer token を必須にする。HTTP はまず
+        // `CDIDX_MCP_HTTP_TOKEN` を使い、未設定なら汎用の
         // `CDIDX_MCP_AUTH_TOKEN` を bearer token として使うため、汎用 token を設定しただけでも
         // HTTP は保護され、クライアントに `Authorization` と `params.auth.token` の両方を
-        // 要求しない (#3156)。どちらの token も未設定なら、loopback bind は stdio と同等の脅威
-        // モデルとみなしてトークン要件を緩める。
+        // 要求しない (#3156)。明示 CLI opt-in だけが unauthenticated loopback を許可し、
+        // non-loopback bind は常に token を必須とする (#4549)。
         string? bearerToken;
         try
         {
@@ -2835,9 +2869,16 @@ internal static partial class ProgramRunner
             return CommandExitCodes.UsageError;
         }
 
-        if (!resolved.IsLoopback && bearerToken is null)
+        if (allowUnauthenticatedHttp && !resolved.IsLoopback)
         {
-            CommandErrorWriter.WriteStderr($"Error: --transport http refuses to bind to '{resolved.Host}' without a shared secret. Set the `{McpHttpTokenEnvVar}` or `{McpAuthenticatorFactory.AuthTokenEnvVar}` environment variable, or bind to a loopback address.");
+            CommandErrorWriter.WriteStderr($"Error: {AllowUnauthenticatedHttpFlag} is limited to loopback listeners; '{resolved.Host}' is not loopback.");
+            PrintMcpUsage();
+            return CommandExitCodes.UsageError;
+        }
+
+        if (bearerToken is null && !allowUnauthenticatedHttp)
+        {
+            CommandErrorWriter.WriteStderr($"Error: --transport http requires bearer authentication for '{resolved.Host}'. Set the `{McpHttpTokenEnvVar}` or `{McpAuthenticatorFactory.AuthTokenEnvVar}` environment variable. For explicitly unsafe loopback-only operation, pass {AllowUnauthenticatedHttpFlag}.");
             PrintMcpUsage();
             return CommandExitCodes.UsageError;
         }
@@ -2850,7 +2891,8 @@ internal static partial class ProgramRunner
                 resolved.Host,
                 resolved.Port,
                 bearerToken,
-                requestLogger: LogHttpMcpRequest);
+                requestLogger: LogHttpMcpRequest,
+                allowUnauthenticatedLoopback: allowUnauthenticatedHttp);
         }
         catch (FormatException ex)
         {
@@ -2882,8 +2924,8 @@ internal static partial class ProgramRunner
             {
                 if (transport.AuthDisabledWarning is { } authWarning)
                 {
-                    CommandErrorWriter.WriteStderr($"[cdidx-mcp] Warning: {authWarning} Set `{McpHttpTokenEnvVar}` or `{McpAuthenticatorFactory.AuthTokenEnvVar}` to require bearer auth.");
-                    CommandErrorWriter.WriteStderr($"[cdidx-mcp] HTTP transport listening on {resolved.Prefix} (loopback, no auth).");
+                    CommandErrorWriter.WriteStderr($"[cdidx-mcp] Warning: {authWarning} Remove {AllowUnauthenticatedHttpFlag} and set `{McpHttpTokenEnvVar}` or `{McpAuthenticatorFactory.AuthTokenEnvVar}` to require bearer auth.");
+                    CommandErrorWriter.WriteStderr($"[cdidx-mcp] HTTP transport listening on {resolved.Prefix} (loopback, explicit unsafe no-auth mode).");
                     GlobalToolLog.Info("mcp_http_auth_disabled_warning loopback=true");
                 }
                 else
@@ -2976,9 +3018,10 @@ internal static partial class ProgramRunner
 
     private static void PrintMcpUsage()
     {
-        CommandErrorWriter.WriteStderr("Usage: cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--suggestion-dedup-threshold <0..1>]");
+        CommandErrorWriter.WriteStderr($"Usage: cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [{AllowUnauthenticatedHttpFlag}] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--suggestion-dedup-threshold <0..1>]");
         CommandErrorWriter.WriteStderr("Note: --json is not supported; MCP requests and responses are JSON-RPC over the selected transport.");
         CommandErrorWriter.WriteStderr("stdio transport: one UTF-8 JSON-RPC object per LF-delimited line, not LSP Content-Length framing; lifecycle diagnostics are written to stderr.");
+        CommandErrorWriter.WriteStderr($"HTTP security: bearer auth is required by default; {AllowUnauthenticatedHttpFlag} is an explicit unsafe loopback-only opt-in. Native clients omit Origin; POST requires UTF-8 application/json.");
         CommandErrorWriter.WriteStderr($"HTTP limits: {HttpMcpTransport.MaxRequestBodyBytesEnvVar}=<bytes> (1..{HttpMcpTransport.MaxConfiguredRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxResponseBodyBytesEnvVar}=<bytes> (1..{HttpMcpTransport.MaxConfiguredResponseBodyBytes.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxResponseBodyBytes.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxQueueDepthEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredQueuedRequests.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxQueuedRequests.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxConcurrentHandlersEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredConcurrentHandlers.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxConcurrentHandlers.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxEventStreamsEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredEventStreams.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxEventStreams.ToString(CultureInfo.InvariantCulture)}).");
     }
 
@@ -3041,10 +3084,16 @@ internal static partial class ProgramRunner
         return true;
     }
 
-    internal static bool TryExtractMcpTransportFlags(string[] cmdArgs, out string? transport, out string? listen, out string error)
+    internal static bool TryExtractMcpTransportFlags(
+        string[] cmdArgs,
+        out string? transport,
+        out string? listen,
+        out bool allowUnauthenticatedHttp,
+        out string error)
     {
         transport = null;
         listen = null;
+        allowUnauthenticatedHttp = false;
         error = string.Empty;
         for (var i = 0; i < cmdArgs.Length; i++)
         {
@@ -3075,6 +3124,10 @@ internal static partial class ProgramRunner
             {
                 listen = arg.Substring("--http-listen=".Length);
             }
+            else if (arg == AllowUnauthenticatedHttpFlag)
+            {
+                allowUnauthenticatedHttp = true;
+            }
         }
         return true;
     }
@@ -3096,6 +3149,8 @@ internal static partial class ProgramRunner
             {
                 continue;
             }
+            if (arg == AllowUnauthenticatedHttpFlag)
+                continue;
             kept.Add(arg);
         }
         return kept.ToArray();
