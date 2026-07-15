@@ -404,6 +404,85 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_UnsupportedReferencePurgeAndReadinessDemotionRollBackTogether()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_stale_refs_atomic_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--db", dbPath, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "legacy/old.toml",
+                    Lang = "toml",
+                    Size = 12,
+                    Lines = 1,
+                    Modified = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "stale-edge-atomic",
+                });
+                writer.InsertReferences([
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = "LegacyLink",
+                        ReferenceKind = "call",
+                        Line = 1,
+                        Column = 1,
+                        Context = "LegacyLink",
+                    },
+                ]);
+            }
+
+            long ReadScalar(string sql)
+            {
+                using var connection = OpenNonPoolingConnection(dbPath);
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = sql;
+                return (long)command.ExecuteScalar()!;
+            }
+
+            var readyVersion = ReadScalar("PRAGMA user_version");
+            Assert.NotEqual(0, readyVersion & DbContext.GraphReadyFlag);
+            Assert.NotEqual(0, readyVersion & DbContext.IssuesReadyFlag);
+            Assert.NotEqual(0, readyVersion & DbContext.FoldReadyFlag);
+            Assert.Equal(1, ReadScalar("SELECT COUNT(*) FROM symbol_references WHERE symbol_name = 'LegacyLink'"));
+
+            using (var connection = OpenNonPoolingConnection(dbPath))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    CREATE TRIGGER fail_readiness_demotion
+                    BEFORE INSERT ON codeindex_meta
+                    BEGIN
+                        SELECT RAISE(FAIL, 'boom');
+                    END;
+                    """;
+                command.ExecuteNonQuery();
+            }
+
+            Assert.Throws<SqliteException>(() =>
+                IndexCommandRunner.Run([projectRoot, "--db", dbPath, "--files", "missing.txt", "--json"], _jsonOptions));
+
+            Assert.Equal(readyVersion, ReadScalar("PRAGMA user_version"));
+            Assert.Equal(1, ReadScalar("SELECT COUNT(*) FROM symbol_references WHERE symbol_name = 'LegacyLink'"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+            DeleteFile(dbPath);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_ExplicitDb_RealMutationRewritesIndexedProjectRootMetadata()
     {
         var projectRootA = CreateTempProject();

@@ -1185,15 +1185,15 @@ public class PreparedCommandCacheTests : IDisposable
 
         var supportedLanguages = new[] { "csharp", "typescript" };
 
-        Assert.Equal(1, writer.CountUnsupportedReferences(supportedLanguages));
-        var hitsBeforeCount = _db.PreparedCommands.HitCount;
-        Assert.Equal(1, writer.CountUnsupportedReferences(supportedLanguages));
-        Assert.True(_db.PreparedCommands.HitCount > hitsBeforeCount);
-
-        Assert.Equal(1, writer.PurgeUnsupportedReferences(supportedLanguages));
+        var missesBeforePurge = _db.PreparedCommands.MissCount;
         var hitsBeforePurge = _db.PreparedCommands.HitCount;
+        Assert.Equal(1, writer.PurgeUnsupportedReferences(supportedLanguages));
+        Assert.Equal(missesBeforePurge + 1, _db.PreparedCommands.MissCount);
+        Assert.Equal(hitsBeforePurge, _db.PreparedCommands.HitCount);
+
         Assert.Equal(0, writer.PurgeUnsupportedReferences(supportedLanguages));
-        Assert.True(_db.PreparedCommands.HitCount > hitsBeforePurge);
+        Assert.Equal(missesBeforePurge + 1, _db.PreparedCommands.MissCount);
+        Assert.Equal(hitsBeforePurge + 1, _db.PreparedCommands.HitCount);
     }
 
     [Fact]

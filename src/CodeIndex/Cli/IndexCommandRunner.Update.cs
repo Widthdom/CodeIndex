@@ -386,17 +386,21 @@ public static partial class IndexCommandRunner
             }
         }
 
-        if (writer.CountUnsupportedReferences(supportedGraphLanguages) > 0)
+        using (var purgeTxn = writer.BeginTransaction(cancellationToken, "update purge unsupported references"))
         {
-            DemoteReadinessOnce();
-
-            using var purgeTxn = writer.BeginTransaction(cancellationToken, "update purge unsupported references");
             purgedRefs = writer.PurgeUnsupportedReferences(supportedGraphLanguages);
             if (purgedRefs > 0)
             {
-                purgeTxn.Commit();
+                // Keep the graph cleanup and trust-marker demotion atomic. This avoids a
+                // full COUNT scan before the DELETE while still ensuring readers never
+                // observe ready graph metadata after stale edges have been committed.
+                // graph cleanup と trust-marker の降格を同一 transaction にまとめる。
+                // DELETE 前の全件 COUNT scan を省きつつ、stale edge の commit 後に
+                // ready metadata が見える状態を防ぐ。
+                DemoteReadinessOnce();
                 mutualRecursionRefreshNeeded = true;
             }
+            purgeTxn.Commit();
         }
 
         StartUpdateSpinnerIfNeeded();
