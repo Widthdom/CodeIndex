@@ -3414,7 +3414,11 @@ public partial class McpServerTests
         Assert.True(rateLimit["enabled"]!.GetValue<bool>());
         Assert.Equal(RateLimiterOptions.MaxRefillTokensPerSecond, rateLimit["rps"]!.GetValue<double>());
         Assert.Equal(RateLimiterOptions.MaxBurstCapacity, rateLimit["burst"]!.GetValue<double>());
-        Assert.Equal(1, rateLimit["bucket_count"]!.GetValue<int>());
+        // A canonical direct call consumes the fixed caller-wide pre-validation bucket and
+        // its secondary per-tool bucket (#4547).
+        // canonical な direct call は固定 caller-wide pre-validation bucket と secondary
+        // per-tool bucket の両方を消費する（#4547）。
+        Assert.Equal(2, rateLimit["bucket_count"]!.GetValue<int>());
         Assert.True(rateLimit["bucket_idle_ttl_seconds"]!.GetValue<double>() > 0);
         Assert.True(rateLimit["next_prune_in_ms"]!.GetValue<long>() >= 0);
         Assert.True(rateLimit["last_prune_age_ms"]!.GetValue<long>() >= 0);
