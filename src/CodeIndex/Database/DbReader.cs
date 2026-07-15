@@ -39,6 +39,7 @@ public partial class DbReader : IDisposable
 {
     public const string VerifyFoldReadyRowsEnvironmentVariable = "CDIDX_VERIFY_FOLD_READY_ROWS";
     internal const int MaxReferenceKindAggregateCharacters = 16 * 1024;
+    private const int SqliteInterruptErrorCode = 9;
 
     private static readonly Regex ImpactSignatureIdentifierRegex = new(@"[\p{L}_][\p{L}\p{Nd}_]*", RegexOptions.Compiled);
     private static readonly Regex CSharpUsingStaticImportRegex = new(@"^\s*(?:global\s+)?using\s+static\s+(?<target>[^;]+)", RegexOptions.Compiled);
@@ -60,6 +61,7 @@ public partial class DbReader : IDisposable
     private readonly HashSet<string> _fileColumns;
     private readonly HashSet<string> _symbolColumns;
     private readonly HashSet<string> _referenceColumns;
+    private readonly HashSet<string> _chunkIndexes;
     private readonly HashSet<string> _symbolIndexes;
     private readonly HashSet<string> _referenceIndexes;
     private readonly HashSet<string> _indexedHotspotFamilyLanguages;
@@ -107,6 +109,48 @@ public partial class DbReader : IDisposable
             GeneratedColumnAvailableScope.Value = previousGeneratedColumnAvailable;
         }
     }
+
+    /// <summary>
+    /// Run a multi-statement read against one deferred SQLite snapshot.
+    /// 複数 statement の読み取りを単一の deferred SQLite snapshot 上で実行する。
+    /// </summary>
+    internal T RunInReadSnapshot<T>(Func<T> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        using var cancellationRegistration = RegisterSqliteInterruptForCancellation();
+        try
+        {
+            _cancellation.ThrowIfCancellationRequested();
+
+            using var transaction = _conn.BeginTransaction(deferred: true);
+            var result = action();
+            _cancellation.ThrowIfCancellationRequested();
+            transaction.Commit();
+            return result;
+        }
+        catch (SqliteException exception) when (IsSqliteInterruptCancellation(exception))
+        {
+            throw new OperationCanceledException(
+                "The SQLite read snapshot was interrupted by cancellation.",
+                exception,
+                _cancellation);
+        }
+    }
+
+    private CancellationTokenRegistration RegisterSqliteInterruptForCancellation()
+        => _cancellation.CanBeCanceled
+            ? _cancellation.UnsafeRegister(
+                static state =>
+                {
+                    var connection = (SqliteConnection)state!;
+                    SQLitePCL.raw.sqlite3_interrupt(connection.Handle);
+                },
+                _conn)
+            : default;
+
+    private bool IsSqliteInterruptCancellation(SqliteException exception)
+        => _cancellation.IsCancellationRequested
+           && exception.SqliteErrorCode == SqliteInterruptErrorCode;
     // #86: True when every symbols / symbol_references row has name_folded populated and
     // the Unicode fold path is safe to use for `--exact`. Legacy / partial-backfill DBs
     // read this as false and fall back to the ASCII-only `COLLATE NOCASE` path.
@@ -447,6 +491,7 @@ public partial class DbReader : IDisposable
         GeneratedColumnAvailableScope.Value = _fileColumns.Contains("generated");
         _symbolColumns = LoadColumns("symbols");
         _referenceColumns = LoadColumns("symbol_references");
+        _chunkIndexes = LoadIndexes("chunks");
         _symbolIndexes = LoadIndexes("symbols");
         int userVersion;
         using (var v = _conn.CreateCommand())
