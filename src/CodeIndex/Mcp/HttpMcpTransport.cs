@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Collections.Specialized;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Numerics;
 using System.Security.Cryptography;
@@ -61,7 +62,12 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     internal const string AuthDenialOversizedToken = "oversized-token";
     internal const string AuthDenialWrongToken = "wrong-token";
     internal const string TimeoutDiagnosticPrefix = "timeout:";
-    internal const string LoopbackAuthDisabledWarning = "HTTP MCP is running on a loopback listener without bearer authentication; local processes can connect.";
+    internal const string LoopbackAuthDisabledWarning = "HTTP MCP is running in explicit unsafe mode without bearer authentication; local processes can connect.";
+    internal const string OriginRejectedDiagnostic = "origin_not_allowed";
+    internal const string PreflightRejectedDiagnostic = "cors_preflight_rejected";
+    internal const string UnsupportedMediaTypeDiagnostic = "unsupported_media_type";
+    internal const string UnsupportedCharsetDiagnostic = "unsupported_charset";
+    internal const string InvalidUtf8Diagnostic = "invalid_utf8";
     private const string BearerPrefix = "Bearer ";
     private const string DefaultStartingHealthJson = """{"status":"starting","db_open":false}""";
     private const string InvalidHealthJson = """{"status":"degraded","db_open":false,"error":"health_provider_invalid"}""";
@@ -69,9 +75,11 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     private static readonly TimeSpan EventStreamWriteTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan ResponseWriteTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan DisposeAcceptLoopTimeout = TimeSpan.FromSeconds(5);
+    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     private readonly HttpListener _listener;
     private readonly string _endpoint;
+    private readonly string _allowedOrigin;
     private readonly Action<HttpRequestLogRecord>? _requestLogger;
     private readonly int _requestLogQueueCapacity;
     private readonly Channel<HttpRequestLogRecord>? _requestLogQueue;
@@ -126,13 +134,13 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     private bool _ownedSemaphoreGatesDisposed;
 
     /// <summary>
-    /// Build an HTTP transport bound to the supplied loopback prefix. If <paramref name="bearerToken"/>
-    /// is non-empty, every request must carry a matching `Authorization: Bearer ...` header; otherwise
-    /// the transport refuses to bind to non-loopback hosts to avoid exposing the MCP catalog to the
-    /// local network without an explicit secret.
-    /// 指定された loopback プレフィックスに HTTP トランスポートを bind する。<paramref name="bearerToken"/>
-    /// が空でない場合、すべてのリクエストに `Authorization: Bearer ...` ヘッダーが必要。トークン未指定で
-    /// loopback 以外に bind しようとした場合は明示的に拒否し、秘密情報なしの LAN 露出を防ぐ。
+    /// Build an HTTP transport bound to the supplied prefix. Every request requires a matching
+    /// `Authorization: Bearer ...` header unless <paramref name="allowUnauthenticatedLoopback"/>
+    /// explicitly opts a loopback-only listener into unsafe mode. Non-loopback listeners always
+    /// require a bearer secret.
+    /// 指定プレフィックスに HTTP transport を bind する。すべての request に bearer secret を要求し、
+    /// <paramref name="allowUnauthenticatedLoopback"/> が明示的に unsafe mode を選んだ loopback listener
+    /// だけを例外とする。non-loopback listener は常に bearer secret が必要。
     /// </summary>
     internal HttpMcpTransport(
         string prefix,
@@ -146,7 +154,8 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         int? maxConcurrentHandlers = null,
         int? maxEventStreams = null,
         int? requestLogQueueCapacity = null,
-        TimeSpan? eventStreamWriteTimeout = null)
+        TimeSpan? eventStreamWriteTimeout = null,
+        bool allowUnauthenticatedLoopback = false)
     {
         _maxRequestBodyBytes = ResolvePositiveIntOption(
             maxRequestBodyBytes,
@@ -203,14 +212,20 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         if (bearerToken is { Length: > 0 } && bearerToken.Contains(',', StringComparison.Ordinal))
             throw new ArgumentException("HTTP bearer token must not contain commas; commas are reserved for rejecting ambiguous Authorization headers.", nameof(bearerToken));
         IsLoopbackBind = IsLoopbackHost(host);
-        if (string.IsNullOrEmpty(bearerToken) && !IsLoopbackBind)
-            throw new ArgumentException("HTTP MCP requires bearer authentication when binding outside loopback.", nameof(bearerToken));
+        if (string.IsNullOrEmpty(bearerToken) && (!IsLoopbackBind || !allowUnauthenticatedLoopback))
+        {
+            var message = IsLoopbackBind
+                ? "HTTP MCP requires bearer authentication by default; unauthenticated loopback requires an explicit unsafe opt-in."
+                : "HTTP MCP requires bearer authentication when binding outside loopback.";
+            throw new ArgumentException(message, nameof(bearerToken));
+        }
         _bearerTokenHash = string.IsNullOrEmpty(bearerToken)
             ? null
             : McpAuthenticationLimits.HashTokenToArray(bearerToken);
         _handlerSemaphore = new SemaphoreSlim(_maxConcurrentHandlers, _maxConcurrentHandlers);
         _listener = new HttpListener();
         _listener.Prefixes.Add(prefix);
+        _allowedOrigin = new Uri(prefix, UriKind.Absolute).GetLeftPart(UriPartial.Authority);
         _listener.Start();
         _requestLogger = requestLogger;
         if (_requestLogger is not null)
@@ -583,6 +598,24 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     {
         var request = BeginRequest(context, cancellationToken);
 
+        if (!TryValidateOrigin(context.Request))
+        {
+            request.AuthOutcome = "not-checked";
+            request.Diagnostic = OriginRejectedDiagnostic;
+            await RespondAsync(request, (int)HttpStatusCode.Forbidden, "Origin is not allowed for this MCP HTTP listener.\n").ConfigureAwait(false);
+            LogRequest(request, (int)HttpStatusCode.Forbidden);
+            return;
+        }
+
+        if (string.Equals(context.Request.HttpMethod, "OPTIONS", StringComparison.OrdinalIgnoreCase))
+        {
+            request.AuthOutcome = "not-checked";
+            request.Diagnostic = PreflightRejectedDiagnostic;
+            await RespondAsync(request, (int)HttpStatusCode.Forbidden, "CORS preflight is not supported by this MCP HTTP listener.\n").ConfigureAwait(false);
+            LogRequest(request, (int)HttpStatusCode.Forbidden);
+            return;
+        }
+
         if (!await TryAuthorizeAsync(request).ConfigureAwait(false))
             return;
 
@@ -623,6 +656,9 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             LogRequest(request, (int)HttpStatusCode.MethodNotAllowed);
             return;
         }
+
+        if (!await TryValidateJsonContentTypeAsync(request).ConfigureAwait(false))
+            return;
 
         var body = await TryReadRequestBodyAsync(request, cancellationToken).ConfigureAwait(false);
         if (body is null)
@@ -684,8 +720,79 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         }
 
         // ToArray/GetString materializes only after Content-Length and streaming reads have both
-        // enforced _maxRequestBodyBytes.
-        return (context.Request.ContentEncoding ?? Encoding.UTF8).GetString(buffer.ToArray());
+        // enforced _maxRequestBodyBytes. Decode strictly as UTF-8 so invalid bytes cannot be
+        // silently replaced with U+FFFD and interpreted as a different JSON-RPC frame (#4549).
+        // byte 上限を両方の経路で確認した後だけ materialize し、strict UTF-8 で decode する。
+        // 不正 byte を U+FFFD に置換して別の JSON-RPC frame として解釈しない (#4549)。
+        try
+        {
+            return StrictUtf8.GetString(buffer.ToArray());
+        }
+        catch (DecoderFallbackException)
+        {
+            request.Diagnostic = InvalidUtf8Diagnostic;
+            await RespondAsync(request, (int)HttpStatusCode.BadRequest, "MCP HTTP request body must be valid UTF-8.\n").ConfigureAwait(false);
+            LogRequest(request, (int)HttpStatusCode.BadRequest);
+            return null;
+        }
+    }
+
+    private bool TryValidateOrigin(HttpListenerRequest request)
+    {
+        var values = request.Headers.GetValues("Origin");
+        if (values is not { Length: > 0 })
+            return true;
+
+        if (values!.Length != 1)
+            return false;
+
+        var value = values[0];
+        if (string.IsNullOrEmpty(value)
+            || !string.Equals(value, value.Trim(), StringComparison.Ordinal)
+            || value.Contains(',', StringComparison.Ordinal)
+            || !Uri.TryCreate(value, UriKind.Absolute, out var origin)
+            || !string.IsNullOrEmpty(origin.UserInfo)
+            || !string.IsNullOrEmpty(origin.Query)
+            || !string.IsNullOrEmpty(origin.Fragment)
+            || !string.Equals(origin.AbsolutePath, "/", StringComparison.Ordinal)
+            || !string.Equals(origin.GetLeftPart(UriPartial.Authority), _allowedOrigin, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private async Task<bool> TryValidateJsonContentTypeAsync(PendingRequest request)
+    {
+        var contentTypes = request.Context.Request.Headers.GetValues("Content-Type");
+        if (contentTypes is not { Length: 1 }
+            || !MediaTypeHeaderValue.TryParse(contentTypes[0], out var contentType)
+            || !string.Equals(contentType.MediaType, "application/json", StringComparison.OrdinalIgnoreCase))
+        {
+            request.Diagnostic = UnsupportedMediaTypeDiagnostic;
+            await RespondAsync(request, (int)HttpStatusCode.UnsupportedMediaType, "MCP HTTP POST requires Content-Type: application/json.\n").ConfigureAwait(false);
+            LogRequest(request, (int)HttpStatusCode.UnsupportedMediaType);
+            return false;
+        }
+
+        var charsetParameters = contentType.Parameters
+            .Where(parameter => string.Equals(parameter.Name, "charset", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var charset = charsetParameters.Length == 1
+            ? charsetParameters[0].Value?.Trim().Trim('"')
+            : null;
+        if (charsetParameters.Length > 1
+            || (charsetParameters.Length == 1
+                && !string.Equals(charset, "utf-8", StringComparison.OrdinalIgnoreCase)))
+        {
+            request.Diagnostic = UnsupportedCharsetDiagnostic;
+            await RespondAsync(request, (int)HttpStatusCode.UnsupportedMediaType, "MCP HTTP POST requires UTF-8 JSON.\n").ConfigureAwait(false);
+            LogRequest(request, (int)HttpStatusCode.UnsupportedMediaType);
+            return false;
+        }
+
+        return true;
     }
 
     private bool TryQueueRequest(PendingRequest request)

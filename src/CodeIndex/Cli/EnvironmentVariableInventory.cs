@@ -66,8 +66,8 @@ internal static class EnvironmentVariableInventory
         Item("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S", "mcp", SensitivityPublic, "performance", "disabled", "no", "MCP keep-alive notification interval.", Location("src/CodeIndex/Mcp/McpServer.cs", 192, "McpServer")),
         Item("CDIDX_MCP_SAMPLING", "mcp", SensitivityPublic, "security", "disabled", "no", "MCP sampling feature gate.", Location("src/CodeIndex/Mcp/McpServer.cs", 194, "McpServer")),
 
-        Item(McpAuthenticatorFactory.AuthTokenEnvVar, "mcp", SensitivitySecret, "security", "local stdio auth or no HTTP bearer auth", "no", "Generic MCP bearer token.", Location("src/CodeIndex/Mcp/McpAuthentication.cs", 264, "McpAuthenticatorFactory")),
-        Item(ProgramRunner.McpHttpTokenEnvVar, "mcp", SensitivitySecret, "security", "falls back to CDIDX_MCP_AUTH_TOKEN", "no", "HTTP MCP bearer token override.", Location("src/CodeIndex/Cli/ProgramRunner.cs", 2368, "ProgramRunner")),
+        Item(McpAuthenticatorFactory.AuthTokenEnvVar, "mcp", SensitivitySecret, "security", "local stdio auth and HTTP bearer fallback", "no", "Generic MCP bearer token; HTTP requires this fallback or the HTTP-specific token unless explicit unsafe loopback mode is selected.", Location("src/CodeIndex/Mcp/McpAuthentication.cs", 264, "McpAuthenticatorFactory")),
+        Item(ProgramRunner.McpHttpTokenEnvVar, "mcp", SensitivitySecret, "security", "falls back to CDIDX_MCP_AUTH_TOKEN", "no", "Preferred HTTP MCP bearer token; required by default on every HTTP listener.", Location("src/CodeIndex/Cli/ProgramRunner.cs", 2368, "ProgramRunner")),
 
         Item("CDIDX_GITHUB_TOKEN", "github", SensitivitySecret, "security", "GitHub submission disabled", "no", "GitHub token used only for explicit suggestion issue submission.", Location("src/CodeIndex/Cli/GitHubIssueReporter.cs", 35, "GitHubIssueReporter")),
         Item("CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS", "github", SensitivityPublic, "performance", "10", "no", "GitHub suggestion submission timeout in seconds.", Location("src/CodeIndex/Cli/GitHubIssueReporter.cs", 53, "GitHubIssueReporter")),

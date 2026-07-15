@@ -100,6 +100,70 @@ public class ProgramRunnerTests
         Assert.IsType<LocalStdioAuthenticator>(ProgramRunner.CreateMcpAuthenticatorForTransport("http"));
     }
 
+    [Fact]
+    public void TryExtractMcpTransportFlags_ExtractsExplicitUnauthenticatedHttpOptIn_Issue4549()
+    {
+        var success = ProgramRunner.TryExtractMcpTransportFlags(
+            ["--transport", "http", "--http-listen=127.0.0.1:0", ProgramRunner.AllowUnauthenticatedHttpFlag],
+            out var transport,
+            out var listen,
+            out var allowUnauthenticatedHttp,
+            out var error);
+
+        Assert.True(success, error);
+        Assert.Equal("http", transport);
+        Assert.Equal("127.0.0.1:0", listen);
+        Assert.True(allowUnauthenticatedHttp);
+    }
+
+    [Fact]
+    public void RunMcp_UnauthenticatedHttpOptInRequiresHttpTransport_Issue4549()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["mcp", ProgramRunner.AllowUnauthenticatedHttpFlag],
+            appVersion: "1.0.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("requires `--transport http`", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunMcp_HttpLoopbackRequiresBearerByDefault_Issue4549()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            ProgramRunner.McpHttpTokenEnvVar,
+            McpAuthenticatorFactory.AuthTokenEnvVar);
+        env.Set(ProgramRunner.McpHttpTokenEnvVar, null);
+        env.Set(McpAuthenticatorFactory.AuthTokenEnvVar, null);
+
+        var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["mcp", "--transport", "http", "--http-listen", "127.0.0.1:0"],
+            appVersion: "1.0.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("requires bearer authentication", stderr, StringComparison.Ordinal);
+        Assert.Contains(ProgramRunner.AllowUnauthenticatedHttpFlag, stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunMcp_UnauthenticatedHttpOptInRejectsNonLoopbackEvenWithToken_Issue4549()
+    {
+        using var env = EnvironmentVariableScope.Capture(ProgramRunner.McpHttpTokenEnvVar);
+        env.Set(ProgramRunner.McpHttpTokenEnvVar, "test-token");
+
+        var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            [
+                "mcp",
+                "--transport", "http",
+                "--http-listen", "0.0.0.0:0",
+                ProgramRunner.AllowUnauthenticatedHttpFlag,
+            ],
+            appVersion: "1.0.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("limited to loopback listeners", stderr, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("--json")]
     [InlineData("--json=array")]

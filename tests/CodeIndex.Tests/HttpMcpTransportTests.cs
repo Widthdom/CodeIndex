@@ -48,6 +48,22 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public void HttpTransport_LoopbackWithoutBearerToken_RequiresExplicitUnsafeOptIn_Issue4549()
+    {
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+
+        var ex = Assert.Throws<ArgumentException>(() => new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null));
+
+        Assert.Equal("bearerToken", ex.ParamName);
+        Assert.Contains("requires bearer authentication by default", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("explicit unsafe opt-in", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void FormatBindFailureDiagnostic_RedactsExceptionMessage_Issue4124()
     {
         var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
@@ -264,6 +280,199 @@ public class HttpMcpTransportTests : IDisposable
         Assert.False(root.GetProperty("http_response_cleanup_degraded").GetBoolean());
         Assert.Equal(0, root.GetProperty("http_response_abort_cleanup_failure_count").GetInt64());
         Assert.Equal(0, root.GetProperty("http_response_close_cleanup_failure_count").GetInt64());
+    }
+
+    [Fact]
+    public async Task HttpTransport_OriginPolicy_AllowsNativeAndSameOriginRequests_Issue4549()
+    {
+        const string token = "issue-4549-token";
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
+        using var client = CreateHttpClient();
+
+        using (var nativeRequest = CreateAuthorizedRequest(1))
+        using (var nativeResponse = await client.SendAsync(nativeRequest))
+        {
+            Assert.Equal(HttpStatusCode.OK, nativeResponse.StatusCode);
+        }
+
+        using var sameOriginRequest = CreateAuthorizedRequest(2);
+        sameOriginRequest.Headers.TryAddWithoutValidation(
+            "Origin",
+            new Uri(harness.Endpoint).GetLeftPart(UriPartial.Authority));
+        using var sameOriginResponse = await client.SendAsync(sameOriginRequest);
+
+        Assert.Equal(HttpStatusCode.OK, sameOriginResponse.StatusCode);
+
+        HttpRequestMessage CreateAuthorizedRequest(int id)
+        {
+            var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+            {
+                Content = new ByteArrayContent(Encoding.UTF8.GetBytes(
+                    $$"""{"jsonrpc":"2.0","id":{{id}},"method":"ping"}""")),
+            };
+            request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            return request;
+        }
+    }
+
+    [Fact]
+    public async Task HttpTransport_OriginPolicy_RejectsUntrustedAmbiguousAndNullOrigins_Issue4549()
+    {
+        const string token = "issue-4549-token";
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        await using var harness = await McpHttpHarness.StartAsync(
+            _dbPath,
+            bearerToken: token,
+            requestLogger: records.Enqueue);
+        using var client = CreateHttpClient();
+
+        var cases = new (string Name, Action<HttpRequestMessage> SetOrigin)[]
+        {
+            ("untrusted", request => request.Headers.TryAddWithoutValidation("Origin", "https://attacker.example")),
+            ("null", request => request.Headers.TryAddWithoutValidation("Origin", "null")),
+            ("duplicate", request => request.Headers.TryAddWithoutValidation(
+                "Origin",
+                new[] { "https://attacker.example", "https://other.example" })),
+            ("comma-folded", request => request.Headers.TryAddWithoutValidation(
+                "Origin",
+                "https://attacker.example, https://other.example")),
+        };
+
+        foreach (var (name, setOrigin) in cases)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+            {
+                Content = new StringContent(
+                    """{"jsonrpc":"2.0","id":1,"method":"ping"}""",
+                    Encoding.UTF8,
+                    "application/json"),
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            setOrigin(request);
+
+            using var response = await client.SendAsync(request);
+            var body = await response.Content.ReadAsStringAsync();
+
+            Assert.True(response.StatusCode == HttpStatusCode.Forbidden, name);
+            Assert.Equal("Origin is not allowed for this MCP HTTP listener.\n", body);
+            Assert.False(response.Headers.Contains("Access-Control-Allow-Origin"));
+            Assert.DoesNotContain("attacker.example", body, StringComparison.Ordinal);
+            Assert.DoesNotContain(token, body, StringComparison.Ordinal);
+        }
+
+        foreach (var path in new[] { "healthz", "events" })
+        {
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                new Uri(new Uri(harness.Endpoint), path));
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            request.Headers.TryAddWithoutValidation("Origin", "https://attacker.example");
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        }
+
+        var logged = await WaitForRequestLogRecordsAsync(records, cases.Length + 2);
+        Assert.All(logged, record =>
+        {
+            Assert.Equal("not-checked", record.AuthOutcome);
+            Assert.Equal(HttpMcpTransport.OriginRejectedDiagnostic, record.Diagnostic);
+        });
+    }
+
+    [Fact]
+    public async Task HttpTransport_BrowserSimpleRequestAndPreflight_AreRejectedBeforeAuth_Issue4549()
+    {
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: "token");
+        using var client = CreateHttpClient();
+
+        using (var simpleRequest = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+        {
+            Content = new StringContent(
+                """{"jsonrpc":"2.0","id":1,"method":"ping"}""",
+                Encoding.UTF8,
+                "text/plain"),
+        })
+        {
+            simpleRequest.Headers.TryAddWithoutValidation("Origin", "https://attacker.example");
+            using var simpleResponse = await client.SendAsync(simpleRequest);
+            Assert.Equal(HttpStatusCode.Forbidden, simpleResponse.StatusCode);
+        }
+
+        using var preflight = new HttpRequestMessage(HttpMethod.Options, harness.Endpoint);
+        preflight.Headers.TryAddWithoutValidation(
+            "Origin",
+            new Uri(harness.Endpoint).GetLeftPart(UriPartial.Authority));
+        preflight.Headers.TryAddWithoutValidation("Access-Control-Request-Method", "POST");
+        preflight.Headers.TryAddWithoutValidation(
+            "Access-Control-Request-Headers",
+            "authorization, content-type");
+        using var preflightResponse = await client.SendAsync(preflight);
+
+        Assert.Equal(HttpStatusCode.Forbidden, preflightResponse.StatusCode);
+        Assert.False(preflightResponse.Headers.Contains("Access-Control-Allow-Origin"));
+        Assert.False(preflightResponse.Headers.Contains("Access-Control-Allow-Methods"));
+        Assert.False(preflightResponse.Headers.Contains("Access-Control-Allow-Headers"));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("text/plain")]
+    [InlineData("application/problem+json")]
+    [InlineData("application/json; charset=utf-16")]
+    [InlineData("application/json; charset=utf-8; charset=utf-16")]
+    public async Task HttpTransport_PostRejectsUnsupportedJsonMediaTypesAndCharsets_Issue4549(string? contentType)
+    {
+        const string token = "issue-4549-token";
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
+        using var client = CreateHttpClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+        {
+            Content = new ByteArrayContent(Encoding.UTF8.GetBytes(
+                """{"jsonrpc":"2.0","id":1,"method":"ping"}""")),
+        };
+        if (contentType is not null)
+            request.Content.Headers.TryAddWithoutValidation("Content-Type", contentType);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.UnsupportedMediaType, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task HttpTransport_PostAcceptsUtf8JsonAndRejectsInvalidUtf8_Issue4549()
+    {
+        const string token = "issue-4549-token";
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
+        using var client = CreateHttpClient();
+
+        using (var invalidRequest = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+        {
+            Content = new ByteArrayContent([0xC3, 0x28]),
+        })
+        {
+            invalidRequest.Content.Headers.TryAddWithoutValidation(
+                "Content-Type",
+                "application/json; charset=\"UTF-8\"");
+            invalidRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            using var invalidResponse = await client.SendAsync(invalidRequest);
+            Assert.Equal(HttpStatusCode.BadRequest, invalidResponse.StatusCode);
+            Assert.Equal(
+                "MCP HTTP request body must be valid UTF-8.\n",
+                await invalidResponse.Content.ReadAsStringAsync());
+        }
+
+        using var validRequest = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+        {
+            Content = new ByteArrayContent(Encoding.UTF8.GetBytes(
+                """{"jsonrpc":"2.0","id":2,"method":"ping"}""")),
+        };
+        validRequest.Content.Headers.TryAddWithoutValidation("Content-Type", "application/json; charset=\"UTF-8\"");
+        validRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var validResponse = await client.SendAsync(validRequest);
+
+        Assert.Equal(HttpStatusCode.OK, validResponse.StatusCode);
     }
 
     [Fact]
@@ -545,7 +754,8 @@ public class HttpMcpTransportTests : IDisposable
             listen.Prefix,
             listen.Host,
             listen.Port,
-            bearerToken: null);
+            bearerToken: null,
+            allowUnauthenticatedLoopback: true);
         transport.OutOfBandFrameHandler = (_, _) =>
         {
             Interlocked.Increment(ref outOfBandHandlerCalls);
@@ -651,7 +861,8 @@ public class HttpMcpTransportTests : IDisposable
             listen.Prefix,
             listen.Host,
             listen.Port,
-            bearerToken: null);
+            bearerToken: null,
+            allowUnauthenticatedLoopback: true);
 
         Assert.Equal(HttpMcpTransport.DefaultMaxRequestBodyBytes, transport.MaxRequestBodyBytes);
         Assert.Equal(HttpMcpTransport.DefaultMaxResponseBodyBytes, transport.MaxResponseBodyBytes);
@@ -675,7 +886,8 @@ public class HttpMcpTransportTests : IDisposable
             "http://127.0.0.1:1/",
             "0.0.0.0",
             1,
-            bearerToken: null));
+            bearerToken: null,
+            allowUnauthenticatedLoopback: true));
 
         Assert.Contains("requires bearer authentication", ex.Message, StringComparison.Ordinal);
         Assert.Equal("bearerToken", ex.ParamName);
@@ -701,7 +913,8 @@ public class HttpMcpTransportTests : IDisposable
             listen.Prefix,
             listen.Host,
             listen.Port,
-            bearerToken: null);
+            bearerToken: null,
+            allowUnauthenticatedLoopback: true);
 
         Assert.Equal(2 * 1024 * 1024, transport.MaxRequestBodyBytes);
         Assert.Equal(3 * 1024 * 1024, transport.MaxResponseBodyBytes);
@@ -864,7 +1077,8 @@ public class HttpMcpTransportTests : IDisposable
             listen.Host,
             listen.Port,
             bearerToken: null,
-            maxQueuedRequests: 1);
+            maxQueuedRequests: 1,
+            allowUnauthenticatedLoopback: true);
 
         using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
         var first = client.PostAsync(
@@ -898,7 +1112,8 @@ public class HttpMcpTransportTests : IDisposable
             listen.Host,
             listen.Port,
             bearerToken: null,
-            maxConcurrentHandlers: 1);
+            maxConcurrentHandlers: 1,
+            allowUnauthenticatedLoopback: true);
 
         using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
         using var events = await client.GetAsync(new Uri(new Uri(listen.Prefix), "events"), HttpCompletionOption.ResponseHeadersRead);
@@ -922,7 +1137,8 @@ public class HttpMcpTransportTests : IDisposable
             listen.Host,
             listen.Port,
             bearerToken: null,
-            maxEventStreams: 1);
+            maxEventStreams: 1,
+            allowUnauthenticatedLoopback: true);
 
         using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
         using var first = await client.GetAsync(new Uri(new Uri(listen.Prefix), "events"), HttpCompletionOption.ResponseHeadersRead);
@@ -1572,7 +1788,8 @@ public class HttpMcpTransportTests : IDisposable
                 maxResponseBodyBytes: maxResponseBodyBytes,
                 maxQueuedRequests: maxQueuedRequests,
                 requestLogQueueCapacity: requestLogQueueCapacity,
-                eventStreamWriteTimeout: eventStreamWriteTimeout);
+                eventStreamWriteTimeout: eventStreamWriteTimeout,
+                allowUnauthenticatedLoopback: bearerToken is null);
             var server = authenticator is null
                 ? new McpServer(dbPath, ConsoleUi.LoadVersion())
                 : new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, authenticator);
