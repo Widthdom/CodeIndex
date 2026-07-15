@@ -1077,6 +1077,55 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
+    public void DbWriter_WithCache_LargeStalePurgeReusesFullBatchDeleteCommand()
+    {
+        const int fileCount = 1_201;
+        var writer = new DbWriter(_db);
+        var projectRoot = TestProjectHelper.CreateTempProject("prepcache_purge_batch");
+        try
+        {
+            using (var transaction = _db.Connection.BeginTransaction())
+            using (var insert = _db.Connection.CreateCommand())
+            {
+                insert.Transaction = transaction;
+                insert.CommandText = """
+                    INSERT INTO files (path, lang, size, lines, checksum, modified)
+                    VALUES (@path, 'csharp', 10, 1, @checksum, @modified)
+                    """;
+                var pathParameter = insert.Parameters.Add("@path", SqliteType.Text);
+                var checksumParameter = insert.Parameters.Add("@checksum", SqliteType.Text);
+                insert.Parameters.Add("@modified", SqliteType.Text).Value = "2026-01-01T00:00:00Z";
+                insert.Prepare();
+                for (var index = 0; index < fileCount; index++)
+                {
+                    pathParameter.Value = $"stale/file_{index:D5}.cs";
+                    checksumParameter.Value = $"stale-{index}";
+                    insert.ExecuteNonQuery();
+                }
+                transaction.Commit();
+            }
+
+            var missesBeforePurge = _db.PreparedCommands.MissCount;
+            var hitsBeforePurge = _db.PreparedCommands.HitCount;
+
+            Assert.Equal(fileCount, writer.PurgeStaleFiles(projectRoot));
+
+            // One scan SQL, one 500-ID SQL reused for the second full batch, and one
+            // 201-ID remainder SQL. A per-file delete would add 1,201 command leases.
+            // scan、500 ID（2 batch目で再利用）、201 ID remainderの3 SQLだけを使う。
+            Assert.Equal(missesBeforePurge + 3, _db.PreparedCommands.MissCount);
+            Assert.Equal(hitsBeforePurge + 1, _db.PreparedCommands.HitCount);
+            using var countCommand = _db.Connection.CreateCommand();
+            countCommand.CommandText = "SELECT COUNT(*) FROM files";
+            Assert.Equal(0L, (long)countCommand.ExecuteScalar()!);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void DbWriter_WithCache_ReferenceGraphMaintenanceReusesCommands()
     {
         var writer = new DbWriter(_db);

@@ -142,22 +142,47 @@ public partial class DbWriter
         // CASCADE on chunks/symbols + FTS triggers handle all cleanup automatically.
         // chunks/symbolsのCASCADE + FTSトリガーが全クリーンアップを自動処理する。
         using var txn = BeginTransaction();
+        DeleteFileRowsByIdBatched(fileIds);
+        beforeCommit?.Invoke();
+        txn.Commit();
+        return fileIds.Count;
+    }
+
+    private void DeleteFileRowsByIdBatched(IReadOnlyList<long> fileIds)
+    {
+        for (var offset = 0; offset < fileIds.Count; offset += DeleteFilesBatchSize)
+        {
+            var batchCount = Math.Min(DeleteFilesBatchSize, fileIds.Count - offset);
+            DeleteFileRowsByIdBatch(fileIds, offset, batchCount);
+        }
+    }
+
+    private void DeleteFileRowsByIdBatch(
+        IReadOnlyList<long> fileIds,
+        int offset,
+        int batchCount)
+    {
+        SqliteDynamicSql.EnsureParameterBudget(batchCount, "file id delete batch");
+        var parameterList = SqliteDynamicSql.BuildParameterList("id", batchCount);
         var deleteCmd = RentCommand(
-            "DELETE FROM files WHERE id = @id",
-            static c => c.Parameters.Add("@id", SqliteType.Integer));
+            $"DELETE FROM files WHERE id IN ({parameterList})",
+            command =>
+            {
+                for (var parameterIndex = 0; parameterIndex < batchCount; parameterIndex++)
+                {
+                    command.Parameters.Add(
+                        SqliteDynamicSql.BuildParameterName("id", parameterIndex),
+                        SqliteType.Integer);
+                }
+            });
         try
         {
-            var pId = deleteCmd.Parameters["@id"];
+            for (var parameterIndex = 0; parameterIndex < batchCount; parameterIndex++)
+                deleteCmd.Parameters[parameterIndex].Value = fileIds[offset + parameterIndex];
+
             if (_commandCache is null)
                 deleteCmd.Prepare();
-            foreach (var id in fileIds)
-            {
-                pId.Value = id;
-                deleteCmd.ExecuteNonQuery();
-            }
-            beforeCommit?.Invoke();
-            txn.Commit();
-            return fileIds.Count;
+            deleteCmd.ExecuteNonQuery();
         }
         finally
         {

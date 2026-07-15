@@ -3820,6 +3820,66 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void PurgeStaleFiles_BatchesLargeDeletesAndCascadesChildrenAndFts()
+    {
+        const int fileCount = 1_201;
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_purge_batch");
+        try
+        {
+            SeedStaleFilesWithChildren(fileCount);
+            Assert.Equal(fileCount, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks"));
+            var beforeCommitCalls = 0;
+
+            var purged = _writer.PurgeStaleFiles(tempDir, () => beforeCommitCalls++);
+
+            Assert.Equal(fileCount, purged);
+            Assert.Equal(1, beforeCommitCalls);
+            Assert.Equal(0, ExecuteScalarLong("SELECT COUNT(*) FROM files"));
+            Assert.Equal(0, ExecuteScalarLong("SELECT COUNT(*) FROM chunks"));
+            Assert.Equal(0, ExecuteScalarLong("SELECT COUNT(*) FROM symbols"));
+            Assert.Equal(0, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void PurgeStaleFiles_MultipleBatchesRollBackTogetherWhenBeforeCommitFails()
+    {
+        const int fileCount = 1_001;
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_purge_batch_rollback");
+        try
+        {
+            SeedStaleFilesWithChildren(fileCount);
+            var beforeCommitCalls = 0;
+
+            Assert.Throws<InvalidOperationException>(() =>
+                _writer.PurgeStaleFiles(
+                    tempDir,
+                    () =>
+                    {
+                        beforeCommitCalls++;
+                        throw new InvalidOperationException("stop before commit");
+                    }));
+
+            Assert.Equal(1, beforeCommitCalls);
+            Assert.Equal(fileCount, ExecuteScalarLong("SELECT COUNT(*) FROM files"));
+            Assert.Equal(fileCount, ExecuteScalarLong("SELECT COUNT(*) FROM chunks"));
+            Assert.Equal(fileCount, ExecuteScalarLong("SELECT COUNT(*) FROM symbols"));
+            Assert.Equal(fileCount, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks"));
+
+            Assert.Equal(fileCount, _writer.PurgeStaleFiles(tempDir));
+            Assert.Equal(0, ExecuteScalarLong("SELECT COUNT(*) FROM files"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void PurgeFilesOutsideRetainedSetWithinListedDirectories_PurgesDeepDescendantsUnderSymlinkPrunedDirectory()
     {
         // Regression for #190 follow-up: earlier symlink-following runs can leave entries like
@@ -4333,6 +4393,44 @@ public class DatabaseTests : IDisposable
             Assert.True(MetaRowExists(key), key);
         }
         Assert.Equal("keep", ReadMeta("unrelated_meta"));
+    }
+
+    private void SeedStaleFilesWithChildren(int fileCount)
+    {
+        using var transaction = _db.Connection.BeginTransaction();
+        using (var insertFile = _db.Connection.CreateCommand())
+        {
+            insertFile.Transaction = transaction;
+            insertFile.CommandText = """
+                INSERT INTO files (path, lang, size, lines, checksum, modified)
+                VALUES (@path, 'csharp', 10, 1, @checksum, @modified)
+                """;
+            var pathParameter = insertFile.Parameters.Add("@path", SqliteType.Text);
+            var checksumParameter = insertFile.Parameters.Add("@checksum", SqliteType.Text);
+            insertFile.Parameters.Add("@modified", SqliteType.Text).Value = "2026-01-01T00:00:00Z";
+            insertFile.Prepare();
+            for (var index = 0; index < fileCount; index++)
+            {
+                pathParameter.Value = $"stale/file_{index:D5}.cs";
+                checksumParameter.Value = $"stale-{index}";
+                insertFile.ExecuteNonQuery();
+            }
+        }
+
+        using (var insertChildren = _db.Connection.CreateCommand())
+        {
+            insertChildren.Transaction = transaction;
+            insertChildren.CommandText = """
+                INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content)
+                SELECT id, 0, 1, 1, 'stale_batch_payload ' || id FROM files;
+
+                INSERT INTO symbols (file_id, kind, name, line, start_line, end_line)
+                SELECT id, 'class', 'Stale' || id, 1, 1, 1 FROM files;
+                """;
+            insertChildren.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
     }
 
     private void DeleteDbPath() => TestProjectHelper.DeleteDirectory(_dbDir);
