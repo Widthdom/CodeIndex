@@ -185,6 +185,17 @@ public partial class McpServer : IDisposable
     internal const int MaxConfiguredResponseBytes = 64 * 1024 * 1024;
     internal const int MaxClientResponseJsonBytes = 1 * 1024 * 1024;
     internal const int MaxMcpPaginationOffset = 10_000;
+    // `resources/read` keeps its text budget below the default HTTP response ceiling even
+    // when JSON escaping expands every source byte. Cursor pages also cap logical lines so
+    // files containing many empty lines cannot turn a small byte budget into unbounded DB work.
+    // `resources/read` の本文上限は、全 source byte が JSON escape で膨張しても既定 HTTP
+    // response 上限内に収まる値とする。空行が多いファイルで小さい byte budget が無制限の
+    // DB 処理に化けないよう、cursor page の論理行数にも上限を設ける。
+    internal const int MinResourceReadMaxBytes = 4;
+    internal const int DefaultResourceReadMaxBytes = 64 * 1024;
+    internal const int MaxResourceReadMaxBytes = 128 * 1024;
+    internal const int MaxResourceReadLinesPerPage = 1_000;
+    internal const int MaxResourceReadCursorCharacters = 128;
     internal const int DefaultToolsListPageSize = 24;
     internal const int MaxToolsListPageSize = 24;
     internal const int MaxMcpMapDepth = 32;
@@ -2396,6 +2407,54 @@ public partial class McpServer : IDisposable
                 suggestion: "Use a cdidx file resource URI returned by resources/list (`cdidx://file/<indexed-path>`).",
                 retrySafe: false);
 
+        if (!TryReadOptionalResourceReadInteger(readParams, "startLine", out var requestedStartLine))
+            return CreateResourceReadArgumentError(id, "startLine",
+                "resources/read params.startLine must be a positive integer.",
+                "Pass a 1-based line number, or omit startLine to begin at line 1.");
+        if (!TryReadOptionalResourceReadInteger(readParams, "endLine", out var requestedEndLine))
+            return CreateResourceReadArgumentError(id, "endLine",
+                "resources/read params.endLine must be a positive integer.",
+                "Pass an inclusive 1-based line number greater than or equal to startLine, or omit endLine to read through the resource.");
+        if (!TryReadOptionalResourceReadInteger(readParams, "maxBytes", out var requestedMaxBytes))
+            return CreateResourceReadArgumentError(id, "maxBytes",
+                "resources/read params.maxBytes must be an integer.",
+                $"Pass a UTF-8 text budget between {MinResourceReadMaxBytes} and {MaxResourceReadMaxBytes} bytes.");
+        if (!TryReadOptionalResourceReadString(readParams, "cursor", out var cursorText))
+            return CreateResourceReadArgumentError(id, "cursor",
+                "resources/read params.cursor must be a non-empty string.",
+                "Use the nextCursor returned in result._meta, or omit cursor to start a new range.");
+
+        if (requestedStartLine is <= 0)
+            return CreateResourceReadIntegerRangeError(id, "startLine", 1, int.MaxValue, requestedStartLine.Value);
+        if (requestedEndLine is <= 0)
+            return CreateResourceReadIntegerRangeError(id, "endLine", 1, int.MaxValue, requestedEndLine.Value);
+        if (requestedStartLine.HasValue && requestedEndLine.HasValue && requestedEndLine.Value < requestedStartLine.Value)
+            return CreateResourceReadArgumentError(id, "endLine",
+                "resources/read params.endLine must be greater than or equal to params.startLine.",
+                "Increase endLine or start a new range with matching 1-based boundaries.");
+
+        var maxBytes = requestedMaxBytes ?? DefaultResourceReadMaxBytes;
+        if (maxBytes < MinResourceReadMaxBytes || maxBytes > MaxResourceReadMaxBytes)
+            return CreateResourceReadIntegerRangeError(id, "maxBytes", MinResourceReadMaxBytes, MaxResourceReadMaxBytes, maxBytes);
+
+        ResourceReadCursor? cursor = null;
+        if (cursorText is not null)
+        {
+            if (requestedStartLine.HasValue || requestedEndLine.HasValue)
+                return CreateResourceReadArgumentError(id, "cursor",
+                    "resources/read params.cursor cannot be combined with startLine or endLine.",
+                    "Continue with cursor and an optional maxBytes value, or omit cursor to start a new line range.");
+            if (cursorText.Length > MaxResourceReadCursorCharacters || !TryParseResourceReadCursor(cursorText, out var parsedCursor))
+                return CreateResourceReadArgumentError(id, "cursor",
+                    "resources/read params.cursor is invalid or expired.",
+                    "Use the exact nextCursor returned by the previous resources/read response, or omit cursor to restart the range.",
+                    new JsonObject
+                    {
+                        ["maxCursorCharacters"] = MaxResourceReadCursorCharacters,
+                    });
+            cursor = parsedCursor;
+        }
+
         return WithDbReader(id, args: null, reader =>
         {
             var files = reader.ListFiles(query: path, limit: 2);
@@ -2405,18 +2464,179 @@ public partial class McpServer : IDisposable
                     suggestion: "Call resources/list again and retry with one of the returned resource URIs.",
                     retrySafe: true);
 
-            var excerpt = reader.GetExcerpt(file.Path, 1, Math.Max(1, file.Lines));
+            var totalLines = Math.Max(1, file.Lines);
+            var fingerprint = BuildResourceReadFingerprint(file.Path, file.Checksum, file.Size, file.Lines, file.Modified);
+            if (cursor is { } suppliedCursor && !string.Equals(suppliedCursor.Fingerprint, fingerprint, StringComparison.Ordinal))
+                return CreateResourceReadArgumentError(id, "cursor",
+                    "resources/read params.cursor no longer matches the indexed resource.",
+                    "The resource changed after the previous page. Omit cursor and restart the range to avoid skipped or duplicated text.",
+                    new JsonObject
+                    {
+                        ["cursorStale"] = true,
+                    });
+
+            var startLine = cursor?.Line ?? requestedStartLine ?? 1;
+            var endLine = cursor?.EndLine ?? requestedEndLine ?? totalLines;
+            if (startLine > totalLines)
+                return CreateResourceReadArgumentError(id, "startLine",
+                    $"resources/read params.startLine exceeds the resource line count ({file.Lines}).",
+                    "Use a startLine from resources/read result._meta or restart at line 1.",
+                    new JsonObject
+                    {
+                        ["totalLines"] = file.Lines,
+                    });
+            endLine = Math.Min(endLine, totalLines);
+            if (endLine < startLine)
+                return CreateResourceReadArgumentError(id, "endLine",
+                    "resources/read effective endLine is before startLine.",
+                    "Restart the range with an endLine greater than or equal to startLine.");
+
+            var page = reader.GetBoundedFileContent(
+                file.Path,
+                startLine,
+                endLine,
+                maxBytes,
+                MaxResourceReadLinesPerPage,
+                cursor?.Line,
+                cursor?.ByteOffset ?? 0);
+            if (page is null && cursor.HasValue)
+                return CreateResourceReadArgumentError(id, "cursor",
+                    "resources/read params.cursor does not identify a readable position in this resource.",
+                    "Omit cursor and restart the range to obtain a fresh continuation token.");
+
+            var text = page?.Content ?? string.Empty;
+            var returnedBytes = page?.Utf8Bytes ?? 0;
+            var truncated = page?.Truncated == true && page.NextLine.HasValue;
+            var metadata = new JsonObject
+            {
+                ["startLine"] = startLine,
+                ["startLineByteOffset"] = cursor?.ByteOffset ?? 0,
+                ["endLine"] = endLine,
+                ["totalLines"] = file.Lines,
+                ["maxBytes"] = maxBytes,
+                ["maxLines"] = MaxResourceReadLinesPerPage,
+                ["returnedStartLine"] = page?.StartLine ?? startLine,
+                ["returnedEndLine"] = page?.EndLine ?? startLine,
+                ["returnedBytes"] = returnedBytes,
+                ["truncated"] = truncated,
+            };
+            if (truncated && page is not null)
+            {
+                metadata["truncationReason"] = page.TruncationReason switch
+                {
+                    "max_lines" => "maxLines",
+                    _ => "maxBytes",
+                };
+                metadata["nextLine"] = page.NextLine!.Value;
+                metadata["nextLineByteOffset"] = page.NextByteOffset ?? 0;
+                metadata["nextCursor"] = BuildResourceReadCursor(
+                    page.NextLine.Value,
+                    page.NextByteOffset ?? 0,
+                    endLine,
+                    fingerprint);
+            }
+
             var contents = new JsonArray
             {
                 new JsonObject
                 {
                     ["uri"] = BuildResourceUri(file.Path),
                     ["mimeType"] = GetResourceMimeType(file.Lang),
-                    ["text"] = excerpt?.Content ?? string.Empty,
+                    ["text"] = text,
                 }
             };
-            return CreateSuccessResponse(true, id, new JsonObject { ["contents"] = contents });
+            return CreateSuccessResponse(true, id, new JsonObject
+            {
+                ["contents"] = contents,
+                ["_meta"] = metadata,
+            });
         });
+    }
+
+    private readonly record struct ResourceReadCursor(int Line, int ByteOffset, int EndLine, string Fingerprint);
+
+    private static bool TryReadOptionalResourceReadInteger(JsonNode? readParams, string name, out int? result)
+    {
+        result = null;
+        if (readParams is not JsonObject obj || !obj.TryGetPropertyValue(name, out var node) || node is null)
+            return true;
+        if (node is not JsonValue value || !value.TryGetValue<int>(out var parsed))
+            return false;
+        result = parsed;
+        return true;
+    }
+
+    private static bool TryReadOptionalResourceReadString(JsonNode? readParams, string name, out string? result)
+    {
+        result = null;
+        if (readParams is not JsonObject obj || !obj.TryGetPropertyValue(name, out var node) || node is null)
+            return true;
+        if (node is not JsonValue value || !value.TryGetValue<string>(out var parsed) || string.IsNullOrWhiteSpace(parsed))
+            return false;
+        result = parsed;
+        return true;
+    }
+
+    private static JsonObject CreateResourceReadIntegerRangeError(JsonNode? id, string argument, int minimum, int maximum, int actual)
+        => CreateResourceReadArgumentError(id, argument,
+            $"resources/read params.{argument} must be between {minimum} and {maximum}.",
+            $"Choose a {argument} value inside the documented resources/read range.",
+            new JsonObject
+            {
+                ["minimum"] = minimum,
+                ["maximum"] = maximum,
+                ["actual"] = actual,
+            });
+
+    private static JsonObject CreateResourceReadArgumentError(
+        JsonNode? id,
+        string argument,
+        string message,
+        string suggestion,
+        JsonObject? extraData = null)
+    {
+        var data = extraData ?? new JsonObject();
+        data["argument"] = argument;
+        return CreateErrorResponse(hasId: true, id: id, code: -32602, message: message,
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: suggestion,
+            retrySafe: false,
+            extraData: data);
+    }
+
+    private static bool TryParseResourceReadCursor(string value, out ResourceReadCursor cursor)
+    {
+        cursor = default;
+        var parts = value.Split(':');
+        if (parts.Length != 5
+            || !string.Equals(parts[0], "v1", StringComparison.Ordinal)
+            || !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var line)
+            || !int.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out var byteOffset)
+            || !int.TryParse(parts[3], NumberStyles.None, CultureInfo.InvariantCulture, out var endLine)
+            || line <= 0
+            || byteOffset < 0
+            || byteOffset > MaxLineByteLength
+            || endLine < line
+            || parts[4].Length != 16)
+        {
+            return false;
+        }
+
+        cursor = new ResourceReadCursor(line, byteOffset, endLine, parts[4]);
+        return true;
+    }
+
+    private static string BuildResourceReadCursor(int line, int byteOffset, int endLine, string fingerprint)
+        => string.Create(CultureInfo.InvariantCulture, $"v1:{line}:{byteOffset}:{endLine}:{fingerprint}");
+
+    private static string BuildResourceReadFingerprint(string path, string? checksum, long size, int lines, DateTime? modified)
+    {
+        var descriptor = string.Create(
+            CultureInfo.InvariantCulture,
+            $"{path}\n{checksum ?? string.Empty}\n{size}\n{lines}\n{modified?.ToUniversalTime().Ticks ?? 0}");
+        Span<byte> digest = stackalloc byte[32];
+        SHA256.HashData(Encoding.UTF8.GetBytes(descriptor), digest);
+        return Convert.ToHexString(digest[..8]);
     }
 
     private static JsonNode CreateResourceUriError(JsonNode? id, string uri, string messagePrefix, string suggestion, bool retrySafe, bool includeLengthLimit = false)

@@ -9,7 +9,9 @@ using System.Threading;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Diagnostics;
+using CodeIndex.Indexer;
 using CodeIndex.Mcp;
+using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
@@ -36,6 +38,67 @@ public class HttpMcpTransportTests : IDisposable
         _dbPath = Path.Combine(_dbDir, "codeindex.db");
         _db = new DbContext(_dbPath);
         _db.InitializeSchema();
+    }
+
+    private void InsertIndexedFile(string path, string content, bool splitIntoProductionChunks = false)
+    {
+        var normalized = content.Replace("\r\n", "\n", StringComparison.Ordinal);
+        var writer = new DbWriter(_db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = "text",
+            Size = Encoding.UTF8.GetByteCount(normalized),
+            Lines = normalized.Split('\n').Length,
+            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertChunks(splitIntoProductionChunks
+            ? ChunkSplitter.Split(fileId, normalized)
+            :
+            [
+                new ChunkRecord
+                {
+                    FileId = fileId,
+                    ChunkIndex = 0,
+                    StartLine = 1,
+                    EndLine = normalized.Split('\n').Length,
+                    Content = normalized,
+                },
+            ]);
+    }
+
+    [Fact]
+    public async Task HttpTransport_ResourcesReadBoundsLargeSingleAndMultiLineFiles_Issue4544()
+    {
+        InsertIndexedFile("src/http-single.txt", new string('s', 4096));
+        InsertIndexedFile(
+            "src/http-multi.txt",
+            string.Join('\n', Enumerable.Range(1, 300).Select(line => $"line-{line:D3}-" + new string('m', 24))),
+            splitIntoProductionChunks: true);
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+        using (var initialize = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}"""))
+            Assert.Equal(HttpStatusCode.OK, initialize.StatusCode);
+
+        var requests = new[]
+        {
+            """{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"cdidx://file/src/http-single.txt","maxBytes":64}}""",
+            """{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"cdidx://file/src/http-multi.txt","maxBytes":64}}""",
+        };
+        foreach (var request in requests)
+        {
+            using var response = await harness.PostJsonAsync(request);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var body = await response.Content.ReadAsStringAsync();
+            using var document = JsonDocument.Parse(body);
+            var result = document.RootElement.GetProperty("result");
+            var text = result.GetProperty("contents")[0].GetProperty("text").GetString()!;
+            var metadata = result.GetProperty("_meta");
+            Assert.InRange(Encoding.UTF8.GetByteCount(text), 1, 64);
+            Assert.Equal(Encoding.UTF8.GetByteCount(text), metadata.GetProperty("returnedBytes").GetInt32());
+            Assert.True(metadata.GetProperty("truncated").GetBoolean());
+            Assert.False(string.IsNullOrWhiteSpace(metadata.GetProperty("nextCursor").GetString()));
+        }
     }
 
     [Fact]

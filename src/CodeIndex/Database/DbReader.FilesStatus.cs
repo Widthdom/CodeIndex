@@ -1,3 +1,4 @@
+using System.Buffers;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
@@ -9,6 +10,10 @@ namespace CodeIndex.Database;
 
 public partial class DbReader
 {
+    internal const int MaxBoundedFileReadUtf8Bytes = 4 * 1024 * 1024;
+    internal const int MaxBoundedFileReadLines = 10_000;
+    private const int BoundedFileReadBufferSize = 4 * 1024;
+
     private static readonly AsyncLocal<TimeSpan?> FindRegexMatchTimeoutOverride = new();
 
     internal static TimeSpan? FindRegexMatchTimeoutForTesting
@@ -624,6 +629,429 @@ public partial class DbReader
                 : null,
             ContentLineSpans = contentLineSpans,
         };
+    }
+
+    /// <summary>
+    /// Read a line range without materializing complete chunk strings, bounded by UTF-8 bytes and lines.
+    /// チャンク文字列全体を実体化せず、UTF-8 byte数と行数で制限して行範囲を読む。
+    /// </summary>
+    /// <remarks>
+    /// Continuation offsets are zero-based UTF-8 byte offsets from the start of an absolute, one-based line.
+    /// continuation offset は、絶対1始まり行の先頭から数えた0始まりUTF-8 byte offset。
+    /// </remarks>
+    public BoundedFileReadResult? GetBoundedFileContent(
+        string path,
+        int startLine,
+        int endLine,
+        int maxUtf8Bytes,
+        int maxLines,
+        int? continuationLine = null,
+        int continuationByteOffset = 0)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+        if (maxUtf8Bytes is <= 0 or > MaxBoundedFileReadUtf8Bytes)
+            throw new ArgumentOutOfRangeException(nameof(maxUtf8Bytes), maxUtf8Bytes,
+                $"UTF-8 byte budget must be between 1 and {MaxBoundedFileReadUtf8Bytes}.");
+        if (maxLines is <= 0 or > MaxBoundedFileReadLines)
+            throw new ArgumentOutOfRangeException(nameof(maxLines), maxLines,
+                $"Line budget must be between 1 and {MaxBoundedFileReadLines}.");
+        if (continuationByteOffset < 0)
+            throw new ArgumentOutOfRangeException(nameof(continuationByteOffset), continuationByteOffset,
+                "Continuation byte offset must be non-negative.");
+        if (!continuationLine.HasValue && continuationByteOffset != 0)
+            return null;
+
+        startLine = Math.Max(1, startLine);
+        endLine = Math.Max(startLine, endLine);
+        var nextLine = continuationLine ?? startLine;
+        if (nextLine < startLine || nextLine > endLine)
+            return null;
+
+        long fileId;
+        string? lang;
+        int totalLines;
+        using (var fileCmd = _conn.CreateCommand())
+        {
+            fileCmd.CommandText = "SELECT id, lang, lines FROM files WHERE path = @path";
+            SqliteCommandPolicy.AddText(fileCmd, "@path", path);
+            using var fileReader = fileCmd.ExecuteTrackedReader();
+            if (!fileReader.TrackedRead())
+                return null;
+
+            fileId = fileReader.GetInt64(0);
+            lang = GetNullableString(fileReader, 1);
+            totalLines = fileReader.GetInt32(2);
+        }
+
+        var effectiveEndLine = Math.Min(endLine, totalLines);
+        if (nextLine > effectiveEndLine)
+            return null;
+
+        // The line cap also bounds chunk metadata. At most the chunks intersecting this
+        // page are retained; content still comes through incremental blob reads.
+        // 行上限でchunk metadataも制限する。このページと交差するchunkだけを保持し、
+        // content本体はincremental blob readで取得する。
+        var scanEndLine = (int)Math.Min(effectiveEndLine, (long)nextLine + maxLines - 1L);
+        var chunks = new List<BoundedFileChunk>();
+        using (var chunkCmd = _conn.CreateCommand())
+        {
+            chunkCmd.CommandText = @"
+                SELECT c.id, c.start_line, c.end_line
+                FROM chunks c
+                WHERE c.file_id = @fileId
+                  AND c.content IS NOT NULL
+                  AND c.end_line >= @startLine
+                  AND c.start_line <= @endLine
+                ORDER BY c.start_line, c.chunk_index";
+            SqliteCommandPolicy.AddInt64(chunkCmd, "@fileId", fileId);
+            SqliteCommandPolicy.AddInt32(chunkCmd, "@startLine", nextLine);
+            SqliteCommandPolicy.AddInt32(chunkCmd, "@endLine", scanEndLine);
+
+            using var chunkReader = chunkCmd.ExecuteTrackedReader();
+            while (chunkReader.TrackedRead())
+            {
+                chunks.Add(new BoundedFileChunk(
+                    chunkReader.GetInt64(0),
+                    chunkReader.GetInt32(1),
+                    chunkReader.GetInt32(2)));
+            }
+        }
+
+        if (chunks.Count == 0)
+            return null;
+
+        var state = new BoundedFileReadState(nextLine, continuationByteOffset);
+        var content = new StringBuilder(Math.Min(maxUtf8Bytes, BoundedFileReadBufferSize));
+        var buffer = ArrayPool<byte>.Shared.Rent(BoundedFileReadBufferSize);
+        try
+        {
+            for (var chunkIndex = 0; chunkIndex < chunks.Count; chunkIndex++)
+            {
+                var chunk = chunks[chunkIndex];
+                _cancellation.ThrowIfCancellationRequested();
+                if (state.Stopped)
+                    break;
+                if (chunk.EndLine < state.NextLine)
+                    continue;
+                if (chunk.StartLine > state.NextLine)
+                {
+                    state.InvalidContinuation = true;
+                    break;
+                }
+
+                using var blob = new SqliteBlob(_conn, "chunks", "content", chunk.RowId, readOnly: true);
+                ReadBoundedChunk(
+                    blob,
+                    chunk,
+                    effectiveEndLine,
+                    maxUtf8Bytes,
+                    maxLines,
+                    content,
+                    buffer,
+                    _cancellation,
+                    isLastChunk: chunkIndex == chunks.Count - 1,
+                    ref state);
+            }
+        }
+        finally
+        {
+            // Indexed source may contain secrets. Clear the entire pooled array before reuse.
+            // index済みsourceにsecretが含まれうるため、poolへ戻す前に配列全体を消去する。
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+        }
+
+        if (state.InvalidContinuation || (!state.Completed && state.TruncationReason == null))
+            return null;
+
+        return new BoundedFileReadResult
+        {
+            Path = path,
+            Lang = lang,
+            TotalLines = totalLines,
+            RequestedStartLine = startLine,
+            RequestedEndLine = endLine,
+            StartLine = state.FirstReturnedLine ?? nextLine,
+            EndLine = state.LastReturnedLine ?? nextLine,
+            Content = content.ToString(),
+            Utf8Bytes = state.Utf8Bytes,
+            Truncated = state.TruncationReason != null,
+            TruncationReason = state.TruncationReason,
+            NextLine = state.TruncationReason != null ? state.NextLine : null,
+            NextByteOffset = state.TruncationReason != null ? state.NextByteOffset : null,
+        };
+    }
+
+    private static void ReadBoundedChunk(
+        SqliteBlob blob,
+        BoundedFileChunk chunk,
+        int effectiveEndLine,
+        int maxUtf8Bytes,
+        int maxLines,
+        StringBuilder content,
+        byte[] buffer,
+        CancellationToken cancellationToken,
+        bool isLastChunk,
+        ref BoundedFileReadState state)
+    {
+        var bufferOffset = 0;
+        var bufferedBytes = 0;
+        var localLine = chunk.StartLine;
+        var localByteOffset = 0;
+        Span<byte> runeBytes = stackalloc byte[4];
+        Span<char> runeChars = stackalloc char[2];
+
+        while (TryReadBlobByte(blob, buffer, ref bufferOffset, ref bufferedBytes, cancellationToken, out var firstByte))
+        {
+            if (localLine > chunk.EndLine)
+                break;
+
+            if (localLine < state.NextLine)
+            {
+                if (firstByte == (byte)'\n')
+                {
+                    localLine++;
+                    localByteOffset = 0;
+                }
+                else
+                {
+                    localByteOffset++;
+                }
+                continue;
+            }
+
+            if (localLine > state.NextLine)
+            {
+                state.InvalidContinuation = true;
+                return;
+            }
+
+            if (firstByte == (byte)'\n')
+            {
+                if (state.NextByteOffset != localByteOffset)
+                {
+                    state.InvalidContinuation = true;
+                    return;
+                }
+
+                if (!CompleteBoundedLine(
+                    localLine,
+                    localByteOffset,
+                    effectiveEndLine,
+                    maxUtf8Bytes,
+                    maxLines,
+                    content,
+                    ref state))
+                {
+                    return;
+                }
+
+                localLine++;
+                localByteOffset = 0;
+                continue;
+            }
+
+            var runeByteCount = ReadUtf8Rune(
+                blob,
+                firstByte,
+                buffer,
+                ref bufferOffset,
+                ref bufferedBytes,
+                cancellationToken,
+                runeBytes,
+                out var rune);
+            var scalarStartOffset = localByteOffset;
+            localByteOffset += runeByteCount;
+
+            if (scalarStartOffset < state.NextByteOffset)
+            {
+                if (localByteOffset > state.NextByteOffset)
+                    state.InvalidContinuation = true;
+                if (state.InvalidContinuation)
+                    return;
+                continue;
+            }
+
+            if (scalarStartOffset != state.NextByteOffset)
+            {
+                state.InvalidContinuation = true;
+                return;
+            }
+            if (state.Utf8Bytes > maxUtf8Bytes - runeByteCount)
+            {
+                state.TruncationReason = "max_bytes";
+                return;
+            }
+            if (!TryEnterBoundedLine(localLine, maxLines, ref state))
+                return;
+
+            var runeCharCount = rune.EncodeToUtf16(runeChars);
+            content.Append(runeChars[..runeCharCount]);
+            state.Utf8Bytes += runeByteCount;
+            state.NextByteOffset = localByteOffset;
+        }
+
+        // Persisted chunks omit the separator after their final line. Treat blob EOF as
+        // that line boundary and synthesize exactly one LF when the requested range continues.
+        // 永続化chunkは最終行後のseparatorを持たないため、blob EOFを行境界として扱い、
+        // 要求範囲が続く場合だけLFを1つ合成する。
+        if (!state.Stopped && localLine <= chunk.EndLine && localLine == state.NextLine)
+        {
+            if (state.NextByteOffset != localByteOffset)
+            {
+                state.InvalidContinuation = true;
+                return;
+            }
+
+            if (isLastChunk && localLine < chunk.EndLine)
+            {
+                // Legacy/test databases can overstate end_line relative to the stored text.
+                // The final blob EOF is the only safe available-content boundary: return what
+                // was actually stored instead of discarding it or inventing missing lines.
+                // legacy/test DBではend_lineが保存textより大きい場合がある。最終blob EOFを
+                // 利用可能contentの安全な終端とし、取得済み本文を捨てたり欠落行を合成しない。
+                if (TryEnterBoundedLine(localLine, maxLines, ref state))
+                    state.Completed = true;
+            }
+            else
+            {
+                _ = CompleteBoundedLine(
+                    localLine,
+                    localByteOffset,
+                    effectiveEndLine,
+                    maxUtf8Bytes,
+                    maxLines,
+                    content,
+                    ref state);
+            }
+        }
+    }
+
+    private static bool CompleteBoundedLine(
+        int line,
+        int lineByteLength,
+        int effectiveEndLine,
+        int maxUtf8Bytes,
+        int maxLines,
+        StringBuilder content,
+        ref BoundedFileReadState state)
+    {
+        if (!TryEnterBoundedLine(line, maxLines, ref state))
+            return false;
+
+        if (line >= effectiveEndLine)
+        {
+            state.Completed = true;
+            return false;
+        }
+
+        if (state.Utf8Bytes >= maxUtf8Bytes)
+        {
+            state.NextLine = line;
+            state.NextByteOffset = lineByteLength;
+            state.TruncationReason = "max_bytes";
+            return false;
+        }
+
+        content.Append('\n');
+        state.Utf8Bytes++;
+        state.NextLine = line + 1;
+        state.NextByteOffset = 0;
+        if (state.ReturnedLineCount >= maxLines)
+        {
+            state.TruncationReason = "max_lines";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryEnterBoundedLine(int line, int maxLines, ref BoundedFileReadState state)
+    {
+        if (state.LastReturnedLine == line)
+            return true;
+        if (state.ReturnedLineCount >= maxLines)
+        {
+            state.TruncationReason = "max_lines";
+            return false;
+        }
+
+        state.FirstReturnedLine ??= line;
+        state.LastReturnedLine = line;
+        state.ReturnedLineCount++;
+        return true;
+    }
+
+    private static int ReadUtf8Rune(
+        SqliteBlob blob,
+        byte firstByte,
+        byte[] buffer,
+        ref int bufferOffset,
+        ref int bufferedBytes,
+        CancellationToken cancellationToken,
+        Span<byte> runeBytes,
+        out Rune rune)
+    {
+        var byteCount = firstByte switch
+        {
+            <= 0x7f => 1,
+            >= 0xc2 and <= 0xdf => 2,
+            >= 0xe0 and <= 0xef => 3,
+            >= 0xf0 and <= 0xf4 => 4,
+            _ => throw new InvalidDataException("Indexed chunk contains invalid UTF-8."),
+        };
+
+        runeBytes[0] = firstByte;
+        for (var i = 1; i < byteCount; i++)
+        {
+            if (!TryReadBlobByte(blob, buffer, ref bufferOffset, ref bufferedBytes, cancellationToken, out runeBytes[i]))
+                throw new InvalidDataException("Indexed chunk ends inside a UTF-8 scalar value.");
+        }
+
+        var status = Rune.DecodeFromUtf8(runeBytes[..byteCount], out rune, out var bytesConsumed);
+        if (status != OperationStatus.Done || bytesConsumed != byteCount)
+            throw new InvalidDataException("Indexed chunk contains invalid UTF-8.");
+        return byteCount;
+    }
+
+    private static bool TryReadBlobByte(
+        SqliteBlob blob,
+        byte[] buffer,
+        ref int bufferOffset,
+        ref int bufferedBytes,
+        CancellationToken cancellationToken,
+        out byte value)
+    {
+        if (bufferOffset >= bufferedBytes)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            bufferedBytes = blob.Read(buffer, 0, buffer.Length);
+            bufferOffset = 0;
+            if (bufferedBytes == 0)
+            {
+                value = 0;
+                return false;
+            }
+        }
+
+        value = buffer[bufferOffset++];
+        return true;
+    }
+
+    private readonly record struct BoundedFileChunk(long RowId, int StartLine, int EndLine);
+
+    private struct BoundedFileReadState(int nextLine, int nextByteOffset)
+    {
+        public int NextLine = nextLine;
+        public int NextByteOffset = nextByteOffset;
+        public int Utf8Bytes;
+        public int ReturnedLineCount;
+        public int? FirstReturnedLine;
+        public int? LastReturnedLine;
+        public string? TruncationReason;
+        public bool Completed;
+        public bool InvalidContinuation;
+        public readonly bool Stopped => Completed || InvalidContinuation || TruncationReason != null;
     }
 
     /// <summary>

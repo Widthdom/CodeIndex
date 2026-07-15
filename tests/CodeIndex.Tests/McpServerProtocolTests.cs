@@ -576,6 +576,9 @@ public partial class McpServerTests
         Assert.Contains("CodeIndex MCP tools", instructions);
         Assert.Contains("grep/find/cat", instructions);
         Assert.Contains("resources/read", instructions);
+        Assert.Contains("startLine/endLine", instructions);
+        Assert.Contains("maxBytes", instructions);
+        Assert.Contains("result._meta.nextCursor", instructions);
         Assert.Contains("whole-file reads", instructions);
         Assert.Contains("definition", instructions);
         Assert.Contains("references", instructions);

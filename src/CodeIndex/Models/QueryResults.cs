@@ -379,6 +379,30 @@ public class FileExcerptResult
         => char.IsLetterOrDigit(c) || c is '/' or '.' or '_' or '-' or ':';
 }
 
+/// <summary>
+/// A byte-bounded page reconstructed directly from indexed chunk blobs.
+/// インデックス済みチャンクBLOBから直接再構成したbyte上限付きページ。
+/// </summary>
+public sealed class BoundedFileReadResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public int TotalLines { get; set; }
+    public int RequestedStartLine { get; set; }
+    public int RequestedEndLine { get; set; }
+    public int StartLine { get; set; }
+    public int EndLine { get; set; }
+    public string Content { get; set; } = string.Empty;
+    public int Utf8Bytes { get; set; }
+    public bool Truncated { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TruncationReason { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? NextLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? NextByteOffset { get; set; }
+}
+
 public class ExcerptContentLineSpan
 {
     public int ContentLine { get; set; }

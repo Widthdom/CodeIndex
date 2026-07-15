@@ -374,10 +374,12 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Stdio response-order tests use the same signal-gated pattern: make the synthetic transport signal the parse-error path instead of sleeping in the response serializer.
   Rate-limit-disabled coverage uses the lightweight `languages` tool for repeated successful calls; do not pay repeated `status` database aggregation cost when the assertion only concerns limiter bypass.
   State-changing notification authentication coverage stays table-driven across cancellation, roots, shutdown, and exit methods; every denied notification must remain response-free, emit only a bounded diagnostic, and leave cancellation, roots, and lifecycle state unchanged.
+  `resources/read` coverage shares the seeded resource helpers for range, UTF-8 byte-boundary, and cursor-reassembly assertions. Keep a real `StdioMcpTransport` wire test for both long single-line and multi-line resources so a regression cannot hide behind direct handler tests.
 - `DependencyPackageExtractorTests.cs`
   Dependency-lock graph fixtures assert explicit parent-package to child-package references and the absence of synthetic top-level package references. Keep NuGet and npm coverage aligned so shared resolved package sets cannot recreate lock-file-to-lock-file similarity edges while `callers` retains the requiring package as its container.
 - `HttpMcpTransportTests.cs`
   HTTP MCP transport behavior, including authentication responses, warm server reuse, concurrent requests, and request logging. Request-log assertions must validate recorded contents without assuming callback order between independently handled HTTP requests.
+  Resource pagination parity uses the real loopback harness with long single-line and multi-line indexed chunks, and asserts the same byte cap, truncation metadata, and continuation cursor as stdio.
   Request-log metadata bounds for long paths, long JSON-RPC IDs, and over-depth IDs share one sequential logger harness and select records by content rather than callback order.
   Bearer-token denial variants share one table-driven harness that verifies the common wire response, challenge header, redaction, and request-log outcome; keep same-length mismatch in that table to exercise the hashed comparison path.
   Matching canonical and lowercase bearer schemes share one authenticated harness because RFC auth-scheme casing does not require isolated server state.
@@ -1008,8 +1010,10 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   stdio response-order test も同じ signal-gated pattern を使い、response serializer で sleep する代わりに synthetic transport が parse-error path を signal するようにします。
   rate-limit-disabled coverage の繰り返し成功 call には軽量な `languages` tool を使い、limiter bypass だけの assertion で `status` の database aggregation cost を繰り返し支払わないでください。
   state-changing notification の認証 coverage は cancellation、roots、shutdown、exit の各 method を table-driven のまま検証し、拒否されたすべての notification が応答を返さず bounded な診断だけを出力し、cancellation、roots、lifecycle state を変更しないことを確認してください。
+  `resources/read` coverage は seed 済み resource helper を共有し、range、UTF-8 byte 境界、cursor 再結合を検証します。direct handler test だけでは回帰を隠せないよう、長い単一行と複数行 resource の双方について実 `StdioMcpTransport` の wire test を維持してください。
 - `HttpMcpTransportTests.cs`
   HTTP MCP transport の挙動。認証レスポンス、warm server reuse、並行リクエスト、リクエストログを含みます。リクエストログの assertion は、独立に処理される HTTP リクエスト間の callback 順序を仮定せず、記録内容を検証してください。
+  resource pagination の parity は、長い単一行と複数行の index chunk を実 loopback harness で読み、stdio と同じ byte 上限、truncation metadata、continuation cursor を検証してください。
   request-log metadata の long path、long JSON-RPC ID、over-depth ID 境界は1つの sequential logger harness を共有し、callback 順序ではなく record 内容で対象を選んでください。
   bearer-token denial variant は、共通 wire response、challenge header、redaction、request-log outcome を検証する1つの table-driven harness を共有し、hash comparison 経路を通す同長 mismatch もその表に含めてください。
   一致する canonical と lowercase の bearer scheme は、RFC auth-scheme casing に独立 server state が不要なため1つの authenticated harness を共有してください。

@@ -393,7 +393,12 @@ public partial class McpServerTests : IDisposable
     private static async Task WaitUntilAsync(Func<bool> condition, string description)
         => await TestDeterminism.WaitUntilAsync(condition, description);
 
-    private void InsertIndexedFile(string path, string lang, string content, bool generated = false)
+    private void InsertIndexedFile(
+        string path,
+        string lang,
+        string content,
+        bool generated = false,
+        bool splitIntoProductionChunks = false)
     {
         var normalized = content.Replace("\r\n", "\n");
         var lines = normalized.Split('\n');
@@ -402,20 +407,25 @@ public partial class McpServerTests : IDisposable
         {
             Path = path,
             Lang = lang,
-            Size = normalized.Length,
+            Size = Encoding.UTF8.GetByteCount(normalized),
             Lines = lines.Length,
             Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
             Checksum = Guid.NewGuid().ToString("N"),
             Generated = generated,
         });
-        writer.InsertChunks([new ChunkRecord
-        {
-            FileId = fileId,
-            ChunkIndex = 0,
-            StartLine = 1,
-            EndLine = lines.Length,
-            Content = normalized,
-        }]);
+        writer.InsertChunks(splitIntoProductionChunks
+            ? ChunkSplitter.Split(fileId, normalized)
+            :
+            [
+                new ChunkRecord
+                {
+                    FileId = fileId,
+                    ChunkIndex = 0,
+                    StartLine = 1,
+                    EndLine = lines.Length,
+                    Content = normalized,
+                },
+            ]);
 
         var symbols = SymbolExtractor.Extract(fileId, lang, normalized);
         writer.InsertSymbols(symbols);
@@ -1165,6 +1175,220 @@ public sealed class Caller
         Assert.Equal("cdidx://file/src/app.cs", content["uri"]!.GetValue<string>());
         Assert.Equal("text/x-csharp", content["mimeType"]!.GetValue<string>());
         Assert.Contains("public class App", content["text"]!.GetValue<string>());
+        var metadata = response["result"]!["_meta"]!;
+        Assert.False(metadata["truncated"]!.GetValue<bool>());
+        Assert.Equal(Encoding.UTF8.GetByteCount(content["text"]!.GetValue<string>()), metadata["returnedBytes"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ResourcesRead_RangesAndContinuesOnUtf8Boundaries_Issue4544()
+    {
+        const string expected = "second\n🙂🙂🙂\nfourth";
+        InsertIndexedFile("src/ranged-resource.txt", "text", "first\n" + expected);
+
+        JsonNode Read(JsonObject readParams)
+        {
+            readParams["uri"] = "cdidx://file/src/ranged-resource.txt";
+            return _server.HandleMessage(new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 4544,
+                ["method"] = "resources/read",
+                ["params"] = readParams,
+            })!;
+        }
+
+        var first = Read(new JsonObject
+        {
+            ["startLine"] = 2,
+            ["endLine"] = 4,
+            ["maxBytes"] = 9,
+        });
+        var firstText = first["result"]!["contents"]![0]!["text"]!.GetValue<string>();
+        var firstMetadata = first["result"]!["_meta"]!;
+        Assert.Equal("second\n", firstText);
+        Assert.Equal(7, firstMetadata["returnedBytes"]!.GetValue<int>());
+        Assert.Equal(2, firstMetadata["returnedEndLine"]!.GetValue<int>());
+        Assert.True(firstMetadata["truncated"]!.GetValue<bool>());
+        Assert.Equal("maxBytes", firstMetadata["truncationReason"]!.GetValue<string>());
+        Assert.Equal(3, firstMetadata["nextLine"]!.GetValue<int>());
+        Assert.Equal(0, firstMetadata["nextLineByteOffset"]!.GetValue<int>());
+
+        var second = Read(new JsonObject
+        {
+            ["cursor"] = firstMetadata["nextCursor"]!.GetValue<string>(),
+            ["maxBytes"] = 8,
+        });
+        var secondText = second["result"]!["contents"]![0]!["text"]!.GetValue<string>();
+        var secondMetadata = second["result"]!["_meta"]!;
+        Assert.Equal("🙂🙂", secondText);
+        Assert.Equal(8, Encoding.UTF8.GetByteCount(secondText));
+        Assert.Equal(3, secondMetadata["nextLine"]!.GetValue<int>());
+        Assert.Equal(8, secondMetadata["nextLineByteOffset"]!.GetValue<int>());
+
+        var third = Read(new JsonObject
+        {
+            ["cursor"] = secondMetadata["nextCursor"]!.GetValue<string>(),
+            ["maxBytes"] = 32,
+        });
+        var thirdText = third["result"]!["contents"]![0]!["text"]!.GetValue<string>();
+        Assert.Equal("🙂\nfourth", thirdText);
+        Assert.False(third["result"]!["_meta"]!["truncated"]!.GetValue<bool>());
+        Assert.Equal(expected, firstText + secondText + thirdText);
+    }
+
+    [Fact]
+    public void ResourcesRead_DefaultBudgetBoundsLargeSingleLineAndReturnsCursor_Issue4544()
+    {
+        var source = new string('x', McpServer.DefaultResourceReadMaxBytes + 1024);
+        InsertIndexedFile("src/large-single-line.js", "javascript", source);
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":4544,"method":"resources/read","params":{"uri":"cdidx://file/src/large-single-line.js"}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var text = response["result"]!["contents"]![0]!["text"]!.GetValue<string>();
+        var metadata = response["result"]!["_meta"]!;
+        Assert.Equal(McpServer.DefaultResourceReadMaxBytes, Encoding.UTF8.GetByteCount(text));
+        Assert.Equal(McpServer.DefaultResourceReadMaxBytes, metadata["maxBytes"]!.GetValue<int>());
+        Assert.Equal(McpServer.DefaultResourceReadMaxBytes, metadata["returnedBytes"]!.GetValue<int>());
+        Assert.True(metadata["truncated"]!.GetValue<bool>());
+        Assert.Equal(1, metadata["nextLine"]!.GetValue<int>());
+        Assert.Equal(McpServer.DefaultResourceReadMaxBytes, metadata["nextLineByteOffset"]!.GetValue<int>());
+        Assert.False(string.IsNullOrWhiteSpace(metadata["nextCursor"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public void ResourcesRead_ReassemblesRangesAcrossOverlappingChunks_Issue4544()
+    {
+        var lines = Enumerable.Range(1, 120).Select(line => $"line-{line:D3}").ToArray();
+        InsertIndexedFile(
+            "src/overlapping-resource.txt",
+            "text",
+            string.Join('\n', lines),
+            splitIntoProductionChunks: true);
+        var expected = string.Join('\n', lines.Skip(74).Take(15));
+        var actual = new StringBuilder();
+        string? cursor = null;
+
+        for (var pageNumber = 0; pageNumber < 10; pageNumber++)
+        {
+            var readParams = new JsonObject
+            {
+                ["uri"] = "cdidx://file/src/overlapping-resource.txt",
+                ["maxBytes"] = 25,
+            };
+            if (cursor is null)
+            {
+                readParams["startLine"] = 75;
+                readParams["endLine"] = 89;
+            }
+            else
+            {
+                readParams["cursor"] = cursor;
+            }
+
+            var response = _server.HandleMessage(new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = pageNumber,
+                ["method"] = "resources/read",
+                ["params"] = readParams,
+            })!;
+            actual.Append(response["result"]!["contents"]![0]!["text"]!.GetValue<string>());
+            var metadata = response["result"]!["_meta"]!;
+            if (!metadata["truncated"]!.GetValue<bool>())
+                break;
+            cursor = metadata["nextCursor"]!.GetValue<string>();
+        }
+
+        Assert.Equal(expected, actual.ToString());
+    }
+
+    [Fact]
+    public void ResourcesRead_DefaultLineCapBoundsEmptyLineResources_Issue4544()
+    {
+        InsertIndexedFile(
+            "src/many-empty-lines.txt",
+            "text",
+            new string('\n', McpServer.MaxResourceReadLinesPerPage + 1) + "tail",
+            splitIntoProductionChunks: true);
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":4544,"method":"resources/read","params":{"uri":"cdidx://file/src/many-empty-lines.txt"}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var metadata = response["result"]!["_meta"]!;
+        Assert.Equal(McpServer.MaxResourceReadLinesPerPage, metadata["returnedBytes"]!.GetValue<int>());
+        Assert.True(metadata["truncated"]!.GetValue<bool>());
+        Assert.Equal("maxLines", metadata["truncationReason"]!.GetValue<string>());
+        Assert.Equal(McpServer.MaxResourceReadLinesPerPage + 1, metadata["nextLine"]!.GetValue<int>());
+        Assert.False(string.IsNullOrWhiteSpace(metadata["nextCursor"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public void ResourcesRead_RejectsInvalidRangeBudgetAndCursorArguments_Issue4544()
+    {
+        var cases = new (JsonObject Params, string Argument)[]
+        {
+            (new JsonObject { ["startLine"] = 0 }, "startLine"),
+            (new JsonObject { ["endLine"] = 0 }, "endLine"),
+            (new JsonObject { ["startLine"] = 2, ["endLine"] = 1 }, "endLine"),
+            (new JsonObject { ["maxBytes"] = McpServer.MinResourceReadMaxBytes - 1 }, "maxBytes"),
+            (new JsonObject { ["maxBytes"] = McpServer.MaxResourceReadMaxBytes + 1 }, "maxBytes"),
+            (new JsonObject { ["cursor"] = "not-a-cursor" }, "cursor"),
+            (new JsonObject { ["cursor"] = "not-a-cursor", ["startLine"] = 1 }, "cursor"),
+        };
+
+        foreach (var testCase in cases)
+        {
+            testCase.Params["uri"] = "cdidx://file/src/app.cs";
+            var response = _server.HandleMessage(new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 4544,
+                ["method"] = "resources/read",
+                ["params"] = testCase.Params,
+            })!;
+
+            Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+            Assert.Equal("invalid_argument", response["error"]!["data"]!["category"]!.GetValue<string>());
+            Assert.Equal(testCase.Argument, response["error"]!["data"]!["argument"]!.GetValue<string>());
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_StdioResourcesReadBoundsLargeSingleAndMultiLineFiles_Issue4544()
+    {
+        InsertIndexedFile("src/stdio-single.txt", "text", new string('s', 4096));
+        InsertIndexedFile(
+            "src/stdio-multi.txt",
+            "text",
+            string.Join('\n', Enumerable.Range(1, 300).Select(line => $"line-{line:D3}-" + new string('m', 24))),
+            splitIntoProductionChunks: true);
+        var initialize = """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}""";
+        var single = """{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"cdidx://file/src/stdio-single.txt","maxBytes":64}}""";
+        var multi = """{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"cdidx://file/src/stdio-multi.txt","maxBytes":64}}""";
+        await using var input = new MemoryStream(Encoding.UTF8.GetBytes(initialize + "\n" + single + "\n" + multi + "\n"));
+        await using var output = new MemoryStream();
+        await using var transport = new StdioMcpTransport(input, output, bufferSize: 1024);
+        using var server = new McpServer(_dbPath, "test");
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        var responses = Encoding.UTF8.GetString(output.ToArray())
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => JsonNode.Parse(line))
+            .Where(node => node?["id"]?.GetValue<int>() is 1 or 2)
+            .ToDictionary(node => node!["id"]!.GetValue<int>());
+        Assert.Equal(2, responses.Count);
+        foreach (var response in responses.Values)
+        {
+            var text = response!["result"]!["contents"]![0]!["text"]!.GetValue<string>();
+            var metadata = response["result"]!["_meta"]!;
+            Assert.InRange(Encoding.UTF8.GetByteCount(text), 1, 64);
+            Assert.Equal(Encoding.UTF8.GetByteCount(text), metadata["returnedBytes"]!.GetValue<int>());
+            Assert.True(metadata["truncated"]!.GetValue<bool>());
+            Assert.False(string.IsNullOrWhiteSpace(metadata["nextCursor"]!.GetValue<string>()));
+        }
     }
 
     [Fact]
