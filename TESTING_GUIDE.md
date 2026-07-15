@@ -381,6 +381,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Request-log metadata bounds for long paths, long JSON-RPC IDs, and over-depth IDs share one sequential logger harness and select records by content rather than callback order.
   Bearer-token denial variants share one table-driven harness that verifies the common wire response, challenge header, redaction, and request-log outcome; keep same-length mismatch in that table to exercise the hashed comparison path.
   Matching canonical and lowercase bearer schemes share one authenticated harness because RFC auth-scheme casing does not require isolated server state.
+  Browser-boundary coverage rejects invalid Origin values and actual CORS preflights before authentication, while authenticated native `OPTIONS` requests without the complete preflight-header pair follow each route's `405` / `Allow` contract; keep `/`, `/healthz`, and `/events` in one table-driven assertion.
   Transport disposal coverage uses one live event-stream lifecycle to verify concurrent idempotent disposal, stream cancellation, server-loop completion, and owned semaphore release together.
   Event-stream lifecycle coverage uses one harness to verify response headers, concurrent POST handling, oversized server-side closure, and client disposal in sequence, with a short test-owned keep-alive instead of the production heartbeat interval.
   No-stream initialize coverage reuses one default harness for explicit protocol negotiation and default handshake behavior; event-stream notification delivery keeps an isolated session.
@@ -1012,6 +1013,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   request-log metadata の long path、long JSON-RPC ID、over-depth ID 境界は1つの sequential logger harness を共有し、callback 順序ではなく record 内容で対象を選んでください。
   bearer-token denial variant は、共通 wire response、challenge header、redaction、request-log outcome を検証する1つの table-driven harness を共有し、hash comparison 経路を通す同長 mismatch もその表に含めてください。
   一致する canonical と lowercase の bearer scheme は、RFC auth-scheme casing に独立 server state が不要なため1つの authenticated harness を共有してください。
+  browser-boundary coverage は不正な Origin 値と実際の CORS preflight を認証前に拒否し、preflight header の完全な組がない authenticated native `OPTIONS` は各 route の `405` / `Allow` 契約に従うことを検証します。`/`、`/healthz`、`/events` は1つの table-driven assertion で扱ってください。
   transport disposal coverage は1つのlive event-stream lifecycleで、concurrent idempotent disposal、stream cancellation、server-loop completion、owned semaphore releaseをまとめて検証してください。
   event-stream lifecycle coverage は1つの harness で response header、並行POST処理、oversized server-side closure、client disposal を順に検証し、production heartbeat interval ではなく短い test-owned keep-alive を使ってください。
   event streamなしのinitialize coverageは1つのdefault harnessでexplicit protocol negotiationとdefault handshakeを検証し、event-stream notification deliveryは独立sessionを維持してください。

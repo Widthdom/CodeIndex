@@ -416,6 +416,67 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Theory]
+    [InlineData("", "POST", "MCP HTTP transport only accepts POST.\n")]
+    [InlineData("healthz", "GET", "MCP health endpoint only accepts GET.\n")]
+    [InlineData("events", "GET", "MCP HTTP event stream only accepts GET.\n")]
+    public async Task HttpTransport_AuthenticatedNativeOptions_UsesRouteSpecificMethodHandling_Issue4549(
+        string path,
+        string allowedMethod,
+        string expectedBody)
+    {
+        const string token = "issue-4549-token";
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
+        using var client = CreateHttpClient();
+        using var request = new HttpRequestMessage(
+            HttpMethod.Options,
+            new Uri(new Uri(harness.Endpoint), path));
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
+        Assert.Collection(
+            response.Content.Headers.Allow,
+            value => Assert.Equal(allowedMethod, value));
+        Assert.Equal(expectedBody, await response.Content.ReadAsStringAsync());
+        Assert.False(response.Headers.Contains("Access-Control-Allow-Origin"));
+        Assert.False(response.Headers.Contains("Access-Control-Allow-Methods"));
+        Assert.False(response.Headers.Contains("Access-Control-Allow-Headers"));
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task HttpTransport_AuthenticatedOptions_WithOnlyOnePreflightHeader_UsesNativeHandling_Issue4549(
+        bool includeOrigin,
+        bool includeAccessControlRequestMethod)
+    {
+        const string token = "issue-4549-token";
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
+        using var client = CreateHttpClient();
+        using var request = new HttpRequestMessage(HttpMethod.Options, harness.Endpoint);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        if (includeOrigin)
+        {
+            request.Headers.TryAddWithoutValidation(
+                "Origin",
+                new Uri(harness.Endpoint).GetLeftPart(UriPartial.Authority));
+        }
+        if (includeAccessControlRequestMethod)
+            request.Headers.TryAddWithoutValidation("Access-Control-Request-Method", "POST");
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
+        Assert.Collection(
+            response.Content.Headers.Allow,
+            value => Assert.Equal("POST", value));
+        Assert.Equal(
+            "MCP HTTP transport only accepts POST.\n",
+            await response.Content.ReadAsStringAsync());
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData("text/plain")]
     [InlineData("application/problem+json")]

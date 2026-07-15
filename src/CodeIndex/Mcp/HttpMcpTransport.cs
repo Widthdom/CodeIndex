@@ -607,7 +607,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             return;
         }
 
-        if (string.Equals(context.Request.HttpMethod, "OPTIONS", StringComparison.OrdinalIgnoreCase))
+        if (IsCorsPreflightRequest(context.Request))
         {
             request.AuthOutcome = "not-checked";
             request.Diagnostic = PreflightRejectedDiagnostic;
@@ -762,6 +762,11 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
 
         return true;
     }
+
+    private static bool IsCorsPreflightRequest(HttpListenerRequest request)
+        => string.Equals(request.HttpMethod, "OPTIONS", StringComparison.OrdinalIgnoreCase)
+            && request.Headers.GetValues("Origin") is { Length: > 0 }
+            && request.Headers.GetValues("Access-Control-Request-Method") is { Length: > 0 };
 
     private async Task<bool> TryValidateJsonContentTypeAsync(PendingRequest request)
     {
