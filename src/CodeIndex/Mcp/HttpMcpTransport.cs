@@ -1768,7 +1768,8 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             // HandleContextAsync calls this only with a body returned by TryReadRequestBodyAsync,
             // so the full JSON parse is bounded by the HTTP request-body byte limit.
             using var doc = BoundedJson.ParseDocument(body, maxRequestBodyBytes, McpServer.MaxJsonDepth);
-            if (!doc.RootElement.TryGetProperty("id", out var id))
+            if (doc.RootElement.ValueKind != JsonValueKind.Object
+                || !doc.RootElement.TryGetProperty("id", out var id))
                 return null;
 
             var requestId = id.ValueKind switch

@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
@@ -75,6 +76,12 @@ public partial class McpServer : IDisposable
     // を渡せるようにするため (#1567)。
     private readonly AsyncLocal<CancellationToken> _currentRequestToken = new();
     private readonly AsyncLocal<bool> _isolateDbForCurrentRequest = new();
+    // HTTP JSON-RPC batches divide the complete array-envelope budget among response-bearing
+    // items. resources/list observes its current share here so two large pages cannot each claim
+    // the transport's full response cap and turn the aggregate frame into HTTP 500.
+    // HTTP JSON-RPC batch は配列 envelope 全体の budget を応答対象 item で分配する。
+    // resources/list は現在の割当をここから参照し、複数ページが transport 上限を重複利用しない。
+    private readonly AsyncLocal<int?> _currentBatchResponseItemMaxBytes = new();
     private readonly AsyncLocal<Func<string, CancellationToken, Task>?> _currentOutOfBandFrameWriter = new();
     private readonly AsyncLocal<bool> _canAwaitClientResponses = new();
     private readonly AsyncLocal<List<Action>?> _deferredFrameLogs = new();
@@ -82,6 +89,11 @@ public partial class McpServer : IDisposable
     private volatile bool _running = true;
     private volatile bool _initialized;
     private volatile bool _enforceInitializationLifecycle;
+    // Zero outside a transport loop. HTTP publishes its configured body cap here so handlers
+    // can shape a valid response before the transport would otherwise reject it.
+    // transport loop 外では 0。HTTP の body 上限を handler に渡し、transport 側の拒否前に
+    // 有効な大きさへ response を整形する。
+    private int _activeTransportMaxResponseBytes;
     private long _timedOutIsolatedActionDrainingCount;
     private long _timedOutIsolatedActionDrainedCount;
     private RequestTimeoutDrainDiagnostic? _lastRequestTimeoutDrainDiagnostic;
@@ -185,6 +197,13 @@ public partial class McpServer : IDisposable
     internal const int MaxConfiguredResponseBytes = 64 * 1024 * 1024;
     internal const int MaxClientResponseJsonBytes = 1 * 1024 * 1024;
     internal const int MaxMcpPaginationOffset = 10_000;
+    internal const int MaxResourceListCursorChars = 23;
+    internal const int MinResourceListMaxBytes = 4 * 1024;
+    internal const int DefaultResourceListMaxBytes = HttpMcpTransport.DefaultMaxResponseBodyBytes;
+    internal const int MaxResourceListMaxBytes = HttpMcpTransport.DefaultMaxResponseBodyBytes;
+    internal const int ResourceListPageSize = 200;
+    private const int ResourceListCursorPayloadBytes = 17;
+    private const byte ResourceListCursorVersion = 1;
     internal const int DefaultToolsListPageSize = 24;
     internal const int MaxToolsListPageSize = 24;
     internal const int MaxMcpMapDepth = 32;
@@ -488,6 +507,10 @@ public partial class McpServer : IDisposable
         // stdoutをJSON-RPC用にクリーンに保つため、ログはstderrに出力
         ConsoleUi.TryWriteErrorLine($"[cdidx-mcp] Starting MCP server v{_version} (db: {FormatDbPathForLog(_dbPath)}, transport: {transport.Name} @ {transport.Endpoint}, max in-flight: {MaxConcurrency})");
 
+        Volatile.Write(
+            ref _activeTransportMaxResponseBytes,
+            transport is HttpMcpTransport activeHttpTransport ? activeHttpTransport.MaxResponseBodyBytes : 0);
+
         if (transport is HttpMcpTransport httpTransport)
         {
             httpTransport.OutOfBandFrameHandler = (frame, _) => ProcessFrameAsync(frame);
@@ -583,6 +606,7 @@ public partial class McpServer : IDisposable
         }
         finally
         {
+            Volatile.Write(ref _activeTransportMaxResponseBytes, 0);
             if (transport is HttpMcpTransport httpTransportToClear)
             {
                 httpTransportToClear.OutOfBandFrameHandler = null;
@@ -1673,42 +1697,240 @@ public partial class McpServer : IDisposable
                 suggestion: $"JSON-RPC batch requests are limited to {MaxBatchRequestCount} items.",
                 retrySafe: false);
 
-        var responses = new JsonArray();
-        foreach (var item in batch)
+        BatchResponseBudgetSlot?[]? budgetSlots = null;
+        var batchResponseLimit = 0;
+        long remainingPayloadBytes = 0;
+        long remainingReservedErrorBytes = 0;
+        var remainingResponseCount = 0;
+        var activeTransportMaxResponseBytes = Volatile.Read(ref _activeTransportMaxResponseBytes);
+        if (activeTransportMaxResponseBytes > 0 && _usesDefaultResponseSerializer)
         {
+            // JSON arrays add two brackets plus one comma between response-bearing items.
+            // Notifications reserve nothing because they never appear in the response array.
+            // JSON 配列の bracket 2 bytes と応答 item 間の comma を先に予約する。
+            // notification は response 配列へ現れないため budget を消費しない。
+            batchResponseLimit = Math.Min(activeTransportMaxResponseBytes, GetMaxResponseBytes());
+            budgetSlots = new BatchResponseBudgetSlot?[batch.Count];
+            for (var index = 0; index < batch.Count; index++)
+            {
+                if (!TryCreateBatchResponseBudgetSlot(batch[index], out var slot))
+                    continue;
+
+                budgetSlots[index] = slot;
+                remainingReservedErrorBytes += slot.ErrorResponseBytes;
+                remainingResponseCount++;
+            }
+
+            if (remainingResponseCount > 0)
+            {
+                remainingPayloadBytes = batchResponseLimit - 2L - (remainingResponseCount - 1L);
+                if (remainingPayloadBytes < remainingReservedErrorBytes)
+                    return CreateBatchEnvelopeBudgetError(batchResponseLimit, retrySafe: true);
+            }
+        }
+
+        var responses = new JsonArray();
+        for (var batchIndex = 0; batchIndex < batch.Count; batchIndex++)
+        {
+            var item = batch[batchIndex];
+            var budgetSlot = budgetSlots?[batchIndex];
+            int? itemResponseLimit = null;
+            if (budgetSlot is { } plannedSlot)
+            {
+                var distributableBytes = Math.Max(0, remainingPayloadBytes - remainingReservedErrorBytes);
+                var fairShareBytes = distributableBytes / remainingResponseCount;
+                itemResponseLimit = checked((int)(plannedSlot.ErrorResponseBytes + fairShareBytes));
+            }
+
+            var previousBatchResponseItemMaxBytes = _currentBatchResponseItemMaxBytes.Value;
+            _currentBatchResponseItemMaxBytes.Value = itemResponseLimit;
             JsonNode? response;
-            if (item is null)
+            try
             {
-                response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: expected JSON object",
-                    category: McpErrorEnvelope.CategoryInvalidRequest,
-                    suggestion: "Each JSON-RPC batch item must be a request object.",
-                    retrySafe: false);
+                if (item is null)
+                {
+                    response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: expected JSON object",
+                        category: McpErrorEnvelope.CategoryInvalidRequest,
+                        suggestion: "Each JSON-RPC batch item must be a request object.",
+                        retrySafe: false);
+                }
+                else if (item is JsonArray)
+                {
+                    response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: nested batches are not supported",
+                        category: McpErrorEnvelope.CategoryInvalidRequest,
+                        suggestion: "JSON-RPC batch items must be request objects, not nested arrays.",
+                        retrySafe: false);
+                }
+                else if (item is not JsonObject)
+                {
+                    response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: expected JSON object",
+                        category: McpErrorEnvelope.CategoryInvalidRequest,
+                        suggestion: "Each JSON-RPC batch item must be a request object.",
+                        retrySafe: false);
+                }
+                else
+                {
+                    response = await HandleMessageAsync(item, isolateRequestDb).ConfigureAwait(false);
+                }
             }
-            else if (item is JsonArray)
+            finally
             {
-                response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: nested batches are not supported",
-                    category: McpErrorEnvelope.CategoryInvalidRequest,
-                    suggestion: "JSON-RPC batch items must be request objects, not nested arrays.",
-                    retrySafe: false);
+                _currentBatchResponseItemMaxBytes.Value = previousBatchResponseItemMaxBytes;
             }
-            else if (item is not JsonObject)
+
+            if (budgetSlot is { } consumedSlot)
             {
-                response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: expected JSON object",
-                    category: McpErrorEnvelope.CategoryInvalidRequest,
-                    suggestion: "Each JSON-RPC batch item must be a request object.",
-                    retrySafe: false);
-            }
-            else
-            {
-                response = await HandleMessageAsync(item, isolateRequestDb).ConfigureAwait(false);
+                remainingReservedErrorBytes -= consumedSlot.ErrorResponseBytes;
+                remainingResponseCount--;
+
+                if (response is null)
+                    continue;
+
+                var responseFitsItemBudget = TryMeasureJsonUtf8BytesWithinLimit(
+                    response,
+                    _jsonOptions,
+                    itemResponseLimit!.Value,
+                    out var responseBytes);
+                var canReplaceWithBudgetError = consumedSlot.CanShapeResourcesListResponse
+                    && IsResourcesListSuccessResponse(response);
+                if (!responseFitsItemBudget && canReplaceWithBudgetError)
+                {
+                    response = consumedSlot.ErrorResponse;
+                    responseBytes = consumedSlot.ErrorResponseBytes;
+                }
+                if (responseFitsItemBudget || canReplaceWithBudgetError)
+                {
+                    remainingPayloadBytes -= responseBytes;
+                }
+                else if (TryMeasureJsonUtf8BytesWithinLimit(
+                    response,
+                    _jsonOptions,
+                    checked((int)Math.Max(0, remainingPayloadBytes)),
+                    out responseBytes))
+                {
+                    remainingPayloadBytes -= responseBytes;
+                }
+                else
+                {
+                    // Preserve generic/state-changing results verbatim. If they consume more than
+                    // the remaining envelope, the canonical aggregate error below reports an
+                    // unknown completion state instead of inviting an unsafe retry.
+                    // generic/state-changing result は置換しない。残余を超える場合は下で
+                    // completion unknown の aggregate error にし、危険な再試行を促さない。
+                    remainingPayloadBytes = 0;
+                }
             }
 
             if (response != null)
                 responses.Add(response);
         }
 
-        return responses.Count == 0 ? null : responses;
+        if (responses.Count == 0)
+            return null;
+        if (batchResponseLimit > 0
+            && !TryMeasureJsonUtf8BytesWithinLimit(responses, _jsonOptions, batchResponseLimit, out _))
+        {
+            return CreateBatchEnvelopeBudgetError(batchResponseLimit, retrySafe: false);
+        }
+        return responses;
     }
+
+    private bool TryCreateBatchResponseBudgetSlot(JsonNode? item, out BatchResponseBudgetSlot slot)
+    {
+        slot = default;
+        if (!BatchItemRequiresResponse(item, out var responseId))
+            return false;
+
+        var errorResponse = CreateBatchItemBudgetError(responseId);
+        _ = TryMeasureJsonUtf8BytesWithinLimit(errorResponse, _jsonOptions, int.MaxValue, out var errorResponseBytes);
+        slot = new BatchResponseBudgetSlot(
+            errorResponse,
+            errorResponseBytes,
+            CanShapeResourcesListResponse(item));
+        return true;
+    }
+
+    private static bool CanShapeResourcesListResponse(JsonNode? item)
+        => item is JsonObject request
+            && TryGetRequestId(request, out var hasId, out _)
+            && hasId
+            && TryGetStringMember(request, "jsonrpc") == "2.0"
+            && TryGetStringMember(request, "method") == "resources/list";
+
+    private static bool IsResourcesListSuccessResponse(JsonNode response)
+        => response is JsonObject responseObject
+            && responseObject["result"] is JsonObject result
+            && result["resources"] is JsonArray;
+
+    private static bool BatchItemRequiresResponse(JsonNode? item, out JsonNode? responseId)
+    {
+        responseId = null;
+        if (item is not JsonObject request)
+            return true;
+
+        if (!TryGetRequestId(request, out var hasId, out var id)
+            || TryGetStringMember(request, "jsonrpc") != "2.0")
+        {
+            return true;
+        }
+
+        var method = TryGetStringMember(request, "method");
+        if (method is "$/cancelRequest"
+            or "notifications/cancelled"
+            or "notifications/initialized"
+            or "notifications/roots/list_changed"
+            or "notifications/shutdown"
+            or "notifications/exit")
+        {
+            return false;
+        }
+        if (!hasId)
+            return false;
+
+        responseId = McpJsonNode.Clone(id);
+        return true;
+    }
+
+    private static JsonObject CreateBatchItemBudgetError(JsonNode? id)
+        => CreateErrorResponse(
+            hasId: true,
+            id,
+            code: -32603,
+            message: "resources/list could not fit within its share of the HTTP batch response byte limit.",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: "Request a smaller resources/list page, split the batch, or raise the HTTP response byte limit.",
+            retrySafe: true,
+            extraData: new JsonObject
+            {
+                ["reason"] = "batch_response_budget_exceeded",
+            });
+
+    private static JsonObject CreateBatchEnvelopeBudgetError(int batchResponseLimit, bool retrySafe)
+        => CreateErrorResponse(
+            hasId: true,
+            id: null,
+            code: -32603,
+            message: retrySafe
+                ? "The JSON-RPC batch cannot fit within the active response byte limit."
+                : "The completed JSON-RPC batch exceeded the active response byte limit.",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: retrySafe
+                ? "Split the batch into fewer requests or raise the HTTP response byte limit."
+                : "Do not automatically retry state-changing items; their completion state is unknown. Split future batches into fewer requests.",
+            retrySafe,
+            extraData: new JsonObject
+            {
+                ["reason"] = retrySafe
+                    ? "batch_response_budget_too_small"
+                    : "batch_response_budget_exceeded",
+                ["limit_bytes"] = batchResponseLimit,
+                ["completion_state"] = retrySafe ? "not_started" : "unknown",
+            });
+
+    private readonly record struct BatchResponseBudgetSlot(
+        JsonObject ErrorResponse,
+        int ErrorResponseBytes,
+        bool CanShapeResourcesListResponse);
 
     private async Task<JsonNode> DispatchWithRequestCancellationAsync(JsonNode? id, bool isolateRequestDb, Func<Task<JsonNode>> action)
     {
@@ -2321,15 +2543,51 @@ public partial class McpServer : IDisposable
 
     private JsonNode HandleResourcesList(JsonNode? id, JsonNode? listParams)
     {
-        const int pageSize = 200;
-        var offset = 0;
+        var requestedMaxBytes = DefaultResourceListMaxBytes;
+        if (listParams?["maxBytes"] is JsonNode maxBytesNode)
+        {
+            if (maxBytesNode is not JsonValue maxBytesValue
+                || !maxBytesValue.TryGetValue<int>(out requestedMaxBytes)
+                || requestedMaxBytes < MinResourceListMaxBytes
+                || requestedMaxBytes > MaxResourceListMaxBytes)
+            {
+                return CreateResourcesListMaxBytesError(id);
+            }
+        }
+        var effectiveMaxBytes = Math.Min(requestedMaxBytes, GetMaxResponseBytes());
+        var activeTransportMaxResponseBytes = Volatile.Read(ref _activeTransportMaxResponseBytes);
+        if (activeTransportMaxResponseBytes > 0)
+            effectiveMaxBytes = Math.Min(effectiveMaxBytes, activeTransportMaxResponseBytes);
+        if (_currentBatchResponseItemMaxBytes.Value is { } batchResponseItemMaxBytes)
+            effectiveMaxBytes = Math.Min(effectiveMaxBytes, batchResponseItemMaxBytes);
+
+        long? afterFileId = null;
+        long? expectedGeneration = null;
+        var legacyOffset = 0;
         if (listParams?["cursor"] is JsonNode cursorNode)
         {
             if (cursorNode is not JsonValue cursorValue
-                || !cursorValue.TryGetValue<string>(out var cursor)
-                || !int.TryParse(cursor, NumberStyles.None, CultureInfo.InvariantCulture, out offset)
-                || offset < 0
-                || offset > MaxMcpPaginationOffset)
+                || !cursorValue.TryGetValue<string>(out var cursor))
+            {
+                return CreateResourcesListCursorError(id);
+            }
+
+            if (cursor.Length > MaxResourceListCursorChars)
+                return CreateResourcesListCursorError(id);
+
+            if (int.TryParse(cursor, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedLegacyOffset))
+            {
+                if (parsedLegacyOffset < 0 || parsedLegacyOffset > MaxMcpPaginationOffset)
+                    return CreateResourcesListCursorError(id);
+                if (parsedLegacyOffset != 0)
+                    return CreateResourcesListRestartError(id);
+            }
+            else if (TryDecodeResourceListCursor(cursor, out var decodedCursor))
+            {
+                afterFileId = decodedCursor.AfterFileId;
+                expectedGeneration = decodedCursor.Generation;
+            }
+            else
             {
                 return CreateResourcesListCursorError(id);
             }
@@ -2337,45 +2595,291 @@ public partial class McpServer : IDisposable
 
         return WithDbReader(id, args: null, reader =>
         {
-            var files = reader.ListFiles(limit: pageSize + 1, offset: offset);
-            var page = files.Take(pageSize).ToArray();
+            var resourcePage = reader.ListResourceFiles(
+                limit: ResourceListPageSize + 1,
+                afterFileId: afterFileId,
+                expectedGeneration: expectedGeneration,
+                legacyOffset: legacyOffset);
+            if (resourcePage.GenerationTrackingUnavailable)
+                return CreateResourcesListGenerationUnavailableError(id);
+            if (resourcePage.CursorRestartRequired)
+                return CreateResourcesListRestartError(id);
+
+            var page = resourcePage.Files.Take(ResourceListPageSize).ToArray();
             var resources = new JsonArray();
+            var reservedResponse = CreateResourceListResponse(
+                id,
+                resources: [],
+                generation: long.MaxValue,
+                lastConsumedFileId: long.MaxValue,
+                hasContinuation: true,
+                requestedMaxBytes: MaxResourceListMaxBytes,
+                effectiveMaxBytes: MaxResourceListMaxBytes,
+                candidatesConsumed: ResourceListPageSize,
+                uriTooLongCount: ResourceListPageSize,
+                resourceExceedsMaxBytesCount: ResourceListPageSize,
+                byteBudgetReached: true);
+            _ = TryMeasureJsonUtf8BytesWithinLimit(
+                reservedResponse,
+                _jsonOptions,
+                int.MaxValue,
+                out var reservedResponseBytes);
+            if (reservedResponseBytes > effectiveMaxBytes)
+                return CreateResourcesListEffectiveMaxBytesError(id, requestedMaxBytes, effectiveMaxBytes);
+
+            var acceptedResourceBytes = 0L;
+            var candidatesConsumed = 0;
+            var uriTooLongCount = 0;
+            var resourceExceedsMaxBytesCount = 0;
+            var byteBudgetReached = false;
+            var stoppedForByteBudget = false;
+            long? lastConsumedFileId = null;
             foreach (var file in page)
             {
                 var uri = BuildResourceUri(file.Path);
                 if (uri.Length > McpBoundedText.MaxResourceUriChars)
+                {
+                    uriTooLongCount++;
+                    candidatesConsumed++;
+                    lastConsumedFileId = file.Id;
                     continue;
+                }
 
-                resources.Add(new JsonObject
+                var resource = new JsonObject
                 {
                     ["uri"] = uri,
                     ["name"] = file.Path,
                     ["description"] = $"{file.Path} ({file.Lang ?? "unknown"}, {file.Lines} lines)",
                     ["mimeType"] = GetResourceMimeType(file.Lang),
-                });
+                };
+                var resourceFitsAlone = TryMeasureJsonUtf8BytesWithinLimit(
+                    resource,
+                    _jsonOptions,
+                    effectiveMaxBytes,
+                    out var resourceBytes);
+                var commaBytes = resources.Count == 0 ? 0 : 1;
+                var resourceFitsEmptyPage = resourceFitsAlone
+                    && reservedResponseBytes + resourceBytes <= effectiveMaxBytes;
+                var resourceFitsPage = resourceFitsEmptyPage
+                    && reservedResponseBytes + acceptedResourceBytes + commaBytes + resourceBytes <= effectiveMaxBytes;
+                if (!resourceFitsPage)
+                {
+                    byteBudgetReached = true;
+                    if (resourceFitsEmptyPage || resources.Count > 0)
+                    {
+                        stoppedForByteBudget = true;
+                        break;
+                    }
+
+                    // Consume resources that cannot fit even on an empty page so the cursor cannot livelock.
+                    // 空ページにも収まらない resource は消費・報告し、cursor の livelock を防ぐ。
+                    resourceExceedsMaxBytesCount++;
+                    candidatesConsumed++;
+                    lastConsumedFileId = file.Id;
+                    continue;
+                }
+
+                resources.Add(resource);
+                acceptedResourceBytes += commaBytes + resourceBytes;
+                candidatesConsumed++;
+                lastConsumedFileId = file.Id;
             }
 
-            var result = new JsonObject
-            {
-                ["resources"] = resources,
-            };
-            var nextOffset = offset + pageSize;
-            if (nextOffset <= MaxMcpPaginationOffset && files.Count > pageSize)
-                result["nextCursor"] = nextOffset.ToString(CultureInfo.InvariantCulture);
-            return CreateSuccessResponse(true, id, result);
+            var hasContinuation = stoppedForByteBudget || resourcePage.Files.Count > ResourceListPageSize;
+            var response = CreateResourceListResponse(
+                id,
+                resources,
+                resourcePage.Generation,
+                lastConsumedFileId,
+                hasContinuation,
+                requestedMaxBytes,
+                effectiveMaxBytes,
+                candidatesConsumed,
+                uriTooLongCount,
+                resourceExceedsMaxBytesCount,
+                byteBudgetReached);
+
+            if (!TryMeasureJsonUtf8BytesWithinLimit(response, _jsonOptions, effectiveMaxBytes, out _))
+                return CreateResourcesListEffectiveMaxBytesError(id, requestedMaxBytes, effectiveMaxBytes);
+            return response;
         });
     }
 
+    private static JsonObject CreateResourcesListMaxBytesError(JsonNode? id)
+        => CreateErrorResponse(hasId: true, id: id, code: -32602,
+            message: $"resources/list maxBytes must be between {MinResourceListMaxBytes} and {MaxResourceListMaxBytes}.",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: "Use an integer params.maxBytes within the documented range, or omit it to use the default.",
+            retrySafe: false,
+            extraData: new JsonObject
+            {
+                ["min_max_bytes"] = MinResourceListMaxBytes,
+                ["max_max_bytes"] = MaxResourceListMaxBytes,
+                ["default_max_bytes"] = DefaultResourceListMaxBytes,
+            });
+
+    private static JsonObject CreateResourcesListEffectiveMaxBytesError(
+        JsonNode? id,
+        int requestedMaxBytes,
+        int effectiveMaxBytes)
+        => CreateErrorResponse(hasId: true, id: id, code: -32602,
+            message: "resources/list response metadata does not fit within the effective byte limit.",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: "Raise the MCP response byte limit or request a larger params.maxBytes value.",
+            retrySafe: false,
+            extraData: new JsonObject
+            {
+                ["requested_max_bytes"] = requestedMaxBytes,
+                ["effective_max_bytes"] = effectiveMaxBytes,
+            });
+
+    private static JsonObject CreateResourceListResponse(
+        JsonNode? id,
+        JsonArray resources,
+        long generation,
+        long? lastConsumedFileId,
+        bool hasContinuation,
+        int requestedMaxBytes,
+        int effectiveMaxBytes,
+        int candidatesConsumed,
+        int uriTooLongCount,
+        int resourceExceedsMaxBytesCount,
+        bool byteBudgetReached)
+    {
+        var result = new JsonObject
+        {
+            ["resources"] = resources,
+            ["_meta"] = new JsonObject
+            {
+                ["response_controls"] = CreateResourceListResponseControls(
+                    requestedMaxBytes,
+                    effectiveMaxBytes,
+                    candidatesConsumed,
+                    resources.Count,
+                    uriTooLongCount,
+                    resourceExceedsMaxBytesCount,
+                    byteBudgetReached,
+                    hasContinuation),
+            },
+        };
+        if (hasContinuation && lastConsumedFileId is not null)
+            result["nextCursor"] = EncodeResourceListCursor(generation, lastConsumedFileId.Value);
+        return CreateSuccessResponse(true, id, result);
+    }
+
+    private static JsonObject CreateResourceListResponseControls(
+        int requestedMaxBytes,
+        int effectiveMaxBytes,
+        int candidatesConsumed,
+        int resourcesReturned,
+        int uriTooLongCount,
+        int resourceExceedsMaxBytesCount,
+        bool byteBudgetReached,
+        bool hasContinuation)
+        => new()
+        {
+            ["requested_max_bytes"] = requestedMaxBytes,
+            ["effective_max_bytes"] = effectiveMaxBytes,
+            ["page_item_limit"] = ResourceListPageSize,
+            ["resource_candidates_consumed"] = candidatesConsumed,
+            ["resources_returned"] = resourcesReturned,
+            ["omitted_resource_count"] = uriTooLongCount + resourceExceedsMaxBytesCount,
+            ["omitted_resource_reason_counts"] = new JsonObject
+            {
+                ["resource_uri_too_long"] = uriTooLongCount,
+                ["resource_exceeds_max_bytes"] = resourceExceedsMaxBytesCount,
+            },
+            ["byte_budget_reached"] = byteBudgetReached,
+            ["continuation_reason"] = hasContinuation
+                ? byteBudgetReached ? "byte_budget" : "item_limit"
+                : "completed",
+        };
+
     private static JsonObject CreateResourcesListCursorError(JsonNode? id)
         => CreateErrorResponse(hasId: true, id: id, code: -32602,
-            message: $"resources/list cursor must be a non-negative pagination offset no greater than {MaxMcpPaginationOffset}.",
+            message: "resources/list cursor is invalid or unsupported.",
             category: McpErrorEnvelope.CategoryInvalidArgument,
             suggestion: "Use the `nextCursor` value returned by the previous resources/list response, or omit params.cursor to start from the first page.",
             retrySafe: false,
             extraData: new JsonObject
             {
-                ["max_pagination_offset"] = MaxMcpPaginationOffset,
+                ["max_cursor_length"] = MaxResourceListCursorChars,
+                ["max_legacy_pagination_offset"] = MaxMcpPaginationOffset,
             });
+
+    private static JsonObject CreateResourcesListRestartError(JsonNode? id)
+        => CreateErrorResponse(hasId: true, id: id, code: McpErrorEnvelope.CodeIndexStale,
+            message: "The indexed file set changed after this resources/list cursor was issued.",
+            category: McpErrorEnvelope.CategoryIndexStale,
+            suggestion: "Omit params.cursor and restart resources/list from the first page.",
+            retrySafe: false,
+            extraData: new JsonObject
+            {
+                ["reason"] = "resources_list_generation_changed",
+                ["restart_required"] = true,
+            });
+
+    private static JsonObject CreateResourcesListGenerationUnavailableError(JsonNode? id)
+        => CreateErrorResponse(hasId: true, id: id, code: McpErrorEnvelope.CodeIndexStale,
+            message: "This database cannot prove a stable resources/list generation.",
+            category: McpErrorEnvelope.CategoryIndexStale,
+            suggestion: "Open the database on writable storage and run `cdidx index <projectPath>` with the current cdidx to install generation tracking. Use an `immutable=1` URI only for a snapshot guaranteed not to change.",
+            retrySafe: false,
+            extraData: new JsonObject
+            {
+                ["reason"] = "resources_list_generation_unavailable",
+                ["migration_required"] = true,
+                ["restart_required"] = false,
+            });
+
+    private static string EncodeResourceListCursor(long generation, long afterFileId)
+    {
+        Span<byte> payload = stackalloc byte[ResourceListCursorPayloadBytes];
+        payload[0] = ResourceListCursorVersion;
+        BinaryPrimitives.WriteInt64BigEndian(payload[1..9], generation);
+        BinaryPrimitives.WriteInt64BigEndian(payload[9..17], afterFileId);
+        return Convert.ToBase64String(payload).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+    }
+
+    private static bool TryDecodeResourceListCursor(string cursor, out ResourceListCursor decoded)
+    {
+        decoded = default;
+        if (cursor.Length != MaxResourceListCursorChars
+            || cursor.Any(static ch => !char.IsAsciiLetterOrDigit(ch) && ch is not '-' and not '_'))
+        {
+            return false;
+        }
+
+        Span<char> base64 = stackalloc char[MaxResourceListCursorChars + 1];
+        for (var i = 0; i < cursor.Length; i++)
+        {
+            base64[i] = cursor[i] switch
+            {
+                '-' => '+',
+                '_' => '/',
+                _ => cursor[i],
+            };
+        }
+        base64[^1] = '=';
+
+        Span<byte> payload = stackalloc byte[ResourceListCursorPayloadBytes];
+        if (!Convert.TryFromBase64Chars(base64, payload, out var bytesWritten)
+            || bytesWritten != ResourceListCursorPayloadBytes
+            || payload[0] != ResourceListCursorVersion)
+        {
+            return false;
+        }
+
+        var generation = BinaryPrimitives.ReadInt64BigEndian(payload[1..9]);
+        var afterFileId = BinaryPrimitives.ReadInt64BigEndian(payload[9..17]);
+        if (generation < 0 || afterFileId <= 0)
+            return false;
+
+        decoded = new ResourceListCursor(generation, afterFileId);
+        return true;
+    }
+
+    private readonly record struct ResourceListCursor(long Generation, long AfterFileId);
 
     private JsonNode HandleResourcesRead(JsonNode? id, JsonNode? readParams)
     {

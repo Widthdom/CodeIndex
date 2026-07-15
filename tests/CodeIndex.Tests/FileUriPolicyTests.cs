@@ -40,4 +40,22 @@ public class FileUriPolicyTests
         Assert.EndsWith("?immutable=1&mode=ro", uri, StringComparison.Ordinal);
         Assert.Equal(Path.GetFullPath(dbPath), DbConnectionFactory.TryGetLocalPath(uri));
     }
+
+    [Theory]
+    [InlineData("file:///tmp/codeindex.db?immutable=1", true)]
+    [InlineData("file:///tmp/codeindex.db?immutable=1&mode=ro", true)]
+    [InlineData("file:///tmp/codeindex.db?mode=ro&immutable=1", true)]
+    [InlineData("file:///tmp/codeindex.db?mode=ro", false)]
+    [InlineData("file:///tmp/codeindex.db?Immutable=1&mode=ro", false)]
+    [InlineData("file:///tmp/codeindex.db?%69mmutable=1&mode=ro", false)]
+    [InlineData("file:///tmp/codeindex.db?immutable=1&immutable=0&mode=ro", false)]
+    [InlineData("file:///tmp/codeindex.db?immutable=1&immutable=1&mode=ro", false)]
+    [InlineData("file:///tmp/codeindex.db? immutable=1&mode=ro", false)]
+    [InlineData("file:///tmp/codeindex.db?immutable=1&mode=ro&cache=shared", false)]
+    public void SqliteFileUri_ImmutableSnapshotTrustRequiresCanonicalUnambiguousQuery_Issue4541(
+        string uri,
+        bool expected)
+    {
+        Assert.Equal(expected, SqliteFileUri.RequestsUnambiguousImmutableSnapshot(uri));
+    }
 }
