@@ -53,6 +53,9 @@ public partial class McpServer : IDisposable
     // `notifications/exit`) を受けると cancel され、トランスポート未クローズでも
     // 読み取りループが unblock して正常終了する (#1567)。
     private readonly CancellationTokenSource _shutdownCts = new();
+    private readonly object _shutdownCancellationGate = new();
+    private Task? _shutdownCancellationTask;
+    private int _shutdownCtsDisposed;
     // Active JSON-RPC requests keyed by their serialized `id`, so MCP `$/cancelRequest`
     // notifications can cancel the exact in-flight tool instead of only shutting down the
     // whole server (#1418).
@@ -121,6 +124,8 @@ public partial class McpServer : IDisposable
     // (ファイルハンドル / rotation) は ProgramRunner 側で所有する。
     private readonly AuditLogSink? _auditLog;
     private readonly TimeSpan _requestTimeout;
+    private readonly TimeSpan _inFlightDrainGracePeriod = DefaultEofDrainTimeout;
+    private readonly TimeSpan _inFlightPostCancelGracePeriod = DefaultEofPostCancelDrainTimeout;
     private readonly TimeSpan? _keepAliveInterval;
     private readonly DateTimeOffset _startedAt;
     private DateTimeOffset _lastRequestAt;
@@ -367,6 +372,7 @@ public partial class McpServer : IDisposable
     internal Func<CancellationToken, Task>? RequestDelayForTests { get; set; }
     internal Func<JsonNode?, CancellationToken, Task>? RequestDelayForTestsWithId { get; set; }
     internal bool ShutdownRequestedForTests => _shutdownCts.IsCancellationRequested;
+    internal CancellationToken ShutdownTokenForTests => _shutdownCts.Token;
 
     /// <summary>
     /// Cap configured for concurrent in-flight tool calls (#1567). Surfaced for tests so
@@ -392,6 +398,22 @@ public partial class McpServer : IDisposable
         get => _requestTimeout;
         init => _requestTimeout = value <= TimeSpan.Zero
             ? throw new ArgumentOutOfRangeException(nameof(value), value, "MCP request timeout must be greater than zero.")
+            : value;
+    }
+
+    internal TimeSpan InFlightDrainGracePeriod
+    {
+        get => _inFlightDrainGracePeriod;
+        init => _inFlightDrainGracePeriod = value < TimeSpan.Zero
+            ? throw new ArgumentOutOfRangeException(nameof(value), value, "MCP in-flight drain grace period cannot be negative.")
+            : value;
+    }
+
+    internal TimeSpan InFlightPostCancelGracePeriod
+    {
+        get => _inFlightPostCancelGracePeriod;
+        init => _inFlightPostCancelGracePeriod = value < TimeSpan.Zero
+            ? throw new ArgumentOutOfRangeException(nameof(value), value, "MCP in-flight post-cancel grace period cannot be negative.")
             : value;
     }
 
@@ -527,76 +549,121 @@ public partial class McpServer : IDisposable
             if (string.Equals(transport.Name, "stdio", StringComparison.OrdinalIgnoreCase)
                 || transport is IConcurrentMcpTransport)
             {
-                await RunConcurrentFrameLoopAsync(transport, loopToken).ConfigureAwait(false);
+                await RunConcurrentFrameLoopAsync(transport, loopToken, cancellationToken).ConfigureAwait(false);
                 return;
             }
 
-            while (_running)
+            Task? terminalTransportWriteTask = null;
+            try
             {
-                // The full read/process/write iteration is wrapped in the same cancellation guard so
-                // a Ctrl+C that lands mid-iteration (e.g. while WriteFrameAsync is flushing) still
-                // exits the loop cleanly instead of bubbling OperationCanceledException out of the
-                // server and past ProgramRunner.RunMcpHttp's graceful-shutdown handler.
-                // Ctrl+C が WriteFrameAsync flush 中に来ても OperationCanceledException を呼び元に
-                // 漏らさず正常終了するよう、read/process/write 全体を同じ cancellation guard で囲む。
-                try
+                while (_running)
                 {
-                    var frame = await transport.ReadFrameAsync(loopToken).ConfigureAwait(false);
-                    if (frame == null)
-                        break; // transport closed / トランスポートが閉じられた
-
-                    string? response;
+                    // The full read/process/write iteration is wrapped in the same cancellation guard so
+                    // a Ctrl+C that lands mid-iteration (e.g. while WriteFrameAsync is flushing) still
+                    // exits the loop cleanly instead of bubbling OperationCanceledException out of the
+                    // server and past ProgramRunner.RunMcpHttp's graceful-shutdown handler.
+                    // Ctrl+C が WriteFrameAsync flush 中に来ても OperationCanceledException を呼び元に
+                    // 漏らさず正常終了するよう、read/process/write 全体を同じ cancellation guard で囲む。
                     try
                     {
-                        // Hand the per-request token to `WithDbReader` so SQLite work the tool kicks
-                        // off can observe shutdown / client-disconnect cancellation through
-                        // `DbReader.Cancellation` (#1567).
-                        // ツールが起動する SQLite 作業が shutdown / 切断を観測できるよう per-request
-                        // token を `WithDbReader` に渡す (#1567)。
-                        _currentRequestToken.Value = loopToken;
-                        _currentOutOfBandFrameWriter.Value = transport is IOutOfBandMcpTransport outOfBandTransport
-                            ? (frameToWrite, writeToken) => outOfBandTransport.WriteOutOfBandFrameAsync(frameToWrite, writeToken)
-                            : null;
-                        _canAwaitClientResponses.Value = transport is IOutOfBandMcpTransport
-                            && (transport is not HttpMcpTransport httpResponseTransport || httpResponseTransport.HasEventStreams);
-                        BeginDeferredFrameLogs();
-                        response = await ProcessFrameAsync(frame).ConfigureAwait(false);
+                        var frame = await transport.ReadFrameAsync(loopToken).ConfigureAwait(false);
+                        if (frame == null)
+                            break; // transport closed / トランスポートが閉じられた
+
+                        string? response;
+                        try
+                        {
+                            // Hand the per-request token to `WithDbReader` so SQLite work the tool kicks
+                            // off can observe shutdown / client-disconnect cancellation through
+                            // `DbReader.Cancellation` (#1567).
+                            // ツールが起動する SQLite 作業が shutdown / 切断を観測できるよう per-request
+                            // token を `WithDbReader` に渡す (#1567)。
+                            _currentRequestToken.Value = loopToken;
+                            _currentOutOfBandFrameWriter.Value = transport is IOutOfBandMcpTransport outOfBandTransport
+                                ? (frameToWrite, writeToken) => outOfBandTransport.WriteOutOfBandFrameAsync(frameToWrite, writeToken)
+                                : null;
+                            _canAwaitClientResponses.Value = transport is IOutOfBandMcpTransport
+                                && (transport is not HttpMcpTransport httpResponseTransport || httpResponseTransport.HasEventStreams);
+                            BeginDeferredFrameLogs();
+                            response = await ProcessFrameAsync(frame).ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            _currentRequestToken.Value = CancellationToken.None;
+                            _currentOutOfBandFrameWriter.Value = null;
+                            _canAwaitClientResponses.Value = false;
+                        }
+
+                        // Internal shutdown cancels `loopToken` to stop reads and request actions, but
+                        // the initiating notification still owns one transport completion (HTTP 204).
+                        // Use only the caller token for that completion; bounded teardown below still
+                        // limits a writer that does not finish (#4543).
+                        // internal shutdown では read/action 用 loopToken を cancel するが、起点の
+                        // notification に対応する transport completion (HTTP 204) は完了させる。
+                        // write は caller token のみを使い、停止しない writer は下の bounded teardown
+                        // で制限する (#4543)。
+                        var responseWriteTask = WriteFrameSafelyAsync(transport, response, cancellationToken);
+                        if (!_running)
+                        {
+                            // Do not await an uncooperative base-transport shutdown completion inline:
+                            // the common finally must own its bounded deadline (#4543).
+                            // 応答しない base transport の shutdown completion を inline await せず、
+                            // common finally の bounded deadline に委ねる (#4543)。
+                            terminalTransportWriteTask = responseWriteTask;
+                            break;
+                        }
+
+                        await responseWriteTask.ConfigureAwait(false);
+                        FlushDeferredFrameLogs();
+
+                        // `notifications/shutdown` flips `_running` inside `HandleMessage`; exit the loop
+                        // immediately so a subsequent slow `ReadFrameAsync` does not extend the lifetime
+                        // of a server that has been asked to stop.
+                        // `notifications/shutdown` が `_running` を倒した直後にループを抜ける (#1567)。
+                        if (!_running)
+                            break;
                     }
-                    finally
+                    catch (OperationCanceledException) when (loopToken.IsCancellationRequested)
                     {
-                        _currentRequestToken.Value = CancellationToken.None;
-                        _currentOutOfBandFrameWriter.Value = null;
-                        _canAwaitClientResponses.Value = false;
-                    }
-
-                    await WriteFrameSafelyAsync(transport, response, loopToken).ConfigureAwait(false);
-                    FlushDeferredFrameLogs();
-
-                    // `notifications/shutdown` flips `_running` inside `HandleMessage`; exit the loop
-                    // immediately so a subsequent slow `ReadFrameAsync` does not extend the lifetime
-                    // of a server that has been asked to stop.
-                    // `notifications/shutdown` が `_running` を倒した直後にループを抜ける (#1567)。
-                    if (!_running)
                         break;
+                    }
+                    catch (DecoderFallbackException ex)
+                    {
+                        BeginDeferredFrameLogs();
+                        terminalTransportWriteTask = WriteTerminalProtocolErrorAsync(
+                            writeGate: null,
+                            transport,
+                            BuildInvalidUtf8ParseErrorResponse(ex),
+                            cancellationToken);
+                        break;
+                    }
+                    catch (BoundedLineLengthException ex)
+                    {
+                        BeginDeferredFrameLogs();
+                        terminalTransportWriteTask = WriteTerminalProtocolErrorAsync(
+                            writeGate: null,
+                            transport,
+                            BuildOversizedLineErrorResponse(ex),
+                            cancellationToken);
+                        break;
+                    }
                 }
-                catch (OperationCanceledException) when (loopToken.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (DecoderFallbackException ex)
-                {
-                    BeginDeferredFrameLogs();
-                    await WriteFrameSafelyAsync(transport, BuildInvalidUtf8ParseErrorResponse(ex), loopToken).ConfigureAwait(false);
-                    FlushDeferredFrameLogs();
-                    break;
-                }
-                catch (BoundedLineLengthException ex)
-                {
-                    BeginDeferredFrameLogs();
-                    await WriteFrameSafelyAsync(transport, BuildOversizedLineErrorResponse(ex), loopToken).ConfigureAwait(false);
-                    FlushDeferredFrameLogs();
-                    break;
-                }
+            }
+            finally
+            {
+                // Base transports have no detached request list, but shutdown cancellation
+                // callbacks and malformed-input writes still participate in the same bounded
+                // teardown contract as concurrent transports (#4543).
+                // base transport に detached request list は無いが、shutdown callback と
+                // malformed-input write は concurrent transport と同じ bounded teardown
+                // 契約へ必ず流す (#4543)。
+                await DrainInFlightTasksAsync(
+                    [],
+                    InFlightDrainGracePeriod,
+                    InFlightPostCancelGracePeriod,
+                    cancellationToken,
+                    terminalTransportWriteTask).ConfigureAwait(false);
+                FlushDeferredFrameLogs();
             }
         }
         finally
@@ -613,239 +680,269 @@ public partial class McpServer : IDisposable
         CommandErrorWriter.WriteStderr("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
     }
 
-    private async Task RunConcurrentFrameLoopAsync(IMcpTransport transport, CancellationToken loopToken)
+    private async Task RunConcurrentFrameLoopAsync(
+        IMcpTransport transport,
+        CancellationToken loopToken,
+        CancellationToken externalCancellationToken)
     {
         var writeGate = new SemaphoreSlim(1, 1);
         var admissionGate = new SemaphoreSlim(MaxAcceptedConcurrentFrames, MaxAcceptedConcurrentFrames);
         var tasks = new List<Task>();
         Task protocolBarrier = Task.CompletedTask;
+        Task? terminalTransportWriteTask = null;
 
-        while (_running)
+        try
         {
-            PruneCompletedRequestTasks(tasks);
-            McpTransportFrame? transportFrame;
-            try
+            while (_running)
             {
-                if (transport is IConcurrentMcpTransport concurrentTransport)
-                {
-                    transportFrame = await concurrentTransport.ReadConcurrentFrameAsync(loopToken).ConfigureAwait(false);
-                }
-                else
-                {
-                    var readFrame = await transport.ReadFrameAsync(loopToken).ConfigureAwait(false);
-                    transportFrame = readFrame is null
-                        ? null
-                        : new McpTransportFrame(readFrame, transport.WriteFrameAsync);
-                }
-            }
-            catch (OperationCanceledException) when (loopToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (DecoderFallbackException ex)
-            {
-                await Task.WhenAll(tasks).ConfigureAwait(false);
-                await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
+                PruneCompletedRequestTasks(tasks);
+                McpTransportFrame? transportFrame;
                 try
+                {
+                    if (transport is IConcurrentMcpTransport concurrentTransport)
+                    {
+                        transportFrame = await concurrentTransport.ReadConcurrentFrameAsync(loopToken).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        var readFrame = await transport.ReadFrameAsync(loopToken).ConfigureAwait(false);
+                        transportFrame = readFrame is null
+                            ? null
+                            : new McpTransportFrame(readFrame, transport.WriteFrameAsync);
+                    }
+                }
+                catch (OperationCanceledException) when (loopToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (DecoderFallbackException ex)
                 {
                     BeginDeferredFrameLogs();
-                    await WriteFrameSafelyAsync(transport, BuildInvalidUtf8ParseErrorResponse(ex), loopToken).ConfigureAwait(false);
-                    FlushDeferredFrameLogs();
+                    terminalTransportWriteTask = WriteTerminalProtocolErrorAsync(
+                        writeGate,
+                        transport,
+                        BuildInvalidUtf8ParseErrorResponse(ex),
+                        externalCancellationToken);
+                    break;
                 }
-                finally
-                {
-                    writeGate.Release();
-                }
-                break;
-            }
-            catch (BoundedLineLengthException ex)
-            {
-                await Task.WhenAll(tasks).ConfigureAwait(false);
-                await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
-                try
+                catch (BoundedLineLengthException ex)
                 {
                     BeginDeferredFrameLogs();
-                    await WriteFrameSafelyAsync(transport, BuildOversizedLineErrorResponse(ex), loopToken).ConfigureAwait(false);
-                    FlushDeferredFrameLogs();
+                    terminalTransportWriteTask = WriteTerminalProtocolErrorAsync(
+                        writeGate,
+                        transport,
+                        BuildOversizedLineErrorResponse(ex),
+                        externalCancellationToken);
+                    break;
                 }
-                finally
-                {
-                    writeGate.Release();
-                }
-                break;
-            }
-            if (transportFrame is null)
-                break;
-            var frame = transportFrame.Frame;
-            var writeResponseAsync = transportFrame.WriteResponseAsync;
+                if (transportFrame is null)
+                    break;
+                var frame = transportFrame.Frame;
+                var writeResponseAsync = transportFrame.WriteResponseAsync;
 
-            if (IsCancellationFrame(frame))
-            {
-                BeginDeferredFrameLogs();
-                var response = await ProcessFrameAsync(frame).ConfigureAwait(false);
-                await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
-                try
+                if (IsCancellationFrame(frame))
                 {
-                    await WriteFrameSafelyAsync(writeResponseAsync, response, loopToken).ConfigureAwait(false);
-                    FlushDeferredFrameLogs();
-                }
-                finally
-                {
-                    writeGate.Release();
-                }
-                continue;
-            }
-
-            if (IsServerResponseFrame(frame))
-            {
-                BeginDeferredFrameLogs();
-                var response = await ProcessFrameAsync(frame).ConfigureAwait(false);
-                await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
-                try
-                {
-                    await WriteFrameSafelyAsync(writeResponseAsync, response, loopToken).ConfigureAwait(false);
-                    FlushDeferredFrameLogs();
-                }
-                finally
-                {
-                    writeGate.Release();
-                }
-                continue;
-            }
-
-            // Admission is deliberately non-blocking: waiting here would prevent a later
-            // cancellation/client-response frame from being read while execution is saturated.
-            // Excess ordinary work receives a retry-safe JSON-RPC overload response instead of
-            // retaining another frame/task/HTTP context without bound (#4536).
-            // admission は non-blocking にする。ここで待つと execution 飽和中に後続の
-            // cancellation/client-response frame を読めなくなるため。上限超過 work は task や
-            // HTTP context を保持し続けず、retry-safe overload response を返す (#4536)。
-            if (!admissionGate.Wait(0))
-            {
-                BeginDeferredFrameLogs();
-                var response = await ProcessFrameAsync(
-                    frame,
-                    beforeDispatchAsync: null,
-                    rejectForCapacity: true).ConfigureAwait(false);
-                await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
-                try
-                {
-                    await WriteFrameSafelyAsync(writeResponseAsync, response, loopToken).ConfigureAwait(false);
-                    FlushDeferredFrameLogs();
-                }
-                finally
-                {
-                    writeGate.Release();
-                }
-                continue;
-            }
-            Interlocked.Increment(ref _acceptedConcurrentFrameCount);
-
-            var requestTaskStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var isProtocolBarrier = IsProtocolOrderingBarrierFrame(frame);
-            var precedingBarrier = protocolBarrier;
-            var tasksAcceptedBeforeBarrier = isProtocolBarrier ? tasks.ToArray() : [];
-            Func<CancellationToken, Task> awaitPredecessorsAsync = isProtocolBarrier
-                ? token => AwaitProtocolPredecessorsAsync(tasksAcceptedBeforeBarrier, token)
-                : token => AwaitProtocolPredecessorsAsync([precedingBarrier], token);
-            var predecessorTask = new Lazy<Task>(
-                () => awaitPredecessorsAsync(loopToken),
-                LazyThreadSafetyMode.ExecutionAndPublication);
-            Task BeforeDispatchAsync(CancellationToken token)
-                => predecessorTask.Value.WaitAsync(token);
-            // Accepted frames are bounded independently from executing operations. The request
-            // registers its id/cancellation state before awaiting protocol predecessors and the
-            // execution gate, so a cancellation cannot expire while queued (#4536).
-            // accepted frame と executing operation は別々に上限化する。request は protocol
-            // predecessor / execution gate を待つ前に id と cancellation state を登録するため、
-            // queue 中に cancellation が失効しない (#4536)。
-            var requestTask = Task.Run(async () =>
-            {
-                try
-                {
-                    requestTaskStarted.TrySetResult();
-                    string? response;
+                    BeginDeferredFrameLogs();
+                    var response = await ProcessFrameAsync(frame).ConfigureAwait(false);
+                    await writeGate.WaitAsync(externalCancellationToken).ConfigureAwait(false);
                     try
                     {
-                        _currentRequestToken.Value = loopToken;
-                        _currentOutOfBandFrameWriter.Value = transport is IOutOfBandMcpTransport outOfBandTransport
-                            ? (frameToWrite, writeToken) => outOfBandTransport.WriteOutOfBandFrameAsync(frameToWrite, writeToken)
-                            : string.Equals(transport.Name, "stdio", StringComparison.OrdinalIgnoreCase)
-                                ? async (frameToWrite, writeToken) =>
-                            {
-                                await writeGate.WaitAsync(writeToken).ConfigureAwait(false);
-                                try
-                                {
-                                    await transport.WriteFrameAsync(frameToWrite, writeToken).ConfigureAwait(false);
-                                }
-                                finally
-                                {
-                                    writeGate.Release();
-                                }
-                            }
-                        : null;
-                        _canAwaitClientResponses.Value = _currentOutOfBandFrameWriter.Value is not null
-                            && (transport is not HttpMcpTransport httpResponseTransport || httpResponseTransport.HasEventStreams);
-                        BeginDeferredFrameLogs();
-                        response = await ProcessFrameAsync(
-                            frame,
-                            BeforeDispatchAsync,
-                            rejectForCapacity: false).ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        _currentRequestToken.Value = CancellationToken.None;
-                        _canAwaitClientResponses.Value = false;
-                        _currentOutOfBandFrameWriter.Value = null;
-                    }
-
-                    // Malformed/unauthorized frames can return before normal dispatch. Start their
-                    // predecessor wait here so such a frame cannot collapse a protocol barrier.
-                    // malformed / unauthorized frame が dispatch 前に return しても protocol
-                    // barrier を消してしまわないよう、未開始ならここで predecessor を待つ。
-                    if (!predecessorTask.IsValueCreated)
-                        await predecessorTask.Value.ConfigureAwait(false);
-
-                    await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
-                    try
-                    {
-                        await WriteFrameSafelyAsync(writeResponseAsync, response, loopToken).ConfigureAwait(false);
+                        await WriteFrameSafelyAsync(writeResponseAsync, response, externalCancellationToken).ConfigureAwait(false);
                         FlushDeferredFrameLogs();
                     }
                     finally
                     {
                         writeGate.Release();
                     }
-                    await predecessorTask.Value.ConfigureAwait(false);
+                    continue;
                 }
-                finally
-                {
-                    Interlocked.Decrement(ref _acceptedConcurrentFrameCount);
-                    admissionGate.Release();
-                }
-            }, CancellationToken.None);
-            tasks.Add(requestTask);
-            if (isProtocolBarrier)
-                protocolBarrier = requestTask;
-            await requestTaskStarted.Task.ConfigureAwait(false);
-        }
 
-        await DrainInFlightTasksAsync(tasks, DefaultEofDrainTimeout, DefaultEofPostCancelDrainTimeout, loopToken, drainToCompletion: true).ConfigureAwait(false);
-        if (tasks.All(static task => task.IsCompleted))
+                if (IsServerResponseFrame(frame))
+                {
+                    BeginDeferredFrameLogs();
+                    var response = await ProcessFrameAsync(frame).ConfigureAwait(false);
+                    await writeGate.WaitAsync(externalCancellationToken).ConfigureAwait(false);
+                    try
+                    {
+                        await WriteFrameSafelyAsync(writeResponseAsync, response, externalCancellationToken).ConfigureAwait(false);
+                        FlushDeferredFrameLogs();
+                    }
+                    finally
+                    {
+                        writeGate.Release();
+                    }
+                    continue;
+                }
+
+                // Admission is deliberately non-blocking: waiting here would prevent a later
+                // cancellation/client-response frame from being read while execution is saturated.
+                // Excess ordinary work receives a retry-safe JSON-RPC overload response instead of
+                // retaining another frame/task/HTTP context without bound (#4536).
+                // admission は non-blocking にする。ここで待つと execution 飽和中に後続の
+                // cancellation/client-response frame を読めなくなるため。上限超過 work は task や
+                // HTTP context を保持し続けず、retry-safe overload response を返す (#4536)。
+                if (!admissionGate.Wait(0))
+                {
+                    BeginDeferredFrameLogs();
+                    var response = await ProcessFrameAsync(
+                        frame,
+                        beforeDispatchAsync: null,
+                        rejectForCapacity: true).ConfigureAwait(false);
+                    await writeGate.WaitAsync(externalCancellationToken).ConfigureAwait(false);
+                    try
+                    {
+                        await WriteFrameSafelyAsync(writeResponseAsync, response, externalCancellationToken).ConfigureAwait(false);
+                        FlushDeferredFrameLogs();
+                    }
+                    finally
+                    {
+                        writeGate.Release();
+                    }
+                    continue;
+                }
+                Interlocked.Increment(ref _acceptedConcurrentFrameCount);
+
+                var requestTaskStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var isProtocolBarrier = IsProtocolOrderingBarrierFrame(frame);
+                var precedingBarrier = protocolBarrier;
+                var tasksAcceptedBeforeBarrier = isProtocolBarrier ? tasks.ToArray() : [];
+                Func<CancellationToken, Task> awaitPredecessorsAsync = isProtocolBarrier
+                    ? token => AwaitProtocolPredecessorsAsync(tasksAcceptedBeforeBarrier, token)
+                    : token => AwaitProtocolPredecessorsAsync([precedingBarrier], token);
+                var predecessorTask = new Lazy<Task>(
+                    () => awaitPredecessorsAsync(loopToken),
+                    LazyThreadSafetyMode.ExecutionAndPublication);
+                Task BeforeDispatchAsync(CancellationToken token)
+                    => predecessorTask.Value.WaitAsync(token);
+                // Accepted frames are bounded independently from executing operations. The request
+                // registers its id/cancellation state before awaiting protocol predecessors and the
+                // execution gate, so a cancellation cannot expire while queued (#4536).
+                // accepted frame と executing operation は別々に上限化する。request は protocol
+                // predecessor / execution gate を待つ前に id と cancellation state を登録するため、
+                // queue 中に cancellation が失効しない (#4536)。
+                var requestTask = Task.Run(async () =>
+                {
+                    try
+                    {
+                        requestTaskStarted.TrySetResult();
+                        string? response;
+                        try
+                        {
+                            _currentRequestToken.Value = loopToken;
+                            _currentOutOfBandFrameWriter.Value = transport is IOutOfBandMcpTransport outOfBandTransport
+                                ? (frameToWrite, writeToken) => outOfBandTransport.WriteOutOfBandFrameAsync(frameToWrite, writeToken)
+                                : string.Equals(transport.Name, "stdio", StringComparison.OrdinalIgnoreCase)
+                                    ? async (frameToWrite, writeToken) =>
+                                {
+                                    await writeGate.WaitAsync(writeToken).ConfigureAwait(false);
+                                    try
+                                    {
+                                        await transport.WriteFrameAsync(frameToWrite, writeToken).ConfigureAwait(false);
+                                    }
+                                    finally
+                                    {
+                                        writeGate.Release();
+                                    }
+                                }
+                            : null;
+                            _canAwaitClientResponses.Value = _currentOutOfBandFrameWriter.Value is not null
+                                && (transport is not HttpMcpTransport httpResponseTransport || httpResponseTransport.HasEventStreams);
+                            BeginDeferredFrameLogs();
+                            response = await ProcessFrameAsync(
+                                frame,
+                                BeforeDispatchAsync,
+                                rejectForCapacity: false).ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            _currentRequestToken.Value = CancellationToken.None;
+                            _canAwaitClientResponses.Value = false;
+                            _currentOutOfBandFrameWriter.Value = null;
+                        }
+
+                        // Malformed/unauthorized frames can return before normal dispatch. Start their
+                        // predecessor wait here so such a frame cannot collapse a protocol barrier.
+                        // malformed / unauthorized frame が dispatch 前に return しても protocol
+                        // barrier を消してしまわないよう、未開始ならここで predecessor を待つ。
+                        if (!predecessorTask.IsValueCreated)
+                            await predecessorTask.Value.ConfigureAwait(false);
+
+                        await writeGate.WaitAsync(externalCancellationToken).ConfigureAwait(false);
+                        try
+                        {
+                            await WriteFrameSafelyAsync(writeResponseAsync, response, externalCancellationToken).ConfigureAwait(false);
+                            FlushDeferredFrameLogs();
+                        }
+                        finally
+                        {
+                            writeGate.Release();
+                        }
+                        await predecessorTask.Value.ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        Interlocked.Decrement(ref _acceptedConcurrentFrameCount);
+                        admissionGate.Release();
+                    }
+                }, CancellationToken.None);
+                tasks.Add(requestTask);
+                if (isProtocolBarrier)
+                    protocolBarrier = requestTask;
+                await requestTaskStarted.Task.ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (loopToken.IsCancellationRequested)
+        {
+            // Every loop exit, including cancellation during inline control/overload writes,
+            // reaches the bounded drain in finally (#4543).
+        }
+        finally
+        {
+            try
+            {
+                await DrainInFlightTasksAsync(
+                    tasks,
+                    InFlightDrainGracePeriod,
+                    InFlightPostCancelGracePeriod,
+                    externalCancellationToken,
+                    terminalTransportWriteTask).ConfigureAwait(false);
+            }
+            finally
+            {
+                // The bounded EOF drain can intentionally leave late request tasks running. Those
+                // tasks can still own the write gate or reach the stdio writer until their finally
+                // blocks run. Publish that aggregate even if draining itself exits unexpectedly,
+                // then clean up the gates only after every accepted task is done (#3999, #4543).
+                // bounded EOF drain は late request task を残すことがある。finally が走るまで gate や
+                // stdio writer を使い得るため、drain 自体が異常終了しても aggregate を公開し、全
+                // accepted task 完了後に gate を dispose する (#3999, #4543)。
+                var transportWork = BuildDrainOperationsTask(tasks, terminalTransportWriteTask);
+                if (transport is StdioMcpTransport stdioTransport)
+                    stdioTransport.DeferDisposalUntil(transportWork);
+                _ = DisposeConcurrentLoopGatesAfterAsync(transportWork, writeGate, admissionGate);
+            }
+        }
+        CommandErrorWriter.WriteStderr("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
+    }
+
+    private static async Task DisposeConcurrentLoopGatesAfterAsync(
+        Task transportWork,
+        SemaphoreSlim writeGate,
+        SemaphoreSlim admissionGate)
+    {
+        try
+        {
+            await transportWork.ConfigureAwait(false);
+        }
+        catch
+        {
+            // Request faults are reported by the bounded drain; gate cleanup must still run.
+        }
+        finally
         {
             writeGate.Dispose();
             admissionGate.Dispose();
         }
-        else
-        {
-            // The bounded EOF drain can intentionally leave late request tasks running. Those
-            // tasks can still own the write gate until their finally blocks run, so disposing here would
-            // turn late completion into ObjectDisposedException (#3999).
-            // bounded EOF drain は late request task を残すことがある。finally が走るまで write gate は
-            // その task が使うため、ここで dispose すると late completion が ObjectDisposedException
-            // になってしまう (#3999)。
-        }
-        CommandErrorWriter.WriteStderr("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
     }
 
     internal static int PruneCompletedRequestTasks(List<Task> tasks)
@@ -876,7 +973,7 @@ public partial class McpServer : IDisposable
         }
         catch (Exception ex)
         {
-            CommandErrorWriter.WriteStderr($"[cdidx-mcp] In-flight request ended before EOF drain ({ex.GetType().Name}).");
+            CommandErrorWriter.WriteStderr($"[cdidx-mcp] In-flight request ended during transport teardown ({ex.GetType().Name}).");
         }
     }
 
@@ -904,64 +1001,256 @@ public partial class McpServer : IDisposable
         }
     }
 
+    private async Task WriteTerminalProtocolErrorAsync(
+        SemaphoreSlim? writeGate,
+        IMcpTransport transport,
+        string response,
+        CancellationToken cancellationToken)
+    {
+        var gateAcquired = false;
+        try
+        {
+            if (writeGate is not null)
+            {
+                await writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                gateAcquired = true;
+            }
+
+            await WriteFrameSafelyAsync(transport, response, cancellationToken).ConfigureAwait(false);
+            FlushDeferredFrameLogs();
+        }
+        finally
+        {
+            if (gateAcquired)
+                writeGate!.Release();
+        }
+    }
+
     internal async Task DrainInFlightTasksAsync(
         List<Task> tasks,
         TimeSpan gracePeriod,
         TimeSpan postCancelGracePeriod,
-        CancellationToken cancellationToken = default,
-        bool drainToCompletion = false)
+        CancellationToken externalCancellationToken = default,
+        Task? terminalTransportWriteTask = null)
     {
-        tasks.RemoveAll(task => task.IsCompleted);
-        if (tasks.Count == 0)
-            return;
+        PruneCompletedRequestTasks(tasks);
+        var shutdownCancellationTask = GetShutdownCancellationTask();
+        var drainOperations = BuildDrainOperationsTask(tasks, terminalTransportWriteTask);
 
-        var allTasks = Task.WhenAll(tasks);
-        if (drainToCompletion && !cancellationToken.IsCancellationRequested)
+        // A shutdown notification may already have started cancellation before EOF reached this
+        // method. In that case the post-cancel deadline begins immediately and includes callback
+        // completion; running another pre-cancel grace window would extend teardown incorrectly.
+        // shutdown notification が EOF より先に cancellation を開始済みなら、callback 完了も
+        // post-cancel deadline に含め、pre-cancel grace を重ねない (#4543)。
+        if (shutdownCancellationTask is not null)
         {
-            await ObserveInFlightTasksAsync(allTasks).ConfigureAwait(false);
+            await AwaitPostCancellationDrainAsync(
+                tasks,
+                drainOperations,
+                terminalTransportWriteTask,
+                shutdownCancellationTask,
+                postCancelGracePeriod,
+                externalCancellationToken).ConfigureAwait(false);
             return;
         }
-        var graceDelay = Task.Delay(gracePeriod, cancellationToken);
-        var completed = await Task.WhenAny(allTasks, graceDelay).ConfigureAwait(false);
-        if (completed == allTasks)
+
+        if (drainOperations.IsCompleted)
         {
-            await ObserveInFlightTasksAsync(allTasks).ConfigureAwait(false);
+            await ObserveCompletedDrainAndShutdownAsync(
+                tasks,
+                drainOperations,
+                terminalTransportWriteTask,
+                postCancelGracePeriod,
+                externalCancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var graceDelay = Task.Delay(gracePeriod, externalCancellationToken);
+        var completed = await Task.WhenAny(drainOperations, graceDelay).ConfigureAwait(false);
+        if (completed == drainOperations)
+        {
+            await ObserveCompletedDrainAndShutdownAsync(
+                tasks,
+                drainOperations,
+                terminalTransportWriteTask,
+                postCancelGracePeriod,
+                externalCancellationToken).ConfigureAwait(false);
             return;
         }
         if (graceDelay.IsCanceled)
+        {
+            ObserveLateInFlightTasks(drainOperations);
             return;
+        }
 
         PruneCompletedRequestTasks(tasks);
-        CommandErrorWriter.WriteStderr($"[cdidx-mcp] EOF reached with {tasks.Count} in-flight request(s); cancelling after {gracePeriod.TotalMilliseconds:0}ms grace period.");
-        try
+        if (tasks.Count > 0)
         {
-            if (!_shutdownCts.IsCancellationRequested)
-                _shutdownCts.Cancel();
+            CommandErrorWriter.WriteStderr(
+                $"[cdidx-mcp] Transport teardown has {tasks.Count} in-flight request(s); cancelling after {gracePeriod.TotalMilliseconds:0}ms grace period.");
         }
-        catch (ObjectDisposedException)
+        if (terminalTransportWriteTask is { IsCompleted: false })
         {
-            // Disposal raced EOF drain; no further action is possible.
+            CommandErrorWriter.WriteStderr(
+                $"[cdidx-mcp] Transport response/completion write is still pending after {gracePeriod.TotalMilliseconds:0}ms grace period; cancelling transport teardown.");
         }
 
-        var postCancelDelay = Task.Delay(postCancelGracePeriod, cancellationToken);
-        completed = await Task.WhenAny(allTasks, postCancelDelay).ConfigureAwait(false);
-        if (completed == allTasks)
+        shutdownCancellationTask = RequestShutdownCancellation();
+        await AwaitPostCancellationDrainAsync(
+            tasks,
+            drainOperations,
+            terminalTransportWriteTask,
+            shutdownCancellationTask,
+            postCancelGracePeriod,
+            externalCancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task ObserveCompletedDrainAndShutdownAsync(
+        List<Task> tasks,
+        Task drainOperations,
+        Task? terminalTransportWriteTask,
+        TimeSpan postCancelGracePeriod,
+        CancellationToken externalCancellationToken)
+    {
+        await ObserveInFlightTasksAsync(drainOperations).ConfigureAwait(false);
+
+        // A queued shutdown frame can start cancellation while the request drain is completing.
+        // Re-read the task after all accepted work has finished; the original snapshot may have
+        // been null even though a slow cancellation callback is now running (#4543).
+        // queued shutdown frame は request drain 完了直前に cancellation を開始できるため、accepted
+        // work 完了後に task を再取得する。初回 snapshot が null でも slow callback が実行中の
+        // race を bounded post-cancel deadline へ含める (#4543)。
+        var shutdownCancellationTask = GetShutdownCancellationTask();
+        if (shutdownCancellationTask is null)
+            return;
+
+        await AwaitPostCancellationDrainAsync(
+            tasks,
+            drainOperations,
+            terminalTransportWriteTask,
+            shutdownCancellationTask,
+            postCancelGracePeriod,
+            externalCancellationToken).ConfigureAwait(false);
+    }
+
+    private static Task BuildDrainOperationsTask(IReadOnlyCollection<Task> tasks, Task? terminalTransportWriteTask)
+    {
+        if (terminalTransportWriteTask is null)
+            return tasks.Count == 0 ? Task.CompletedTask : Task.WhenAll(tasks);
+
+        var operations = new Task[tasks.Count + 1];
+        var operationIndex = 0;
+        foreach (var task in tasks)
+            operations[operationIndex++] = task;
+        operations[^1] = terminalTransportWriteTask;
+        return Task.WhenAll(operations);
+    }
+
+    private async Task AwaitPostCancellationDrainAsync(
+        List<Task> tasks,
+        Task drainOperations,
+        Task? terminalTransportWriteTask,
+        Task shutdownCancellationTask,
+        TimeSpan postCancelGracePeriod,
+        CancellationToken externalCancellationToken)
+    {
+        // Internal shutdown cancels the linked loop token. Use the original caller token so it
+        // cannot collapse this deadline, while Ctrl+C/SIGTERM/transport cancellation can still
+        // interrupt it (#3400, #4543).
+        // internal shutdown では post-cancel deadline を潰さず、外部 cancellation では中断可能にする。
+        var postCancelWork = Task.WhenAll(drainOperations, shutdownCancellationTask);
+        var postCancelDelay = Task.Delay(postCancelGracePeriod, externalCancellationToken);
+        var completed = await Task.WhenAny(postCancelWork, postCancelDelay).ConfigureAwait(false);
+        if (completed == postCancelWork)
         {
-            await ObserveInFlightTasksAsync(allTasks).ConfigureAwait(false);
+            await ObserveInFlightTasksAsync(drainOperations).ConfigureAwait(false);
+            _ = shutdownCancellationTask.Exception;
             return;
         }
         if (postCancelDelay.IsCanceled)
+        {
+            ObserveLateInFlightTasks(postCancelWork);
             return;
+        }
 
-        // The shutdown token is already canceled in this path. Use an uncancelled observer so
-        // late task faults are still observed after the client-visible drain window (#3774).
-        // この経路では shutdown token はキャンセル済み。client-visible な drain window 後でも
-        // late fault を観測できるよう、未キャンセルの observer を使う (#3774)。
-        _ = allTasks.ContinueWith(task =>
+        PruneCompletedRequestTasks(tasks);
+        if (tasks.Count > 0)
+        {
+            CommandErrorWriter.WriteStderr(
+                $"[cdidx-mcp] Transport teardown final deadline expired with {tasks.Count} in-flight request(s) remaining after {postCancelGracePeriod.TotalMilliseconds:0}ms post-cancel grace period.");
+        }
+        if (terminalTransportWriteTask is { IsCompleted: false })
+        {
+            CommandErrorWriter.WriteStderr(
+                $"[cdidx-mcp] Transport response/completion write is still pending after {postCancelGracePeriod.TotalMilliseconds:0}ms post-cancel grace period.");
+        }
+        if (!shutdownCancellationTask.IsCompleted)
+        {
+            CommandErrorWriter.WriteStderr(
+                $"[cdidx-mcp] Shutdown cancellation callbacks are still running after {postCancelGracePeriod.TotalMilliseconds:0}ms post-cancel grace period.");
+        }
+
+        // Use an uncancelled observer so late faults are still observed after the bounded,
+        // client-visible drain window (#3774, #4543).
+        // bounded drain window 後の late fault も未キャンセル observer で観測する。
+        ObserveLateInFlightTasks(postCancelWork);
+    }
+
+    private Task? GetShutdownCancellationTask()
+    {
+        lock (_shutdownCancellationGate)
+            return _shutdownCancellationTask;
+    }
+
+    private Task RequestShutdownCancellation()
+    {
+        TaskCompletionSource completion;
+        lock (_shutdownCancellationGate)
+        {
+            if (_shutdownCancellationTask is not null)
+                return _shutdownCancellationTask;
+
+            completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _shutdownCancellationTask = completion.Task;
+        }
+
+        _ = CompleteShutdownCancellationAsync(completion);
+        return completion.Task;
+    }
+
+    private async Task CompleteShutdownCancellationAsync(TaskCompletionSource completion)
+    {
+        try
+        {
+            await _shutdownCts.CancelAsync().ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposal won the race; cancellation can no longer be requested.
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                CommandErrorWriter.WriteStderr(
+                    $"[cdidx-mcp] Shutdown cancellation callback failed during transport teardown ({ex.GetType().Name}).");
+            }
+            catch
+            {
+                // Diagnostics must never abort bounded teardown.
+            }
+        }
+        finally
+        {
+            completion.TrySetResult();
+        }
+    }
+
+    private static void ObserveLateInFlightTasks(Task tasks)
+        => _ = tasks.ContinueWith(task =>
         {
             _ = task.Exception;
         }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-    }
 
     private static async Task ObserveInFlightTasksAsync(Task tasks)
     {
@@ -971,7 +1260,7 @@ public partial class McpServer : IDisposable
         }
         catch (Exception ex)
         {
-            CommandErrorWriter.WriteStderr($"[cdidx-mcp] In-flight request ended during EOF drain ({ex.GetType().Name}).");
+            CommandErrorWriter.WriteStderr($"[cdidx-mcp] In-flight request ended during transport teardown ({ex.GetType().Name}).");
         }
     }
 
@@ -1574,25 +1863,16 @@ public partial class McpServer : IDisposable
         // listener stop), which races with in-flight work and forces clients to send SIGINT.
         // Treating both `notifications/shutdown` (the MCP spec-aligned name) and the legacy
         // LSP-style `notifications/exit` alias as graceful-stop signals lets clients drain the
-        // current request and exit cleanly. Cancelling `_shutdownCts` unblocks any pending
-        // `ReadFrameAsync` in the loop.
-        // JSON-RPC 通知による graceful shutdown (#1567)。`_shutdownCts.Cancel()` でループ側の
-        // `ReadFrameAsync` を unblock し、`_running = false` で次のイテレーション開始を抑止する。
+        // current request and exit cleanly. Asynchronous cancellation unblocks any pending
+        // `ReadFrameAsync` without letting a slow user callback hold the dispatch thread (#4543).
+        // JSON-RPC 通知による graceful shutdown (#1567)。非同期 cancellation で slow callback に
+        // dispatch thread を塞がせず `ReadFrameAsync` を unblock する (#4543)。
         if (string.Equals(method, "notifications/shutdown", StringComparison.Ordinal)
             || string.Equals(method, "notifications/exit", StringComparison.Ordinal))
         {
             WriteMcpLogLine($"[cdidx-mcp] Received {method}; draining in-flight work and shutting down.");
             _running = false;
-            try
-            {
-                if (!_shutdownCts.IsCancellationRequested)
-                    _shutdownCts.Cancel();
-            }
-            catch (ObjectDisposedException)
-            {
-                // Server is already disposing — nothing more to cancel.
-                // dispose 中なので追加 cancel は不要。
-            }
+            _ = RequestShutdownCancellation();
             return null;
         }
 
@@ -4111,19 +4391,33 @@ public partial class McpServer : IDisposable
             return;
         _disposed = true;
         CloseSharedDb();
-        try
+        var shutdownCancellationTask = RequestShutdownCancellation();
+        if (shutdownCancellationTask.IsCompleted)
         {
-            if (!_shutdownCts.IsCancellationRequested)
-                _shutdownCts.Cancel();
+            DisposeShutdownCtsOnce();
         }
-        catch (ObjectDisposedException)
+        else
         {
-            // already disposed / 既に dispose 済み
+            _ = shutdownCancellationTask.ContinueWith(
+                static (_, state) => ((McpServer)state!).DisposeShutdownCtsOnce(),
+                this,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
         }
-        _shutdownCts.Dispose();
-        _concurrencyGate.Dispose();
+        // Bounded transport teardown can intentionally leave a late task that still releases
+        // this gate. As with `_sharedDbWriteGate`, keep the managed semaphore undisposed so
+        // eventual completion cannot fail with ObjectDisposedException (#3999, #4543).
+        // bounded transport teardown 後も late task がこの gate を release し得るため、
+        // `_sharedDbWriteGate` と同様に dispose せず、遅延完了時の例外を防ぐ (#3999, #4543)。
         _textWriterGate.Dispose();
         GC.SuppressFinalize(this);
+    }
+
+    private void DisposeShutdownCtsOnce()
+    {
+        if (Interlocked.Exchange(ref _shutdownCtsDisposed, 1) == 0)
+            _shutdownCts.Dispose();
     }
 
     // --- JSON-RPC helpers / JSON-RPCヘルパー ---

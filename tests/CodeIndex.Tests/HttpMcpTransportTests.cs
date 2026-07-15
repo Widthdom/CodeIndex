@@ -884,6 +884,24 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_ShutdownNotificationCompletesItsOwnPostBeforeLoopExit_Issue4543()
+    {
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+        using (var initialize = await harness.PostJsonAsync(
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"""))
+        {
+            Assert.Equal(HttpStatusCode.OK, initialize.StatusCode);
+        }
+
+        using var shutdown = await harness.PostJsonAsync(
+                """{"jsonrpc":"2.0","method":"notifications/shutdown"}""")
+            .WaitAsync(TestDeterminism.DefaultTimeout);
+
+        Assert.Equal(HttpStatusCode.NoContent, shutdown.StatusCode);
+        await harness.WaitForServerLoopAsync();
+    }
+
+    [Fact]
     public async Task HttpTransport_NonOutOfBandPayloads_AreQueuedForNormalHandling_Issue3711()
     {
         var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");

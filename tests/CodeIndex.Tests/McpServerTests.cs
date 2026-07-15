@@ -160,20 +160,19 @@ public partial class McpServerTests : IDisposable
 
         Assert.Equal(1, removed);
         Assert.Same(pending.Task, Assert.Single(tasks));
-        Assert.Contains("In-flight request ended before EOF drain (InvalidOperationException)", stderr.ToString(), StringComparison.Ordinal);
+        Assert.Contains("In-flight request ended during transport teardown (InvalidOperationException)", stderr.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task DrainInFlightTasksAsync_CleanEofWaitsForLegitimateRequest_Issue4434()
+    public async Task DrainInFlightTasksAsync_CleanEofWaitsWithinGraceForLegitimateRequest_Issue4434()
     {
         var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var tasks = new List<Task> { pending.Task };
         var drain = _server.DrainInFlightTasksAsync(
             tasks,
+            TestDeterminism.DefaultTimeout,
             TimeSpan.Zero,
-            TimeSpan.Zero,
-            CancellationToken.None,
-            drainToCompletion: true);
+            CancellationToken.None);
 
         Assert.False(drain.IsCompleted);
         Assert.False(_server.ShutdownRequestedForTests);
@@ -187,9 +186,9 @@ public partial class McpServerTests : IDisposable
     [Fact]
     public async Task DrainInFlightTasksAsync_DiagnosticCountsOnlyUnfinishedRequests_Issue4435()
     {
-        var completedDuringGrace = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completesOnShutdown = Task.Delay(Timeout.InfiniteTimeSpan, _server.ShutdownTokenForTests);
         var unfinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var tasks = new List<Task> { Task.CompletedTask, completedDuringGrace.Task, unfinished.Task };
+        var tasks = new List<Task> { completesOnShutdown, unfinished.Task };
         var previousError = Console.Error;
         using var stderr = new StringWriter();
         Console.SetError(stderr);
@@ -198,9 +197,8 @@ public partial class McpServerTests : IDisposable
         {
             var drain = _server.DrainInFlightTasksAsync(
                 tasks,
-                TimeSpan.FromMilliseconds(100),
+                TimeSpan.Zero,
                 TimeSpan.Zero);
-            completedDuringGrace.SetResult();
             await drain.WaitAsync(TimeSpan.FromSeconds(5));
         }
         finally
@@ -208,7 +206,18 @@ public partial class McpServerTests : IDisposable
             Console.SetError(previousError);
         }
 
-        Assert.Contains("EOF reached with 1 in-flight request(s)", stderr.ToString(), StringComparison.Ordinal);
+        Assert.Contains(
+            "Transport teardown has 2 in-flight request(s); cancelling after 0ms grace period.",
+            stderr.ToString(),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Transport teardown final deadline expired with 2 in-flight request(s) remaining after 0ms post-cancel grace period.",
+            stderr.ToString(),
+            StringComparison.Ordinal);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => completesOnShutdown.WaitAsync(TestDeterminism.DefaultTimeout));
+        unfinished.SetResult();
+        await unfinished.Task.WaitAsync(TestDeterminism.DefaultTimeout);
     }
 
     private static bool MethodCallsType(MethodInfo method, Type declaringType)
@@ -382,12 +391,378 @@ public partial class McpServerTests : IDisposable
 
         await _server.DrainInFlightTasksAsync(
             tasks,
-            TimeSpan.FromMilliseconds(10),
-            TimeSpan.FromMilliseconds(10));
+            TimeSpan.Zero,
+            TimeSpan.Zero);
 
         Assert.True(_server.ShutdownRequestedForTests);
         stuck.SetResult();
         await stuck.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task DrainInFlightTasksAsync_ExternalCancellationInterruptsPostCancelGrace_Issue3400_Issue4543()
+    {
+        var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var externalCts = new CancellationTokenSource();
+        using var stderr = new StringWriter();
+        var drainTask = Task.Run(() =>
+        {
+            lock (TestConsoleLock.Gate)
+            {
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(stderr);
+#pragma warning disable xUnit1031
+                    _server.DrainInFlightTasksAsync(
+                            [pending.Task],
+                            TimeSpan.Zero,
+                            TestDeterminism.DefaultTimeout,
+                            externalCts.Token)
+                        .GetAwaiter()
+                        .GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
+            }
+        });
+
+        try
+        {
+            await WaitUntilAsync(
+                () => _server.ShutdownRequestedForTests,
+                "transport teardown to enter its post-cancel grace period");
+            Assert.False(drainTask.IsCompleted);
+
+            externalCts.Cancel();
+            await drainTask.WaitAsync(TestDeterminism.DefaultTimeout);
+
+            Assert.DoesNotContain(
+                "Transport teardown final deadline expired",
+                stderr.ToString(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            externalCts.Cancel();
+            pending.TrySetResult();
+            await drainTask.WaitAsync(TestDeterminism.DefaultTimeout);
+            await pending.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+    }
+
+    [Fact]
+    public async Task DrainInFlightTasksAsync_BlockingShutdownCallbackIsBounded_Issue4543()
+    {
+        var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callbackStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callbackCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseCallback = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registration = _server.ShutdownTokenForTests.Register(() =>
+        {
+            callbackStarted.TrySetResult();
+#pragma warning disable xUnit1031
+            releaseCallback.Task.GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+            callbackCompleted.TrySetResult();
+        });
+        using var stderr = new StringWriter();
+        var drainTask = Task.Run(() =>
+        {
+            lock (TestConsoleLock.Gate)
+            {
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(stderr);
+#pragma warning disable xUnit1031
+                    _server.DrainInFlightTasksAsync(
+                            [pending.Task],
+                            TimeSpan.Zero,
+                            TimeSpan.Zero)
+                        .GetAwaiter()
+                        .GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
+            }
+        });
+
+        try
+        {
+            await callbackStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            await drainTask.WaitAsync(TestDeterminism.DefaultTimeout);
+            Assert.False(callbackCompleted.Task.IsCompleted);
+            Assert.Contains(
+                "Shutdown cancellation callbacks are still running after 0ms post-cancel grace period.",
+                stderr.ToString(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            releaseCallback.TrySetResult();
+            pending.TrySetResult();
+            await callbackCompleted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            await drainTask.WaitAsync(TestDeterminism.DefaultTimeout);
+            registration.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task DrainInFlightTasksAsync_ThrowingShutdownCallbackIsObserved_Issue4543()
+    {
+        var callbackRan = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registration = _server.ShutdownTokenForTests.Register(() =>
+        {
+            callbackRan.TrySetResult();
+            throw new InvalidOperationException("issue-4543 callback sentinel");
+        });
+        var pending = Task.Delay(Timeout.InfiniteTimeSpan, _server.ShutdownTokenForTests);
+        using var stderr = new StringWriter();
+        var drainTask = Task.Run(() =>
+        {
+            lock (TestConsoleLock.Gate)
+            {
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(stderr);
+#pragma warning disable xUnit1031
+                    _server.DrainInFlightTasksAsync(
+                            [pending],
+                            TimeSpan.Zero,
+                            TestDeterminism.DefaultTimeout)
+                        .GetAwaiter()
+                        .GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
+            }
+        });
+
+        await callbackRan.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+        await drainTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        Assert.Contains(
+            "Shutdown cancellation callback failed during transport teardown",
+            stderr.ToString(),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("issue-4543 callback sentinel", stderr.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RunAsync_ShutdownStartedAfterEofSnapshotStillBoundsCallbacks_Issue4543()
+    {
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            maxConcurrency: 2)
+        {
+            RequestTimeout = TimeSpan.FromDays(1),
+            InFlightDrainGracePeriod = TestDeterminism.DefaultTimeout,
+            InFlightPostCancelGracePeriod = TimeSpan.Zero,
+        };
+        Assert.NotNull(await server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":"issue-4543-late-shutdown-init","method":"initialize","params":{}}"""));
+
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.RequestDelayForTestsWithId = (id, _) =>
+        {
+            if (id?.GetValue<int>() != 454301)
+                return Task.CompletedTask;
+            firstStarted.TrySetResult();
+            return releaseFirst.Task;
+        };
+
+        var callbackStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callbackCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseCallback = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registration = server.ShutdownTokenForTests.Register(() =>
+        {
+            callbackStarted.TrySetResult();
+#pragma warning disable xUnit1031
+            releaseCallback.Task.GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+            callbackCompleted.TrySetResult();
+        });
+        var transport = QueuedFrameTransport.FromExactFrames(
+            """{"jsonrpc":"2.0","id":454301,"method":"ping"}""",
+            """{"jsonrpc":"2.0","method":"notifications/shutdown"}""");
+        transport.BeforeFrameReturnedAsync = async (frame, cancellationToken) =>
+        {
+            if (frame is null)
+            {
+                await TestDeterminism.WaitUntilAsync(
+                    () => server.AcceptedConcurrentFrameCountForTests == 2,
+                    "both pre-EOF frames to be accepted",
+                    cancellationToken: cancellationToken);
+            }
+        };
+        using var stderr = new StringWriter();
+        var runTask = Task.Run(() =>
+        {
+            lock (TestConsoleLock.Gate)
+            {
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(stderr);
+#pragma warning disable xUnit1031
+                    server.RunAsync(transport, CancellationToken.None).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
+            }
+        });
+
+        try
+        {
+            await firstStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            await transport.EndOfInputRead.WaitAsync(TestDeterminism.DefaultTimeout);
+            await TestDeterminism.AssertTaskRemainsBlockedAsync(runTask);
+
+            releaseFirst.TrySetResult();
+            await callbackStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+
+            Assert.False(callbackCompleted.Task.IsCompleted);
+            Assert.Contains(
+                "Shutdown cancellation callbacks are still running after 0ms post-cancel grace period.",
+                stderr.ToString(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            releaseFirst.TrySetResult();
+            releaseCallback.TrySetResult();
+            await callbackCompleted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_BaseTransportShutdownUsesBoundedCallbackDrain_Issue4543()
+    {
+        using var server = new McpServer(_dbPath, "test")
+        {
+            InFlightDrainGracePeriod = TimeSpan.Zero,
+            InFlightPostCancelGracePeriod = TimeSpan.Zero,
+        };
+        var callbackStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callbackCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseCallback = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registration = server.ShutdownTokenForTests.Register(() =>
+        {
+            callbackStarted.TrySetResult();
+#pragma warning disable xUnit1031
+            releaseCallback.Task.GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+            callbackCompleted.TrySetResult();
+        });
+        var transport = new ShutdownProbeTransport(
+            "base-memory",
+            onWrite: null,
+            """{"jsonrpc":"2.0","method":"notifications/shutdown"}""");
+        using var stderr = new StringWriter();
+        var runTask = Task.Run(() =>
+        {
+            lock (TestConsoleLock.Gate)
+            {
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(stderr);
+#pragma warning disable xUnit1031
+                    server.RunAsync(transport, CancellationToken.None).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
+            }
+        });
+
+        try
+        {
+            await callbackStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+            Assert.False(callbackCompleted.Task.IsCompleted);
+            Assert.Contains(
+                "Shutdown cancellation callbacks are still running after 0ms post-cancel grace period.",
+                stderr.ToString(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            releaseCallback.TrySetResult();
+            await callbackCompleted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_BaseTransportShutdownCompletionUsesBoundedDrain_Issue4543()
+    {
+        using var server = new McpServer(_dbPath, "test")
+        {
+            InFlightDrainGracePeriod = TimeSpan.Zero,
+            InFlightPostCancelGracePeriod = TimeSpan.Zero,
+        };
+        var releaseWrite = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var transport = new BlockingShutdownCompletionTransport(releaseWrite.Task);
+        using var stderr = new StringWriter();
+        var runTask = Task.Run(() =>
+        {
+            lock (TestConsoleLock.Gate)
+            {
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(stderr);
+#pragma warning disable xUnit1031
+                    server.RunAsync(transport, CancellationToken.None).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
+            }
+        });
+
+        try
+        {
+            await transport.ShutdownWriteStarted.WaitAsync(TestDeterminism.DefaultTimeout);
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+            Assert.False(transport.ShutdownWriteCompleted.IsCompleted);
+            Assert.Contains(
+                "Transport response/completion write is still pending after 0ms post-cancel grace period.",
+                stderr.ToString(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            releaseWrite.TrySetResult();
+            await transport.ShutdownWriteCompleted.WaitAsync(TestDeterminism.DefaultTimeout);
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition, string description)
@@ -2618,7 +2993,7 @@ public sealed class Caller
     }
 
     [Fact]
-    public async Task RunAsync_InvalidUtf8DecodeFailure_WaitsForPriorStdioResponse()
+    public async Task RunAsync_InvalidUtf8DecodeFailure_PreservesPriorStdioResponse()
     {
         using var invalidUtf8ReadStarted = new ManualResetEventSlim(false);
         var transport = new InvalidUtf8ReadTransport(
@@ -2639,11 +3014,390 @@ public sealed class Caller
         Assert.True(firstResponseStarted.IsSet);
         Assert.True(invalidUtf8ReadStarted.IsSet);
         Assert.Equal(2, transport.WrittenFrames.Count);
-        using var first = JsonDocument.Parse(transport.WrittenFrames[0]!);
-        using var second = JsonDocument.Parse(transport.WrittenFrames[1]!);
-        Assert.Equal(1, first.RootElement.GetProperty("id").GetInt32());
-        Assert.Equal(-32700, second.RootElement.GetProperty("error").GetProperty("code").GetInt32());
+        var priorResponseText = Assert.Single(
+            transport.WrittenFrames,
+            static frame => frame?.Contains("\"id\":1", StringComparison.Ordinal) == true);
+        var parseErrorText = Assert.Single(
+            transport.WrittenFrames,
+            static frame => frame?.Contains("\"code\":-32700", StringComparison.Ordinal) == true);
+        using var priorResponse = JsonDocument.Parse(priorResponseText!);
+        using var parseError = JsonDocument.Parse(parseErrorText!);
+        Assert.Equal(1, priorResponse.RootElement.GetProperty("id").GetInt32());
+        Assert.Equal(-32700, parseError.RootElement.GetProperty("error").GetProperty("code").GetInt32());
     }
+
+    [Fact]
+    public async Task RunAsync_StdioEofBoundsNeverCompletingInFlightRequest_Issue4543()
+    {
+        var result = await RunTerminalTeardownWithNeverCompletingRequestAsync(terminalReadException: null);
+
+        Assert.Empty(result.WrittenFrames);
+        Assert.Null(result.ProtocolErrorFrame);
+        AssertTransportTeardownReachedFinalDeadline(result.Stderr);
+    }
+
+    [Fact]
+    public async Task RunAsync_StdioEofLateRequestUnwindsAfterServerDisposal_Issue4543()
+    {
+        var result = await RunTerminalTeardownWithNeverCompletingRequestAsync(
+            terminalReadException: null,
+            disposeBeforeLateRelease: true);
+
+        Assert.Empty(result.WrittenFrames);
+        Assert.Null(result.ProtocolErrorFrame);
+        AssertTransportTeardownReachedFinalDeadline(result.Stderr);
+    }
+
+    [Fact]
+    public async Task RunAsync_InvalidUtf8WritesErrorBeforeNeverCompletingRequestDrain_Issue4543()
+    {
+        var result = await RunTerminalTeardownWithNeverCompletingRequestAsync(
+            new DecoderFallbackException(
+                "Unable to translate bytes [ED][A0][80] at index 0 from specified code page to Unicode."));
+
+        Assert.True(result.ProtocolErrorWrittenBeforeShutdown);
+        Assert.NotNull(result.ProtocolErrorFrame);
+        using var response = JsonDocument.Parse(result.ProtocolErrorFrame);
+        var error = response.RootElement.GetProperty("error");
+        Assert.Equal(-32700, error.GetProperty("code").GetInt32());
+        Assert.Contains("invalid UTF-8", error.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("parse_error", error.GetProperty("data").GetProperty("category").GetString());
+        AssertTransportTeardownReachedFinalDeadline(result.Stderr);
+    }
+
+    [Fact]
+    public async Task RunAsync_OversizedFrameWritesErrorBeforeNeverCompletingRequestDrain_Issue4543()
+    {
+        var result = await RunTerminalTeardownWithNeverCompletingRequestAsync(
+            new BoundedLineLengthException(
+                McpServer.MaxLineCharacterCount + 1,
+                McpServer.MaxLineByteLength + 1,
+                McpServer.MaxLineCharacterCount,
+                McpServer.MaxLineByteLength));
+
+        Assert.True(result.ProtocolErrorWrittenBeforeShutdown);
+        Assert.NotNull(result.ProtocolErrorFrame);
+        using var response = JsonDocument.Parse(result.ProtocolErrorFrame);
+        var error = response.RootElement.GetProperty("error");
+        Assert.Equal(-32700, error.GetProperty("code").GetInt32());
+        Assert.Equal("Message too large", error.GetProperty("message").GetString());
+        Assert.Equal("message_too_large", error.GetProperty("data").GetProperty("category").GetString());
+        AssertTransportTeardownReachedFinalDeadline(result.Stderr);
+    }
+
+    [Fact]
+    public async Task RunAsync_InvalidUtf8BlockedTerminalWriteStopsAtFinalDeadline_Issue4543()
+    {
+        using var server = new McpServer(_dbPath, "test")
+        {
+            InFlightDrainGracePeriod = TimeSpan.Zero,
+            InFlightPostCancelGracePeriod = TimeSpan.Zero,
+        };
+        var terminalWriteStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseTerminalWrite = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var transport = QueuedFrameTransport.FromExactFrames();
+        transport.TerminalReadException = new DecoderFallbackException(
+            "Unable to translate bytes [ED][A0][80] at index 0 from specified code page to Unicode.");
+        transport.BeforeFrameWrittenAsync = async (_, _) =>
+        {
+            terminalWriteStarted.TrySetResult();
+            await releaseTerminalWrite.Task;
+        };
+        using var stderr = new StringWriter();
+        var runTask = Task.Run(() =>
+        {
+            lock (TestConsoleLock.Gate)
+            {
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(stderr);
+#pragma warning disable xUnit1031
+                    server.RunAsync(transport, CancellationToken.None).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
+            }
+        });
+
+        try
+        {
+            await terminalWriteStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+            Assert.Empty(transport.WrittenFrames);
+            Assert.Contains(
+                "Transport response/completion write is still pending after 0ms post-cancel grace period.",
+                stderr.ToString(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            releaseTerminalWrite.TrySetResult();
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+            await WaitUntilAsync(
+                () => transport.WrittenFrames.Count == 1,
+                "blocked malformed-input response write to finish after test cleanup");
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_InvalidUtf8WriteGateContentionStopsAtFinalDeadline_Issue4543()
+    {
+        using var server = new McpServer(_dbPath, "test")
+        {
+            InFlightDrainGracePeriod = TimeSpan.Zero,
+            InFlightPostCancelGracePeriod = TimeSpan.Zero,
+        };
+        Assert.NotNull(await server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":"issue-4543-gate-init","method":"initialize","params":{}}"""));
+
+        var responseWriteStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseResponseWrite = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var transport = QueuedFrameTransport.FromExactFrames(
+            """{"jsonrpc":"2.0","id":45431,"method":"ping"}""");
+        transport.TerminalReadException = new DecoderFallbackException(
+            "Unable to translate bytes [ED][A0][80] at index 0 from specified code page to Unicode.");
+        transport.BeforeFrameReturnedAsync = async (frame, cancellationToken) =>
+        {
+            if (frame is null)
+                await responseWriteStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout, cancellationToken);
+        };
+        transport.BeforeFrameWrittenAsync = async (frame, _) =>
+        {
+            if (frame?.Contains("\"id\":45431", StringComparison.Ordinal) != true)
+                return;
+
+            responseWriteStarted.TrySetResult();
+            await releaseResponseWrite.Task;
+        };
+        using var stderr = new StringWriter();
+        var runTask = Task.Run(() =>
+        {
+            lock (TestConsoleLock.Gate)
+            {
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(stderr);
+#pragma warning disable xUnit1031
+                    server.RunAsync(transport, CancellationToken.None).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
+            }
+        });
+
+        try
+        {
+            await responseWriteStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+            Assert.Empty(transport.WrittenFrames);
+            Assert.Contains(
+                "Transport teardown final deadline expired with 1 in-flight request(s) remaining",
+                stderr.ToString(),
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "Transport response/completion write is still pending after 0ms post-cancel grace period.",
+                stderr.ToString(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            releaseResponseWrite.TrySetResult();
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+            await WaitUntilAsync(
+                () => server.AvailableConcurrencySlotsForTests == server.MaxConcurrency,
+                "write-gate contention request to release its execution slot after test cleanup");
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_CancellationDuringInlineControlWriteStillRunsDrain_Issue4543()
+    {
+        using var server = new McpServer(_dbPath, "test")
+        {
+            InFlightDrainGracePeriod = TimeSpan.Zero,
+            InFlightPostCancelGracePeriod = TimeSpan.Zero,
+        };
+        Assert.NotNull(await server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":"issue-4543-inline-write-init","method":"initialize","params":{}}"""));
+
+        var firstWriteStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstWrite = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationFrameReturned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var transport = QueuedFrameTransport.FromExactFrames(
+            """{"jsonrpc":"2.0","id":454302,"method":"ping"}""",
+            """{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":999999}}""");
+        transport.BeforeFrameReturnedAsync = async (frame, cancellationToken) =>
+        {
+            if (frame?.Contains("notifications/cancelled", StringComparison.Ordinal) == true)
+            {
+                await firstWriteStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout, cancellationToken);
+                cancellationFrameReturned.TrySetResult();
+            }
+        };
+        transport.BeforeFrameWrittenAsync = async (frame, _) =>
+        {
+            if (frame?.Contains("\"id\":454302", StringComparison.Ordinal) != true)
+                return;
+            firstWriteStarted.TrySetResult();
+            await releaseFirstWrite.Task;
+        };
+        using var cancellation = new CancellationTokenSource();
+        var runTask = server.RunAsync(transport, cancellation.Token);
+
+        try
+        {
+            await cancellationFrameReturned.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            cancellation.Cancel();
+
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+            Assert.Equal(1, server.AcceptedConcurrentFrameCountForTests);
+        }
+        finally
+        {
+            cancellation.Cancel();
+            releaseFirstWrite.TrySetResult();
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+            await WaitUntilAsync(
+                () => server.AcceptedConcurrentFrameCountForTests == 0,
+                "late response writer to finish after inline control cancellation");
+        }
+    }
+
+    private async Task<TransportTeardownProbeResult> RunTerminalTeardownWithNeverCompletingRequestAsync(
+        Exception? terminalReadException,
+        bool disposeBeforeLateRelease = false)
+    {
+        var server = new McpServer(_dbPath, "test")
+        {
+            RequestTimeout = TimeSpan.FromDays(1),
+            InFlightDrainGracePeriod = TimeSpan.Zero,
+            InFlightPostCancelGracePeriod = TimeSpan.Zero,
+        };
+        var initializeResponse = await server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":"issue-4543-init","method":"initialize","params":{}}""");
+        Assert.NotNull(initializeResponse);
+
+        var requestStarted = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var shutdownCancellationObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRequest = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.RequestDelayForTests = async cancellationToken =>
+        {
+            requestStarted.TrySetResult(cancellationToken);
+            using var registration = cancellationToken.Register(
+                () => shutdownCancellationObserved.TrySetResult());
+            await releaseRequest.Task.ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+        };
+
+        var protocolErrorWritten = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var protocolErrorWrittenBeforeShutdown = false;
+        var transport = QueuedFrameTransport.FromExactFrames(
+            """{"jsonrpc":"2.0","id":4543,"method":"ping"}""");
+        transport.TerminalReadException = terminalReadException;
+        transport.BeforeFrameReturnedAsync = async (frame, cancellationToken) =>
+        {
+            if (frame is null)
+                await requestStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout, cancellationToken);
+        };
+        transport.BeforeFrameWrittenAsync = (frame, cancellationToken) =>
+        {
+            if (terminalReadException is not null && frame is not null)
+            {
+                protocolErrorWrittenBeforeShutdown = !server.ShutdownRequestedForTests
+                    && !cancellationToken.IsCancellationRequested;
+                protocolErrorWritten.TrySetResult(frame);
+            }
+            return Task.CompletedTask;
+        };
+
+        var runTask = Task.Run(() =>
+        {
+            lock (TestConsoleLock.Gate)
+            {
+                var previousError = Console.Error;
+                using var stderr = new StringWriter();
+                try
+                {
+                    Console.SetError(stderr);
+#pragma warning disable xUnit1031
+                    server.RunAsync(transport, CancellationToken.None).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                    return stderr.ToString();
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
+            }
+        });
+
+        try
+        {
+            var requestToken = await requestStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            string? protocolErrorFrame = null;
+            if (terminalReadException is not null)
+            {
+                // A protocol error must reach the wire while the unrelated request is still
+                // blocked. Releasing the request only happens in finally, so this fails if the
+                // read-error path waits for every request before writing (#4543).
+                protocolErrorFrame = await protocolErrorWritten.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            }
+
+            var stderr = await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+            await shutdownCancellationObserved.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            Assert.True(requestToken.IsCancellationRequested);
+
+            return new TransportTeardownProbeResult(
+                transport.WrittenFrames.ToArray(),
+                protocolErrorFrame,
+                protocolErrorWrittenBeforeShutdown,
+                stderr);
+        }
+        finally
+        {
+            if (disposeBeforeLateRelease)
+                server.Dispose();
+            try
+            {
+                releaseRequest.TrySetResult();
+                await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+                await WaitUntilAsync(
+                    () => server.AvailableConcurrencySlotsForTests == server.MaxConcurrency,
+                    "never-completing issue #4543 request to unwind after test cleanup");
+            }
+            finally
+            {
+                if (!disposeBeforeLateRelease)
+                    server.Dispose();
+            }
+        }
+    }
+
+    private static void AssertTransportTeardownReachedFinalDeadline(string stderr)
+    {
+        Assert.Contains(
+            "[cdidx-mcp] Transport teardown has 1 in-flight request(s); cancelling after 0ms grace period.",
+            stderr,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "[cdidx-mcp] Transport teardown final deadline expired with 1 in-flight request(s) remaining after 0ms post-cancel grace period.",
+            stderr,
+            StringComparison.Ordinal);
+    }
+
+    private sealed record TransportTeardownProbeResult(
+        string?[] WrittenFrames,
+        string? ProtocolErrorFrame,
+        bool ProtocolErrorWrittenBeforeShutdown,
+        string Stderr);
 
     [Fact]
     public async Task StdioTransport_Utf16BomInput_ThrowsDecodeFailure()
@@ -2656,6 +3410,51 @@ public sealed class Caller
         await using var transport = new StdioMcpTransport(input, output, bufferSize: 1024);
 
         await Assert.ThrowsAsync<DecoderFallbackException>(() => transport.ReadFrameAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task StdioTransport_DisposalWaitsForLateWriterBarrier_Issue4543()
+    {
+        await using var input = new MemoryStream();
+        var output = new BlockingWriteStream();
+        var transport = new StdioMcpTransport(input, output, bufferSize: 64);
+        var startLateWrite = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lateWrite = Task.Run(async () =>
+        {
+            await startLateWrite.Task;
+            await transport.WriteFrameAsync(
+                """{"jsonrpc":"2.0","id":454303,"result":{}}""",
+                CancellationToken.None);
+        });
+        transport.DeferDisposalUntil(lateWrite);
+
+        await transport.DisposeAsync();
+        Assert.False(output.IsDisposed);
+
+        startLateWrite.TrySetResult();
+        await output.WriteStarted.WaitAsync(TestDeterminism.DefaultTimeout);
+        Assert.False(output.IsDisposed);
+        Assert.False(lateWrite.IsCompleted);
+
+        output.ReleaseWrite();
+        await lateWrite.WaitAsync(TestDeterminism.DefaultTimeout);
+        await WaitUntilAsync(() => output.IsDisposed, "stdio output disposal after the late writer completed");
+    }
+
+    [Fact]
+    public async Task StdioTransport_InputDisposeFailureDoesNotStrandDeferredOutput_Issue4543()
+    {
+        var input = new ThrowingDisposeStream();
+        var output = new BlockingWriteStream();
+        var transport = new StdioMcpTransport(input, output, bufferSize: 64);
+        var releaseOutput = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        transport.DeferDisposalUntil(releaseOutput.Task);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => transport.DisposeAsync().AsTask());
+        Assert.False(output.IsDisposed);
+
+        releaseOutput.TrySetResult();
+        await WaitUntilAsync(() => output.IsDisposed, "stdio output cleanup after input disposal failed");
     }
 
     [Fact]
@@ -6807,6 +7606,7 @@ public sealed class Caller
         public string Endpoint => "memory://queued";
         public List<string?> WrittenFrames { get; } = [];
         public Task EndOfInputRead => _endOfInputRead.Task;
+        public Exception? TerminalReadException { get; set; }
         public Func<string?, CancellationToken, Task>? BeforeFrameReturnedAsync { get; set; }
         public Func<string?, CancellationToken, Task>? BeforeFrameWrittenAsync { get; set; }
 
@@ -6817,7 +7617,11 @@ public sealed class Caller
             if (BeforeFrameReturnedAsync is { } beforeFrameReturned)
                 await beforeFrameReturned(frame, cancellationToken);
             if (frame is null)
+            {
                 _endOfInputRead.TrySetResult();
+                if (TerminalReadException is { } terminalReadException)
+                    throw terminalReadException;
+            }
             return frame;
         }
 
@@ -7082,4 +7886,116 @@ public sealed class Caller
             return base.FlushAsync(cancellationToken);
         }
     }
+
+    private sealed class BlockingShutdownCompletionTransport : IMcpTransport
+    {
+        private readonly Queue<string?> _frames = new(
+        [
+            """{"jsonrpc":"2.0","id":"issue-4543-base-write-init","method":"initialize","params":{}}""",
+            """{"jsonrpc":"2.0","method":"notifications/shutdown"}""",
+            null,
+        ]);
+        private readonly Task _releaseWrite;
+        private readonly TaskCompletionSource _shutdownWriteStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _shutdownWriteCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal BlockingShutdownCompletionTransport(Task releaseWrite)
+        {
+            _releaseWrite = releaseWrite;
+        }
+
+        public string Name => "base-blocking-shutdown";
+        public string Endpoint => "in-memory";
+        internal Task ShutdownWriteStarted => _shutdownWriteStarted.Task;
+        internal Task ShutdownWriteCompleted => _shutdownWriteCompleted.Task;
+
+        public Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(_frames.Dequeue());
+        }
+
+        public async Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
+        {
+            if (frame is not null)
+                return;
+
+            _shutdownWriteStarted.TrySetResult();
+            await _releaseWrite.ConfigureAwait(false);
+            _shutdownWriteCompleted.TrySetResult();
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+
+    private sealed class BlockingWriteStream : Stream
+    {
+        private readonly TaskCompletionSource _writeStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseWrite = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal Task WriteStarted => _writeStarted.Task;
+        internal bool IsDisposed { get; private set; }
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => !IsDisposed;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        internal void ReleaseWrite() => _releaseWrite.TrySetResult();
+
+        public override void Flush() { }
+        public override Task FlushAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            _writeStarted.TrySetResult();
+#pragma warning disable xUnit1031
+            _releaseWrite.Task.GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+        }
+
+        public override async Task WriteAsync(
+            byte[] buffer,
+            int offset,
+            int count,
+            CancellationToken cancellationToken)
+        {
+            _writeStarted.TrySetResult();
+            await _releaseWrite.Task.ConfigureAwait(false);
+        }
+
+        public override async ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            _writeStarted.TrySetResult();
+            await _releaseWrite.Task.ConfigureAwait(false);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            IsDisposed = true;
+            base.Dispose(disposing);
+        }
+    }
+
+    private sealed class ThrowingDisposeStream : MemoryStream
+    {
+        protected override void Dispose(bool disposing)
+        {
+            base.Dispose(disposing);
+            if (disposing)
+                throw new InvalidOperationException("issue-4543 input dispose sentinel");
+        }
+    }
+
 }

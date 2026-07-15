@@ -1999,9 +1999,19 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   no separate notification frame.
 - Every request frame must carry an exact `"jsonrpc":"2.0"` member. Except for
   `initialize`, responded methods are rejected until initialization succeeds
-  (#4468). When a finite stdio input reaches EOF, already accepted requests are
-  drained to completion rather than cancelled after a fixed grace period
-  (#4434), and cancellation diagnostics count only unfinished tasks (#4435).
+  (#4468). EOF, invalid UTF-8, and oversized stdio input share a bounded
+  teardown policy: accepted requests receive a grace period, then cancellation,
+  then a post-cancel deadline (#4543). Malformed-input protocol-error writes and
+  asynchronous shutdown-cancellation callbacks are included in those same
+  deadlines, so a blocked writer, write gate, or callback cannot hold teardown
+  indefinitely. `notifications/shutdown` cancels reads and request actions without
+  cancelling the initiating transport completion (`204 No Content` on HTTP), and
+  callbacks that start after the first drain snapshot still join the post-cancel
+  deadline. Every concurrent-loop exit reaches the bounded drain. Stdio input is
+  closed promptly while output disposal waits for accepted tasks that can still
+  reach the response writer. The final diagnostic records each unfinished
+  category. External transport or process cancellation can interrupt either
+  cleanup window.
 - Independent stdio requests and HTTP POSTs execute concurrently up to the
   configured MCP request limit (#4536). The read loop continues accepting
   cancellation and client-response frames while execution slots are full. The
@@ -2082,8 +2092,10 @@ is:
 
 - `Task<string?> ReadFrameAsync(CancellationToken)` returns one
   request-frame string, or `null` to signal end-of-stream (closed stdin,
-  cancelled HTTP listener, etc.). On clean stdio EOF, the MCP loop drains all
-  accepted requests before exiting.
+  cancelled HTTP listener, etc.). On stdio EOF, the MCP loop applies a bounded
+  grace/cancel/post-cancel drain to accepted requests before exiting. Terminal
+  malformed-input writes and asynchronous cancellation callbacks participate in
+  the same final deadline (#4543).
 - `Task WriteFrameAsync(string?, CancellationToken)` writes one response
   frame. `null` means "this was a notification" — stdio drops it; HTTP
   closes the in-flight request with `204 No Content`.
@@ -2093,7 +2105,8 @@ is:
   writer for exactly one input frame. This lets multiple requests complete out
   of order without attaching an HTTP response to a different POST (#4536).
   The base loop does not acquire an outer concurrency permit; dispatch owns the
-  one global execution permit.
+  one global execution permit. Shutdown completions from base transports also
+  join the bounded terminal-write drain.
 - `IAsyncDisposable` lets each transport release its kernel-side
   resources (file handles, listener prefixes) without coupling to
   `McpServer`.
@@ -2104,6 +2117,8 @@ frames cannot switch encodings, output is BOM-less UTF-8, 64 KiB buffer,
 `AutoFlush = true`). Malformed UTF-8 bytes
 raise a transport decode failure that the MCP loop maps to JSON-RPC `-32700`
 with an invalid-UTF-8 hint instead of silently replacing bytes with U+FFFD.
+During teardown, input closes immediately to unblock reads, while output disposal
+is deferred behind the aggregate of accepted tasks that can still write.
 JSON-RPC frames are also bounded before dispatch: at most 1,000,000 UTF-16
 characters, at most 1,048,576 UTF-8 bytes, and JSON nesting depth 32. Oversized,
 malformed, or too-deep frames return `-32700` with `id: null`; MCP `status`
@@ -4305,7 +4320,7 @@ sequenceDiagram
 - `McpServer` が stdin/stdout を持ち、JSON-RPC 2.0 フレームを解析する。
 - レスポンス構築は `JsonSerializer.Serialize<T>(...)` ではなく、`System.Text.Json.Nodes.JsonObject` / `JsonArray` を**手組み**する。これが、トリミング済みバイナリでリフレクションベースのシリアライズが無効でも MCP パスが動き続ける理由。
 - `initialize` レスポンスは `protocolVersion`、`capabilities`、`serverInfo.name`、`serverInfo.version`（`ConsoleUi.LoadVersion()` — `version.json` が源）、および AI クライアントにツール選択を案内する長い `instructions` 文字列を返す。その後 client が `notifications/initialized` を送信し、cdidx は client-to-server 通知として no-op で受理するが、server 側から同じ通知を生成しない（#4433）。HTTP session は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` を設定した場合、opt-in の keep-alive notification を `/events` で受け取れる。HTTP transport では out-of-band 通知は接続済みの `/events` SSE stream にだけ配送され、POST のみのクライアントは initialize response だけを受け取り、別通知 frame は受け取らない。
-- すべての request frame は厳密な `"jsonrpc":"2.0"` member を持つ必要があり、`initialize` 以外の応答対象 method は初期化成功まで拒否される（#4468）。有限の stdio input が EOF に達した場合、受理済み request は固定 grace period 後に cancel せず完了まで drain し（#4434）、cancellation diagnostic は未完了 task だけを数える（#4435）。
+- すべての request frame は厳密な `"jsonrpc":"2.0"` member を持つ必要があり、`initialize` 以外の応答対象 method は初期化成功まで拒否される（#4468）。stdio の EOF、不正 UTF-8、oversized input は、grace period、cancellation、post-cancel deadline の共通 bounded teardown を使う（#4543）。不正入力の protocol-error write と非同期 shutdown-cancellation callback も同じ deadline に含めるため、writer、write gate、callback の停止で teardown が無期限に残らない。`notifications/shutdown` は read と request action を cancel するが、起点の transport completion（HTTP では `204 No Content`）は cancel しない。初回 drain snapshot 後に開始した callback と concurrent loop の全終了経路も bounded drain に含める。stdio input は速やかに close し、output dispose は response writer に到達し得る accepted task の完了まで defer する。最終 diagnostic には未完了カテゴリごとの状態を記録し、外部 transport または process cancellation はどちらの cleanup window も中断できる。
 - 独立した stdio request と HTTP POST は、設定された MCP request 上限まで並行実行する（#4536）。実行 slot が全て使用中でも read loop は cancellation/client-response frame を受け続ける。accepted-frame backlog は execution 上限 + 64 に別途制限し、超過 request には retry-safe な `-32003` / `server_busy` を返す。request id は protocol/gate 待機前に登録し、execution timeout は slot 取得後に開始し、timeout 後も cancellation を無視して動く action は実際に drain するまで slot を保持する。initialize など session mutation の受信順は protocol barrier で維持し、可変な request state は `AsyncLocal` または request-scoped snapshot に置き、shared writer tool は直列化する。基本 `IMcpTransport` loop は outer frame slot を確保しないため、`maxConcurrency: 1` の single request は `_concurrencyGate` を1回だけ取得し、request は dispatch 時だけ slot を消費する。
 - advertised capability には `tools`、`resources`、`prompts`、`logging` が含まれる。`logging` は MCP `notifications/message` を示し、`logging/setLevel` は `debug`、`info`、`notice`、`warning`、`error`、`critical`、`alert`、`emergency` を受け付ける。
 - `protocolVersion` は**ハードコードではなく交渉**で決まる（#1554）。サーバーは `McpServer.SupportedProtocolVersions`（新しい順: `2025-03-26`, `2024-11-05`）を保持し、`initialize` パラメータからクライアント要求バージョンを読み取って、対応集合にあればそれを返し（合意）、未指定／非文字列なら既定の最新バージョンに fallback し、対応外なら `error.data` に `requestedVersion` と `supportedVersions` を入れた JSON-RPC `-32602` で拒否する。これにより将来 MCP 仕様が改訂されても、wire format が黙ってずれるのではなく actionable な handshake 失敗として表面化する。配列を新バージョンで更新する際は `ProtocolVersion` を先頭エントリと揃えて意図的に bump する。
@@ -4317,12 +4332,12 @@ MCP は独立したシリアライズ戦略（オブジェクトを JSON など�
 
 `McpServer.RunAsync` は 2 つに分かれている。public な stdio エントリポイント（`StdioMcpTransport` と legacy な stdin/stdout のペアを構築する）と、JSON-RPC ループ本体を持つ internal な `RunAsync(IMcpTransport, CancellationToken)` で、後者はトランスポート非依存。`IMcpTransport` 契約は以下のとおり:
 
-- `Task<string?> ReadFrameAsync(CancellationToken)` はリクエストフレームを 1 つ文字列で返すか、ストリーム終端を示す `null` を返す（stdin クローズ、HTTP listener キャンセル等）。正常な stdio EOF では、MCP ループは受理済み request をすべて drain してから終了する。
+- `Task<string?> ReadFrameAsync(CancellationToken)` はリクエストフレームを 1 つ文字列で返すか、ストリーム終端を示す `null` を返す（stdin クローズ、HTTP listener キャンセル等）。stdio EOF では、MCP ループは受理済み request に bounded な grace/cancel/post-cancel drain を適用し、terminal malformed-input write と非同期 cancellation callback も同じ最終 deadline に含めて終了する（#4543）。
 - `Task WriteFrameAsync(string?, CancellationToken)` は応答フレームを 1 件書く。`null` は「これは通知だった」を意味し、stdio は何も書かず、HTTP は処理中のリクエストを `204 No Content` でクローズする。
-- 基本契約は厳密に「1 read → 1 write」。transport は `IConcurrentMcpTransport` を実装しない限り再入を明示的に拒否する。並行対応 transport の `McpTransportFrame` は入力 frame 1 件専用の response writer を保持するため、複数 request の完了順が前後しても HTTP 応答が別の POST に結び付かない（#4536）。base loop は outer concurrency permit を取得せず、dispatch が global execution permit を1つだけ取得する。
+- 基本契約は厳密に「1 read → 1 write」。transport は `IConcurrentMcpTransport` を実装しない限り再入を明示的に拒否する。並行対応 transport の `McpTransportFrame` は入力 frame 1 件専用の response writer を保持するため、複数 request の完了順が前後しても HTTP 応答が別の POST に結び付かない（#4536）。base loop は outer concurrency permit を取得せず、dispatch が global execution permit を1つだけ取得する。base transport の shutdown completion も bounded terminal-write drain に参加する。
 - `IAsyncDisposable` により、各トランスポートが自身のカーネル側リソース（ファイルハンドル、listener プレフィックス）を `McpServer` と結合せずに解放できる。
 
-`StdioMcpTransport` は #1558 以前と同じ stdio framing を維持しつつ、入力を strict UTF-8 として検証する（BOM 自動検出は無効にし、UTF-16/UTF-32 フレームが encoding を切り替えられないようにする。出力は BOM なし UTF-8、64 KiB バッファ、`AutoFlush = true`）。不正な UTF-8 バイトは transport decode failure として表面化し、MCP ループはバイトを U+FFFD に黙って置換せず、invalid UTF-8 のヒント付き JSON-RPC `-32700` に変換する。
+`StdioMcpTransport` は #1558 以前と同じ stdio framing を維持しつつ、入力を strict UTF-8 として検証する（BOM 自動検出は無効にし、UTF-16/UTF-32 フレームが encoding を切り替えられないようにする。出力は BOM なし UTF-8、64 KiB バッファ、`AutoFlush = true`）。不正な UTF-8 バイトは transport decode failure として表面化し、MCP ループはバイトを U+FFFD に黙って置換せず、invalid UTF-8 のヒント付き JSON-RPC `-32700` に変換する。teardown では read を unblock するため input を即時 close し、output dispose は write に到達し得る accepted task の aggregate 完了まで defer する。
 
 `HttpMcpTransport`（同じく #1558）は `System.Net.HttpListener` をラップする:
 
