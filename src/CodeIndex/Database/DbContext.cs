@@ -2643,7 +2643,10 @@ public class DbContext : IDisposable
     {
         // A rebuild that produces zero files must still invalidate an outstanding resource cursor.
         // 0 件になる rebuild でも既存の resource cursor を必ず無効化する。
-        Execute(IncrementResourceListGenerationSql);
+        // A fresh database has no cursor to invalidate and creates this table after DropAll.
+        // fresh database には無効化対象がなく、この table は DropAll 後に作成される。
+        if (TableExists("codeindex_meta"))
+            Execute(IncrementResourceListGenerationSql);
         Execute(DropFtsChunksInsertTriggerSql);
         Execute(DropFtsChunksDeleteTriggerSql);
         Execute(DropFtsChunksUpdateTriggerSql);
