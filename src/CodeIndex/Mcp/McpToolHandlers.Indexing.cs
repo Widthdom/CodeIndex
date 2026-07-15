@@ -328,7 +328,7 @@ public partial class McpServer
             writer.MarkBatchInProgress();
 
         var hadCSharpStaticInterfaceContractsBeforePurge = !startedWithNoIndexedFiles
-            && writer.LoadCSharpStaticInterfaceContractSymbols().Count > 0;
+            && writer.HasCSharpStaticInterfaceContractSymbols();
 
         // Purge stale files / 古いファイルをパージ
         var purged = startedWithNoIndexedFiles

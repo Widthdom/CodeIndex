@@ -784,17 +784,19 @@ public class PreparedCommandCacheTests : IDisposable
         var first = writer.LoadCSharpStaticInterfaceContractSymbols();
         Assert.Contains(first, s => s.Kind == "interface" && s.Name == "IShape");
         Assert.Contains(first, s => s.Kind == "function" && s.Name == "Create");
+        Assert.True(writer.HasCSharpStaticInterfaceContractSymbols());
         Assert.True(writer.HasCSharpStaticInterfaceContractSymbolsInPaths(
             new HashSet<string>(StringComparer.Ordinal) { "src/IShape.cs" }));
 
         var hitsBefore = _db.PreparedCommands.HitCount;
 
         var second = writer.LoadCSharpStaticInterfaceContractSymbols();
+        Assert.True(writer.HasCSharpStaticInterfaceContractSymbols());
         Assert.True(writer.HasCSharpStaticInterfaceContractSymbolsInPaths(
             new HashSet<string>(StringComparer.Ordinal) { "src/IShape.cs" }));
 
         Assert.Equal(first.Count, second.Count);
-        Assert.True(_db.PreparedCommands.HitCount >= hitsBefore + 2);
+        Assert.True(_db.PreparedCommands.HitCount >= hitsBefore + 3);
     }
 
     [Fact]

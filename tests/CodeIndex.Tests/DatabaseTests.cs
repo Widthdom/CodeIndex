@@ -3057,6 +3057,82 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void HasCSharpStaticInterfaceContractSymbols_PreservesContractSelectionSemantics()
+    {
+        Assert.False(_writer.HasCSharpStaticInterfaceContractSymbols());
+
+        var modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+        var typeScriptFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/ITypeScript.ts",
+            Lang = "typescript",
+            Size = 50,
+            Lines = 3,
+            Modified = modified,
+        });
+        var csharpFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/IShape.cs",
+            Lang = "csharp",
+            Size = 100,
+            Lines = 6,
+            Modified = modified,
+        });
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = typeScriptFileId,
+                Kind = "interface",
+                Name = "ITypeScript",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 3,
+            },
+            new SymbolRecord
+            {
+                FileId = csharpFileId,
+                Kind = "function",
+                Name = "CreateInClass",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                ContainerKind = "class",
+                Signature = "public static abstract IShape CreateInClass();",
+            },
+        ]);
+
+        Assert.False(_writer.HasCSharpStaticInterfaceContractSymbols());
+
+        _writer.InsertSymbols([new SymbolRecord
+        {
+            FileId = csharpFileId,
+            Kind = "function",
+            Name = "Create",
+            Line = 4,
+            StartLine = 4,
+            EndLine = 4,
+            ContainerKind = "interface",
+            Signature = "public static abstract IShape Create();",
+        }]);
+        Assert.True(_writer.HasCSharpStaticInterfaceContractSymbols());
+
+        _writer.DeleteFileData(csharpFileId);
+        Assert.False(_writer.HasCSharpStaticInterfaceContractSymbols());
+
+        _writer.InsertSymbols([new SymbolRecord
+        {
+            FileId = csharpFileId,
+            Kind = "interface",
+            Name = "IShape",
+            Line = 1,
+            StartLine = 1,
+            EndLine = 6,
+            Signature = "public interface IShape",
+        }]);
+        Assert.True(_writer.HasCSharpStaticInterfaceContractSymbols());
+    }
+
+    [Fact]
     public void InsertSymbols_ChunksLargeInputUnderSqlVariableLimit()
     {
         var fileId = _writer.UpsertFile(new FileRecord
