@@ -187,6 +187,10 @@ public partial class McpServer : IDisposable
     internal const int MaxClientResponseJsonBytes = 1 * 1024 * 1024;
     internal const int MaxMcpPaginationOffset = 10_000;
     internal const int MaxResourceListCursorChars = 23;
+    internal const int MinResourceListMaxBytes = 4 * 1024;
+    internal const int DefaultResourceListMaxBytes = HttpMcpTransport.DefaultMaxResponseBodyBytes;
+    internal const int MaxResourceListMaxBytes = HttpMcpTransport.DefaultMaxResponseBodyBytes;
+    internal const int ResourceListPageSize = 200;
     private const int ResourceListCursorPayloadBytes = 17;
     private const byte ResourceListCursorVersion = 1;
     internal const int DefaultToolsListPageSize = 24;
@@ -2302,7 +2306,19 @@ public partial class McpServer : IDisposable
 
     private JsonNode HandleResourcesList(JsonNode? id, JsonNode? listParams)
     {
-        const int pageSize = 200;
+        var requestedMaxBytes = DefaultResourceListMaxBytes;
+        if (listParams?["maxBytes"] is JsonNode maxBytesNode)
+        {
+            if (maxBytesNode is not JsonValue maxBytesValue
+                || !maxBytesValue.TryGetValue<int>(out requestedMaxBytes)
+                || requestedMaxBytes < MinResourceListMaxBytes
+                || requestedMaxBytes > MaxResourceListMaxBytes)
+            {
+                return CreateResourcesListMaxBytesError(id);
+            }
+        }
+        var effectiveMaxBytes = Math.Min(requestedMaxBytes, GetMaxResponseBytes());
+
         long? afterFileId = null;
         long? expectedGeneration = null;
         var legacyOffset = 0;
@@ -2338,39 +2354,202 @@ public partial class McpServer : IDisposable
         return WithDbReader(id, args: null, reader =>
         {
             var resourcePage = reader.ListResourceFiles(
-                limit: pageSize + 1,
+                limit: ResourceListPageSize + 1,
                 afterFileId: afterFileId,
                 expectedGeneration: expectedGeneration,
                 legacyOffset: legacyOffset);
             if (resourcePage.CursorRestartRequired)
                 return CreateResourcesListRestartError(id);
 
-            var page = resourcePage.Files.Take(pageSize).ToArray();
+            var page = resourcePage.Files.Take(ResourceListPageSize).ToArray();
             var resources = new JsonArray();
+            var reservedResponse = CreateResourceListResponse(
+                id,
+                resources: [],
+                generation: long.MaxValue,
+                lastConsumedFileId: long.MaxValue,
+                hasContinuation: true,
+                requestedMaxBytes: MaxResourceListMaxBytes,
+                effectiveMaxBytes: MaxResourceListMaxBytes,
+                candidatesConsumed: ResourceListPageSize,
+                uriTooLongCount: ResourceListPageSize,
+                resourceExceedsMaxBytesCount: ResourceListPageSize,
+                byteBudgetReached: true);
+            _ = TryMeasureJsonUtf8BytesWithinLimit(
+                reservedResponse,
+                _jsonOptions,
+                int.MaxValue,
+                out var reservedResponseBytes);
+            if (reservedResponseBytes > effectiveMaxBytes)
+                return CreateResourcesListEffectiveMaxBytesError(id, requestedMaxBytes, effectiveMaxBytes);
+
+            var acceptedResourceBytes = 0L;
+            var candidatesConsumed = 0;
+            var uriTooLongCount = 0;
+            var resourceExceedsMaxBytesCount = 0;
+            var byteBudgetReached = false;
+            var stoppedForByteBudget = false;
+            long? lastConsumedFileId = null;
             foreach (var file in page)
             {
                 var uri = BuildResourceUri(file.Path);
                 if (uri.Length > McpBoundedText.MaxResourceUriChars)
+                {
+                    uriTooLongCount++;
+                    candidatesConsumed++;
+                    lastConsumedFileId = file.Id;
                     continue;
+                }
 
-                resources.Add(new JsonObject
+                var resource = new JsonObject
                 {
                     ["uri"] = uri,
                     ["name"] = file.Path,
                     ["description"] = $"{file.Path} ({file.Lang ?? "unknown"}, {file.Lines} lines)",
                     ["mimeType"] = GetResourceMimeType(file.Lang),
-                });
+                };
+                var resourceFitsAlone = TryMeasureJsonUtf8BytesWithinLimit(
+                    resource,
+                    _jsonOptions,
+                    effectiveMaxBytes,
+                    out var resourceBytes);
+                var commaBytes = resources.Count == 0 ? 0 : 1;
+                var resourceFitsEmptyPage = resourceFitsAlone
+                    && reservedResponseBytes + resourceBytes <= effectiveMaxBytes;
+                var resourceFitsPage = resourceFitsEmptyPage
+                    && reservedResponseBytes + acceptedResourceBytes + commaBytes + resourceBytes <= effectiveMaxBytes;
+                if (!resourceFitsPage)
+                {
+                    byteBudgetReached = true;
+                    if (resourceFitsEmptyPage || resources.Count > 0)
+                    {
+                        stoppedForByteBudget = true;
+                        break;
+                    }
+
+                    // Consume resources that cannot fit even on an empty page so the cursor cannot livelock.
+                    // 空ページにも収まらない resource は消費・報告し、cursor の livelock を防ぐ。
+                    resourceExceedsMaxBytesCount++;
+                    candidatesConsumed++;
+                    lastConsumedFileId = file.Id;
+                    continue;
+                }
+
+                resources.Add(resource);
+                acceptedResourceBytes += commaBytes + resourceBytes;
+                candidatesConsumed++;
+                lastConsumedFileId = file.Id;
             }
 
-            var result = new JsonObject
-            {
-                ["resources"] = resources,
-            };
-            if (resourcePage.Files.Count > pageSize && page.Length > 0)
-                result["nextCursor"] = EncodeResourceListCursor(resourcePage.Generation, page[^1].Id);
-            return CreateSuccessResponse(true, id, result);
+            var hasContinuation = stoppedForByteBudget || resourcePage.Files.Count > ResourceListPageSize;
+            var response = CreateResourceListResponse(
+                id,
+                resources,
+                resourcePage.Generation,
+                lastConsumedFileId,
+                hasContinuation,
+                requestedMaxBytes,
+                effectiveMaxBytes,
+                candidatesConsumed,
+                uriTooLongCount,
+                resourceExceedsMaxBytesCount,
+                byteBudgetReached);
+
+            if (!TryMeasureJsonUtf8BytesWithinLimit(response, _jsonOptions, effectiveMaxBytes, out _))
+                return CreateResourcesListEffectiveMaxBytesError(id, requestedMaxBytes, effectiveMaxBytes);
+            return response;
         });
     }
+
+    private static JsonObject CreateResourcesListMaxBytesError(JsonNode? id)
+        => CreateErrorResponse(hasId: true, id: id, code: -32602,
+            message: $"resources/list maxBytes must be between {MinResourceListMaxBytes} and {MaxResourceListMaxBytes}.",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: "Use an integer params.maxBytes within the documented range, or omit it to use the default.",
+            retrySafe: false,
+            extraData: new JsonObject
+            {
+                ["min_max_bytes"] = MinResourceListMaxBytes,
+                ["max_max_bytes"] = MaxResourceListMaxBytes,
+                ["default_max_bytes"] = DefaultResourceListMaxBytes,
+            });
+
+    private static JsonObject CreateResourcesListEffectiveMaxBytesError(
+        JsonNode? id,
+        int requestedMaxBytes,
+        int effectiveMaxBytes)
+        => CreateErrorResponse(hasId: true, id: id, code: -32602,
+            message: "resources/list response metadata does not fit within the effective byte limit.",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: "Raise the MCP response byte limit or request a larger params.maxBytes value.",
+            retrySafe: false,
+            extraData: new JsonObject
+            {
+                ["requested_max_bytes"] = requestedMaxBytes,
+                ["effective_max_bytes"] = effectiveMaxBytes,
+            });
+
+    private static JsonObject CreateResourceListResponse(
+        JsonNode? id,
+        JsonArray resources,
+        long generation,
+        long? lastConsumedFileId,
+        bool hasContinuation,
+        int requestedMaxBytes,
+        int effectiveMaxBytes,
+        int candidatesConsumed,
+        int uriTooLongCount,
+        int resourceExceedsMaxBytesCount,
+        bool byteBudgetReached)
+    {
+        var result = new JsonObject
+        {
+            ["resources"] = resources,
+            ["_meta"] = new JsonObject
+            {
+                ["response_controls"] = CreateResourceListResponseControls(
+                    requestedMaxBytes,
+                    effectiveMaxBytes,
+                    candidatesConsumed,
+                    resources.Count,
+                    uriTooLongCount,
+                    resourceExceedsMaxBytesCount,
+                    byteBudgetReached,
+                    hasContinuation),
+            },
+        };
+        if (hasContinuation && lastConsumedFileId is not null)
+            result["nextCursor"] = EncodeResourceListCursor(generation, lastConsumedFileId.Value);
+        return CreateSuccessResponse(true, id, result);
+    }
+
+    private static JsonObject CreateResourceListResponseControls(
+        int requestedMaxBytes,
+        int effectiveMaxBytes,
+        int candidatesConsumed,
+        int resourcesReturned,
+        int uriTooLongCount,
+        int resourceExceedsMaxBytesCount,
+        bool byteBudgetReached,
+        bool hasContinuation)
+        => new()
+        {
+            ["requested_max_bytes"] = requestedMaxBytes,
+            ["effective_max_bytes"] = effectiveMaxBytes,
+            ["page_item_limit"] = ResourceListPageSize,
+            ["resource_candidates_consumed"] = candidatesConsumed,
+            ["resources_returned"] = resourcesReturned,
+            ["omitted_resource_count"] = uriTooLongCount + resourceExceedsMaxBytesCount,
+            ["omitted_resource_reason_counts"] = new JsonObject
+            {
+                ["resource_uri_too_long"] = uriTooLongCount,
+                ["resource_exceeds_max_bytes"] = resourceExceedsMaxBytesCount,
+            },
+            ["byte_budget_reached"] = byteBudgetReached,
+            ["continuation_reason"] = hasContinuation
+                ? byteBudgetReached ? "byte_budget" : "item_limit"
+                : "completed",
+        };
 
     private static JsonObject CreateResourcesListCursorError(JsonNode? id)
         => CreateErrorResponse(hasId: true, id: id, code: -32602,

@@ -10,6 +10,7 @@ using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Diagnostics;
 using CodeIndex.Mcp;
+using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
@@ -641,6 +642,55 @@ public class HttpMcpTransportTests : IDisposable
         var body = await follow.Content.ReadAsStringAsync();
         using var doc = JsonDocument.Parse(body);
         Assert.Equal(2, doc.RootElement.GetProperty("id").GetInt32());
+    }
+
+    [Fact]
+    public async Task HttpTransport_ResourcesListHonorsRequestedResponseBudget_Issue4542()
+    {
+        const int responseBudget = 100_000;
+        var writer = new DbWriter(_db.Connection);
+        using (var transaction = writer.BeginTransaction())
+        {
+            var longPrefix = "src/" + new string('x', 1_800);
+            for (var i = 0; i < 30; i++)
+            {
+                writer.UpsertFile(new FileRecord
+                {
+                    Path = $"{longPrefix}-{i:D2}.cs",
+                    Lang = "csharp",
+                    Size = 1,
+                    Lines = 1,
+                    Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+                    Checksum = $"http-budget-{i}",
+                });
+            }
+            transaction.Commit();
+        }
+        await using var harness = await McpHttpHarness.StartAsync(
+            _dbPath,
+            maxResponseBodyBytes: responseBudget);
+        using (var initialize = await harness.PostJsonAsync(
+            """{"jsonrpc":"2.0","id":"init","method":"initialize","params":{}}"""))
+        {
+            Assert.Equal(HttpStatusCode.OK, initialize.StatusCode);
+        }
+
+        var requestBody = """{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{"maxBytes":"""
+            + responseBudget.ToString(CultureInfo.InvariantCulture)
+            + "}}";
+        using var response = await harness.PostJsonAsync(requestBody);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsByteArrayAsync();
+        Assert.InRange(body.Length, 90_000, responseBudget);
+        using var document = JsonDocument.Parse(body);
+        var result = document.RootElement.GetProperty("result");
+        Assert.Equal("byte_budget", result
+            .GetProperty("_meta")
+            .GetProperty("response_controls")
+            .GetProperty("continuation_reason")
+            .GetString());
+        Assert.True(result.TryGetProperty("nextCursor", out _));
     }
 
     [Fact]

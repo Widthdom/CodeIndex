@@ -441,17 +441,22 @@ public partial class McpServerTests : IDisposable
         transaction.Commit();
     }
 
-    private JsonNode CallResourcesList(string cursor, int id)
-        => _server.HandleMessage(new JsonObject
+    private JsonNode CallResourcesList(string cursor, int id, int? maxBytes = null)
+    {
+        var listParams = new JsonObject
+        {
+            ["cursor"] = cursor,
+        };
+        if (maxBytes is not null)
+            listParams["maxBytes"] = maxBytes.Value;
+        return _server.HandleMessage(new JsonObject
         {
             ["jsonrpc"] = "2.0",
             ["id"] = id,
             ["method"] = "resources/list",
-            ["params"] = new JsonObject
-            {
-                ["cursor"] = cursor,
-            },
+            ["params"] = listParams,
         })!;
+    }
 
     private static void AssertResourcesListRestartRequired(JsonNode response)
     {
@@ -1109,6 +1114,49 @@ public sealed class Caller
         Assert.Equal("invalid_argument", response["error"]!["data"]!["category"]!.GetValue<string>());
     }
 
+    [Theory]
+    [InlineData(McpServer.MinResourceListMaxBytes - 1)]
+    [InlineData(McpServer.MaxResourceListMaxBytes + 1)]
+    public void ResourcesList_MaxBytesOutsideBounds_ReturnsInvalidParams_Issue4542(int maxBytes)
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "resources/list",
+            ["params"] = new JsonObject
+            {
+                ["maxBytes"] = maxBytes,
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        var data = response["error"]!["data"]!;
+        Assert.Equal("invalid_argument", data["category"]!.GetValue<string>());
+        Assert.Equal(McpServer.MinResourceListMaxBytes, data["min_max_bytes"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxResourceListMaxBytes, data["max_max_bytes"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ResourcesList_ByteBudgetContinuationMetadata_DoesNotExceedItemLimitReservation_Issue4542()
+    {
+        InsertResourceFileRecords(205, "src/metadata-budget");
+        var response = _server.HandleMessage(
+            JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}""")!)!;
+        var itemLimitControls = response["result"]!["_meta"]!["response_controls"]!;
+        Assert.False(itemLimitControls["byte_budget_reached"]!.GetValue<bool>());
+        Assert.Equal("item_limit", itemLimitControls["continuation_reason"]!.GetValue<string>());
+        var byteBudgetControls = JsonNode.Parse(itemLimitControls.ToJsonString())!;
+        byteBudgetControls["byte_budget_reached"] = true;
+        byteBudgetControls["continuation_reason"] = "byte_budget";
+
+        Assert.Equal(
+            Encoding.UTF8.GetByteCount(itemLimitControls.ToJsonString()),
+            Encoding.UTF8.GetByteCount(byteBudgetControls.ToJsonString()));
+    }
+
     [Fact]
     public void ResourcesList_CursorBeyondPaginationCap_ReturnsInvalidParams_Issue3112()
     {
@@ -1197,6 +1245,9 @@ public sealed class Caller
         Assert.Equal(200, firstResources.Count);
         Assert.Equal(McpServer.MaxResourceListCursorChars, cursor.Length);
         Assert.False(int.TryParse(cursor, NumberStyles.None, CultureInfo.InvariantCulture, out _));
+        var firstControls = firstResponse["result"]!["_meta"]!["response_controls"]!;
+        Assert.Equal("item_limit", firstControls["continuation_reason"]!.GetValue<string>());
+        Assert.Equal(0, firstControls["omitted_resource_count"]!.GetValue<int>());
         Assert.DoesNotContain(secondResources, resource => resource!["name"]!.GetValue<string>() == "zz/deep-00198.cs");
         Assert.Contains(secondResources, resource => resource!["name"]!.GetValue<string>() == "zz/deep-00199.cs");
         var firstNames = firstResources.Select(resource => resource!["name"]!.GetValue<string>()).ToHashSet(StringComparer.Ordinal);
@@ -1241,7 +1292,7 @@ public sealed class Caller
     }
 
     [Fact]
-    public void ResourcesList_DoesNotAdvertiseUrisTooLongToRead_Issue3122()
+    public void ResourcesList_ReportsUrisTooLongToRead_Issue3122_Issue4542()
     {
         var longPath = "src/" + new string('x', McpBoundedText.MaxResourceUriChars) + ".cs";
         InsertIndexedFile(longPath, "csharp", "public class TooLongResource { }");
@@ -1253,6 +1304,115 @@ public sealed class Caller
         Assert.DoesNotContain(resources, resource => resource!["name"]!.GetValue<string>() == longPath);
         Assert.All(resources, resource =>
             Assert.True(resource!["uri"]!.GetValue<string>().Length <= McpBoundedText.MaxResourceUriChars));
+        var controls = response["result"]!["_meta"]!["response_controls"]!;
+        Assert.Equal(1, controls["omitted_resource_count"]!.GetValue<int>());
+        Assert.Equal(1, controls["omitted_resource_reason_counts"]!["resource_uri_too_long"]!.GetValue<int>());
+        Assert.Equal(0, controls["omitted_resource_reason_counts"]!["resource_exceeds_max_bytes"]!.GetValue<int>());
+        Assert.Equal("completed", controls["continuation_reason"]!.GetValue<string>());
+        Assert.DoesNotContain(longPath, response.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ResourcesList_ResourceLargerThanRequestedBudget_IsReportedAndCursorProgresses_Issue4542()
+    {
+        var largePath = "src/" + new string('x', 1_800) + ".cs";
+        InsertIndexedFile(largePath, "csharp", "public class LargeResource { }");
+        var firstRequest = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "resources/list",
+            ["params"] = new JsonObject
+            {
+                ["maxBytes"] = McpServer.MinResourceListMaxBytes,
+            },
+        };
+
+        var firstResponse = _server.HandleMessage(firstRequest)!;
+        var cursor = firstResponse["result"]!["nextCursor"]!.GetValue<string>();
+        var secondResponse = CallResourcesList(
+            cursor,
+            id: 2,
+            maxBytes: McpServer.MinResourceListMaxBytes);
+
+        var secondResult = secondResponse["result"]!;
+        Assert.Empty(secondResult["resources"]!.AsArray());
+        Assert.Null(secondResult["nextCursor"]);
+        var controls = secondResult["_meta"]!["response_controls"]!;
+        Assert.Equal(1, controls["omitted_resource_count"]!.GetValue<int>());
+        Assert.Equal(1, controls["omitted_resource_reason_counts"]!["resource_exceeds_max_bytes"]!.GetValue<int>());
+        Assert.Equal("completed", controls["continuation_reason"]!.GetValue<string>());
+        Assert.DoesNotContain(largePath, secondResponse.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ResourcesList_DefaultMaxBytesBoundsEnvelopeAndContinues_Issue4542()
+    {
+        const int insertedFileCount = 200;
+        var longPrefix = "src/" + new string('x', 1_800);
+        var writer = new DbWriter(_db.Connection);
+        using (var transaction = writer.BeginTransaction())
+        {
+            for (var i = 0; i < insertedFileCount; i++)
+            {
+                writer.UpsertFile(new FileRecord
+                {
+                    Path = $"{longPrefix}-{i:D3}.cs",
+                    Lang = "csharp",
+                    Size = 1,
+                    Lines = 1,
+                    Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+                    Checksum = $"near-cap-{i}",
+                });
+            }
+            transaction.Commit();
+        }
+        var firstRequest = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "resources/list",
+            ["params"] = new JsonObject
+            {
+                ["maxBytes"] = McpServer.DefaultResourceListMaxBytes,
+            },
+        };
+
+        var firstResponse = _server.HandleMessage(firstRequest)!;
+
+        Assert.True(_server.TrySerializeJsonNodeWithinByteLimitForTests(
+            firstResponse,
+            int.MaxValue,
+            out _,
+            out var firstResponseBytes));
+        Assert.InRange(firstResponseBytes, 900_000, McpServer.DefaultResourceListMaxBytes);
+        var firstResult = firstResponse["result"]!;
+        var firstResources = firstResult["resources"]!.AsArray();
+        var controls = firstResult["_meta"]!["response_controls"]!;
+        Assert.True(controls["byte_budget_reached"]!.GetValue<bool>());
+        Assert.Equal("byte_budget", controls["continuation_reason"]!.GetValue<string>());
+        Assert.Equal(0, controls["omitted_resource_count"]!.GetValue<int>());
+        var cursor = firstResult["nextCursor"]!.GetValue<string>();
+
+        var secondResponse = CallResourcesList(
+            cursor,
+            id: 2,
+            maxBytes: McpServer.DefaultResourceListMaxBytes);
+
+        Assert.True(_server.TrySerializeJsonNodeWithinByteLimitForTests(
+            secondResponse,
+            int.MaxValue,
+            out _,
+            out var secondResponseBytes));
+        Assert.True(secondResponseBytes <= McpServer.DefaultResourceListMaxBytes);
+        var secondResult = secondResponse["result"]!;
+        Assert.Null(secondResult["nextCursor"]);
+        var allNames = firstResources
+            .Concat(secondResult["resources"]!.AsArray())
+            .Select(resource => resource!["name"]!.GetValue<string>())
+            .ToArray();
+        Assert.Equal(insertedFileCount + 1, allNames.Length);
+        Assert.Equal(allNames.Length, allNames.Distinct(StringComparer.Ordinal).Count());
     }
 
     [Fact]
