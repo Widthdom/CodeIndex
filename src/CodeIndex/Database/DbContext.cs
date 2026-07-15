@@ -474,7 +474,7 @@ public class DbContext : IDisposable
                     ApplyConnectionPerformancePragmas();
                     RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
                     _isReadOnly = true;
-                    _immutableReadOnly = SqliteFileUri.RequestsImmutable(dbPath);
+                    _immutableReadOnly = SqliteFileUri.RequestsUnambiguousImmutableSnapshot(dbPath);
                     WarnIfBatchInProgress();
                     return;
                 }
