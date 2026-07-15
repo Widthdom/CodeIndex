@@ -52,6 +52,9 @@ public partial class DbReader
 
         int? afterBucket = null;
         string? afterPath = null;
+        var excludeGeneratedPredicate = _fileColumns.Contains("generated")
+            ? "COALESCE(f.generated, 0) = 0"
+            : null;
         if (afterFileId is not null)
         {
             using (var anchorCommand = _conn.CreateCommand())
@@ -61,6 +64,7 @@ public partial class DbReader
                     SELECT {PathBucketOrder} AS path_bucket, f.path
                     FROM files f
                     WHERE f.id = @afterFileId
+                    {(excludeGeneratedPredicate is null ? string.Empty : $"AND {excludeGeneratedPredicate}")}
                     """;
                 SqliteCommandPolicy.Add(anchorCommand, "@afterFileId", afterFileId.Value);
                 using var anchorReader = anchorCommand.ExecuteTrackedReader();
@@ -80,6 +84,15 @@ public partial class DbReader
 
         using var command = _conn.CreateCommand();
         command.Transaction = transaction;
+        // Match the established resources/read visibility contract: generated files remain
+        // outside the resource surface when the schema can identify them. Build this into the
+        // keyset source so omitted rows neither consume the page limit nor become cursor anchors.
+        // schema で generated file を識別できる場合は、既存 resources/read の可視性契約に
+        // 合わせて resource surface から除外する。省略行が page limit や cursor anchor を
+        // 消費しないよう keyset source 自体へ条件を組み込む。
+        var sourcePredicate = excludeGeneratedPredicate is null
+            ? string.Empty
+            : $"WHERE {excludeGeneratedPredicate}";
         var seekPredicate = afterFileId is null
             ? string.Empty
             : "WHERE path_bucket > @afterBucket OR (path_bucket = @afterBucket AND path > @afterPath)";
@@ -88,6 +101,7 @@ public partial class DbReader
             WITH resource_files AS (
                 SELECT f.id, f.path, f.lang, f.lines, {PathBucketOrder} AS path_bucket
                 FROM files f
+                {sourcePredicate}
             )
             SELECT id, path, lang, lines
             FROM resource_files

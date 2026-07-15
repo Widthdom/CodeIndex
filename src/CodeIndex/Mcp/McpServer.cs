@@ -93,11 +93,12 @@ public partial class McpServer : IDisposable
     // を渡せるようにするため (#1567)。
     private readonly AsyncLocal<CancellationToken> _currentRequestToken = new();
     private readonly AsyncLocal<bool> _isolateDbForCurrentRequest = new();
-    // HTTP JSON-RPC batches divide the complete array-envelope budget among response-bearing
-    // items. resources/list observes its current share here so two large pages cannot each claim
-    // the transport's full response cap and turn the aggregate frame into HTTP 500.
-    // HTTP JSON-RPC batch は配列 envelope 全体の budget を応答対象 item で分配する。
-    // resources/list は現在の割当をここから参照し、複数ページが transport 上限を重複利用しない。
+    // JSON-RPC batches divide the complete array-envelope budget among response-bearing
+    // items. resources/list and resources/read observe their current share here so large
+    // pages cannot each claim the full response cap and overflow the aggregate frame.
+    // JSON-RPC batch は配列 envelope 全体の budget を応答対象 item で分配する。
+    // resources/list と resources/read は現在の割当をここから参照し、複数ページが
+    // response 上限を重複利用しない。
     private readonly AsyncLocal<int?> _currentBatchResponseItemMaxBytes = new();
     private readonly AsyncLocal<Func<string, CancellationToken, Task>?> _currentOutOfBandFrameWriter = new();
     private readonly AsyncLocal<bool> _canAwaitClientResponses = new();
@@ -212,6 +213,17 @@ public partial class McpServer : IDisposable
     internal const int ResourceListPageSize = 200;
     private const int ResourceListCursorPayloadBytes = 17;
     private const byte ResourceListCursorVersion = 1;
+    // `resources/read` keeps its text budget below the default HTTP response ceiling even
+    // when JSON escaping expands every source byte. Cursor pages also cap logical lines so
+    // files containing many empty lines cannot turn a small byte budget into unbounded DB work.
+    // `resources/read` の本文上限は、全 source byte が JSON escape で膨張しても既定 HTTP
+    // response 上限内に収まる値とする。空行が多いファイルで小さい byte budget が無制限の
+    // DB 処理に化けないよう、cursor page の論理行数にも上限を設ける。
+    internal const int MinResourceReadMaxBytes = 4;
+    internal const int DefaultResourceReadMaxBytes = 64 * 1024;
+    internal const int MaxResourceReadMaxBytes = 128 * 1024;
+    internal const int MaxResourceReadLinesPerPage = 1_000;
+    internal const int MaxResourceReadCursorCharacters = 128;
     internal const int DefaultToolsListPageSize = 24;
     internal const int MaxToolsListPageSize = 24;
     internal const int MaxMcpMapDepth = 32;
@@ -389,6 +401,7 @@ public partial class McpServer : IDisposable
     internal Action? CancellationRegistriesMissedForTests { get; set; }
     internal Func<CancellationToken, Task>? RequestDelayForTests { get; set; }
     internal Func<JsonNode?, CancellationToken, Task>? RequestDelayForTestsWithId { get; set; }
+    internal Action? ResourceReadMetadataLoadedForTests { get; set; }
     internal Action? McpSessionSnapshotCapturedForTests { get; set; }
     internal bool ShutdownRequestedForTests => _shutdownCts.IsCancellationRequested;
     internal CancellationToken ShutdownTokenForTests => _shutdownCts.Token;
@@ -542,6 +555,11 @@ public partial class McpServer : IDisposable
     {
         ArgumentNullException.ThrowIfNull(transport);
         _enforceInitializationLifecycle = true;
+        Volatile.Write(
+            ref _activeTransportMaxResponseBytes,
+            transport is IMcpResponseSizeLimitProvider responseLimitProvider
+                ? responseLimitProvider.MaxResponseFrameBytes
+                : 0);
 
         // Link the caller-supplied token (Ctrl+C / HTTP listener stop) with the server-internal
         // shutdown signal so `notifications/shutdown` also wakes any pending `ReadFrameAsync`.
@@ -555,10 +573,6 @@ public partial class McpServer : IDisposable
         // Use stderr for logging so stdout stays clean for JSON-RPC
         // stdoutをJSON-RPC用にクリーンに保つため、ログはstderrに出力
         ConsoleUi.TryWriteErrorLine($"[cdidx-mcp] Starting MCP server v{_version} (db: {FormatDbPathForLog(_dbPath)}, transport: {transport.Name} @ {transport.Endpoint}, max in-flight: {MaxConcurrency})");
-
-        Volatile.Write(
-            ref _activeTransportMaxResponseBytes,
-            transport is HttpMcpTransport activeHttpTransport ? activeHttpTransport.MaxResponseBodyBytes : 0);
 
         if (transport is HttpMcpTransport httpTransport)
         {
@@ -1559,6 +1573,15 @@ public partial class McpServer : IDisposable
         return true;
     }
 
+    internal Task<JsonNode?> RegisterPendingClientRequestForTests(string id)
+    {
+        var key = JsonSerializer.Serialize(id);
+        var pending = new TaskCompletionSource<JsonNode?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_pendingClientRequests.TryAdd(key, pending))
+            throw new InvalidOperationException($"Pending MCP client request already registered: {id}");
+        return pending.Task;
+    }
+
     private async Task<JsonNode?> SendClientRequestAsync(string method, JsonObject? @params, CancellationToken cancellationToken)
     {
         if (ClientRequestHandlerForTests is { } handler)
@@ -1959,13 +1982,35 @@ public partial class McpServer : IDisposable
             }
 
             var previousFrameInitializeState = _frameInitializeState.Value;
-            _frameInitializeState.Value = new FrameInitializeState(CurrentInitializeState, isProvisionalGeneration: false);
+            var initialFrameInitializeState = CurrentInitializeState;
+            var frameInitializeState = new FrameInitializeState(
+                initialFrameInitializeState,
+                isProvisionalGeneration: false);
+            _frameInitializeState.Value = frameInitializeState;
+            var batchBeforeDispatchAsync = beforeDispatchAsync;
+            if (beforeDispatchAsync is not null)
+            {
+                batchBeforeDispatchAsync = async cancellationToken =>
+                {
+                    await beforeDispatchAsync(cancellationToken).ConfigureAwait(false);
+                    // The concurrent loop accepts and pre-registers a batch before its protocol
+                    // predecessor finishes. Advance only this batch's original generation after
+                    // that predecessor commits; timed-out older frames retain their own holders,
+                    // and an in-batch initialize replaces this holder instead of being overwritten.
+                    // concurrent loop は protocol predecessor 完了前に batch を受理・事前登録する。
+                    // predecessor の commit 後、この batch の元 generation だけを進める。timeout
+                    // 後の旧 frame は別 holder を保持し、batch 内 initialize は holder 自体を置換する。
+                    frameInitializeState.TryAdvanceToPublishedGeneration(
+                        initialFrameInitializeState,
+                        PublishedInitializeState);
+                };
+            }
             try
             {
                 return await HandleBatchMessageAsync(
                     batch,
                     isolateRequestDb,
-                    beforeDispatchAsync,
+                    batchBeforeDispatchAsync,
                     rejectForCapacity,
                     deferredInitializeCommits).ConfigureAwait(false);
             }
@@ -2028,11 +2073,34 @@ public partial class McpServer : IDisposable
             return null;
         }
 
+        if (rejectForCapacity && IsStateChangingNotification(method))
+        {
+            // Eager cancellation is handled above. Other state notifications are dropped on
+            // admission overflow regardless of a malformed id, matching the normal no-id
+            // overload contract without mutating roots or lifecycle state (#4536, #4545).
+            // eager cancellation は上で処理済み。それ以外の state notification は malformed
+            // id の有無に関係なく admission overflow 時に drop し、roots/lifecycle を変更しない。
+            return null;
+        }
+
+        var protocolPredecessorAwaited = false;
+        if (IsStateChangingNotification(method) && beforeDispatchAsync is not null)
+        {
+            // Cancellation controls intentionally bypass protocol barriers, but roots/lifecycle
+            // notifications must not mutate state before an earlier initialize commits. Apply the
+            // method semantic even when a malformed client attaches an id to the notification.
+            // cancellation control は protocol barrier を bypass する一方、roots/lifecycle
+            // notification は先行 initialize の commit 前に state を変更してはならない。
+            // malformed client が id を付けた場合も method semantics に基づいて待機する。
+            await beforeDispatchAsync(_currentRequestToken.Value).ConfigureAwait(false);
+            protocolPredecessorAwaited = true;
+        }
+
         if (!hasId)
         {
             if (rejectForCapacity)
                 return null;
-            if (beforeDispatchAsync is not null)
+            if (!protocolPredecessorAwaited && beforeDispatchAsync is not null)
                 await beforeDispatchAsync(_currentRequestToken.Value).ConfigureAwait(false);
         }
 
@@ -2308,24 +2376,44 @@ public partial class McpServer : IDisposable
                 suggestion: $"JSON-RPC batch requests are limited to {MaxBatchRequestCount} items.",
                 retrySafe: false);
 
+        // Client replies complete server-initiated requests and never produce a response item.
+        // Consume matched replies before reserving response bytes; unmatched response-shaped
+        // objects remain ordinary invalid requests and retain their budget slot.
+        // client reply は server 起点 request を完了し response item を生成しないため、response
+        // budget 予約前に matched reply を consume する。unmatched object は invalid request として残す。
+        var completed = new bool[batch.Count];
+        for (var index = 0; index < batch.Count; index++)
+        {
+            if (batch[index] is JsonObject itemObject
+                && TryCompletePendingClientRequest(itemObject))
+            {
+                completed[index] = true;
+            }
+        }
+
         BatchResponseBudgetSlot?[]? budgetSlots = null;
         int?[]? batchResponseItemLimits = null;
+        JsonObject? batchBudgetPreflightError = null;
         var batchResponseLimit = 0;
         var activeTransportMaxResponseBytes = Volatile.Read(ref _activeTransportMaxResponseBytes);
-        if (activeTransportMaxResponseBytes > 0 && _usesDefaultResponseSerializer)
+        if (_usesDefaultResponseSerializer)
         {
             // The complete JSON array owns one response budget. Reserve brackets, commas, and a
             // bounded error for every response-bearing item, then divide the remaining bytes
             // deterministically before concurrent dispatch. JSON 配列全体で 1 つの response
             // budget を共有する。bracket、comma、各 response item の bounded error を予約し、
             // 残りを concurrent dispatch 前に決定的に分配する。
-            batchResponseLimit = Math.Min(activeTransportMaxResponseBytes, GetMaxResponseBytes());
+            batchResponseLimit = GetMaxResponseBytes();
+            if (activeTransportMaxResponseBytes > 0)
+                batchResponseLimit = Math.Min(activeTransportMaxResponseBytes, batchResponseLimit);
             budgetSlots = new BatchResponseBudgetSlot?[batch.Count];
             batchResponseItemLimits = new int?[batch.Count];
             long reservedErrorBytes = 0;
             var responseCount = 0;
             for (var index = 0; index < batch.Count; index++)
             {
+                if (completed[index])
+                    continue;
                 if (!TryCreateBatchResponseBudgetSlot(batch[index], out var slot))
                     continue;
 
@@ -2338,50 +2426,61 @@ public partial class McpServer : IDisposable
             {
                 var payloadBytes = batchResponseLimit - 2L - (responseCount - 1L);
                 if (payloadBytes < reservedErrorBytes)
-                    return CreateBatchEnvelopeBudgetError(batchResponseLimit, retrySafe: true);
-
-                var distributableBytes = payloadBytes - reservedErrorBytes;
-                var fairShareBytes = distributableBytes / responseCount;
-                var remainderBytes = distributableBytes % responseCount;
-                for (var index = 0; index < batch.Count; index++)
                 {
-                    if (budgetSlots[index] is not { } slot)
-                        continue;
-
-                    var itemExtraBytes = fairShareBytes;
-                    if (remainderBytes > 0)
+                    // Defer the terminal budget error until request IDs are durably registered
+                    // and cancellation controls have run. No ordinary or state-changing work is
+                    // dispatched on this path (#4544, #4545).
+                    // terminal budget error は request ID の durable 登録と cancellation control
+                    // 実行後まで保留し、通常処理や他の state mutation は開始しない。
+                    batchBudgetPreflightError = CreateBatchEnvelopeBudgetError(
+                        batchResponseLimit,
+                        retrySafe: true);
+                }
+                else
+                {
+                    var distributableBytes = payloadBytes - reservedErrorBytes;
+                    var fairShareBytes = distributableBytes / responseCount;
+                    var remainderBytes = distributableBytes % responseCount;
+                    for (var index = 0; index < batch.Count; index++)
                     {
-                        itemExtraBytes++;
-                        remainderBytes--;
-                    }
-                    batchResponseItemLimits[index] = checked((int)(slot.ErrorResponseBytes + itemExtraBytes));
-                }
+                        if (budgetSlots[index] is not { } slot)
+                            continue;
 
-                // Equal caps can strand the same resource-serialization fragment in every slot.
-                // Move one minimum page quantum from the first resources/list slot to the last so
-                // one concurrent page can consume that deterministic slack without exceeding the
-                // aggregate cap. 等分時に各 slot へ同じ serialization 断片が残るのを避けるため、
-                // 最初の resources/list から最後へ最小 page 予算 1 単位を移す。
-                var firstResourceIndex = -1;
-                var lastResourceIndex = -1;
-                for (var index = 0; index < batch.Count; index++)
-                {
-                    if (budgetSlots[index]?.CanShapeResourcesListResponse != true)
-                        continue;
-                    if (firstResourceIndex < 0)
-                        firstResourceIndex = index;
-                    lastResourceIndex = index;
-                }
-                if (firstResourceIndex >= 0 && lastResourceIndex != firstResourceIndex)
-                {
-                    var donorSlot = budgetSlots[firstResourceIndex]!.Value;
-                    var donorLimit = batchResponseItemLimits[firstResourceIndex]!.Value;
-                    var transferableBytes = Math.Min(
-                        MinResourceListMaxBytes,
-                        donorLimit - donorSlot.ErrorResponseBytes);
-                    batchResponseItemLimits[firstResourceIndex] = donorLimit - transferableBytes;
-                    batchResponseItemLimits[lastResourceIndex] = checked(
-                        batchResponseItemLimits[lastResourceIndex]!.Value + transferableBytes);
+                        var itemExtraBytes = fairShareBytes;
+                        if (remainderBytes > 0)
+                        {
+                            itemExtraBytes++;
+                            remainderBytes--;
+                        }
+                        batchResponseItemLimits[index] = checked((int)(slot.ErrorResponseBytes + itemExtraBytes));
+                    }
+
+                    // Equal caps can strand the same resource-serialization fragment in every slot.
+                    // Move one minimum page quantum from the first resources/list slot to the last so
+                    // one concurrent page can consume that deterministic slack without exceeding the
+                    // aggregate cap. 等分時に各 slot へ同じ serialization 断片が残るのを避けるため、
+                    // 最初の resources/list から最後へ最小 page 予算 1 単位を移す。
+                    var firstResourceIndex = -1;
+                    var lastResourceIndex = -1;
+                    for (var index = 0; index < batch.Count; index++)
+                    {
+                        if (budgetSlots[index]?.CanShapeResourcesListResponse != true)
+                            continue;
+                        if (firstResourceIndex < 0)
+                            firstResourceIndex = index;
+                        lastResourceIndex = index;
+                    }
+                    if (firstResourceIndex >= 0 && lastResourceIndex != firstResourceIndex)
+                    {
+                        var donorSlot = budgetSlots[firstResourceIndex]!.Value;
+                        var donorLimit = batchResponseItemLimits[firstResourceIndex]!.Value;
+                        var transferableBytes = Math.Min(
+                            MinResourceListMaxBytes,
+                            donorLimit - donorSlot.ErrorResponseBytes);
+                        batchResponseItemLimits[firstResourceIndex] = donorLimit - transferableBytes;
+                        batchResponseItemLimits[lastResourceIndex] = checked(
+                            batchResponseItemLimits[lastResourceIndex]!.Value + transferableBytes);
+                    }
                 }
             }
         }
@@ -2394,7 +2493,6 @@ public partial class McpServer : IDisposable
         // 不正 item は即時確定し、cancel control は先行処理し、状態変更 item で順序 segment を区切る。
         var responsesByIndex = new JsonNode?[batch.Count];
         var logsByIndex = new DeferredFrameLogBuffer?[batch.Count];
-        var completed = new bool[batch.Count];
         var orderingFences = new bool[batch.Count];
         var cancellationItems = new bool[batch.Count];
         var queuedRegistrations = new QueuedBatchRequestRegistration?[batch.Count];
@@ -2403,6 +2501,9 @@ public partial class McpServer : IDisposable
 
         for (var index = 0; index < batch.Count; index++)
         {
+            if (completed[index])
+                continue;
+
             var item = batch[index];
             if (item is null || item is not JsonObject and not JsonArray)
             {
@@ -2418,13 +2519,7 @@ public partial class McpServer : IDisposable
                 completed[index] = true;
                 continue;
             }
-
             var itemObject = (JsonObject)item;
-            if (TryCompletePendingClientRequest(itemObject))
-            {
-                completed[index] = true;
-                continue;
-            }
             if (IsCancellationItem(itemObject))
             {
                 // Execute controls only after this pass has durably registered every unique
@@ -2472,6 +2567,14 @@ public partial class McpServer : IDisposable
             responsesByIndex[index] = cancellationResult.Response;
             logsByIndex[index] = cancellationResult.Logs;
             completed[index] = true;
+        }
+
+        if (batchBudgetPreflightError is not null)
+        {
+            foreach (var registration in queuedRegistrations)
+                registration?.DisposeIfUnclaimed();
+            MergeBatchItemLogs(logsByIndex);
+            return batchBudgetPreflightError;
         }
 
         if (rejectForCapacity)
@@ -2610,8 +2713,9 @@ public partial class McpServer : IDisposable
                     _jsonOptions,
                     itemResponseLimit,
                     out _)
-                && slot.CanShapeResourcesListResponse
-                && IsResourcesListSuccessResponse(response))
+                && (slot.CanShapeResourcesReadResponse
+                    || (slot.CanShapeResourcesListResponse
+                        && IsResourcesListSuccessResponse(response))))
             {
                 response = slot.ErrorResponse;
             }
@@ -2787,12 +2891,17 @@ public partial class McpServer : IDisposable
         if (!BatchItemRequiresResponse(item, out var responseId))
             return false;
 
-        var errorResponse = CreateBatchItemBudgetError(responseId);
+        var canShapeResourcesListResponse = CanShapeResourcesListResponse(item);
+        var canShapeResourcesReadResponse = CanShapeResourcesReadResponse(item);
+        var errorResponse = canShapeResourcesReadResponse
+            ? CreateResourceReadBatchItemBudgetError(responseId)
+            : CreateBatchItemBudgetError(responseId);
         _ = TryMeasureJsonUtf8BytesWithinLimit(errorResponse, _jsonOptions, int.MaxValue, out var errorResponseBytes);
         slot = new BatchResponseBudgetSlot(
             errorResponse,
             errorResponseBytes,
-            CanShapeResourcesListResponse(item));
+            canShapeResourcesListResponse,
+            canShapeResourcesReadResponse);
         return true;
     }
 
@@ -2802,6 +2911,13 @@ public partial class McpServer : IDisposable
             && hasId
             && TryGetStringMember(request, "jsonrpc") == "2.0"
             && TryGetStringMember(request, "method") == "resources/list";
+
+    private static bool CanShapeResourcesReadResponse(JsonNode? item)
+        => item is JsonObject request
+            && TryGetRequestId(request, out var hasId, out _)
+            && hasId
+            && TryGetStringMember(request, "jsonrpc") == "2.0"
+            && TryGetStringMember(request, "method") == "resources/read";
 
     private static bool IsResourcesListSuccessResponse(JsonNode response)
         => response is JsonObject responseObject
@@ -2842,13 +2958,27 @@ public partial class McpServer : IDisposable
             hasId: true,
             id,
             code: -32603,
-            message: "resources/list could not fit within its share of the HTTP batch response byte limit.",
+            message: "resources/list could not fit within its share of the active batch response byte limit.",
             category: McpErrorEnvelope.CategoryInvalidArgument,
-            suggestion: "Request a smaller resources/list page, split the batch, or raise the HTTP response byte limit.",
+            suggestion: "Request a smaller resources/list page, split the batch, or raise the applicable MCP or transport response byte limit.",
             retrySafe: true,
             extraData: new JsonObject
             {
                 ["reason"] = "batch_response_budget_exceeded",
+            });
+
+    private static JsonObject CreateResourceReadBatchItemBudgetError(JsonNode? id)
+        => CreateErrorResponse(
+            hasId: true,
+            id,
+            code: -32603,
+            message: "Batch response budget too small.",
+            category: McpErrorEnvelope.CategoryInternalError,
+            suggestion: "Use a smaller JSON-RPC batch and retry.",
+            retrySafe: false,
+            extraData: new JsonObject
+            {
+                ["reason"] = "batch_response_budget_too_small",
             });
 
     private static JsonObject CreateBatchEnvelopeBudgetError(int batchResponseLimit, bool retrySafe)
@@ -2861,7 +2991,7 @@ public partial class McpServer : IDisposable
                 : "The completed JSON-RPC batch exceeded the active response byte limit.",
             category: McpErrorEnvelope.CategoryInvalidArgument,
             suggestion: retrySafe
-                ? "Split the batch into fewer requests or raise the HTTP response byte limit."
+                ? "Split the batch into fewer requests or raise the applicable MCP or transport response byte limit."
                 : "Do not automatically retry state-changing items; their completion state is unknown. Split future batches into fewer requests.",
             retrySafe,
             extraData: new JsonObject
@@ -2876,7 +3006,8 @@ public partial class McpServer : IDisposable
     private readonly record struct BatchResponseBudgetSlot(
         JsonObject ErrorResponse,
         int ErrorResponseBytes,
-        bool CanShapeResourcesListResponse);
+        bool CanShapeResourcesListResponse,
+        bool CanShapeResourcesReadResponse);
 
     private async Task<JsonNode> DispatchWithRequestCancellationAsync(
         JsonNode? id,
@@ -3644,6 +3775,23 @@ public partial class McpServer : IDisposable
         internal bool TryConsumeAcceptedRootsChange()
             => Interlocked.Exchange(ref _acceptedRootsChange, 0) != 0;
 
+        internal bool TryAdvanceToPublishedGeneration(
+            InitializeSessionState expectedState,
+            InitializeSessionState publishedState)
+        {
+            if (IsProvisionalGeneration)
+                return false;
+
+            lock (_gate)
+            {
+                if (!ReferenceEquals(Current, expectedState))
+                    return false;
+
+                Volatile.Write(ref _current, publishedState);
+                return true;
+            }
+        }
+
         internal bool TryRefreshClientRoots(
             InitializeSessionState expectedState,
             ClientRootSnapshot refreshedRoots)
@@ -4214,27 +4362,388 @@ public partial class McpServer : IDisposable
                 suggestion: "Use a cdidx file resource URI returned by resources/list (`cdidx://file/<indexed-path>`).",
                 retrySafe: false);
 
-        return WithDbReader(id, args: null, reader =>
+        if (!TryReadOptionalResourceReadInteger(readParams, "startLine", out var requestedStartLine))
+            return CreateResourceReadArgumentError(id, "startLine",
+                "resources/read params.startLine must be a positive integer.",
+                "Pass a 1-based line number, or omit startLine to begin at line 1.");
+        if (!TryReadOptionalResourceReadInteger(readParams, "endLine", out var requestedEndLine))
+            return CreateResourceReadArgumentError(id, "endLine",
+                "resources/read params.endLine must be a positive integer.",
+                "Pass an inclusive 1-based line number greater than or equal to startLine, or omit endLine to read through the resource.");
+        if (!TryReadOptionalResourceReadInteger(readParams, "maxBytes", out var requestedMaxBytes))
+            return CreateResourceReadArgumentError(id, "maxBytes",
+                "resources/read params.maxBytes must be an integer.",
+                $"Pass a UTF-8 text budget between {MinResourceReadMaxBytes} and {MaxResourceReadMaxBytes} bytes.");
+        if (!TryReadOptionalResourceReadString(readParams, "cursor", out var cursorText))
+            return CreateResourceReadArgumentError(id, "cursor",
+                "resources/read params.cursor must be a non-empty string.",
+                "Use the nextCursor returned in result._meta, or omit cursor to start a new range.");
+
+        if (requestedStartLine is <= 0)
+            return CreateResourceReadIntegerRangeError(id, "startLine", 1, int.MaxValue, requestedStartLine.Value);
+        if (requestedEndLine is <= 0)
+            return CreateResourceReadIntegerRangeError(id, "endLine", 1, int.MaxValue, requestedEndLine.Value);
+        if (requestedStartLine.HasValue && requestedEndLine.HasValue && requestedEndLine.Value < requestedStartLine.Value)
+            return CreateResourceReadArgumentError(id, "endLine",
+                "resources/read params.endLine must be greater than or equal to params.startLine.",
+                "Increase endLine or start a new range with matching 1-based boundaries.");
+
+        var maxBytes = requestedMaxBytes ?? DefaultResourceReadMaxBytes;
+        if (maxBytes < MinResourceReadMaxBytes || maxBytes > MaxResourceReadMaxBytes)
+            return CreateResourceReadIntegerRangeError(id, "maxBytes", MinResourceReadMaxBytes, MaxResourceReadMaxBytes, maxBytes);
+
+        ResourceReadCursor? cursor = null;
+        if (cursorText is not null)
         {
-            var files = reader.ListFiles(query: path, limit: 2);
-            var file = files.FirstOrDefault(f => string.Equals(f.Path, path, StringComparison.Ordinal));
+            if (requestedStartLine.HasValue || requestedEndLine.HasValue)
+                return CreateResourceReadArgumentError(id, "cursor",
+                    "resources/read params.cursor cannot be combined with startLine or endLine.",
+                    "Continue with cursor and an optional maxBytes value, or omit cursor to start a new line range.");
+            if (cursorText.Length > MaxResourceReadCursorCharacters || !TryParseResourceReadCursor(cursorText, out var parsedCursor))
+                return CreateResourceReadArgumentError(id, "cursor",
+                    "resources/read params.cursor is invalid or expired.",
+                    "Use the exact nextCursor returned by the previous resources/read response, or omit cursor to restart the range.",
+                    new JsonObject
+                    {
+                        ["maxCursorCharacters"] = MaxResourceReadCursorCharacters,
+                    });
+            cursor = parsedCursor;
+        }
+
+        return WithDbReader(id, args: null, reader => reader.RunInReadSnapshot(() =>
+        {
+            var file = reader.GetResourceFileMetadata(path);
             if (file == null)
                 return CreateResourceUriError(id, uri, messagePrefix: "Resource not found",
                     suggestion: "Call resources/list again and retry with one of the returned resource URIs.",
                     retrySafe: true);
 
-            var excerpt = reader.GetExcerpt(file.Path, 1, Math.Max(1, file.Lines));
+            var fingerprint = BuildResourceReadFingerprint(file.Path, file.Checksum, file.Size, file.Lines, file.Modified);
+            if (cursor is { } suppliedCursor && !string.Equals(suppliedCursor.Fingerprint, fingerprint, StringComparison.Ordinal))
+                return CreateResourceReadArgumentError(id, "cursor",
+                    "resources/read params.cursor no longer matches the indexed resource.",
+                    "The resource changed after the previous page. Omit cursor and restart the range to avoid skipped or duplicated text.",
+                    new JsonObject
+                    {
+                        ["cursorStale"] = true,
+                    });
+
+            ResourceReadMetadataLoadedForTests?.Invoke();
+
+            var isEmpty = file.Size >= 0
+                          && DbReader.IsAffirmativelyEmptyIndexedFile(file.Lines, file.Checksum);
+            var totalLines = Math.Max(0, file.Lines);
+            var hasReadableLines = !isEmpty && file.Lines > 0;
+            if (isEmpty && cursor.HasValue)
+                return CreateResourceReadArgumentError(id, "cursor",
+                    "resources/read params.cursor does not identify a readable position in this empty resource.",
+                    "Omit cursor and restart the resource read without line boundaries.");
+
+            var startLine = isEmpty ? 0 : hasReadableLines ? cursor?.Line ?? requestedStartLine ?? 1 : 1;
+            var endLine = isEmpty ? 0 : hasReadableLines ? cursor?.EndLine ?? requestedEndLine ?? totalLines : 1;
+            if (hasReadableLines && startLine > totalLines)
+                return CreateResourceReadArgumentError(id, "startLine",
+                    $"resources/read params.startLine exceeds the resource line count ({file.Lines}).",
+                    "Use a startLine from resources/read result._meta or restart at line 1.",
+                    new JsonObject
+                    {
+                        ["totalLines"] = file.Lines,
+                    });
+            if (hasReadableLines)
+                endLine = Math.Min(endLine, totalLines);
+            if (hasReadableLines && endLine < startLine)
+                return CreateResourceReadArgumentError(id, "endLine",
+                    "resources/read effective endLine is before startLine.",
+                    "Restart the range with an endLine greater than or equal to startLine.");
+
+            var resourceUri = BuildResourceUri(file.Path);
+            var mimeType = GetResourceMimeType(file.Lang);
+            var effectiveMaxBytes = GetEffectiveResourceReadMaxBytes(
+                id,
+                resourceUri,
+                mimeType,
+                maxBytes);
+            if (effectiveMaxBytes < MinResourceReadMaxBytes)
+                return CreateErrorResponse(hasId: true, id: id, code: -32603,
+                    message: "The configured MCP response limit is too small for a resources/read page.",
+                    category: McpErrorEnvelope.CategoryInternalError,
+                    suggestion: "Use a smaller JSON-RPC batch, or increase CDIDX_MCP_RESPONSE_MAX_BYTES or CDIDX_MCP_HTTP_MAX_RESPONSE_BYTES, then retry.",
+                    retrySafe: false,
+                    extraData: new JsonObject
+                    {
+                        ["reason"] = "resource_response_budget_too_small",
+                        ["minimumContentBytes"] = MinResourceReadMaxBytes,
+                        ["responseLimitBytes"] = GetEffectiveResourceReadResponseLimit(),
+                    });
+
+            var page = reader.GetBoundedFileContent(
+                file,
+                isEmpty ? 1 : startLine,
+                isEmpty ? 1 : endLine,
+                effectiveMaxBytes,
+                MaxResourceReadLinesPerPage,
+                hasReadableLines ? cursor?.Line : null,
+                hasReadableLines ? cursor?.ByteOffset ?? 0 : 0);
+            switch (page.Status)
+            {
+                case BoundedFileReadStatus.FileNotFound:
+                    return CreateResourceUriError(id, uri, messagePrefix: "Resource not found",
+                        suggestion: "Call resources/list again and retry with one of the returned resource URIs.",
+                        retrySafe: true);
+                case BoundedFileReadStatus.InvalidContinuation:
+                    return CreateResourceReadArgumentError(id, "cursor",
+                        "resources/read params.cursor does not identify a readable UTF-8 position in this resource.",
+                        "Omit cursor and restart the range to obtain a fresh continuation token.");
+                case BoundedFileReadStatus.IncompleteCoverage:
+                case BoundedFileReadStatus.ContentUnavailable:
+                case BoundedFileReadStatus.InvalidTopology:
+                    return CreateResourceReadStorageError(id, page.Status, page.FailureReason);
+            }
+
+            var text = page.Content;
+            var returnedBytes = page.Utf8Bytes;
+            var truncated = page.Truncated && page.NextLine.HasValue;
+            var metadata = new JsonObject
+            {
+                ["startLine"] = startLine,
+                ["startLineByteOffset"] = cursor?.ByteOffset ?? 0,
+                ["endLine"] = endLine,
+                ["totalLines"] = totalLines,
+                ["maxBytes"] = maxBytes,
+                ["maxLines"] = MaxResourceReadLinesPerPage,
+                ["returnedStartLine"] = isEmpty ? 0 : page.StartLine,
+                ["returnedEndLine"] = isEmpty ? 0 : page.EndLine,
+                ["returnedBytes"] = returnedBytes,
+                ["truncated"] = truncated,
+            };
+            if (effectiveMaxBytes != maxBytes)
+                metadata["effectiveMaxBytes"] = effectiveMaxBytes;
+            if (truncated)
+            {
+                metadata["truncationReason"] = page.TruncationReason switch
+                {
+                    "max_lines" => "maxLines",
+                    "max_bytes" when effectiveMaxBytes < maxBytes => "maxResponseBytes",
+                    _ => "maxBytes",
+                };
+                metadata["nextLine"] = page.NextLine!.Value;
+                metadata["nextLineByteOffset"] = page.NextByteOffset ?? 0;
+                metadata["nextCursor"] = BuildResourceReadCursor(
+                    page.NextLine.Value,
+                    page.NextByteOffset ?? 0,
+                    endLine,
+                    fingerprint);
+            }
+
             var contents = new JsonArray
             {
                 new JsonObject
                 {
-                    ["uri"] = BuildResourceUri(file.Path),
-                    ["mimeType"] = GetResourceMimeType(file.Lang),
-                    ["text"] = excerpt?.Content ?? string.Empty,
+                    ["uri"] = resourceUri,
+                    ["mimeType"] = mimeType,
+                    ["text"] = text,
                 }
             };
-            return CreateSuccessResponse(true, id, new JsonObject { ["contents"] = contents });
+            return CreateSuccessResponse(true, id, new JsonObject
+            {
+                ["contents"] = contents,
+                ["_meta"] = metadata,
+            });
+        }));
+    }
+
+    private JsonObject CreateResourceReadStorageError(
+        JsonNode? id,
+        BoundedFileReadStatus status,
+        string? reason)
+    {
+        var normalizedReason = reason ?? status switch
+        {
+            BoundedFileReadStatus.IncompleteCoverage => "resource_chunk_coverage_incomplete",
+            BoundedFileReadStatus.ContentUnavailable => "resource_content_unavailable",
+            _ => "resource_chunk_topology_invalid",
+        };
+        var extraData = new JsonObject
+        {
+            ["reason"] = normalizedReason,
+        };
+        if (status == BoundedFileReadStatus.InvalidTopology)
+        {
+            extraData["maxChunks"] = DbReader.MaxBoundedFileReadChunks;
+            extraData["maxScannedBytes"] = DbReader.MaxBoundedFileReadScannedUtf8Bytes;
+        }
+
+        return status switch
+        {
+            BoundedFileReadStatus.IncompleteCoverage => CreateErrorResponse(hasId: true, id: id,
+                code: McpErrorEnvelope.CodeIndexStale,
+                message: "Indexed resource chunks do not cover the requested range.",
+                category: McpErrorEnvelope.CategoryIndexStale,
+                suggestion: "Refresh or rebuild the index, then call resources/list and retry the read.",
+                retrySafe: true,
+                extraData: extraData),
+            BoundedFileReadStatus.ContentUnavailable => CreateErrorResponse(hasId: true, id: id,
+                code: McpErrorEnvelope.CodeIndexMissing,
+                message: "Indexed content is unavailable for this non-empty resource.",
+                category: McpErrorEnvelope.CategoryIndexMissing,
+                suggestion: "Inspect file issues, resolve skipped-content diagnostics, and rebuild the index before retrying.",
+                retrySafe: true,
+                extraData: extraData),
+            _ => CreateErrorResponse(hasId: true, id: id,
+                code: McpErrorEnvelope.CodeIndexCorrupted,
+                message: "Indexed resource storage metadata is inconsistent or exceeds safe read limits.",
+                category: McpErrorEnvelope.CategoryIndexCorrupted,
+                suggestion: "Delete the index database, rebuild it, and retry with a resource URI from resources/list.",
+                retrySafe: false,
+                extraData: extraData),
+        };
+    }
+
+    private int GetEffectiveResourceReadMaxBytes(
+        JsonNode? id,
+        string resourceUri,
+        string mimeType,
+        int requestedMaxBytes)
+    {
+        var worstCaseMetadata = new JsonObject
+        {
+            ["startLine"] = int.MaxValue,
+            ["startLineByteOffset"] = int.MaxValue,
+            ["endLine"] = int.MaxValue,
+            ["totalLines"] = int.MaxValue,
+            ["maxBytes"] = requestedMaxBytes,
+            ["effectiveMaxBytes"] = int.MaxValue,
+            ["maxLines"] = MaxResourceReadLinesPerPage,
+            ["returnedStartLine"] = int.MaxValue,
+            ["returnedEndLine"] = int.MaxValue,
+            ["returnedBytes"] = int.MaxValue,
+            ["truncated"] = true,
+            ["truncationReason"] = "maxResponseBytes",
+            ["nextLine"] = int.MaxValue,
+            ["nextLineByteOffset"] = int.MaxValue,
+            ["nextCursor"] = new string('x', MaxResourceReadCursorCharacters),
+        };
+        var worstCaseResponse = CreateSuccessResponse(true, id, new JsonObject
+        {
+            ["contents"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["uri"] = resourceUri,
+                    ["mimeType"] = mimeType,
+                    ["text"] = string.Empty,
+                },
+            },
+            ["_meta"] = worstCaseMetadata,
         });
+        var envelopeBytes = Encoding.UTF8.GetByteCount(worstCaseResponse.ToJsonString(_jsonOptions));
+        var availableEncodedTextBytes = GetEffectiveResourceReadResponseLimit() - envelopeBytes;
+        if (availableEncodedTextBytes <= 0)
+            return 0;
+
+        // System.Text.Json's default encoder expands any valid source UTF-8 byte by at most
+        // six bytes (`\uXXXX` for an ASCII control or HTML-sensitive character).
+        // System.Text.Json既定encoderで有効なsource UTF-8 1 byteが展開される最大は6 byte
+        // （ASCII control/HTML-sensitive文字の`\uXXXX`）。
+        const int worstCaseJsonExpansion = 6;
+        return Math.Min(requestedMaxBytes, availableEncodedTextBytes / worstCaseJsonExpansion);
+    }
+
+    private int GetEffectiveResourceReadResponseLimit()
+    {
+        var responseLimit = GetMaxResponseBytes();
+        var transportLimit = Volatile.Read(ref _activeTransportMaxResponseBytes);
+        if (transportLimit > 0)
+            responseLimit = Math.Min(responseLimit, transportLimit);
+        if (_currentBatchResponseItemMaxBytes.Value is { } batchLimit)
+            responseLimit = Math.Min(responseLimit, Math.Max(0, batchLimit));
+        return responseLimit;
+    }
+
+    private readonly record struct ResourceReadCursor(int Line, int ByteOffset, int EndLine, string Fingerprint);
+
+    private static bool TryReadOptionalResourceReadInteger(JsonNode? readParams, string name, out int? result)
+    {
+        result = null;
+        if (readParams is not JsonObject obj || !obj.TryGetPropertyValue(name, out var node) || node is null)
+            return true;
+        if (node is not JsonValue value || !value.TryGetValue<int>(out var parsed))
+            return false;
+        result = parsed;
+        return true;
+    }
+
+    private static bool TryReadOptionalResourceReadString(JsonNode? readParams, string name, out string? result)
+    {
+        result = null;
+        if (readParams is not JsonObject obj || !obj.TryGetPropertyValue(name, out var node) || node is null)
+            return true;
+        if (node is not JsonValue value || !value.TryGetValue<string>(out var parsed) || string.IsNullOrWhiteSpace(parsed))
+            return false;
+        result = parsed;
+        return true;
+    }
+
+    private static JsonObject CreateResourceReadIntegerRangeError(JsonNode? id, string argument, int minimum, int maximum, int actual)
+        => CreateResourceReadArgumentError(id, argument,
+            $"resources/read params.{argument} must be between {minimum} and {maximum}.",
+            $"Choose a {argument} value inside the documented resources/read range.",
+            new JsonObject
+            {
+                ["minimum"] = minimum,
+                ["maximum"] = maximum,
+                ["actual"] = actual,
+            });
+
+    private static JsonObject CreateResourceReadArgumentError(
+        JsonNode? id,
+        string argument,
+        string message,
+        string suggestion,
+        JsonObject? extraData = null)
+    {
+        var data = extraData ?? new JsonObject();
+        data["argument"] = argument;
+        return CreateErrorResponse(hasId: true, id: id, code: -32602, message: message,
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: suggestion,
+            retrySafe: false,
+            extraData: data);
+    }
+
+    private static bool TryParseResourceReadCursor(string value, out ResourceReadCursor cursor)
+    {
+        cursor = default;
+        var parts = value.Split(':');
+        if (parts.Length != 5
+            || !string.Equals(parts[0], "v1", StringComparison.Ordinal)
+            || !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var line)
+            || !int.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out var byteOffset)
+            || !int.TryParse(parts[3], NumberStyles.None, CultureInfo.InvariantCulture, out var endLine)
+            || line <= 0
+            || byteOffset < 0
+            || byteOffset > DbReader.MaxBoundedFileReadScannedUtf8Bytes
+            || endLine < line
+            || parts[4].Length != 16)
+        {
+            return false;
+        }
+
+        cursor = new ResourceReadCursor(line, byteOffset, endLine, parts[4]);
+        return true;
+    }
+
+    private static string BuildResourceReadCursor(int line, int byteOffset, int endLine, string fingerprint)
+        => string.Create(CultureInfo.InvariantCulture, $"v1:{line}:{byteOffset}:{endLine}:{fingerprint}");
+
+    private static string BuildResourceReadFingerprint(string path, string? checksum, long size, int lines, DateTime? modified)
+    {
+        var descriptor = string.Create(
+            CultureInfo.InvariantCulture,
+            $"{path}\n{checksum ?? string.Empty}\n{size}\n{lines}\n{modified?.ToUniversalTime().Ticks ?? 0}");
+        Span<byte> digest = stackalloc byte[32];
+        SHA256.HashData(Encoding.UTF8.GetBytes(descriptor), digest);
+        return Convert.ToHexString(digest[..8]);
     }
 
     private static JsonNode CreateResourceUriError(JsonNode? id, string uri, string messagePrefix, string suggestion, bool retrySafe, bool includeLengthLimit = false)

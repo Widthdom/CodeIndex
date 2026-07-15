@@ -29,7 +29,7 @@ namespace CodeIndex.Mcp;
 /// `/events` subscription はすべて同じ session に属する。サーバー起点の JSON-RPC 通知は
 /// 同じ logical session 向けの bounded SSE fan-out channel `/events` で公開する。
 /// </summary>
-internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport, IConcurrentMcpTransport
+internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport, IConcurrentMcpTransport, IMcpResponseSizeLimitProvider
 {
     internal const int DefaultMaxRequestBodyBytes = 1_000_000;
     internal const int DefaultMaxResponseBodyBytes = 1_000_000;
@@ -294,6 +294,8 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     internal int MaxRequestBodyBytes => _maxRequestBodyBytes;
 
     internal int MaxResponseBodyBytes => _maxResponseBodyBytes;
+
+    int IMcpResponseSizeLimitProvider.MaxResponseFrameBytes => _maxResponseBodyBytes;
 
     internal int MaxQueuedRequests => _maxQueuedRequests;
 

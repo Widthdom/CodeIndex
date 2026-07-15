@@ -3240,6 +3240,55 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void RunInReadSnapshot_CancellationInterruptsRunningSql_Issue4544()
+    {
+        _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/resource-snapshot-cancellation.txt",
+            Lang = "text",
+            Size = 1,
+            Lines = 1,
+            Checksum = "snapshot-cancellation",
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        using var cancellation = new CancellationTokenSource();
+        var callbackCount = 0;
+        _db.Connection.CreateFunction<long>(
+            "cancel_resource_snapshot",
+            () =>
+            {
+                callbackCount++;
+                cancellation.Cancel();
+                return 1;
+            });
+
+        using var reader = new DbReader(_db, cancellation.Token);
+        var exception = Assert.Throws<OperationCanceledException>(() => reader.RunInReadSnapshot(() =>
+        {
+            using var command = _db.Connection.CreateCommand();
+            command.CommandText = """
+                WITH RECURSIVE sequence(value) AS (
+                    SELECT 1
+                    UNION ALL
+                    SELECT value + 1 FROM sequence WHERE value < 1000
+                )
+                SELECT SUM(cancel_resource_snapshot()) FROM sequence
+                """;
+            return command.ExecuteScalar();
+        }));
+
+        Assert.Equal(cancellation.Token, exception.CancellationToken);
+        var sqliteException = Assert.IsType<SqliteException>(exception.InnerException);
+        Assert.Equal(9, sqliteException.SqliteErrorCode);
+        Assert.True(callbackCount > 0);
+
+        using var retry = _db.Connection.CreateCommand();
+        retry.CommandText = "SELECT COUNT(*) FROM files";
+        Assert.Equal(1L, retry.ExecuteScalar());
+    }
+
+    [Fact]
     public void InsertSymbols_ChunksLargeInputUnderSqlVariableLimit()
     {
         var fileId = _writer.UpsertFile(new FileRecord

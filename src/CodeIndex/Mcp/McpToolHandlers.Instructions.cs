@@ -53,6 +53,8 @@ public partial class McpServer
             parts.Add("Investigation flow: search broadly, use definition for declarations, references for usage sites, callers/callees for call graph impact, outline/map for structure, then excerpt or resources/read for focused line ranges. Prefer pagination, path/lang filters, exactName/exactSubstring, and prefix over dumping large files. 調査順序: まず広く search し、宣言は definition、利用箇所は references、呼び出し影響は callers/callees、構造把握は outline/map、その後に excerpt または resources/read で必要な行範囲だけを読んでください。大きなファイルを丸ごと読む前に pagination、path/lang filter、exactName/exactSubstring、prefix で絞り込んでください。");
         }
 
+        parts.Add("For resources/read, use startLine/endLine and maxBytes, then continue truncated reads with result._meta.nextCursor. resources/read では startLine/endLine と maxBytes を使い、切り詰められた場合は result._meta.nextCursor で継続してください。");
+
         if (On("analyze_symbol"))
             parts.Add("Use 'analyze_symbol' to get definition, callers, callees, and references in one call instead of chaining separate tools.");
 
