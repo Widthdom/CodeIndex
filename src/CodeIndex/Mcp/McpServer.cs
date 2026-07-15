@@ -62,6 +62,14 @@ public partial class McpServer : IDisposable
     // JSON-RPC request id ごとの実行中 CTS。MCP `$/cancelRequest` 通知でサーバー全体ではなく
     // 対象ツール呼び出しだけを cancel するため (#1418)。
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _activeRequests = new(StringComparer.Ordinal);
+    // Batch workers can leave valid items queued behind the execution gate. Keep their
+    // cancellation sources in a separate durable registry until dispatch moves them into
+    // `_activeRequests`, so cancellation never depends on the short scheduler-race tombstone
+    // below (#4545).
+    // batch worker 待ちの valid item は execution gate の後ろに滞留し得る。dispatch が
+    // `_activeRequests` へ移すまで専用 registry で cancellation source を保持し、短命な
+    // scheduler-race tombstone に依存せず cancel できるようにする (#4545)。
+    private readonly ConcurrentDictionary<string, QueuedBatchRequestRegistration> _queuedBatchRequests = new(StringComparer.Ordinal);
     // A stdio cancellation frame can win the scheduler race against the request task that
     // read the preceding request frame. Keep a tiny, short-lived tombstone so registration
     // consumes that cancellation instead of silently dropping it (#1418).
@@ -92,7 +100,7 @@ public partial class McpServer : IDisposable
     private readonly AsyncLocal<bool> _isolateDbForCurrentRequest = new();
     private readonly AsyncLocal<Func<string, CancellationToken, Task>?> _currentOutOfBandFrameWriter = new();
     private readonly AsyncLocal<bool> _canAwaitClientResponses = new();
-    private readonly AsyncLocal<List<Action>?> _deferredFrameLogs = new();
+    private readonly AsyncLocal<DeferredFrameLogBuffer?> _deferredFrameLogs = new();
     private static readonly AsyncLocal<RequestCorrelationContext?> CurrentCorrelationContext = new();
     private volatile bool _running = true;
     private volatile bool _initialized;
@@ -369,6 +377,7 @@ public partial class McpServer : IDisposable
     internal string CurrentSessionId => _sessionId;
 
     internal Action<JsonNode?>? RequestRegisteredForTests { get; set; }
+    internal Action? CancellationRegistriesMissedForTests { get; set; }
     internal Func<CancellationToken, Task>? RequestDelayForTests { get; set; }
     internal Func<JsonNode?, CancellationToken, Task>? RequestDelayForTestsWithId { get; set; }
     internal bool ShutdownRequestedForTests => _shutdownCts.IsCancellationRequested;
@@ -382,6 +391,7 @@ public partial class McpServer : IDisposable
     internal int MaxConcurrency { get; }
     internal int AvailableConcurrencySlotsForTests => _concurrencyGate.CurrentCount;
     internal int AcceptedConcurrentFrameCountForTests => Volatile.Read(ref _acceptedConcurrentFrameCount);
+    internal int QueuedBatchRequestCountForTests => _queuedBatchRequests.Count;
 
     internal int MaxAcceptedConcurrentFrames
     {
@@ -1417,7 +1427,8 @@ public partial class McpServer : IDisposable
                 request,
                 isolateRequestDb: true,
                 beforeDispatchAsync,
-                rejectForCapacity).ConfigureAwait(false);
+                rejectForCapacity,
+                queuedBatchRegistration: null).ConfigureAwait(false);
             activity?.SetTag("rpc.result", response is null ? "notification" : "response");
             return response != null ? SerializeResponseOrFallback(response, responseHasId, responseId) : null;
         }
@@ -1668,7 +1679,7 @@ public partial class McpServer : IDisposable
     }
 
     private void BeginDeferredFrameLogs()
-        => _deferredFrameLogs.Value = [];
+        => _deferredFrameLogs.Value = new DeferredFrameLogBuffer();
 
     private void FlushDeferredFrameLogs()
     {
@@ -1677,8 +1688,105 @@ public partial class McpServer : IDisposable
             return;
 
         _deferredFrameLogs.Value = null;
-        foreach (var log in logs)
-            log();
+        logs.ForwardTo(static log => log());
+    }
+
+    private sealed class DeferredFrameLogBuffer
+    {
+        private readonly object _gate = new();
+        private List<Action>? _logs = [];
+        private Action<Action>? _lateLogForwarder;
+
+        public void Add(Action log)
+        {
+            Action<Action>? lateLogForwarder;
+            lock (_gate)
+            {
+                if (_logs is not null)
+                {
+                    _logs.Add(log);
+                    return;
+                }
+
+                lateLogForwarder = _lateLogForwarder;
+            }
+
+            (lateLogForwarder ?? (static lateLog => lateLog()))(log);
+        }
+
+        public void ForwardTo(Action<Action> lateLogForwarder)
+        {
+            lock (_gate)
+            {
+                if (_logs is null)
+                    return;
+
+                foreach (var log in _logs)
+                    lateLogForwarder(log);
+                _logs = null;
+                _lateLogForwarder = lateLogForwarder;
+            }
+        }
+    }
+
+    private sealed class QueuedBatchRequestRegistration
+    {
+        private readonly McpServer _owner;
+        private readonly string _requestKey;
+        private readonly CancellationTokenSource _cancellation;
+        // 0 = queued, 1 = claimed by normal dispatch, 2 = cleaned before dispatch.
+        private int _state;
+
+        internal QueuedBatchRequestRegistration(
+            McpServer owner,
+            string requestKey,
+            CancellationTokenSource cancellation)
+        {
+            _owner = owner;
+            _requestKey = requestKey;
+            _cancellation = cancellation;
+        }
+
+        internal CancellationToken Token => _cancellation.Token;
+
+        internal bool TryCancel()
+        {
+            try
+            {
+                _cancellation.Cancel();
+                return true;
+            }
+            catch (ObjectDisposedException)
+            {
+                // Dispatch won the move into `_activeRequests`; the caller will retry there.
+                return false;
+            }
+        }
+
+        internal bool TryClaim()
+        {
+            if (Interlocked.CompareExchange(ref _state, 1, 0) != 0)
+                return false;
+            RemoveAndDispose();
+            return true;
+        }
+
+        internal void DisposeIfUnclaimed()
+        {
+            if (Interlocked.CompareExchange(ref _state, 2, 0) != 0)
+                return;
+            RemoveAndDispose();
+        }
+
+        private void RemoveAndDispose()
+        {
+            if (_owner._queuedBatchRequests.TryGetValue(_requestKey, out var current)
+                && ReferenceEquals(current, this))
+            {
+                _owner._queuedBatchRequests.TryRemove(_requestKey, out _);
+            }
+            _cancellation.Dispose();
+        }
     }
 
     private static void WriteMcpLogLine(string message)
@@ -1769,16 +1877,27 @@ public partial class McpServer : IDisposable
     internal JsonNode? HandleMessage(JsonNode request)
         // Keep this sync wrapper for existing in-process callers; async transports call
         // HandleMessageAsync so server loops do not need a sync-over-async bridge.
-        => HandleMessageAsync(request, isolateRequestDb: false, beforeDispatchAsync: null, rejectForCapacity: false).GetAwaiter().GetResult();
+        => HandleMessageAsync(
+            request,
+            isolateRequestDb: false,
+            beforeDispatchAsync: null,
+            rejectForCapacity: false,
+            queuedBatchRegistration: null).GetAwaiter().GetResult();
 
     internal Task<JsonNode?> HandleMessageAsync(JsonNode request)
-        => HandleMessageAsync(request, isolateRequestDb: false, beforeDispatchAsync: null, rejectForCapacity: false);
+        => HandleMessageAsync(
+            request,
+            isolateRequestDb: false,
+            beforeDispatchAsync: null,
+            rejectForCapacity: false,
+            queuedBatchRegistration: null);
 
     private async Task<JsonNode?> HandleMessageAsync(
         JsonNode request,
         bool isolateRequestDb,
         Func<CancellationToken, Task>? beforeDispatchAsync,
-        bool rejectForCapacity)
+        bool rejectForCapacity,
+        QueuedBatchRequestRegistration? queuedBatchRegistration)
     {
         if (request is JsonArray batch)
             return await HandleBatchMessageAsync(batch, isolateRequestDb, beforeDispatchAsync, rejectForCapacity).ConfigureAwait(false);
@@ -1914,7 +2033,7 @@ public partial class McpServer : IDisposable
                 retrySafe: false);
         }
 
-        return await DispatchWithRequestCancellationAsync(id, isolateRequestDb, beforeDispatchAsync, () =>
+        return await DispatchWithRequestCancellationAsync(id, isolateRequestDb, beforeDispatchAsync, queuedBatchRegistration, () =>
         {
             if (_enforceInitializationLifecycle && !_initialized && method != "initialize")
             {
@@ -2115,55 +2234,333 @@ public partial class McpServer : IDisposable
                 suggestion: $"JSON-RPC batch requests are limited to {MaxBatchRequestCount} items.",
                 retrySafe: false);
 
-        var responses = new JsonArray();
-        foreach (var item in batch)
+        // A batch is one wire frame but each item is an independently bounded JSON-RPC
+        // operation (#4545). Invalid items are materialized immediately, cancellation controls
+        // run eagerly, and state-changing items split the remaining work into ordered segments.
+        // Response nodes are retained by input index so completion timing cannot reorder the wire
+        // response. バッチは 1 wire frame だが、各 item を独立した bounded operation として扱う。
+        // 不正 item は即時確定し、cancel control は先行処理し、状態変更 item で順序 segment を区切る。
+        var responsesByIndex = new JsonNode?[batch.Count];
+        var logsByIndex = new DeferredFrameLogBuffer?[batch.Count];
+        var completed = new bool[batch.Count];
+        var orderingFences = new bool[batch.Count];
+        var cancellationItems = new bool[batch.Count];
+        var queuedRegistrations = new QueuedBatchRequestRegistration?[batch.Count];
+        var seenRequestIds = new HashSet<string>(StringComparer.Ordinal);
+        var isolateBatchItems = isolateRequestDb || batch.Count > 1;
+
+        for (var index = 0; index < batch.Count; index++)
         {
-            JsonNode? response;
-            if (item is null)
+            var item = batch[index];
+            if (item is null || item is not JsonObject and not JsonArray)
             {
-                response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: expected JSON object",
-                    category: McpErrorEnvelope.CategoryInvalidRequest,
-                    suggestion: "Each JSON-RPC batch item must be a request object.",
-                    retrySafe: false);
+                using (BeginBatchItemCorrelation(id: null, index))
+                    responsesByIndex[index] = CreateInvalidBatchItemResponse(nestedBatch: false);
+                completed[index] = true;
+                continue;
             }
-            else if (item is JsonArray)
+            if (item is JsonArray)
             {
-                response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: nested batches are not supported",
-                    category: McpErrorEnvelope.CategoryInvalidRequest,
-                    suggestion: "JSON-RPC batch items must be request objects, not nested arrays.",
-                    retrySafe: false);
-            }
-            else if (item is not JsonObject)
-            {
-                response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: expected JSON object",
-                    category: McpErrorEnvelope.CategoryInvalidRequest,
-                    suggestion: "Each JSON-RPC batch item must be a request object.",
-                    retrySafe: false);
-            }
-            else
-            {
-                response = await HandleMessageAsync(
-                    item,
-                    isolateRequestDb,
-                    beforeDispatchAsync,
-                    rejectForCapacity).ConfigureAwait(false);
+                using (BeginBatchItemCorrelation(id: null, index))
+                    responsesByIndex[index] = CreateInvalidBatchItemResponse(nestedBatch: true);
+                completed[index] = true;
+                continue;
             }
 
-            if (response != null)
-                responses.Add(response);
+            var itemObject = (JsonObject)item;
+            if (TryCompletePendingClientRequest(itemObject))
+            {
+                completed[index] = true;
+                continue;
+            }
+            if (IsCancellationItem(itemObject))
+            {
+                // Execute controls only after this pass has durably registered every unique
+                // request ID. This preserves eager cancellation even when the control precedes
+                // its target and the short tombstone cache is full (#4545).
+                // 全 unique request ID を durable 登録してから control を実行する。cancel が target
+                // より先でも、短命 tombstone cache が満杯でも eager cancellation を保つ。
+                cancellationItems[index] = true;
+                continue;
+            }
+
+            orderingFences[index] = IsProtocolOrderingBarrierItem(itemObject);
+            if (TryGetRequestId(itemObject, out var hasId, out var id)
+                && hasId
+                && SerializeRequestId(id) is { } requestKey)
+            {
+                if (!seenRequestIds.Add(requestKey))
+                {
+                    // Preserve the pre-concurrency behavior for duplicate ids in one batch: the
+                    // later occurrence starts only after the earlier occurrence has completed.
+                    // 同一 batch 内の重複 id は、後続を fence にして従来の逐次 semantics を保つ。
+                    orderingFences[index] = true;
+                }
+                else if (!rejectForCapacity)
+                {
+                    queuedRegistrations[index] = TryRegisterQueuedBatchRequest(requestKey);
+                }
+            }
         }
 
+        for (var index = 0; index < batch.Count; index++)
+        {
+            if (!cancellationItems[index])
+                continue;
+
+            var cancellationResult = await ExecuteBatchItemAsync(
+                batch[index]!,
+                index,
+                isolateRequestDb: true,
+                beforeDispatchAsync: null,
+                rejectForCapacity: false,
+                queuedBatchRegistration: null).ConfigureAwait(false);
+            responsesByIndex[index] = cancellationResult.Response;
+            logsByIndex[index] = cancellationResult.Logs;
+            completed[index] = true;
+        }
+
+        if (rejectForCapacity)
+        {
+            for (var index = 0; index < batch.Count; index++)
+            {
+                if (completed[index])
+                    continue;
+                var result = await ExecuteBatchItemAsync(
+                    batch[index]!,
+                    index,
+                    isolateBatchItems,
+                    beforeDispatchAsync: null,
+                    rejectForCapacity: true,
+                    queuedBatchRegistration: null).ConfigureAwait(false);
+                responsesByIndex[index] = result.Response;
+                logsByIndex[index] = result.Logs;
+                completed[index] = true;
+            }
+
+            MergeBatchItemLogs(logsByIndex);
+            return BuildBatchResponse(responsesByIndex);
+        }
+
+        var independentSegment = new List<int>();
+        for (var index = 0; index < batch.Count; index++)
+        {
+            if (completed[index])
+                continue;
+
+            if (!orderingFences[index])
+            {
+                independentSegment.Add(index);
+                continue;
+            }
+
+            await ExecuteBatchSegmentAsync(
+                batch,
+                independentSegment,
+                isolateBatchItems,
+                responsesByIndex,
+                logsByIndex,
+                queuedRegistrations,
+                beforeDispatchAsync).ConfigureAwait(false);
+            independentSegment.Clear();
+            await ExecuteBatchItemAsync(
+                batch[index]!,
+                index,
+                isolateBatchItems,
+                responsesByIndex,
+                logsByIndex,
+                beforeDispatchAsync,
+                queuedRegistrations[index]).ConfigureAwait(false);
+        }
+
+        await ExecuteBatchSegmentAsync(
+            batch,
+            independentSegment,
+            isolateBatchItems,
+            responsesByIndex,
+            logsByIndex,
+            queuedRegistrations,
+            beforeDispatchAsync).ConfigureAwait(false);
+        MergeBatchItemLogs(logsByIndex);
+
+        return BuildBatchResponse(responsesByIndex);
+    }
+
+    private QueuedBatchRequestRegistration? TryRegisterQueuedBatchRequest(string requestKey)
+    {
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            _currentRequestToken.Value,
+            _shutdownCts.Token);
+        var registration = new QueuedBatchRequestRegistration(this, requestKey, cancellation);
+        if (!_queuedBatchRequests.TryAdd(requestKey, registration))
+        {
+            registration.DisposeIfUnclaimed();
+            return null;
+        }
+
+        if (TryConsumePendingRequestCancellation(requestKey))
+            registration.TryCancel();
+        return registration;
+    }
+
+    private static JsonNode? BuildBatchResponse(IReadOnlyList<JsonNode?> responsesByIndex)
+    {
+        var responses = new JsonArray();
+        foreach (var response in responsesByIndex)
+        {
+            if (response is not null)
+                responses.Add(response);
+        }
         return responses.Count == 0 ? null : responses;
+    }
+
+    private static JsonObject CreateInvalidBatchItemResponse(bool nestedBatch)
+        => CreateErrorResponse(
+            hasId: true,
+            id: null,
+            code: -32600,
+            message: nestedBatch ? "Invalid request: nested batches are not supported" : "Invalid request: expected JSON object",
+            category: McpErrorEnvelope.CategoryInvalidRequest,
+            suggestion: nestedBatch
+                ? "JSON-RPC batch items must be request objects, not nested arrays."
+                : "Each JSON-RPC batch item must be a request object.",
+            retrySafe: false);
+
+    private static bool IsCancellationItem(JsonObject item)
+        => TryGetStringMember(item, "method") is "$/cancelRequest" or "notifications/cancelled";
+
+    private async Task ExecuteBatchSegmentAsync(
+        JsonArray batch,
+        IReadOnlyList<int> indexes,
+        bool isolateRequestDb,
+        JsonNode?[] responsesByIndex,
+        DeferredFrameLogBuffer?[] logsByIndex,
+        QueuedBatchRequestRegistration?[] queuedRegistrations,
+        Func<CancellationToken, Task>? beforeDispatchAsync)
+    {
+        if (indexes.Count == 0)
+            return;
+
+        var nextIndex = -1;
+        var workers = new Task[Math.Min(indexes.Count, MaxConcurrency)];
+        for (var workerIndex = 0; workerIndex < workers.Length; workerIndex++)
+        {
+            workers[workerIndex] = Task.Run(async () =>
+            {
+                while (true)
+                {
+                    var segmentIndex = Interlocked.Increment(ref nextIndex);
+                    if (segmentIndex >= indexes.Count)
+                        return;
+
+                    var batchIndex = indexes[segmentIndex];
+                    await ExecuteBatchItemAsync(
+                        batch[batchIndex]!,
+                        batchIndex,
+                        isolateRequestDb,
+                        responsesByIndex,
+                        logsByIndex,
+                        beforeDispatchAsync,
+                        queuedRegistrations[batchIndex]).ConfigureAwait(false);
+                }
+            }, CancellationToken.None);
+        }
+
+        await Task.WhenAll(workers).ConfigureAwait(false);
+    }
+
+    private async Task ExecuteBatchItemAsync(
+        JsonNode item,
+        int index,
+        bool isolateRequestDb,
+        JsonNode?[] responsesByIndex,
+        DeferredFrameLogBuffer?[] logsByIndex,
+        Func<CancellationToken, Task>? beforeDispatchAsync,
+        QueuedBatchRequestRegistration? queuedBatchRegistration)
+    {
+        var result = await ExecuteBatchItemAsync(
+            item,
+            index,
+            isolateRequestDb,
+            beforeDispatchAsync,
+            rejectForCapacity: false,
+            queuedBatchRegistration).ConfigureAwait(false);
+        responsesByIndex[index] = result.Response;
+        logsByIndex[index] = result.Logs;
+    }
+
+    private async Task<(JsonNode? Response, DeferredFrameLogBuffer Logs)> ExecuteBatchItemAsync(
+        JsonNode item,
+        int index,
+        bool isolateRequestDb,
+        Func<CancellationToken, Task>? beforeDispatchAsync,
+        bool rejectForCapacity,
+        QueuedBatchRequestRegistration? queuedBatchRegistration)
+    {
+        var parentLogs = _deferredFrameLogs.Value;
+        var itemLogs = new DeferredFrameLogBuffer();
+        _deferredFrameLogs.Value = itemLogs;
+        Database.DbDebug.ResetContext();
+        ExtractResponseId(item, out var hasId, out var id);
+        using var correlationScope = BeginBatchItemCorrelation(id, index);
+        try
+        {
+            var response = await HandleMessageAsync(
+                item,
+                isolateRequestDb,
+                beforeDispatchAsync,
+                rejectForCapacity,
+                queuedBatchRegistration).ConfigureAwait(false);
+            return (response, itemLogs);
+        }
+        catch (Exception ex)
+        {
+            DeferFrameLog(BuildUnhandledLoopErrorLog(DiagnosticRedactor.FormatExceptionMessage(ex)));
+            if (!hasId)
+                return (null, itemLogs);
+
+            var classification = McpErrorEnvelope.ClassifyException(ex);
+            return (CreateErrorResponse(
+                hasId: true,
+                id,
+                classification.JsonRpcCode,
+                BuildSanitizedLoopErrorMessage(ex),
+                category: classification.Category,
+                suggestion: classification.Suggestion,
+                retrySafe: classification.RetrySafe), itemLogs);
+        }
+        finally
+        {
+            Database.DbDebug.ResetContext();
+            _deferredFrameLogs.Value = parentLogs;
+            queuedBatchRegistration?.DisposeIfUnclaimed();
+        }
+    }
+
+    private void MergeBatchItemLogs(IReadOnlyList<DeferredFrameLogBuffer?> logsByIndex)
+    {
+        var parentLogs = _deferredFrameLogs.Value;
+        Action<Action> forward = parentLogs is null
+            ? static log => log()
+            : parentLogs.Add;
+        foreach (var itemLogs in logsByIndex)
+            itemLogs?.ForwardTo(forward);
     }
 
     private async Task<JsonNode> DispatchWithRequestCancellationAsync(
         JsonNode? id,
         bool isolateRequestDb,
         Func<CancellationToken, Task>? beforeDispatchAsync,
+        QueuedBatchRequestRegistration? queuedBatchRegistration,
         Func<Task<JsonNode>> action)
     {
         var requestKey = SerializeRequestId(id);
-        var requestCts = CancellationTokenSource.CreateLinkedTokenSource(_currentRequestToken.Value, _shutdownCts.Token);
+        var requestCts = queuedBatchRegistration is null
+            ? CancellationTokenSource.CreateLinkedTokenSource(_currentRequestToken.Value, _shutdownCts.Token)
+            : CancellationTokenSource.CreateLinkedTokenSource(
+                _currentRequestToken.Value,
+                _shutdownCts.Token,
+                queuedBatchRegistration.Token);
         var registeredRequest = false;
         if (requestKey is not null)
         {
@@ -2176,6 +2573,8 @@ public partial class McpServer : IDisposable
                     retrySafe: true);
             }
             registeredRequest = true;
+            if (queuedBatchRegistration is not null && !queuedBatchRegistration.TryClaim())
+                CancelRequestCts(requestCts);
             if (TryConsumePendingRequestCancellation(requestKey))
                 CancelRequestCts(requestCts);
             RequestRegisteredForTests?.Invoke(id);
@@ -2246,10 +2645,10 @@ public partial class McpServer : IDisposable
                 // otherwise `_activeRequests`, the linked CTS, and the execution lease would leak
                 // when an isolated action eventually observes cancellation and exits. The lease
                 // intentionally remains held until the underlying action actually ends so timeout
-                // responses cannot let live handlers exceed MaxConcurrency (#3722, #4536).
+                // responses cannot let live handlers exceed MaxConcurrency (#3722, #4536, #4545).
                 // request timeout / shutdown cancellation 後でも cleanup は必ず実行する。
                 // underlying action が実際に終了するまで execution lease も保持し、timeout response
-                // の後に live handler が MaxConcurrency を超えないようにする (#3722, #4536)。
+                // の後に live handler が MaxConcurrency を超えないようにする (#3722, #4536, #4545)。
                 _ = actionTask.ContinueWith(task =>
                 {
                     try
@@ -2382,6 +2781,16 @@ public partial class McpServer : IDisposable
         return new CorrelationScope(previous);
     }
 
+    private static IDisposable BeginBatchItemCorrelation(JsonNode? id, int itemIndex)
+    {
+        var previous = CurrentCorrelationContext.Value;
+        var correlationId = previous is null
+            ? Guid.NewGuid().ToString("D")
+            : $"{previous.CorrelationId}.{itemIndex.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+        CurrentCorrelationContext.Value = new RequestCorrelationContext(SerializeRequestId(id), correlationId);
+        return new CorrelationScope(previous);
+    }
+
     private static IDisposable BeginChildCorrelation(int childIndex)
     {
         var previous = CurrentCorrelationContext.Value;
@@ -2426,10 +2835,37 @@ public partial class McpServer : IDisposable
             CancelRequestCts(cts);
             return;
         }
+        if (_queuedBatchRequests.TryGetValue(requestKey, out var queuedRequest)
+            && queuedRequest.TryCancel())
+        {
+            return;
+        }
 
+        CancellationRegistriesMissedForTests?.Invoke();
         RememberPendingRequestCancellation(requestKey);
-        if (_activeRequests.TryGetValue(requestKey, out cts) && TryConsumePendingRequestCancellation(requestKey))
+        if (_activeRequests.TryGetValue(requestKey, out cts))
+        {
+            _ = TryConsumePendingRequestCancellation(requestKey);
             CancelRequestCts(cts);
+            return;
+        }
+        if (_queuedBatchRequests.TryGetValue(requestKey, out queuedRequest))
+        {
+            // The target can enter the durable registry after the first lookup but before the
+            // bounded tombstone insertion. Recheck it independently of tombstone capacity so a
+            // full cache cannot discard cancellation for an already-queued batch item (#4545).
+            // target は初回 lookup 後、bounded tombstone 挿入前に durable registry へ入り得る。
+            // tombstone capacity と独立して再確認し、満杯でも登録済み batch item の cancel を
+            // 失わないようにする (#4545)。
+            _ = TryConsumePendingRequestCancellation(requestKey);
+            if (queuedRequest.TryCancel())
+                return;
+            if (_activeRequests.TryGetValue(requestKey, out cts))
+            {
+                CancelRequestCts(cts);
+                return;
+            }
+        }
     }
 
     private void RememberPendingRequestCancellation(string requestKey)

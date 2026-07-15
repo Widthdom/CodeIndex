@@ -832,13 +832,34 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
 
     private async Task<bool> TryHandleOutOfBandFrameAsync(PendingRequest request, string body, CancellationToken cancellationToken)
     {
-        if (OutOfBandFrameHandler is null || (!IsCancellationNotification(body) && !IsJsonRpcResponse(body)))
+        if (OutOfBandFrameHandler is null)
             return false;
+
+        var hasCancellationBatch = TrySplitCancellationBatch(
+            body,
+            out var cancellationBatch,
+            out var remainingBatch);
+        if (!hasCancellationBatch && !IsCancellationNotification(body) && !IsJsonRpcResponse(body))
+            return false;
+
+        var outOfBandBody = cancellationBatch ?? body;
 
         var context = request.Context;
         try
         {
-            var frame = await OutOfBandFrameHandler(body, cancellationToken).ConfigureAwait(false);
+            var frame = await OutOfBandFrameHandler(outOfBandBody, cancellationToken).ConfigureAwait(false);
+            if (remainingBatch is not null)
+            {
+                if (frame is not null)
+                    throw new InvalidDataException("Cancellation notifications in a mixed JSON-RPC batch must not produce a response.");
+
+                // The extracted cancellation notifications have already been dispatched. Queue only
+                // the remaining raw batch items so cancellation side effects cannot be replayed.
+                request.Body = remainingBatch;
+                request.RequestId = TryExtractJsonRpcId(remainingBatch, _maxRequestBodyBytes);
+                return false;
+            }
+
             if (frame is null)
             {
                 context.Response.StatusCode = (int)HttpStatusCode.NoContent;
@@ -877,6 +898,149 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             return true;
         }
     }
+
+    private bool TrySplitCancellationBatch(
+        string body,
+        out string? cancellationBatch,
+        out string? remainingBatch)
+    {
+        cancellationBatch = null;
+        remainingBatch = null;
+
+        try
+        {
+            using var document = BoundedJson.ParseDocument(body, _maxRequestBodyBytes, McpServer.MaxJsonDepth);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Array
+                || root.GetArrayLength() is 0 or > McpServer.MaxBatchRequestCount)
+            {
+                return false;
+            }
+
+            var batchRequestIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var item in root.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.Object
+                    && item.TryGetProperty("id", out var id)
+                    && TryCanonicalizeJsonRpcId(id, out var requestId))
+                {
+                    batchRequestIds.Add(requestId);
+                }
+            }
+
+            var cancellations = new List<string>();
+            var remaining = new List<string>();
+            foreach (var item in root.EnumerateArray())
+            {
+                var rawItem = item.GetRawText();
+                if (IsValidCancellationNotification(item)
+                    && (!TryGetCancellationTargetId(item, out var targetId)
+                        || !batchRequestIds.Contains(targetId)))
+                {
+                    cancellations.Add(rawItem);
+                }
+                else
+                {
+                    // A cancellation targeting an item in this same batch must remain with the
+                    // raw batch. The server pre-registers all unique IDs before its eager control
+                    // pass, avoiding the short tombstone TTL/cap without weakening cross-frame
+                    // cancellation before HTTP queue admission (#4545).
+                    // 同じ batch 内 item を対象にする cancellation は raw batch に残す。server が
+                    // eager control pass 前に unique ID を事前登録し、cross-frame cancellation の
+                    // queue admission 前処理を保ったまま tombstone TTL/cap 依存を除く (#4545)。
+                    remaining.Add(rawItem);
+                }
+            }
+
+            if (cancellations.Count == 0)
+                return false;
+
+            cancellationBatch = BuildRawBatch(cancellations);
+            remainingBatch = remaining.Count == 0 ? null : BuildRawBatch(remaining);
+            return true;
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsValidCancellationNotification(JsonElement item)
+    {
+        if (item.ValueKind != JsonValueKind.Object
+            || item.TryGetProperty("id", out _)
+            || !item.TryGetProperty("jsonrpc", out var version)
+            || version.ValueKind != JsonValueKind.String
+            || !string.Equals(version.GetString(), "2.0", StringComparison.Ordinal)
+            || !item.TryGetProperty("method", out var method)
+            || method.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        var methodName = method.GetString();
+        if (!string.Equals(methodName, "$/cancelRequest", StringComparison.Ordinal)
+            && !string.Equals(methodName, "notifications/cancelled", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return !item.TryGetProperty("params", out var parameters)
+            || parameters.ValueKind is JsonValueKind.Null or JsonValueKind.Object;
+    }
+
+    private static bool TryGetCancellationTargetId(JsonElement item, out string targetId)
+    {
+        targetId = string.Empty;
+        if (!item.TryGetProperty("params", out var parameters)
+            || parameters.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (parameters.TryGetProperty("id", out var id)
+            && id.ValueKind != JsonValueKind.Null
+            && TryCanonicalizeJsonRpcId(id, out targetId))
+        {
+            return true;
+        }
+
+        return parameters.TryGetProperty("requestId", out var requestId)
+            && TryCanonicalizeJsonRpcId(requestId, out targetId);
+    }
+
+    private static bool TryCanonicalizeJsonRpcId(JsonElement id, out string canonicalId)
+    {
+        canonicalId = string.Empty;
+        switch (id.ValueKind)
+        {
+            case JsonValueKind.String:
+                var stringId = id.GetString() ?? string.Empty;
+                if (stringId.Length > McpServer.MaxRequestIdCharacterCount
+                    || Encoding.UTF8.GetByteCount(stringId) > McpServer.MaxRequestIdByteLength)
+                {
+                    return false;
+                }
+                canonicalId = JsonSerializer.Serialize(stringId);
+                return true;
+
+            case JsonValueKind.Number:
+                var numberId = id.GetRawText();
+                if (numberId.Length > McpServer.MaxRequestIdCharacterCount
+                    || Encoding.UTF8.GetByteCount(numberId) > McpServer.MaxRequestIdByteLength)
+                {
+                    return false;
+                }
+                canonicalId = numberId;
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    private static string BuildRawBatch(IReadOnlyList<string> items)
+        => "[" + string.Join(',', items) + "]";
 
     private static bool IsCancellationNotification(string body)
     {
@@ -1790,8 +1954,11 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             // HandleContextAsync calls this only with a body returned by TryReadRequestBodyAsync,
             // so the full JSON parse is bounded by the HTTP request-body byte limit.
             using var doc = BoundedJson.ParseDocument(body, maxRequestBodyBytes, McpServer.MaxJsonDepth);
-            if (!doc.RootElement.TryGetProperty("id", out var id))
+            if (doc.RootElement.ValueKind != JsonValueKind.Object
+                || !doc.RootElement.TryGetProperty("id", out var id))
+            {
                 return null;
+            }
 
             var requestId = id.ValueKind switch
             {

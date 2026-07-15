@@ -3714,6 +3714,565 @@ public sealed class Caller
     }
 
     [Fact]
+    public async Task RunAsync_StdioBatchAtSingleConcurrencyDoesNotDeadlock_Issue4545()
+    {
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            maxConcurrency: 1);
+        var initializeResponse = await server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":"issue-4545-single-init","method":"initialize","params":{}}""");
+        Assert.NotNull(initializeResponse);
+        var transport = QueuedFrameTransport.FromExactFrames(
+            """[{"jsonrpc":"2.0","id":454501,"method":"ping"},{"jsonrpc":"2.0","id":454502,"method":"ping"}]""");
+        using var cancellation = new CancellationTokenSource();
+
+        var runTask = server.RunAsync(transport, cancellation.Token);
+        try
+        {
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+        finally
+        {
+            cancellation.Cancel();
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+
+        var responseText = Assert.Single(transport.WrittenFrames, static frame => frame is not null);
+        var responses = Assert.IsType<JsonArray>(JsonNode.Parse(responseText!));
+        Assert.Equal([454501, 454502], responses.Select(static response => response!["id"]!.GetValue<int>()).ToArray());
+        Assert.All(responses, static response => Assert.NotNull(response!["result"]));
+        Assert.Equal(server.MaxConcurrency, server.AvailableConcurrencySlotsForTests);
+    }
+
+    [Fact]
+    public async Task ProcessFrameAsync_BatchItemsOverlapWithinLimitAndResponsesPreserveInputOrder_Issue4545()
+    {
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            maxConcurrency: 2);
+        var releaseSlow = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFast = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstTwoStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thirdStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thirdCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var counterGate = new object();
+        var completionOrder = new List<int>();
+        var startedCount = 0;
+        var activeCount = 0;
+        var maxActiveCount = 0;
+        server.RequestDelayForTestsWithId = async (id, cancellationToken) =>
+        {
+            var requestId = id!.GetValue<int>();
+            lock (counterGate)
+            {
+                startedCount++;
+                activeCount++;
+                maxActiveCount = Math.Max(maxActiveCount, activeCount);
+                if (startedCount == 2)
+                    firstTwoStarted.TrySetResult();
+                if (requestId == 454513)
+                    thirdStarted.TrySetResult();
+            }
+
+            try
+            {
+                if (requestId == 454511)
+                    await releaseSlow.Task.WaitAsync(cancellationToken);
+                else if (requestId == 454512)
+                    await releaseFast.Task.WaitAsync(cancellationToken);
+            }
+            finally
+            {
+                lock (counterGate)
+                {
+                    activeCount--;
+                    completionOrder.Add(requestId);
+                    if (requestId == 454513)
+                        thirdCompleted.TrySetResult();
+                }
+            }
+        };
+
+        var batchTask = server.ProcessFrameAsync(
+            """[{"jsonrpc":"2.0","id":454511,"method":"ping"},{"jsonrpc":"2.0","id":454512,"method":"ping"},{"jsonrpc":"2.0","id":454513,"method":"ping"}]""");
+        try
+        {
+            await firstTwoStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            lock (counterGate)
+            {
+                Assert.Equal(2, startedCount);
+                Assert.Equal(2, activeCount);
+                Assert.Equal(2, maxActiveCount);
+            }
+            Assert.False(thirdStarted.Task.IsCompleted);
+
+            releaseFast.TrySetResult();
+            await thirdStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            await thirdCompleted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            Assert.False(batchTask.IsCompleted);
+
+            releaseSlow.TrySetResult();
+            var responseText = await batchTask.WaitAsync(TestDeterminism.DefaultTimeout);
+            var responses = Assert.IsType<JsonArray>(JsonNode.Parse(responseText!));
+            Assert.Equal([454511, 454512, 454513], responses.Select(static response => response!["id"]!.GetValue<int>()).ToArray());
+        }
+        finally
+        {
+            releaseFast.TrySetResult();
+            releaseSlow.TrySetResult();
+            await batchTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+
+        lock (counterGate)
+        {
+            Assert.Equal(3, startedCount);
+            Assert.Equal(0, activeCount);
+            Assert.Equal(2, maxActiveCount);
+            Assert.Equal([454512, 454513, 454511], completionOrder);
+        }
+        Assert.Equal(server.MaxConcurrency, server.AvailableConcurrencySlotsForTests);
+    }
+
+    [Fact]
+    public async Task RunAsync_StdioBatchInitializeFencesAdjacentRequests_Issue4545()
+    {
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            maxConcurrency: 2);
+        var initialResponse = await server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":"issue-4545-fence-init","method":"initialize","params":{}}""");
+        Assert.NotNull(initialResponse);
+        var precedingPingStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releasePrecedingPing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var initializeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseInitialize = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var followingPingStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.RequestDelayForTestsWithId = async (id, cancellationToken) =>
+        {
+            var requestId = id!.GetValue<int>();
+            if (requestId == 454520)
+            {
+                precedingPingStarted.TrySetResult();
+                await releasePrecedingPing.Task.WaitAsync(cancellationToken);
+            }
+            else if (requestId == 454521)
+            {
+                initializeStarted.TrySetResult();
+                await releaseInitialize.Task.WaitAsync(cancellationToken);
+            }
+            else if (requestId == 454522)
+            {
+                followingPingStarted.TrySetResult();
+            }
+        };
+        var transport = QueuedFrameTransport.FromExactFrames(
+            """[{"jsonrpc":"2.0","id":454520,"method":"ping"},{"jsonrpc":"2.0","id":454521,"method":"initialize","params":{"clientInfo":{"name":"batch-fence-client"}}},{"jsonrpc":"2.0","id":454522,"method":"ping"}]""");
+        using var cancellation = new CancellationTokenSource();
+
+        var runTask = server.RunAsync(transport, cancellation.Token);
+        try
+        {
+            await Task.WhenAll(precedingPingStarted.Task, transport.EndOfInputRead)
+                .WaitAsync(TestDeterminism.DefaultTimeout);
+            Assert.False(initializeStarted.Task.IsCompleted);
+            Assert.False(followingPingStarted.Task.IsCompleted);
+            Assert.Empty(transport.WrittenFrames);
+
+            releasePrecedingPing.TrySetResult();
+            await initializeStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            Assert.False(followingPingStarted.Task.IsCompleted);
+
+            releaseInitialize.TrySetResult();
+            await followingPingStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+        finally
+        {
+            releasePrecedingPing.TrySetResult();
+            releaseInitialize.TrySetResult();
+            cancellation.Cancel();
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+
+        var responseText = Assert.Single(transport.WrittenFrames, static frame => frame is not null);
+        var responses = Assert.IsType<JsonArray>(JsonNode.Parse(responseText!));
+        Assert.Equal([454520, 454521, 454522], responses.Select(static response => response!["id"]!.GetValue<int>()).ToArray());
+        Assert.All(responses, static response => Assert.NotNull(response!["result"]));
+        Assert.Equal("batch-fence-client", server.CurrentCaller);
+    }
+
+    [Fact]
+    public async Task ProcessFrameAsync_BatchDuplicateIdsRunSequentially_Issue4545()
+    {
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            maxConcurrency: 2);
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var occurrence = 0;
+        server.RequestDelayForTestsWithId = async (_, cancellationToken) =>
+        {
+            var current = Interlocked.Increment(ref occurrence);
+            if (current == 1)
+            {
+                firstStarted.TrySetResult();
+                await releaseFirst.Task.WaitAsync(cancellationToken);
+            }
+            else if (current == 2)
+            {
+                secondStarted.TrySetResult();
+            }
+        };
+
+        var batchTask = server.ProcessFrameAsync(
+            """[{"jsonrpc":"2.0","id":454530,"method":"ping"},{"jsonrpc":"2.0","id":454530,"method":"ping"}]""");
+        try
+        {
+            await firstStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            Assert.False(secondStarted.Task.IsCompleted);
+
+            releaseFirst.TrySetResult();
+            await secondStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            var responseText = await batchTask.WaitAsync(TestDeterminism.DefaultTimeout);
+            var responses = Assert.IsType<JsonArray>(JsonNode.Parse(responseText!));
+            Assert.Equal(2, responses.Count);
+            Assert.All(responses, static response =>
+            {
+                Assert.Equal(454530, response!["id"]!.GetValue<int>());
+                Assert.NotNull(response["result"]);
+            });
+        }
+        finally
+        {
+            releaseFirst.TrySetResult();
+            await batchTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+
+        Assert.Equal(2, occurrence);
+    }
+
+    [Fact]
+    public async Task ProcessFrameAsync_BatchCancellationIsEagerAndIsolated_Issue4545()
+    {
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            maxConcurrency: 2);
+        var siblingStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSibling = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var siblingCancellationObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.RequestDelayForTestsWithId = async (id, cancellationToken) =>
+        {
+            if (id!.GetValue<int>() != 454532)
+                return;
+
+            using var registration = cancellationToken.Register(() => siblingCancellationObserved.TrySetResult());
+            siblingStarted.TrySetResult();
+            await releaseSibling.Task.WaitAsync(cancellationToken);
+        };
+
+        var batchTask = server.ProcessFrameAsync(
+            """[{"jsonrpc":"2.0","id":454531,"method":"ping"},{"jsonrpc":"2.0","id":454532,"method":"ping"},{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":454531}}]""");
+        try
+        {
+            await siblingStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            Assert.False(siblingCancellationObserved.Task.IsCompleted);
+            Assert.False(batchTask.IsCompleted);
+
+            releaseSibling.TrySetResult();
+            var responseText = await batchTask.WaitAsync(TestDeterminism.DefaultTimeout);
+            var responses = Assert.IsType<JsonArray>(JsonNode.Parse(responseText!));
+            Assert.Equal([454531, 454532], responses.Select(static response => response!["id"]!.GetValue<int>()).ToArray());
+            Assert.Equal("request_cancelled", responses[0]!["error"]!["data"]!["category"]!.GetValue<string>());
+            Assert.NotNull(responses[1]!["result"]);
+            Assert.False(siblingCancellationObserved.Task.IsCompleted);
+        }
+        finally
+        {
+            releaseSibling.TrySetResult();
+            await batchTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+    }
+
+    [Fact]
+    public async Task ProcessFrameAsync_QueuedBatchCancellationIgnoresTombstoneCapAndTtl_Issue4545()
+    {
+        var timeProvider = new ManualMcpTimeProvider(DateTimeOffset.Parse("2026-07-15T00:00:00Z", CultureInfo.InvariantCulture));
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            auditLog: null,
+            maxConcurrency: 1,
+            timeProvider);
+        Assert.NotNull(await server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":"issue-4545-durable-cancel-init","method":"initialize","params":{}}"""));
+
+        // Fill the legacy scheduler-race tombstone cache. The cancellation for the queued batch
+        // item below must use its durable batch registration instead of trying to enter this cache.
+        for (var index = 0; index < 64; index++)
+        {
+            Assert.Null(await server.ProcessFrameAsync(
+                """{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"issue-4545-unrelated-"""
+                + index.ToString(CultureInfo.InvariantCulture)
+                + "\"}}"));
+        }
+
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var queuedItemStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.RequestDelayForTestsWithId = (id, _) =>
+        {
+            var numericId = id!.GetValue<int>();
+            if (numericId == 454570)
+            {
+                firstStarted.TrySetResult();
+                return releaseFirst.Task;
+            }
+
+            queuedItemStarted.TrySetResult();
+            return Task.CompletedTask;
+        };
+
+        var batchTask = server.ProcessFrameAsync(
+            """[{"jsonrpc":"2.0","id":454570,"method":"ping"},{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":454571}},{"jsonrpc":"2.0","id":454571,"method":"ping"}]""");
+        try
+        {
+            await firstStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            Assert.Equal(1, server.QueuedBatchRequestCountForTests);
+
+            timeProvider.Advance(TimeSpan.FromSeconds(6));
+            releaseFirst.TrySetResult();
+
+            var responseText = await batchTask.WaitAsync(TestDeterminism.DefaultTimeout);
+            var responses = JsonNode.Parse(responseText!)!.AsArray();
+            Assert.Equal([454570, 454571], responses.Select(static response => response!["id"]!.GetValue<int>()).ToArray());
+            Assert.Equal("ok", responses[0]!["result"]!["status"]!.GetValue<string>());
+            Assert.Equal("request_cancelled", responses[1]!["error"]!["data"]!["category"]!.GetValue<string>());
+            Assert.False(queuedItemStarted.Task.IsCompleted);
+            Assert.Equal(0, server.QueuedBatchRequestCountForTests);
+        }
+        finally
+        {
+            releaseFirst.TrySetResult();
+            await batchTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+    }
+
+    [Fact]
+    public async Task ProcessFrameAsync_QueuedBatchRegistrationRaceIgnoresFullTombstoneCache_Issue4545()
+    {
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            auditLog: null,
+            maxConcurrency: 1,
+            new ManualMcpTimeProvider(DateTimeOffset.Parse("2026-07-15T00:00:00Z", CultureInfo.InvariantCulture)));
+        Assert.NotNull(await server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":"issue-4545-registration-race-init","method":"initialize","params":{}}"""));
+
+        for (var index = 0; index < 64; index++)
+        {
+            Assert.Null(await server.ProcessFrameAsync(
+                """{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"issue-4545-race-fill-"""
+                + index.ToString(CultureInfo.InvariantCulture)
+                + "\"}}"));
+        }
+
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var targetStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.RequestDelayForTestsWithId = (id, _) => id!.GetValue<int>() switch
+        {
+            454572 => SignalAndWait(firstStarted, releaseFirst.Task),
+            454573 => SignalAndComplete(targetStarted),
+            _ => Task.CompletedTask,
+        };
+
+        Task<string?>? batchTask = null;
+        server.CancellationRegistriesMissedForTests = () =>
+        {
+            server.CancellationRegistriesMissedForTests = null;
+            batchTask = server.ProcessFrameAsync(
+                """[{"jsonrpc":"2.0","id":454572,"method":"ping"},{"jsonrpc":"2.0","id":454573,"method":"ping"}]""");
+        };
+
+        Assert.Null(await server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":454573}}"""));
+        Assert.NotNull(batchTask);
+        try
+        {
+            await firstStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            releaseFirst.TrySetResult();
+
+            var responses = JsonNode.Parse(
+                await batchTask!.WaitAsync(TestDeterminism.DefaultTimeout) ?? string.Empty)!.AsArray();
+            Assert.Equal("ok", responses[0]!["result"]!["status"]!.GetValue<string>());
+            Assert.Equal("request_cancelled", responses[1]!["error"]!["data"]!["category"]!.GetValue<string>());
+            Assert.False(targetStarted.Task.IsCompleted);
+            Assert.Equal(0, server.QueuedBatchRequestCountForTests);
+        }
+        finally
+        {
+            releaseFirst.TrySetResult();
+            if (batchTask is not null)
+                await batchTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+
+        static async Task SignalAndWait(TaskCompletionSource signal, Task wait)
+        {
+            signal.TrySetResult();
+            await wait;
+        }
+
+        static Task SignalAndComplete(TaskCompletionSource signal)
+        {
+            signal.TrySetResult();
+            return Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task ProcessFrameAsync_BatchEarlyReturnReleasesQueuedIdForReuse_Issue4545()
+    {
+        using var server = new McpServer(_dbPath, "test");
+
+        var invalidResponseText = await server.ProcessFrameAsync(
+            """[{"jsonrpc":"1.0","id":"issue-4545-reusable","method":"ping"}]""");
+        var invalidResponse = Assert.Single(JsonNode.Parse(invalidResponseText!)!.AsArray());
+        Assert.Equal(-32600, invalidResponse!["error"]!["code"]!.GetValue<int>());
+        Assert.Equal(0, server.QueuedBatchRequestCountForTests);
+
+        var reusedResponseText = await server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":"issue-4545-reusable","method":"ping"}""");
+        var reusedResponse = JsonNode.Parse(reusedResponseText!);
+        Assert.Equal("ok", reusedResponse!["result"]!["status"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task ProcessFrameAsync_BatchIsolatesItemExceptionAndOmitsNotificationResponse_Issue4545()
+    {
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            maxConcurrency: 2);
+        server.RequestDelayForTestsWithId = (id, _) => id!.GetValue<int>() == 454541
+            ? Task.FromException(new InvalidOperationException("private batch item detail"))
+            : Task.CompletedTask;
+
+        var responseText = await server.ProcessFrameAsync(
+            """[{"jsonrpc":"2.0","id":454540,"method":"ping"},{"jsonrpc":"2.0","id":454541,"method":"ping"},{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","id":454542,"method":"ping"}]""");
+
+        var responses = Assert.IsType<JsonArray>(JsonNode.Parse(responseText!));
+        Assert.Equal([454540, 454541, 454542], responses.Select(static response => response!["id"]!.GetValue<int>()).ToArray());
+        Assert.NotNull(responses[0]!["result"]);
+        Assert.Equal(-32603, responses[1]!["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("internal_error", responses[1]!["error"]!["data"]!["category"]!.GetValue<string>());
+        Assert.DoesNotContain("private batch item detail", responses[1]!.ToJsonString(), StringComparison.Ordinal);
+        Assert.NotNull(responses[2]!["result"]);
+    }
+
+    [Fact]
+    public async Task ProcessFrameAsync_NotificationOnlyBatchReturnsNoResponse_Issue4545()
+    {
+        using var server = new McpServer(_dbPath, "test");
+
+        var response = await server.ProcessFrameAsync(
+            """[{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","method":"notifications/roots/list_changed"}]""");
+
+        Assert.Null(response);
+    }
+
+    [Fact]
+    public async Task RunAsync_StdioMixedBatchCancellationBypassesOuterProtocolBarrier_Issue4545()
+    {
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            maxConcurrency: 1)
+        {
+            RequestTimeout = TimeSpan.FromDays(1),
+        };
+        Assert.NotNull(await server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":"issue-4545-barrier-init","method":"initialize","params":{}}"""));
+
+        var targetStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.RequestDelayForTestsWithId = (id, cancellationToken) =>
+        {
+            if (id?.GetValue<int>() != 454560)
+                return Task.CompletedTask;
+
+            targetStarted.TrySetResult();
+            return Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        };
+        var transport = QueuedFrameTransport.FromExactFrames(
+            """{"jsonrpc":"2.0","id":454560,"method":"ping"}""",
+            """[{"jsonrpc":"2.0","id":454561,"method":"logging/setLevel","params":{"level":"debug"}},{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":454560}},{"jsonrpc":"2.0","id":454562,"method":"ping"}]""");
+        transport.BeforeFrameReturnedAsync = async (frame, cancellationToken) =>
+        {
+            if (frame?.Contains("\"method\":\"logging/setLevel\"", StringComparison.Ordinal) == true)
+                await targetStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout, cancellationToken);
+        };
+
+        await server.RunAsync(transport, CancellationToken.None).WaitAsync(TestDeterminism.DefaultTimeout);
+
+        var targetResponseText = Assert.Single(
+            transport.WrittenFrames,
+            static frame => frame?.Contains("\"id\":454560", StringComparison.Ordinal) == true
+                && frame.StartsWith("{", StringComparison.Ordinal));
+        Assert.Equal(
+            "request_cancelled",
+            JsonNode.Parse(targetResponseText!)!["error"]!["data"]!["category"]!.GetValue<string>());
+
+        var batchResponseText = Assert.Single(
+            transport.WrittenFrames,
+            static frame => frame?.StartsWith("[", StringComparison.Ordinal) == true);
+        var batchResponses = JsonNode.Parse(batchResponseText!)!.AsArray();
+        Assert.Equal([454561, 454562], batchResponses.Select(static item => item!["id"]!.GetValue<int>()).ToArray());
+        Assert.All(batchResponses, static item => Assert.NotNull(item!["result"]));
+    }
+
+    [Fact]
     public async Task RunAsync_StdioCancellationBypassesSaturatedConcurrencyGate_Issue4536()
     {
         using var server = new McpServer(
@@ -4024,6 +4583,59 @@ public sealed class Caller
         await secondStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
         var secondResponseText = await secondResponseTask.WaitAsync(TestDeterminism.DefaultTimeout);
         Assert.Equal("ok", JsonNode.Parse(secondResponseText!)!["result"]!["status"]!.GetValue<string>());
+        Assert.Equal(1, server.AvailableConcurrencySlotsForTests);
+    }
+
+    [Fact]
+    public async Task ProcessFrameAsync_BatchTimedOutActionRetainsConcurrencyLeaseUntilItDrains_Issue4536_Issue4545()
+    {
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            maxConcurrency: 1)
+        {
+            RequestTimeout = TimeSpan.FromMilliseconds(100),
+        };
+        Assert.NotNull(await server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":"issue-4536-batch-timeout-init","method":"initialize","params":{}}"""));
+
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondRegistered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.RequestRegisteredForTests = id =>
+        {
+            if (id?.GetValue<int>() == 453654)
+                secondRegistered.TrySetResult();
+        };
+        server.RequestDelayForTestsWithId = (id, _) =>
+        {
+            if (id?.GetValue<int>() == 453653)
+            {
+                firstStarted.TrySetResult();
+                return releaseFirst.Task;
+            }
+
+            secondStarted.TrySetResult();
+            return Task.CompletedTask;
+        };
+
+        var batchResponseTask = server.ProcessFrameAsync(
+            """[{"jsonrpc":"2.0","id":453653,"method":"ping"},{"jsonrpc":"2.0","id":453654,"method":"ping"}]""");
+        await Task.WhenAll(firstStarted.Task, secondRegistered.Task).WaitAsync(TestDeterminism.DefaultTimeout);
+        Assert.False(secondStarted.Task.IsCompleted);
+        Assert.Equal(0, server.AvailableConcurrencySlotsForTests);
+
+        releaseFirst.TrySetResult();
+        await secondStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+        var responseText = await batchResponseTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        var responses = JsonNode.Parse(responseText!)!.AsArray();
+        Assert.Equal("Request timed out", responses[0]!["error"]!["message"]!.GetValue<string>());
+        Assert.Equal("ok", responses[1]!["result"]!["status"]!.GetValue<string>());
         Assert.Equal(1, server.AvailableConcurrencySlotsForTests);
     }
 
@@ -4522,6 +5134,47 @@ public sealed class Caller
             WrittenFrames.Add(frame);
             _onWrite?.Invoke(frame);
             return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class BlockingShutdownCompletionTransport : IMcpTransport
+    {
+        private readonly Queue<string?> _frames = new(
+        [
+            """{"jsonrpc":"2.0","id":"issue-4543-base-write-init","method":"initialize","params":{}}""",
+            """{"jsonrpc":"2.0","method":"notifications/shutdown"}""",
+            null,
+        ]);
+        private readonly Task _releaseWrite;
+        private readonly TaskCompletionSource _shutdownWriteStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _shutdownWriteCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal BlockingShutdownCompletionTransport(Task releaseWrite)
+        {
+            _releaseWrite = releaseWrite;
+        }
+
+        public string Name => "base-blocking-shutdown";
+        public string Endpoint => "in-memory";
+        internal Task ShutdownWriteStarted => _shutdownWriteStarted.Task;
+        internal Task ShutdownWriteCompleted => _shutdownWriteCompleted.Task;
+
+        public Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(_frames.Dequeue());
+        }
+
+        public async Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
+        {
+            if (frame is not null)
+                return;
+
+            _shutdownWriteStarted.TrySetResult();
+            await _releaseWrite.ConfigureAwait(false);
+            _shutdownWriteCompleted.TrySetResult();
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -7887,48 +8540,6 @@ public sealed class Caller
         }
     }
 
-    private sealed class BlockingShutdownCompletionTransport : IMcpTransport
-    {
-        private readonly Queue<string?> _frames = new(
-        [
-            """{"jsonrpc":"2.0","id":"issue-4543-base-write-init","method":"initialize","params":{}}""",
-            """{"jsonrpc":"2.0","method":"notifications/shutdown"}""",
-            null,
-        ]);
-        private readonly Task _releaseWrite;
-        private readonly TaskCompletionSource _shutdownWriteStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource _shutdownWriteCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        internal BlockingShutdownCompletionTransport(Task releaseWrite)
-        {
-            _releaseWrite = releaseWrite;
-        }
-
-        public string Name => "base-blocking-shutdown";
-        public string Endpoint => "in-memory";
-        internal Task ShutdownWriteStarted => _shutdownWriteStarted.Task;
-        internal Task ShutdownWriteCompleted => _shutdownWriteCompleted.Task;
-
-        public Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(_frames.Dequeue());
-        }
-
-        public async Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
-        {
-            if (frame is not null)
-                return;
-
-            _shutdownWriteStarted.TrySetResult();
-            await _releaseWrite.ConfigureAwait(false);
-            _shutdownWriteCompleted.TrySetResult();
-        }
-
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
-
-
     private sealed class BlockingWriteStream : Stream
     {
         private readonly TaskCompletionSource _writeStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -7998,4 +8609,21 @@ public sealed class Caller
         }
     }
 
+    private sealed class ManualMcpTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private readonly object _gate = new();
+        private DateTimeOffset _utcNow = utcNow;
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            lock (_gate)
+                return _utcNow;
+        }
+
+        internal void Advance(TimeSpan amount)
+        {
+            lock (_gate)
+                _utcNow += amount;
+        }
+    }
 }

@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -902,6 +903,94 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_BearerProtectedMixedBatchCancellationRequiresAuthAndIsNotReplayed_Issue4545()
+    {
+        const string bearerToken = "issue-4545-bearer";
+        await using var harness = await McpHttpHarness.StartAsync(
+            _dbPath,
+            bearerToken: bearerToken,
+            maxConcurrency: 1);
+        using (var initialize = await harness.PostJsonAsync(
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""",
+            bearerToken))
+        {
+            Assert.Equal(HttpStatusCode.OK, initialize.StatusCode);
+        }
+
+        var targetStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var targetCancellationObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseTarget = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.RequestDelayForTestsWithId = async (id, cancellationToken) =>
+        {
+            if (id?.GetValue<int>() != 454501)
+                return;
+
+            using var registration = cancellationToken.Register(() => targetCancellationObserved.TrySetResult());
+            targetStarted.TrySetResult();
+            await releaseTarget.Task.WaitAsync(cancellationToken);
+        };
+
+        var targetPost = harness.PostJsonAsync(
+            """{"jsonrpc":"2.0","id":454501,"method":"ping"}""",
+            bearerToken);
+        try
+        {
+            await targetStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            const string mixedBatch =
+                """[{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":454501}},{"jsonrpc":"2.0","id":454502,"method":"ping"}]""";
+
+            using (var unauthorized = await harness.PostJsonAsync(mixedBatch))
+            {
+                Assert.Equal(HttpStatusCode.Unauthorized, unauthorized.StatusCode);
+                Assert.Contains(
+                    unauthorized.Headers.WwwAuthenticate,
+                    header => header.Scheme.Equals("Bearer", StringComparison.OrdinalIgnoreCase));
+            }
+            Assert.False(targetCancellationObserved.Task.IsCompleted);
+            await TestDeterminism.AssertTaskRemainsBlockedAsync(targetPost);
+
+            using var mixedResponse = await harness.PostJsonAsync(mixedBatch, bearerToken);
+            Assert.Equal(HttpStatusCode.OK, mixedResponse.StatusCode);
+            using (var mixedDocument = JsonDocument.Parse(await mixedResponse.Content.ReadAsStringAsync()))
+            {
+                Assert.Equal(JsonValueKind.Array, mixedDocument.RootElement.ValueKind);
+                var remainingResponse = Assert.Single(mixedDocument.RootElement.EnumerateArray());
+                Assert.Equal(454502, remainingResponse.GetProperty("id").GetInt32());
+                Assert.Equal("ok", remainingResponse.GetProperty("result").GetProperty("status").GetString());
+            }
+
+            using (var targetResponse = await targetPost.WaitAsync(TestDeterminism.DefaultTimeout))
+            {
+                Assert.Equal(HttpStatusCode.OK, targetResponse.StatusCode);
+                using var targetDocument = JsonDocument.Parse(await targetResponse.Content.ReadAsStringAsync());
+                Assert.Equal(454501, targetDocument.RootElement.GetProperty("id").GetInt32());
+                Assert.Equal(
+                    "request_cancelled",
+                    targetDocument.RootElement.GetProperty("error").GetProperty("data").GetProperty("category").GetString());
+            }
+
+            harness.RequestDelayForTestsWithId = null;
+            using var reusedResponse = await harness.PostJsonAsync(
+                """{"jsonrpc":"2.0","id":454501,"method":"ping"}""",
+                bearerToken);
+            Assert.Equal(HttpStatusCode.OK, reusedResponse.StatusCode);
+            using var reusedDocument = JsonDocument.Parse(await reusedResponse.Content.ReadAsStringAsync());
+            Assert.Equal(454501, reusedDocument.RootElement.GetProperty("id").GetInt32());
+            Assert.Equal("ok", reusedDocument.RootElement.GetProperty("result").GetProperty("status").GetString());
+        }
+        finally
+        {
+            releaseTarget.TrySetResult();
+            harness.RequestDelayForTestsWithId = null;
+            try
+            {
+                using var targetResponse = await targetPost.WaitAsync(TestDeterminism.DefaultTimeout);
+            }
+            catch { /* primary assertion reports the failure; cleanup must still release the harness. */ }
+        }
+    }
+
+    [Fact]
     public async Task HttpTransport_NonOutOfBandPayloads_AreQueuedForNormalHandling_Issue3711()
     {
         var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
@@ -1257,6 +1346,93 @@ public class HttpMcpTransportTests : IDisposable
         await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":1,"result":{}}""", CancellationToken.None);
         using var firstResponse = await first.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task HttpTransport_MixedBatchCancellationRunsBeforeQueueRejection_Issue4545()
+    {
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        var outOfBandFrames = new ConcurrentQueue<string>();
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            allowUnauthenticatedLoopback: true,
+            maxQueuedRequests: 1);
+        transport.OutOfBandFrameHandler = (frame, _) =>
+        {
+            outOfBandFrames.Enqueue(frame);
+            return Task.FromResult<string?>(null);
+        };
+
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var first = client.PostAsync(
+            listen.Prefix,
+            new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"));
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the first request to fill the HTTP MCP queue");
+
+        using var second = await client.PostAsync(
+            listen.Prefix,
+            new StringContent(
+                """[{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":1}},{"jsonrpc":"2.0","id":2,"method":"ping"}]""",
+                Encoding.UTF8,
+                "application/json"));
+
+        AssertTooManyRequests(second, HttpMcpTransport.RequestQueueLimitRejection);
+        Assert.Equal(1, transport.RequestQueueLimitRejectionCount);
+        Assert.Equal(1, transport.QueuedRequestCount);
+        var extractedFrame = Assert.Single(outOfBandFrames);
+        using (var extractedDocument = JsonDocument.Parse(extractedFrame))
+        {
+            var notification = Assert.Single(extractedDocument.RootElement.EnumerateArray());
+            Assert.Equal("$/cancelRequest", notification.GetProperty("method").GetString());
+            Assert.False(notification.TryGetProperty("id", out _));
+        }
+
+        var frame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.NotNull(frame);
+        Assert.Contains("\"id\":1", frame, StringComparison.Ordinal);
+        Assert.DoesNotContain("$/cancelRequest", frame, StringComparison.Ordinal);
+        await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":1,"result":{}}""", CancellationToken.None);
+        using var firstResponse = await first.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task HttpTransport_SameBatchCancellationStaysWithItsQueuedTarget_Issue4545()
+    {
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        var outOfBandFrames = new ConcurrentQueue<string>();
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            allowUnauthenticatedLoopback: true);
+        transport.OutOfBandFrameHandler = (frame, _) =>
+        {
+            outOfBandFrames.Enqueue(frame);
+            return Task.FromResult<string?>(null);
+        };
+
+        const string batch =
+            """[{"jsonrpc":"2.0","id":"same-batch-target","method":"ping"},{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"same-batch-target"}}]""";
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var post = client.PostAsync(
+            listen.Prefix,
+            new StringContent(batch, Encoding.UTF8, "application/json"));
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "same-batch cancellation request to enter the normal queue");
+
+        var frame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TestDeterminism.DefaultTimeout);
+        Assert.Equal(batch, frame);
+        Assert.Empty(outOfBandFrames);
+
+        await transport.WriteFrameAsync(
+            """[{"jsonrpc":"2.0","id":"same-batch-target","error":{"code":-32800,"message":"Request cancelled"}}]""",
+            CancellationToken.None);
+        using var response = await post.WaitAsync(TestDeterminism.DefaultTimeout);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]
@@ -1916,6 +2092,12 @@ public class HttpMcpTransportTests : IDisposable
             set => _server.RequestDelayForTests = value;
         }
 
+        public Func<JsonNode?, CancellationToken, Task>? RequestDelayForTestsWithId
+        {
+            get => _server.RequestDelayForTestsWithId;
+            set => _server.RequestDelayForTestsWithId = value;
+        }
+
         public void RecordResponseCleanupFailure(string kind, string operation, Exception exception)
             => _transport.RecordResponseCleanupFailure(kind, operation, exception);
 
@@ -1979,14 +2161,22 @@ public class HttpMcpTransportTests : IDisposable
             return new McpHttpHarness(server, transport, cts, loopTask, listen.Prefix);
         }
 
-        public async Task<HttpResponseMessage> PostJsonAsync(string body)
+        public Task<HttpResponseMessage> PostJsonAsync(string body)
+            => PostJsonAsync(body, bearerToken: null);
+
+        public async Task<HttpResponseMessage> PostJsonAsync(string body, string? bearerToken)
         {
             if (_loopTask.IsCompleted)
                 await _loopTask.ConfigureAwait(false);
 
             using var client = HttpMcpTransportTests.CreateHttpClient(RequestTimeout);
-            var content = new StringContent(body, Encoding.UTF8, "application/json");
-            return await client.PostAsync(Endpoint, content);
+            using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            };
+            if (bearerToken is not null)
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+            return await client.SendAsync(request);
         }
 
         public ValueTask DisposeTransportAsync()
