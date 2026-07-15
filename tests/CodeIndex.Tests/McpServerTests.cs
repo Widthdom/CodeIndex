@@ -6302,6 +6302,161 @@ public sealed class Caller
     }
 
     [Fact]
+    public async Task RunAsync_AdmissionOverflowCancellationBeforeAndDuringWriteDoesNotPoisonRetry_Issue4536_Issue4545()
+    {
+        const string blockerId = "issue-4536-overflow-cancel-blocker";
+        const string rejectedId = "issue-4536-overflow-cancel-retry";
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            maxConcurrency: 1)
+        {
+            MaxAcceptedConcurrentFrames = 1,
+        };
+        Assert.NotNull(await server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":"issue-4536-overflow-cancel-init","method":"initialize","params":{}}"""));
+
+        var blockerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseBlocker = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationDuringBusyWriteCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.RequestDelayForTestsWithId = async (id, cancellationToken) =>
+        {
+            if (id?.GetValue<string>() != blockerId)
+                return;
+            blockerStarted.TrySetResult();
+            await releaseBlocker.Task.WaitAsync(cancellationToken);
+        };
+
+        var transport = QueuedFrameTransport.FromExactFrames(
+            """{"jsonrpc":"2.0","id":"issue-4536-overflow-cancel-blocker","method":"ping"}""",
+            """{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"issue-4536-overflow-cancel-retry"}}""",
+            """{"jsonrpc":"2.0","id":"issue-4536-overflow-cancel-retry","method":"ping"}""");
+        transport.BeforeFrameReturnedAsync = async (frame, cancellationToken) =>
+        {
+            if (frame?.Contains("notifications/cancelled", StringComparison.Ordinal) == true)
+                await blockerStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout, cancellationToken);
+        };
+        transport.BeforeFrameWrittenAsync = async (frame, _) =>
+        {
+            if (frame?.Contains(rejectedId, StringComparison.Ordinal) != true
+                || frame.Contains("\"category\":\"server_busy\"", StringComparison.Ordinal) != true)
+            {
+                return;
+            }
+
+            Assert.Equal(1, server.QueuedBatchRequestCountForTests);
+            Assert.Null(await server.ProcessFrameAsync(
+                """{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"issue-4536-overflow-cancel-retry"}}"""));
+            cancellationDuringBusyWriteCompleted.TrySetResult();
+        };
+
+        var runTask = server.RunAsync(transport, CancellationToken.None);
+        try
+        {
+            await cancellationDuringBusyWriteCompleted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            releaseBlocker.TrySetResult();
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+        finally
+        {
+            releaseBlocker.TrySetResult();
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+
+        var busyResponseText = Assert.Single(
+            transport.WrittenFrames,
+            frame => frame?.Contains(rejectedId, StringComparison.Ordinal) == true
+                && frame.Contains("\"category\":\"server_busy\"", StringComparison.Ordinal));
+        Assert.Equal(
+            "server_busy",
+            JsonNode.Parse(busyResponseText!)!["error"]!["data"]!["category"]!.GetValue<string>());
+        Assert.Equal(0, server.QueuedBatchRequestCountForTests);
+
+        var retryResponseText = await server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":"issue-4536-overflow-cancel-retry","method":"ping"}""");
+        Assert.Equal("ok", JsonNode.Parse(retryResponseText!)!["result"]!["status"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task RunAsync_AdmissionOverflowBatchCancellationDoesNotPoisonRetry_Issue4536_Issue4545()
+    {
+        const string blockerId = "issue-4545-overflow-batch-blocker";
+        const string rejectedId = "issue-4545-overflow-batch-retry";
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            maxConcurrency: 1)
+        {
+            MaxAcceptedConcurrentFrames = 1,
+        };
+        Assert.NotNull(await server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":"issue-4545-overflow-batch-init","method":"initialize","params":{}}"""));
+
+        var blockerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseBlocker = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var busyBatchWriteStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.RequestDelayForTestsWithId = async (id, cancellationToken) =>
+        {
+            if (id?.GetValue<string>() != blockerId)
+                return;
+            blockerStarted.TrySetResult();
+            await releaseBlocker.Task.WaitAsync(cancellationToken);
+        };
+
+        var transport = QueuedFrameTransport.FromExactFrames(
+            """{"jsonrpc":"2.0","id":"issue-4545-overflow-batch-blocker","method":"ping"}""",
+            """[{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"issue-4545-overflow-batch-retry"}},{"jsonrpc":"2.0","id":"issue-4545-overflow-batch-retry","method":"ping"}]""");
+        transport.BeforeFrameReturnedAsync = async (frame, cancellationToken) =>
+        {
+            if (frame?.StartsWith("[", StringComparison.Ordinal) == true)
+                await blockerStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout, cancellationToken);
+        };
+        transport.BeforeFrameWrittenAsync = (frame, _) =>
+        {
+            if (frame?.Contains(rejectedId, StringComparison.Ordinal) == true
+                && frame.Contains("\"category\":\"server_busy\"", StringComparison.Ordinal))
+            {
+                Assert.Equal(1, server.QueuedBatchRequestCountForTests);
+                busyBatchWriteStarted.TrySetResult();
+            }
+            return Task.CompletedTask;
+        };
+
+        var runTask = server.RunAsync(transport, CancellationToken.None);
+        try
+        {
+            await busyBatchWriteStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            releaseBlocker.TrySetResult();
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+        finally
+        {
+            releaseBlocker.TrySetResult();
+            await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+
+        var busyBatchText = Assert.Single(
+            transport.WrittenFrames,
+            frame => frame?.StartsWith("[", StringComparison.Ordinal) == true
+                && frame.Contains(rejectedId, StringComparison.Ordinal));
+        var busyResponse = Assert.Single(JsonNode.Parse(busyBatchText!)!.AsArray());
+        Assert.Equal("server_busy", busyResponse!["error"]!["data"]!["category"]!.GetValue<string>());
+        Assert.Equal(0, server.QueuedBatchRequestCountForTests);
+
+        var retryResponseText = await server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":"issue-4545-overflow-batch-retry","method":"ping"}""");
+        Assert.Equal("ok", JsonNode.Parse(retryResponseText!)!["result"]!["status"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task RunAsync_AdmissionOverflowDropsIdBearingStateNotification_Issue4536_Issue4545()
     {
         using var server = new McpServer(

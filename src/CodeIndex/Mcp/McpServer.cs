@@ -822,11 +822,20 @@ public partial class McpServer : IDisposable
                 // HTTP context を保持し続けず、retry-safe overload response を返す (#4536)。
                 if (!admissionGate.Wait(0))
                 {
+                    // Keep every response-bearing id registered until its retry-safe overload
+                    // response has reached the transport. A cancellation before or during that
+                    // write then belongs to this rejected occurrence instead of poisoning a later
+                    // same-id retry (#4536, #4545).
+                    // retry-safe overload 応答が transport へ届くまで response-bearing id を登録する。
+                    // reject 前または write 中の cancel をこの occurrence に束縛し、同じ id の後続
+                    // retry へ持ち越さない (#4536, #4545)。
+                    using var capacityRejectedRegistrations = new CapacityRejectedFrameRegistrations(this);
                     BeginDeferredFrameLogs();
                     var response = await ProcessFrameAsync(
                         frame,
                         beforeDispatchAsync: null,
-                        rejectForCapacity: true).ConfigureAwait(false);
+                        rejectForCapacity: true,
+                        capacityRejectedRegistrations: capacityRejectedRegistrations).ConfigureAwait(false);
                     await writeGate.WaitAsync(externalCancellationToken).ConfigureAwait(false);
                     try
                     {
@@ -1424,7 +1433,8 @@ public partial class McpServer : IDisposable
     private async Task<string?> ProcessFrameAsync(
         string line,
         Func<CancellationToken, Task>? beforeDispatchAsync,
-        bool rejectForCapacity)
+        bool rejectForCapacity,
+        CapacityRejectedFrameRegistrations? capacityRejectedRegistrations = null)
     {
         if (string.IsNullOrWhiteSpace(line))
             return null;
@@ -1449,6 +1459,7 @@ public partial class McpServer : IDisposable
             if (TryCompletePendingClientRequest(request))
                 return null;
 
+            capacityRejectedRegistrations?.Register(request);
             ExtractResponseId(request, out responseHasId, out responseId);
             if (responseHasId && CurrentCorrelationContext.Value is null)
                 frameCorrelationScope = BeginRequestCorrelation(responseId);
@@ -1793,6 +1804,54 @@ public partial class McpServer : IDisposable
                 _logs = null;
                 _lateLogForwarder = lateLogForwarder;
             }
+        }
+    }
+
+    private sealed class CapacityRejectedFrameRegistrations : IDisposable
+    {
+        private readonly McpServer _owner;
+        private readonly HashSet<string> _requestKeys = new(StringComparer.Ordinal);
+        private readonly List<QueuedBatchRequestRegistration> _registrations = [];
+        private bool _disposed;
+
+        internal CapacityRejectedFrameRegistrations(McpServer owner)
+        {
+            _owner = owner;
+        }
+
+        internal void Register(JsonNode request)
+        {
+            if (request is JsonArray batch)
+            {
+                foreach (var item in batch)
+                    RegisterItem(item);
+                return;
+            }
+
+            RegisterItem(request);
+        }
+
+        private void RegisterItem(JsonNode? item)
+        {
+            if (!BatchItemRequiresResponse(item, out var responseId)
+                || SerializeRequestId(responseId) is not { } requestKey
+                || !_requestKeys.Add(requestKey))
+            {
+                return;
+            }
+
+            if (_owner.TryRegisterQueuedBatchRequest(requestKey) is { } registration)
+                _registrations.Add(registration);
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+
+            foreach (var registration in _registrations)
+                registration.DisposeIfUnclaimed();
         }
     }
 
