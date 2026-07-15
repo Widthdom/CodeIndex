@@ -42,34 +42,54 @@ internal static class SqliteFileUri
 
     internal static bool RequestsReadOnly(string uriText)
     {
-        if (!StartsWithFileScheme(uriText))
-            return false;
+        return HasQuerySegment(uriText, "immutable=1")
+            || HasQuerySegment(uriText, "mode=ro");
+    }
 
-        if (!TryValidateBounds(uriText, out var queryIndex, out _))
+    internal static bool RequestsUnambiguousImmutableSnapshot(string uriText)
+    {
+        if (!StartsWithFileScheme(uriText)
+            || !TryValidateBounds(uriText, out var queryIndex, out _)
+            || queryIndex < 0)
+        {
             return false;
+        }
 
-        if (queryIndex < 0)
-            return false;
-
+        var sawImmutable = false;
+        var sawReadOnlyMode = false;
         var query = uriText.AsSpan(queryIndex + 1);
         while (!query.IsEmpty)
         {
             var ampersandIndex = query.IndexOf('&');
             var segment = ampersandIndex >= 0 ? query[..ampersandIndex] : query;
-            segment = segment.Trim();
-            if (segment.Equals("immutable=1".AsSpan(), StringComparison.OrdinalIgnoreCase) ||
-                segment.Equals("mode=ro".AsSpan(), StringComparison.OrdinalIgnoreCase))
+            if (segment.SequenceEqual("immutable=1".AsSpan()))
             {
-                return true;
+                if (sawImmutable)
+                    return false;
+                sawImmutable = true;
+            }
+            else if (segment.SequenceEqual("mode=ro".AsSpan()))
+            {
+                if (sawReadOnlyMode)
+                    return false;
+                sawReadOnlyMode = true;
+            }
+            else
+            {
+                // Generation-zero cursors rely on SQLite actually honoring immutable=1.
+                // Reject unknown, encoded, case-variant, whitespace-padded, or conflicting
+                // query parameters instead of interpreting them more broadly than SQLite.
+                // 世代 0 cursor は SQLite が immutable=1 を実際に解釈することが前提。
+                // unknown / encoded / case variant / 空白付き / 競合 parameter は拒否する。
+                return false;
             }
 
             if (ampersandIndex < 0)
                 break;
-
             query = query[(ampersandIndex + 1)..];
         }
 
-        return false;
+        return sawImmutable;
     }
 
     internal static string TruncateDiagnosticValue(string value)
@@ -110,5 +130,29 @@ internal static class SqliteFileUri
 
         parseError = null;
         return true;
+    }
+
+    private static bool HasQuerySegment(string uriText, string expectedSegment)
+    {
+        if (!StartsWithFileScheme(uriText)
+            || !TryValidateBounds(uriText, out var queryIndex, out _)
+            || queryIndex < 0)
+        {
+            return false;
+        }
+
+        var query = uriText.AsSpan(queryIndex + 1);
+        while (!query.IsEmpty)
+        {
+            var ampersandIndex = query.IndexOf('&');
+            var segment = ampersandIndex >= 0 ? query[..ampersandIndex] : query;
+            if (segment.Trim().Equals(expectedSegment.AsSpan(), StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (ampersandIndex < 0)
+                break;
+            query = query[(ampersandIndex + 1)..];
+        }
+
+        return false;
     }
 }

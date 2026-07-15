@@ -797,6 +797,84 @@ public partial class McpServerTests : IDisposable
         writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols));
     }
 
+    private void InsertResourceFileRecords(int count, string pathPrefix)
+    {
+        var writer = new DbWriter(_db.Connection);
+        using var transaction = writer.BeginTransaction();
+        for (var i = 0; i < count; i++)
+        {
+            writer.UpsertFile(new FileRecord
+            {
+                Path = $"{pathPrefix}-{i:D5}.cs",
+                Lang = "csharp",
+                Size = 1,
+                Lines = 1,
+                Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+                Checksum = $"{pathPrefix}-{i}",
+            });
+        }
+        transaction.Commit();
+    }
+
+    private static string CreateLegacyResourceDatabase(string projectRoot, int fileCount = 205)
+    {
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        using (var transaction = writer.BeginTransaction())
+        {
+            for (var i = 0; i < fileCount; i++)
+            {
+                writer.UpsertFile(new FileRecord
+                {
+                    Path = $"src/legacy-resource-{i:D5}.cs",
+                    Lang = "csharp",
+                    Size = 1,
+                    Lines = 1,
+                    Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+                    Checksum = $"legacy-resource-{i}",
+                });
+            }
+            transaction.Commit();
+        }
+
+        using var stripTracking = db.Connection.CreateCommand();
+        stripTracking.CommandText = """
+            DROP TRIGGER IF EXISTS files_resource_generation_ai;
+            DROP TRIGGER IF EXISTS files_resource_generation_ad;
+            DROP TRIGGER IF EXISTS files_resource_generation_au;
+            DELETE FROM codeindex_meta WHERE key = 'resource_list_generation';
+            """;
+        stripTracking.ExecuteNonQuery();
+        return dbPath;
+    }
+
+    private JsonNode CallResourcesList(string cursor, int id, int? maxBytes = null)
+    {
+        var listParams = new JsonObject
+        {
+            ["cursor"] = cursor,
+        };
+        if (maxBytes is not null)
+            listParams["maxBytes"] = maxBytes.Value;
+        return _server.HandleMessage(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = id,
+            ["method"] = "resources/list",
+            ["params"] = listParams,
+        })!;
+    }
+
+    private static void AssertResourcesListRestartRequired(JsonNode response)
+    {
+        Assert.Equal(-32011, response["error"]!["code"]!.GetValue<int>());
+        var data = response["error"]!["data"]!;
+        Assert.Equal("index_stale", data["category"]!.GetValue<string>());
+        Assert.Equal("resources_list_generation_changed", data["reason"]!.GetValue<string>());
+        Assert.True(data["restart_required"]!.GetValue<bool>());
+    }
+
     private static JsonNode CallIndex(McpServer server, string path, Action<JsonObject>? configure = null)
     {
         var arguments = new JsonObject
@@ -1419,7 +1497,72 @@ public sealed class Caller
         Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
         var data = response["error"]!["data"]!;
         Assert.Equal("invalid_argument", data["category"]!.GetValue<string>());
-        Assert.Equal(McpServer.MaxMcpPaginationOffset, data["max_pagination_offset"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxResourceListCursorChars, data["max_cursor_length"]!.GetValue<int>());
+    }
+
+    [Theory]
+    [InlineData('A')]
+    [InlineData('0')]
+    public void ResourcesList_OversizedCursor_ReturnsInvalidParams_Issue4541(char fill)
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "resources/list",
+            ["params"] = new JsonObject
+            {
+                ["cursor"] = new string(fill, McpServer.MaxResourceListCursorChars + 1),
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("invalid_argument", response["error"]!["data"]!["category"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData(McpServer.MinResourceListMaxBytes - 1)]
+    [InlineData(McpServer.MaxResourceListMaxBytes + 1)]
+    public void ResourcesList_MaxBytesOutsideBounds_ReturnsInvalidParams_Issue4542(int maxBytes)
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "resources/list",
+            ["params"] = new JsonObject
+            {
+                ["maxBytes"] = maxBytes,
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        var data = response["error"]!["data"]!;
+        Assert.Equal("invalid_argument", data["category"]!.GetValue<string>());
+        Assert.Equal(McpServer.MinResourceListMaxBytes, data["min_max_bytes"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxResourceListMaxBytes, data["max_max_bytes"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ResourcesList_ByteBudgetContinuationMetadata_DoesNotExceedItemLimitReservation_Issue4542()
+    {
+        InsertResourceFileRecords(205, "src/metadata-budget");
+        var response = _server.HandleMessage(
+            JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}""")!)!;
+        var itemLimitControls = response["result"]!["_meta"]!["response_controls"]!;
+        Assert.False(itemLimitControls["byte_budget_reached"]!.GetValue<bool>());
+        Assert.Equal("item_limit", itemLimitControls["continuation_reason"]!.GetValue<string>());
+        var byteBudgetControls = JsonNode.Parse(itemLimitControls.ToJsonString())!;
+        byteBudgetControls["byte_budget_reached"] = true;
+        byteBudgetControls["continuation_reason"] = "byte_budget";
+
+        Assert.Equal(
+            Encoding.UTF8.GetByteCount(itemLimitControls.ToJsonString()),
+            Encoding.UTF8.GetByteCount(byteBudgetControls.ToJsonString()));
     }
 
     [Fact]
@@ -1441,27 +1584,12 @@ public sealed class Caller
         Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
         var data = response["error"]!["data"]!;
         Assert.Equal("invalid_argument", data["category"]!.GetValue<string>());
-        Assert.Equal(McpServer.MaxMcpPaginationOffset, data["max_pagination_offset"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxMcpPaginationOffset, data["max_legacy_pagination_offset"]!.GetValue<int>());
     }
 
     [Fact]
-    public void ResourcesList_AtPaginationCap_DoesNotEmitSelfInvalidNextCursor_Issue3112()
+    public void ResourcesList_NonzeroLegacyCursor_RequiresRestart_Issue4541()
     {
-        var writer = new DbWriter(_db.Connection);
-        using var transaction = writer.BeginTransaction();
-        for (var i = 0; i < McpServer.MaxMcpPaginationOffset + 200; i++)
-        {
-            writer.UpsertFile(new FileRecord
-            {
-                Path = $"zz/paged-{i:D5}.cs",
-                Lang = "csharp",
-                Size = 1,
-                Lines = 1,
-                Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
-                Checksum = $"bulk-{i}",
-            });
-        }
-        transaction.Commit();
         var request = new JsonObject
         {
             ["jsonrpc"] = "2.0",
@@ -1469,13 +1597,14 @@ public sealed class Caller
             ["method"] = "resources/list",
             ["params"] = new JsonObject
             {
-                ["cursor"] = McpServer.MaxMcpPaginationOffset.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["cursor"] = "200",
             },
         };
 
         var response = _server.HandleMessage(request)!;
 
-        Assert.Null(response["result"]!["nextCursor"]);
+        AssertResourcesListRestartRequired(response);
+        Assert.False(response["error"]!["data"]!["retry_safe"]!.GetValue<bool>());
     }
 
     [Fact]
@@ -1496,27 +1625,184 @@ public sealed class Caller
             });
         }
         transaction.Commit();
-        var request = new JsonObject
+        var firstRequest = new JsonObject
         {
             ["jsonrpc"] = "2.0",
             ["id"] = 1,
             ["method"] = "resources/list",
+            ["params"] = new JsonObject(),
+        };
+
+        var firstResponse = _server.HandleMessage(firstRequest)!;
+        var firstResources = firstResponse["result"]!["resources"]!.AsArray();
+        var cursor = firstResponse["result"]!["nextCursor"]!.GetValue<string>();
+        var secondRequest = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 2,
+            ["method"] = "resources/list",
             ["params"] = new JsonObject
             {
-                ["cursor"] = "200",
+                ["cursor"] = cursor,
             },
         };
 
-        var response = _server.HandleMessage(request)!;
+        var secondResponse = _server.HandleMessage(secondRequest)!;
+        var secondResources = secondResponse["result"]!["resources"]!.AsArray();
 
-        var resources = response["result"]!["resources"]!.AsArray();
-        Assert.Equal("400", response["result"]!["nextCursor"]!.GetValue<string>());
-        Assert.DoesNotContain(resources, resource => resource!["name"]!.GetValue<string>() == "zz/deep-00000.cs");
-        Assert.Contains(resources, resource => resource!["name"]!.GetValue<string>() == "zz/deep-00199.cs");
+        Assert.Equal(200, firstResources.Count);
+        Assert.Equal(McpServer.MaxResourceListCursorChars, cursor.Length);
+        Assert.False(int.TryParse(cursor, NumberStyles.None, CultureInfo.InvariantCulture, out _));
+        var firstControls = firstResponse["result"]!["_meta"]!["response_controls"]!;
+        Assert.Equal("item_limit", firstControls["continuation_reason"]!.GetValue<string>());
+        Assert.Equal(0, firstControls["omitted_resource_count"]!.GetValue<int>());
+        Assert.DoesNotContain(secondResources, resource => resource!["name"]!.GetValue<string>() == "zz/deep-00198.cs");
+        Assert.Contains(secondResources, resource => resource!["name"]!.GetValue<string>() == "zz/deep-00199.cs");
+        var firstNames = firstResources.Select(resource => resource!["name"]!.GetValue<string>()).ToHashSet(StringComparer.Ordinal);
+        Assert.DoesNotContain(secondResources, resource => firstNames.Contains(resource!["name"]!.GetValue<string>()));
     }
 
     [Fact]
-    public void ResourcesList_DoesNotAdvertiseUrisTooLongToRead_Issue3122()
+    public void ResourcesList_InsertionBetweenPages_RequiresRestart_Issue4541()
+    {
+        InsertResourceFileRecords(205, "src/mutation-insert");
+        var firstResponse = _server.HandleMessage(
+            JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}""")!)!;
+        var cursor = firstResponse["result"]!["nextCursor"]!.GetValue<string>();
+        InsertIndexedFile("src/000-inserted.cs", "csharp", "public class Inserted { }");
+
+        var response = CallResourcesList(cursor, id: 2);
+
+        AssertResourcesListRestartRequired(response);
+        var restarted = _server.HandleMessage(
+            JsonNode.Parse("""{"jsonrpc":"2.0","id":3,"method":"resources/list","params":{}}""")!)!;
+        Assert.Contains(restarted["result"]!["resources"]!.AsArray(),
+            resource => resource!["name"]!.GetValue<string>() == "src/000-inserted.cs");
+    }
+
+    [Fact]
+    public void ResourcesList_DeletionBetweenPages_RequiresRestart_Issue4541()
+    {
+        InsertResourceFileRecords(205, "src/mutation-delete");
+        var firstResponse = _server.HandleMessage(
+            JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}""")!)!;
+        var cursor = firstResponse["result"]!["nextCursor"]!.GetValue<string>();
+        var writer = new DbWriter(_db.Connection);
+        Assert.True(writer.DeleteFileByPath("src/app.cs"));
+
+        var response = CallResourcesList(cursor, id: 2);
+
+        AssertResourcesListRestartRequired(response);
+        var restarted = _server.HandleMessage(
+            JsonNode.Parse("""{"jsonrpc":"2.0","id":3,"method":"resources/list","params":{}}""")!)!;
+        Assert.DoesNotContain(restarted["result"]!["resources"]!.AsArray(),
+            resource => resource!["name"]!.GetValue<string>() == "src/app.cs");
+    }
+
+    [Fact]
+    public void ResourcesList_FreshDatabaseSeedsGenerationAndMutationTriggers_Issue4541()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_resources_generation_fresh");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        using var db = new DbContext(dbPath);
+
+        using (var generation = db.Connection.CreateCommand())
+        {
+            generation.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'resource_list_generation'";
+            Assert.Equal("0", generation.ExecuteScalar() as string);
+        }
+
+        var writer = new DbWriter(db.Connection);
+        writer.UpsertFile(new FileRecord
+        {
+            Path = "src/fresh-generation.cs",
+            Lang = "csharp",
+            Size = 1,
+            Lines = 1,
+            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+            Checksum = "fresh-generation",
+        });
+
+        using var incremented = db.Connection.CreateCommand();
+        incremented.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'resource_list_generation'";
+        Assert.Equal("1", incremented.ExecuteScalar() as string);
+    }
+
+    [Fact]
+    public void ResourcesList_WritableLegacyDatabaseMigratesBeforeIssuingCursor_Issue4541()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_resources_generation_writable_legacy");
+        var dbPath = CreateLegacyResourceDatabase(project.Root);
+        using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+        var first = server.HandleMessage(
+            JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}""")!)!;
+        var cursor = first["result"]!["nextCursor"]!.GetValue<string>();
+
+        using (var externalDb = new DbContext(dbPath))
+        {
+            var writer = new DbWriter(externalDb.Connection);
+            Assert.True(writer.DeleteFileByPath("src/legacy-resource-00000.cs"));
+        }
+
+        var stale = server.HandleMessage(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 2,
+            ["method"] = "resources/list",
+            ["params"] = new JsonObject { ["cursor"] = cursor },
+        })!;
+        AssertResourcesListRestartRequired(stale);
+    }
+
+    [Fact]
+    public void ResourcesList_MutableReadOnlyLegacyDatabaseRequiresMigration_Issue4541()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_resources_generation_readonly_legacy");
+        var dbPath = CreateLegacyResourceDatabase(project.Root);
+        var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?mode=ro";
+        using var server = new McpServer(readOnlyUri, ConsoleUi.LoadVersion());
+
+        var response = server.HandleMessage(
+            JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}""")!)!;
+
+        Assert.Equal(-32011, response["error"]!["code"]!.GetValue<int>());
+        var data = response["error"]!["data"]!;
+        Assert.Equal("resources_list_generation_unavailable", data["reason"]!.GetValue<string>());
+        Assert.True(data["migration_required"]!.GetValue<bool>());
+        Assert.False(data["restart_required"]!.GetValue<bool>());
+        Assert.False(data["retry_safe"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ResourcesList_ImmutableLegacyDatabaseUsesStableSnapshotCursor_Issue4541()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_resources_generation_immutable_legacy");
+        var dbPath = CreateLegacyResourceDatabase(project.Root);
+        var immutableUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+        using var server = new McpServer(immutableUri, ConsoleUi.LoadVersion());
+
+        var first = server.HandleMessage(
+            JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}""")!)!;
+        var firstResources = first["result"]!["resources"]!.AsArray();
+        var cursor = first["result"]!["nextCursor"]!.GetValue<string>();
+        var second = server.HandleMessage(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 2,
+            ["method"] = "resources/list",
+            ["params"] = new JsonObject { ["cursor"] = cursor },
+        })!;
+        var secondResources = second["result"]!["resources"]!.AsArray();
+
+        Assert.Equal(200, firstResources.Count);
+        Assert.Equal(5, secondResources.Count);
+        var firstNames = firstResources.Select(resource => resource!["name"]!.GetValue<string>()).ToHashSet(StringComparer.Ordinal);
+        Assert.DoesNotContain(secondResources, resource => firstNames.Contains(resource!["name"]!.GetValue<string>()));
+        Assert.Null(second["result"]!["nextCursor"]);
+    }
+
+    [Fact]
+    public void ResourcesList_ReportsUrisTooLongToRead_Issue3122_Issue4542()
     {
         var longPath = "src/" + new string('x', McpBoundedText.MaxResourceUriChars) + ".cs";
         InsertIndexedFile(longPath, "csharp", "public class TooLongResource { }");
@@ -1528,6 +1814,115 @@ public sealed class Caller
         Assert.DoesNotContain(resources, resource => resource!["name"]!.GetValue<string>() == longPath);
         Assert.All(resources, resource =>
             Assert.True(resource!["uri"]!.GetValue<string>().Length <= McpBoundedText.MaxResourceUriChars));
+        var controls = response["result"]!["_meta"]!["response_controls"]!;
+        Assert.Equal(1, controls["omitted_resource_count"]!.GetValue<int>());
+        Assert.Equal(1, controls["omitted_resource_reason_counts"]!["resource_uri_too_long"]!.GetValue<int>());
+        Assert.Equal(0, controls["omitted_resource_reason_counts"]!["resource_exceeds_max_bytes"]!.GetValue<int>());
+        Assert.Equal("completed", controls["continuation_reason"]!.GetValue<string>());
+        Assert.DoesNotContain(longPath, response.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ResourcesList_ResourceLargerThanRequestedBudget_IsReportedAndCursorProgresses_Issue4542()
+    {
+        var largePath = "src/" + new string('x', 1_800) + ".cs";
+        InsertIndexedFile(largePath, "csharp", "public class LargeResource { }");
+        var firstRequest = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "resources/list",
+            ["params"] = new JsonObject
+            {
+                ["maxBytes"] = McpServer.MinResourceListMaxBytes,
+            },
+        };
+
+        var firstResponse = _server.HandleMessage(firstRequest)!;
+        var cursor = firstResponse["result"]!["nextCursor"]!.GetValue<string>();
+        var secondResponse = CallResourcesList(
+            cursor,
+            id: 2,
+            maxBytes: McpServer.MinResourceListMaxBytes);
+
+        var secondResult = secondResponse["result"]!;
+        Assert.Empty(secondResult["resources"]!.AsArray());
+        Assert.Null(secondResult["nextCursor"]);
+        var controls = secondResult["_meta"]!["response_controls"]!;
+        Assert.Equal(1, controls["omitted_resource_count"]!.GetValue<int>());
+        Assert.Equal(1, controls["omitted_resource_reason_counts"]!["resource_exceeds_max_bytes"]!.GetValue<int>());
+        Assert.Equal("completed", controls["continuation_reason"]!.GetValue<string>());
+        Assert.DoesNotContain(largePath, secondResponse.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ResourcesList_DefaultMaxBytesBoundsEnvelopeAndContinues_Issue4542()
+    {
+        const int insertedFileCount = 200;
+        var longPrefix = "src/" + new string('x', 1_800);
+        var writer = new DbWriter(_db.Connection);
+        using (var transaction = writer.BeginTransaction())
+        {
+            for (var i = 0; i < insertedFileCount; i++)
+            {
+                writer.UpsertFile(new FileRecord
+                {
+                    Path = $"{longPrefix}-{i:D3}.cs",
+                    Lang = "csharp",
+                    Size = 1,
+                    Lines = 1,
+                    Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+                    Checksum = $"near-cap-{i}",
+                });
+            }
+            transaction.Commit();
+        }
+        var firstRequest = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "resources/list",
+            ["params"] = new JsonObject
+            {
+                ["maxBytes"] = McpServer.DefaultResourceListMaxBytes,
+            },
+        };
+
+        var firstResponse = _server.HandleMessage(firstRequest)!;
+
+        Assert.True(_server.TrySerializeJsonNodeWithinByteLimitForTests(
+            firstResponse,
+            int.MaxValue,
+            out _,
+            out var firstResponseBytes));
+        Assert.InRange(firstResponseBytes, 900_000, McpServer.DefaultResourceListMaxBytes);
+        var firstResult = firstResponse["result"]!;
+        var firstResources = firstResult["resources"]!.AsArray();
+        var controls = firstResult["_meta"]!["response_controls"]!;
+        Assert.True(controls["byte_budget_reached"]!.GetValue<bool>());
+        Assert.Equal("byte_budget", controls["continuation_reason"]!.GetValue<string>());
+        Assert.Equal(0, controls["omitted_resource_count"]!.GetValue<int>());
+        var cursor = firstResult["nextCursor"]!.GetValue<string>();
+
+        var secondResponse = CallResourcesList(
+            cursor,
+            id: 2,
+            maxBytes: McpServer.DefaultResourceListMaxBytes);
+
+        Assert.True(_server.TrySerializeJsonNodeWithinByteLimitForTests(
+            secondResponse,
+            int.MaxValue,
+            out _,
+            out var secondResponseBytes));
+        Assert.True(secondResponseBytes <= McpServer.DefaultResourceListMaxBytes);
+        var secondResult = secondResponse["result"]!;
+        Assert.Null(secondResult["nextCursor"]);
+        var allNames = firstResources
+            .Concat(secondResult["resources"]!.AsArray())
+            .Select(resource => resource!["name"]!.GetValue<string>())
+            .ToArray();
+        Assert.Equal(insertedFileCount + 1, allNames.Length);
+        Assert.Equal(allNames.Length, allNames.Distinct(StringComparer.Ordinal).Count());
     }
 
     [Fact]

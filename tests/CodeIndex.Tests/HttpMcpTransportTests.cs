@@ -11,6 +11,7 @@ using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Diagnostics;
 using CodeIndex.Mcp;
+using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
@@ -1098,6 +1099,90 @@ public class HttpMcpTransportTests : IDisposable
         Assert.Equal(2, doc.RootElement.GetProperty("id").GetInt32());
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(500_000)]
+    public async Task HttpTransport_ResourcesListHonorsConfiguredTransportBudget_Issue4542(int requestedMaxBytes)
+    {
+        const int responseBudget = 100_000;
+        InsertLongResourceFilesForResponseBudget("http-budget");
+        await using var harness = await McpHttpHarness.StartAsync(
+            _dbPath,
+            maxResponseBodyBytes: responseBudget);
+        using (var initialize = await harness.PostJsonAsync(
+            """{"jsonrpc":"2.0","id":"init","method":"initialize","params":{}}"""))
+        {
+            Assert.Equal(HttpStatusCode.OK, initialize.StatusCode);
+        }
+
+        var requestBody = requestedMaxBytes == 0
+            ? """{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}"""
+            : """{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{"maxBytes":"""
+                + requestedMaxBytes.ToString(CultureInfo.InvariantCulture)
+                + "}}";
+        using var response = await harness.PostJsonAsync(requestBody);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsByteArrayAsync();
+        Assert.InRange(body.Length, 90_000, responseBudget);
+        using var document = JsonDocument.Parse(body);
+        var result = document.RootElement.GetProperty("result");
+        var controls = result.GetProperty("_meta").GetProperty("response_controls");
+        Assert.Equal(
+            requestedMaxBytes == 0 ? McpServer.DefaultResourceListMaxBytes : requestedMaxBytes,
+            controls.GetProperty("requested_max_bytes").GetInt32());
+        Assert.Equal(responseBudget, controls.GetProperty("effective_max_bytes").GetInt32());
+        Assert.Equal("byte_budget", controls.GetProperty("continuation_reason").GetString());
+        Assert.True(result.TryGetProperty("nextCursor", out _));
+    }
+
+    [Fact]
+    public async Task HttpTransport_ResourcesListBatchHonorsConfiguredTransportBudget_Issue4542()
+    {
+        const int responseBudget = 100_000;
+        const int requestedMaxBytes = 500_000;
+        InsertLongResourceFilesForResponseBudget("http-batch-budget");
+        await using var harness = await McpHttpHarness.StartAsync(
+            _dbPath,
+            maxResponseBodyBytes: responseBudget);
+        using (var initialize = await harness.PostJsonAsync(
+            """{"jsonrpc":"2.0","id":"init","method":"initialize","params":{}}"""))
+        {
+            Assert.Equal(HttpStatusCode.OK, initialize.StatusCode);
+        }
+
+        using var response = await harness.PostJsonAsync(
+            """
+            [
+              {"jsonrpc":"2.0","id":1,"method":"resources/list","params":{"maxBytes":500000}},
+              {"jsonrpc":"2.0","id":2,"method":"resources/list","params":{"maxBytes":500000}}
+            ]
+            """);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsByteArrayAsync();
+        Assert.InRange(body.Length, 90_000, responseBudget);
+        using var document = JsonDocument.Parse(body);
+        var items = document.RootElement.EnumerateArray()
+            .ToDictionary(item => item.GetProperty("id").GetInt32());
+        Assert.Equal(2, items.Count);
+        foreach (var id in new[] { 1, 2 })
+        {
+            var result = items[id].GetProperty("result");
+            Assert.NotEmpty(result.GetProperty("resources").EnumerateArray());
+            var controls = result.GetProperty("_meta").GetProperty("response_controls");
+            Assert.Equal(requestedMaxBytes, controls.GetProperty("requested_max_bytes").GetInt32());
+            Assert.InRange(
+                controls.GetProperty("effective_max_bytes").GetInt32(),
+                McpServer.MinResourceListMaxBytes,
+                responseBudget - 1);
+            Assert.Equal("byte_budget", controls.GetProperty("continuation_reason").GetString());
+            Assert.Equal(
+                McpServer.MaxResourceListCursorChars,
+                result.GetProperty("nextCursor").GetString()!.Length);
+        }
+    }
+
     [Fact]
     public async Task HttpTransport_DefaultLimitOptions_UseBoundedDefaults()
     {
@@ -2047,6 +2132,26 @@ public class HttpMcpTransportTests : IDisposable
 
         for (var i = 0; i < nestedObjectCount; i++)
             builder.Append('}');
+    }
+
+    private void InsertLongResourceFilesForResponseBudget(string checksumPrefix)
+    {
+        var writer = new DbWriter(_db.Connection);
+        using var transaction = writer.BeginTransaction();
+        var longPrefix = "src/" + new string('x', 1_800);
+        for (var i = 0; i < 30; i++)
+        {
+            writer.UpsertFile(new FileRecord
+            {
+                Path = $"{longPrefix}-{i:D2}.cs",
+                Lang = "csharp",
+                Size = 1,
+                Lines = 1,
+                Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+                Checksum = $"{checksumPrefix}-{i}",
+            });
+        }
+        transaction.Commit();
     }
 
     private sealed class McpHttpHarness : IAsyncDisposable
