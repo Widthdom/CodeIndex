@@ -138,6 +138,7 @@ public static partial class IndexCommandRunner
             && (!projectRootWritten || !typeScriptAugmentationVersionMatchesCurrent);
         var typeScriptAugmentationReadyCleared = !typeScriptAugmentationVersionMatchesCurrent;
         var ftsMutated = false;
+        var mutualRecursionRefreshNeeded = false;
         var purgedRefs = 0;
         var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages();
         using var postExtractionHooks = new LazyDisposable<PostExtractionHookRunner>(
@@ -392,7 +393,10 @@ public static partial class IndexCommandRunner
             using var purgeTxn = writer.BeginTransaction(cancellationToken, "update purge unsupported references");
             purgedRefs = writer.PurgeUnsupportedReferences(supportedGraphLanguages);
             if (purgedRefs > 0)
+            {
                 purgeTxn.Commit();
+                mutualRecursionRefreshNeeded = true;
+            }
         }
 
         StartUpdateSpinnerIfNeeded();
@@ -485,6 +489,7 @@ public static partial class IndexCommandRunner
                             deleteTxn.Commit();
                             removed++;
                             ftsMutated = true;
+                            mutualRecursionRefreshNeeded = true;
                             WriteUpdateVerboseStatus($"  [DEL ] {relPath}");
                         }
                         else
@@ -520,6 +525,7 @@ public static partial class IndexCommandRunner
                             deleteTxn.Commit();
                             removed++;
                             ftsMutated = true;
+                            mutualRecursionRefreshNeeded = true;
                             if (options.Verbose && !options.Json && !options.Quiet)
                             {
                                 PauseUpdateSpinnerForConsoleWrite();
@@ -563,6 +569,7 @@ public static partial class IndexCommandRunner
                             deleteTxn.Commit();
                             removed++;
                             ftsMutated = true;
+                            mutualRecursionRefreshNeeded = true;
                         }
                         else
                         {
@@ -605,6 +612,7 @@ public static partial class IndexCommandRunner
                                 purgeTxn.Commit();
                                 removed += purged;
                                 ftsMutated = true;
+                                mutualRecursionRefreshNeeded = true;
                                 if (options.Verbose && !options.Json && !options.Quiet)
                                 {
                                     PauseUpdateSpinnerForConsoleWrite();
@@ -634,6 +642,7 @@ public static partial class IndexCommandRunner
                             deleteTxn.Commit();
                             removed++;
                             ftsMutated = true;
+                            mutualRecursionRefreshNeeded = true;
                             if (options.Verbose && !options.Json && !options.Quiet)
                             {
                                 PauseUpdateSpinnerForConsoleWrite();
@@ -677,6 +686,7 @@ public static partial class IndexCommandRunner
                             deleteTxn.Commit();
                             removed++;
                             ftsMutated = true;
+                            mutualRecursionRefreshNeeded = true;
                         }
                         else
                         {
@@ -767,6 +777,7 @@ public static partial class IndexCommandRunner
                             purgeTxn.Commit();
                             removed += purged;
                             ftsMutated = true;
+                            mutualRecursionRefreshNeeded = true;
                         }
                         skipped++;
                         if (options.Verbose && !options.Json && !options.Quiet)
@@ -802,7 +813,7 @@ public static partial class IndexCommandRunner
                     {
                         writer.InsertChunks(chunks, cancellationToken);
                         writer.InsertSymbols([], cancellationToken);
-                        writer.InsertReferences([], cancellationToken);
+                        writer.InsertReferences([], refreshMutualRecursionFlags: false, cancellationToken);
                         currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
                         var generatedIssues = AppendIssueIfMissing(
                             FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine, loaded.ConflictMarkerLine),
@@ -814,6 +825,7 @@ public static partial class IndexCommandRunner
                         fileBatchMarked = false;
                         updated++;
                         ftsMutated = true;
+                        mutualRecursionRefreshNeeded = true;
                         WriteUpdateVerboseStatus($"  [OK  ] {relPath} ({chunks.Count} chunks, generated-code extraction skipped)");
                         continue;
                     }
@@ -840,13 +852,14 @@ public static partial class IndexCommandRunner
                             ? [issue]
                             : AppendIssue([symbolRegexTimeoutIssue], issue);
                         writer.InsertSymbols([], cancellationToken);
-                        writer.InsertReferences([], cancellationToken);
+                        writer.InsertReferences([], refreshMutualRecursionFlags: false, cancellationToken);
                         writer.InsertIssues(fileId, capIssues);
                         writer.ClearBatchInProgress();
                         txn.Commit();
                         fileBatchMarked = false;
                         updated++;
                         ftsMutated = true;
+                        mutualRecursionRefreshNeeded = true;
                         WriteUpdateVerboseStatus($"  [SKIP] {relPath} ({issue.Message})");
                         continue;
                     }
@@ -861,13 +874,14 @@ public static partial class IndexCommandRunner
                             ? [issue]
                             : AppendIssue([symbolRegexTimeoutIssue], issue);
                         writer.InsertSymbols([], cancellationToken);
-                        writer.InsertReferences([], cancellationToken);
+                        writer.InsertReferences([], refreshMutualRecursionFlags: false, cancellationToken);
                         writer.InsertIssues(fileId, capIssues);
                         writer.ClearBatchInProgress();
                         txn.Commit();
                         fileBatchMarked = false;
                         updated++;
                         ftsMutated = true;
+                        mutualRecursionRefreshNeeded = true;
                         WriteUpdateVerboseStatus($"  [SKIP] {relPath} ({issue.Message})");
                         continue;
                     }
@@ -901,7 +915,7 @@ public static partial class IndexCommandRunner
                         referenceCapIssue = BuildReferenceCountExceededIssue(record.Path, references.Count, options.MaxReferencesPerFile);
                         references = [];
                     }
-                    writer.InsertReferences(references, cancellationToken);
+                    writer.InsertReferences(references, refreshMutualRecursionFlags: false, cancellationToken);
                     // Validate content for encoding issues / エンコーディング問題を検証
                     currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
                     IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine, loaded.ConflictMarkerLine);
@@ -919,6 +933,7 @@ public static partial class IndexCommandRunner
 
                     updated++;
                     ftsMutated = true;
+                    mutualRecursionRefreshNeeded = true;
                     UpdateFileCommittedForTesting?.Invoke(updated + removed, targetPaths.Count);
                     ThrowIfUpdateCancelled();
                     WriteUpdateVerboseStatus($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
@@ -958,13 +973,14 @@ public static partial class IndexCommandRunner
                         var fileId = writer.UpsertFile(skippedRecord);
                         writer.InsertChunks([], cancellationToken);
                         writer.InsertSymbols([], cancellationToken);
-                        writer.InsertReferences([], cancellationToken);
+                        writer.InsertReferences([], refreshMutualRecursionFlags: false, cancellationToken);
                         writer.InsertIssues(fileId, [BuildNullByteIssue(binaryFile)]);
                         writer.ClearBatchInProgress();
                         txn.Commit();
 
                         updated++;
                         ftsMutated = true;
+                        mutualRecursionRefreshNeeded = true;
                         continue;
                     }
 
@@ -987,7 +1003,7 @@ public static partial class IndexCommandRunner
                         var fileId = writer.UpsertFile(skippedRecord);
                         writer.InsertChunks([], cancellationToken);
                         writer.InsertSymbols([], cancellationToken);
-                        writer.InsertReferences([], cancellationToken);
+                        writer.InsertReferences([], refreshMutualRecursionFlags: false, cancellationToken);
                         writer.InsertIssues(fileId,
                         [
                             new FileIssue
@@ -1003,6 +1019,7 @@ public static partial class IndexCommandRunner
 
                         updated++;
                         ftsMutated = true;
+                        mutualRecursionRefreshNeeded = true;
                         continue;
                     }
 
@@ -1032,6 +1049,7 @@ public static partial class IndexCommandRunner
                                 deleteTxn.Commit();
                                 removed++;
                                 ftsMutated = true;
+                                mutualRecursionRefreshNeeded = true;
                             }
                         }
                         else
@@ -1083,11 +1101,15 @@ public static partial class IndexCommandRunner
                 {
                     removed += purgedMissing;
                     ftsMutated = true;
+                    mutualRecursionRefreshNeeded = true;
                     WriteUpdateVerboseStatus($"  [DEL ] purged {purgedMissing:N0} missing indexed path(s) after --changed-between");
                 }
             }
         }
 
+        ThrowIfUpdateCancelled();
+        if (mutualRecursionRefreshNeeded)
+            writer.RefreshMutualRecursionFlags();
         ThrowIfUpdateCancelled();
         PauseUpdateSpinnerForConsoleWrite();
 

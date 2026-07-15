@@ -19,6 +19,66 @@ namespace CodeIndex.Tests;
 public partial class IndexCommandRunnerTests
 {
     [Fact]
+    public void Run_UpdateMode_RefreshesMutualRecursionOncePerBatchIncludingDeleteOnly()
+    {
+        var projectRoot = CreateTempProject();
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
+        var refreshCount = 0;
+        try
+        {
+            var firstPath = Path.Combine(projectRoot, "MutualRecursionA.cs");
+            var secondPath = Path.Combine(projectRoot, "MutualRecursionB.cs");
+            File.WriteAllText(
+                firstPath,
+                "public static class MutualRecursionA { public static void CrossCycleA() { CrossCycleB(); } }\n");
+            File.WriteAllText(
+                secondPath,
+                "public static class MutualRecursionB { public static void CrossCycleB() { CrossCycleA(); } }\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(2, CountMutualRecursionReferences(dbPath));
+
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                refreshCount++;
+                previousRefreshHook?.Invoke();
+            };
+
+            File.AppendAllText(firstPath, "// changed A\n");
+            File.AppendAllText(secondPath, "// changed B\n");
+            File.SetLastWriteTimeUtc(firstPath, DateTime.UtcNow.AddSeconds(2));
+            File.SetLastWriteTimeUtc(secondPath, DateTime.UtcNow.AddSeconds(2));
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "MutualRecursionA.cs", "MutualRecursionB.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(2, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, refreshCount);
+            Assert.Equal(2, CountMutualRecursionReferences(dbPath));
+
+            refreshCount = 0;
+            File.Delete(secondPath);
+
+            var (deleteExitCode, deleteJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "MutualRecursionB.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, deleteExitCode);
+            Assert.Equal(1, deleteJson.GetProperty("summary").GetProperty("removed").GetInt32());
+            Assert.Equal(1, refreshCount);
+            Assert.Equal(0, CountMutualRecursionReferences(dbPath));
+        }
+        finally
+        {
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_RejectsNewSymbolKindFilterPolicy()
     {
         var projectRoot = CreateTempProject();
