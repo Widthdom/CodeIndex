@@ -96,6 +96,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     private readonly Channel<PendingRequest> _requestQueue;
     private readonly SemaphoreSlim _queueSlots;
     private readonly SemaphoreSlim _handlerSemaphore;
+    private readonly SemaphoreSlim _eventStreamHandlerSemaphore;
     private readonly int _maxRequestBodyBytes;
     private readonly int _maxResponseBodyBytes;
     private readonly int _maxQueuedRequests;
@@ -233,6 +234,11 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             ? null
             : McpAuthenticationLimits.HashTokenToArray(bearerToken);
         _handlerSemaphore = new SemaphoreSlim(_maxConcurrentHandlers, _maxConcurrentHandlers);
+        // Event streams have their own admission gate so long-lived SSE connections cannot
+        // consume the handler capacity reserved for POST and other short-lived requests (#4550).
+        // 長寿命 SSE 接続が POST 等の短命 request 用 handler capacity を消費しないよう、
+        // event stream は独立した admission gate で制御する (#4550)。
+        _eventStreamHandlerSemaphore = new SemaphoreSlim(_maxEventStreams, _maxEventStreams);
         _listener = new HttpListener();
         _listener.Prefixes.Add(prefix);
         _allowedOrigin = new Uri(prefix, UriKind.Absolute).GetLeftPart(UriPartial.Authority);
@@ -302,6 +308,12 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     internal int MaxConcurrentHandlers => _maxConcurrentHandlers;
 
     internal int MaxEventStreams => _maxEventStreams;
+
+    internal int PostHandlerCapacity => _maxConcurrentHandlers;
+
+    internal int EventStreamHandlerCapacity => _maxEventStreams;
+
+    internal bool UsesSeparateEventStreamHandlers => true;
 
     internal int RequestLogQueueCapacity => _requestLogQueue is null ? 0 : _requestLogQueueCapacity;
 
@@ -501,14 +513,18 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         }
 
         var raw = global::CodeIndex.EnvironmentAccess.GetProcessEnvironmentVariable(envVar);
-        if (BigInteger.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
+        if (raw is null)
+            return defaultValue;
+
+        if (!BigInteger.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+            || parsed <= 0
+            || parsed > maximumValue)
         {
-            if (parsed > maximumValue)
-                throw new FormatException($"{envVar} must be between 1 and {maximumValue.ToString(CultureInfo.InvariantCulture)} for {description}; got {parsed.ToString(CultureInfo.InvariantCulture)}.");
-            return (int)parsed;
+            throw new FormatException(
+                $"{envVar} must be an integer between 1 and {maximumValue.ToString(CultureInfo.InvariantCulture)} for {description}.");
         }
 
-        return defaultValue;
+        return (int)parsed;
     }
 
     private static int ResolveRequestLogQueueCapacity(int? explicitValue)
@@ -579,9 +595,16 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
                     break;
                 }
 
-                if (!_handlerSemaphore.Wait(0))
+                var eventStreamRequest = IsEventStreamRequest(context.Request);
+                var admissionGate = eventStreamRequest
+                    ? _eventStreamHandlerSemaphore
+                    : _handlerSemaphore;
+                if (!admissionGate.Wait(0))
                 {
-                    await RejectHandlerLimitAsync(context).ConfigureAwait(false);
+                    if (eventStreamRequest)
+                        await RejectEventStreamLimitAsync(context).ConfigureAwait(false);
+                    else
+                        await RejectHandlerLimitAsync(context).ConfigureAwait(false);
                     continue;
                 }
 
@@ -591,7 +614,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
                 // handler は semaphore slot を所有する。pre-canceled Task.Run で finally が
                 // 走らず slot が漏れないよう、shutdown token は handler 内だけに渡す。
                 _ = BackgroundTaskObserver.Run(
-                    () => RunHandlerAsync(context, cancellationToken),
+                    () => RunHandlerAsync(context, cancellationToken, admissionGate),
                     "cdidx-mcp-http",
                     "request handler");
             }
@@ -602,7 +625,10 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         }
     }
 
-    private async Task RunHandlerAsync(HttpListenerContext context, CancellationToken cancellationToken)
+    private async Task RunHandlerAsync(
+        HttpListenerContext context,
+        CancellationToken cancellationToken,
+        SemaphoreSlim admissionGate)
     {
         try
         {
@@ -610,9 +636,13 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         }
         finally
         {
-            _handlerSemaphore.Release();
+            admissionGate.Release();
         }
     }
+
+    private static bool IsEventStreamRequest(HttpListenerRequest request)
+        => string.Equals(request.HttpMethod, "GET", StringComparison.OrdinalIgnoreCase)
+            && IsEventsPath(request.Url?.AbsolutePath);
 
     private async Task RejectHandlerLimitAsync(HttpListenerContext context)
     {
@@ -622,6 +652,17 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         context.Response.AddHeader("Retry-After", "1");
         context.Response.AddHeader(RejectionReasonHeader, ConcurrentHandlerLimitRejection);
         await RespondAsync(request, (int)HttpStatusCode.TooManyRequests, "MCP HTTP concurrent handler limit is full.\n").ConfigureAwait(false);
+        LogRequest(request, (int)HttpStatusCode.TooManyRequests);
+    }
+
+    private async Task RejectEventStreamLimitAsync(HttpListenerContext context)
+    {
+        var request = BeginRequest(context);
+        request.AuthOutcome = "not-checked";
+        MarkRejected(request, EventStreamLimitRejection);
+        context.Response.AddHeader("Retry-After", "1");
+        context.Response.AddHeader(RejectionReasonHeader, EventStreamLimitRejection);
+        await RespondAsync(request, (int)HttpStatusCode.TooManyRequests, "MCP HTTP event stream limit is full.\n").ConfigureAwait(false);
         LogRequest(request, (int)HttpStatusCode.TooManyRequests);
     }
 

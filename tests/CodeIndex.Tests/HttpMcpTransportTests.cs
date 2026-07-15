@@ -779,6 +779,9 @@ public class HttpMcpTransportTests : IDisposable
         Assert.Equal(0, root.GetProperty("http_event_stream_count").GetInt32());
         Assert.True(root.GetProperty("http_event_stream_limit").GetInt32() >= 1);
         Assert.True(root.GetProperty("http_max_concurrent_handlers").GetInt32() >= 1);
+        Assert.True(root.GetProperty("http_post_handler_capacity").GetInt32() >= 1);
+        Assert.True(root.GetProperty("http_event_stream_handler_capacity").GetInt32() >= 1);
+        Assert.True(root.GetProperty("http_separate_event_stream_handlers").GetBoolean());
         Assert.Equal(0, root.GetProperty("http_queued_request_count").GetInt32());
         Assert.True(root.GetProperty("http_request_queue_limit").GetInt32() >= 1);
         Assert.Equal(0, root.GetProperty("http_request_log_queue_depth").GetInt32());
@@ -1930,6 +1933,79 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public void HttpTransport_PresentInvalidEnvironmentLimits_ThrowWithExactRange()
+    {
+        var cases = new (string Variable, int Maximum)[]
+        {
+            (HttpMcpTransport.MaxRequestBodyBytesEnvVar, HttpMcpTransport.MaxConfiguredRequestBodyBytes),
+            (HttpMcpTransport.MaxResponseBodyBytesEnvVar, HttpMcpTransport.MaxConfiguredResponseBodyBytes),
+            (HttpMcpTransport.MaxQueueDepthEnvVar, HttpMcpTransport.MaxConfiguredQueuedRequests),
+            (HttpMcpTransport.MaxConcurrentHandlersEnvVar, HttpMcpTransport.MaxConfiguredConcurrentHandlers),
+            (HttpMcpTransport.MaxEventStreamsEnvVar, HttpMcpTransport.MaxConfiguredEventStreams),
+        };
+
+        foreach (var (variable, maximum) in cases)
+        {
+            foreach (var invalidValue in new[] { "not-an-integer", "0", "-1" })
+            {
+                using var env = EnvironmentVariableScope.Capture(variable);
+                env.Set(variable, invalidValue);
+                var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+
+                var ex = Assert.Throws<FormatException>(() => new HttpMcpTransport(
+                    listen.Prefix,
+                    listen.Host,
+                    listen.Port,
+                    bearerToken: null));
+
+                Assert.Contains(variable, ex.Message, StringComparison.Ordinal);
+                Assert.Contains(
+                    $"integer between 1 and {maximum.ToString(CultureInfo.InvariantCulture)}",
+                    ex.Message,
+                    StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task HttpTransport_EnvironmentLimitBoundaries_AreAccepted()
+    {
+        foreach (var useMaximum in new[] { false, true })
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                HttpMcpTransport.MaxRequestBodyBytesEnvVar,
+                HttpMcpTransport.MaxResponseBodyBytesEnvVar,
+                HttpMcpTransport.MaxQueueDepthEnvVar,
+                HttpMcpTransport.MaxConcurrentHandlersEnvVar,
+                HttpMcpTransport.MaxEventStreamsEnvVar);
+            var requestBytes = useMaximum ? HttpMcpTransport.MaxConfiguredRequestBodyBytes : 1;
+            var responseBytes = useMaximum ? HttpMcpTransport.MaxConfiguredResponseBodyBytes : 1;
+            var queueDepth = useMaximum ? HttpMcpTransport.MaxConfiguredQueuedRequests : 1;
+            var handlerCount = useMaximum ? HttpMcpTransport.MaxConfiguredConcurrentHandlers : 1;
+            var streamCount = useMaximum ? HttpMcpTransport.MaxConfiguredEventStreams : 1;
+            env.Set(HttpMcpTransport.MaxRequestBodyBytesEnvVar, requestBytes.ToString(CultureInfo.InvariantCulture));
+            env.Set(HttpMcpTransport.MaxResponseBodyBytesEnvVar, responseBytes.ToString(CultureInfo.InvariantCulture));
+            env.Set(HttpMcpTransport.MaxQueueDepthEnvVar, queueDepth.ToString(CultureInfo.InvariantCulture));
+            env.Set(HttpMcpTransport.MaxConcurrentHandlersEnvVar, handlerCount.ToString(CultureInfo.InvariantCulture));
+            env.Set(HttpMcpTransport.MaxEventStreamsEnvVar, streamCount.ToString(CultureInfo.InvariantCulture));
+
+            var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+            await using var transport = new HttpMcpTransport(
+                listen.Prefix,
+                listen.Host,
+                listen.Port,
+                bearerToken: null,
+                allowUnauthenticatedLoopback: true);
+
+            Assert.Equal(requestBytes, transport.MaxRequestBodyBytes);
+            Assert.Equal(responseBytes, transport.MaxResponseBodyBytes);
+            Assert.Equal(queueDepth, transport.MaxQueuedRequests);
+            Assert.Equal(handlerCount, transport.PostHandlerCapacity);
+            Assert.Equal(streamCount, transport.EventStreamHandlerCapacity);
+        }
+    }
+
+    [Fact]
     public void HttpTransport_OversizedRequestBytesEnvironment_ThrowsWithRange()
     {
         using var env = EnvironmentVariableScope.Capture(HttpMcpTransport.MaxRequestBodyBytesEnvVar);
@@ -2215,7 +2291,50 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_ConcurrentHandlerLimit_Returns429()
+    public async Task HttpTransport_EventStreamSaturation_PreservesPostCapacity()
+    {
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxConcurrentHandlers: 1,
+            maxEventStreams: 1,
+            allowUnauthenticatedLoopback: true);
+
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
+        using var eventsRequest = new HttpRequestMessage(HttpMethod.Get, new Uri(new Uri(listen.Prefix), "events"));
+        eventsRequest.Headers.TryAddWithoutValidation(HttpMcpTransport.SessionIdHeaderName, sessionId);
+        using var events = await client.SendAsync(eventsRequest, HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+        await WaitUntilAsync(() => transport.HasEventStreams, "the first event stream to occupy the event-stream gate");
+
+        using var secondStreamRequest = new HttpRequestMessage(HttpMethod.Get, new Uri(new Uri(listen.Prefix), "events"));
+        secondStreamRequest.Headers.TryAddWithoutValidation(HttpMcpTransport.SessionIdHeaderName, sessionId);
+        using var secondStream = await client.SendAsync(secondStreamRequest, HttpCompletionOption.ResponseHeadersRead);
+        AssertTooManyRequests(secondStream, HttpMcpTransport.EventStreamLimitRejection);
+
+        using var postRequest = new HttpRequestMessage(HttpMethod.Post, listen.Prefix)
+        {
+            Content = new StringContent("""{"jsonrpc":"2.0","id":2,"method":"ping"}""", Encoding.UTF8, "application/json"),
+        };
+        postRequest.Headers.TryAddWithoutValidation(HttpMcpTransport.SessionIdHeaderName, sessionId);
+        var post = client.SendAsync(postRequest);
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the POST request to enter its independent queue");
+        var frame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Contains("\"id\":2", frame, StringComparison.Ordinal);
+        await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":2,"result":{}}""", CancellationToken.None);
+        using var postResponse = await post.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(HttpStatusCode.OK, postResponse.StatusCode);
+        Assert.Equal(0, transport.ConcurrentHandlerLimitRejectionCount);
+        Assert.Equal(1, transport.EventStreamLimitRejectionCount);
+    }
+
+    [Fact]
+    public async Task HttpTransport_ConcurrentPostHandlerLimit_Returns429()
     {
         var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
         await using var transport = new HttpMcpTransport(
@@ -2226,23 +2345,36 @@ public class HttpMcpTransportTests : IDisposable
             maxConcurrentHandlers: 1,
             allowUnauthenticatedLoopback: true);
 
-        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
-        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
-        using var eventsRequest = new HttpRequestMessage(HttpMethod.Get, new Uri(new Uri(listen.Prefix), "events"));
-        eventsRequest.Headers.TryAddWithoutValidation(HttpMcpTransport.SessionIdHeaderName, sessionId);
-        using var events = await client.SendAsync(eventsRequest, HttpCompletionOption.ResponseHeadersRead);
-        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
-        await WaitUntilAsync(() => transport.HasEventStreams, "the first event stream to occupy the only handler slot");
+        const string firstBody = """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""";
+        using var firstClient = CreateHttpClient(TimeSpan.FromSeconds(5));
+        using var secondClient = CreateHttpClient(TimeSpan.FromSeconds(5));
+        using var gatedBody = new GatedHttpContent(firstBody);
+        using var firstRequest = new HttpRequestMessage(HttpMethod.Post, listen.Prefix)
+        {
+            Content = gatedBody,
+        };
+        var first = firstClient.SendAsync(firstRequest);
+        await gatedBody.FirstChunkWritten.WaitAsync(TimeSpan.FromSeconds(5));
 
         using var secondRequest = new HttpRequestMessage(HttpMethod.Post, listen.Prefix)
         {
             Content = new StringContent("""{"jsonrpc":"2.0","id":2,"method":"ping"}""", Encoding.UTF8, "application/json"),
         };
-        secondRequest.Headers.TryAddWithoutValidation(HttpMcpTransport.SessionIdHeaderName, sessionId);
-        using var second = await client.SendAsync(secondRequest);
+        using var second = await secondClient.SendAsync(secondRequest);
 
         AssertTooManyRequests(second, HttpMcpTransport.ConcurrentHandlerLimitRejection);
         Assert.Equal(1, transport.ConcurrentHandlerLimitRejectionCount);
+
+        gatedBody.Release();
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the first POST to finish its body and enter the queue");
+        var frame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(firstBody, frame);
+        await transport.WriteFrameAsync(
+            """{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26"}}""",
+            CancellationToken.None);
+        using var firstResponse = await first.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+        Assert.True(firstResponse.Headers.Contains(HttpMcpTransport.SessionIdHeaderName));
     }
 
     [Fact]
@@ -3187,6 +3319,48 @@ public class HttpMcpTransportTests : IDisposable
         {
             length = 0;
             return false;
+        }
+    }
+
+    private sealed class GatedHttpContent : HttpContent
+    {
+        private readonly byte[] _bytes;
+        private readonly TaskCompletionSource _firstChunkWritten = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public GatedHttpContent(string body)
+        {
+            _bytes = Encoding.UTF8.GetBytes(body);
+            Headers.ContentType = new MediaTypeHeaderValue("application/json")
+            {
+                CharSet = "utf-8",
+            };
+        }
+
+        public Task FirstChunkWritten => _firstChunkWritten.Task;
+
+        public void Release() => _release.TrySetResult();
+
+        protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+        {
+            await stream.WriteAsync(_bytes.AsMemory(0, 1));
+            await stream.FlushAsync();
+            _firstChunkWritten.TrySetResult();
+            await _release.Task;
+            await stream.WriteAsync(_bytes.AsMemory(1));
+        }
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = _bytes.Length;
+            return true;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                Release();
+            base.Dispose(disposing);
         }
     }
 

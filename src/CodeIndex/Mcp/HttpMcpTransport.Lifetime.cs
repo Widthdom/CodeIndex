@@ -36,6 +36,7 @@ internal sealed partial class HttpMcpTransport
         {
             _queueSlots.Dispose();
             _handlerSemaphore.Dispose();
+            _eventStreamHandlerSemaphore.Dispose();
             Volatile.Write(ref _ownedSemaphoreGatesDisposed, true);
         }
     }
@@ -105,7 +106,8 @@ internal sealed partial class HttpMcpTransport
     {
         var deadline = DateTimeOffset.UtcNow.Add(DisposeAcceptLoopTimeout);
         while (_queueSlots.CurrentCount != _maxQueuedRequests
-            || _handlerSemaphore.CurrentCount != _maxConcurrentHandlers)
+            || _handlerSemaphore.CurrentCount != _maxConcurrentHandlers
+            || _eventStreamHandlerSemaphore.CurrentCount != _maxEventStreams)
         {
             if (DateTimeOffset.UtcNow >= deadline)
                 return false;
