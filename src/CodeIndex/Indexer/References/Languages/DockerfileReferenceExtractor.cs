@@ -51,7 +51,7 @@ internal static class DockerfileReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         HashSet<string>? stageNames,
         SymbolRecord? container)
@@ -112,7 +112,7 @@ internal static class DockerfileReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         HashSet<string> stageNames,
         SymbolRecord? container)
@@ -235,7 +235,7 @@ internal static class DockerfileReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         HashSet<string>? variableNames,
         SymbolRecord? container)
@@ -277,7 +277,7 @@ internal static class DockerfileReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         HashSet<string> variableNames,
         SymbolRecord? container)

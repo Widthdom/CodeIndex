@@ -233,6 +233,16 @@ and typed parameter schemas are created only on a cache miss; each execution
 reassigns parameter values by ordinal. Keep new bulk-write paths on this bounded
 cache so large indexes do not rebuild equivalent SQLite commands per file.
 
+Repository-wide incremental scans load stat-reuse candidates with one SQLite
+statement before the C# contract prepass and parallel extraction. Each candidate
+is still compared with a fresh filesystem size and UTC modification time, and
+language extractor versions, extraction caps, stale issue metadata, and generated
+code suppression must all remain part of the snapshot eligibility contract. Do
+not replace this snapshot with per-file database probes in either CLI or MCP.
+Rows with missing or invalid legacy stat values are excluded so normal checksum
+reuse or reindexing can repair them, and CLI/MCP cancellation must interrupt the
+snapshot query as well as the later extraction pipeline.
+
 `FileIssue` rows may include nullable `origin` and `severity` metadata.
 For `replacement_char`, `origin: source_literal` means the file contains a
 valid encoded U+FFFD literal, while `origin: decode_replacement` means the
@@ -254,6 +264,13 @@ from raw SQL transactions do not attempt a nested `BEGIN`. Dependent metadata
 and row rewrites that must succeed or fail together should be placed inside the
 same `DbWriter.BeginTransaction()` scope; do not stamp readiness or schema
 trust metadata before the dependent rows are written.
+
+`MarkFoldReadyWithResult` is the single validation-and-stamp path used by CLI and
+MCP when carried fold metadata is current. It checks NULL folded columns and
+current folded values once under `BEGIN IMMEDIATE`, returns a precise failure
+category, and stamps readiness without a caller-side full-table pre-scan. When
+carried metadata is stale, callers may run the cheaper NULL-only check solely to
+prioritize the legacy-backfill degradation reason.
 
 ### Extending the indexer
 
@@ -360,11 +377,33 @@ per candidate. If scope or delimiter information is needed for many candidates,
 precompute the ranges once per file, function, or block and reuse that structure
 for the per-candidate lookup.
 
+The same rule applies to extracted-symbol membership. When a later per-line or
+per-match decision repeatedly asks whether a class, property, import alias, or
+other symbol exists, build a dictionary or set once and reuse it. A helper that
+hides `symbols.Any(...)`, LINQ enumeration, or signature parsing inside the
+candidate loop is still a repeated scan. Keep uncommon language/feature lookups
+lazy, and preserve source-order or first-match semantics when replacing
+`Distinct`-based scans.
+
+Container ownership follows the same contract. If references repeatedly resolve
+an extracted declaration by name and source range, index candidates by name once
+and scan only that name's ordered range list. Preserve first-candidate behavior
+for duplicate names and keep the index local to one extraction call.
+
 Duplicate detection in hot extraction loops should use a `HashSet` or another
 constant-time structure keyed by the full emitted record identity. Do not add
 `List.Any(...)`, `List.Contains(...)`, nested regex scans, or repeated string
 joins to loops that can run once per local variable, parameter, call site, type
 reference, or pattern match in a large generated file.
+Reference deduplication specifically uses `ReferenceDedupeSet` with a value-type
+identity. Do not replace it with concatenated string keys: candidate names and
+container names can be long, and the key is created before duplicate rejection.
+
+For delimiter-only parsing in hot extractors, prefer index/span walks when the
+consumer needs only one item at a time or validation can stay on the source
+string. `string.Split` creates an array and substrings for every import,
+dependency, path segment, or declaration item. Preserve the original empty-item,
+trimming, quote, and first-separator semantics when replacing it.
 
 The C# value-receiver path is the reference example: local receiver scopes are
 derived from precomputed block spans for the containing function, and duplicate
@@ -585,7 +624,7 @@ Operators can override the defaults with environment variables:
 | `CDIDX_SQLITE_CACHE_KB` | `65536` | Positive cache size in KiB, up to `1048576`; cdidx applies it as a negative SQLite `cache_size` value so SQLite interprets it as KiB. Invalid or oversized values fall back to the default. |
 | `CDIDX_SQLITE_MMAP_BYTES` | `268435456` | Non-negative memory-map window in bytes on 64-bit processes, up to `1073741824`. Use `0` to disable mmap. Invalid or oversized values fall back to the default. |
 | `CDIDX_SQLITE_BUSY_TIMEOUT_MS` | `5000` | Non-negative SQLite busy timeout in milliseconds, up to `3600000`. Use a higher value for slow disks or concurrent MCP/index workflows; invalid or oversized values fall back to the default. |
-| `CDIDX_PREPARED_COMMAND_CACHE_CAPACITY` | `32` | Positive prepared SQLite command cache capacity per connection, up to `512`. Invalid or oversized values fall back to the default. |
+| `CDIDX_PREPARED_COMMAND_CACHE_CAPACITY` | `64` | Positive prepared SQLite command cache capacity per connection, up to `512`. Invalid or oversized values fall back to the default. |
 
 After a successful `cdidx index` run, the writer refreshes SQLite planner statistics so large repositories do not rely on default selectivity estimates for `search`, `references`, `callers`, and related joins. A brand-new index database runs full `ANALYZE` once after the initial population; later successful index runs use SQLite's lighter `PRAGMA optimize`. This maintenance is best-effort and never changes the schema contract.
 
@@ -2652,6 +2691,14 @@ row-count shape ごとに bounded な `PreparedCommandCache` で再利用しま�
 value を再設定します。大規模 index で同じ SQLite command を file ごとに再構築しないよう、
 新しい bulk-write 経路もこの bounded cache に載せてください。
 
+リポジトリ全体の incremental scan は、C# contract prepass と parallel extraction の前に
+stat-reuse 候補を 1 回の SQLite statement で読みます。各候補は引き続き最新の filesystem
+size と UTC 更新時刻と照合し、language extractor version、extraction cap、古い issue metadata、
+generated-code suppression も snapshot eligibility contract に含めます。CLI と MCP のどちらでも、
+この snapshot を file ごとの database probe に戻さないでください。旧 DB の欠損または不正な
+stat 値を持つ row は除外して通常の checksum reuse / 再 index で修復し、CLI/MCP の cancellation は
+後続の extraction pipeline だけでなく snapshot query も中断できる状態を保ってください。
+
 `FileIssue` rows には nullable な `origin` / `severity` metadata が入ることがある。
 `replacement_char` では `origin: source_literal` が正規にエンコードされた U+FFFD
 literal、`origin: decode_replacement` が不正 byte に対して decoder が挿入した U+FFFD
@@ -2668,6 +2715,12 @@ standalone stamp にも commit boundary を持たせ、raw SQL transaction か�
 `BEGIN` を試みないようにします。dependent metadata と row rewrite が一体で成功・失敗すべき
 場合は、同じ `DbWriter.BeginTransaction()` scope に入れてください。dependent row を書く前に
 readiness や schema trust metadata を stamp してはいけません。
+
+carried fold metadata が current の場合、CLI と MCP は `MarkFoldReadyWithResult` を唯一の
+validation-and-stamp 経路として使います。`BEGIN IMMEDIATE` の下で NULL folded column と current
+folded value を 1 回だけ検証し、正確な失敗 category を返して、caller 側の full-table pre-scan なしで
+readiness を stamp します。carried metadata が stale の場合は、legacy-backfill の degradation reason
+を優先するためだけに、より軽い NULL-only check を caller が実行できます。
 
 ### インデクサー拡張
 
@@ -2797,10 +2850,29 @@ symbol / reference extractor は `cdidx index` 中に実行されるため、言
 多数の候補に対して scope や delimiter 情報が必要な場合は、file / function / block 単位で
 範囲情報を一度だけ事前計算し、候補ごとの lookup でその構造を再利用する。
 
+同じ規則を extracted symbol の membership にも適用する。後続の per-line / per-match 判定が
+class、property、import alias などの存在を繰り返し確認する場合は、dictionary / set を一度だけ
+構築して再利用する。candidate loop の中で `symbols.Any(...)`、LINQ 列挙、signature parse を
+隠す helper も反復走査である。まれな language / feature 用 lookup は lazy に構築し、
+`Distinct` ベースの走査を置換するときは source order や first-match semantics を維持する。
+
+container ownership にも同じ契約を適用する。reference が extracted declaration を name と
+source range で繰り返し解決する場合は、candidate を name ごとに一度だけ索引化し、その name の
+ordered range list だけを走査する。duplicate name の first-candidate behavior を維持し、index は
+1 回の extraction call 内だけに保持する。
+
 hot な抽出ループでの重複検出には、出力 record の完全な identity を key にした `HashSet` などの
 定数時間構造を使う。大きな生成ファイルで local variable、parameter、call site、type reference、
 pattern match ごとに実行され得るループへ、`List.Any(...)`、`List.Contains(...)`、nested regex scan、
 繰り返しの string join を追加してはならない。
+reference deduplication は特に、value-type identity を持つ `ReferenceDedupeSet` を使う。
+candidate name / container name は長くなり得て、duplicate rejection より前に key が作られるため、
+連結 string key へ戻してはならない。
+
+hot extractor の delimiter-only parsing では、consumer が item を一度に1つだけ必要とする場合や
+validation を source string 上で完結できる場合、index / span walk を優先する。`string.Split` は
+import、dependency、path segment、declaration item ごとに array と substring を作る。置換時は
+元の empty-item、trim、quote、first-separator semantics を維持する。
 
 C# の value receiver 経路を参照例とする。local receiver の scope は containing function 用に
 事前計算した block span から導出し、重複 receiver record は hash set で追跡する。この領域の
@@ -3041,7 +3113,7 @@ operator は environment variable で既定値を上書きできる。
 | `CDIDX_SQLITE_CACHE_KB` | `65536` | KiB 単位の正の cache size。上限は `1048576`。cdidx は SQLite が KiB として解釈するよう負の `cache_size` 値として適用する。invalid / oversized value は既定値に戻る。 |
 | `CDIDX_SQLITE_MMAP_BYTES` | `268435456` | 64-bit process で使う memory-map window の byte 数。`0` 以上、上限 `1073741824`。`0` で mmap を無効化する。invalid / oversized value は既定値に戻る。 |
 | `CDIDX_SQLITE_BUSY_TIMEOUT_MS` | `5000` | SQLite busy timeout の millisecond 値。`0` 以上、上限 `3600000`。低速 disk や concurrent MCP/index workflow では大きい値を使える。invalid / oversized value は既定値に戻る。 |
-| `CDIDX_PREPARED_COMMAND_CACHE_CAPACITY` | `32` | connection ごとの prepared SQLite command cache capacity。正の整数、上限 `512`。invalid / oversized value は既定値に戻る。 |
+| `CDIDX_PREPARED_COMMAND_CACHE_CAPACITY` | `64` | connection ごとの prepared SQLite command cache capacity。正の整数、上限 `512`。invalid / oversized value は既定値に戻る。 |
 
 `cdidx index` が成功すると、writer は SQLite planner statistics を更新し、大規模 repository で `search`、`references`、`callers` などの join が default selectivity estimate に依存しないようにする。新規 index database は初回 population 後に full `ANALYZE` を一度実行し、それ以降の成功した index run では軽量な `PRAGMA optimize` を使う。この maintenance は best-effort であり、schema contract は変更しない。
 

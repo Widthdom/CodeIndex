@@ -655,7 +655,7 @@ public static partial class ReferenceExtractor
         Func<IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames>> getValueReceiverNamesByContainingType,
         Func<IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>>> getValueReceiverNamesByFunctionStartLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,

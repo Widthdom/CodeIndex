@@ -36,7 +36,7 @@ internal static class PerlReferenceExtractor
         string preparedLine,
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -54,7 +54,7 @@ internal static class PerlReferenceExtractor
     private static void EmitModuleReference(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -89,7 +89,7 @@ internal static class PerlReferenceExtractor
     private static void EmitRequiredModulePathReference(
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -116,7 +116,7 @@ internal static class PerlReferenceExtractor
     private static void EmitBaseModuleReferences(
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -146,7 +146,7 @@ internal static class PerlReferenceExtractor
         string name,
         int column,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -167,7 +167,7 @@ internal static class PerlReferenceExtractor
     private static void EmitMooseInheritanceReferences(
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -183,7 +183,7 @@ internal static class PerlReferenceExtractor
     private static void AddQuotedModuleReferences(
         Group argsGroup,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -212,7 +212,7 @@ internal static class PerlReferenceExtractor
     private static void EmitArrowCallReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -244,7 +244,7 @@ internal static class PerlReferenceExtractor
     private static void EmitQualifiedFunctionCallReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,

@@ -6108,6 +6108,8 @@ public partial class McpServerTests
         var optimizedFts = false;
         var discoveredPostExtractionHooks = false;
         var loadedPaths = new List<string>();
+        var statSnapshotReads = 0;
+        var foldBackfillVerifications = 0;
         try
         {
             File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { public void Run() { } }\n");
@@ -6123,6 +6125,8 @@ public partial class McpServerTests
             McpServer.McpIndexFtsOptimizeForTesting = () => optimizedFts = true;
             McpServer.McpIndexCSharpMetadataResolveForTesting = () => resolvedCSharpMetadataTargets = true;
             McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
+            DbWriter.ReusableStatSnapshotReadForTesting = () => statSnapshotReads++;
+            DbWriter.FoldBackfillVerificationForTesting = () => foldBackfillVerifications++;
 
             var secondResponse = CallIndex(server, fixtureDir);
 
@@ -6132,6 +6136,8 @@ public partial class McpServerTests
             Assert.False(optimizedFts);
             Assert.False(resolvedCSharpMetadataTargets);
             Assert.False(rebuiltTypeScriptAugmentation);
+            Assert.Equal(1, statSnapshotReads);
+            Assert.Equal(1, foldBackfillVerifications);
         }
         finally
         {
@@ -6140,8 +6146,158 @@ public partial class McpServerTests
             McpServer.McpIndexFtsOptimizeForTesting = null;
             McpServer.McpIndexCSharpMetadataResolveForTesting = null;
             McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = null;
+            DbWriter.ReusableStatSnapshotReadForTesting = null;
+            DbWriter.FoldBackfillVerificationForTesting = null;
             TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_InvalidLegacyModifiedReindexesFile()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"cdidx_mcp_invalid_legacy_modified_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_invalid_legacy_modified");
+        var loadedPaths = new System.Collections.Concurrent.ConcurrentBag<string>();
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { }\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var firstResponse = CallIndex(server, fixtureDir);
+            Assert.False(firstResponse["result"]?["isError"]?.GetValue<bool>() ?? false, firstResponse.ToJsonString());
+
+            using (var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE files SET modified = 'not-a-timestamp' WHERE path = 'app.cs'";
+                Assert.Equal(1, command.ExecuteNonQuery());
+            }
+
+            McpServer.McpIndexFileContentLoadForTesting = path => loadedPaths.Add(path);
+            var secondResponse = CallIndex(server, fixtureDir);
+
+            Assert.False(secondResponse["result"]?["isError"]?.GetValue<bool>() ?? false, secondResponse.ToJsonString());
+            Assert.Contains("app.cs", loadedPaths);
+        }
+        finally
+        {
+            McpServer.McpIndexFileContentLoadForTesting = null;
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+        }
+    }
+
+    [Fact]
+    public async Task ToolsCall_Index_StatSnapshotObservesRequestCancellationToken()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"cdidx_mcp_stat_snapshot_cancel_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_stat_snapshot_cancel");
+        using var cancellation = new CancellationTokenSource();
+        var hookInvoked = false;
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { }\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var firstResponse = CallIndex(server, fixtureDir);
+            Assert.False(firstResponse["result"]?["isError"]?.GetValue<bool>() ?? false, firstResponse.ToJsonString());
+
+            DbWriter.ReusableStatSnapshotReadForTesting = () =>
+            {
+                hookInvoked = true;
+                cancellation.Cancel();
+            };
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject { ["path"] = fixtureDir },
+                },
+            };
+            var transport = new QueuedFrameTransport(request.ToJsonString());
+
+            await server.RunAsync(transport, cancellation.Token).WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.True(hookInvoked);
+        }
+        finally
+        {
+            DbWriter.ReusableStatSnapshotReadForTesting = null;
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+        }
+    }
+
+    [Fact]
+    public async Task ToolsCall_Index_CancelledDuringCSharpContractPreflight_DoesNotPurgeStaleFiles()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"cdidx_mcp_contract_preflight_cancel_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_contract_preflight_cancel");
+        var previousPreflightHook = DbWriter.CSharpContractPreflightForTesting;
+        using var cancellation = new CancellationTokenSource();
+        var hookInvoked = false;
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "keep.cs"), "public class Keep { }\n");
+            var stalePath = Path.Combine(fixtureDir, "stale.cs");
+            File.WriteAllText(stalePath, "public class Stale { }\n");
+
+            using (var server = new McpServer(dbPath, ConsoleUi.LoadVersion()))
+            {
+                var firstResponse = CallIndex(server, fixtureDir);
+                Assert.False(firstResponse["result"]?["isError"]?.GetValue<bool>() ?? false, firstResponse.ToJsonString());
+                File.Delete(stalePath);
+
+                DbWriter.CSharpContractPreflightForTesting = () =>
+                {
+                    hookInvoked = true;
+                    cancellation.Cancel();
+                    previousPreflightHook?.Invoke();
+                };
+                var request = new JsonObject
+                {
+                    ["jsonrpc"] = "2.0",
+                    ["id"] = 1,
+                    ["method"] = "tools/call",
+                    ["params"] = new JsonObject
+                    {
+                        ["name"] = "index",
+                        ["arguments"] = new JsonObject { ["path"] = fixtureDir },
+                    },
+                };
+                var transport = new QueuedFrameTransport(request.ToJsonString());
+
+                await server.RunAsync(transport, cancellation.Token).WaitAsync(TimeSpan.FromSeconds(5));
+            }
+
+            Assert.True(hookInvoked);
+            using var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM files WHERE path = 'stale.cs'";
+            Assert.Equal(1L, (long)command.ExecuteScalar()!);
+        }
+        finally
+        {
+            DbWriter.CSharpContractPreflightForTesting = previousPreflightHook;
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
 
@@ -7117,10 +7273,12 @@ public partial class McpServerTests
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_rebuild_fresh_{Guid.NewGuid():N}");
         Directory.CreateDirectory(fixtureDir);
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_rebuild_fresh");
+        var statSnapshotReads = 0;
         try
         {
             File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { }");
             using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            DbWriter.ReusableStatSnapshotReadForTesting = () => statSnapshotReads++;
 
             var request = new JsonObject
             {
@@ -7141,9 +7299,11 @@ public partial class McpServerTests
 
             Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
             Assert.True(response["result"]!["structuredContent"]!["summary"]!["files"]!.GetValue<long>() >= 1L);
+            Assert.Equal(0, statSnapshotReads);
         }
         finally
         {
+            DbWriter.ReusableStatSnapshotReadForTesting = null;
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
         }

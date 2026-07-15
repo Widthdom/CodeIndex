@@ -42,6 +42,12 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
+    public void DefaultCapacity_CoversDiverseIndexBatchShapes()
+    {
+        Assert.Equal(64, PreparedCommandCache.DefaultCapacity);
+    }
+
+    [Fact]
     public void DbWriter_WithCache_BulkInsertShapesReusePreparedCommands()
     {
         var writer = new DbWriter(_db);
@@ -301,7 +307,13 @@ public class PreparedCommandCacheTests : IDisposable
             Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
         };
 
+        var initialCount = _db.PreparedCommands.Count;
+        var initialHits = _db.PreparedCommands.HitCount;
+        var initialMisses = _db.PreparedCommands.MissCount;
         var id1 = writer.UpsertFile(file);
+        Assert.Equal(initialCount + 2, _db.PreparedCommands.Count);
+        Assert.Equal(initialMisses + 2, _db.PreparedCommands.MissCount);
+        Assert.Equal(initialHits, _db.PreparedCommands.HitCount);
 
         var file2 = new FileRecord
         {
@@ -315,11 +327,9 @@ public class PreparedCommandCacheTests : IDisposable
         var id2 = writer.UpsertFile(file2);
 
         Assert.NotEqual(id1, id2);
-
-        // The cache should hold prepared commands for the hot per-file SQLs.
-        // ホットパス SQL に対応する prepared command が cache に積まれている。
-        Assert.True(_db.PreparedCommands.Count > 0);
-        Assert.True(_db.PreparedCommands.MissCount > 0);
+        Assert.Equal(initialCount + 2, _db.PreparedCommands.Count);
+        Assert.Equal(initialMisses + 2, _db.PreparedCommands.MissCount);
+        Assert.Equal(initialHits + 2, _db.PreparedCommands.HitCount);
     }
 
     [Fact]
@@ -774,17 +784,19 @@ public class PreparedCommandCacheTests : IDisposable
         var first = writer.LoadCSharpStaticInterfaceContractSymbols();
         Assert.Contains(first, s => s.Kind == "interface" && s.Name == "IShape");
         Assert.Contains(first, s => s.Kind == "function" && s.Name == "Create");
+        Assert.True(writer.HasCSharpStaticInterfaceContractSymbols());
         Assert.True(writer.HasCSharpStaticInterfaceContractSymbolsInPaths(
             new HashSet<string>(StringComparer.Ordinal) { "src/IShape.cs" }));
 
         var hitsBefore = _db.PreparedCommands.HitCount;
 
         var second = writer.LoadCSharpStaticInterfaceContractSymbols();
+        Assert.True(writer.HasCSharpStaticInterfaceContractSymbols());
         Assert.True(writer.HasCSharpStaticInterfaceContractSymbolsInPaths(
             new HashSet<string>(StringComparer.Ordinal) { "src/IShape.cs" }));
 
         Assert.Equal(first.Count, second.Count);
-        Assert.True(_db.PreparedCommands.HitCount >= hitsBefore + 2);
+        Assert.True(_db.PreparedCommands.HitCount >= hitsBefore + 3);
     }
 
     [Fact]
@@ -1067,6 +1079,55 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
+    public void DbWriter_WithCache_LargeStalePurgeReusesFullBatchDeleteCommand()
+    {
+        const int fileCount = 1_201;
+        var writer = new DbWriter(_db);
+        var projectRoot = TestProjectHelper.CreateTempProject("prepcache_purge_batch");
+        try
+        {
+            using (var transaction = _db.Connection.BeginTransaction())
+            using (var insert = _db.Connection.CreateCommand())
+            {
+                insert.Transaction = transaction;
+                insert.CommandText = """
+                    INSERT INTO files (path, lang, size, lines, checksum, modified)
+                    VALUES (@path, 'csharp', 10, 1, @checksum, @modified)
+                    """;
+                var pathParameter = insert.Parameters.Add("@path", SqliteType.Text);
+                var checksumParameter = insert.Parameters.Add("@checksum", SqliteType.Text);
+                insert.Parameters.Add("@modified", SqliteType.Text).Value = "2026-01-01T00:00:00Z";
+                insert.Prepare();
+                for (var index = 0; index < fileCount; index++)
+                {
+                    pathParameter.Value = $"stale/file_{index:D5}.cs";
+                    checksumParameter.Value = $"stale-{index}";
+                    insert.ExecuteNonQuery();
+                }
+                transaction.Commit();
+            }
+
+            var missesBeforePurge = _db.PreparedCommands.MissCount;
+            var hitsBeforePurge = _db.PreparedCommands.HitCount;
+
+            Assert.Equal(fileCount, writer.PurgeStaleFiles(projectRoot));
+
+            // One scan SQL, one 500-ID SQL reused for the second full batch, and one
+            // 201-ID remainder SQL. A per-file delete would add 1,201 command leases.
+            // scan、500 ID（2 batch目で再利用）、201 ID remainderの3 SQLだけを使う。
+            Assert.Equal(missesBeforePurge + 3, _db.PreparedCommands.MissCount);
+            Assert.Equal(hitsBeforePurge + 1, _db.PreparedCommands.HitCount);
+            using var countCommand = _db.Connection.CreateCommand();
+            countCommand.CommandText = "SELECT COUNT(*) FROM files";
+            Assert.Equal(0L, (long)countCommand.ExecuteScalar()!);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void DbWriter_WithCache_ReferenceGraphMaintenanceReusesCommands()
     {
         var writer = new DbWriter(_db);
@@ -1175,15 +1236,15 @@ public class PreparedCommandCacheTests : IDisposable
 
         var supportedLanguages = new[] { "csharp", "typescript" };
 
-        Assert.Equal(1, writer.CountUnsupportedReferences(supportedLanguages));
-        var hitsBeforeCount = _db.PreparedCommands.HitCount;
-        Assert.Equal(1, writer.CountUnsupportedReferences(supportedLanguages));
-        Assert.True(_db.PreparedCommands.HitCount > hitsBeforeCount);
-
-        Assert.Equal(1, writer.PurgeUnsupportedReferences(supportedLanguages));
+        var missesBeforePurge = _db.PreparedCommands.MissCount;
         var hitsBeforePurge = _db.PreparedCommands.HitCount;
+        Assert.Equal(1, writer.PurgeUnsupportedReferences(supportedLanguages));
+        Assert.Equal(missesBeforePurge + 1, _db.PreparedCommands.MissCount);
+        Assert.Equal(hitsBeforePurge, _db.PreparedCommands.HitCount);
+
         Assert.Equal(0, writer.PurgeUnsupportedReferences(supportedLanguages));
-        Assert.True(_db.PreparedCommands.HitCount > hitsBeforePurge);
+        Assert.Equal(missesBeforePurge + 1, _db.PreparedCommands.MissCount);
+        Assert.Equal(hitsBeforePurge + 1, _db.PreparedCommands.HitCount);
     }
 
     [Fact]

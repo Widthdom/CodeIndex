@@ -24,7 +24,7 @@ internal static class GoReferenceExtractor
     public static void EmitConcurrencyReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -115,7 +115,7 @@ internal static class GoReferenceExtractor
         string preparedLine,
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,

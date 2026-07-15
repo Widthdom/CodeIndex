@@ -20,7 +20,15 @@ namespace CodeIndex.Database;
 /// </remarks>
 internal sealed class PreparedCommandCache : IDisposable
 {
-    internal const int DefaultCapacity = 32;
+    // Full indexes interleave per-file chunk, symbol, reference-line, and reference
+    // batches. Their final partial batches naturally produce more than 32 SQL shapes,
+    // so the smaller cache repeatedly evicted still-hot prepared statements and paid
+    // SQLite's parameter-name binding cost again. Keep enough shapes resident without
+    // taking the much larger memory step of the 128/512 opt-in settings.
+    // フル索引では chunk / symbol / reference-line / reference の端数バッチが混在し、
+    // SQL 形状が 32 種を超える。小さな cache では hot statement まで追い出して
+    // parameter 名解決を繰り返すため、128/512 の大きなメモリ増を避けつつ 64 にする。
+    internal const int DefaultCapacity = 64;
     internal const int MaxCapacity = 512;
     internal const string CapacityEnvironmentVariable = "CDIDX_PREPARED_COMMAND_CACHE_CAPACITY";
 

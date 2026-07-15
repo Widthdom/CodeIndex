@@ -143,7 +143,7 @@ internal static class PhpReferenceExtractor
     public static void EmitDocblockParamTypeReferences(
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -161,7 +161,7 @@ internal static class PhpReferenceExtractor
     public static void EmitDocblockReturnTypeReferences(
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -179,7 +179,7 @@ internal static class PhpReferenceExtractor
     public static void EmitDocblockVarTypeReferences(
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -197,7 +197,7 @@ internal static class PhpReferenceExtractor
     public static void EmitDocblockThrowsTypeReferences(
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -215,7 +215,7 @@ internal static class PhpReferenceExtractor
     public static void EmitDocblockExtendsTypeReferences(
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -233,7 +233,7 @@ internal static class PhpReferenceExtractor
     public static void EmitDocblockImplementsTypeReferences(
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -251,7 +251,7 @@ internal static class PhpReferenceExtractor
     public static void EmitDocblockMixinTypeReferences(
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -269,7 +269,7 @@ internal static class PhpReferenceExtractor
     public static void EmitDocblockPropertyTypeReferences(
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -316,7 +316,7 @@ internal static class PhpReferenceExtractor
     public static void EmitDocblockMethodReturnTypeReferences(
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -334,7 +334,7 @@ internal static class PhpReferenceExtractor
     public static void EmitDocblockMethodParameterTypeReferences(
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -366,7 +366,7 @@ internal static class PhpReferenceExtractor
     public static void EmitDocblockTemplateBoundTypeReferences(
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -384,7 +384,7 @@ internal static class PhpReferenceExtractor
     public static void EmitDocblockTypeAliasTargetReferences(
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -402,7 +402,7 @@ internal static class PhpReferenceExtractor
     public static void EmitDocblockImportTypeSourceReferences(
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -421,7 +421,7 @@ internal static class PhpReferenceExtractor
         Regex tagRegex,
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -450,7 +450,7 @@ internal static class PhpReferenceExtractor
         string typeExpression,
         int typeExpressionIndex,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -477,7 +477,7 @@ internal static class PhpReferenceExtractor
     public static void EmitAttributeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -533,7 +533,7 @@ internal static class PhpReferenceExtractor
     public static void EmitStaticAccessReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -612,7 +612,7 @@ internal static class PhpReferenceExtractor
     public static void EmitInstanceofReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -637,7 +637,7 @@ internal static class PhpReferenceExtractor
     public static void EmitCatchTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -665,7 +665,7 @@ internal static class PhpReferenceExtractor
     public static void EmitReturnTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -699,7 +699,7 @@ internal static class PhpReferenceExtractor
     public static void EmitParameterTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -730,7 +730,7 @@ internal static class PhpReferenceExtractor
     public static void EmitPropertyTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -767,7 +767,7 @@ internal static class PhpReferenceExtractor
     public static void EmitInheritanceTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -798,7 +798,7 @@ internal static class PhpReferenceExtractor
     public static void EmitUseTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -834,7 +834,7 @@ internal static class PhpReferenceExtractor
     public static void EmitUseFunctionReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -884,7 +884,7 @@ internal static class PhpReferenceExtractor
     public static void EmitUseConstReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -934,7 +934,7 @@ internal static class PhpReferenceExtractor
     private static void EmitGroupUseTypeReferences(
         Match groupMatch,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -982,7 +982,7 @@ internal static class PhpReferenceExtractor
     private static void EmitGroupUseImportReferences(
         Match groupMatch,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1047,7 +1047,7 @@ internal static class PhpReferenceExtractor
     private static void AddPhpTypeReferenceFromQualifiedName(
         Capture nameGroup,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1066,7 +1066,7 @@ internal static class PhpReferenceExtractor
         string rawName,
         int nameIndex,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1089,7 +1089,7 @@ internal static class PhpReferenceExtractor
         int nameIndex,
         string referenceKind,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1138,7 +1138,7 @@ internal static class PhpReferenceExtractor
     public static void EmitObjectMemberAccessReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,

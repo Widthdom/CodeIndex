@@ -42,7 +42,7 @@ public static partial class ReferenceExtractor
     {
         var matchLines = SolidityLanguageSupport.MaskCommentsAndStrings(preparedLines);
         List<ReferenceRecord>? references = null;
-        HashSet<string>? seen = null;
+        ReferenceDedupeSet? seen = null;
 
         for (var i = 0; i < matchLines.Length; i++)
         {
@@ -62,7 +62,7 @@ public static partial class ReferenceExtractor
 
     private static void AddSolidityInheritanceReferences(
         ref List<ReferenceRecord>? references,
-        ref HashSet<string>? seen,
+        ref ReferenceDedupeSet? seen,
         long fileId,
         string line,
         string context,
@@ -119,7 +119,7 @@ public static partial class ReferenceExtractor
 
     private static void AddSolidityLibraryReferences(
         ref List<ReferenceRecord>? references,
-        ref HashSet<string>? seen,
+        ref ReferenceDedupeSet? seen,
         long fileId,
         string line,
         string context,
@@ -142,7 +142,7 @@ public static partial class ReferenceExtractor
 
     private static void AddSolidityModifierReferences(
         ref List<ReferenceRecord>? references,
-        ref HashSet<string>? seen,
+        ref ReferenceDedupeSet? seen,
         long fileId,
         string line,
         string context,
@@ -181,7 +181,7 @@ public static partial class ReferenceExtractor
 
     private static void AddSolidityEventReferences(
         ref List<ReferenceRecord>? references,
-        ref HashSet<string>? seen,
+        ref ReferenceDedupeSet? seen,
         long fileId,
         string line,
         string context,
@@ -203,7 +203,7 @@ public static partial class ReferenceExtractor
 
     private static void AddSolidityInterfaceCallReferences(
         ref List<ReferenceRecord>? references,
-        ref HashSet<string>? seen,
+        ref ReferenceDedupeSet? seen,
         long fileId,
         string line,
         string context,
@@ -231,7 +231,7 @@ public static partial class ReferenceExtractor
 
     private static void AddSolidityReference(
         ref List<ReferenceRecord>? references,
-        ref HashSet<string>? seen,
+        ref ReferenceDedupeSet? seen,
         long fileId,
         string name,
         int nameIndex,
@@ -242,7 +242,7 @@ public static partial class ReferenceExtractor
     {
         AddReference(
             references ??= [],
-            seen ??= new HashSet<string>(StringComparer.Ordinal),
+            seen ??= new ReferenceDedupeSet(),
             fileId,
             name,
             nameIndex,

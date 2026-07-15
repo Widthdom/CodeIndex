@@ -9,7 +9,7 @@ public static partial class ReferenceExtractor
 {
     internal static void AddTypeExpressionSegments(
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string expression,
         int expressionStartInLine,

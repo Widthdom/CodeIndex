@@ -64,7 +64,7 @@ internal static class RustReferenceExtractor
     public static void EmitMultilineAttributeReferences(
         string[] preparedLines,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         Func<int, int, SymbolRecord?> resolveContainer)
     {
@@ -189,7 +189,7 @@ internal static class RustReferenceExtractor
         int startLineIndex,
         int startColumn,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         Func<int, int, SymbolRecord?> resolveContainer)
     {
@@ -382,7 +382,7 @@ internal static class RustReferenceExtractor
     public static void EmitAttributeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -417,7 +417,7 @@ internal static class RustReferenceExtractor
     private static void EmitDeriveTypeList(
         Group typesGroup,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -436,7 +436,7 @@ internal static class RustReferenceExtractor
         string types,
         int typesStartIndex,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -470,7 +470,7 @@ internal static class RustReferenceExtractor
         int attributeStartLineIndex,
         int attributeStartColumn,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         Func<int, int, SymbolRecord?> resolveContainer)
     {
@@ -574,7 +574,7 @@ internal static class RustReferenceExtractor
     public static void EmitTypePositionReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -610,7 +610,7 @@ internal static class RustReferenceExtractor
     private static void EmitMutableReferenceTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -664,7 +664,7 @@ internal static class RustReferenceExtractor
     private static void EmitLifetimeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -707,7 +707,7 @@ internal static class RustReferenceExtractor
     private static void EmitHigherRankedTraitBoundReferences(
         string line,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -750,7 +750,7 @@ internal static class RustReferenceExtractor
     private static void EmitUseReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -773,7 +773,7 @@ internal static class RustReferenceExtractor
         string body,
         int bodyStart,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -889,7 +889,7 @@ internal static class RustReferenceExtractor
     private static void EmitExternCrateReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -921,7 +921,7 @@ internal static class RustReferenceExtractor
     private static void EmitModuleDeclarationReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -952,7 +952,7 @@ internal static class RustReferenceExtractor
     private static void EmitFunctionSignatureTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1015,7 +1015,7 @@ internal static class RustReferenceExtractor
     private static void EmitClosureSignatureTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1096,7 +1096,7 @@ internal static class RustReferenceExtractor
     private static void EmitLetTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1139,7 +1139,7 @@ internal static class RustReferenceExtractor
     private static void EmitConstStaticTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1209,7 +1209,7 @@ internal static class RustReferenceExtractor
     private static void EmitTypeAliasTargetReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1248,7 +1248,7 @@ internal static class RustReferenceExtractor
     private static void EmitTraitAliasTargetReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1287,7 +1287,7 @@ internal static class RustReferenceExtractor
     private static void EmitAssociatedTypeBoundReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1332,7 +1332,7 @@ internal static class RustReferenceExtractor
     private static void EmitTupleStructFieldTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1386,7 +1386,7 @@ internal static class RustReferenceExtractor
     private static void EmitStructFieldTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1482,7 +1482,7 @@ internal static class RustReferenceExtractor
     private static void EmitEnumVariantTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1519,7 +1519,7 @@ internal static class RustReferenceExtractor
         string preparedLine,
         int openParen,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1556,7 +1556,7 @@ internal static class RustReferenceExtractor
         string preparedLine,
         int openBrace,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1616,7 +1616,7 @@ internal static class RustReferenceExtractor
     private static void EmitAsCastTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1657,7 +1657,7 @@ internal static class RustReferenceExtractor
     private static void EmitAssociatedCallReceiverTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1711,7 +1711,7 @@ internal static class RustReferenceExtractor
     private static void EmitAssociatedValueReceiverTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1764,7 +1764,7 @@ internal static class RustReferenceExtractor
     private static void EmitQualifiedAssociatedCallReceiverTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1845,7 +1845,7 @@ internal static class RustReferenceExtractor
         int partStart,
         int partEnd,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1881,7 +1881,7 @@ internal static class RustReferenceExtractor
     private static void EmitStructLiteralInstantiationReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -1960,7 +1960,7 @@ internal static class RustReferenceExtractor
     private static void EmitImplAndTraitTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -2062,7 +2062,7 @@ internal static class RustReferenceExtractor
     private static void EmitGenericBoundReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -2161,7 +2161,7 @@ internal static class RustReferenceExtractor
         string preparedLine,
         int genericOpenIndex,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -2191,7 +2191,7 @@ internal static class RustReferenceExtractor
         int genericOpenIndex,
         HashSet<string> constGenericNames,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -2235,7 +2235,7 @@ internal static class RustReferenceExtractor
     private static void EmitWhereClauseConstGenericReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -2264,7 +2264,7 @@ internal static class RustReferenceExtractor
         string clause,
         int clauseStart,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -2323,7 +2323,7 @@ internal static class RustReferenceExtractor
         string preparedLine,
         int genericOpenIndex,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -2351,7 +2351,7 @@ internal static class RustReferenceExtractor
     private static void EmitWhereClauseFunctionTraitReturnTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -2383,7 +2383,7 @@ internal static class RustReferenceExtractor
         string clause,
         int clauseStart,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -2429,7 +2429,7 @@ internal static class RustReferenceExtractor
         string expression,
         int expressionStart,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -2464,7 +2464,7 @@ internal static class RustReferenceExtractor
         string preparedLine,
         int genericOpenIndex,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,

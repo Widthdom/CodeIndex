@@ -10,7 +10,7 @@ internal static class RazorReferenceExtractor
     public static void EmitReferences(
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,

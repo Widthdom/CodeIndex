@@ -103,7 +103,7 @@ internal static partial class CSharpReferenceExtractor
         IReadOnlyList<SymbolRecord> containerCandidates,
         string[] structuralLines,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -182,7 +182,7 @@ internal static partial class CSharpReferenceExtractor
         IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
         Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         ref CSharpMultiLineTypePatternState state)
         => ReferenceExtractor.AdvanceCSharpMultiLineTypePatternState(
@@ -208,7 +208,7 @@ internal static partial class CSharpReferenceExtractor
         IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
         Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -252,7 +252,7 @@ internal static partial class CSharpReferenceExtractor
         IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
         Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId)
         => ReferenceExtractor.FlushPendingCSharpMultiLineTypePatternReference(
             ref state,
@@ -274,7 +274,7 @@ internal static partial class CSharpReferenceExtractor
         IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
         Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId)
         => ReferenceExtractor.EmitCSharpSwitchExpressionTypePatternReferences(
             lines,
@@ -292,7 +292,7 @@ internal static partial class CSharpReferenceExtractor
     public static void EmitDocCrefReferences(
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         int columnOffset,
         string context,
@@ -327,7 +327,7 @@ internal static partial class CSharpReferenceExtractor
         string preparedLine,
         IReadOnlyList<(int start, int end)>? csharpAttrRangesOnLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -615,7 +615,7 @@ internal static partial class CSharpReferenceExtractor
         Func<IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames>> getValueReceiverNamesByContainingType,
         Func<IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>>> getValueReceiverNamesByFunctionStartLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,

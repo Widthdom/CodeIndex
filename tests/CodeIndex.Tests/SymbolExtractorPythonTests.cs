@@ -285,7 +285,8 @@ public partial class SymbolExtractorTests
                 def __class_getitem__(cls, item):
                     return cls
 
-            values = [captured := item for item in range(3)]
+            values = [(captured := item, captured := item) for item in range(3)]
+            fallback = (captured := 4)
 
             def read(stream):
                 while chunk := stream.read(8192):
@@ -296,8 +297,8 @@ public partial class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class_hook" && s.Name == "__init_subclass__");
         Assert.Contains(symbols, s => s.Kind == "class_hook" && s.Name == "__class_getitem__");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "captured" && s.SubKind == "walrus");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "chunk" && s.SubKind == "walrus");
+        Assert.Equal(2, symbols.Count(s => s.Kind == "property" && s.Name == "captured" && s.SubKind == "walrus"));
+        Assert.Single(symbols, s => s.Kind == "property" && s.Name == "chunk" && s.SubKind == "walrus");
     }
 
     [Fact]

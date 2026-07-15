@@ -22,12 +22,25 @@ internal static class GitHubActionsReferenceExtractor
         int? maxReferenceCount)
     {
         var references = ReferenceExtractor.CreateReferenceList(maxReferenceCount, Math.Min(lines.Length, 64));
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var seen = new ReferenceDedupeSet();
         var jobsIndent = -1;
         var currentJobIndent = -1;
         string? currentJob = null;
         SymbolRecord? currentJobSymbol = null;
         int? runIndent = null;
+        Dictionary<string, SymbolRecord>? symbolsByName = null;
+
+        SymbolRecord? FindSymbol(string name)
+        {
+            if (symbolsByName == null)
+            {
+                symbolsByName = new Dictionary<string, SymbolRecord>(StringComparer.Ordinal);
+                foreach (var symbol in symbols)
+                    symbolsByName.TryAdd(symbol.Name, symbol);
+            }
+
+            return symbolsByName.GetValueOrDefault(name);
+        }
 
         for (var index = 0; index < lines.Length && !ReferenceExtractor.ReferenceLimitReached(references); index++)
         {
@@ -65,7 +78,7 @@ internal static class GitHubActionsReferenceExtractor
             {
                 currentJob = key;
                 currentJobIndent = indent;
-                currentJobSymbol = symbols.FirstOrDefault(symbol => symbol.Name == $"jobs.{currentJob}");
+                currentJobSymbol = FindSymbol($"jobs.{currentJob}");
                 continue;
             }
 
@@ -74,11 +87,27 @@ internal static class GitHubActionsReferenceExtractor
 
             if (key == "needs")
             {
-                foreach (var need in value.Trim('[', ']').Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                var needs = value.AsSpan();
+                while (needs.Length > 0 && needs[0] == '[')
+                    needs = needs[1..];
+                while (needs.Length > 0 && needs[^1] == ']')
+                    needs = needs[..^1];
+
+                var itemStart = 0;
+                while (itemStart <= needs.Length)
                 {
-                    var target = need.Trim('\'', '"');
-                    if (target.Length > 0)
+                    var separator = needs[itemStart..].IndexOf(',');
+                    var itemEnd = separator >= 0 ? itemStart + separator : needs.Length;
+                    var targetSpan = TrimNeedsItem(needs[itemStart..itemEnd]);
+                    if (targetSpan.Length > 0)
+                    {
+                        var target = targetSpan.ToString();
                         Add(fileId, $"jobs.{target}", line.IndexOf(target, StringComparison.Ordinal), "call", line, index + 1, currentJobSymbol, references, seen);
+                    }
+
+                    if (separator < 0)
+                        break;
+                    itemStart = itemEnd + 1;
                 }
             }
             else if (key == "uses")
@@ -104,7 +133,7 @@ internal static class GitHubActionsReferenceExtractor
         int lineNumber,
         SymbolRecord? container,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         int baseIndex = 0)
     {
         foreach (Match match in LocalPathRegex.Matches(text))
@@ -124,13 +153,23 @@ internal static class GitHubActionsReferenceExtractor
         int line,
         SymbolRecord? container,
         List<ReferenceRecord> references,
-        HashSet<string> seen) =>
+        ReferenceDedupeSet seen) =>
         ReferenceExtractor.AddReference(references, seen, fileId, name, Math.Max(0, index), kind, context, line, container, "yaml");
 
     private static string StripValue(string value)
     {
         var comment = value.IndexOf(" #", StringComparison.Ordinal);
         return (comment >= 0 ? value[..comment] : value).Trim().Trim('\'', '"');
+    }
+
+    private static ReadOnlySpan<char> TrimNeedsItem(ReadOnlySpan<char> value)
+    {
+        value = value.Trim();
+        while (value.Length > 0 && value[0] is '\'' or '"')
+            value = value[1..];
+        while (value.Length > 0 && value[^1] is '\'' or '"')
+            value = value[..^1];
+        return value;
     }
 
     private static int CountLeadingSpaces(string line)

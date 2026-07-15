@@ -5,6 +5,14 @@ namespace CodeIndex.Database;
 
 public partial class DbWriter
 {
+    private static readonly AsyncLocal<Action?> ScopedReusableStatSnapshotReadForTesting = new();
+
+    internal static Action? ReusableStatSnapshotReadForTesting
+    {
+        get => ScopedReusableStatSnapshotReadForTesting.Value;
+        set => ScopedReusableStatSnapshotReadForTesting.Value = value;
+    }
+
     /// <summary>
     /// Check if a file needs re-indexing by comparing modified time and checksum.
     /// 更新日時とチェックサムを比較してファイルの再インデックスが必要か判定する。
@@ -35,6 +43,10 @@ public partial class DbWriter
                   THEN @modified
                   ELSE modified
               END,
+                  size = CASE
+                      WHEN @size IS NOT NULL THEN @size
+                      ELSE size
+                  END,
                   generated = CASE
                   WHEN @generated IS NOT NULL THEN @generated
                   ELSE generated
@@ -113,6 +125,10 @@ public partial class DbWriter
                   THEN @modified
                   ELSE modified
               END,
+                  size = CASE
+                      WHEN @size IS NOT NULL THEN @size
+                      ELSE size
+                  END,
                   generated = CASE
                   WHEN @generated IS NOT NULL THEN @generated
                   ELSE generated
@@ -351,6 +367,145 @@ public partial class DbWriter
         }
     }
 
+    /// <summary>
+    /// Loads repository-wide stat-reuse candidates in one SQLite statement. Callers still
+    /// compare every row with a fresh filesystem stat, while avoiding per-file database probes.
+    /// repository 全体の stat-reuse 候補を 1 回で読み、filesystem stat は各 file で再確認する。
+    /// </summary>
+    internal IReadOnlyDictionary<string, ReusableIndexedFileStat> LoadReusableIndexedFileStats(
+        int maxSymbolsPerFile,
+        int maxReferencesPerFile,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ReusableStatSnapshotReadForTesting?.Invoke();
+        cancellationToken.ThrowIfCancellationRequested();
+        var hasIssuesTable = TableExists("file_issues");
+        var hasIssueMetadataColumns = hasIssuesTable && HasIssueMetadataColumns();
+        var staleIssuePredicate = hasIssueMetadataColumns
+            ? @"
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM file_issues stale_i
+                    WHERE stale_i.file_id = f.id
+                      AND (
+                          (stale_i.kind IN ('replacement_char', 'non_utf8_likely', 'bom', 'utf16_bom')
+                              AND (stale_i.origin IS NULL OR stale_i.severity IS NULL))
+                          OR (stale_i.kind = 'bom' AND f.path LIKE '%.sln')
+                      )
+                )"
+            : string.Empty;
+        var countIssuePredicates = hasIssuesTable
+            ? @"
+                AND NOT EXISTS (
+                    SELECT 1 FROM file_issues
+                    WHERE file_id = f.id AND kind = 'symbol_count_exceeded'
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM file_issues
+                    WHERE file_id = f.id AND kind = 'reference_count_exceeded'
+                )"
+            : string.Empty;
+        var generatedSuppressionProjection = hasIssuesTable
+            ? @"EXISTS (
+                    SELECT 1 FROM file_issues
+                    WHERE file_id = f.id AND kind = @generated_issue_kind
+                )"
+            : "0";
+        var cmd = RentCommand(
+            $@"SELECT
+                    f.id,
+                    f.path,
+                    f.modified,
+                    f.size,
+                    f.lang,
+                    {generatedSuppressionProjection} AS generated_suppressed
+                FROM files f
+                WHERE f.lang IS NOT NULL
+                  {staleIssuePredicate}
+                  AND NOT EXISTS (
+                      SELECT 1 FROM symbols
+                      WHERE file_id = f.id
+                      LIMIT 1 OFFSET @max_symbols
+                  )
+                  {countIssuePredicates}
+                  AND NOT EXISTS (
+                      SELECT 1 FROM symbol_references
+                      WHERE file_id = f.id
+                      LIMIT 1 OFFSET @max_references
+                  )",
+            c =>
+            {
+                c.Parameters.Add("@max_symbols", SqliteType.Integer);
+                c.Parameters.Add("@max_references", SqliteType.Integer);
+                if (hasIssuesTable)
+                    c.Parameters.Add("@generated_issue_kind", SqliteType.Text);
+            });
+        var candidates = new List<ReusableIndexedFileStat>();
+        try
+        {
+            cmd.Parameters["@max_symbols"].Value = maxSymbolsPerFile;
+            cmd.Parameters["@max_references"].Value = maxReferencesPerFile;
+            if (hasIssuesTable)
+                cmd.Parameters["@generated_issue_kind"].Value = FileIndexer.GeneratedCodeExtractionSkippedIssueKind;
+            using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (reader.GetValue(2) is not string modified
+                    || !TryParseStoredModifiedUtc(modified, out var modifiedUtc)
+                    || reader.GetValue(3) is not long size)
+                {
+                    continue;
+                }
+
+                candidates.Add(new ReusableIndexedFileStat(
+                    reader.GetInt64(0),
+                    reader.GetString(1),
+                    modifiedUtc,
+                    size,
+                    reader.GetString(4),
+                    reader.GetInt64(5) != 0));
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch (SqliteException ex) when (IsSqliteInterruptCancellation(ex, cancellationToken))
+        {
+            throw new OperationCanceledException("Reusable file stat snapshot was interrupted.", ex, cancellationToken);
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+
+        var currentVersionByLanguage = new Dictionary<string, bool>(StringComparer.Ordinal);
+        var reusable = new Dictionary<string, ReusableIndexedFileStat>(candidates.Count, StringComparer.Ordinal);
+        foreach (var candidate in candidates)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!currentVersionByLanguage.TryGetValue(candidate.Language, out var versionCurrent))
+            {
+                versionCurrent = SymbolExtractorVersionMatchesCurrent(candidate.Language);
+                currentVersionByLanguage.Add(candidate.Language, versionCurrent);
+            }
+
+            if (versionCurrent)
+                reusable[candidate.Path] = candidate;
+        }
+
+        return reusable;
+    }
+
+    private static bool TryParseStoredModifiedUtc(string value, out DateTime modifiedUtc)
+        => DateTime.TryParse(
+            value,
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal
+            | System.Globalization.DateTimeStyles.AdjustToUniversal,
+            out modifiedUtc);
+
     private bool HasStaleIssueMetadata(string relativePath)
     {
         if (!HasIssueMetadataColumns())
@@ -586,3 +741,11 @@ public partial class DbWriter
         return languages;
     }
 }
+
+internal readonly record struct ReusableIndexedFileStat(
+    long FileId,
+    string Path,
+    DateTime ModifiedUtc,
+    long Size,
+    string Language,
+    bool GeneratedExtractionSuppressed);

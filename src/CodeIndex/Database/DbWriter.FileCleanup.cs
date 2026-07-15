@@ -161,11 +161,7 @@ public partial class DbWriter
     private void DeleteFileIdBatch(IReadOnlyList<long> fileIds)
     {
         DeleteCrossFileReferencesToSymbolsDefinedOnlyByFiles(fileIds);
-
-        using var deleteCmd = _conn.CreateCommand();
-        var parameters = SqliteDynamicSql.AddParameters(deleteCmd, "id", fileIds, SqliteType.Integer, "file id delete batch");
-        deleteCmd.CommandText = $"DELETE FROM files WHERE id IN ({string.Join(", ", parameters)})";
-        deleteCmd.ExecuteNonQuery();
+        DeleteFileRowsByIdBatch(fileIds, offset: 0, batchCount: fileIds.Count);
     }
 
     private void DeleteCrossFileReferencesToSymbolsDefinedOnlyByFiles(IReadOnlyList<long> fileIds)

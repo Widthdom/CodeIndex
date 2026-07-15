@@ -9,7 +9,7 @@ internal static partial class PythonReferenceExtractor
     public static void EmitFunctionReturnReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -61,7 +61,7 @@ internal static partial class PythonReferenceExtractor
     public static void EmitFunctionParameterReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -123,7 +123,7 @@ internal static partial class PythonReferenceExtractor
     public static void EmitVariableAnnotationReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,

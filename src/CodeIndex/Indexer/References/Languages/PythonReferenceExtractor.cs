@@ -163,7 +163,7 @@ internal static partial class PythonReferenceExtractor
     private static void EmitPythonTypeExpressionReferences(
         Group typeGroup,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -252,7 +252,7 @@ internal static partial class PythonReferenceExtractor
     public static void EmitDecoratorReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -307,7 +307,7 @@ internal static partial class PythonReferenceExtractor
         string preparedLine,
         Match decoratorMatch,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -388,7 +388,7 @@ internal static partial class PythonReferenceExtractor
     public static void EmitRaiseReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -420,7 +420,7 @@ internal static partial class PythonReferenceExtractor
     public static void EmitExceptReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -477,7 +477,7 @@ internal static partial class PythonReferenceExtractor
     public static void EmitIsInstanceReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -534,7 +534,7 @@ internal static partial class PythonReferenceExtractor
     public static void EmitIsSubclassReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -591,7 +591,7 @@ internal static partial class PythonReferenceExtractor
     public static void EmitCastReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -696,7 +696,7 @@ internal static partial class PythonReferenceExtractor
     public static void EmitAssertTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -749,7 +749,7 @@ internal static partial class PythonReferenceExtractor
     public static void EmitTypeAliasReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -796,7 +796,7 @@ internal static partial class PythonReferenceExtractor
     public static void EmitNewTypeReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -828,7 +828,7 @@ internal static partial class PythonReferenceExtractor
     public static void EmitTypeVarBoundReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -860,7 +860,7 @@ internal static partial class PythonReferenceExtractor
     public static void EmitTypeVarConstraintReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -894,7 +894,7 @@ internal static partial class PythonReferenceExtractor
     public static void EmitGetTypeHintsReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -948,7 +948,7 @@ internal static partial class PythonReferenceExtractor
         string preparedLine,
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,

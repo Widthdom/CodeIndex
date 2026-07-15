@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
@@ -163,6 +164,29 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void SymbolExtraction_JavaScriptTypeScriptDenseIdentifiers_StaysWithinAllocationBudget()
+    {
+        var content = BuildJavaScriptTypeScriptDenseIdentifierFixture(functionCount: 180);
+        _ = SymbolExtractor.Extract(1, "javascript", content);
+        _ = SymbolExtractor.Extract(1, "typescript", content);
+
+        var javaScriptAllocatedBytes = MeasureAllocatedBytes(
+            () => SymbolExtractor.Extract(1, "javascript", content));
+        var typeScriptAllocatedBytes = MeasureAllocatedBytes(
+            () => SymbolExtractor.Extract(1, "typescript", content));
+
+        Assert.True(
+            javaScriptAllocatedBytes < 3_300_000
+                && typeScriptAllocatedBytes < 4_000_000
+                && javaScriptAllocatedBytes + typeScriptAllocatedBytes < 7_100_000,
+            $"Dense JS/TS identifier extraction allocated JavaScript={javaScriptAllocatedBytes:N0}, TypeScript={typeScriptAllocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void ReferenceExtraction_CsharpHotPath_StaysWithinAllocationBudget()
     {
         var content = BuildCSharpHotPathFixture(typeCount: 80);
@@ -171,7 +195,130 @@ public class PerformanceTests : IDisposable
 
         var allocatedBytes = MeasureAllocatedBytes(() => ReferenceExtractor.Extract(1, "csharp", content, symbols));
 
-        Assert.True(allocatedBytes < 18_000_000, $"Reference extraction allocated {allocatedBytes:N0} bytes");
+        Assert.True(allocatedBytes < 6_000_000, $"Reference extraction allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void ReferenceExtraction_RepeatedSymbolMembership_StaysWithinAllocationBudget()
+    {
+        var pythonContent = BuildPythonImportedTypeCallFixture(importCount: 120);
+        var pythonSymbols = SymbolExtractor.Extract(1, "python", pythonContent);
+        _ = ReferenceExtractor.Extract(1, "python", pythonContent, pythonSymbols);
+
+        var pythonAllocatedBytes = MeasureAllocatedBytes(
+            () => ReferenceExtractor.Extract(1, "python", pythonContent, pythonSymbols));
+
+        var csharpContent = BuildCSharpPrivatePropertyReceiverFixture(typeCount: 120);
+        var csharpSymbols = SymbolExtractor.Extract(1, "csharp", csharpContent);
+        _ = ReferenceExtractor.Extract(1, "csharp", csharpContent, csharpSymbols);
+
+        var csharpAllocatedBytes = MeasureAllocatedBytes(
+            () => ReferenceExtractor.Extract(1, "csharp", csharpContent, csharpSymbols));
+
+        Assert.True(pythonAllocatedBytes < 2_000_000, $"Python reference extraction allocated {pythonAllocatedBytes:N0} bytes");
+        Assert.True(csharpAllocatedBytes < 6_000_000, $"C# reference extraction allocated {csharpAllocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void ReferenceExtraction_RepeatedContainerLookup_StaysWithinAllocationBudget()
+    {
+        var csharpContent = BuildCSharpPrivatePropertyReceiverFixture(typeCount: 240);
+        var csharpSymbols = SymbolExtractor.Extract(1, "csharp", csharpContent);
+        _ = ReferenceExtractor.Extract(1, "csharp", csharpContent, csharpSymbols);
+        var csharpAllocatedBytes = MeasureAllocatedBytes(
+            () => ReferenceExtractor.Extract(1, "csharp", csharpContent, csharpSymbols));
+
+        var yamlContent = BuildGitHubActionsJobFixture(jobCount: 240);
+        var yamlSymbols = SymbolExtractor.Extract(1, "yaml", yamlContent);
+        _ = ReferenceExtractor.Extract(1, "yaml", yamlContent, yamlSymbols);
+        var yamlAllocatedBytes = MeasureAllocatedBytes(
+            () => ReferenceExtractor.Extract(1, "yaml", yamlContent, yamlSymbols));
+
+        Assert.True(
+            csharpAllocatedBytes < 8_000_000 && yamlAllocatedBytes < 2_500_000,
+            $"Container lookup allocated {csharpAllocatedBytes:N0} bytes for C# and {yamlAllocatedBytes:N0} bytes for YAML");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void Extraction_DenseDelimitedLists_StayWithinAllocationBudget()
+    {
+        var pythonContent = BuildPythonCommaImportFixture(itemCount: 400);
+        var pythonSymbols = SymbolExtractor.Extract(1, "python", pythonContent);
+        _ = ReferenceExtractor.Extract(1, "python", pythonContent, pythonSymbols);
+        var pythonAllocatedBytes = MeasureAllocatedBytes(
+            () => ReferenceExtractor.Extract(1, "python", pythonContent, pythonSymbols));
+
+        var yamlContent = BuildGitHubActionsNeedsListFixture(dependencyCount: 400);
+        var yamlSymbols = SymbolExtractor.Extract(1, "yaml", yamlContent);
+        _ = ReferenceExtractor.Extract(1, "yaml", yamlContent, yamlSymbols);
+        var yamlAllocatedBytes = MeasureAllocatedBytes(
+            () => ReferenceExtractor.Extract(1, "yaml", yamlContent, yamlSymbols));
+
+        var jsonContent = BuildJsonRepositoryPathFixture(pathCount: 400);
+        var jsonSymbols = SymbolExtractor.Extract(1, "json", jsonContent);
+        _ = ReferenceExtractor.Extract(1, "json", jsonContent, jsonSymbols);
+        var jsonAllocatedBytes = MeasureAllocatedBytes(
+            () => ReferenceExtractor.Extract(1, "json", jsonContent, jsonSymbols));
+
+        var fortranContent = BuildFortranProcedureListFixture(procedureCount: 400);
+        _ = SymbolExtractor.Extract(1, "fortran", fortranContent);
+        var fortranAllocatedBytes = MeasureAllocatedBytes(
+            () => SymbolExtractor.Extract(1, "fortran", fortranContent));
+
+        var totalAllocatedBytes = pythonAllocatedBytes + yamlAllocatedBytes + jsonAllocatedBytes + fortranAllocatedBytes;
+        Assert.True(
+            pythonAllocatedBytes < 1_150_000
+                && yamlAllocatedBytes < 1_400_000
+                && jsonAllocatedBytes < 470_000
+                && fortranAllocatedBytes < 340_000
+                && totalAllocatedBytes < 3_180_000,
+            $"Dense list extraction allocated Python={pythonAllocatedBytes:N0}, YAML={yamlAllocatedBytes:N0}, JSON={jsonAllocatedBytes:N0}, Fortran={fortranAllocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void ReferenceDedupe_DenseLongIdentities_StayWithinAllocationBudget()
+    {
+        const int keyCount = 10_000;
+        var name = new string('N', 128);
+        var container = new SymbolRecord
+        {
+            Kind = "function",
+            Name = new string('C', 128),
+        };
+
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            var seen = new ReferenceDedupeSet(keyCount);
+            for (var index = 0; index < keyCount; index++)
+            {
+                seen.Add(ReferenceExtractor.CreateReferenceDedupeKey(
+                    1,
+                    "csharp",
+                    index + 1,
+                    17,
+                    "type_reference",
+                    name,
+                    container));
+            }
+        });
+
+        Assert.True(allocatedBytes < 1_000_000, $"Reference dedupe allocated {allocatedBytes:N0} bytes");
     }
 
     private static long MeasureAllocatedBytes(Action action)
@@ -255,6 +402,129 @@ public class PerformanceTests : IDisposable
                     }
                 }
                 """));
+    }
+
+    private static string BuildJavaScriptTypeScriptDenseIdentifierFixture(int functionCount)
+    {
+        var builder = new StringBuilder();
+        for (var index = 0; index < functionCount; index++)
+        {
+            builder.Append("export function handler").Append(index)
+                .Append("(inputValue").Append(index).Append(", divisorValue").Append(index).AppendLine(") {")
+                .Append("  const normalizedValue").Append(index).Append(" = inputValue").Append(index).AppendLine(";")
+                .Append("  if (normalizedValue").Append(index).Append(") return /[{}]/.test(normalizedValue").Append(index).AppendLine(");")
+                .Append("  const quotientValue").Append(index).Append(" = normalizedValue").Append(index)
+                .Append(" / divisorValue").Append(index).AppendLine(";")
+                .Append("  return quotientValue").Append(index).AppendLine(";")
+                .AppendLine("}");
+        }
+
+        return builder.ToString();
+    }
+
+    private static string BuildPythonImportedTypeCallFixture(int importCount)
+    {
+        var content = new StringBuilder(importCount * 120);
+        for (var index = 0; index < importCount; index++)
+        {
+            content.Append("from models").Append(index).Append(" import Model").Append(index)
+                .Append(" as Alias").Append(index).Append('\n');
+            content.Append("import services").Append(index).Append(" as svc").Append(index).Append('\n');
+        }
+        content.Append("def build_all():\n");
+        for (var index = 0; index < importCount; index++)
+        {
+            content.Append("    Alias").Append(index).Append("()\n");
+            content.Append("    svc").Append(index).Append(".Service").Append(index).Append("()\n");
+        }
+        return content.ToString();
+    }
+
+    private static string BuildCSharpPrivatePropertyReceiverFixture(int typeCount)
+    {
+        var content = new StringBuilder(typeCount * 180);
+        for (var index = 0; index < typeCount; index++)
+        {
+            content.Append("class Service").Append(index).Append(" {\n")
+                .Append("    private Worker").Append(index).Append(" Worker").Append(index).Append(" { get; }\n")
+                .Append("    void Run() { Worker").Append(index).Append(".Execute(); }\n")
+                .Append("}\n")
+                .Append("class Worker").Append(index).Append(" { public void Execute() { } }\n");
+        }
+        return content.ToString();
+    }
+
+    private static string BuildGitHubActionsJobFixture(int jobCount)
+    {
+        var content = new StringBuilder(jobCount * 120);
+        content.Append("name: Dense workflow\njobs:\n");
+        for (var index = 0; index < jobCount; index++)
+        {
+            content.Append("  job").Append(index).Append(":\n");
+            if (index > 0)
+                content.Append("    needs: [job").Append(index - 1).Append("]\n");
+            content.Append("    steps:\n")
+                .Append("      - run: ./scripts/job").Append(index).Append(".sh\n");
+        }
+        return content.ToString();
+    }
+
+    private static string BuildPythonCommaImportFixture(int itemCount)
+    {
+        var content = new StringBuilder(itemCount * 60);
+        content.Append("from models import ");
+        for (var index = 0; index < itemCount; index++)
+        {
+            if (index > 0)
+                content.Append(", ");
+            content.Append("Model").Append(index).Append(" as Alias").Append(index);
+        }
+        content.Append("\ndef build_all():\n");
+        for (var index = 0; index < itemCount; index++)
+            content.Append("    Alias").Append(index).Append("()\n");
+        return content.ToString();
+    }
+
+    private static string BuildGitHubActionsNeedsListFixture(int dependencyCount)
+    {
+        var content = new StringBuilder(dependencyCount * 70);
+        content.Append("name: Dense needs\njobs:\n");
+        for (var index = 0; index < dependencyCount; index++)
+            content.Append("  job").Append(index).Append(":\n    steps:\n      - run: echo ready\n");
+        content.Append("  aggregate:\n    needs: [");
+        for (var index = 0; index < dependencyCount; index++)
+        {
+            if (index > 0)
+                content.Append(", ");
+            content.Append("job").Append(index);
+        }
+        content.Append("]\n    steps:\n      - run: echo done\n");
+        return content.ToString();
+    }
+
+    private static string BuildJsonRepositoryPathFixture(int pathCount)
+    {
+        var content = new StringBuilder(pathCount * 50).Append("{\n");
+        for (var index = 0; index < pathCount; index++)
+        {
+            content.Append("  \"path").Append(index).Append("\": \"src/module")
+                .Append(index).Append("/file").Append(index).Append(".cs\"");
+            content.Append(index + 1 == pathCount ? '\n' : ",\n");
+        }
+        return content.Append("}\n").ToString();
+    }
+
+    private static string BuildFortranProcedureListFixture(int procedureCount)
+    {
+        var content = new StringBuilder(procedureCount * 20)
+            .Append("module dense_mod\n  interface\n    module procedure ");
+        for (var index = 0; index < procedureCount; index++)
+        {
+            if (index > 0)
+                content.Append(", ");
+            content.Append("proc_").Append(index);
+        }
+        return content.Append("\n  end interface\nend module dense_mod\n").ToString();
     }
 
     public void Dispose()

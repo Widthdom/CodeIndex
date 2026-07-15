@@ -36,7 +36,7 @@ internal static class ElixirReferenceExtractor
     public static void EmitTypePositionReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -60,7 +60,7 @@ internal static class ElixirReferenceExtractor
     private static void EmitDefimplReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -88,7 +88,14 @@ internal static class ElixirReferenceExtractor
             if (name.Length == 0)
                 return;
 
-            var key = $"type_reference:{name}:{lineNumber}:{column}";
+            var key = ReferenceExtractor.CreateReferenceDedupeKey(
+                fileId: 0,
+                language: null,
+                lineNumber,
+                column,
+                "type_reference",
+                name,
+                container: null);
             if (!seen.Add(key))
                 return;
 
@@ -127,7 +134,7 @@ internal static class ElixirReferenceExtractor
             preparedLine,
             addCallLikeReference,
             [],
-            [],
+            new ReferenceDedupeSet(),
             0,
             string.Empty,
             0,

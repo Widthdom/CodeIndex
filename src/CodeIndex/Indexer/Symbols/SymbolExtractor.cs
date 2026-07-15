@@ -550,7 +550,7 @@ public static partial class SymbolExtractor
         JavaScriptLexMode Mode = JavaScriptLexMode.Code,
         bool EscapeNext = false,
         JavaScriptPrevTokenKind PreviousTokenKind = JavaScriptPrevTokenKind.None,
-        string? PreviousIdentifier = null,
+        bool PreviousIdentifierAllowsRegex = false,
         bool ExpectingControlFlowOpenParen = false,
         int ControlFlowParenDepth = 0,
         bool RegexAllowedAfterControlFlowParen = false);
@@ -621,6 +621,64 @@ public static partial class SymbolExtractor
         string RecordName,
         int RecordStartLine,
         List<RecordPrimaryComponent> Components);
+
+    private readonly record struct RecordPrimaryComponentParentKey(
+        long FileId,
+        string Kind,
+        string Name,
+        int StartLine);
+
+    private readonly record struct RecordPrimaryComponentPropertyKey(
+        long FileId,
+        string ContainerKind,
+        string ContainerName);
+
+    private sealed class RecordPrimaryComponentParentIndex
+    {
+        private readonly Dictionary<RecordPrimaryComponentParentKey, SymbolRecord> _parents = [];
+        private int _indexedCount;
+        private SymbolRecord? _lastIndexedSymbol;
+
+        public SymbolRecord? FindLast(
+            List<SymbolRecord> symbols,
+            RecordPrimaryComponentParentKey key)
+        {
+            Synchronize(symbols);
+            return _parents.TryGetValue(key, out var parent) ? parent : null;
+        }
+
+        private void Synchronize(List<SymbolRecord> symbols)
+        {
+            // AddSymbolRecord can remove declaration-only functions from the list tail.
+            // Rebuild if that invalidated the indexed boundary; otherwise consume only
+            // symbols appended since the previous record declaration.
+            // AddSymbolRecord は末尾の declaration-only function を除くことがあるため、
+            // index境界が無効なら再構築し、それ以外は追加分だけを取り込む。
+            if (_indexedCount > symbols.Count
+                || (_indexedCount > 0
+                    && !ReferenceEquals(symbols[_indexedCount - 1], _lastIndexedSymbol)))
+            {
+                _parents.Clear();
+                _indexedCount = 0;
+            }
+
+            for (var index = _indexedCount; index < symbols.Count; index++)
+            {
+                var symbol = symbols[index];
+                if (symbol.Kind is not ("class" or "struct" or "enum"))
+                    continue;
+
+                _parents[new RecordPrimaryComponentParentKey(
+                    symbol.FileId,
+                    symbol.Kind,
+                    symbol.Name,
+                    symbol.StartLine)] = symbol;
+            }
+
+            _indexedCount = symbols.Count;
+            _lastIndexedSymbol = symbols.Count > 0 ? symbols[^1] : null;
+        }
+    }
 
     private readonly record struct StrippedRecordComponentText(
         string Text,
@@ -3621,19 +3679,11 @@ public static partial class SymbolExtractor
            && IsJavaScriptTypeScriptIdentifierStart(name[3])
            && char.IsUpper(name[3]);
 
-    private static HashSet<string> BuildSymbolLineKeySet(IReadOnlyList<SymbolRecord> symbols)
+    private static HashSet<SymbolKindNameIdentity> BuildSymbolKindNameIdentities(IReadOnlyList<SymbolRecord> symbols)
     {
-        var existing = new HashSet<string>(symbols.Count, StringComparer.Ordinal);
+        var existing = new HashSet<SymbolKindNameIdentity>(symbols.Count);
         foreach (var symbol in symbols)
-            existing.Add($"{symbol.Kind}:{symbol.Name}:{symbol.Line}");
-        return existing;
-    }
-
-    private static HashSet<string> BuildSymbolKindNameKeySet(IReadOnlyList<SymbolRecord> symbols)
-    {
-        var existing = new HashSet<string>(symbols.Count, StringComparer.Ordinal);
-        foreach (var symbol in symbols)
-            existing.Add($"{symbol.Kind}:{symbol.Name}");
+            existing.Add(new SymbolKindNameIdentity(symbol.Kind, symbol.Name));
         return existing;
     }
 
@@ -3666,7 +3716,7 @@ public static partial class SymbolExtractor
         if (properties.Count == 0)
             return;
 
-        var existing = BuildSymbolLineKeySet(symbols);
+        var existing = BuildSymbolLineIdentities(symbols);
 
         foreach (var property in properties)
         {
@@ -3688,8 +3738,8 @@ public static partial class SymbolExtractor
 
                 var accessorName = accessorMatch.Groups["name"].Value;
                 var symbolName = $"{property.Name}.{accessorName}";
-                var key = $"accessor:{symbolName}:{accessorLine + 1}";
-                if (!existing.Add(key))
+                var identity = new SymbolLineIdentity(fileId, accessorLine + 1, "accessor", symbolName);
+                if (!existing.Add(identity))
                     continue;
 
                 var accessorBodyEndLine = accessorLine;
@@ -3741,7 +3791,7 @@ public static partial class SymbolExtractor
         if (properties.Count == 0)
             return;
 
-        var existing = BuildSymbolLineKeySet(symbols);
+        var existing = BuildSymbolLineIdentities(symbols);
 
         foreach (var property in properties)
         {
@@ -3788,8 +3838,8 @@ public static partial class SymbolExtractor
 
                     var accessorName = accessorMatch.Groups["name"].Value;
                     var symbolName = $"{property.Name}.{accessorName}";
-                    var key = $"accessor:{symbolName}:{accessorLine + 1}";
-                    if (!existing.Add(key))
+                    var identity = new SymbolLineIdentity(fileId, accessorLine + 1, "accessor", symbolName);
+                    if (!existing.Add(identity))
                         continue;
 
                     sawAccessor = true;
@@ -3830,13 +3880,13 @@ public static partial class SymbolExtractor
         long fileId,
         string[] lines,
         List<SymbolRecord> symbols,
-        HashSet<string> existing,
+        HashSet<SymbolLineIdentity> existing,
         SymbolRecord property,
         string propertyLine)
     {
         var projectedName = "$" + property.Name.Trim('`');
-        var key = $"property:{projectedName}:{property.Line}";
-        if (!existing.Add(key))
+        var identity = new SymbolLineIdentity(fileId, property.Line, "property", projectedName);
+        if (!existing.Add(identity))
             return;
 
         symbols.Add(new SymbolRecord
@@ -3962,7 +4012,7 @@ public static partial class SymbolExtractor
         if (!LinesContain(lines, "friend", StringComparison.Ordinal))
             return;
 
-        var declared = BuildSymbolKindNameKeySet(symbols);
+        var declared = BuildSymbolKindNameIdentities(symbols);
         var inBlockComment = false;
 
         for (var i = 0; i < lines.Length; i++)
@@ -4125,14 +4175,14 @@ public static partial class SymbolExtractor
         long fileId,
         List<SymbolRecord> symbols,
         SymbolExtractionState extractionState,
-        HashSet<string> declared,
+        HashSet<SymbolKindNameIdentity> declared,
         string kind,
         string name,
         int lineNumber,
         int startColumn,
         string line)
     {
-        if (name.Length == 0 || !declared.Add($"{kind}:{name}"))
+        if (name.Length == 0 || !declared.Add(new SymbolKindNameIdentity(kind, name)))
             return;
 
         AddSymbolRecord(
@@ -4369,6 +4419,7 @@ public static partial class SymbolExtractor
     }
 
     private readonly record struct SymbolLineIdentity(long FileId, int Line, string Kind, string Name);
+    private readonly record struct SymbolKindNameIdentity(string Kind, string Name);
 
     private sealed class SymbolLineIdentityState
     {
@@ -4545,7 +4596,7 @@ public static partial class SymbolExtractor
 
     private static void AddSymbolRecord(
         List<SymbolRecord> symbols,
-        HashSet<string>? cssSeenSymbols,
+        HashSet<SymbolLineIdentity>? cssSeenSymbols,
         int lineNumber,
         SymbolRecord symbol,
         string? rawLine = null) =>
@@ -4554,7 +4605,7 @@ public static partial class SymbolExtractor
     private static void AddSymbolRecord(
         List<SymbolRecord> symbols,
         SymbolExtractionState extractionState,
-        HashSet<string>? cssSeenSymbols,
+        HashSet<SymbolLineIdentity>? cssSeenSymbols,
         int lineNumber,
         SymbolRecord symbol,
         string? rawLine = null)
@@ -4564,8 +4615,8 @@ public static partial class SymbolExtractor
 
         if (cssSeenSymbols != null)
         {
-            var key = $"{lineNumber}:{symbol.Kind}:{symbol.Name}";
-            if (!cssSeenSymbols.Add(key))
+            var identity = new SymbolLineIdentity(symbol.FileId, lineNumber, symbol.Kind, symbol.Name);
+            if (!cssSeenSymbols.Add(identity))
                 return;
         }
 
@@ -5470,6 +5521,7 @@ public static partial class SymbolExtractor
         string kind,
         string recordName,
         ref List<PendingRecordPrimaryComponents>? pendingRecordPrimaryComponents,
+        ref RecordPrimaryComponentParentIndex? parentIndex,
         List<SymbolRecord> symbols)
     {
         if (lang == "kotlin")
@@ -5493,11 +5545,13 @@ public static partial class SymbolExtractor
             out var declarationEndLine))
             return;
 
-        var parentSymbol = symbols.LastOrDefault(symbol =>
-            symbol.FileId == fileId
-            && symbol.Kind == kind
-            && symbol.Name == recordName
-            && symbol.StartLine == declarationLineIndex + 1);
+        var parentKey = new RecordPrimaryComponentParentKey(
+            fileId,
+            kind,
+            recordName,
+            declarationLineIndex + 1);
+        var parentSymbol = (parentIndex ??= new RecordPrimaryComponentParentIndex())
+            .FindLast(symbols, parentKey);
         if (parentSymbol != null)
             parentSymbol.EndLine = Math.Max(parentSymbol.EndLine, declarationEndLine);
 
@@ -5519,20 +5573,78 @@ public static partial class SymbolExtractor
         if (pendingRecordPrimaryComponents is not { Count: > 0 })
             return;
 
+        var parents = new Dictionary<RecordPrimaryComponentParentKey, SymbolRecord?>();
+        var propertyBuckets = new Dictionary<RecordPrimaryComponentPropertyKey, List<SymbolRecord>>();
         foreach (var pending in pendingRecordPrimaryComponents)
         {
-            var parentSymbol = FindRecordPrimaryComponentParent(symbols, pending);
+            parents.TryAdd(
+                new RecordPrimaryComponentParentKey(
+                    pending.FileId,
+                    pending.Kind,
+                    pending.RecordName,
+                    pending.RecordStartLine),
+                null);
+            propertyBuckets.TryAdd(
+                new RecordPrimaryComponentPropertyKey(
+                    pending.FileId,
+                    pending.Kind,
+                    pending.RecordName),
+                []);
+        }
+
+        // Build both final-state indexes after AssignContainers. Forward overwrite preserves
+        // the previous reverse-search "last parent wins" rule, and property buckets retain
+        // source-list order for overlapping/nested parent ranges.
+        // AssignContainers 後の最終状態から両indexを構築する。forward上書きで従来の
+        // 「最後のparent優先」を保ち、property bucketは重複range向けにlist順を保つ。
+        foreach (var symbol in symbols)
+        {
+            var parentKey = new RecordPrimaryComponentParentKey(
+                symbol.FileId,
+                symbol.Kind,
+                symbol.Name,
+                symbol.StartLine);
+            if (parents.ContainsKey(parentKey))
+                parents[parentKey] = symbol;
+
+            if (symbol.Kind == "property"
+                && symbol.ContainerKind != null
+                && symbol.ContainerName != null
+                && propertyBuckets.TryGetValue(
+                    new RecordPrimaryComponentPropertyKey(
+                        symbol.FileId,
+                        symbol.ContainerKind,
+                        symbol.ContainerName),
+                    out var propertyBucket))
+            {
+                propertyBucket.Add(symbol);
+            }
+        }
+
+        foreach (var pending in pendingRecordPrimaryComponents)
+        {
+            var parentKey = new RecordPrimaryComponentParentKey(
+                pending.FileId,
+                pending.Kind,
+                pending.RecordName,
+                pending.RecordStartLine);
+            var parentSymbol = parents[parentKey];
             if (parentSymbol == null)
                 continue;
 
-            var existingComponentNames = BuildExistingRecordPrimaryComponentNameSet(symbols, pending, parentSymbol);
+            var propertyKey = new RecordPrimaryComponentPropertyKey(
+                pending.FileId,
+                pending.Kind,
+                pending.RecordName);
+            var propertyBucket = propertyBuckets[propertyKey];
+            var existingComponentNames = BuildExistingRecordPrimaryComponentNameSet(propertyBucket, parentSymbol);
 
             foreach (var component in pending.Components)
             {
                 if (!existingComponentNames.Add(component.Name))
                     continue;
 
-                symbols.Add(new SymbolRecord
+                var componentSymbol = new SymbolRecord
                 {
                     FileId = pending.FileId,
                     Kind = "property",
@@ -5545,43 +5657,21 @@ public static partial class SymbolExtractor
                     ContainerName = pending.RecordName,
                     Visibility = component.Visibility ?? "public",
                     ReturnType = component.Type,
-                });
+                };
+                symbols.Add(componentSymbol);
+                propertyBucket.Add(componentSymbol);
             }
         }
-    }
-
-    private static SymbolRecord? FindRecordPrimaryComponentParent(
-        IReadOnlyList<SymbolRecord> symbols,
-        PendingRecordPrimaryComponents pending)
-    {
-        for (var i = symbols.Count - 1; i >= 0; i--)
-        {
-            var symbol = symbols[i];
-            if (symbol.FileId == pending.FileId
-                && symbol.Kind == pending.Kind
-                && symbol.Name == pending.RecordName
-                && symbol.StartLine == pending.RecordStartLine)
-            {
-                return symbol;
-            }
-        }
-
-        return null;
     }
 
     private static HashSet<string> BuildExistingRecordPrimaryComponentNameSet(
-        IReadOnlyList<SymbolRecord> symbols,
-        PendingRecordPrimaryComponents pending,
+        IReadOnlyList<SymbolRecord> propertyCandidates,
         SymbolRecord parentSymbol)
     {
         var existingComponentNames = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var symbol in symbols)
+        foreach (var symbol in propertyCandidates)
         {
-            if (symbol.FileId == pending.FileId
-                && symbol.Kind == "property"
-                && symbol.ContainerKind == pending.Kind
-                && symbol.ContainerName == pending.RecordName
-                && symbol.StartLine >= parentSymbol.StartLine
+            if (symbol.StartLine >= parentSymbol.StartLine
                 && symbol.EndLine <= parentSymbol.EndLine)
             {
                 existingComponentNames.Add(symbol.Name);
@@ -7047,17 +7137,45 @@ public static partial class SymbolExtractor
         return -1;
     }
 
+    private readonly record struct DeclaredContainerIdentity(long FileId, string Kind, string Name);
+
     private static void PopulateDeclaredContainerQualifiedNames(List<SymbolRecord> symbols)
     {
+        var requestedContainers = new HashSet<DeclaredContainerIdentity>();
         foreach (var symbol in symbols)
         {
-            if (symbol.ContainerKind == null
-                || symbol.ContainerName == null)
-            {
-                continue;
-            }
+            if (symbol.ContainerKind != null && symbol.ContainerName != null)
+                requestedContainers.Add(new DeclaredContainerIdentity(symbol.FileId, symbol.ContainerKind, symbol.ContainerName));
+        }
 
-            var container = FindDeclaredContainerSymbol(symbols, symbol);
+        if (requestedContainers.Count == 0)
+            return;
+
+        var declaredContainers = new Dictionary<DeclaredContainerIdentity, List<SymbolRecord>>(requestedContainers.Count);
+        foreach (var candidate in symbols)
+        {
+            var identity = new DeclaredContainerIdentity(candidate.FileId, candidate.Kind, candidate.Name);
+            if (!requestedContainers.Contains(identity))
+                continue;
+
+            if (!declaredContainers.TryGetValue(identity, out var candidates))
+            {
+                candidates = [];
+                declaredContainers.Add(identity, candidates);
+            }
+            candidates.Add(candidate);
+        }
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.ContainerKind == null || symbol.ContainerName == null)
+                continue;
+
+            var identity = new DeclaredContainerIdentity(symbol.FileId, symbol.ContainerKind, symbol.ContainerName);
+            if (!declaredContainers.TryGetValue(identity, out var candidates))
+                continue;
+
+            var container = FindDeclaredContainerSymbol(candidates, symbol);
             if (container == null)
                 continue;
 
@@ -7067,15 +7185,12 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static SymbolRecord? FindDeclaredContainerSymbol(IReadOnlyList<SymbolRecord> symbols, SymbolRecord symbol)
+    private static SymbolRecord? FindDeclaredContainerSymbol(IReadOnlyList<SymbolRecord> candidates, SymbolRecord symbol)
     {
         SymbolRecord? best = null;
-        foreach (var candidate in symbols)
+        foreach (var candidate in candidates)
         {
-            if (candidate.FileId != symbol.FileId
-                || candidate.Kind != symbol.ContainerKind
-                || candidate.Name != symbol.ContainerName
-                || candidate.StartLine > symbol.StartLine
+            if (candidate.StartLine > symbol.StartLine
                 || candidate.EndLine < symbol.EndLine)
             {
                 continue;

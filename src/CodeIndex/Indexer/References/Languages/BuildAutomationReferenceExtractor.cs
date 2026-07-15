@@ -59,7 +59,7 @@ internal static class BuildAutomationReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         SymbolRecord? container)
     {
@@ -85,7 +85,7 @@ internal static class BuildAutomationReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         SymbolRecord? container)
     {
@@ -130,7 +130,7 @@ internal static class BuildAutomationReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         SymbolRecord? container)
     {
@@ -171,7 +171,7 @@ internal static class BuildAutomationReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         SymbolRecord? container)
     {
@@ -203,7 +203,7 @@ internal static class BuildAutomationReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         SymbolRecord? container)
     {
@@ -355,7 +355,7 @@ internal static class BuildAutomationReferenceExtractor
 
     private static void AddReference(
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         Match match,
         string referenceKind,
@@ -376,7 +376,7 @@ internal static class BuildAutomationReferenceExtractor
 
     private static void AddReference(
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         BuildToken token,
         string referenceKind,

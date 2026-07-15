@@ -57,7 +57,7 @@ internal static class ScalaReferenceExtractor
     public static void EmitAdditionalReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -134,7 +134,7 @@ internal static class ScalaReferenceExtractor
     public static void EmitMethodReferenceReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,

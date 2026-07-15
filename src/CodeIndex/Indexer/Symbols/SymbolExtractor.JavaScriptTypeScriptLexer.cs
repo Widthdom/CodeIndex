@@ -188,7 +188,7 @@ public static partial class SymbolExtractor
                 state = state with
                 {
                     PreviousTokenKind = JavaScriptPrevTokenKind.Other,
-                    PreviousIdentifier = null
+                    PreviousIdentifierAllowsRegex = false
                 };
                 i++;
                 continue;
@@ -200,11 +200,12 @@ public static partial class SymbolExtractor
                 while (i < line.Length && (char.IsLetterOrDigit(line[i]) || line[i] == '_' || line[i] == '$'))
                     i++;
 
+                var identifier = line.AsSpan(tokenStart, i - tokenStart);
                 state = state with
                 {
                     PreviousTokenKind = JavaScriptPrevTokenKind.Identifier,
-                    PreviousIdentifier = line[tokenStart..i],
-                    ExpectingControlFlowOpenParen = IsJavaScriptControlFlowKeyword(line[tokenStart..i])
+                    PreviousIdentifierAllowsRegex = IsJavaScriptRegexPrefixKeyword(identifier),
+                    ExpectingControlFlowOpenParen = IsJavaScriptControlFlowKeyword(identifier)
                 };
                 continue;
             }
@@ -218,7 +219,7 @@ public static partial class SymbolExtractor
                 state = state with
                 {
                     PreviousTokenKind = JavaScriptPrevTokenKind.Number,
-                    PreviousIdentifier = null,
+                    PreviousIdentifierAllowsRegex = false,
                     ExpectingControlFlowOpenParen = false
                 };
                 continue;
@@ -257,7 +258,7 @@ public static partial class SymbolExtractor
                         '}' => JavaScriptPrevTokenKind.CloseBrace,
                         _ => JavaScriptPrevTokenKind.Other
                     },
-                    PreviousIdentifier = null,
+                    PreviousIdentifierAllowsRegex = false,
                     ExpectingControlFlowOpenParen = false,
                     ControlFlowParenDepth = controlFlowParenDepth,
                     RegexAllowedAfterControlFlowParen = regexAllowedAfterControlFlowParen
@@ -279,9 +280,7 @@ public static partial class SymbolExtractor
             return true;
 
         if (state.PreviousTokenKind == JavaScriptPrevTokenKind.Identifier)
-        {
-            return IsJavaScriptRegexPrefixKeyword(state.PreviousIdentifier);
-        }
+            return state.PreviousIdentifierAllowsRegex;
 
         if (state.PreviousTokenKind == JavaScriptPrevTokenKind.CloseParen)
             return state.RegexAllowedAfterControlFlowParen;
@@ -289,16 +288,32 @@ public static partial class SymbolExtractor
         return false;
     }
 
-    private static bool IsJavaScriptControlFlowKeyword(string identifier)
+    private static bool IsJavaScriptControlFlowKeyword(ReadOnlySpan<char> identifier)
     {
-        return identifier is "if" or "for" or "while" or "switch" or "catch" or "with";
+        return identifier.Length switch
+        {
+            2 => identifier.SequenceEqual("if"),
+            3 => identifier.SequenceEqual("for"),
+            4 => identifier.SequenceEqual("with"),
+            5 => identifier.SequenceEqual("while") || identifier.SequenceEqual("catch"),
+            6 => identifier.SequenceEqual("switch"),
+            _ => false
+        };
     }
 
-    private static bool IsJavaScriptRegexPrefixKeyword(string? identifier)
+    private static bool IsJavaScriptRegexPrefixKeyword(ReadOnlySpan<char> identifier)
     {
-        return identifier is
-            "return" or "throw" or "case" or "delete" or "typeof" or "void" or "new" or
-            "in" or "of" or "instanceof" or "yield" or "await" or "else" or "do" or "finally";
+        return identifier.Length switch
+        {
+            2 => identifier.SequenceEqual("in") || identifier.SequenceEqual("of") || identifier.SequenceEqual("do"),
+            3 => identifier.SequenceEqual("new"),
+            4 => identifier.SequenceEqual("case") || identifier.SequenceEqual("void") || identifier.SequenceEqual("else"),
+            5 => identifier.SequenceEqual("throw") || identifier.SequenceEqual("yield") || identifier.SequenceEqual("await"),
+            6 => identifier.SequenceEqual("return") || identifier.SequenceEqual("delete") || identifier.SequenceEqual("typeof"),
+            7 => identifier.SequenceEqual("finally"),
+            10 => identifier.SequenceEqual("instanceof"),
+            _ => false
+        };
     }
 
     private static int SkipJavaScriptRegexLiteral(string line, char[] sanitized, int slashIndex)

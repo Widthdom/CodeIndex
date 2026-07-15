@@ -5,6 +5,54 @@ namespace CodeIndex.Database;
 
 public partial class DbWriter
 {
+    private const string MutualRecursionValueSql = """
+        CASE
+            WHEN r.is_self_reference = 0
+             AND r.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
+             AND r.container_name IS NOT NULL
+             AND r.container_name <> ''
+             AND r.symbol_name IS NOT NULL
+             AND r.symbol_name <> ''
+             AND (
+                (
+                    r.container_name_folded IS NOT NULL
+                    AND r.container_name_folded <> ''
+                    AND r.symbol_name_folded IS NOT NULL
+                    AND r.symbol_name_folded <> ''
+                    AND EXISTS (
+                        SELECT 1
+                        FROM symbol_references AS reverse
+                        WHERE reverse.is_self_reference = 0
+                          AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
+                          AND reverse.container_name_folded = r.symbol_name_folded
+                          AND reverse.symbol_name_folded = r.container_name_folded
+                    )
+                )
+                OR (
+                    (r.container_name_folded IS NULL OR r.symbol_name_folded IS NULL)
+                    AND EXISTS (
+                        SELECT 1
+                        FROM symbol_references AS reverse
+                        WHERE reverse.is_self_reference = 0
+                          AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
+                          AND reverse.container_name = r.symbol_name COLLATE NOCASE
+                          AND reverse.symbol_name = r.container_name COLLATE NOCASE
+                    )
+                )
+             )
+            THEN 1
+            ELSE 0
+        END
+        """;
+
+    private static readonly string RefreshMutualRecursionFlagsSql = $"""
+        UPDATE symbol_references AS r
+        SET is_mutual_recursion = {MutualRecursionValueSql}
+        -- IS NOT is null-safe and also normalizes legacy non-boolean values.
+        -- IS NOT により NULL と legacy の非boolean値も安全に正規化する。
+        WHERE r.is_mutual_recursion IS NOT ({MutualRecursionValueSql})
+        """;
+
     /// <summary>
     /// Insert indexed references in batches.
     /// インデックス済み参照をバッチ挿入する。
@@ -30,6 +78,9 @@ public partial class DbWriter
         if (references.Count == 0) return;
 
         int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 13);
+        var foldedNameCache = CreateFoldedNameCache(
+            Math.Min(references.Count, rowsPerStatement),
+            namesPerRow: 2);
         var newReferenceLineIds = referenceLinesAreNew
             ? new Dictionary<(long FileId, int Line, string Context), long>()
             : null;
@@ -37,7 +88,6 @@ public partial class DbWriter
         {
             CheckBatchCancellationAndReportProgress("insert_references", i, references.Count, cancellationToken);
             int end = Math.Min(i + rowsPerStatement, references.Count);
-            var foldedNameCache = CreateFoldedNameCache(end - i, namesPerRow: 2);
             // Always open a chunk-scoped transaction or SAVEPOINT so reference_lines and
             // symbol_references share one rollback boundary; without it a mid-chunk failure
             // under an outer transaction would orphan committed reference_lines (#1518).
@@ -52,18 +102,27 @@ public partial class DbWriter
             try
             {
                 var parameterIndex = 0;
+                (long FileId, int Line, string Context)? previousReferenceLineKey = null;
+                var previousReferenceLineId = 0L;
                 for (int j = i; j < end; j++)
                 {
                     var reference = references[j];
                     ValidateReferenceKinds(reference);
-                    var referenceLineId = referenceLineIds[(reference.FileId, reference.Line, reference.Context)];
+                    var referenceLineKey = (reference.FileId, reference.Line, reference.Context);
+                    if (previousReferenceLineKey is not { } previousKey
+                        || !ReferenceLineKeysEqual(previousKey, referenceLineKey))
+                    {
+                        previousReferenceLineId = referenceLineIds[referenceLineKey];
+                        previousReferenceLineKey = referenceLineKey;
+                    }
+
                     cmd.Parameters[parameterIndex++].Value = reference.FileId;
                     cmd.Parameters[parameterIndex++].Value = reference.SymbolName;
                     cmd.Parameters[parameterIndex++].Value = reference.ReferenceKind;
                     cmd.Parameters[parameterIndex++].Value = reference.Line;
                     cmd.Parameters[parameterIndex++].Value = reference.Column;
                     cmd.Parameters[parameterIndex++].Value = DBNull.Value;
-                    cmd.Parameters[parameterIndex++].Value = referenceLineId;
+                    cmd.Parameters[parameterIndex++].Value = previousReferenceLineId;
                     cmd.Parameters[parameterIndex++].Value = (object?)reference.ContainerKind ?? DBNull.Value;
                     cmd.Parameters[parameterIndex++].Value = (object?)reference.ContainerName ?? DBNull.Value;
                     cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(reference.SymbolName, foldedNameCache);
@@ -85,7 +144,7 @@ public partial class DbWriter
         if (refreshMutualRecursionFlags)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            RefreshMutualRecursionFlags();
+            RefreshMutualRecursionFlags(cancellationToken);
         }
     }
 
@@ -93,11 +152,18 @@ public partial class DbWriter
     {
         var batchCount = end - start;
         var referenceLineKeys = new HashSet<(long FileId, int Line, string Context)>(batchCount);
+        (long FileId, int Line, string Context)? previousReferenceLineKey = null;
         for (int i = start; i < end; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var reference = references[i];
-            referenceLineKeys.Add((reference.FileId, reference.Line, reference.Context));
+            var referenceLineKey = (reference.FileId, reference.Line, reference.Context);
+            if (previousReferenceLineKey is not { } previousKey
+                || !ReferenceLineKeysEqual(previousKey, referenceLineKey))
+            {
+                referenceLineKeys.Add(referenceLineKey);
+                previousReferenceLineKey = referenceLineKey;
+            }
         }
 
         var rows = referenceLineKeys.ToArray();
@@ -108,7 +174,7 @@ public partial class DbWriter
             int batchEnd = Math.Min(i + rowsPerStatement, rows.Length);
             var statementRowCount = batchEnd - i;
             var sql = ReferenceLineUpsertSqlCache.GetOrAdd(statementRowCount, static count => BuildReferenceLineUpsertSql(count));
-            var cmd = RentCommand(sql, c => AddReferenceLineParameters(c, statementRowCount, "@fid", "@line", "@context"));
+            var cmd = RentCommand(sql, c => AddReferenceLineParameters(c, statementRowCount));
             try
             {
                 AssignReferenceLineParameterValues(cmd, rows, i, batchEnd);
@@ -130,7 +196,7 @@ public partial class DbWriter
             var sql = ReferenceLineLookupSqlCache.GetOrAdd(statementRowCount, static count => BuildReferenceLineLookupSql(count));
             var cmd = RentCommand(
                 sql,
-                c => AddReferenceLineParameters(c, statementRowCount, "@lookupFid", "@lookupLine", "@lookupContext"));
+                c => AddReferenceLineParameters(c, statementRowCount));
             try
             {
                 AssignReferenceLineParameterValues(cmd, rows, i, keyEnd);
@@ -163,11 +229,18 @@ public partial class DbWriter
     {
         var batchCount = end - start;
         var referenceLineKeys = new HashSet<(long FileId, int Line, string Context)>(batchCount);
+        (long FileId, int Line, string Context)? previousReferenceLineKey = null;
         for (int i = start; i < end; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var reference = references[i];
-            referenceLineKeys.Add((reference.FileId, reference.Line, reference.Context));
+            var referenceLineKey = (reference.FileId, reference.Line, reference.Context);
+            if (previousReferenceLineKey is not { } previousKey
+                || !ReferenceLineKeysEqual(previousKey, referenceLineKey))
+            {
+                referenceLineKeys.Add(referenceLineKey);
+                previousReferenceLineKey = referenceLineKey;
+            }
         }
 
         var lineIds = new Dictionary<(long FileId, int Line, string Context), long>(referenceLineKeys.Count);
@@ -187,7 +260,7 @@ public partial class DbWriter
             int batchEnd = Math.Min(i + rowsPerStatement, rows.Count);
             var statementRowCount = batchEnd - i;
             var sql = ReferenceLineInsertSqlCache.GetOrAdd(statementRowCount, static count => BuildReferenceLineInsertSql(count));
-            var cmd = RentCommand(sql, c => AddReferenceLineParameters(c, statementRowCount, "@fid", "@line", "@context"));
+            var cmd = RentCommand(sql, c => AddReferenceLineParameters(c, statementRowCount));
             try
             {
                 AssignReferenceLineParameterValues(cmd, rows, i, batchEnd);
@@ -212,53 +285,29 @@ public partial class DbWriter
         return lineIds;
     }
 
-    internal void RefreshMutualRecursionFlags()
+    private static bool ReferenceLineKeysEqual(
+        (long FileId, int Line, string Context) left,
+        (long FileId, int Line, string Context) right)
+        => left.FileId == right.FileId
+           && left.Line == right.Line
+           && string.Equals(left.Context, right.Context, StringComparison.Ordinal);
+
+    internal void RefreshMutualRecursionFlags(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         MutualRecursionRefreshForTesting?.Invoke();
-        var cmd = RentCommand(
-            @"
-            UPDATE symbol_references AS r
-            SET is_mutual_recursion = CASE
-                WHEN r.is_self_reference = 0
-                 AND r.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
-                 AND r.container_name IS NOT NULL
-                 AND r.container_name <> ''
-                 AND r.symbol_name IS NOT NULL
-                 AND r.symbol_name <> ''
-                 AND (
-                    (
-                        r.container_name_folded IS NOT NULL
-                        AND r.container_name_folded <> ''
-                        AND r.symbol_name_folded IS NOT NULL
-                        AND r.symbol_name_folded <> ''
-                        AND EXISTS (
-                            SELECT 1
-                            FROM symbol_references AS reverse
-                            WHERE reverse.is_self_reference = 0
-                              AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
-                              AND reverse.container_name_folded = r.symbol_name_folded
-                              AND reverse.symbol_name_folded = r.container_name_folded
-                        )
-                    )
-                    OR (
-                        (r.container_name_folded IS NULL OR r.symbol_name_folded IS NULL)
-                        AND EXISTS (
-                            SELECT 1
-                            FROM symbol_references AS reverse
-                            WHERE reverse.is_self_reference = 0
-                              AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
-                              AND reverse.container_name = r.symbol_name COLLATE NOCASE
-                              AND reverse.symbol_name = r.container_name COLLATE NOCASE
-                        )
-                    )
-                 )
-                THEN 1
-                ELSE 0
-            END",
-            static _ => { });
+        cancellationToken.ThrowIfCancellationRequested();
+        var cmd = RentCommand(RefreshMutualRecursionFlagsSql, static _ => { });
         try
         {
+            using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             cmd.ExecuteNonQuery();
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch (SqliteException ex) when (IsSqliteInterruptCancellation(ex, cancellationToken))
+        {
+            throw new OperationCanceledException("Mutual recursion refresh was interrupted.", ex, cancellationToken);
         }
         finally
         {

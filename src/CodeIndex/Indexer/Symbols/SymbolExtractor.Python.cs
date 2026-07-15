@@ -642,9 +642,7 @@ public static partial class SymbolExtractor
         string[] lines,
         List<SymbolRecord> symbols)
     {
-        var seen = new HashSet<string>(symbols.Count, StringComparer.Ordinal);
-        foreach (var symbol in symbols)
-            seen.Add($"{symbol.Line}:{symbol.Kind}:{symbol.Name}");
+        var seen = BuildSymbolLineIdentities(symbols);
 
         for (var i = 0; i < lines.Length; i++)
         {
@@ -658,8 +656,8 @@ public static partial class SymbolExtractor
                 if (name is "if" or "while" or "for")
                     continue;
 
-                var key = $"{i + 1}:property:{name}";
-                if (!seen.Add(key))
+                var identity = new SymbolLineIdentity(fileId, i + 1, "property", name);
+                if (!seen.Add(identity))
                     continue;
 
                 AddSymbolRecord(

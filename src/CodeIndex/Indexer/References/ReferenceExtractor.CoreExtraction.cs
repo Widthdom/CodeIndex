@@ -132,6 +132,12 @@ public static partial class ReferenceExtractor
             IReadOnlyDictionary<(int Line, string Kind), SymbolRecord>? DefinitionContainersByLineAndKind,
             IReadOnlyDictionary<int, SymbolRecord>? HeaderSymbolsByLine) pythonSymbolLookups = default;
         var pythonSymbolLookupsResolved = false;
+        HashSet<string>? pythonClassNames = null;
+        var pythonClassNamesResolved = false;
+        PythonImportBindingResolver.ImportedTypeCallLookup? pythonImportedTypeCallLookup = null;
+        HashSet<(string Container, string Name)>? csharpPrivateProperties = null;
+        var csharpPrivatePropertiesResolved = false;
+        Dictionary<string, List<SymbolRecord>>? csharpContainerCandidatesByName = null;
         var swiftPropertyDefinitionsByLine = language == "swift"
             ? BuildSwiftPropertyDefinitionsByLine(language, symbols, request.ReportDiagnostic)
             : null;
@@ -201,6 +207,76 @@ public static partial class ReferenceExtractor
         var csharpValueReceiverLookupsResolved = false;
         IReadOnlyDictionary<string, List<PowerShellReferenceExtractor.SplatAssignment>>? powershellSplatAssignments = null;
         var powershellSplatAssignmentsResolved = false;
+
+        bool HasSameFilePythonClass(string candidate, string leaf)
+        {
+            if (!pythonClassNamesResolved)
+            {
+                foreach (var symbol in symbols)
+                {
+                    if (symbol.Kind == "class")
+                        (pythonClassNames ??= new HashSet<string>(StringComparer.Ordinal)).Add(symbol.Name);
+                }
+                pythonClassNamesResolved = true;
+            }
+
+            return pythonClassNames != null
+                && (pythonClassNames.Contains(candidate) || pythonClassNames.Contains(leaf));
+        }
+
+        PythonImportBindingResolver.ImportedTypeCallLookup GetPythonImportedTypeCallLookup()
+            => pythonImportedTypeCallLookup ??= PythonImportBindingResolver.BuildImportedTypeCallLookup(symbols);
+
+        bool HasCSharpPrivateProperty(string containingType, string propertyName)
+        {
+            if (!csharpPrivatePropertiesResolved)
+            {
+                foreach (var symbol in symbols)
+                {
+                    if (symbol.Kind == "property"
+                        && symbol.ContainerQualifiedName != null
+                        && string.Equals(symbol.Visibility, "private", StringComparison.OrdinalIgnoreCase))
+                    {
+                        (csharpPrivateProperties ??= []).Add((symbol.ContainerQualifiedName, symbol.Name));
+                    }
+                }
+                csharpPrivatePropertiesResolved = true;
+            }
+
+            return csharpPrivateProperties?.Contains((containingType, propertyName)) == true;
+        }
+
+        SymbolRecord? FindCSharpContainerCandidate(string? containerName, int lineNumber)
+        {
+            if (containerName == null)
+                return null;
+
+            if (csharpContainerCandidatesByName == null)
+            {
+                csharpContainerCandidatesByName = new Dictionary<string, List<SymbolRecord>>(StringComparer.Ordinal);
+                foreach (var candidate in containerCandidates)
+                {
+                    if (!csharpContainerCandidatesByName.TryGetValue(candidate.Name, out var candidates))
+                    {
+                        candidates = [];
+                        csharpContainerCandidatesByName.Add(candidate.Name, candidates);
+                    }
+                    candidates.Add(candidate);
+                }
+            }
+
+            if (!csharpContainerCandidatesByName.TryGetValue(containerName, out var namedCandidates))
+                return null;
+
+            foreach (var candidate in namedCandidates)
+            {
+                if (candidate.BodyStartLine <= lineNumber && candidate.BodyEndLine >= lineNumber)
+                    return candidate;
+            }
+
+            return null;
+        }
+
         // Workspace-wide same-name type rescue needs cross-file visibility, so the
         // extractor leaves ambiguous unqualified using-static pattern heads for the
         // read path to disambiguate.
@@ -396,11 +472,11 @@ public static partial class ReferenceExtractor
                 reference.IsSelfReference = IsSameReferenceName(reference.ContainerName, resolvedName);
             }
 
-            var deduped = new HashSet<string>(StringComparer.Ordinal);
+            var deduped = new HashSet<ReferenceDedupeKey>();
             for (var index = 0; index < references.Count;)
             {
                 var reference = references[index];
-                var key = BuildReferenceDedupeKey(
+                var key = CreateReferenceDedupeKey(
                     reference.FileId,
                     language,
                     reference.Line,
@@ -491,7 +567,7 @@ public static partial class ReferenceExtractor
             return null;
         }
 
-        void EmitCSharpBclRegexWithoutTimeoutReferences(List<ReferenceRecord> references, HashSet<string> seen)
+        void EmitCSharpBclRegexWithoutTimeoutReferences(List<ReferenceRecord> references, ReferenceDedupeSet seen)
         {
             if (language != "csharp")
                 return;
@@ -516,7 +592,7 @@ public static partial class ReferenceExtractor
                     Kind = reference.ContainerKind ?? string.Empty,
                     Name = reference.ContainerName ?? string.Empty,
                 };
-                var dedupeKey = BuildReferenceDedupeKey(
+                var dedupeKey = CreateReferenceDedupeKey(
                     reference.FileId,
                     language,
                     reference.Line,
@@ -2272,11 +2348,7 @@ public static partial class ReferenceExtractor
                         if (containingType != null
                             && receiverLookups.ByContainingType.TryGetValue(containingType, out var receiverNames)
                             && (receiverNames.InstanceNames.Contains(normalizedName) || receiverNames.StaticNames.Contains(normalizedName))
-                            && symbols.Any(symbol =>
-                                symbol.Kind == "property"
-                                && symbol.Name == normalizedName
-                                && symbol.ContainerQualifiedName == containingType
-                                && string.Equals(symbol.Visibility, "private", StringComparison.OrdinalIgnoreCase)))
+                            && HasCSharpPrivateProperty(containingType, normalizedName))
                         {
                             references.RemoveAll(reference =>
                                 reference.FileId == fileId
@@ -2380,13 +2452,17 @@ public static partial class ReferenceExtractor
                     if (leaf.Length == 0 || !char.IsUpper(leaf, 0))
                         return false;
 
-                    if (symbols.Any(symbol => symbol.Kind == "class"
-                        && (symbol.Name == candidate || symbol.Name == leaf)))
+                    if (HasSameFilePythonClass(candidate, leaf))
                     {
                         return true;
                     }
 
-                    return PythonImportBindingResolver.TryResolveImportedTypeCall(candidate, preparedLine, callIndex, symbols, out canonicalName);
+                    return PythonImportBindingResolver.TryResolveImportedTypeCall(
+                        candidate,
+                        preparedLine,
+                        callIndex,
+                        GetPythonImportedTypeCallLookup(),
+                        out canonicalName);
                 }
             }
 
@@ -3321,16 +3397,9 @@ public static partial class ReferenceExtractor
                 if (tokenEnd >= line.Length || !line.AsSpan(tokenEnd).TrimStart().StartsWith(".", StringComparison.Ordinal))
                     continue;
 
-                var owner = containerCandidates.FirstOrDefault(candidate =>
-                    candidate.Name == reference.ContainerName
-                    && candidate.BodyStartLine <= reference.Line
-                    && candidate.BodyEndLine >= reference.Line);
+                var owner = FindCSharpContainerCandidate(reference.ContainerName, reference.Line);
                 var containingType = GetContainingTypeQualifiedName(owner);
-                if (containingType == null || !symbols.Any(symbol =>
-                        symbol.Kind == "property"
-                        && symbol.Name == reference.SymbolName
-                        && symbol.ContainerQualifiedName == containingType
-                        && string.Equals(symbol.Visibility, "private", StringComparison.OrdinalIgnoreCase)))
+                if (containingType == null || !HasCSharpPrivateProperty(containingType, reference.SymbolName))
                 {
                     continue;
                 }

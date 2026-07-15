@@ -464,13 +464,20 @@ public partial class ReferenceExtractorTests
         var rightKey = ReferenceExtractor.BuildReferenceDedupeKey(1, "csharp", 3, 5, "call", "Bar", rightContainer);
 
         Assert.NotEqual(leftKey, rightKey);
+
+        var seen = new ReferenceDedupeSet();
+        var leftValueKey = ReferenceExtractor.CreateReferenceDedupeKey(1, "csharp", 3, 5, "call", "Bar", leftContainer);
+        var rightValueKey = ReferenceExtractor.CreateReferenceDedupeKey(1, "csharp", 3, 5, "call", "Bar", rightContainer);
+        Assert.True(seen.Add(leftValueKey));
+        Assert.False(seen.Add(leftValueKey));
+        Assert.True(seen.Add(rightValueKey));
     }
 
     [Fact]
     public void AddTypeReferenceSegment_DedupesWithinFileAndLanguageOnly()
     {
         var references = new List<ReferenceRecord>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var seen = new ReferenceDedupeSet();
 
         ReferenceExtractor.AddTypeReferenceSegment(references, seen, 1, "Runner", 4, "Runner value", 7, null, "java");
         ReferenceExtractor.AddTypeReferenceSegment(references, seen, 1, "Runner", 4, "Runner value", 7, null, "java");

@@ -7,7 +7,7 @@ internal static class PascalReferenceExtractor
     public static void EmitTypePositionReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -38,7 +38,7 @@ internal static class PascalReferenceExtractor
             preparedLine,
             addCallLikeReference,
             [],
-            [],
+            new ReferenceDedupeSet(),
             0,
             string.Empty,
             0,

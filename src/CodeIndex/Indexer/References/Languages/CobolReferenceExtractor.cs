@@ -157,7 +157,7 @@ internal static class CobolReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         SymbolRecord? container,
         IReadOnlyList<SymbolRecord>? cobolCallableSymbols)
@@ -191,7 +191,7 @@ internal static class CobolReferenceExtractor
         StatementPattern pattern,
         string rawLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -203,7 +203,7 @@ internal static class CobolReferenceExtractor
 
     private static void EmitNamedReference(
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         Match match,
         string referenceKind,
@@ -234,7 +234,7 @@ internal static class CobolReferenceExtractor
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         SymbolRecord? container)
     {

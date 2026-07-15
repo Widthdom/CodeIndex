@@ -61,10 +61,10 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var seen = new HashSet<RustUseSymbolOccurrence>();
             foreach (var occurrence in occurrences)
             {
-                if (!seen.Add($"{occurrence.Name}@{occurrence.Line}:{occurrence.Column}"))
+                if (!seen.Add(occurrence))
                     continue;
 
                 AddRustUseSymbolOccurrence(fileId, lines, symbols, extractionState, symbolLineIdentities, statement, occurrence);

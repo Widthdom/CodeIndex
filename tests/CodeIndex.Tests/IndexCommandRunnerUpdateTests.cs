@@ -19,6 +19,116 @@ namespace CodeIndex.Tests;
 public partial class IndexCommandRunnerTests
 {
     [Fact]
+    public void Run_UpdateMode_RefreshesMutualRecursionOncePerBatchIncludingDeleteOnly()
+    {
+        var projectRoot = CreateTempProject();
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
+        var refreshCount = 0;
+        try
+        {
+            var firstPath = Path.Combine(projectRoot, "MutualRecursionA.cs");
+            var secondPath = Path.Combine(projectRoot, "MutualRecursionB.cs");
+            File.WriteAllText(
+                firstPath,
+                "public static class MutualRecursionA { public static void CrossCycleA() { CrossCycleB(); } }\n");
+            File.WriteAllText(
+                secondPath,
+                "public static class MutualRecursionB { public static void CrossCycleB() { CrossCycleA(); } }\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(2, CountMutualRecursionReferences(dbPath));
+
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                refreshCount++;
+                previousRefreshHook?.Invoke();
+            };
+
+            File.AppendAllText(firstPath, "// changed A\n");
+            File.AppendAllText(secondPath, "// changed B\n");
+            File.SetLastWriteTimeUtc(firstPath, DateTime.UtcNow.AddSeconds(2));
+            File.SetLastWriteTimeUtc(secondPath, DateTime.UtcNow.AddSeconds(2));
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "MutualRecursionA.cs", "MutualRecursionB.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(2, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, refreshCount);
+            Assert.Equal(2, CountMutualRecursionReferences(dbPath));
+
+            refreshCount = 0;
+            File.Delete(secondPath);
+
+            var (deleteExitCode, deleteJson) = RunAndCaptureJson(
+                [projectRoot, "--files", "MutualRecursionB.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, deleteExitCode);
+            Assert.Equal(1, deleteJson.GetProperty("summary").GetProperty("removed").GetInt32());
+            Assert.Equal(1, refreshCount);
+            Assert.Equal(0, CountMutualRecursionReferences(dbPath));
+        }
+        finally
+        {
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_CancelledDuringMutualRecursionRefresh_LeavesReadinessDegraded()
+    {
+        var projectRoot = CreateTempProject();
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
+        using var cancellation = new CancellationTokenSource();
+        var hookInvoked = false;
+        try
+        {
+            var firstPath = Path.Combine(projectRoot, "MutualRecursionA.cs");
+            var secondPath = Path.Combine(projectRoot, "MutualRecursionB.cs");
+            File.WriteAllText(
+                firstPath,
+                "public static class MutualRecursionA { public static void CrossCycleA() { CrossCycleB(); } }\n");
+            File.WriteAllText(
+                secondPath,
+                "public static class MutualRecursionB { public static void CrossCycleB() { CrossCycleA(); } }\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.AppendAllText(firstPath, "// changed A\n");
+            File.AppendAllText(secondPath, "// changed B\n");
+            File.SetLastWriteTimeUtc(firstPath, DateTime.UtcNow.AddSeconds(2));
+            File.SetLastWriteTimeUtc(secondPath, DateTime.UtcNow.AddSeconds(2));
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                hookInvoked = true;
+                cancellation.Cancel();
+                previousRefreshHook?.Invoke();
+            };
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRoot, "--files", "MutualRecursionA.cs", "MutualRecursionB.cs", "--json"],
+                cancellation);
+
+            Assert.True(hookInvoked);
+            Assert.Equal(CommandExitCodes.Interrupted, exitCode);
+            Assert.Equal(CommandErrorCodes.Interrupted, json.GetProperty("error_code").GetString());
+            using var db = new DbContext(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Equal(0, db.GetUserVersion());
+        }
+        finally
+        {
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_RejectsNewSymbolKindFilterPolicy()
     {
         var projectRoot = CreateTempProject();
@@ -338,6 +448,85 @@ public partial class IndexCommandRunnerTests
         {
             DeleteDirectory(projectRootA);
             DeleteDirectory(projectRootB);
+            SqliteConnection.ClearAllPools();
+            DeleteFile(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_UnsupportedReferencePurgeAndReadinessDemotionRollBackTogether()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_stale_refs_atomic_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--db", dbPath, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "legacy/old.toml",
+                    Lang = "toml",
+                    Size = 12,
+                    Lines = 1,
+                    Modified = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "stale-edge-atomic",
+                });
+                writer.InsertReferences([
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = "LegacyLink",
+                        ReferenceKind = "call",
+                        Line = 1,
+                        Column = 1,
+                        Context = "LegacyLink",
+                    },
+                ]);
+            }
+
+            long ReadScalar(string sql)
+            {
+                using var connection = OpenNonPoolingConnection(dbPath);
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = sql;
+                return (long)command.ExecuteScalar()!;
+            }
+
+            var readyVersion = ReadScalar("PRAGMA user_version");
+            Assert.NotEqual(0, readyVersion & DbContext.GraphReadyFlag);
+            Assert.NotEqual(0, readyVersion & DbContext.IssuesReadyFlag);
+            Assert.NotEqual(0, readyVersion & DbContext.FoldReadyFlag);
+            Assert.Equal(1, ReadScalar("SELECT COUNT(*) FROM symbol_references WHERE symbol_name = 'LegacyLink'"));
+
+            using (var connection = OpenNonPoolingConnection(dbPath))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    CREATE TRIGGER fail_readiness_demotion
+                    BEFORE INSERT ON codeindex_meta
+                    BEGIN
+                        SELECT RAISE(FAIL, 'boom');
+                    END;
+                    """;
+                command.ExecuteNonQuery();
+            }
+
+            Assert.Throws<SqliteException>(() =>
+                IndexCommandRunner.Run([projectRoot, "--db", dbPath, "--files", "missing.txt", "--json"], _jsonOptions));
+
+            Assert.Equal(readyVersion, ReadScalar("PRAGMA user_version"));
+            Assert.Equal(1, ReadScalar("SELECT COUNT(*) FROM symbol_references WHERE symbol_name = 'LegacyLink'"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
             DeleteFile(dbPath);
         }

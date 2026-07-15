@@ -235,6 +235,8 @@ public partial class IndexCommandRunnerTests
         int? queueCapacity = null;
         var loadedPaths = new ConcurrentBag<string>();
         var statLookups = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
+        var statSnapshotReads = 0;
+        var foldBackfillVerifications = 0;
         try
         {
             RunGit(projectRoot, "init");
@@ -262,6 +264,8 @@ public partial class IndexCommandRunnerTests
                     IndexCommandRunner.FullScanFileContentLoadForTesting = path => loadedPaths.Add(path);
                     IndexCommandRunner.FullScanExtractionQueueCapacityForTesting = capacity => queueCapacity = capacity;
                     IndexedFileStatReuse.LookupForTesting = path => statLookups.AddOrUpdate(path, 1, static (_, count) => count + 1);
+                    DbWriter.ReusableStatSnapshotReadForTesting = () => statSnapshotReads++;
+                    DbWriter.FoldBackfillVerificationForTesting = () => foldBackfillVerifications++;
 
                     var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
 
@@ -279,6 +283,8 @@ public partial class IndexCommandRunnerTests
                     Assert.Equal(1, statLookups["app.ts"]);
                     Assert.Equal(1, statLookups["feature.cs"]);
                     Assert.All(statLookups, lookup => Assert.Equal(1, lookup.Value));
+                    Assert.Equal(1, statSnapshotReads);
+                    Assert.Equal(1, foldBackfillVerifications);
                 }
                 finally
                 {
@@ -286,11 +292,145 @@ public partial class IndexCommandRunnerTests
                     IndexCommandRunner.FullScanFileContentLoadForTesting = null;
                     IndexCommandRunner.FullScanExtractionQueueCapacityForTesting = null;
                     IndexedFileStatReuse.LookupForTesting = null;
+                    DbWriter.ReusableStatSnapshotReadForTesting = null;
+                    DbWriter.FoldBackfillVerificationForTesting = null;
                 }
             }
         }
         finally
         {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_IncompleteLegacyStatReindexesFile()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_incomplete_legacy_stat");
+        var loadedPaths = new ConcurrentBag<string>();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var connection = OpenNonPoolingConnection(dbPath))
+            using (var command = connection.CreateCommand())
+            {
+                connection.Open();
+                command.CommandText = "UPDATE files SET size = NULL WHERE path = 'app.cs'";
+                Assert.Equal(1, command.ExecuteNonQuery());
+            }
+
+            lock (FullScanContentLoadHookGate)
+            {
+                try
+                {
+                    IndexCommandRunner.FullScanFileContentLoadForTesting = path => loadedPaths.Add(path);
+
+                    var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
+
+                    Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+                    Assert.Equal("success", refreshJson.GetProperty("status").GetString());
+                    Assert.Contains("app.cs", loadedPaths);
+                }
+                finally
+                {
+                    IndexCommandRunner.FullScanFileContentLoadForTesting = null;
+                }
+            }
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+            using var verifyCommand = verify.CreateCommand();
+            verifyCommand.CommandText = "SELECT size FROM files WHERE path = 'app.cs'";
+            Assert.IsType<long>(verifyCommand.ExecuteScalar());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_StatSnapshotObservesCancellationToken()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_stat_snapshot_cancel");
+        using var cancellation = new CancellationTokenSource();
+        var hookInvoked = false;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            lock (FullScanContentLoadHookGate)
+            {
+                try
+                {
+                    DbWriter.ReusableStatSnapshotReadForTesting = () =>
+                    {
+                        hookInvoked = true;
+                        cancellation.Cancel();
+                    };
+
+                    var (exitCode, json) = RunAndCaptureJson(
+                        [projectRoot, "--json"],
+                        cancellation);
+
+                    Assert.True(hookInvoked);
+                    Assert.Equal(CommandExitCodes.Interrupted, exitCode);
+                    Assert.Equal(CommandErrorCodes.Interrupted, json.GetProperty("error_code").GetString());
+                }
+                finally
+                {
+                    DbWriter.ReusableStatSnapshotReadForTesting = null;
+                }
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_CancelledDuringMutualRecursionRefresh_LeavesReadinessDegraded()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_mutual_refresh_cancel");
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
+        using var cancellation = new CancellationTokenSource();
+        var hookInvoked = false;
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "MutualRecursionA.cs"),
+                "public static class MutualRecursionA { public static void CrossCycleA() { CrossCycleB(); } }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "MutualRecursionB.cs"),
+                "public static class MutualRecursionB { public static void CrossCycleB() { CrossCycleA(); } }\n");
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                hookInvoked = true;
+                cancellation.Cancel();
+                previousRefreshHook?.Invoke();
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"], cancellation);
+
+            Assert.True(hookInvoked);
+            Assert.Equal(CommandExitCodes.Interrupted, exitCode);
+            Assert.Equal(CommandErrorCodes.Interrupted, json.GetProperty("error_code").GetString());
+            using var db = new DbContext(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Equal(0, db.GetUserVersion());
+        }
+        finally
+        {
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }

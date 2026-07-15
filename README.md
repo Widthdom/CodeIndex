@@ -103,7 +103,19 @@ The first index does the expensive scan once. After edits, branch switches, or
 CI checkouts, refresh with `cdidx .`, `--files`, `--commits`, or
 `--changed-between` as appropriate. See the [User Guide quick start](USER_GUIDE.md#quick-start)
 and [incremental update reliability](USER_GUIDE.md#incremental-update-reliability)
-for the full workflow.
+for the full workflow. Repository-wide refreshes load unchanged-file metadata
+in one batch, then validate each candidate against the live filesystem instead
+of issuing a SQLite lookup for every file. Successful no-op finalization also
+validates folded lookup rows once inside the readiness-stamp transaction.
+During reference extraction, repeated C# property and Python import/class
+membership checks reuse file-local lookup sets instead of rescanning every
+extracted symbol for each call site.
+C# declaration-container resolution and GitHub Actions job ownership likewise
+use name-indexed candidates instead of a full container scan per reference.
+Dense Python import, GitHub Actions dependency, JSON path, and Fortran procedure
+lists are scanned in place instead of allocating temporary split arrays.
+Across all reference languages, duplicate detection stores structured identity
+keys instead of allocating a concatenated key string for every candidate.
 
 For a faster first pass when you only need text search, `definition`, `symbols`,
 or `map`, run `cdidx . --symbols-only`. Reference graph commands remain degraded
@@ -322,6 +334,17 @@ cdidx lsp --db .cdidx/codeindex.db
 状況に応じて `cdidx .`、`--files`、`--commits`、`--changed-between` で更新します。
 全体の流れは [ユーザーガイドのクイックスタート](USER_GUIDE.md#クイックスタート) と
 [インクリメンタル更新の信頼性](USER_GUIDE.md#インクリメンタル更新の信頼性) を参照してください。
+リポジトリ全体の更新では unchanged-file metadata を一括で読み、file ごとの SQLite lookup を
+繰り返さずに各候補を実 filesystem と照合します。成功する no-op の finalization でも、folded
+lookup row の検証を readiness-stamp transaction 内の 1 回にまとめます。
+reference extraction でも、C# property と Python import / class の反復 membership check は
+call site ごとに全 extracted symbol を再走査せず、file-local な lookup set を再利用します。
+C# declaration-container 解決と GitHub Actions の job ownership も同様に、reference ごとの
+全 container 走査ではなく name-indexed candidate を使います。
+密な Python import、GitHub Actions dependency、JSON path、Fortran procedure list は、
+一時的な split array を作らず入力上で直接走査します。
+全 reference language の重複検出でも、candidate ごとの連結 key string を作らず、
+structured identity key を保持します。
 
 まず text search、`definition`、`symbols`、`map` だけを速く使いたい場合は
 `cdidx . --symbols-only` を使えます。reference graph 系コマンドは、このフラグなしで

@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using CodeIndex.Database;
 
 namespace CodeIndex.Tests;
 
@@ -139,6 +140,16 @@ public sealed class DocumentationDriftTests
         }
 
         Assert.Empty(failures);
+    }
+
+    [Fact]
+    public void PreparedCommandCacheDefault_DocumentationMatchesRuntime()
+    {
+        var content = RepositoryTestPaths.ReadText("DEVELOPER_GUIDE.md");
+        var documentedRow =
+            $"| `CDIDX_PREPARED_COMMAND_CACHE_CAPACITY` | `{PreparedCommandCache.DefaultCapacity}` |";
+
+        Assert.Equal(2, content.Split(documentedRow, StringSplitOptions.None).Length - 1);
     }
 
     [Theory]

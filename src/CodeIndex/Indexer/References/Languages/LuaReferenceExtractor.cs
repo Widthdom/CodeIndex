@@ -126,7 +126,7 @@ internal static class LuaReferenceExtractor
     public static void EmitTypePositionReferences(
         string originalLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -140,7 +140,7 @@ internal static class LuaReferenceExtractor
         string preparedLine,
         Action<string, int> addCallLikeReference,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,

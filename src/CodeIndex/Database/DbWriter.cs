@@ -33,6 +33,7 @@ public partial class DbWriter
     private static readonly AsyncLocal<Action<string>?> ScopedBatchRowSkipWarningForTesting = new();
     private static readonly AsyncLocal<Action<DbWriterBatchProgress>?> ScopedBatchProgressCheckpointForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedMutualRecursionRefreshForTesting = new();
+    private static readonly AsyncLocal<Action?> ScopedCSharpContractPreflightForTesting = new();
     internal static Action<string>? LanguagePresenceCheckForTesting
     {
         get => ScopedLanguagePresenceCheckForTesting.Value;
@@ -75,6 +76,12 @@ public partial class DbWriter
         set => ScopedMutualRecursionRefreshForTesting.Value = value;
     }
 
+    internal static Action? CSharpContractPreflightForTesting
+    {
+        get => ScopedCSharpContractPreflightForTesting.Value;
+        set => ScopedCSharpContractPreflightForTesting.Value = value;
+    }
+
     // Transaction ownership (#4154): the semaphore is held for the outermost writer
     // transaction lifetime. Same-stack nested calls from the owning thread and
     // AsyncLocal token skip the semaphore and become SAVEPOINTs; other flows wait even
@@ -86,6 +93,7 @@ public partial class DbWriter
     private static readonly TimeSpan TransactionStateContentionWaitInterval = TimeSpan.FromMilliseconds(50);
     private const int DeleteFilesBatchSize = 500;
     private const int SqliteConstraintErrorCode = 19;
+    private const int SqliteInterruptErrorCode = 9;
     private const int TypeScriptModuleSyntaxFallbackMaxBytes = (int)FileIndexer.DefaultMaxFileSizeBytes;
     private const int TypeScriptModuleSyntaxFallbackMaxLines = 16384;
     private static readonly ConcurrentDictionary<int, string> ChunkInsertSqlCache = new();
@@ -164,5 +172,18 @@ public partial class DbWriter
     }
 
     private bool IsInTransaction() => _transactionDepth > 0;
+
+    private CancellationTokenRegistration RegisterSqliteInterrupt(CancellationToken cancellationToken)
+        => cancellationToken.UnsafeRegister(
+            static state =>
+            {
+                var connection = (SqliteConnection)state!;
+                SQLitePCL.raw.sqlite3_interrupt(connection.Handle);
+            },
+            _conn);
+
+    private static bool IsSqliteInterruptCancellation(SqliteException exception, CancellationToken cancellationToken)
+        => cancellationToken.IsCancellationRequested
+           && exception.SqliteErrorCode == SqliteInterruptErrorCode;
 
 }

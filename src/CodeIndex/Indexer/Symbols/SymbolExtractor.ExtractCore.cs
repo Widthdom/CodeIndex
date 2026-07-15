@@ -213,8 +213,9 @@ public static partial class SymbolExtractor
         var symbols = new SymbolExtractionList(initialSymbolCapacity);
         var extractionState = symbols.ExtractionState;
         List<PendingRecordPrimaryComponents>? pendingRecordPrimaryComponents = null;
+        RecordPrimaryComponentParentIndex? recordPrimaryComponentParentIndex = null;
         var cssSeenSymbols = lang == "css"
-            ? new HashSet<string>(StringComparer.Ordinal)
+            ? new HashSet<SymbolLineIdentity>()
             : null;
         var dockerfileStageNames = lang == "dockerfile"
             ? new HashSet<string>(StringComparer.Ordinal)
@@ -1233,15 +1234,22 @@ public static partial class SymbolExtractor
                             && name.Contains(',')
                             && signature.Contains("procedure", StringComparison.OrdinalIgnoreCase))
                         {
-                            var names = name.Split(',');
-                            for (var index = 0; index < names.Length; index++)
+                            var names = name.AsSpan();
+                            var nameStart = 0;
+                            while (nameStart <= names.Length)
                             {
-                                var candidate = names[index].Trim();
-                                if (candidate.Length == 0)
-                                    continue;
+                                var separator = names[nameStart..].IndexOf(',');
+                                var nameEnd = separator >= 0 ? nameStart + separator : names.Length;
+                                var candidate = names[nameStart..nameEnd].Trim();
+                                if (candidate.Length > 0)
+                                {
+                                    fortranProcedureNames ??= new List<string>();
+                                    fortranProcedureNames.Add(candidate.ToString());
+                                }
 
-                                fortranProcedureNames ??= new List<string>(names.Length);
-                                fortranProcedureNames.Add(candidate);
+                                if (separator < 0)
+                                    break;
+                                nameStart = nameEnd + 1;
                             }
                         }
 
@@ -1645,6 +1653,7 @@ public static partial class SymbolExtractor
                             kind,
                             name,
                             ref pendingRecordPrimaryComponents,
+                            ref recordPrimaryComponentParentIndex,
                             symbols);
 
                         // C# plain-field (kind `property`, BodyStyle.None) matches need their own

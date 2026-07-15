@@ -328,7 +328,7 @@ public partial class McpServer
             writer.MarkBatchInProgress();
 
         var hadCSharpStaticInterfaceContractsBeforePurge = !startedWithNoIndexedFiles
-            && writer.LoadCSharpStaticInterfaceContractSymbols().Count > 0;
+            && writer.HasCSharpStaticInterfaceContractSymbols(requestToken);
 
         // Purge stale files / 古いファイルをパージ
         var purged = startedWithNoIndexedFiles
@@ -383,26 +383,32 @@ public partial class McpServer
             knownReadableFileSizes[path] = size;
         }
         await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
+        var reusableIndexedFileStats = !rebuild && !startedWithNoIndexedFiles
+            ? writer.LoadReusableIndexedFileStats(
+                maxSymbolsPerFile,
+                maxReferencesPerFile,
+                _currentRequestToken.Value)
+            : null;
         Dictionary<string, IndexedFileStatReuseResult?>? csharpPrepassStatReuse = null;
         bool IsGeneratedExtractionSuppressed(CSharpStaticInterfacePrepass.FileTarget target)
             => target.GeneratedExtractionSuppressed == true;
 
         bool CanReuseCSharpPrepassTargetWithoutRead(CSharpStaticInterfacePrepass.FileTarget target)
         {
-            if (!symbolKindFilterMatchesPrior || !csharpSymbolNameContractMatchesCurrent)
+            if (rebuild
+                || startedWithNoIndexedFiles
+                || !symbolKindFilterMatchesPrior
+                || !csharpSymbolNameContractMatchesCurrent)
                 return false;
             if (target.Language != "csharp")
                 return false;
 
             var existingFile = IndexedFileStatReuse.TryGetReusableUnchangedFile(
-                writer,
+                reusableIndexedFileStats!,
                 target.FilePath,
                 target.IndexPath,
                 target.Language,
-                maxSymbolsPerFile,
-                maxReferencesPerFile,
-                IsGeneratedExtractionSuppressed(target),
-                allowReuse: true);
+                IsGeneratedExtractionSuppressed(target));
             if (existingFile == null)
             {
                 (csharpPrepassStatReuse ??= new Dictionary<string, IndexedFileStatReuseResult?>(
@@ -484,20 +490,18 @@ public partial class McpServer
                     && (target.Language != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                     && (target.Language != "sql" || sqlGraphContractMatchesCurrent)
                     && AllowReuseWithCurrentHotspotFamilyTrust(target.Language, hotspotFamilyTrustMatchesCurrent);
-                var statMatchedFile = allowStatReuse
-                    && target.Language == "csharp"
-                    && csharpPrepassStatReuse != null
-                    && csharpPrepassStatReuse.TryGetValue(target.IndexPath, out var cachedCSharpPrepassReuse)
+                var statMatchedFile = !allowStatReuse
+                    ? null
+                    : target.Language == "csharp"
+                      && csharpPrepassStatReuse != null
+                      && csharpPrepassStatReuse.TryGetValue(target.IndexPath, out var cachedCSharpPrepassReuse)
                         ? cachedCSharpPrepassReuse
                         : IndexedFileStatReuse.TryGetReusableUnchangedFile(
-                            writer,
+                            reusableIndexedFileStats!,
                             filePath,
                             target.IndexPath,
                             target.Language,
-                            maxSymbolsPerFile,
-                            maxReferencesPerFile,
-                            IsGeneratedExtractionSuppressed(target),
-                            allowStatReuse);
+                            IsGeneratedExtractionSuppressed(target));
                 if (statMatchedFile != null)
                 {
                     skipped++;
@@ -761,7 +765,7 @@ public partial class McpServer
         {
             requestToken.ThrowIfCancellationRequested();
             await EmitProgressNotificationAsync(progressToken, processed, files.Count, "Finalizing reference graph.").ConfigureAwait(false);
-            writer.RefreshMutualRecursionFlags();
+            writer.RefreshMutualRecursionFlags(requestToken);
         }
 
         if (ftsBulkLoad != null)
@@ -840,28 +844,27 @@ public partial class McpServer
             // name_folded / *_folded. Stamp only when every row is backfilled; otherwise readers
             // would silently miss legacy rows on the folded-equality path. Codex #86 review.
             // MCP も incremental で skip される legacy 行が残るため、実検証を通してから stamp。
-            var backfillReady = skipped == 0 || writer.AllFoldedColumnsBackfilled();
-            var foldedKeysCurrent = skipped == 0 || writer.AllFoldedColumnValuesMatchCurrentFold();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
             var foldVersionMatchesCurrent = priorFoldVersion == currentFoldVersion;
             var foldFingerprintMatchesCurrent = priorFoldFingerprint == currentFoldFingerprint;
             var canRestampExistingFoldTrust = foldVersionMatchesCurrent && foldFingerprintMatchesCurrent;
-            if (backfillReady && foldedKeysCurrent && (skipped == 0 || canRestampExistingFoldTrust))
+            if (skipped == 0 || canRestampExistingFoldTrust)
             {
-                // MarkFoldReady re-verifies inside BEGIN IMMEDIATE; a concurrent NULL-folded
-                // insert during this restamp window leaves foldReadyAfter=false and degrades
-                // to the legacy "missing_fold_backfill" reason instead of silent misadvertise.
-                // Issue #1535.
-                // BEGIN IMMEDIATE 内で再検証する。concurrent NULL 差し込みで stamp が失敗した
-                // 場合は missing_fold_backfill に降格する。Issue #1535。
-                foldReadyAfter = writer.MarkFoldReady(
+                // The stamp transaction performs the only row verification for the common
+                // current-metadata path and reports whether NULL or stale values blocked it.
+                // current metadata 経路の row 検証は stamp transaction 内の一度だけにまとめ、
+                // NULL と stale value のどちらが妨げたかも保持する。
+                var foldStampResult = writer.MarkFoldReadyWithResult(
                     stampCurrentSymbolExtractorVersions: skipped == 0,
                     symbolExtractorLanguagesToStamp: skipped == 0 ? indexedSymbolExtractorLanguages : null);
-                if (!foldReadyAfter)
+                foldReadyAfter = foldStampResult == FoldReadyStampResult.Ready;
+                if (foldStampResult == FoldReadyStampResult.MissingBackfill)
                     foldReadyReason = DegradationReasonCodes.MissingFoldBackfill;
+                else if (foldStampResult == FoldReadyStampResult.NonCurrentFoldValues)
+                    foldReadyReason = DegradationReasonCodes.FoldRowsNotRestamped;
             }
-            else if (!backfillReady)
+            else if (!writer.AllFoldedColumnsBackfilled())
             {
                 foldReadyReason = DegradationReasonCodes.MissingFoldBackfill;
             }

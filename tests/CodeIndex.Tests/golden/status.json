@@ -208,7 +208,7 @@
   },
   "prepared_command_cache": {
     "count": 0,
-    "capacity": 32,
+    "capacity": 64,
     "hit_count": 0,
     "miss_count": 0,
     "eviction_count": 0

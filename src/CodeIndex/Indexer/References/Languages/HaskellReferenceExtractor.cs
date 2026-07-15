@@ -7,7 +7,7 @@ internal static class HaskellReferenceExtractor
     public static void EmitTypePositionReferences(
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -43,7 +43,7 @@ internal static class HaskellReferenceExtractor
             preparedLine,
             addCallLikeReference,
             [],
-            [],
+            new ReferenceDedupeSet(),
             0,
             string.Empty,
             0,

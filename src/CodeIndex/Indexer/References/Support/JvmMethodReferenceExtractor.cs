@@ -20,7 +20,7 @@ internal static class JvmMethodReferenceExtractor
         string language,
         string preparedLine,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -68,7 +68,7 @@ internal static class JvmMethodReferenceExtractor
         string language,
         Group ownerGroup,
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string context,
         int lineNumber,
@@ -213,7 +213,7 @@ internal static class JvmMethodReferenceExtractor
 
     private static void AddChainReference(
         List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ReferenceDedupeSet seen,
         long fileId,
         string language,
         string name,
@@ -223,7 +223,7 @@ internal static class JvmMethodReferenceExtractor
         SymbolRecord? container)
     {
         name = NormalizeMethodReferenceName(language, name);
-        var dedupeKey = ReferenceExtractor.BuildReferenceDedupeKey(fileId, language, lineNumber, column, "call", name, container);
+        var dedupeKey = ReferenceExtractor.CreateReferenceDedupeKey(fileId, language, lineNumber, column, "call", name, container);
         if (!seen.Add(dedupeKey))
             return;
 
