@@ -782,6 +782,13 @@ public class HttpMcpTransportTests : IDisposable
         Assert.True(root.GetProperty("http_post_handler_capacity").GetInt32() >= 1);
         Assert.True(root.GetProperty("http_event_stream_handler_capacity").GetInt32() >= 1);
         Assert.True(root.GetProperty("http_separate_event_stream_handlers").GetBoolean());
+        Assert.True(root.GetProperty("http_max_request_body_bytes").GetInt32() >= 1);
+        Assert.True(root.GetProperty("http_request_body_budget_limit_bytes").GetInt32() >= root.GetProperty("http_max_request_body_bytes").GetInt32());
+        Assert.Equal(0, root.GetProperty("http_request_body_bytes_in_flight").GetInt64());
+        Assert.True(root.GetProperty("http_request_body_process_bytes_in_flight").GetInt64() >= 0);
+        Assert.True(root.GetProperty("http_request_body_peak_bytes").GetInt64() >= 0);
+        Assert.Equal("process", root.GetProperty("http_request_body_budget_scope").GetString());
+        Assert.Equal(0, root.GetProperty("http_request_body_budget_rejection_count").GetInt64());
         Assert.Equal(0, root.GetProperty("http_queued_request_count").GetInt32());
         Assert.True(root.GetProperty("http_request_queue_limit").GetInt32() >= 1);
         Assert.Equal(0, root.GetProperty("http_request_log_queue_depth").GetInt32());
@@ -1874,11 +1881,13 @@ public class HttpMcpTransportTests : IDisposable
             allowUnauthenticatedLoopback: true);
 
         Assert.Equal(HttpMcpTransport.DefaultMaxRequestBodyBytes, transport.MaxRequestBodyBytes);
+        Assert.Equal(HttpMcpTransport.DefaultMaxInFlightRequestBodyBytes, transport.MaxInFlightRequestBodyBytes);
         Assert.Equal(HttpMcpTransport.DefaultMaxResponseBodyBytes, transport.MaxResponseBodyBytes);
         Assert.Equal(HttpMcpTransport.DefaultMaxQueuedRequests, transport.MaxQueuedRequests);
         Assert.Equal(HttpMcpTransport.DefaultMaxConcurrentHandlers, transport.MaxConcurrentHandlers);
         Assert.Equal(HttpMcpTransport.DefaultMaxEventStreams, transport.MaxEventStreams);
         Assert.InRange(transport.MaxRequestBodyBytes, 1, HttpMcpTransport.MaxConfiguredRequestBodyBytes);
+        Assert.InRange(transport.MaxInFlightRequestBodyBytes, transport.MaxRequestBodyBytes, HttpMcpTransport.MaxConfiguredInFlightRequestBodyBytes);
         Assert.InRange(transport.MaxResponseBodyBytes, 1, HttpMcpTransport.MaxConfiguredResponseBodyBytes);
         Assert.InRange(transport.MaxQueuedRequests, 1, HttpMcpTransport.MaxConfiguredQueuedRequests);
         Assert.InRange(transport.MaxConcurrentHandlers, 1, HttpMcpTransport.MaxConfiguredConcurrentHandlers);
@@ -1907,11 +1916,13 @@ public class HttpMcpTransportTests : IDisposable
     {
         using var env = EnvironmentVariableScope.Capture(
             HttpMcpTransport.MaxRequestBodyBytesEnvVar,
+            HttpMcpTransport.MaxInFlightRequestBodyBytesEnvVar,
             HttpMcpTransport.MaxResponseBodyBytesEnvVar,
             HttpMcpTransport.MaxQueueDepthEnvVar,
             HttpMcpTransport.MaxConcurrentHandlersEnvVar,
             HttpMcpTransport.MaxEventStreamsEnvVar);
         env.Set(HttpMcpTransport.MaxRequestBodyBytesEnvVar, (2 * 1024 * 1024).ToString(CultureInfo.InvariantCulture));
+        env.Set(HttpMcpTransport.MaxInFlightRequestBodyBytesEnvVar, (4 * 1024 * 1024).ToString(CultureInfo.InvariantCulture));
         env.Set(HttpMcpTransport.MaxResponseBodyBytesEnvVar, (3 * 1024 * 1024).ToString(CultureInfo.InvariantCulture));
         env.Set(HttpMcpTransport.MaxQueueDepthEnvVar, "128");
         env.Set(HttpMcpTransport.MaxConcurrentHandlersEnvVar, "32");
@@ -1926,6 +1937,7 @@ public class HttpMcpTransportTests : IDisposable
             allowUnauthenticatedLoopback: true);
 
         Assert.Equal(2 * 1024 * 1024, transport.MaxRequestBodyBytes);
+        Assert.Equal(4 * 1024 * 1024, transport.MaxInFlightRequestBodyBytes);
         Assert.Equal(3 * 1024 * 1024, transport.MaxResponseBodyBytes);
         Assert.Equal(128, transport.MaxQueuedRequests);
         Assert.Equal(32, transport.MaxConcurrentHandlers);
@@ -1938,6 +1950,7 @@ public class HttpMcpTransportTests : IDisposable
         var cases = new (string Variable, int Maximum)[]
         {
             (HttpMcpTransport.MaxRequestBodyBytesEnvVar, HttpMcpTransport.MaxConfiguredRequestBodyBytes),
+            (HttpMcpTransport.MaxInFlightRequestBodyBytesEnvVar, HttpMcpTransport.MaxConfiguredInFlightRequestBodyBytes),
             (HttpMcpTransport.MaxResponseBodyBytesEnvVar, HttpMcpTransport.MaxConfiguredResponseBodyBytes),
             (HttpMcpTransport.MaxQueueDepthEnvVar, HttpMcpTransport.MaxConfiguredQueuedRequests),
             (HttpMcpTransport.MaxConcurrentHandlersEnvVar, HttpMcpTransport.MaxConfiguredConcurrentHandlers),
@@ -1946,7 +1959,13 @@ public class HttpMcpTransportTests : IDisposable
 
         foreach (var (variable, maximum) in cases)
         {
-            foreach (var invalidValue in new[] { "not-an-integer", "0", "-1" })
+            foreach (var invalidValue in new[]
+            {
+                "not-an-integer",
+                "0",
+                "-1",
+                ((long)maximum + 1).ToString(CultureInfo.InvariantCulture),
+            })
             {
                 using var env = EnvironmentVariableScope.Capture(variable);
                 env.Set(variable, invalidValue);
@@ -1974,16 +1993,19 @@ public class HttpMcpTransportTests : IDisposable
         {
             using var env = EnvironmentVariableScope.Capture(
                 HttpMcpTransport.MaxRequestBodyBytesEnvVar,
+                HttpMcpTransport.MaxInFlightRequestBodyBytesEnvVar,
                 HttpMcpTransport.MaxResponseBodyBytesEnvVar,
                 HttpMcpTransport.MaxQueueDepthEnvVar,
                 HttpMcpTransport.MaxConcurrentHandlersEnvVar,
                 HttpMcpTransport.MaxEventStreamsEnvVar);
             var requestBytes = useMaximum ? HttpMcpTransport.MaxConfiguredRequestBodyBytes : 1;
+            var inFlightRequestBytes = useMaximum ? HttpMcpTransport.MaxConfiguredInFlightRequestBodyBytes : 1;
             var responseBytes = useMaximum ? HttpMcpTransport.MaxConfiguredResponseBodyBytes : 1;
             var queueDepth = useMaximum ? HttpMcpTransport.MaxConfiguredQueuedRequests : 1;
             var handlerCount = useMaximum ? HttpMcpTransport.MaxConfiguredConcurrentHandlers : 1;
             var streamCount = useMaximum ? HttpMcpTransport.MaxConfiguredEventStreams : 1;
             env.Set(HttpMcpTransport.MaxRequestBodyBytesEnvVar, requestBytes.ToString(CultureInfo.InvariantCulture));
+            env.Set(HttpMcpTransport.MaxInFlightRequestBodyBytesEnvVar, inFlightRequestBytes.ToString(CultureInfo.InvariantCulture));
             env.Set(HttpMcpTransport.MaxResponseBodyBytesEnvVar, responseBytes.ToString(CultureInfo.InvariantCulture));
             env.Set(HttpMcpTransport.MaxQueueDepthEnvVar, queueDepth.ToString(CultureInfo.InvariantCulture));
             env.Set(HttpMcpTransport.MaxConcurrentHandlersEnvVar, handlerCount.ToString(CultureInfo.InvariantCulture));
@@ -1998,11 +2020,30 @@ public class HttpMcpTransportTests : IDisposable
                 allowUnauthenticatedLoopback: true);
 
             Assert.Equal(requestBytes, transport.MaxRequestBodyBytes);
+            Assert.Equal(inFlightRequestBytes, transport.MaxInFlightRequestBodyBytes);
             Assert.Equal(responseBytes, transport.MaxResponseBodyBytes);
             Assert.Equal(queueDepth, transport.MaxQueuedRequests);
             Assert.Equal(handlerCount, transport.PostHandlerCapacity);
             Assert.Equal(streamCount, transport.EventStreamHandlerCapacity);
         }
+    }
+
+    [Fact]
+    public void HttpTransport_InFlightRequestBodyBudgetBelowPerRequestLimit_ThrowsWithBothVariables()
+    {
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        var ex = Assert.Throws<FormatException>(() => new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxRequestBodyBytes: 1024,
+            maxInFlightRequestBodyBytes: 1023));
+
+        Assert.Contains(HttpMcpTransport.MaxRequestBodyBytesEnvVar, ex.Message, StringComparison.Ordinal);
+        Assert.Contains(HttpMcpTransport.MaxInFlightRequestBodyBytesEnvVar, ex.Message, StringComparison.Ordinal);
+        Assert.Contains("1024", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("1023", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2288,6 +2329,265 @@ public class HttpMcpTransportTests : IDisposable
             CancellationToken.None);
         using var response = await post.WaitAsync(TestDeterminism.DefaultTimeout);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task HttpTransport_ProcessWideRequestBodyBudget_BoundsConcurrentMaximumBodies()
+    {
+        const int bodyBytes = 1024;
+        var body = BuildSizedJsonRpcRequest(bodyBytes, 1);
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxRequestBodyBytes: bodyBytes,
+            maxInFlightRequestBodyBytes: bodyBytes,
+            maxQueuedRequests: 32,
+            maxConcurrentHandlers: 32,
+            allowUnauthenticatedLoopback: true);
+
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(10));
+        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
+        var first = PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new StringContent(body, Encoding.UTF8, "application/json"));
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the first maximum-sized body to hold the process budget");
+        Assert.Equal(bodyBytes, transport.InFlightRequestBodyBytes);
+
+        var rejectedTasks = Enumerable.Range(0, 15)
+            .Select(_ => PostWithSessionAsync(
+                client,
+                listen.Prefix,
+                sessionId,
+                new StringContent(body, Encoding.UTF8, "application/json")))
+            .ToArray();
+        var rejectedResponses = await Task.WhenAll(rejectedTasks);
+        try
+        {
+            Assert.All(
+                rejectedResponses,
+                response => AssertTooManyRequests(response, HttpMcpTransport.RequestBodyBudgetLimitRejection));
+        }
+        finally
+        {
+            foreach (var response in rejectedResponses)
+                response.Dispose();
+        }
+
+        Assert.Equal(15, transport.RequestBodyBudgetLimitRejectionCount);
+        Assert.Equal(bodyBytes, transport.InFlightRequestBodyBytes);
+        Assert.InRange(transport.PeakInFlightRequestBodyBytes, bodyBytes, bodyBytes);
+
+        var frame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(body, frame);
+        await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":1,"result":{}}""", CancellationToken.None);
+        using var firstResponse = await first.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+        Assert.Equal(0, transport.InFlightRequestBodyBytes);
+
+        var follow = PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new StringContent(body, Encoding.UTF8, "application/json"));
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "a follow-up body to reuse the released process budget");
+        _ = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":1,"result":{}}""", CancellationToken.None);
+        using var followResponse = await follow.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, followResponse.StatusCode);
+        Assert.Equal(0, transport.InFlightRequestBodyBytes);
+    }
+
+    [Fact]
+    public async Task HttpTransport_UnknownLengthBody_EnforcesBudgetDuringStreamingAndRollsBackPartialReservation()
+    {
+        const int maxBodyBytes = 256;
+        const int queuedBodyBytes = 160;
+        var queuedBody = BuildSizedJsonRpcRequest(queuedBodyBytes, 1);
+        var streamingBody = BuildSizedJsonRpcRequest(queuedBodyBytes, 2);
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxRequestBodyBytes: maxBodyBytes,
+            maxInFlightRequestBodyBytes: maxBodyBytes,
+            maxQueuedRequests: 4,
+            maxConcurrentHandlers: 4,
+            allowUnauthenticatedLoopback: true);
+
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
+        var first = PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new StringContent(queuedBody, Encoding.UTF8, "application/json"));
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the known-length body to retain part of the process budget");
+        Assert.Equal(queuedBodyBytes, transport.InFlightRequestBodyBytes);
+
+        using var streamedResponse = await PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new UnknownLengthStringContent(streamingBody));
+        AssertTooManyRequests(streamedResponse, HttpMcpTransport.RequestBodyBudgetLimitRejection);
+        await WaitUntilAsync(
+            () => transport.InFlightRequestBodyBytes == queuedBodyBytes,
+            "the rejected streaming body's partial reservation to be returned");
+        Assert.Equal(1, transport.RequestBodyBudgetLimitRejectionCount);
+        Assert.Equal(queuedBodyBytes, transport.InFlightRequestBodyBytes);
+        Assert.Equal(maxBodyBytes, transport.PeakInFlightRequestBodyBytes);
+
+        _ = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":1,"result":{}}""", CancellationToken.None);
+        using var firstResponse = await first.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+        Assert.Equal(0, transport.InFlightRequestBodyBytes);
+    }
+
+    [Fact]
+    public async Task HttpTransport_UnknownLengthBody_AcceptsExactBudgetFitAndEmptyBodyAtSaturation()
+    {
+        const int maxBodyBytes = 256;
+        const int knownBodyBytes = 160;
+        const int exactFitBodyBytes = maxBodyBytes - knownBodyBytes;
+        var knownBody = BuildSizedJsonRpcRequest(knownBodyBytes, 1);
+        var exactFitBody = BuildSizedJsonRpcRequest(exactFitBodyBytes, 2);
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxRequestBodyBytes: maxBodyBytes,
+            maxInFlightRequestBodyBytes: maxBodyBytes,
+            maxQueuedRequests: 4,
+            maxConcurrentHandlers: 4,
+            allowUnauthenticatedLoopback: true);
+
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
+        var knownPost = PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new StringContent(knownBody, Encoding.UTF8, "application/json"));
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the known body to retain part of the budget");
+
+        var exactFitPost = PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new UnknownLengthStringContent(exactFitBody));
+        await WaitUntilAsync(
+            () => transport.QueuedRequestCount == 2,
+            "the exact-fit unknown-length body to be accepted after its EOF probe");
+        Assert.Equal(maxBodyBytes, transport.InFlightRequestBodyBytes);
+
+        using var emptyResponse = await PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new UnknownLengthStringContent(string.Empty));
+        Assert.Equal(HttpStatusCode.NoContent, emptyResponse.StatusCode);
+        Assert.Equal(0, transport.RequestBodyBudgetLimitRejectionCount);
+        Assert.Equal(maxBodyBytes, transport.InFlightRequestBodyBytes);
+
+        var firstFrame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(knownBody, firstFrame);
+        await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":1,"result":{}}""", CancellationToken.None);
+        using var knownResponse = await knownPost.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, knownResponse.StatusCode);
+
+        var secondFrame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(exactFitBody, secondFrame);
+        await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":2,"result":{}}""", CancellationToken.None);
+        using var exactFitResponse = await exactFitPost.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, exactFitResponse.StatusCode);
+        Assert.Equal(0, transport.InFlightRequestBodyBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HttpTransport_Dispose_ReleasesQueuedAndPendingRequestBodyReservations(bool dequeueBeforeDispose)
+    {
+        const int bodyBytes = 512;
+        var body = BuildSizedJsonRpcRequest(bodyBytes, 1);
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxRequestBodyBytes: bodyBytes,
+            maxInFlightRequestBodyBytes: bodyBytes,
+            maxQueuedRequests: 2,
+            allowUnauthenticatedLoopback: true);
+
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
+        var post = PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new StringContent(body, Encoding.UTF8, "application/json"));
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the request body to be retained before disposal");
+        if (dequeueBeforeDispose)
+            _ = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+
+        await transport.DisposeAsync();
+
+        Assert.Equal(0, transport.InFlightRequestBodyBytes);
+        Assert.Equal(0, transport.QueuedRequestCount);
+        Assert.True(transport.OwnedSemaphoreGatesDisposedForTests);
+        try
+        {
+            using var response = await post.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            // Listener disposal aborts the retained response.
+        }
+    }
+
+    [Fact]
+    public async Task HttpTransport_OutOfBandCompletion_ReleasesRequestBodyBudget()
+    {
+        const string body = """{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":1}}""";
+        var bodyBytes = Encoding.UTF8.GetByteCount(body);
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxRequestBodyBytes: bodyBytes,
+            maxInFlightRequestBodyBytes: bodyBytes,
+            allowUnauthenticatedLoopback: true);
+        transport.OutOfBandFrameHandler = (_, _) => Task.FromResult<string?>(null);
+
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
+        using var response = await PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new StringContent(body, Encoding.UTF8, "application/json"));
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        await WaitUntilAsync(
+            () => transport.InFlightRequestBodyBytes == 0,
+            "the out-of-band request body reservation to be returned");
+        Assert.Equal(0, transport.QueuedRequestCount);
+        Assert.Equal(0, transport.InFlightRequestBodyBytes);
+        Assert.Equal(bodyBytes, transport.PeakInFlightRequestBodyBytes);
     }
 
     [Fact]
@@ -2961,18 +3261,32 @@ public class HttpMcpTransportTests : IDisposable
         var post = client.PostAsync(
             endpoint,
             new StringContent(
-                """{"jsonrpc":"2.0","id":"transport-session-init","method":"initialize","params":{}}""",
+                """{"jsonrpc":"2.0","id":0,"method":"initialize"}""",
                 Encoding.UTF8,
                 "application/json"));
         await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "transport initialize request to enter the queue");
         _ = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
         await transport.WriteFrameAsync(
-            """{"jsonrpc":"2.0","id":"transport-session-init","result":{"protocolVersion":"2025-03-26"}}""",
+            """{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":"2025-03-26"}}""",
             CancellationToken.None);
         using var response = await post.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.True(response.Headers.TryGetValues(HttpMcpTransport.SessionIdHeaderName, out var sessionValues));
         return Assert.Single(sessionValues);
+    }
+
+    private static async Task<HttpResponseMessage> PostWithSessionAsync(
+        HttpClient client,
+        string endpoint,
+        string sessionId,
+        HttpContent content)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
+        {
+            Content = content,
+        };
+        request.Headers.TryAddWithoutValidation(HttpMcpTransport.SessionIdHeaderName, sessionId);
+        return await client.SendAsync(request);
     }
 
     private static void AssertTooManyRequests(HttpResponseMessage response, string rejectionReason)
@@ -3020,6 +3334,18 @@ public class HttpMcpTransportTests : IDisposable
         AppendNestedObject(builder, nestedObjectCount);
         builder.Append('}');
         return builder.ToString();
+    }
+
+    private static string BuildSizedJsonRpcRequest(int byteLength, int id)
+    {
+        var prefix = "{\"jsonrpc\":\"2.0\",\"id\":"
+            + id.ToString(CultureInfo.InvariantCulture)
+            + ",\"method\":\"ping\",\"params\":{\"padding\":\"";
+        const string suffix = "\"}}";
+        var paddingBytes = byteLength - Encoding.UTF8.GetByteCount(prefix) - Encoding.UTF8.GetByteCount(suffix);
+        if (paddingBytes < 0)
+            throw new ArgumentOutOfRangeException(nameof(byteLength), byteLength, "Requested JSON-RPC body size is too small.");
+        return prefix + new string('x', paddingBytes) + suffix;
     }
 
     private static string BuildNestedJsonRpcResponse(int nestedObjectCount)

@@ -32,8 +32,10 @@ namespace CodeIndex.Mcp;
 internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport, IConcurrentMcpTransport, IMcpResponseSizeLimitProvider
 {
     internal const int DefaultMaxRequestBodyBytes = 1_000_000;
+    internal const int DefaultMaxInFlightRequestBodyBytes = 64 * 1024 * 1024;
     internal const int DefaultMaxResponseBodyBytes = 1_000_000;
     internal const int MaxConfiguredRequestBodyBytes = 16 * 1024 * 1024;
+    internal const int MaxConfiguredInFlightRequestBodyBytes = 1024 * 1024 * 1024;
     internal const int MaxConfiguredResponseBodyBytes = 16 * 1024 * 1024;
     internal const int DefaultMaxQueuedRequests = 64;
     internal const int MaxConfiguredQueuedRequests = 1024;
@@ -48,6 +50,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     internal const int MaxSseEventFrameBytes = 64 * 1024;
     internal const string RequestLogTruncationMarker = "...<truncated>";
     internal const string MaxRequestBodyBytesEnvVar = "CDIDX_MCP_HTTP_MAX_REQUEST_BYTES";
+    internal const string MaxInFlightRequestBodyBytesEnvVar = "CDIDX_MCP_HTTP_MAX_IN_FLIGHT_REQUEST_BYTES";
     internal const string MaxResponseBodyBytesEnvVar = "CDIDX_MCP_HTTP_MAX_RESPONSE_BYTES";
     internal const string MaxQueueDepthEnvVar = "CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH";
     internal const string MaxConcurrentHandlersEnvVar = "CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS";
@@ -56,6 +59,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     internal const string RejectionReasonHeader = "X-Cdidx-Mcp-Rejection";
     internal const string ConcurrentHandlerLimitRejection = "concurrent_handler_limit";
     internal const string RequestQueueLimitRejection = "request_queue_limit";
+    internal const string RequestBodyBudgetLimitRejection = "request_body_budget_limit";
     internal const string EventStreamLimitRejection = "event_stream_limit";
     internal const string SessionRequiredRejection = "session_required";
     internal const string SessionNotFoundRejection = "session_not_found";
@@ -83,6 +87,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     private static readonly TimeSpan ResponseWriteTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan DisposeAcceptLoopTimeout = TimeSpan.FromSeconds(5);
     private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+    private static readonly RequestBodyBudget ProcessRequestBodyBudget = new();
 
     private readonly HttpListener _listener;
     private readonly string _endpoint;
@@ -94,10 +99,12 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     private readonly ConcurrentDictionary<Guid, EventStream> _eventStreams = new();
     private readonly CancellationTokenSource _acceptCts = new();
     private readonly Channel<PendingRequest> _requestQueue;
+    private readonly SemaphoreSlim _requestQueueReaderSemaphore = new(1, 1);
     private readonly SemaphoreSlim _queueSlots;
     private readonly SemaphoreSlim _handlerSemaphore;
     private readonly SemaphoreSlim _eventStreamHandlerSemaphore;
     private readonly int _maxRequestBodyBytes;
+    private readonly int _maxInFlightRequestBodyBytes;
     private readonly int _maxResponseBodyBytes;
     private readonly int _maxQueuedRequests;
     private readonly int _maxConcurrentHandlers;
@@ -125,6 +132,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     private long _responseCloseCleanupFailureCount;
     private long _concurrentHandlerLimitRejectionCount;
     private long _requestQueueLimitRejectionCount;
+    private long _requestBodyBudgetLimitRejectionCount;
     private long _eventStreamLimitRejectionCount;
     private long _eventStreamDropCount;
     private long _eventStreamWriteFailureDropCount;
@@ -134,6 +142,8 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     private long _authDenialMalformedTokenCount;
     private long _authDenialOversizedTokenCount;
     private long _authDenialWrongTokenCount;
+    private long _inFlightRequestBodyBytes;
+    private long _peakInFlightRequestBodyBytes;
     private Task? _disposeTask;
     private string? _lastResponseAbortCleanupFailure;
     private string? _lastResponseCloseCleanupFailure;
@@ -160,6 +170,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         string? bearerToken,
         Action<HttpRequestLogRecord>? requestLogger = null,
         int? maxRequestBodyBytes = null,
+        int? maxInFlightRequestBodyBytes = null,
         int? maxResponseBodyBytes = null,
         int? maxQueuedRequests = null,
         int? maxConcurrentHandlers = null,
@@ -175,6 +186,18 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             DefaultMaxRequestBodyBytes,
             MaxConfiguredRequestBodyBytes,
             "HTTP MCP request body byte limit");
+        _maxInFlightRequestBodyBytes = ResolvePositiveIntOption(
+            maxInFlightRequestBodyBytes,
+            nameof(maxInFlightRequestBodyBytes),
+            MaxInFlightRequestBodyBytesEnvVar,
+            DefaultMaxInFlightRequestBodyBytes,
+            MaxConfiguredInFlightRequestBodyBytes,
+            "HTTP MCP process-wide in-flight request body byte budget");
+        if (_maxInFlightRequestBodyBytes < _maxRequestBodyBytes)
+        {
+            throw new FormatException(
+                $"{MaxInFlightRequestBodyBytesEnvVar} ({_maxInFlightRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}) must be greater than or equal to {MaxRequestBodyBytesEnvVar} ({_maxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}).");
+        }
         _maxResponseBodyBytes = ResolvePositiveIntOption(
             maxResponseBodyBytes,
             nameof(maxResponseBodyBytes),
@@ -299,6 +322,8 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
 
     internal int MaxRequestBodyBytes => _maxRequestBodyBytes;
 
+    internal int MaxInFlightRequestBodyBytes => _maxInFlightRequestBodyBytes;
+
     internal int MaxResponseBodyBytes => _maxResponseBodyBytes;
 
     int IMcpResponseSizeLimitProvider.MaxResponseFrameBytes => _maxResponseBodyBytes;
@@ -336,6 +361,14 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     internal long ConcurrentHandlerLimitRejectionCount => Interlocked.Read(ref _concurrentHandlerLimitRejectionCount);
 
     internal long RequestQueueLimitRejectionCount => Interlocked.Read(ref _requestQueueLimitRejectionCount);
+
+    internal long RequestBodyBudgetLimitRejectionCount => Interlocked.Read(ref _requestBodyBudgetLimitRejectionCount);
+
+    internal long InFlightRequestBodyBytes => Interlocked.Read(ref _inFlightRequestBodyBytes);
+
+    internal long PeakInFlightRequestBodyBytes => Interlocked.Read(ref _peakInFlightRequestBodyBytes);
+
+    internal long ProcessInFlightRequestBodyBytes => ProcessRequestBodyBudget.CurrentBytes;
 
     internal long EventStreamLimitRejectionCount => Interlocked.Read(ref _eventStreamLimitRejectionCount);
 
@@ -541,11 +574,35 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     public async Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
-        if (_pendingRequest is not null)
-            throw new InvalidOperationException("HttpMcpTransport: ReadFrameAsync called twice without an intervening WriteFrameAsync.");
+        await _requestQueueReaderSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
 
-        _pendingRequest = await ReadPendingRequestAsync(cancellationToken).ConfigureAwait(false);
-        return _pendingRequest?.Body;
+        try
+        {
+            if (Volatile.Read(ref _pendingRequest) is not null)
+                throw new InvalidOperationException("HttpMcpTransport: ReadFrameAsync called twice without an intervening WriteFrameAsync.");
+
+            var request = await ReadPendingRequestAsync(cancellationToken).ConfigureAwait(false);
+            if (request is null)
+                return null;
+            if (Interlocked.CompareExchange(ref _pendingRequest, request, null) is not null)
+                throw new InvalidOperationException("HttpMcpTransport: pending request handoff was not empty.");
+            if (IsDisposed)
+            {
+                var disposedRequest = Interlocked.Exchange(ref _pendingRequest, null);
+                if (disposedRequest is not null)
+                {
+                    AbortResponseBestEffort(disposedRequest.Context.Response, "dequeued request disposal");
+                    ReleasePendingInitialize(disposedRequest);
+                    ReleaseRequestBodyReservation(disposedRequest);
+                }
+                return null;
+            }
+            return request.Body;
+        }
+        finally
+        {
+            _requestQueueReaderSemaphore.Release();
+        }
     }
 
     public async Task<McpTransportFrame?> ReadConcurrentFrameAsync(CancellationToken cancellationToken)
@@ -554,6 +611,13 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         var request = await ReadPendingRequestAsync(cancellationToken).ConfigureAwait(false);
         if (request is null)
             return null;
+        if (IsDisposed)
+        {
+            AbortResponseBestEffort(request.Context.Response, "concurrent dequeued request disposal");
+            ReleasePendingInitialize(request);
+            ReleaseRequestBodyReservation(request);
+            return null;
+        }
 
         return new McpTransportFrame(
             request.Body ?? string.Empty,
@@ -669,173 +733,245 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     private async Task HandleContextAsync(HttpListenerContext context, CancellationToken cancellationToken)
     {
         var request = BeginRequest(context, cancellationToken);
-
-        if (!TryValidateOrigin(context.Request))
+        var reservationTransferredToQueue = false;
+        try
         {
-            request.AuthOutcome = "not-checked";
-            request.Diagnostic = OriginRejectedDiagnostic;
-            await RespondAsync(request, (int)HttpStatusCode.Forbidden, "Origin is not allowed for this MCP HTTP listener.\n").ConfigureAwait(false);
-            LogRequest(request, (int)HttpStatusCode.Forbidden);
-            return;
-        }
-
-        if (IsCorsPreflightRequest(context.Request))
-        {
-            request.AuthOutcome = "not-checked";
-            request.Diagnostic = PreflightRejectedDiagnostic;
-            await RespondAsync(request, (int)HttpStatusCode.Forbidden, "CORS preflight is not supported by this MCP HTTP listener.\n").ConfigureAwait(false);
-            LogRequest(request, (int)HttpStatusCode.Forbidden);
-            return;
-        }
-
-        if (!await TryAuthorizeAsync(request).ConfigureAwait(false))
-            return;
-
-        if (IsHealthPath(context.Request.Url?.AbsolutePath))
-        {
-            if (!string.Equals(context.Request.HttpMethod, "GET", StringComparison.OrdinalIgnoreCase))
+            if (!TryValidateOrigin(context.Request))
             {
-                context.Response.AddHeader("Allow", "GET");
-                await RespondAsync(request, (int)HttpStatusCode.MethodNotAllowed, "MCP health endpoint only accepts GET.\n").ConfigureAwait(false);
-                LogRequest(request, (int)HttpStatusCode.MethodNotAllowed);
+                request.AuthOutcome = "not-checked";
+                request.Diagnostic = OriginRejectedDiagnostic;
+                await RespondAsync(request, (int)HttpStatusCode.Forbidden, "Origin is not allowed for this MCP HTTP listener.\n").ConfigureAwait(false);
+                LogRequest(request, (int)HttpStatusCode.Forbidden);
                 return;
             }
 
-            var healthJson = ResolveHealthJson(HealthJsonProvider);
-            await RespondJsonAsync(request, (int)HttpStatusCode.OK, healthJson).ConfigureAwait(false);
-            LogRequest(request, (int)HttpStatusCode.OK);
-            return;
-        }
-
-        if (IsEventsPath(context.Request.Url?.AbsolutePath))
-        {
-            if (!string.Equals(context.Request.HttpMethod, "GET", StringComparison.OrdinalIgnoreCase))
+            if (IsCorsPreflightRequest(context.Request))
             {
-                context.Response.AddHeader("Allow", "GET");
-                await RespondAsync(request, (int)HttpStatusCode.MethodNotAllowed, "MCP HTTP event stream only accepts GET.\n").ConfigureAwait(false);
-                LogRequest(request, (int)HttpStatusCode.MethodNotAllowed);
+                request.AuthOutcome = "not-checked";
+                request.Diagnostic = PreflightRejectedDiagnostic;
+                await RespondAsync(request, (int)HttpStatusCode.Forbidden, "CORS preflight is not supported by this MCP HTTP listener.\n").ConfigureAwait(false);
+                LogRequest(request, (int)HttpStatusCode.Forbidden);
                 return;
             }
 
-            if (!await TryRequireEstablishedSessionAsync(request).ConfigureAwait(false))
+            if (!await TryAuthorizeAsync(request).ConfigureAwait(false))
                 return;
 
-            await RunEventStreamAsync(request, cancellationToken).ConfigureAwait(false);
-            return;
-        }
-
-        if (!string.Equals(context.Request.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase))
-        {
-            context.Response.AddHeader("Allow", "POST");
-            await RespondAsync(request, (int)HttpStatusCode.MethodNotAllowed, "MCP HTTP transport only accepts POST.\n").ConfigureAwait(false);
-            LogRequest(request, (int)HttpStatusCode.MethodNotAllowed);
-            return;
-        }
-
-        if (!await TryValidateJsonContentTypeAsync(request).ConfigureAwait(false))
-            return;
-
-        // Once initialize succeeds, reject missing or foreign sessions before reading a POST
-        // body so an unrelated HTTP client cannot consume request-body or JSON-RPC resources.
-        // initialize 成功後は POST body を読む前に欠落・別 session を拒否し、無関係な HTTP
-        // client に request-body / JSON-RPC resource を消費させない。
-        if (IsSessionEstablished
-            && !await TryValidateSessionHeaderAsync(request).ConfigureAwait(false))
-        {
-            return;
-        }
-
-        var body = await TryReadRequestBodyAsync(request, cancellationToken).ConfigureAwait(false);
-        if (body is null)
-            return;
-
-        request.Body = body;
-        request.RequestId = TryExtractJsonRpcIdTelemetry(body, _maxRequestBodyBytes);
-        if (!request.SessionValidated)
-        {
-            // The session can become established while this handler is reading its body. Recheck
-            // after the bounded read so no headerless frame can slip behind initialize in the
-            // single-reader queue. Before establishment, only one response-bearing initialize
-            // request may claim the pending session.
-            // body 読み込み中に session が確立し得るため、bounded read 後に再確認する。
-            // これにより header 無し frame が initialize の後ろへ queue される race を防ぐ。
-            // 確立前に pending session を claim できるのは応答対象 initialize 1 件だけ。
-            if (IsSessionEstablished)
+            if (IsHealthPath(context.Request.Url?.AbsolutePath))
             {
-                if (!await TryValidateSessionHeaderAsync(request).ConfigureAwait(false))
+                if (!string.Equals(context.Request.HttpMethod, "GET", StringComparison.OrdinalIgnoreCase))
+                {
+                    context.Response.AddHeader("Allow", "GET");
+                    await RespondAsync(request, (int)HttpStatusCode.MethodNotAllowed, "MCP health endpoint only accepts GET.\n").ConfigureAwait(false);
+                    LogRequest(request, (int)HttpStatusCode.MethodNotAllowed);
                     return;
+                }
+
+                var healthJson = ResolveHealthJson(HealthJsonProvider);
+                await RespondJsonAsync(request, (int)HttpStatusCode.OK, healthJson).ConfigureAwait(false);
+                LogRequest(request, (int)HttpStatusCode.OK);
+                return;
             }
-            else if (!await TryClaimPendingInitializeAsync(request, body).ConfigureAwait(false))
+
+            if (IsEventsPath(context.Request.Url?.AbsolutePath))
+            {
+                if (!string.Equals(context.Request.HttpMethod, "GET", StringComparison.OrdinalIgnoreCase))
+                {
+                    context.Response.AddHeader("Allow", "GET");
+                    await RespondAsync(request, (int)HttpStatusCode.MethodNotAllowed, "MCP HTTP event stream only accepts GET.\n").ConfigureAwait(false);
+                    LogRequest(request, (int)HttpStatusCode.MethodNotAllowed);
+                    return;
+                }
+
+                if (!await TryRequireEstablishedSessionAsync(request).ConfigureAwait(false))
+                    return;
+
+                await RunEventStreamAsync(request, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            if (!string.Equals(context.Request.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase))
+            {
+                context.Response.AddHeader("Allow", "POST");
+                await RespondAsync(request, (int)HttpStatusCode.MethodNotAllowed, "MCP HTTP transport only accepts POST.\n").ConfigureAwait(false);
+                LogRequest(request, (int)HttpStatusCode.MethodNotAllowed);
+                return;
+            }
+
+            if (!await TryValidateJsonContentTypeAsync(request).ConfigureAwait(false))
+                return;
+
+            // Once initialize succeeds, reject missing or foreign sessions before reading a POST
+            // body so an unrelated HTTP client cannot consume request-body or JSON-RPC resources.
+            // initialize 成功後は POST body を読む前に欠落・別 session を拒否し、無関係な HTTP
+            // client に request-body / JSON-RPC resource を消費させない。
+            if (IsSessionEstablished
+                && !await TryValidateSessionHeaderAsync(request).ConfigureAwait(false))
             {
                 return;
             }
-        }
 
-        if (string.IsNullOrWhiteSpace(body))
-        {
-            context.Response.StatusCode = (int)HttpStatusCode.NoContent;
-            CloseResponseOrThrow(context.Response, "empty request body");
-            LogRequest(request, (int)HttpStatusCode.NoContent);
-            return;
-        }
+            var body = await TryReadRequestBodyAsync(request, cancellationToken).ConfigureAwait(false);
+            if (body is null)
+                return;
 
-        if (await TryHandleOutOfBandFrameAsync(request, body, cancellationToken).ConfigureAwait(false))
-        {
-            ReleasePendingInitialize(request);
-            return;
-        }
+            request.Body = body;
+            request.RequestId = TryExtractJsonRpcIdTelemetry(body, _maxRequestBodyBytes);
+            if (!request.SessionValidated)
+            {
+                // The session can become established while this handler is reading its body.
+                // Recheck after the bounded read so no headerless frame can slip behind
+                // initialize in the single-reader queue. Before establishment, only one
+                // response-bearing initialize request may claim the pending session.
+                // body 読み込み中に session が確立し得るため、bounded read 後に再確認する。
+                // これにより header 無し frame が initialize の後ろへ queue される race を防ぐ。
+                // 確立前に pending session を claim できるのは応答対象 initialize 1 件だけ。
+                if (IsSessionEstablished)
+                {
+                    if (!await TryValidateSessionHeaderAsync(request).ConfigureAwait(false))
+                        return;
+                }
+                else if (!await TryClaimPendingInitializeAsync(request, body).ConfigureAwait(false))
+                {
+                    return;
+                }
+            }
 
-        if (!TryQueueRequest(request))
+            if (string.IsNullOrWhiteSpace(body))
+            {
+                context.Response.StatusCode = (int)HttpStatusCode.NoContent;
+                CloseResponseOrThrow(context.Response, "empty request body");
+                LogRequest(request, (int)HttpStatusCode.NoContent);
+                return;
+            }
+
+            if (await TryHandleOutOfBandFrameAsync(request, body, cancellationToken).ConfigureAwait(false))
+            {
+                ReleasePendingInitialize(request);
+                return;
+            }
+
+            if (!TryQueueRequest(request))
+            {
+                ReleasePendingInitialize(request);
+                MarkRejected(request, RequestQueueLimitRejection);
+                context.Response.AddHeader("Retry-After", "1");
+                context.Response.AddHeader(RejectionReasonHeader, RequestQueueLimitRejection);
+                await RespondAsync(request, (int)HttpStatusCode.TooManyRequests, "MCP HTTP request queue is full.\n").ConfigureAwait(false);
+                LogRequest(request, (int)HttpStatusCode.TooManyRequests);
+            }
+            else
+            {
+                reservationTransferredToQueue = true;
+            }
+        }
+        finally
         {
-            ReleasePendingInitialize(request);
-            MarkRejected(request, RequestQueueLimitRejection);
-            context.Response.AddHeader("Retry-After", "1");
-            context.Response.AddHeader(RejectionReasonHeader, RequestQueueLimitRejection);
-            await RespondAsync(request, (int)HttpStatusCode.TooManyRequests, "MCP HTTP request queue is full.\n").ConfigureAwait(false);
-            LogRequest(request, (int)HttpStatusCode.TooManyRequests);
+            if (!reservationTransferredToQueue)
+            {
+                ReleasePendingInitialize(request);
+                ReleaseRequestBodyReservation(request);
+            }
         }
     }
 
     private async Task<string?> TryReadRequestBodyAsync(PendingRequest request, CancellationToken cancellationToken)
     {
         var context = request.Context;
-        if (context.Request.ContentLength64 > _maxRequestBodyBytes)
+        var contentLength = context.Request.ContentLength64;
+        if (contentLength > _maxRequestBodyBytes)
         {
             request.Diagnostic = "request_body_limit_exceeded";
             await RespondAsync(request, (int)HttpStatusCode.RequestEntityTooLarge, $"MCP HTTP request body exceeds the configured {_maxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)} byte limit.\n").ConfigureAwait(false);
             LogRequest(request, (int)HttpStatusCode.RequestEntityTooLarge);
             return null;
         }
-        if (context.Request.ContentLength64 < 0)
+        if (contentLength < 0)
             request.Diagnostic = "request_body_length_unknown";
 
-        using var buffer = new MemoryStream();
-        var scratch = new byte[Math.Min(8192, _maxRequestBodyBytes)];
-        while (true)
+        if (contentLength > 0 && !TryReserveRequestBodyBytesExact(request, checked((int)contentLength)))
         {
-            var read = await context.Request.InputStream.ReadAsync(scratch.AsMemory(), cancellationToken).ConfigureAwait(false);
-            if (read == 0)
-                break;
-
-            if (buffer.Length + read > _maxRequestBodyBytes)
-            {
-                request.Diagnostic = "request_body_limit_exceeded";
-                await RespondAsync(request, (int)HttpStatusCode.RequestEntityTooLarge, $"MCP HTTP request body exceeds the configured {_maxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)} byte limit.\n").ConfigureAwait(false);
-                LogRequest(request, (int)HttpStatusCode.RequestEntityTooLarge);
-                return null;
-            }
-
-            buffer.Write(scratch, 0, read);
+            await RejectRequestBodyBudgetAsync(request).ConfigureAwait(false);
+            return null;
         }
 
-        // ToArray/GetString materializes only after Content-Length and streaming reads have both
-        // enforced _maxRequestBodyBytes. Decode strictly as UTF-8 so invalid bytes cannot be
-        // silently replaced with U+FFFD and interpreted as a different JSON-RPC frame (#4549).
-        // byte 上限を両方の経路で確認した後だけ materialize し、strict UTF-8 で decode する。
-        // 不正 byte を U+FFFD に置換して別の JSON-RPC frame として解釈しない (#4549)。
+        using var buffer = new MemoryStream(contentLength > 0 ? checked((int)contentLength) : 0);
+        var scratch = new byte[Math.Min(8192, _maxRequestBodyBytes)];
+        if (contentLength >= 0)
+        {
+            while (buffer.Length < contentLength)
+            {
+                var readSize = (int)Math.Min(scratch.Length, contentLength - buffer.Length);
+                var read = await context.Request.InputStream.ReadAsync(
+                    scratch.AsMemory(0, readSize),
+                    cancellationToken).ConfigureAwait(false);
+                if (read == 0)
+                    break;
+                buffer.Write(scratch, 0, read);
+            }
+        }
+        else
+        {
+            while (true)
+            {
+                var remaining = _maxRequestBodyBytes - checked((int)buffer.Length);
+                if (remaining == 0)
+                {
+                    var overflowRead = await context.Request.InputStream.ReadAsync(
+                        scratch.AsMemory(0, 1),
+                        cancellationToken).ConfigureAwait(false);
+                    if (overflowRead == 0)
+                        break;
+
+                    request.Diagnostic = "request_body_limit_exceeded";
+                    await RespondAsync(request, (int)HttpStatusCode.RequestEntityTooLarge, $"MCP HTTP request body exceeds the configured {_maxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)} byte limit.\n").ConfigureAwait(false);
+                    LogRequest(request, (int)HttpStatusCode.RequestEntityTooLarge);
+                    return null;
+                }
+
+                var reservedForRead = TryReserveRequestBodyBytesUpTo(
+                    request,
+                    Math.Min(scratch.Length, remaining));
+                if (reservedForRead == 0)
+                {
+                    // A full budget may mean this unknown-length body fit exactly. Probe EOF
+                    // without retaining the byte and reject only when more body data exists.
+                    // budget 満杯は body がちょうど収まった場合もある。保持しない 1 byte で
+                    // EOF を確認し、追加データが実在するときだけ拒否する。
+                    var overBudgetRead = await context.Request.InputStream.ReadAsync(
+                        scratch.AsMemory(0, 1),
+                        cancellationToken).ConfigureAwait(false);
+                    if (overBudgetRead == 0)
+                        break;
+
+                    await RejectRequestBodyBudgetAsync(request).ConfigureAwait(false);
+                    return null;
+                }
+
+                var read = await context.Request.InputStream.ReadAsync(
+                    scratch.AsMemory(0, reservedForRead),
+                    cancellationToken).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    ReleaseRequestBodyReservationBytes(request, reservedForRead);
+                    break;
+                }
+
+                if (read < reservedForRead)
+                    ReleaseRequestBodyReservationBytes(request, reservedForRead - read);
+                buffer.Write(scratch, 0, read);
+            }
+        }
+
+        // Decode directly from the bounded MemoryStream buffer so the raw body is not copied a
+        // second time before the queued string takes ownership of the reservation (#4548).
+        // bounded MemoryStream の buffer から直接 decode し、queue 用 string が reservation を
+        // 引き継ぐ前に raw body を二重 copy しない (#4548)。
         try
         {
-            return StrictUtf8.GetString(buffer.ToArray());
+            if (!buffer.TryGetBuffer(out var bytes) || bytes.Array is null)
+                throw new InvalidOperationException("HTTP MCP request body buffer is unavailable.");
+            return StrictUtf8.GetString(bytes.Array, bytes.Offset, checked((int)buffer.Length));
         }
         catch (DecoderFallbackException)
         {
@@ -844,6 +980,72 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             LogRequest(request, (int)HttpStatusCode.BadRequest);
             return null;
         }
+    }
+
+    private bool TryReserveRequestBodyBytesExact(PendingRequest request, int bytes)
+    {
+        if (bytes <= 0)
+            return true;
+        if (!ProcessRequestBodyBudget.TryReserveExact(bytes, _maxInFlightRequestBodyBytes))
+            return false;
+
+        TrackRequestBodyReservation(request, bytes);
+        return true;
+    }
+
+    private int TryReserveRequestBodyBytesUpTo(PendingRequest request, int requestedBytes)
+    {
+        var reserved = ProcessRequestBodyBudget.TryReserveUpTo(requestedBytes, _maxInFlightRequestBodyBytes);
+        if (reserved > 0)
+            TrackRequestBodyReservation(request, reserved);
+        return reserved;
+    }
+
+    private void TrackRequestBodyReservation(PendingRequest request, int bytes)
+    {
+        Interlocked.Add(ref request.ReservedBodyBytes, bytes);
+        var current = Interlocked.Add(ref _inFlightRequestBodyBytes, bytes);
+        var peak = Interlocked.Read(ref _peakInFlightRequestBodyBytes);
+        while (current > peak)
+        {
+            var observed = Interlocked.CompareExchange(ref _peakInFlightRequestBodyBytes, current, peak);
+            if (observed == peak)
+                break;
+            peak = observed;
+        }
+    }
+
+    private void ReleaseRequestBodyReservationBytes(PendingRequest request, int bytes)
+    {
+        if (bytes <= 0)
+            return;
+
+        Interlocked.Add(ref request.ReservedBodyBytes, -bytes);
+        Interlocked.Add(ref _inFlightRequestBodyBytes, -bytes);
+        ProcessRequestBodyBudget.Release(bytes);
+    }
+
+    private void ReleaseRequestBodyReservation(PendingRequest request)
+    {
+        var bytes = Interlocked.Exchange(ref request.ReservedBodyBytes, 0);
+        if (bytes <= 0)
+            return;
+
+        Interlocked.Add(ref _inFlightRequestBodyBytes, -bytes);
+        ProcessRequestBodyBudget.Release(bytes);
+    }
+
+    private async Task RejectRequestBodyBudgetAsync(PendingRequest request)
+    {
+        request.Diagnostic = RequestBodyBudgetLimitRejection;
+        MarkRejected(request, RequestBodyBudgetLimitRejection);
+        request.Context.Response.AddHeader("Retry-After", "1");
+        request.Context.Response.AddHeader(RejectionReasonHeader, RequestBodyBudgetLimitRejection);
+        await RespondAsync(
+            request,
+            (int)HttpStatusCode.TooManyRequests,
+            $"MCP HTTP process-wide in-flight request body budget of {_maxInFlightRequestBodyBytes.ToString(CultureInfo.InvariantCulture)} bytes is full.\n").ConfigureAwait(false);
+        LogRequest(request, (int)HttpStatusCode.TooManyRequests);
     }
 
     private bool TryValidateOrigin(HttpListenerRequest request)
@@ -1356,19 +1558,18 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     public async Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
-        var request = _pendingRequest
+        var request = Interlocked.Exchange(ref _pendingRequest, null)
             ?? throw new InvalidOperationException("HttpMcpTransport: WriteFrameAsync called without a pending ReadFrameAsync.");
-        _pendingRequest = null;
         await WriteFrameAsync(request, frame, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task WriteFrameAsync(PendingRequest request, string? frame, CancellationToken cancellationToken)
     {
-        ObjectDisposedException.ThrowIf(IsDisposed, this);
         var context = request.Context;
 
         try
         {
+            ObjectDisposedException.ThrowIf(IsDisposed, this);
             if (request.OwnsInitializeClaim
                 && frame is not null
                 && IsSuccessfulInitializeResponse(frame))
@@ -1423,6 +1624,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         finally
         {
             ReleasePendingInitialize(request);
+            ReleaseRequestBodyReservation(request);
         }
     }
 
@@ -2102,6 +2304,8 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             Interlocked.Increment(ref _concurrentHandlerLimitRejectionCount);
         else if (string.Equals(reason, RequestQueueLimitRejection, StringComparison.Ordinal))
             Interlocked.Increment(ref _requestQueueLimitRejectionCount);
+        else if (string.Equals(reason, RequestBodyBudgetLimitRejection, StringComparison.Ordinal))
+            Interlocked.Increment(ref _requestBodyBudgetLimitRejectionCount);
         else if (string.Equals(reason, EventStreamLimitRejection, StringComparison.Ordinal))
             Interlocked.Increment(ref _eventStreamLimitRejectionCount);
     }
@@ -2286,6 +2490,43 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         }
     }
 
+    private sealed class RequestBodyBudget
+    {
+        private long _currentBytes;
+
+        internal long CurrentBytes => Interlocked.Read(ref _currentBytes);
+
+        internal bool TryReserveExact(int bytes, int limitBytes)
+        {
+            while (true)
+            {
+                var current = Interlocked.Read(ref _currentBytes);
+                if (bytes > limitBytes - current)
+                    return false;
+                if (Interlocked.CompareExchange(ref _currentBytes, current + bytes, current) == current)
+                    return true;
+            }
+        }
+
+        internal int TryReserveUpTo(int requestedBytes, int limitBytes)
+        {
+            while (true)
+            {
+                var current = Interlocked.Read(ref _currentBytes);
+                var available = limitBytes - current;
+                if (available <= 0)
+                    return 0;
+
+                var reserved = (int)Math.Min(requestedBytes, available);
+                if (Interlocked.CompareExchange(ref _currentBytes, current + reserved, current) == current)
+                    return reserved;
+            }
+        }
+
+        internal void Release(long bytes)
+            => Interlocked.Add(ref _currentBytes, -bytes);
+    }
+
     private sealed class PendingRequest
     {
         private readonly long _startedTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -2327,6 +2568,8 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         internal bool OwnsInitializeClaim { get; set; }
 
         internal bool Logged { get; set; }
+
+        internal long ReservedBodyBytes;
 
         internal TimeSpan Elapsed => System.Diagnostics.Stopwatch.GetElapsedTime(_startedTimestamp);
     }

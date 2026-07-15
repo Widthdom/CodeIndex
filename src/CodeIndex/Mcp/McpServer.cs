@@ -2362,6 +2362,13 @@ public partial class McpServer : IDisposable
         };
         if (httpTransport is not null)
         {
+            result["http_max_request_body_bytes"] = httpTransport.MaxRequestBodyBytes;
+            result["http_request_body_budget_limit_bytes"] = httpTransport.MaxInFlightRequestBodyBytes;
+            result["http_request_body_bytes_in_flight"] = httpTransport.InFlightRequestBodyBytes;
+            result["http_request_body_process_bytes_in_flight"] = httpTransport.ProcessInFlightRequestBodyBytes;
+            result["http_request_body_peak_bytes"] = httpTransport.PeakInFlightRequestBodyBytes;
+            result["http_request_body_budget_scope"] = "process";
+            result["http_request_body_budget_rejection_count"] = httpTransport.RequestBodyBudgetLimitRejectionCount;
             result["http_event_stream_count"] = httpTransport.EventStreamCount;
             result["http_event_stream_limit"] = httpTransport.MaxEventStreams;
             result["http_max_concurrent_handlers"] = httpTransport.MaxConcurrentHandlers;

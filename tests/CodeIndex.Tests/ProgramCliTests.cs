@@ -92,6 +92,25 @@ public class ProgramCliTests
     }
 
     [ProductionRuntimeFact]
+    public void Mcp_HttpRequestBodyBudgetBelowPerRequestLimitReturnsUsageError()
+    {
+        var (exitCode, _, stderr) = RunCliInSubprocess(
+            ["mcp", "--transport", "http"],
+            new Dictionary<string, string?>
+            {
+                [HttpMcpTransport.MaxRequestBodyBytesEnvVar] = "1024",
+                [HttpMcpTransport.MaxInFlightRequestBodyBytesEnvVar] = "1023",
+                [ProgramRunner.McpHttpTokenEnvVar] = "test-token",
+            });
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains(HttpMcpTransport.MaxRequestBodyBytesEnvVar, stderr, StringComparison.Ordinal);
+        Assert.Contains(HttpMcpTransport.MaxInFlightRequestBodyBytesEnvVar, stderr, StringComparison.Ordinal);
+        Assert.Contains("must be greater than or equal", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("HTTP transport listening", stderr, StringComparison.Ordinal);
+    }
+
+    [ProductionRuntimeFact]
     public void Mcp_DbAcceptsLeadingDoubleDashPathValueViaInlineLiteral()
     {
         var (exitCode, _, stderr) = RunCliInSubprocess(["mcp", "--db=--tmp.db"]);
