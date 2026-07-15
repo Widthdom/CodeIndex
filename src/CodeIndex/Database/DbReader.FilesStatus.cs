@@ -8,13 +8,26 @@ using System.Threading;
 
 namespace CodeIndex.Database;
 
+internal sealed record ResourceFileMetadata(
+    long Id,
+    string Path,
+    string? Lang,
+    long Size,
+    int Lines,
+    string? Checksum,
+    DateTime? Modified);
+
 public partial class DbReader
 {
     internal const int MaxBoundedFileReadUtf8Bytes = 4 * 1024 * 1024;
     internal const int MaxBoundedFileReadLines = 10_000;
     internal const int MaxBoundedFileReadChunks = 256;
     internal const int MaxBoundedFileReadScannedUtf8Bytes = 32 * 1024 * 1024;
+    internal const string BoundedResourceReadChunkEndIndexName = "idx_chunks_file_end_start_nonnull";
+    internal const string BoundedResourceReadChunkIndexName = "idx_chunks_file_start_chunk_nonnull";
     private const int BoundedFileReadBufferSize = 4 * 1024;
+    private const string EmptyIndexedContentChecksum =
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
     private static readonly AsyncLocal<TimeSpan?> FindRegexMatchTimeoutOverride = new();
     private static readonly AsyncLocal<int?> BoundedFileReadScanByteLimitOverride = new();
@@ -640,6 +653,48 @@ public partial class DbReader
         };
     }
 
+    internal static bool IsAffirmativelyEmptyIndexedFile(int lines, string? checksum)
+        => lines == 0
+           && string.Equals(checksum, EmptyIndexedContentChecksum, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Load only the exact resource metadata needed by resources/read.
+    /// resources/read に必要な完全一致resource metadataだけを取得する。
+    /// </summary>
+    internal ResourceFileMetadata? GetResourceFileMetadata(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+
+        _cancellation.ThrowIfCancellationRequested();
+        using var command = _conn.CreateCommand();
+        command.CommandText = $"""
+            SELECT f.id, f.path, f.lang,
+                   COALESCE(f.size, -1), COALESCE(f.lines, -1),
+                   {GetFileColumnSql("checksum")} AS checksum,
+                   {GetFileColumnSql("modified")} AS modified
+            FROM files f
+            WHERE f.path = @path
+            LIMIT 1
+            """;
+        SqliteCommandPolicy.AddText(command, "@path", path);
+
+        using var reader = command.ExecuteTrackedReader();
+        if (!reader.TrackedRead())
+            return null;
+
+        var metadata = new ResourceFileMetadata(
+            reader.GetInt64(0),
+            reader.GetString(1),
+            GetNullableString(reader, 2),
+            reader.GetInt64(3),
+            reader.GetInt32(4),
+            GetNullableString(reader, 5),
+            GetNullableDateTime(reader, 6));
+        _cancellation.ThrowIfCancellationRequested();
+        return metadata;
+    }
+
     /// <summary>
     /// Read a line range without materializing complete chunk strings, bounded by UTF-8 bytes and lines.
     /// チャンク文字列全体を実体化せず、UTF-8 byte数と行数で制限して行範囲を読む。
@@ -649,7 +704,7 @@ public partial class DbReader
     /// continuation offset は、絶対1始まり行の先頭から数えた0始まりUTF-8 byte offset。
     /// </remarks>
     internal BoundedFileReadResult GetBoundedFileContent(
-        string path,
+        ResourceFileMetadata file,
         int startLine,
         int endLine,
         int maxUtf8Bytes,
@@ -657,6 +712,8 @@ public partial class DbReader
         int? continuationLine = null,
         int continuationByteOffset = 0)
     {
+        ArgumentNullException.ThrowIfNull(file);
+        var path = file.Path;
         if (string.IsNullOrWhiteSpace(path))
             return new BoundedFileReadResult { Status = BoundedFileReadStatus.FileNotFound };
         if (maxUtf8Bytes is <= 0 or > MaxBoundedFileReadUtf8Bytes)
@@ -677,23 +734,10 @@ public partial class DbReader
         if (nextLine < startLine || nextLine > endLine)
             return new BoundedFileReadResult { Status = BoundedFileReadStatus.InvalidContinuation, Path = path };
 
-        long fileId;
-        string? lang;
-        int totalLines;
-        long fileSize;
-        using (var fileCmd = _conn.CreateCommand())
-        {
-            fileCmd.CommandText = "SELECT id, lang, lines, size FROM files WHERE path = @path";
-            SqliteCommandPolicy.AddText(fileCmd, "@path", path);
-            using var fileReader = fileCmd.ExecuteTrackedReader();
-            if (!fileReader.TrackedRead())
-                return new BoundedFileReadResult { Status = BoundedFileReadStatus.FileNotFound, Path = path };
-
-            fileId = fileReader.GetInt64(0);
-            lang = GetNullableString(fileReader, 1);
-            totalLines = fileReader.GetInt32(2);
-            fileSize = fileReader.GetInt64(3);
-        }
+        var fileId = file.Id;
+        var lang = file.Lang;
+        var totalLines = file.Lines;
+        var fileSize = file.Size;
 
         BoundedFileReadResult CreateResult(BoundedFileReadStatus status, string? failureReason = null) => new()
         {
@@ -708,55 +752,143 @@ public partial class DbReader
             EndLine = nextLine,
         };
 
-        if (fileSize == 0)
-            return CreateResult(BoundedFileReadStatus.Empty);
-        if (totalLines <= 0)
+        if (fileSize < 0 || totalLines < 0 || (fileSize == 0 && totalLines > 0))
+            return CreateResult(BoundedFileReadStatus.InvalidTopology, "resource_file_metadata_inconsistent");
+        if (totalLines == 0)
+        {
+            if (_hasChunksTable && HasAnyResourceChunk(fileId))
+                return CreateResult(BoundedFileReadStatus.InvalidTopology, "resource_file_metadata_inconsistent");
+            if (IsAffirmativelyEmptyIndexedFile(totalLines, file.Checksum))
+                return CreateResult(BoundedFileReadStatus.Empty);
+            if (fileSize == 0 && file.Checksum != null)
+                return CreateResult(BoundedFileReadStatus.InvalidTopology, "resource_file_metadata_inconsistent");
             return CreateResult(BoundedFileReadStatus.ContentUnavailable, "resource_content_unavailable");
+        }
         if (!_hasChunksTable)
             return CreateResult(BoundedFileReadStatus.ContentUnavailable, "resource_content_unavailable");
+        if (!_chunkIndexes.Contains(BoundedResourceReadChunkIndexName)
+            || !_chunkIndexes.Contains(BoundedResourceReadChunkEndIndexName))
+            return CreateResult(BoundedFileReadStatus.ContentUnavailable, "resource_bounded_read_index_unavailable");
+        if (HasNullResourceChunkBoundary(fileId))
+            return CreateResult(BoundedFileReadStatus.InvalidTopology, "resource_chunk_topology_invalid");
 
         var effectiveEndLine = Math.Min(endLine, totalLines);
         if (nextLine > effectiveEndLine)
             return CreateResult(BoundedFileReadStatus.InvalidContinuation);
 
-        // Bound chunk metadata independently from the line cap. Production chunks overlap by
-        // only ten lines, but a legacy or malformed DB can contain arbitrarily many rows for
-        // the same range. Fetch one sentinel row beyond the cap so that topology is rejected
-        // before any blob is opened, then sort only that bounded row set in memory so SQLite
-        // does not materialize an unbounded ORDER BY input.
-        // line上限とは独立してchunk metadataを制限する。production chunkの重複は10行だけだが、
-        // legacyまたは不正DBは同一範囲に任意件数を持ち得る。上限+1件を取得し、blobを開く前に
-        // topology異常を拒否する。そのbounded row setだけをmemory上でsortし、SQLiteが無制限な
-        // ORDER BY inputをmaterializeしないようにする。
+        // Bound SQLite work as well as returned metadata. Two disjoint index seeks collect
+        // at most one capped predecessor set and one capped forward set; overlap filtering
+        // then happens only over those bounded rows in memory. This avoids a full file_id
+        // scan for late ranges and gaps while retaining legacy chunks that span many lines.
+        // 返却metadataだけでなくSQLiteの走査量も制限する。互いに素なpredecessor/forwardの
+        // index seekを各上限件数まで取得し、重複範囲の判定はbounded rowだけmemory上で行う。
+        // これにより後方rangeやgapでもfile_id全走査を避け、長いlegacy chunkも扱える。
         var scanEndLine = (int)Math.Min(effectiveEndLine, (long)nextLine + maxLines - 1L);
         var chunks = new List<BoundedFileChunk>();
-        using (var chunkCmd = _conn.CreateCommand())
+        var chunkIds = new HashSet<long>();
+        string? chunkTopologyFailure = null;
+
+        int ReadChunkCandidates(string commandText, bool includeEndLine)
         {
-            chunkCmd.CommandText = @"
-                SELECT c.id, c.start_line, c.end_line, c.chunk_index
-                FROM chunks c
-                WHERE c.file_id = @fileId
-                  AND c.content IS NOT NULL
-                  AND c.end_line >= @startLine
-                  AND c.start_line <= @endLine
-                LIMIT @chunkLimit";
+            using var chunkCmd = _conn.CreateCommand();
+            chunkCmd.CommandText = commandText;
             SqliteCommandPolicy.AddInt64(chunkCmd, "@fileId", fileId);
             SqliteCommandPolicy.AddInt32(chunkCmd, "@startLine", nextLine);
-            SqliteCommandPolicy.AddInt32(chunkCmd, "@endLine", scanEndLine);
+            if (includeEndLine)
+                SqliteCommandPolicy.AddInt32(chunkCmd, "@endLine", scanEndLine);
             SqliteCommandPolicy.AddInt32(chunkCmd, "@chunkLimit", MaxBoundedFileReadChunks + 1);
 
+            var rawCandidateCount = 0;
             using var chunkReader = chunkCmd.ExecuteTrackedReader();
             while (chunkReader.TrackedRead())
             {
+                rawCandidateCount++;
                 _cancellation.ThrowIfCancellationRequested();
-                chunks.Add(new BoundedFileChunk(
+                if (chunkReader.IsDBNull(1) || chunkReader.IsDBNull(2) || chunkReader.IsDBNull(3))
+                {
+                    chunkTopologyFailure = "resource_chunk_topology_invalid";
+                    break;
+                }
+
+                var chunk = new BoundedFileChunk(
                     chunkReader.GetInt64(0),
                     chunkReader.GetInt32(1),
                     chunkReader.GetInt32(2),
-                    chunkReader.GetInt32(3)));
+                    chunkReader.GetInt32(3));
+                if (chunk.StartLine <= 0 || chunk.EndLine < chunk.StartLine || chunk.ChunkIndex < 0)
+                {
+                    chunkTopologyFailure = "resource_chunk_topology_invalid";
+                    break;
+                }
+                if (chunk.EndLine < nextLine || chunk.StartLine > scanEndLine)
+                    continue;
+
+                if (chunkIds.Add(chunk.RowId))
+                    chunks.Add(chunk);
+                if (chunks.Count > MaxBoundedFileReadChunks)
+                    break;
+            }
+
+            return rawCandidateCount;
+        }
+
+        var predecessorCandidateCount = ReadChunkCandidates(
+            $"""
+            SELECT c.id, c.start_line, c.end_line, c.chunk_index
+            FROM chunks c INDEXED BY {BoundedResourceReadChunkIndexName}
+            WHERE c.file_id = @fileId
+              AND c.content IS NOT NULL
+              AND c.start_line <= @startLine
+            ORDER BY c.start_line DESC, c.chunk_index DESC
+            LIMIT @chunkLimit
+            """,
+            includeEndLine: false);
+
+        bool HasChunkCoveringNextLine()
+            => chunks.Any(chunk => chunk.StartLine <= nextLine && chunk.EndLine >= nextLine);
+
+        if (chunkTopologyFailure == null
+            && chunks.Count <= MaxBoundedFileReadChunks
+            && !HasChunkCoveringNextLine()
+            && predecessorCandidateCount > MaxBoundedFileReadChunks)
+        {
+            var endCandidateCount = ReadChunkCandidates(
+                $"""
+                SELECT c.id, c.start_line, c.end_line, c.chunk_index
+                FROM chunks c INDEXED BY {BoundedResourceReadChunkEndIndexName}
+                WHERE c.file_id = @fileId
+                  AND c.content IS NOT NULL
+                  AND c.end_line >= @startLine
+                ORDER BY c.end_line, c.start_line, c.chunk_index
+                LIMIT @chunkLimit
+                """,
+                includeEndLine: false);
+            if (chunkTopologyFailure == null
+                && !HasChunkCoveringNextLine()
+                && endCandidateCount > MaxBoundedFileReadChunks)
+            {
+                return CreateResult(BoundedFileReadStatus.InvalidTopology, "chunk_candidate_scan_limit_exceeded");
             }
         }
 
+        if (chunkTopologyFailure == null && chunks.Count <= MaxBoundedFileReadChunks)
+        {
+            ReadChunkCandidates(
+                $"""
+                SELECT c.id, c.start_line, c.end_line, c.chunk_index
+                FROM chunks c INDEXED BY {BoundedResourceReadChunkIndexName}
+                WHERE c.file_id = @fileId
+                  AND c.content IS NOT NULL
+                  AND c.start_line > @startLine
+                  AND c.start_line <= @endLine
+                ORDER BY c.start_line, c.chunk_index
+                LIMIT @chunkLimit
+                """,
+                includeEndLine: true);
+        }
+
+        if (chunkTopologyFailure != null)
+            return CreateResult(BoundedFileReadStatus.InvalidTopology, chunkTopologyFailure);
         if (chunks.Count > MaxBoundedFileReadChunks)
             return CreateResult(BoundedFileReadStatus.InvalidTopology, "chunk_limit_exceeded");
         chunks.Sort(static (left, right) =>
@@ -766,15 +898,7 @@ public partial class DbReader
         });
         if (chunks.Count == 0)
         {
-            using var anyChunkCmd = _conn.CreateCommand();
-            anyChunkCmd.CommandText = @"
-                SELECT 1
-                FROM chunks
-                WHERE file_id = @fileId AND content IS NOT NULL
-                LIMIT 1";
-            SqliteCommandPolicy.AddInt64(anyChunkCmd, "@fileId", fileId);
-            var hasAnyStoredContent = anyChunkCmd.ExecuteScalar() != null;
-            return hasAnyStoredContent
+            return HasAnyStoredResourceChunk(fileId)
                 ? CreateResult(BoundedFileReadStatus.IncompleteCoverage, "resource_chunk_coverage_incomplete")
                 : CreateResult(BoundedFileReadStatus.ContentUnavailable, "resource_content_unavailable");
         }
@@ -856,6 +980,63 @@ public partial class DbReader
             NextLine = state.TruncationReason != null ? state.NextLine : null,
             NextByteOffset = state.TruncationReason != null ? state.NextByteOffset : null,
         };
+    }
+
+    private bool HasAnyResourceChunk(long fileId)
+    {
+        _cancellation.ThrowIfCancellationRequested();
+        using var command = _conn.CreateCommand();
+        command.CommandText = "SELECT 1 FROM chunks WHERE file_id = @fileId LIMIT 1";
+        SqliteCommandPolicy.AddInt64(command, "@fileId", fileId);
+        var hasChunk = command.ExecuteScalar() != null;
+        _cancellation.ThrowIfCancellationRequested();
+        return hasChunk;
+    }
+
+    private bool HasAnyStoredResourceChunk(long fileId)
+    {
+        _cancellation.ThrowIfCancellationRequested();
+        using var command = _conn.CreateCommand();
+        command.CommandText = $"""
+            SELECT 1
+            FROM chunks INDEXED BY {BoundedResourceReadChunkIndexName}
+            WHERE file_id = @fileId AND content IS NOT NULL
+            LIMIT 1
+            """;
+        SqliteCommandPolicy.AddInt64(command, "@fileId", fileId);
+        var hasChunk = command.ExecuteScalar() != null;
+        _cancellation.ThrowIfCancellationRequested();
+        return hasChunk;
+    }
+
+    private bool HasNullResourceChunkBoundary(long fileId)
+    {
+        bool Exists(string commandText)
+        {
+            using var command = _conn.CreateCommand();
+            command.CommandText = commandText;
+            SqliteCommandPolicy.AddInt64(command, "@fileId", fileId);
+            return command.ExecuteScalar() != null;
+        }
+
+        _cancellation.ThrowIfCancellationRequested();
+        var hasNullBoundary = Exists($"""
+            SELECT 1
+            FROM chunks INDEXED BY {BoundedResourceReadChunkIndexName}
+            WHERE file_id = @fileId
+              AND content IS NOT NULL
+              AND start_line IS NULL
+            LIMIT 1
+            """) || Exists($"""
+            SELECT 1
+            FROM chunks INDEXED BY {BoundedResourceReadChunkEndIndexName}
+            WHERE file_id = @fileId
+              AND content IS NOT NULL
+              AND end_line IS NULL
+            LIMIT 1
+            """);
+        _cancellation.ThrowIfCancellationRequested();
+        return hasNullBoundary;
     }
 
     private static void ReadBoundedChunk(

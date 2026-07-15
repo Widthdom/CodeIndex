@@ -95,6 +95,8 @@ public class DbContext : IDisposable
     ];
     private static readonly string[] ReadMigrationRequiredIndexes =
     [
+        "idx_chunks_file_end_start_nonnull",
+        "idx_chunks_file_start_chunk_nonnull",
         "idx_symbol_refs_name",
         "idx_symbol_refs_file",
         "idx_symbol_refs_container",
@@ -1952,6 +1954,8 @@ public class DbContext : IDisposable
                 // idx_files_path is not needed: the UNIQUE constraint on path already creates an implicit index
                 // idx_files_path は不要: path の UNIQUE 制約が暗黙的にインデックスを作成済み
                 Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file    ON chunks(file_id)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file_end_start_nonnull ON chunks(file_id, end_line, start_line, chunk_index) WHERE content IS NOT NULL");
+                Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file_start_chunk_nonnull ON chunks(file_id, start_line, chunk_index, end_line) WHERE content IS NOT NULL");
                 Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name   ON symbols(name)");
                 // Case-insensitive exact-match index for `symbols --exact` (and MCP `symbols` exact=true).
                 // Without this, `name = @q COLLATE NOCASE` falls back to a full symbols scan per query name,
@@ -2772,6 +2776,7 @@ public class DbContext : IDisposable
         // The order here matches the legacy inline migration: tables before the columns and
         // indexes that reference them, and fold columns before the folded indexes (#86).
         // 並び順は legacy インラインマイグレーションと同じ。テーブル→列→index、fold 列→folded index。
+        yield return ("CREATE INDEX bounded resource read chunk indexes", EnsureBoundedResourceReadChunkIndexes);
         yield return ("CREATE TABLE reference_lines", () => Execute(@"
             CREATE TABLE IF NOT EXISTS reference_lines (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2879,6 +2884,15 @@ public class DbContext : IDisposable
                 key    TEXT PRIMARY KEY NOT NULL,
                 value  TEXT
             )"));
+    }
+
+    private void EnsureBoundedResourceReadChunkIndexes()
+    {
+        if (!TableExists("chunks"))
+            return;
+
+        Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file_end_start_nonnull ON chunks(file_id, end_line, start_line, chunk_index) WHERE content IS NOT NULL");
+        Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file_start_chunk_nonnull ON chunks(file_id, start_line, chunk_index, end_line) WHERE content IS NOT NULL");
     }
 
     private bool ReadMigrationSchemaIsCurrent()

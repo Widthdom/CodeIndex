@@ -2463,8 +2463,7 @@ public partial class McpServer : IDisposable
 
         return WithDbReader(id, args: null, reader => reader.RunInReadSnapshot(() =>
         {
-            var files = reader.ListFiles(query: path, limit: 2);
-            var file = files.FirstOrDefault(f => string.Equals(f.Path, path, StringComparison.Ordinal));
+            var file = reader.GetResourceFileMetadata(path);
             if (file == null)
                 return CreateResourceUriError(id, uri, messagePrefix: "Resource not found",
                     suggestion: "Call resources/list again and retry with one of the returned resource URIs.",
@@ -2482,18 +2481,18 @@ public partial class McpServer : IDisposable
 
             ResourceReadMetadataLoadedForTests?.Invoke();
 
-            var isEmpty = file.Size == 0;
+            var isEmpty = file.Size >= 0
+                          && DbReader.IsAffirmativelyEmptyIndexedFile(file.Lines, file.Checksum);
             var totalLines = Math.Max(0, file.Lines);
-            if (!isEmpty && totalLines == 0)
-                return CreateResourceReadStorageError(id, BoundedFileReadStatus.ContentUnavailable, "resource_content_unavailable");
+            var hasReadableLines = !isEmpty && file.Lines > 0;
             if (isEmpty && cursor.HasValue)
                 return CreateResourceReadArgumentError(id, "cursor",
                     "resources/read params.cursor does not identify a readable position in this empty resource.",
                     "Omit cursor and restart the resource read without line boundaries.");
 
-            var startLine = isEmpty ? 0 : cursor?.Line ?? requestedStartLine ?? 1;
-            var endLine = isEmpty ? 0 : cursor?.EndLine ?? requestedEndLine ?? totalLines;
-            if (!isEmpty && startLine > totalLines)
+            var startLine = isEmpty ? 0 : hasReadableLines ? cursor?.Line ?? requestedStartLine ?? 1 : 1;
+            var endLine = isEmpty ? 0 : hasReadableLines ? cursor?.EndLine ?? requestedEndLine ?? totalLines : 1;
+            if (hasReadableLines && startLine > totalLines)
                 return CreateResourceReadArgumentError(id, "startLine",
                     $"resources/read params.startLine exceeds the resource line count ({file.Lines}).",
                     "Use a startLine from resources/read result._meta or restart at line 1.",
@@ -2501,9 +2500,9 @@ public partial class McpServer : IDisposable
                     {
                         ["totalLines"] = file.Lines,
                     });
-            if (!isEmpty)
+            if (hasReadableLines)
                 endLine = Math.Min(endLine, totalLines);
-            if (!isEmpty && endLine < startLine)
+            if (hasReadableLines && endLine < startLine)
                 return CreateResourceReadArgumentError(id, "endLine",
                     "resources/read effective endLine is before startLine.",
                     "Restart the range with an endLine greater than or equal to startLine.");
@@ -2529,13 +2528,13 @@ public partial class McpServer : IDisposable
                     });
 
             var page = reader.GetBoundedFileContent(
-                file.Path,
+                file,
                 isEmpty ? 1 : startLine,
                 isEmpty ? 1 : endLine,
                 effectiveMaxBytes,
                 MaxResourceReadLinesPerPage,
-                cursor?.Line,
-                cursor?.ByteOffset ?? 0);
+                hasReadableLines ? cursor?.Line : null,
+                hasReadableLines ? cursor?.ByteOffset ?? 0 : 0);
             switch (page.Status)
             {
                 case BoundedFileReadStatus.FileNotFound:
@@ -2643,7 +2642,7 @@ public partial class McpServer : IDisposable
                 extraData: extraData),
             _ => CreateErrorResponse(hasId: true, id: id,
                 code: McpErrorEnvelope.CodeIndexCorrupted,
-                message: "Indexed resource chunk topology exceeds safe read limits.",
+                message: "Indexed resource storage metadata is inconsistent or exceeds safe read limits.",
                 category: McpErrorEnvelope.CategoryIndexCorrupted,
                 suggestion: "Delete the index database, rebuild it, and retry with a resource URI from resources/list.",
                 retrySafe: false,

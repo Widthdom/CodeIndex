@@ -414,7 +414,7 @@ public partial class McpServerTests : IDisposable
             Size = Encoding.UTF8.GetByteCount(normalized),
             Lines = lineCount,
             Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
-            Checksum = Guid.NewGuid().ToString("N"),
+            Checksum = FileContentLoader.ComputeChecksumFromNormalizedContent(normalized),
             Generated = generated,
         });
         writer.InsertChunks(normalized.Length == 0
@@ -1201,6 +1201,19 @@ public sealed class Caller
     }
 
     [Fact]
+    public void ResourcesRead_UsesExactPathWhenSubstringCandidatesSortFirst_Issue4544()
+    {
+        InsertIndexedFile("a/src/exact-collision.txt.copy", "text", "decoy-a");
+        InsertIndexedFile("b/src/exact-collision.txt.copy", "text", "decoy-b");
+        InsertIndexedFile("src/exact-collision.txt", "text", "expected");
+
+        var response = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":4544,"method":"resources/read","params":{"uri":"cdidx://file/src/exact-collision.txt"}}""")!)!;
+
+        Assert.Equal("expected", response["result"]!["contents"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ResourcesRead_RangesAndContinuesOnUtf8Boundaries_Issue4544()
     {
         const string expected = "second\n🙂🙂🙂\nfourth";
@@ -1487,8 +1500,119 @@ public sealed class Caller
         InsertIndexedFile("src/unavailable-resource.txt", "text", "indexed metadata without content");
         DeleteIndexedChunks("src/unavailable-resource.txt");
 
-        var empty = _server.HandleMessage(JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"cdidx://file/src/empty-resource.txt"}}""")!)!;
+        var writer = new DbWriter(_db.Connection);
+        var emptyChecksum = FileContentLoader.ComputeChecksumFromNormalizedContent(string.Empty);
+        writer.UpsertFile(new FileRecord
+        {
+            Path = "src/normalized-empty-resource.txt",
+            Lang = "text",
+            Size = Encoding.UTF8.GetByteCount("\uFEFF\u200B"),
+            Lines = 0,
+            Checksum = emptyChecksum,
+            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+        });
+        writer.UpsertFile(new FileRecord
+        {
+            Path = "src/skipped-empty-metadata.txt",
+            Lang = "text",
+            Size = 128,
+            Lines = 0,
+            Checksum = null,
+            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+        });
+        writer.UpsertFile(new FileRecord
+        {
+            Path = "src/lfs-empty-metadata.txt",
+            Lang = "text",
+            Size = 128,
+            Lines = 0,
+            Checksum = FileContentLoader.ComputeChecksumFromNormalizedContent("version https://git-lfs.github.com/spec/v1"),
+            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+        });
+        var strayChunkFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/inconsistent-empty-resource.txt",
+            Lang = "text",
+            Size = 0,
+            Lines = 0,
+            Checksum = emptyChecksum,
+            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+        });
+        writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = strayChunkFileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "x",
+            },
+        ]);
+        writer.UpsertFile(new FileRecord
+        {
+            Path = "src/inconsistent-zero-size-resource.txt",
+            Lang = "text",
+            Size = 0,
+            Lines = 1,
+            Checksum = FileContentLoader.ComputeChecksumFromNormalizedContent("x"),
+            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+        });
+        var nullContentFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/null-content-resource.txt",
+            Lang = "text",
+            Size = 1,
+            Lines = 1,
+            Checksum = FileContentLoader.ComputeChecksumFromNormalizedContent("x"),
+            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+        });
+        var nullStartLineFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/null-start-line-resource.txt",
+            Lang = "text",
+            Size = 1,
+            Lines = 1,
+            Checksum = FileContentLoader.ComputeChecksumFromNormalizedContent("x"),
+            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+        });
+        var nullEndLineFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/null-end-line-resource.txt",
+            Lang = "text",
+            Size = 1,
+            Lines = 1,
+            Checksum = FileContentLoader.ComputeChecksumFromNormalizedContent("x"),
+            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+        });
+        using (var malformedChunks = _db.Connection.CreateCommand())
+        {
+            malformedChunks.CommandText = """
+                INSERT INTO chunks(file_id, chunk_index, start_line, end_line, content)
+                VALUES (@nullContentFileId, 0, 1, 1, NULL);
+                INSERT INTO chunks(file_id, chunk_index, start_line, end_line, content)
+                VALUES (@nullStartLineFileId, 0, NULL, 1, 'x');
+                INSERT INTO chunks(file_id, chunk_index, start_line, end_line, content)
+                VALUES (@nullEndLineFileId, 0, 2, NULL, 'x');
+                """;
+            malformedChunks.Parameters.AddWithValue("@nullContentFileId", nullContentFileId);
+            malformedChunks.Parameters.AddWithValue("@nullStartLineFileId", nullStartLineFileId);
+            malformedChunks.Parameters.AddWithValue("@nullEndLineFileId", nullEndLineFileId);
+            malformedChunks.ExecuteNonQuery();
+        }
+
+        JsonNode Read(string path, int id) => _server.HandleMessage(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = id,
+            ["method"] = "resources/read",
+            ["params"] = new JsonObject
+            {
+                ["uri"] = $"cdidx://file/{path}",
+            },
+        })!;
+
+        var empty = Read("src/empty-resource.txt", 1);
         Assert.Equal(string.Empty, empty["result"]!["contents"]![0]!["text"]!.GetValue<string>());
         var emptyMetadata = empty["result"]!["_meta"]!;
         Assert.Equal(0, emptyMetadata["totalLines"]!.GetValue<int>());
@@ -1496,18 +1620,54 @@ public sealed class Caller
         Assert.Equal(0, emptyMetadata["returnedEndLine"]!.GetValue<int>());
         Assert.Equal(0, emptyMetadata["returnedBytes"]!.GetValue<int>());
         Assert.False(emptyMetadata["truncated"]!.GetValue<bool>());
+        Assert.Null(emptyMetadata["nextCursor"]);
 
-        var newlineOnly = _server.HandleMessage(JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"cdidx://file/src/newline-resource.txt"}}""")!)!;
+        var normalizedEmpty = Read("src/normalized-empty-resource.txt", 2);
+        Assert.Equal(string.Empty, normalizedEmpty["result"]!["contents"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(0, normalizedEmpty["result"]!["_meta"]!["totalLines"]!.GetValue<int>());
+        Assert.Equal(0, normalizedEmpty["result"]!["_meta"]!["returnedBytes"]!.GetValue<int>());
+
+        var newlineOnly = Read("src/newline-resource.txt", 3);
         Assert.Equal(string.Empty, newlineOnly["result"]!["contents"]![0]!["text"]!.GetValue<string>());
         Assert.Equal(1, newlineOnly["result"]!["_meta"]!["totalLines"]!.GetValue<int>());
         Assert.False(newlineOnly["result"]!["_meta"]!["truncated"]!.GetValue<bool>());
 
-        var unavailable = _server.HandleMessage(JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"cdidx://file/src/unavailable-resource.txt"}}""")!)!;
-        Assert.Equal(McpErrorEnvelope.CodeIndexMissing, unavailable["error"]!["code"]!.GetValue<int>());
-        Assert.Equal(McpErrorEnvelope.CategoryIndexMissing, unavailable["error"]!["data"]!["category"]!.GetValue<string>());
-        Assert.Equal("resource_content_unavailable", unavailable["error"]!["data"]!["reason"]!.GetValue<string>());
+        foreach (var unavailable in new[]
+                 {
+                     Read("src/unavailable-resource.txt", 4),
+                     Read("src/skipped-empty-metadata.txt", 5),
+                     Read("src/lfs-empty-metadata.txt", 6),
+                     Read("src/null-content-resource.txt", 9),
+                 })
+        {
+            Assert.Equal(McpErrorEnvelope.CodeIndexMissing, unavailable["error"]!["code"]!.GetValue<int>());
+            Assert.Equal(McpErrorEnvelope.CategoryIndexMissing, unavailable["error"]!["data"]!["category"]!.GetValue<string>());
+            Assert.Equal("resource_content_unavailable", unavailable["error"]!["data"]!["reason"]!.GetValue<string>());
+        }
+
+        foreach (var inconsistent in new[]
+                 {
+                     Read("src/inconsistent-empty-resource.txt", 7),
+                     Read("src/inconsistent-zero-size-resource.txt", 8),
+                 })
+        {
+            Assert.Equal(McpErrorEnvelope.CodeIndexCorrupted, inconsistent["error"]!["code"]!.GetValue<int>());
+            Assert.Equal(McpErrorEnvelope.CategoryIndexCorrupted, inconsistent["error"]!["data"]!["category"]!.GetValue<string>());
+            Assert.False(inconsistent["error"]!["data"]!["retry_safe"]!.GetValue<bool>());
+            Assert.Equal("resource_file_metadata_inconsistent", inconsistent["error"]!["data"]!["reason"]!.GetValue<string>());
+        }
+
+
+        foreach (var nullBoundary in new[]
+                 {
+                     Read("src/null-start-line-resource.txt", 10),
+                     Read("src/null-end-line-resource.txt", 11),
+                 })
+        {
+            Assert.Equal(McpErrorEnvelope.CodeIndexCorrupted, nullBoundary["error"]!["code"]!.GetValue<int>());
+            Assert.Equal(McpErrorEnvelope.CategoryIndexCorrupted, nullBoundary["error"]!["data"]!["category"]!.GetValue<string>());
+            Assert.Equal("resource_chunk_topology_invalid", nullBoundary["error"]!["data"]!["reason"]!.GetValue<string>());
+        }
     }
 
     [Fact]
@@ -1569,6 +1729,184 @@ public sealed class Caller
         Assert.Equal(McpErrorEnvelope.CodeIndexCorrupted, scanCap["error"]!["code"]!.GetValue<int>());
         Assert.Equal(McpErrorEnvelope.CategoryIndexCorrupted, scanCap["error"]!["data"]!["category"]!.GetValue<string>());
         Assert.Equal("scan_limit_exceeded", scanCap["error"]!["data"]!["reason"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ResourcesRead_UsesBoundedChunkRangeSeeksForLateRanges_Issue4544()
+    {
+        const string path = "src/late-range-resource.txt";
+        var fileId = InsertIndexedFile(path, "text", "target", lineCountOverride: 10_000);
+        DeleteIndexedChunks(path);
+        using (var insert = _db.Connection.CreateCommand())
+        {
+            insert.CommandText = """
+                WITH digits(value) AS (
+                    VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)
+                ), numbered(line) AS (
+                    SELECT 1 + ones.value + (10 * tens.value) + (100 * hundreds.value) + (1000 * thousands.value)
+                    FROM digits ones
+                    CROSS JOIN digits tens
+                    CROSS JOIN digits hundreds
+                    CROSS JOIN digits thousands
+                )
+                INSERT INTO chunks(file_id, chunk_index, start_line, end_line, content)
+                SELECT @fileId, line, line, line, 'x'
+                FROM numbered
+                WHERE line <= 5000;
+
+                INSERT INTO chunks(file_id, chunk_index, start_line, end_line, content)
+                VALUES (@fileId, 10000, 10000, 10000, 'target');
+                """;
+            insert.Parameters.AddWithValue("@fileId", fileId);
+            insert.ExecuteNonQuery();
+        }
+
+        string Explain(string sql)
+        {
+            using var explain = _db.Connection.CreateCommand();
+            explain.CommandText = "EXPLAIN QUERY PLAN " + sql;
+            explain.Parameters.AddWithValue("@fileId", fileId);
+            explain.Parameters.AddWithValue("@startLine", 10_000);
+            explain.Parameters.AddWithValue("@endLine", 10_000);
+            explain.Parameters.AddWithValue("@chunkLimit", DbReader.MaxBoundedFileReadChunks + 1);
+            using var planReader = explain.ExecuteReader();
+            var details = new List<string>();
+            while (planReader.Read())
+                details.Add(planReader.GetString(3));
+            return string.Join('\n', details);
+        }
+
+        var predecessorPlan = Explain($"""
+            SELECT c.id, c.start_line, c.end_line, c.chunk_index
+            FROM chunks c INDEXED BY {DbReader.BoundedResourceReadChunkIndexName}
+            WHERE c.file_id = @fileId
+              AND c.content IS NOT NULL
+              AND c.start_line <= @startLine
+            ORDER BY c.start_line DESC, c.chunk_index DESC
+            LIMIT @chunkLimit
+            """);
+        var endPlan = Explain($"""
+            SELECT c.id, c.start_line, c.end_line, c.chunk_index
+            FROM chunks c INDEXED BY {DbReader.BoundedResourceReadChunkEndIndexName}
+            WHERE c.file_id = @fileId
+              AND c.content IS NOT NULL
+              AND c.end_line >= @startLine
+            ORDER BY c.end_line, c.start_line, c.chunk_index
+            LIMIT @chunkLimit
+            """);
+        var forwardPlan = Explain($"""
+            SELECT c.id, c.start_line, c.end_line, c.chunk_index
+            FROM chunks c INDEXED BY {DbReader.BoundedResourceReadChunkIndexName}
+            WHERE c.file_id = @fileId
+              AND c.content IS NOT NULL
+              AND c.start_line > @startLine
+              AND c.start_line <= @endLine
+            ORDER BY c.start_line, c.chunk_index
+            LIMIT @chunkLimit
+            """);
+        Assert.Contains(DbReader.BoundedResourceReadChunkIndexName, predecessorPlan);
+        Assert.Contains("start_line<?", predecessorPlan);
+        Assert.DoesNotContain("USE TEMP B-TREE", predecessorPlan);
+        Assert.Contains(DbReader.BoundedResourceReadChunkEndIndexName, endPlan);
+        Assert.Contains("end_line>?", endPlan);
+        Assert.DoesNotContain("USE TEMP B-TREE", endPlan);
+        Assert.Contains(DbReader.BoundedResourceReadChunkIndexName, forwardPlan);
+        Assert.Contains("start_line>? AND start_line<?", forwardPlan);
+        Assert.DoesNotContain("USE TEMP B-TREE", forwardPlan);
+
+        var lateRange = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"cdidx://file/src/late-range-resource.txt","startLine":10000,"endLine":10000}}""")!)!;
+        Assert.Equal("target", lateRange["result"]!["contents"]![0]!["text"]!.GetValue<string>());
+
+        var gap = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"cdidx://file/src/late-range-resource.txt","startLine":7500,"endLine":7500}}""")!)!;
+        Assert.Equal(McpErrorEnvelope.CodeIndexStale, gap["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("resource_chunk_coverage_incomplete", gap["error"]!["data"]!["reason"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ResourcesRead_FindsLongCoveringChunkBeyondPredecessorCap_Issue4544()
+    {
+        const string path = "src/long-covering-resource.txt";
+        var longContent = new string('\n', 9_999) + "target";
+        var writer = new DbWriter(_db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = "text",
+            Size = Encoding.UTF8.GetByteCount(longContent),
+            Lines = 10_000,
+            Checksum = FileContentLoader.ComputeChecksumFromNormalizedContent(longContent),
+            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+        });
+        using (var insert = _db.Connection.CreateCommand())
+        {
+            insert.CommandText = """
+                WITH digits(value) AS (
+                    VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)
+                ), numbered(line) AS (
+                    SELECT 1 + ones.value + (10 * tens.value) + (100 * hundreds.value)
+                    FROM digits ones
+                    CROSS JOIN digits tens
+                    CROSS JOIN digits hundreds
+                )
+                INSERT INTO chunks(file_id, chunk_index, start_line, end_line, content)
+                SELECT @fileId, line, line, line, 'x'
+                FROM numbered
+                WHERE line BETWEEN 2 AND 300;
+
+                INSERT INTO chunks(file_id, chunk_index, start_line, end_line, content)
+                VALUES (@fileId, 0, 1, 10000, @longContent);
+                """;
+            insert.Parameters.AddWithValue("@fileId", fileId);
+            insert.Parameters.AddWithValue("@longContent", longContent);
+            insert.ExecuteNonQuery();
+        }
+
+        var response = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":4544,"method":"resources/read","params":{"uri":"cdidx://file/src/long-covering-resource.txt","startLine":10000,"endLine":10000}}""")!)!;
+
+        Assert.Equal("target", response["result"]!["contents"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(10_000, response["result"]!["_meta"]!["returnedStartLine"]!.GetValue<int>());
+        Assert.Equal(10_000, response["result"]!["_meta"]!["returnedEndLine"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ResourcesRead_ReportsBoundedCandidateAmbiguityForLargeMiddleGap_Issue4544()
+    {
+        const string path = "src/large-middle-gap-resource.txt";
+        var fileId = InsertIndexedFile(path, "text", "x", lineCountOverride: 49_010);
+        DeleteIndexedChunks(path);
+        using (var insert = _db.Connection.CreateCommand())
+        {
+            insert.CommandText = """
+                WITH digits(value) AS (
+                    VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)
+                ), numbered(chunk_index) AS (
+                    SELECT ones.value + (10 * tens.value) + (100 * hundreds.value)
+                    FROM digits ones
+                    CROSS JOIN digits tens
+                    CROSS JOIN digits hundreds
+                )
+                INSERT INTO chunks(file_id, chunk_index, start_line, end_line, content)
+                SELECT @fileId,
+                       chunk_index,
+                       1 + (chunk_index * 70),
+                       80 + (chunk_index * 70),
+                       'x'
+                FROM numbered
+                WHERE chunk_index < 700 AND chunk_index <> 350;
+                """;
+            insert.Parameters.AddWithValue("@fileId", fileId);
+            insert.ExecuteNonQuery();
+        }
+
+        var response = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":4544,"method":"resources/read","params":{"uri":"cdidx://file/src/large-middle-gap-resource.txt","startLine":24540,"endLine":24540}}""")!)!;
+
+        Assert.Equal(McpErrorEnvelope.CodeIndexCorrupted, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal(McpErrorEnvelope.CategoryIndexCorrupted, response["error"]!["data"]!["category"]!.GetValue<string>());
+        Assert.Equal("chunk_candidate_scan_limit_exceeded", response["error"]!["data"]!["reason"]!.GetValue<string>());
     }
 
     [Fact]
