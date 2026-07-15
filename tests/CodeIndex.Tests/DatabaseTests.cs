@@ -249,6 +249,96 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void RefreshMutualRecursionFlags_UpdatesOnlyChangedRowsAndClearsBrokenCycles()
+    {
+        var fileId = UpsertTestFile("src/mutual.cs", checksum: "mutual-differential");
+        _writer.InsertReferences(
+        [
+            new ReferenceRecord { FileId = fileId, SymbolName = "Beta", ReferenceKind = "call", Line = 1, Column = 1, Context = "Beta();", ContainerName = "Alpha" },
+            new ReferenceRecord { FileId = fileId, SymbolName = "Alpha", ReferenceKind = "call", Line = 2, Column = 1, Context = "Alpha();", ContainerName = "Beta" },
+            new ReferenceRecord { FileId = fileId, SymbolName = "Delta", ReferenceKind = "call", Line = 3, Column = 1, Context = "Delta();", ContainerName = "Gamma" },
+        ],
+        refreshMutualRecursionFlags: false);
+        ExecuteNonQuery(_db.Connection, """
+            CREATE TABLE mutual_refresh_audit (reference_id INTEGER, old_value INTEGER, new_value INTEGER);
+            CREATE TRIGGER audit_mutual_refresh
+            AFTER UPDATE OF is_mutual_recursion ON symbol_references
+            BEGIN
+                INSERT INTO mutual_refresh_audit (reference_id, old_value, new_value)
+                VALUES (NEW.id, OLD.is_mutual_recursion, NEW.is_mutual_recursion);
+            END;
+            """);
+
+        _writer.RefreshMutualRecursionFlags();
+
+        Assert.Equal(2, ExecuteScalarLong("SELECT changes()"));
+        Assert.Equal(2, ExecuteScalarLong("SELECT COUNT(*) FROM mutual_refresh_audit"));
+        Assert.Equal(2, ExecuteScalarLong("SELECT COUNT(*) FROM symbol_references WHERE is_mutual_recursion = 1"));
+
+        _writer.RefreshMutualRecursionFlags();
+
+        Assert.Equal(0, ExecuteScalarLong("SELECT changes()"));
+        Assert.Equal(2, ExecuteScalarLong("SELECT COUNT(*) FROM mutual_refresh_audit"));
+
+        ExecuteNonQuery(_db.Connection, "DELETE FROM symbol_references WHERE container_name = 'Beta' AND symbol_name = 'Alpha'");
+        _writer.RefreshMutualRecursionFlags();
+
+        Assert.Equal(1, ExecuteScalarLong("SELECT changes()"));
+        Assert.Equal(3, ExecuteScalarLong("SELECT COUNT(*) FROM mutual_refresh_audit"));
+        Assert.Equal(0, ExecuteScalarLong("SELECT COUNT(*) FROM symbol_references WHERE is_mutual_recursion = 1"));
+    }
+
+    [Fact]
+    public void RefreshMutualRecursionFlags_NormalizesUnexpectedStoredValues()
+    {
+        var fileId = UpsertTestFile("src/mutual-normalize.cs", checksum: "mutual-normalize");
+        _writer.InsertReferences(
+        [
+            new ReferenceRecord { FileId = fileId, SymbolName = "Beta", ReferenceKind = "call", Line = 1, Column = 1, Context = "Beta();", ContainerName = "Alpha" },
+            new ReferenceRecord { FileId = fileId, SymbolName = "Alpha", ReferenceKind = "call", Line = 2, Column = 1, Context = "Alpha();", ContainerName = "Beta" },
+            new ReferenceRecord { FileId = fileId, SymbolName = "Delta", ReferenceKind = "call", Line = 3, Column = 1, Context = "Delta();", ContainerName = "Gamma" },
+        ],
+        refreshMutualRecursionFlags: false);
+        ExecuteNonQuery(_db.Connection, "UPDATE symbol_references SET is_mutual_recursion = 2");
+
+        _writer.RefreshMutualRecursionFlags();
+
+        Assert.Equal(3, ExecuteScalarLong("SELECT changes()"));
+        Assert.Equal(2, ExecuteScalarLong("SELECT COUNT(*) FROM symbol_references WHERE is_mutual_recursion = 1"));
+        Assert.Equal(1, ExecuteScalarLong("SELECT COUNT(*) FROM symbol_references WHERE is_mutual_recursion = 0"));
+        Assert.Equal(0, ExecuteScalarLong("SELECT COUNT(*) FROM symbol_references WHERE is_mutual_recursion NOT IN (0, 1)"));
+    }
+
+    [Fact]
+    public void RefreshMutualRecursionFlags_RollsBackAllChangedRowsWhenTriggerAborts()
+    {
+        var fileId = UpsertTestFile("src/mutual-rollback.cs", checksum: "mutual-rollback");
+        _writer.InsertReferences(
+        [
+            new ReferenceRecord { FileId = fileId, SymbolName = "Beta", ReferenceKind = "call", Line = 1, Column = 1, Context = "Beta();", ContainerName = "Alpha" },
+            new ReferenceRecord { FileId = fileId, SymbolName = "Alpha", ReferenceKind = "call", Line = 2, Column = 1, Context = "Alpha();", ContainerName = "Beta" },
+        ],
+        refreshMutualRecursionFlags: false);
+        ExecuteNonQuery(_db.Connection, """
+            CREATE TRIGGER fail_second_mutual_refresh
+            BEFORE UPDATE OF is_mutual_recursion ON symbol_references
+            WHEN NEW.symbol_name = 'Alpha'
+            BEGIN
+                SELECT RAISE(ABORT, 'boom');
+            END;
+            """);
+
+        Assert.Throws<SqliteException>(() => _writer.RefreshMutualRecursionFlags());
+        Assert.Equal(0, ExecuteScalarLong("SELECT COUNT(*) FROM symbol_references WHERE is_mutual_recursion <> 0"));
+
+        ExecuteNonQuery(_db.Connection, "DROP TRIGGER fail_second_mutual_refresh");
+        _writer.RefreshMutualRecursionFlags();
+
+        Assert.Equal(2, ExecuteScalarLong("SELECT changes()"));
+        Assert.Equal(2, ExecuteScalarLong("SELECT COUNT(*) FROM symbol_references WHERE is_mutual_recursion = 1"));
+    }
+
+    [Fact]
     public void DeleteFileData_WhenReferencedLineIsDeleted_PreservesReferenceWithNullLineContext()
     {
         var callerFileId = UpsertTestFile("src/caller.cs", checksum: "caller");

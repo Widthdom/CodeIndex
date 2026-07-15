@@ -5,6 +5,54 @@ namespace CodeIndex.Database;
 
 public partial class DbWriter
 {
+    private const string MutualRecursionValueSql = """
+        CASE
+            WHEN r.is_self_reference = 0
+             AND r.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
+             AND r.container_name IS NOT NULL
+             AND r.container_name <> ''
+             AND r.symbol_name IS NOT NULL
+             AND r.symbol_name <> ''
+             AND (
+                (
+                    r.container_name_folded IS NOT NULL
+                    AND r.container_name_folded <> ''
+                    AND r.symbol_name_folded IS NOT NULL
+                    AND r.symbol_name_folded <> ''
+                    AND EXISTS (
+                        SELECT 1
+                        FROM symbol_references AS reverse
+                        WHERE reverse.is_self_reference = 0
+                          AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
+                          AND reverse.container_name_folded = r.symbol_name_folded
+                          AND reverse.symbol_name_folded = r.container_name_folded
+                    )
+                )
+                OR (
+                    (r.container_name_folded IS NULL OR r.symbol_name_folded IS NULL)
+                    AND EXISTS (
+                        SELECT 1
+                        FROM symbol_references AS reverse
+                        WHERE reverse.is_self_reference = 0
+                          AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
+                          AND reverse.container_name = r.symbol_name COLLATE NOCASE
+                          AND reverse.symbol_name = r.container_name COLLATE NOCASE
+                    )
+                )
+             )
+            THEN 1
+            ELSE 0
+        END
+        """;
+
+    private static readonly string RefreshMutualRecursionFlagsSql = $"""
+        UPDATE symbol_references AS r
+        SET is_mutual_recursion = {MutualRecursionValueSql}
+        -- IS NOT is null-safe and also normalizes legacy non-boolean values.
+        -- IS NOT により NULL と legacy の非boolean値も安全に正規化する。
+        WHERE r.is_mutual_recursion IS NOT ({MutualRecursionValueSql})
+        """;
+
     /// <summary>
     /// Insert indexed references in batches.
     /// インデックス済み参照をバッチ挿入する。
@@ -247,47 +295,7 @@ public partial class DbWriter
     internal void RefreshMutualRecursionFlags()
     {
         MutualRecursionRefreshForTesting?.Invoke();
-        var cmd = RentCommand(
-            @"
-            UPDATE symbol_references AS r
-            SET is_mutual_recursion = CASE
-                WHEN r.is_self_reference = 0
-                 AND r.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
-                 AND r.container_name IS NOT NULL
-                 AND r.container_name <> ''
-                 AND r.symbol_name IS NOT NULL
-                 AND r.symbol_name <> ''
-                 AND (
-                    (
-                        r.container_name_folded IS NOT NULL
-                        AND r.container_name_folded <> ''
-                        AND r.symbol_name_folded IS NOT NULL
-                        AND r.symbol_name_folded <> ''
-                        AND EXISTS (
-                            SELECT 1
-                            FROM symbol_references AS reverse
-                            WHERE reverse.is_self_reference = 0
-                              AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
-                              AND reverse.container_name_folded = r.symbol_name_folded
-                              AND reverse.symbol_name_folded = r.container_name_folded
-                        )
-                    )
-                    OR (
-                        (r.container_name_folded IS NULL OR r.symbol_name_folded IS NULL)
-                        AND EXISTS (
-                            SELECT 1
-                            FROM symbol_references AS reverse
-                            WHERE reverse.is_self_reference = 0
-                              AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
-                              AND reverse.container_name = r.symbol_name COLLATE NOCASE
-                              AND reverse.symbol_name = r.container_name COLLATE NOCASE
-                        )
-                    )
-                 )
-                THEN 1
-                ELSE 0
-            END",
-            static _ => { });
+        var cmd = RentCommand(RefreshMutualRecursionFlagsSql, static _ => { });
         try
         {
             cmd.ExecuteNonQuery();
