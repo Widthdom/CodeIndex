@@ -2041,10 +2041,14 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   body-token gate, failures uniformly return JSON-RPC `-32001 "Unauthorized"`
   (per #1530 sanitization — the
   wire never distinguishes missing-from-wrong), and `BuildAuthFailureLog`
-  emits the detailed reason to stderr. Notifications
-  (`notifications/initialized`, `notifications/cancelled`) short-circuit
-  *before* the gate because they produce no response and cannot signal
-  an error code. The middleware is the seam for future transports — a
+  emits the detailed reason to stderr. Side-effect-free notifications such as
+  `notifications/initialized` may short-circuit without authentication.
+  State-changing notifications (`$/cancelRequest`, `notifications/cancelled`,
+  `notifications/roots/list_changed`, `notifications/shutdown`, and
+  `notifications/exit`) pass through the gate before mutating cancellation,
+  roots, or lifecycle state. Authentication failures remain response-free and
+  emit only the bounded stderr diagnostic (#4537). The middleware is the seam
+  for future transports — a
   networked listener supplies a different `IMcpAuthenticator` while the
   `McpCallerIdentity` shape (`Source` + `Subject`) stays stable for the
   audit log (#1562).
@@ -4278,7 +4282,7 @@ sequenceDiagram
 - すべての request frame は厳密な `"jsonrpc":"2.0"` member を持つ必要があり、`initialize` 以外の応答対象 method は初期化成功まで拒否される（#4468）。有限の stdio input が EOF に達した場合、受理済み request は固定 grace period 後に cancel せず完了まで drain し（#4434）、cancellation diagnostic は未完了 task だけを数える（#4435）。
 - advertised capability には `tools`、`resources`、`prompts`、`logging` が含まれる。`logging` は MCP `notifications/message` を示し、`logging/setLevel` は `debug`、`info`、`notice`、`warning`、`error`、`critical`、`alert`、`emergency` を受け付ける。
 - `protocolVersion` は**ハードコードではなく交渉**で決まる（#1554）。サーバーは `McpServer.SupportedProtocolVersions`（新しい順: `2025-03-26`, `2024-11-05`）を保持し、`initialize` パラメータからクライアント要求バージョンを読み取って、対応集合にあればそれを返し（合意）、未指定／非文字列なら既定の最新バージョンに fallback し、対応外なら `error.data` に `requestedVersion` と `supportedVersions` を入れた JSON-RPC `-32602` で拒否する。これにより将来 MCP 仕様が改訂されても、wire format が黙ってずれるのではなく actionable な handshake 失敗として表面化する。配列を新バージョンで更新する際は `ProtocolVersion` を先頭エントリと揃えて意図的に bump する。
-- **認証ミドルウェア**（#1559）。`McpServer` はパース済み JSON-RPC リクエストごとに、メソッド抽出 *後*・dispatch *前* で `IMcpAuthenticator` を呼ぶ。既定の `LocalStdioAuthenticator` は permissive で（従来の stdio 動作を維持し、呼び出し元を `stdio` / `local` でタグ付けする）、stdio では `CDIDX_MCP_AUTH_TOKEN` を設定すると `TokenMcpAuthenticator` に切り替わる。未設定または空文字の token だけが permissive で、空白のみ・空白文字入り・制御文字入り・4096 文字超の token は設定値として拒否する。`TokenMcpAuthenticator` は応答が必要な全リクエストに対し、`params.auth.token` が一致することを要求し、比較は `CryptographicOperations.FixedTimeEquals` による定数時間比較で行う。HTTP はこの body token ゲートを重ねず、`ProgramRunner` が `CDIDX_MCP_HTTP_TOKEN` を優先し、未設定なら `CDIDX_MCP_AUTH_TOKEN` を fallback として bearer secret に解決して、`Authorization: Bearer ...` の transport check に一本化する（#3156）。HTTP bearer 値は `Bearer ` の後ろを trim せず完全一致で扱い、空白文字・制御文字・4096 文字超は hash 前に拒否する。JSON-RPC body token ゲートの失敗は統一された JSON-RPC `-32001 "Unauthorized"` を返し（#1530 の sanitization 方針に従い、ワイヤでは未提示と不一致を区別しない）、`BuildAuthFailureLog` が詳細を stderr に書き出す。通知（`notifications/initialized`、`notifications/cancelled`）は応答もエラーコードも持たないため、ゲート *より前* で short-circuit する。このミドルウェアが将来 transport の差し替え seam になる — ネットワーク listener は別の `IMcpAuthenticator` を提供しつつ、`McpCallerIdentity`（`Source` + `Subject`）の形を保ち、監査ログ（#1562）から再利用できる。
+- **認証ミドルウェア**（#1559）。`McpServer` はパース済み JSON-RPC リクエストごとに、メソッド抽出 *後*・dispatch *前* で `IMcpAuthenticator` を呼ぶ。既定の `LocalStdioAuthenticator` は permissive で（従来の stdio 動作を維持し、呼び出し元を `stdio` / `local` でタグ付けする）、stdio では `CDIDX_MCP_AUTH_TOKEN` を設定すると `TokenMcpAuthenticator` に切り替わる。未設定または空文字の token だけが permissive で、空白のみ・空白文字入り・制御文字入り・4096 文字超の token は設定値として拒否する。`TokenMcpAuthenticator` は応答が必要な全リクエストに対し、`params.auth.token` が一致することを要求し、比較は `CryptographicOperations.FixedTimeEquals` による定数時間比較で行う。HTTP はこの body token ゲートを重ねず、`ProgramRunner` が `CDIDX_MCP_HTTP_TOKEN` を優先し、未設定なら `CDIDX_MCP_AUTH_TOKEN` を fallback として bearer secret に解決して、`Authorization: Bearer ...` の transport check に一本化する（#3156）。HTTP bearer 値は `Bearer ` の後ろを trim せず完全一致で扱い、空白文字・制御文字・4096 文字超は hash 前に拒否する。JSON-RPC body token ゲートの失敗は統一された JSON-RPC `-32001 "Unauthorized"` を返し（#1530 の sanitization 方針に従い、ワイヤでは未提示と不一致を区別しない）、`BuildAuthFailureLog` が詳細を stderr に書き出す。副作用のない `notifications/initialized` は認証せず short-circuit できる。一方、state-changing notification（`$/cancelRequest`、`notifications/cancelled`、`notifications/roots/list_changed`、`notifications/shutdown`、`notifications/exit`）は cancellation / roots / lifecycle state を変更する前に認証する。認証失敗時も notification は応答を返さず、bounded な stderr 診断だけを残す（#4537）。このミドルウェアが将来 transport の差し替え seam になる — ネットワーク listener は別の `IMcpAuthenticator` を提供しつつ、`McpCallerIdentity`（`Source` + `Subject`）の形を保ち、監査ログ（#1562）から再利用できる。
 
 MCP は独立したシリアライズ戦略（オブジェクトを JSON などの転送形式に変換する方式のこと。CLI の `--json` 側は .NET 標準の `JsonSerializer` に任せる方式、MCP 側は `JsonObject` を手で組み立てる方式と、別の手段を採っている）を採るため、「そもそもバイナリは走るのか?」を確かめる最も頑健なスモークテスト（デプロイや起動直後に行う、基本動作だけを短時間で確認する簡易テストのこと。詳細な正しさではなく「煙が出ていないか＝致命的に壊れていないか」を見るためこの名で呼ばれる）となる — .NET ホスト、`Program.Main`、CLI ルーティング、`ConsoleUi.LoadVersion()` に負荷をかけるが、SQLite には触れない（`search` など MCP の*ツール呼び出し*は SQLite に触れるが、`initialize` 単独では触れない）。
 

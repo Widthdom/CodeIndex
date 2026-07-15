@@ -21,6 +21,10 @@ When the variable is unset, stdio keeps the historical local-trusted-client
 behavior and does not authenticate individual JSON-RPC frames. Tool allow/deny
 environment variables can reduce the advertised/callable tool set, but they are
 not a substitute for trusting the client or protecting the transport.
+When the token is configured, it protects both responded requests and every
+state-changing notification (cancellation, roots invalidation, shutdown, and
+exit). A rejected notification remains response-free as required by JSON-RPC
+and cannot mutate server state; only a bounded local diagnostic is emitted.
 
 ### Write-Shaped MCP Tools
 

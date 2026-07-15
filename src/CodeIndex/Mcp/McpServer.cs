@@ -1395,13 +1395,27 @@ public partial class McpServer : IDisposable
 
         using var correlationScope = hasId && CurrentCorrelationContext.Value is null ? BeginRequestCorrelation(id) : null;
 
+        // A JSON-RPC notification cannot carry an error response, but that does not make it
+        // safe to bypass authentication when handling it mutates server state. Authenticate
+        // every state-changing notification before cancellation, roots, or lifecycle state is
+        // touched; on denial, emit only the bounded local diagnostic and preserve the required
+        // no-response wire contract (#4537).
+        // JSON-RPC notification はエラー応答を持てないが、server state を変更する通知まで認証を
+        // 省略してよいことにはならない。cancellation / roots / lifecycle state に触れる前に認証し、
+        // 拒否時は bounded なローカル診断だけを残して no-response 契約を維持する (#4537)。
+        if (IsStateChangingNotification(method))
+        {
+            var notificationAuth = _authenticator.Authenticate(request);
+            if (!notificationAuth.IsAuthenticated)
+            {
+                WriteMcpLogLine(BuildAuthFailureLog(method, notificationAuth.FailureReason));
+                return null;
+            }
+        }
+
         if (method == "$/cancelRequest" || method == "notifications/cancelled")
         {
-            var cancelAuth = _authenticator.Authenticate(request);
-            if (cancelAuth.IsAuthenticated)
-                TryCancelRequest(request["params"]);
-            else
-                WriteMcpLogLine(BuildAuthFailureLog(method, cancelAuth.FailureReason));
+            TryCancelRequest(request["params"]);
             return null;
         }
 
@@ -1452,11 +1466,13 @@ public partial class McpServer : IDisposable
         // Authenticate every responded request before dispatch so the auth contract is
         // uniform across `initialize`, `tools/list`, `tools/call`, and `ping`. Run auth even
         // when `method` is missing or malformed so a token-protected server cannot be probed
-        // for method-shape errors without credentials (#1559). Notifications already
-        // short-circuited above because they produce no response and cannot leak an error code.
+        // for method-shape errors without credentials (#1559). State-changing notifications
+        // pass through their own auth gate above; side-effect-free notifications short-circuit
+        // without authentication because they produce no response.
         // すべての応答対象リクエストを dispatch 前に認証する。`method` が欠落・不正でも
         // 認証は走らせ、トークン保護下のサーバーで未認証呼び出し元に method 形式エラーを
-        // 漏らさない (#1559)。通知は応答が無いため上のブランチで先に return している。
+        // 漏らさない (#1559)。state-changing notification は上の専用ゲートで認証し、
+        // 副作用のない notification だけを応答なしで short-circuit する。
         var authResult = _authenticator.Authenticate(request);
         if (!authResult.IsAuthenticated)
         {
@@ -1506,6 +1522,13 @@ public partial class McpServer : IDisposable
             category: McpErrorEnvelope.CategoryInvalidRequest,
             suggestion: "Send a JSON-RPC 2.0 object (e.g. {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}).",
             retrySafe: false);
+
+    private static bool IsStateChangingNotification(string? method)
+        => method is "$/cancelRequest"
+            or "notifications/cancelled"
+            or "notifications/roots/list_changed"
+            or "notifications/shutdown"
+            or "notifications/exit";
 
     private string BuildHealthJson(HttpMcpTransport? httpTransport = null)
         => BuildHealthResult(httpTransport).ToJsonString(_jsonOptions);
