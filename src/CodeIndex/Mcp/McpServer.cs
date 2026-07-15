@@ -2314,11 +2314,15 @@ public partial class McpServer : IDisposable
                 return CreateResourcesListCursorError(id);
             }
 
+            if (cursor.Length > MaxResourceListCursorChars)
+                return CreateResourcesListCursorError(id);
+
             if (int.TryParse(cursor, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedLegacyOffset))
             {
                 if (parsedLegacyOffset < 0 || parsedLegacyOffset > MaxMcpPaginationOffset)
                     return CreateResourcesListCursorError(id);
-                legacyOffset = parsedLegacyOffset;
+                if (parsedLegacyOffset != 0)
+                    return CreateResourcesListRestartError(id);
             }
             else if (TryDecodeResourceListCursor(cursor, out var decodedCursor))
             {
@@ -2385,7 +2389,7 @@ public partial class McpServer : IDisposable
             message: "The indexed file set changed after this resources/list cursor was issued.",
             category: McpErrorEnvelope.CategoryIndexStale,
             suggestion: "Omit params.cursor and restart resources/list from the first page.",
-            retrySafe: true,
+            retrySafe: false,
             extraData: new JsonObject
             {
                 ["reason"] = "resources_list_generation_changed",

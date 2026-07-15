@@ -1087,8 +1087,10 @@ public sealed class Caller
         Assert.Equal(McpServer.MaxResourceListCursorChars, data["max_cursor_length"]!.GetValue<int>());
     }
 
-    [Fact]
-    public void ResourcesList_OversizedOpaqueCursor_ReturnsInvalidParams_Issue4541()
+    [Theory]
+    [InlineData('A')]
+    [InlineData('0')]
+    public void ResourcesList_OversizedCursor_ReturnsInvalidParams_Issue4541(char fill)
     {
         var request = new JsonObject
         {
@@ -1097,7 +1099,7 @@ public sealed class Caller
             ["method"] = "resources/list",
             ["params"] = new JsonObject
             {
-                ["cursor"] = new string('A', McpServer.MaxResourceListCursorChars + 1),
+                ["cursor"] = new string(fill, McpServer.MaxResourceListCursorChars + 1),
             },
         };
 
@@ -1130,23 +1132,8 @@ public sealed class Caller
     }
 
     [Fact]
-    public void ResourcesList_LegacyCursorAtPaginationCap_UpgradesToOpaqueCursor_Issue4541()
+    public void ResourcesList_NonzeroLegacyCursor_RequiresRestart_Issue4541()
     {
-        var writer = new DbWriter(_db.Connection);
-        using var transaction = writer.BeginTransaction();
-        for (var i = 0; i < McpServer.MaxMcpPaginationOffset + 200; i++)
-        {
-            writer.UpsertFile(new FileRecord
-            {
-                Path = $"zz/paged-{i:D5}.cs",
-                Lang = "csharp",
-                Size = 1,
-                Lines = 1,
-                Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
-                Checksum = $"bulk-{i}",
-            });
-        }
-        transaction.Commit();
         var request = new JsonObject
         {
             ["jsonrpc"] = "2.0",
@@ -1154,15 +1141,14 @@ public sealed class Caller
             ["method"] = "resources/list",
             ["params"] = new JsonObject
             {
-                ["cursor"] = McpServer.MaxMcpPaginationOffset.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["cursor"] = "200",
             },
         };
 
         var response = _server.HandleMessage(request)!;
 
-        var nextCursor = response["result"]!["nextCursor"]!.GetValue<string>();
-        Assert.Equal(McpServer.MaxResourceListCursorChars, nextCursor.Length);
-        Assert.False(int.TryParse(nextCursor, NumberStyles.None, CultureInfo.InvariantCulture, out _));
+        AssertResourcesListRestartRequired(response);
+        Assert.False(response["error"]!["data"]!["retry_safe"]!.GetValue<bool>());
     }
 
     [Fact]
