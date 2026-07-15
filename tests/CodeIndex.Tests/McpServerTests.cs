@@ -422,6 +422,46 @@ public partial class McpServerTests : IDisposable
         writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols));
     }
 
+    private void InsertResourceFileRecords(int count, string pathPrefix)
+    {
+        var writer = new DbWriter(_db.Connection);
+        using var transaction = writer.BeginTransaction();
+        for (var i = 0; i < count; i++)
+        {
+            writer.UpsertFile(new FileRecord
+            {
+                Path = $"{pathPrefix}-{i:D5}.cs",
+                Lang = "csharp",
+                Size = 1,
+                Lines = 1,
+                Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+                Checksum = $"{pathPrefix}-{i}",
+            });
+        }
+        transaction.Commit();
+    }
+
+    private JsonNode CallResourcesList(string cursor, int id)
+        => _server.HandleMessage(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = id,
+            ["method"] = "resources/list",
+            ["params"] = new JsonObject
+            {
+                ["cursor"] = cursor,
+            },
+        })!;
+
+    private static void AssertResourcesListRestartRequired(JsonNode response)
+    {
+        Assert.Equal(-32011, response["error"]!["code"]!.GetValue<int>());
+        var data = response["error"]!["data"]!;
+        Assert.Equal("index_stale", data["category"]!.GetValue<string>());
+        Assert.Equal("resources_list_generation_changed", data["reason"]!.GetValue<string>());
+        Assert.True(data["restart_required"]!.GetValue<bool>());
+    }
+
     private static JsonNode CallIndex(McpServer server, string path, Action<JsonObject>? configure = null)
     {
         var arguments = new JsonObject
@@ -1044,7 +1084,27 @@ public sealed class Caller
         Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
         var data = response["error"]!["data"]!;
         Assert.Equal("invalid_argument", data["category"]!.GetValue<string>());
-        Assert.Equal(McpServer.MaxMcpPaginationOffset, data["max_pagination_offset"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxResourceListCursorChars, data["max_cursor_length"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ResourcesList_OversizedOpaqueCursor_ReturnsInvalidParams_Issue4541()
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "resources/list",
+            ["params"] = new JsonObject
+            {
+                ["cursor"] = new string('A', McpServer.MaxResourceListCursorChars + 1),
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("invalid_argument", response["error"]!["data"]!["category"]!.GetValue<string>());
     }
 
     [Fact]
@@ -1066,11 +1126,11 @@ public sealed class Caller
         Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
         var data = response["error"]!["data"]!;
         Assert.Equal("invalid_argument", data["category"]!.GetValue<string>());
-        Assert.Equal(McpServer.MaxMcpPaginationOffset, data["max_pagination_offset"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxMcpPaginationOffset, data["max_legacy_pagination_offset"]!.GetValue<int>());
     }
 
     [Fact]
-    public void ResourcesList_AtPaginationCap_DoesNotEmitSelfInvalidNextCursor_Issue3112()
+    public void ResourcesList_LegacyCursorAtPaginationCap_UpgradesToOpaqueCursor_Issue4541()
     {
         var writer = new DbWriter(_db.Connection);
         using var transaction = writer.BeginTransaction();
@@ -1100,7 +1160,9 @@ public sealed class Caller
 
         var response = _server.HandleMessage(request)!;
 
-        Assert.Null(response["result"]!["nextCursor"]);
+        var nextCursor = response["result"]!["nextCursor"]!.GetValue<string>();
+        Assert.Equal(McpServer.MaxResourceListCursorChars, nextCursor.Length);
+        Assert.False(int.TryParse(nextCursor, NumberStyles.None, CultureInfo.InvariantCulture, out _));
     }
 
     [Fact]
@@ -1121,23 +1183,75 @@ public sealed class Caller
             });
         }
         transaction.Commit();
-        var request = new JsonObject
+        var firstRequest = new JsonObject
         {
             ["jsonrpc"] = "2.0",
             ["id"] = 1,
             ["method"] = "resources/list",
+            ["params"] = new JsonObject(),
+        };
+
+        var firstResponse = _server.HandleMessage(firstRequest)!;
+        var firstResources = firstResponse["result"]!["resources"]!.AsArray();
+        var cursor = firstResponse["result"]!["nextCursor"]!.GetValue<string>();
+        var secondRequest = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 2,
+            ["method"] = "resources/list",
             ["params"] = new JsonObject
             {
-                ["cursor"] = "200",
+                ["cursor"] = cursor,
             },
         };
 
-        var response = _server.HandleMessage(request)!;
+        var secondResponse = _server.HandleMessage(secondRequest)!;
+        var secondResources = secondResponse["result"]!["resources"]!.AsArray();
 
-        var resources = response["result"]!["resources"]!.AsArray();
-        Assert.Equal("400", response["result"]!["nextCursor"]!.GetValue<string>());
-        Assert.DoesNotContain(resources, resource => resource!["name"]!.GetValue<string>() == "zz/deep-00000.cs");
-        Assert.Contains(resources, resource => resource!["name"]!.GetValue<string>() == "zz/deep-00199.cs");
+        Assert.Equal(200, firstResources.Count);
+        Assert.Equal(McpServer.MaxResourceListCursorChars, cursor.Length);
+        Assert.False(int.TryParse(cursor, NumberStyles.None, CultureInfo.InvariantCulture, out _));
+        Assert.DoesNotContain(secondResources, resource => resource!["name"]!.GetValue<string>() == "zz/deep-00198.cs");
+        Assert.Contains(secondResources, resource => resource!["name"]!.GetValue<string>() == "zz/deep-00199.cs");
+        var firstNames = firstResources.Select(resource => resource!["name"]!.GetValue<string>()).ToHashSet(StringComparer.Ordinal);
+        Assert.DoesNotContain(secondResources, resource => firstNames.Contains(resource!["name"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public void ResourcesList_InsertionBetweenPages_RequiresRestart_Issue4541()
+    {
+        InsertResourceFileRecords(205, "src/mutation-insert");
+        var firstResponse = _server.HandleMessage(
+            JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}""")!)!;
+        var cursor = firstResponse["result"]!["nextCursor"]!.GetValue<string>();
+        InsertIndexedFile("src/000-inserted.cs", "csharp", "public class Inserted { }");
+
+        var response = CallResourcesList(cursor, id: 2);
+
+        AssertResourcesListRestartRequired(response);
+        var restarted = _server.HandleMessage(
+            JsonNode.Parse("""{"jsonrpc":"2.0","id":3,"method":"resources/list","params":{}}""")!)!;
+        Assert.Contains(restarted["result"]!["resources"]!.AsArray(),
+            resource => resource!["name"]!.GetValue<string>() == "src/000-inserted.cs");
+    }
+
+    [Fact]
+    public void ResourcesList_DeletionBetweenPages_RequiresRestart_Issue4541()
+    {
+        InsertResourceFileRecords(205, "src/mutation-delete");
+        var firstResponse = _server.HandleMessage(
+            JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}""")!)!;
+        var cursor = firstResponse["result"]!["nextCursor"]!.GetValue<string>();
+        var writer = new DbWriter(_db.Connection);
+        Assert.True(writer.DeleteFileByPath("src/app.cs"));
+
+        var response = CallResourcesList(cursor, id: 2);
+
+        AssertResourcesListRestartRequired(response);
+        var restarted = _server.HandleMessage(
+            JsonNode.Parse("""{"jsonrpc":"2.0","id":3,"method":"resources/list","params":{}}""")!)!;
+        Assert.DoesNotContain(restarted["result"]!["resources"]!.AsArray(),
+            resource => resource!["name"]!.GetValue<string>() == "src/app.cs");
     }
 
     [Fact]

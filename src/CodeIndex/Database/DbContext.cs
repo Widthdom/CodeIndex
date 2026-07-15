@@ -54,6 +54,42 @@ public class DbContext : IDisposable
         CreateFtsChunksInsertTriggerSql + ";\n"
         + CreateFtsChunksDeleteTriggerSql + ";\n"
         + CreateFtsChunksUpdateTriggerSql;
+    internal const string ResourceListGenerationMetaKey = "resource_list_generation";
+    private const string EnsureResourceListGenerationSql = """
+        INSERT INTO codeindex_meta(key, value)
+        VALUES ('resource_list_generation', '0')
+        ON CONFLICT(key) DO NOTHING
+        """;
+    private const string IncrementResourceListGenerationSql = """
+        INSERT INTO codeindex_meta(key, value)
+        VALUES ('resource_list_generation', '1')
+        ON CONFLICT(key) DO UPDATE SET
+            value = CAST(COALESCE(CAST(value AS INTEGER), 0) + 1 AS TEXT)
+        """;
+    private const string CreateResourceListGenerationInsertTriggerSql = """
+        CREATE TRIGGER IF NOT EXISTS files_resource_generation_ai AFTER INSERT ON files BEGIN
+            INSERT INTO codeindex_meta(key, value)
+            VALUES ('resource_list_generation', '1')
+            ON CONFLICT(key) DO UPDATE SET
+                value = CAST(COALESCE(CAST(value AS INTEGER), 0) + 1 AS TEXT);
+        END
+        """;
+    private const string CreateResourceListGenerationDeleteTriggerSql = """
+        CREATE TRIGGER IF NOT EXISTS files_resource_generation_ad AFTER DELETE ON files BEGIN
+            INSERT INTO codeindex_meta(key, value)
+            VALUES ('resource_list_generation', '1')
+            ON CONFLICT(key) DO UPDATE SET
+                value = CAST(COALESCE(CAST(value AS INTEGER), 0) + 1 AS TEXT);
+        END
+        """;
+    private const string CreateResourceListGenerationUpdateTriggerSql = """
+        CREATE TRIGGER IF NOT EXISTS files_resource_generation_au AFTER UPDATE ON files BEGIN
+            INSERT INTO codeindex_meta(key, value)
+            VALUES ('resource_list_generation', '1')
+            ON CONFLICT(key) DO UPDATE SET
+                value = CAST(COALESCE(CAST(value AS INTEGER), 0) + 1 AS TEXT);
+        END
+        """;
 
     private static readonly string[] RequiredCodeIndexTables =
     [
@@ -115,6 +151,12 @@ public class DbContext : IDisposable
         "idx_symbol_refs_symbol_name_folded_kind",
         "idx_symbol_refs_symbol_name_folded_file",
         "idx_symbol_refs_container_name_folded_kind",
+    ];
+    private static readonly string[] ReadMigrationRequiredTriggers =
+    [
+        "files_resource_generation_ai",
+        "files_resource_generation_ad",
+        "files_resource_generation_au",
     ];
 
     private SqliteConnection _connection = null!;
@@ -2015,6 +2057,12 @@ public class DbContext : IDisposable
                 Execute(CreateFtsChunksInsertTriggerSql);
                 Execute(CreateFtsChunksDeleteTriggerSql);
                 Execute(CreateFtsChunksUpdateTriggerSql);
+                // Keep MCP resources/list cursors tied to the exact indexed-file snapshot.
+                // MCP resources/list カーソルをインデックス済みファイルのスナップショットに結び付ける。
+                Execute(EnsureResourceListGenerationSql);
+                Execute(CreateResourceListGenerationInsertTriggerSql);
+                Execute(CreateResourceListGenerationDeleteTriggerSql);
+                Execute(CreateResourceListGenerationUpdateTriggerSql);
                 transaction.Commit();
             }
             finally
@@ -2593,6 +2641,9 @@ public class DbContext : IDisposable
     /// </summary>
     public void DropAll()
     {
+        // A rebuild that produces zero files must still invalidate an outstanding resource cursor.
+        // 0 件になる rebuild でも既存の resource cursor を必ず無効化する。
+        Execute(IncrementResourceListGenerationSql);
         Execute(DropFtsChunksInsertTriggerSql);
         Execute(DropFtsChunksDeleteTriggerSql);
         Execute(DropFtsChunksUpdateTriggerSql);
@@ -2879,6 +2930,10 @@ public class DbContext : IDisposable
                 key    TEXT PRIMARY KEY NOT NULL,
                 value  TEXT
             )"));
+        yield return ("Initialize resources/list generation", () => Execute(EnsureResourceListGenerationSql));
+        yield return ("CREATE TRIGGER files_resource_generation_ai", () => Execute(CreateResourceListGenerationInsertTriggerSql));
+        yield return ("CREATE TRIGGER files_resource_generation_ad", () => Execute(CreateResourceListGenerationDeleteTriggerSql));
+        yield return ("CREATE TRIGGER files_resource_generation_au", () => Execute(CreateResourceListGenerationUpdateTriggerSql));
     }
 
     private bool ReadMigrationSchemaIsCurrent()
@@ -2898,6 +2953,12 @@ public class DbContext : IDisposable
         foreach (var index in ReadMigrationRequiredIndexes)
         {
             if (!IndexExists(index))
+                return false;
+        }
+
+        foreach (var trigger in ReadMigrationRequiredTriggers)
+        {
+            if (!TriggerExists(trigger))
                 return false;
         }
 
@@ -2977,6 +3038,16 @@ public class DbContext : IDisposable
         if (_activeMigrationTransaction != null)
             cmd.Transaction = _activeMigrationTransaction;
         cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = @name";
+        SqliteCommandPolicy.Add(cmd, "@name", name);
+        return cmd.ExecuteScalar() != null;
+    }
+
+    private bool TriggerExists(string name)
+    {
+        using var cmd = SqliteConnectionPolicy.CreateCommand(_connection);
+        if (_activeMigrationTransaction != null)
+            cmd.Transaction = _activeMigrationTransaction;
+        cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = @name";
         SqliteCommandPolicy.Add(cmd, "@name", name);
         return cmd.ExecuteScalar() != null;
     }

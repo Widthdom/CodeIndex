@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
@@ -185,6 +186,9 @@ public partial class McpServer : IDisposable
     internal const int MaxConfiguredResponseBytes = 64 * 1024 * 1024;
     internal const int MaxClientResponseJsonBytes = 1 * 1024 * 1024;
     internal const int MaxMcpPaginationOffset = 10_000;
+    internal const int MaxResourceListCursorChars = 23;
+    private const int ResourceListCursorPayloadBytes = 17;
+    private const byte ResourceListCursorVersion = 1;
     internal const int DefaultToolsListPageSize = 24;
     internal const int MaxToolsListPageSize = 24;
     internal const int MaxMcpMapDepth = 32;
@@ -2299,14 +2303,29 @@ public partial class McpServer : IDisposable
     private JsonNode HandleResourcesList(JsonNode? id, JsonNode? listParams)
     {
         const int pageSize = 200;
-        var offset = 0;
+        long? afterFileId = null;
+        long? expectedGeneration = null;
+        var legacyOffset = 0;
         if (listParams?["cursor"] is JsonNode cursorNode)
         {
             if (cursorNode is not JsonValue cursorValue
-                || !cursorValue.TryGetValue<string>(out var cursor)
-                || !int.TryParse(cursor, NumberStyles.None, CultureInfo.InvariantCulture, out offset)
-                || offset < 0
-                || offset > MaxMcpPaginationOffset)
+                || !cursorValue.TryGetValue<string>(out var cursor))
+            {
+                return CreateResourcesListCursorError(id);
+            }
+
+            if (int.TryParse(cursor, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedLegacyOffset))
+            {
+                if (parsedLegacyOffset < 0 || parsedLegacyOffset > MaxMcpPaginationOffset)
+                    return CreateResourcesListCursorError(id);
+                legacyOffset = parsedLegacyOffset;
+            }
+            else if (TryDecodeResourceListCursor(cursor, out var decodedCursor))
+            {
+                afterFileId = decodedCursor.AfterFileId;
+                expectedGeneration = decodedCursor.Generation;
+            }
+            else
             {
                 return CreateResourcesListCursorError(id);
             }
@@ -2314,8 +2333,15 @@ public partial class McpServer : IDisposable
 
         return WithDbReader(id, args: null, reader =>
         {
-            var files = reader.ListFiles(limit: pageSize + 1, offset: offset);
-            var page = files.Take(pageSize).ToArray();
+            var resourcePage = reader.ListResourceFiles(
+                limit: pageSize + 1,
+                afterFileId: afterFileId,
+                expectedGeneration: expectedGeneration,
+                legacyOffset: legacyOffset);
+            if (resourcePage.CursorRestartRequired)
+                return CreateResourcesListRestartError(id);
+
+            var page = resourcePage.Files.Take(pageSize).ToArray();
             var resources = new JsonArray();
             foreach (var file in page)
             {
@@ -2336,23 +2362,84 @@ public partial class McpServer : IDisposable
             {
                 ["resources"] = resources,
             };
-            var nextOffset = offset + pageSize;
-            if (nextOffset <= MaxMcpPaginationOffset && files.Count > pageSize)
-                result["nextCursor"] = nextOffset.ToString(CultureInfo.InvariantCulture);
+            if (resourcePage.Files.Count > pageSize && page.Length > 0)
+                result["nextCursor"] = EncodeResourceListCursor(resourcePage.Generation, page[^1].Id);
             return CreateSuccessResponse(true, id, result);
         });
     }
 
     private static JsonObject CreateResourcesListCursorError(JsonNode? id)
         => CreateErrorResponse(hasId: true, id: id, code: -32602,
-            message: $"resources/list cursor must be a non-negative pagination offset no greater than {MaxMcpPaginationOffset}.",
+            message: "resources/list cursor is invalid or unsupported.",
             category: McpErrorEnvelope.CategoryInvalidArgument,
             suggestion: "Use the `nextCursor` value returned by the previous resources/list response, or omit params.cursor to start from the first page.",
             retrySafe: false,
             extraData: new JsonObject
             {
-                ["max_pagination_offset"] = MaxMcpPaginationOffset,
+                ["max_cursor_length"] = MaxResourceListCursorChars,
+                ["max_legacy_pagination_offset"] = MaxMcpPaginationOffset,
             });
+
+    private static JsonObject CreateResourcesListRestartError(JsonNode? id)
+        => CreateErrorResponse(hasId: true, id: id, code: McpErrorEnvelope.CodeIndexStale,
+            message: "The indexed file set changed after this resources/list cursor was issued.",
+            category: McpErrorEnvelope.CategoryIndexStale,
+            suggestion: "Omit params.cursor and restart resources/list from the first page.",
+            retrySafe: true,
+            extraData: new JsonObject
+            {
+                ["reason"] = "resources_list_generation_changed",
+                ["restart_required"] = true,
+            });
+
+    private static string EncodeResourceListCursor(long generation, long afterFileId)
+    {
+        Span<byte> payload = stackalloc byte[ResourceListCursorPayloadBytes];
+        payload[0] = ResourceListCursorVersion;
+        BinaryPrimitives.WriteInt64BigEndian(payload[1..9], generation);
+        BinaryPrimitives.WriteInt64BigEndian(payload[9..17], afterFileId);
+        return Convert.ToBase64String(payload).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+    }
+
+    private static bool TryDecodeResourceListCursor(string cursor, out ResourceListCursor decoded)
+    {
+        decoded = default;
+        if (cursor.Length != MaxResourceListCursorChars
+            || cursor.Any(static ch => !char.IsAsciiLetterOrDigit(ch) && ch is not '-' and not '_'))
+        {
+            return false;
+        }
+
+        Span<char> base64 = stackalloc char[MaxResourceListCursorChars + 1];
+        for (var i = 0; i < cursor.Length; i++)
+        {
+            base64[i] = cursor[i] switch
+            {
+                '-' => '+',
+                '_' => '/',
+                _ => cursor[i],
+            };
+        }
+        base64[^1] = '=';
+
+        Span<byte> payload = stackalloc byte[ResourceListCursorPayloadBytes];
+        if (!Convert.TryFromBase64Chars(base64, payload, out var bytesWritten)
+            || bytesWritten != ResourceListCursorPayloadBytes
+            || payload[0] != ResourceListCursorVersion)
+        {
+            return false;
+        }
+
+        var generation = BinaryPrimitives.ReadInt64BigEndian(payload[1..9]);
+        var afterFileId = BinaryPrimitives.ReadInt64BigEndian(payload[9..17]);
+        if (generation < 0 || afterFileId <= 0)
+            return false;
+
+        decoded = new ResourceListCursor(generation, afterFileId);
+        return true;
+    }
+
+    private readonly record struct ResourceListCursor(long Generation, long AfterFileId);
 
     private JsonNode HandleResourcesRead(JsonNode? id, JsonNode? readParams)
     {
