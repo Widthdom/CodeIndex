@@ -307,7 +307,13 @@ public class PreparedCommandCacheTests : IDisposable
             Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
         };
 
+        var initialCount = _db.PreparedCommands.Count;
+        var initialHits = _db.PreparedCommands.HitCount;
+        var initialMisses = _db.PreparedCommands.MissCount;
         var id1 = writer.UpsertFile(file);
+        Assert.Equal(initialCount + 2, _db.PreparedCommands.Count);
+        Assert.Equal(initialMisses + 2, _db.PreparedCommands.MissCount);
+        Assert.Equal(initialHits, _db.PreparedCommands.HitCount);
 
         var file2 = new FileRecord
         {
@@ -321,11 +327,9 @@ public class PreparedCommandCacheTests : IDisposable
         var id2 = writer.UpsertFile(file2);
 
         Assert.NotEqual(id1, id2);
-
-        // The cache should hold prepared commands for the hot per-file SQLs.
-        // ホットパス SQL に対応する prepared command が cache に積まれている。
-        Assert.True(_db.PreparedCommands.Count > 0);
-        Assert.True(_db.PreparedCommands.MissCount > 0);
+        Assert.Equal(initialCount + 2, _db.PreparedCommands.Count);
+        Assert.Equal(initialMisses + 2, _db.PreparedCommands.MissCount);
+        Assert.Equal(initialHits + 2, _db.PreparedCommands.HitCount);
     }
 
     [Fact]

@@ -70,13 +70,6 @@ public partial class DbWriter
     /// </summary>
     public long UpsertFile(FileRecord file, bool cleanExistingData = true)
     {
-        if (cleanExistingData)
-        {
-            // Clean up old chunks/symbols so new ones can be inserted
-            // 新しいチャンク/シンボル挿入のため古いデータをクリーンアップ
-            CleanExistingFileData(file.Path);
-        }
-
         // ON CONFLICT DO UPDATE preserves the existing row ID
         // ON CONFLICT DO UPDATEで既存の行IDを保持する
         var cmd = RentCommand(
@@ -102,6 +95,7 @@ public partial class DbWriter
                 c.Parameters.Add("@modified", SqliteType.Text);
                 c.Parameters.Add("@generated", SqliteType.Integer);
             });
+        long fileId;
         try
         {
             cmd.Parameters["@path"].Value = file.Path;
@@ -114,12 +108,22 @@ public partial class DbWriter
             using var reader = cmd.ExecuteReader();
             if (!reader.Read())
                 throw new InvalidOperationException("SQLite RETURNING id produced no row for file upsert.");
-            return reader.GetInt64(0);
+            fileId = reader.GetInt64(0);
         }
         finally
         {
             ReleaseCommand(cmd);
         }
+
+        // Release the RETURNING reader and its prepared command before leasing the
+        // cleanup command. Existing rows keep the same ID, while new rows pay only a
+        // harmless no-op delete. Fresh bulk loads use InsertNewFile and skip this path.
+        // RETURNING reader と prepared command を解放してから cleanup command を借りる。
+        // 既存行は同じIDを保ち、新規行のDELETEはno-op。fresh bulk loadはInsertNewFileを使う。
+        if (cleanExistingData)
+            DeleteFileData(fileId);
+
+        return fileId;
     }
 
     /// <summary>
@@ -175,15 +179,14 @@ public partial class DbWriter
     {
         // FTS cleanup is handled automatically by fts_chunks_ad trigger on chunk deletion
         // FTSクリーンアップはチャンク削除時にfts_chunks_adトリガーで自動処理される
-        ExecuteFileIdDelete("DELETE FROM chunks WHERE file_id = @fid", fileId);
-        ExecuteFileIdDelete("DELETE FROM symbols WHERE file_id = @fid", fileId);
-        ExecuteFileIdDelete("DELETE FROM symbol_references WHERE file_id = @fid", fileId);
-        ExecuteFileIdDelete("DELETE FROM reference_lines WHERE file_id = @fid", fileId);
-    }
-
-    private void ExecuteFileIdDelete(string sql, long fileId)
-    {
-        var cmd = RentCommand(sql, static c => c.Parameters.Add("@fid", SqliteType.Integer));
+        var cmd = RentCommand(
+            """
+            DELETE FROM chunks WHERE file_id = @fid;
+            DELETE FROM symbols WHERE file_id = @fid;
+            DELETE FROM symbol_references WHERE file_id = @fid;
+            DELETE FROM reference_lines WHERE file_id = @fid;
+            """,
+            static c => c.Parameters.Add("@fid", SqliteType.Integer));
         try
         {
             cmd.Parameters["@fid"].Value = fileId;

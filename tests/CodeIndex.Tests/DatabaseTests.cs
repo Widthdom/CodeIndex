@@ -1839,6 +1839,202 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void UpsertFile_PreservesIdCleansIndexRowsAndKeepsIssues()
+    {
+        var initial = new FileRecord
+        {
+            Path = "src/reindex.py",
+            Lang = "python",
+            Size = 100,
+            Lines = 5,
+            Checksum = "old",
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        };
+        var fileId = _writer.UpsertFile(initial);
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = fileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = 5,
+            Content = "old_upsert_token",
+        }]);
+        _writer.InsertSymbols([new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "function",
+            Name = "old_symbol",
+            Line = 1,
+            StartLine = 1,
+            EndLine = 1,
+        }]);
+        _writer.InsertReferences([new ReferenceRecord
+        {
+            FileId = fileId,
+            SymbolName = "old_call",
+            ReferenceKind = "call",
+            Line = 2,
+            Column = 1,
+            Context = "old_call()",
+            ContainerKind = "function",
+            ContainerName = "old_symbol",
+        }]);
+        _writer.InsertIssues(fileId, [new FileIssue
+        {
+            Path = initial.Path,
+            Kind = "old_issue",
+            Line = 1,
+            Message = "keep until InsertIssues owns replacement",
+        }]);
+
+        var updatedId = _writer.UpsertFile(new FileRecord
+        {
+            Path = initial.Path,
+            Lang = "python",
+            Size = 200,
+            Lines = 8,
+            Checksum = "new",
+            Modified = new DateTime(2025, 2, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        Assert.Equal(fileId, updatedId);
+        using (var command = _db.Connection.CreateCommand())
+        {
+            command.Parameters.AddWithValue("@fileId", fileId);
+            command.CommandText = """
+                SELECT
+                    (SELECT size FROM files WHERE id = @fileId),
+                    (SELECT COUNT(*) FROM chunks WHERE file_id = @fileId),
+                    (SELECT COUNT(*) FROM symbols WHERE file_id = @fileId),
+                    (SELECT COUNT(*) FROM symbol_references WHERE file_id = @fileId),
+                    (SELECT COUNT(*) FROM reference_lines WHERE file_id = @fileId),
+                    (SELECT COUNT(*) FROM file_issues WHERE file_id = @fileId)
+                """;
+            using var reader = command.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal(200L, reader.GetInt64(0));
+            Assert.Equal(0L, reader.GetInt64(1));
+            Assert.Equal(0L, reader.GetInt64(2));
+            Assert.Equal(0L, reader.GetInt64(3));
+            Assert.Equal(0L, reader.GetInt64(4));
+            Assert.Equal(1L, reader.GetInt64(5));
+        }
+
+        using var ftsCommand = _db.Connection.CreateCommand();
+        ftsCommand.CommandText = "SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'old_upsert_token'";
+        Assert.Equal(0L, (long)ftsCommand.ExecuteScalar()!);
+
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = fileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = 8,
+            Content = "preserved_without_cleanup",
+        }]);
+        var noCleanupId = _writer.UpsertFile(new FileRecord
+        {
+            Path = initial.Path,
+            Lang = "python",
+            Size = 300,
+            Lines = 9,
+            Checksum = "newer",
+            Modified = new DateTime(2025, 3, 1, 0, 0, 0, DateTimeKind.Utc),
+        }, cleanExistingData: false);
+
+        Assert.Equal(fileId, noCleanupId);
+        Assert.Equal((1, 1, 0, 0), _writer.GetCounts());
+    }
+
+    [Fact]
+    public void UpsertFile_CleanupFailureRollsBackMetadataRowsAndFts()
+    {
+        var initial = new FileRecord
+        {
+            Path = "src/rollback.py",
+            Lang = "python",
+            Size = 100,
+            Lines = 5,
+            Checksum = "old",
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        };
+        var fileId = _writer.UpsertFile(initial);
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = fileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = 5,
+            Content = "rollback_upsert_token",
+        }]);
+        _writer.InsertSymbols([new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "function",
+            Name = "rollback_symbol",
+            Line = 1,
+            StartLine = 1,
+            EndLine = 1,
+        }]);
+
+        using (var trigger = _db.Connection.CreateCommand())
+        {
+            trigger.CommandText = $"""
+                CREATE TRIGGER fail_upsert_symbol_cleanup
+                BEFORE DELETE ON symbols
+                WHEN OLD.file_id = {fileId}
+                BEGIN
+                    SELECT RAISE(ABORT, 'injected cleanup failure');
+                END;
+                """;
+            trigger.ExecuteNonQuery();
+        }
+
+        var updated = new FileRecord
+        {
+            Path = initial.Path,
+            Lang = initial.Lang,
+            Size = 200,
+            Lines = 8,
+            Checksum = "new",
+            Modified = new DateTime(2025, 2, 1, 0, 0, 0, DateTimeKind.Utc),
+        };
+        try
+        {
+            using var transaction = _writer.BeginTransaction();
+            Assert.Throws<SqliteException>(() => _writer.UpsertFile(updated));
+        }
+        finally
+        {
+            using var dropTrigger = _db.Connection.CreateCommand();
+            dropTrigger.CommandText = "DROP TRIGGER IF EXISTS fail_upsert_symbol_cleanup";
+            dropTrigger.ExecuteNonQuery();
+        }
+
+        using (var verify = _db.Connection.CreateCommand())
+        {
+            verify.Parameters.AddWithValue("@fileId", fileId);
+            verify.CommandText = """
+                SELECT
+                    (SELECT size FROM files WHERE id = @fileId),
+                    (SELECT COUNT(*) FROM chunks WHERE file_id = @fileId),
+                    (SELECT COUNT(*) FROM symbols WHERE file_id = @fileId),
+                    (SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'rollback_upsert_token')
+                """;
+            using var reader = verify.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal(100L, reader.GetInt64(0));
+            Assert.Equal(1L, reader.GetInt64(1));
+            Assert.Equal(1L, reader.GetInt64(2));
+            Assert.Equal(1L, reader.GetInt64(3));
+        }
+
+        var retryId = _writer.UpsertFile(updated);
+        Assert.Equal(fileId, retryId);
+        Assert.Equal((1, 0, 0, 0), _writer.GetCounts());
+    }
+
+    [Fact]
     public void GetUnchangedFileId_ReturnIdIfUnchanged()
     {
         var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
