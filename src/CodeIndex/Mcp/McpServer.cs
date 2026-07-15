@@ -86,8 +86,8 @@ public partial class McpServer : IDisposable
     private readonly AsyncLocal<bool> _canAwaitClientResponses = new();
     private readonly AsyncLocal<List<Action>?> _deferredFrameLogs = new();
     private static readonly AsyncLocal<RequestCorrelationContext?> CurrentCorrelationContext = new();
+    private readonly object _initializeStateGate = new();
     private volatile bool _running = true;
-    private volatile bool _initialized;
     private volatile bool _enforceInitializationLifecycle;
     // Zero outside a transport loop. HTTP publishes its configured body cap here so handlers
     // can shape a valid response before the transport would otherwise reject it.
@@ -97,7 +97,6 @@ public partial class McpServer : IDisposable
     private long _timedOutIsolatedActionDrainingCount;
     private long _timedOutIsolatedActionDrainedCount;
     private RequestTimeoutDrainDiagnostic? _lastRequestTimeoutDrainDiagnostic;
-    private bool _clientRootsStale = true;
     // Per-session DbContext reused across MCP tool calls. Holding the connection open
     // avoids reopening SQLite, reapplying pragmas, and re-registering every SQL function
     // on each invocation (issue #1494).
@@ -132,31 +131,19 @@ public partial class McpServer : IDisposable
     // `initialize` so a single-session reconnection picks up the new caller identity.
     // `initialize.clientInfo` を audit に転写し、別ログを引かなくても呼び出し元を辿れるよう
     // にする。`initialize` 毎に上書きすることで再接続時に caller identity が追随する。
-    private string? _clientName;
-    private string? _clientVersion;
-    private BoundedMcpText? _clientNameDisplay;
-    private BoundedMcpText? _clientVersionDisplay;
-    private JsonNode? _clientCapabilities;
-    private int? _clientCapabilitiesSerializedBytes;
-    private string? _clientCapabilitiesTruncationReason;
-    private bool _clientSupportsRoots;
-    private bool _clientSupportsSampling;
-    private JsonArray _clientRoots = [];
-    private JsonArray _clientRootDiagnostics = [];
-    private int _clientRootCount;
-    private bool _clientRootsTruncated;
+    // The same snapshot carries the sticky caller used by the per-(tool, caller) limiter.
+    // 同じ snapshot に (tool, caller) 単位の limiter が使う sticky caller も保持する。
+    // Publish negotiated initialize metadata through one immutable reference. Writers are
+    // serialized by `_initializeStateGate`; readers capture this reference once so a draining
+    // request cannot combine fields from before and after a successful re-initialize (#4540).
+    // initialize で交渉した metadata は単一の immutable reference として公開する。writer は
+    // `_initializeStateGate` で直列化し、reader は reference を一度だけ取得することで、drain 中の
+    // request が成功した re-initialize の前後の field を混在させない (#4540)。
+    private InitializeSessionState _initializeState = InitializeSessionState.Empty;
     private string _mcpLogLevel = "info";
     // Opaque per-server-instance session id copied into suggestion attribution records (#1873).
     // #1873 の提案 attribution 用に保存する、サーバーインスタンス単位の不透明セッションID。
     private readonly string _sessionId = Guid.NewGuid().ToString("D");
-    // Caller identity used to key the per-(tool, caller) rate limiter. Captured from the
-    // `clientInfo.name` field of the `initialize` request when the client supplies it, so
-    // shared / networked MCP deployments can attribute and throttle individual clients
-    // instead of treating the whole server as a single bucket (#1560).
-    // (tool, caller) ごとのレート制限のキーに使う呼び出し元 ID。`initialize` の
-    // `clientInfo.name` から取得し、共有・ネットワーク経由の MCP でクライアント単位の
-    // 計量・スロットルが効くようにする（#1560）。
-    private string _caller = "unknown";
 
     // Preferred MCP protocol version returned when the client does not pin one. This is the
     // newest entry in `SupportedProtocolVersions` and must stay in lockstep with that array.
@@ -360,7 +347,9 @@ public partial class McpServer : IDisposable
     /// 直近の `initialize` の `clientInfo.name` から取得した呼び出し元 ID（#1560）。
     /// テストがレート制限のキーを検証するために公開する。
     /// </summary>
-    internal string CurrentCaller => _caller;
+    private InitializeSessionState CurrentInitializeState => Volatile.Read(ref _initializeState);
+
+    internal string CurrentCaller => CurrentInitializeState.Caller;
 
     /// <summary>
     /// Opaque session id used for suggestion attribution records (#1873).
@@ -370,6 +359,7 @@ public partial class McpServer : IDisposable
 
     internal Action<JsonNode?>? RequestRegisteredForTests { get; set; }
     internal Func<CancellationToken, Task>? RequestDelayForTests { get; set; }
+    internal Action? McpSessionSnapshotCapturedForTests { get; set; }
     internal bool ShutdownRequestedForTests => _shutdownCts.IsCancellationRequested;
 
     /// <summary>
@@ -1016,6 +1006,7 @@ public partial class McpServer : IDisposable
         var responseHasId = true;
         JsonNode? responseId = null;
         IDisposable? frameCorrelationScope = null;
+        var deferredInitializeCommits = new DeferredInitializeCommits();
         try
         {
             request = JsonFrameParser.ParseNode(line, MaxJsonDepth);
@@ -1029,9 +1020,26 @@ public partial class McpServer : IDisposable
             if (responseHasId && CurrentCorrelationContext.Value is null)
                 frameCorrelationScope = BeginRequestCorrelation(responseId);
             using var activity = StartMcpActivity(request, responseId);
-            var response = await HandleMessageAsync(request, isolateRequestDb: true).ConfigureAwait(false);
+            var response = await HandleMessageAsync(
+                request,
+                isolateRequestDb: true,
+                deferredInitializeCommits).ConfigureAwait(false);
             activity?.SetTag("rpc.result", response is null ? "notification" : "response");
-            return response != null ? SerializeResponseOrFallback(response, responseHasId, responseId) : null;
+            if (response is null)
+                return null;
+
+            var serialized = SerializeResponseOrFallback(
+                response,
+                responseHasId,
+                responseId,
+                out var serializedOriginalResponse);
+            if (serializedOriginalResponse)
+            {
+                foreach (var state in deferredInitializeCommits.GetIncludedStates(response))
+                    CommitInitializeState(state);
+            }
+
+            return serialized;
         }
         catch (JsonException ex)
         {
@@ -1059,7 +1067,11 @@ public partial class McpServer : IDisposable
                 category: classification.Category,
                 suggestion: classification.Suggestion,
                 retrySafe: classification.RetrySafe);
-            return SerializeResponseOrFallback(errorResponse, responseHasId, responseId);
+            return SerializeResponseOrFallback(
+                errorResponse,
+                responseHasId,
+                responseId,
+                out _);
         }
         finally
         {
@@ -1222,8 +1234,13 @@ public partial class McpServer : IDisposable
         return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
-    private string SerializeResponseOrFallback(JsonNode response, bool hasId, JsonNode? id)
+    private string SerializeResponseOrFallback(
+        JsonNode response,
+        bool hasId,
+        JsonNode? id,
+        out bool serializedOriginalResponse)
     {
+        serializedOriginalResponse = false;
         try
         {
             var responseLimit = GetMaxResponseBytes();
@@ -1232,13 +1249,17 @@ public partial class McpServer : IDisposable
                 if (!TrySerializeJsonNodeWithinByteLimit(response, _jsonOptions, responseLimit, captureSerialized: true, out var boundedSerialized, out var boundedResponseBytes))
                     return CreateResponseTooLargeError(hasId, id, boundedResponseBytes, responseLimit, actualBytesExact: false).ToJsonString(_jsonOptions);
 
+                serializedOriginalResponse = true;
                 return boundedSerialized!;
             }
 
             var serialized = _serializeResponse(response);
             var responseBytes = Encoding.UTF8.GetByteCount(serialized);
             if (responseBytes <= responseLimit)
+            {
+                serializedOriginalResponse = true;
                 return serialized;
+            }
 
             return CreateResponseTooLargeError(hasId, id, responseBytes, responseLimit).ToJsonString(_jsonOptions);
         }
@@ -1381,15 +1402,21 @@ public partial class McpServer : IDisposable
     internal JsonNode? HandleMessage(JsonNode request)
         // Keep this sync wrapper for existing in-process callers; async transports call
         // HandleMessageAsync so server loops do not need a sync-over-async bridge.
-        => HandleMessageAsync(request, isolateRequestDb: false).GetAwaiter().GetResult();
+        => HandleMessageAsync(request, isolateRequestDb: false, deferredInitializeCommits: null).GetAwaiter().GetResult();
 
     internal Task<JsonNode?> HandleMessageAsync(JsonNode request)
-        => HandleMessageAsync(request, isolateRequestDb: false);
+        => HandleMessageAsync(request, isolateRequestDb: false, deferredInitializeCommits: null);
 
-    private async Task<JsonNode?> HandleMessageAsync(JsonNode request, bool isolateRequestDb)
+    private async Task<JsonNode?> HandleMessageAsync(
+        JsonNode request,
+        bool isolateRequestDb,
+        DeferredInitializeCommits? deferredInitializeCommits)
     {
         if (request is JsonArray batch)
-            return await HandleBatchMessageAsync(batch, isolateRequestDb).ConfigureAwait(false);
+            return await HandleBatchMessageAsync(
+                batch,
+                isolateRequestDb,
+                deferredInitializeCommits).ConfigureAwait(false);
 
         if (request is not JsonObject obj)
             return CreateExpectedJsonObjectErrorResponse();
@@ -1449,7 +1476,7 @@ public partial class McpServer : IDisposable
 
         if (method == "notifications/roots/list_changed")
         {
-            _clientRootsStale = true;
+            MarkClientRootsStale();
             return null;
         }
 
@@ -1515,7 +1542,7 @@ public partial class McpServer : IDisposable
                 retrySafe: false);
         }
 
-        if (_enforceInitializationLifecycle && !_initialized && method != "initialize")
+        if (_enforceInitializationLifecycle && !CurrentInitializeState.Initialized && method != "initialize")
         {
             return CreateErrorResponse(hasId: true, id: id, code: -32002, message: "Server not initialized",
                 category: McpErrorEnvelope.CategoryInvalidRequest,
@@ -1525,7 +1552,10 @@ public partial class McpServer : IDisposable
 
         return await DispatchWithRequestCancellationAsync(id, isolateRequestDb, () => method switch
         {
-            "initialize" => Task.FromResult<JsonNode>(HandleInitialize(id, request["params"])),
+            "initialize" => Task.FromResult<JsonNode>(HandleInitialize(
+                id,
+                request["params"],
+                deferredInitializeCommits)),
             "tools/list" => Task.FromResult<JsonNode>(HandleToolsList(id, request["params"])),
             "tools/call" => HandleToolsCallAsync(id, request["params"]),
             "resources/list" => Task.FromResult<JsonNode>(HandleResourcesList(id, request["params"])),
@@ -1683,7 +1713,10 @@ public partial class McpServer : IDisposable
         return _lastDbCheckOk == true;
     }
 
-    private async Task<JsonNode?> HandleBatchMessageAsync(JsonArray batch, bool isolateRequestDb)
+    private async Task<JsonNode?> HandleBatchMessageAsync(
+        JsonArray batch,
+        bool isolateRequestDb,
+        DeferredInitializeCommits? deferredInitializeCommits)
     {
         if (batch.Count == 0)
             return CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: empty batch",
@@ -1770,7 +1803,10 @@ public partial class McpServer : IDisposable
                 }
                 else
                 {
-                    response = await HandleMessageAsync(item, isolateRequestDb).ConfigureAwait(false);
+                    response = await HandleMessageAsync(
+                        item,
+                        isolateRequestDb,
+                        deferredInitializeCommits).ConfigureAwait(false);
                 }
             }
             finally
@@ -2273,27 +2309,11 @@ public partial class McpServer : IDisposable
     /// Handle the initialize handshake.
     /// initializeハンドシェイクを処理。
     /// </summary>
-    private JsonNode HandleInitialize(JsonNode? id, JsonNode? _params)
+    private JsonNode HandleInitialize(
+        JsonNode? id,
+        JsonNode? _params,
+        DeferredInitializeCommits? deferredInitializeCommits)
     {
-        CaptureClientInfo(_params);
-        CaptureClientSession(_params);
-        // Caller stickiness: allow upgrading from the default "unknown" bucket to a named
-        // identity, but reject re-initialize attempts that swap one named identity for
-        // another. Otherwise a single networked session could reset its rate-limit bucket
-        // mid-flight by re-initializing under a fresh name (issue #1560 evidence — DoS
-        // surface for networked MCP deployments).
-        // caller の sticky 制御: 既定の "unknown" バケットからは名前付き ID への昇格を許すが、
-        // 名前付き ID 同士のスワップは拒否する。これを許すと 1 セッション内で再 initialize により
-        // 新しい名前でレート制限バケットをリセットできてしまい、#1560 が指摘する DoS 経路になる。
-        var resolved = ResolveCallerIdentity(_params);
-        if (_caller == "unknown")
-        {
-            _caller = resolved;
-        }
-        else if (resolved != _caller && resolved != "unknown")
-        {
-            DeferFrameLog(BuildCallerSwapRejectionLog(_caller, resolved));
-        }
         var negotiated = NegotiateProtocolVersion(_params, out var requestedVersion);
         if (negotiated == null)
         {
@@ -2308,6 +2328,12 @@ public partial class McpServer : IDisposable
             return CreateUnsupportedProtocolError(id, requestedVersion);
         }
 
+        // Parse caller-controlled identity, capability, and root metadata into a detached
+        // draft. None of it becomes observable session state until protocol negotiation and
+        // complete success-response serialization have both succeeded (#4540).
+        // caller が制御する identity / capability / root metadata は切り離した draft へ解析する。
+        // protocol 交渉と success response の serialization が完了するまで公開しない (#4540)。
+        var initializeState = BuildInitializeState(_params);
         var result = new JsonObject
         {
             ["protocolVersion"] = negotiated,
@@ -2342,104 +2368,258 @@ public partial class McpServer : IDisposable
             // サーバー指示 — AIクライアント向けツール選択ガイダンス
             ["instructions"] = BuildInstructions()
         };
-        _initialized = true;
-        return CreateSuccessResponse(true, id, result);
+        var response = CreateSuccessResponse(true, id, result);
+        if (deferredInitializeCommits is null)
+            CommitInitializeState(initializeState);
+        else
+            deferredInitializeCommits.Register(response, initializeState);
+        return response;
     }
 
     /// <summary>
-    /// Resolve the protocol version to advertise back to the client. Returns the version
-    /// string on success and `null` when the client pinned an unsupported version.
-    /// Issue #1554: the previous handshake hardcoded a single version, so a future MCP
-    /// spec bump would silently break clients. The negotiation now mirrors the MCP spec:
-    /// echo the client's requested version when it is in our supported set, fall back to
-    /// the preferred version when no version was supplied, and surface a structured error
-    /// when there is no overlap (no silent downgrade so clients cannot mistakenly proceed
-    /// against an unsupported wire format).
-    /// クライアントに返すプロトコルバージョンを決める。成功時はバージョン文字列、
-    /// クライアントが対応外バージョンを指定した場合は `null` を返す。Issue #1554:
-    /// 旧実装はハードコードした 1 つのバージョンだけを返していたため、将来の仕様改訂で
-    /// 無言で互換が壊れる。本ロジックは MCP 仕様準拠で、要求バージョンが対応集合にあれば
-    /// それをそのまま返し、未指定なら既定バージョンを返し、重なりが無い場合は構造化エラー
-    /// を返す（黙ってダウングレードしないことでクライアントが誤った wire format で進むのを防ぐ）。
+    /// Build a detached snapshot of caller-controlled initialize metadata. The caller must
+    /// commit this snapshot only after protocol negotiation and success-response serialization succeed.
+    /// caller が制御する initialize metadata の切り離した snapshot を構築する。呼び出し元は
+    /// protocol 交渉と success response の serialization 成功後に限って commit すること。
     /// </summary>
-    /// <summary>
-    /// Capture `initialize.clientInfo.{name,version}` onto the per-session caller fields so
-    /// audit records (#1562) can identify the requester without a parallel log source. Best-
-    /// effort: malformed shapes leave the fields unset rather than failing the handshake.
-    /// `initialize.clientInfo.{name,version}` をセッションの caller フィールドに記録し、
-    /// audit ログ (#1562) で別ソースを引かなくても呼び出し元を辿れるようにする。形が壊れていても
-    /// handshake は失敗させない（ベストエフォート）。
-    /// </summary>
-    private void CaptureClientInfo(JsonNode? initializeParams)
+    private PendingInitializeState BuildInitializeState(JsonNode? initializeParams)
     {
-        // Every initialize reseats caller identity so a reconnect that omits or malforms
-        // clientInfo cannot inherit the previous client's name/version. Leaving the stale
-        // values would mis-attribute later audit records to the wrong caller (#1562 review).
-        // initialize ごとに caller を再設定する。clientInfo を省略 / 不正型で送ってきた
-        // 再接続が前回のクライアント名/version を引き継がないようにするため。
-        _clientName = null;
-        _clientVersion = null;
-        _clientNameDisplay = null;
-        _clientVersionDisplay = null;
-        if (initializeParams is not JsonObject obj)
-            return;
-        _clientRootsStale = true;
-        if (obj["clientInfo"] is not JsonObject info)
-            return;
-        _clientNameDisplay = TryReadBoundedClientInfoMember(info, "name");
-        _clientVersionDisplay = TryReadBoundedClientInfoMember(info, "version");
-        _clientName = _clientNameDisplay?.Text;
-        _clientVersion = _clientVersionDisplay?.Text;
-    }
+        BoundedMcpText? clientNameDisplay = null;
+        BoundedMcpText? clientVersionDisplay = null;
+        JsonNode? clientCapabilities = null;
+        int? clientCapabilitiesSerializedBytes = null;
+        string? clientCapabilitiesTruncationReason = null;
+        var clientSupportsRoots = false;
+        var clientSupportsSampling = false;
+        var clientRoots = new List<string>();
+        var clientRootDiagnostics = new List<string>();
+        var clientRootsTruncated = false;
+        var markClientRootsStale = false;
 
-    private void CaptureClientSession(JsonNode? initializeParams)
-    {
-        _clientCapabilities = null;
-        _clientCapabilitiesSerializedBytes = null;
-        _clientCapabilitiesTruncationReason = null;
-        _clientSupportsRoots = false;
-        _clientSupportsSampling = false;
-        ResetClientRoots();
-        if (initializeParams is not JsonObject obj)
-            return;
-
-        if (!obj.TryGetPropertyValue("capabilities", out var capabilities))
-            obj.TryGetPropertyValue("clientCapabilities", out capabilities);
-        if (capabilities is not null)
-            CaptureClientCapabilities(capabilities);
-
-        if (TryReadStringValue(obj["rootUri"]) is { Length: > 0 } rootUri)
-            CaptureClientRoot(rootUri);
-
-        if (obj["roots"] is JsonArray roots)
+        if (initializeParams is JsonObject obj)
         {
-            foreach (var root in roots)
+            markClientRootsStale = true;
+            if (obj["clientInfo"] is JsonObject info)
             {
-                var uri = TryReadStringValue(root?["uri"]) ?? TryReadStringValue(root);
-                if (!string.IsNullOrWhiteSpace(uri))
-                    CaptureClientRoot(uri);
+                clientNameDisplay = TryReadBoundedClientInfoMember(info, "name");
+                clientVersionDisplay = TryReadBoundedClientInfoMember(info, "version");
+            }
+
+            if (!obj.TryGetPropertyValue("capabilities", out var capabilities))
+                obj.TryGetPropertyValue("clientCapabilities", out capabilities);
+            if (capabilities is not null)
+            {
+                if (capabilities is JsonObject capabilitiesObject)
+                {
+                    clientSupportsRoots = capabilitiesObject.TryGetPropertyValue("roots", out var rootsCapability)
+                        && rootsCapability is not null;
+                    clientSupportsSampling = capabilitiesObject.TryGetPropertyValue("sampling", out var samplingCapability)
+                        && samplingCapability is not null;
+                }
+
+                if (!TryMeasureJsonUtf8BytesWithinLimit(capabilities, _jsonOptions, MaxClientCapabilitiesJsonBytes, out var serializedBytes))
+                {
+                    clientCapabilitiesSerializedBytes = serializedBytes;
+                    clientCapabilities = new JsonObject();
+                    clientCapabilitiesTruncationReason = "byte_limit";
+                }
+                else
+                {
+                    clientCapabilitiesSerializedBytes = serializedBytes;
+                    if (!IsJsonNodeDepthWithinLimit(capabilities, MaxClientCapabilitiesDepth))
+                    {
+                        clientCapabilities = new JsonObject();
+                        clientCapabilitiesTruncationReason = "depth_limit";
+                    }
+                    else
+                    {
+                        clientCapabilities = McpJsonNode.Clone(capabilities);
+                    }
+                }
+            }
+
+            void AddRoot(string uri)
+            {
+                clientRoots.Add(uri);
+                if (clientRootDiagnostics.Count >= MaxClientRootCount)
+                {
+                    clientRootsTruncated = true;
+                    return;
+                }
+
+                var display = McpBoundedText.ForDisplay(uri, MaxClientRootUriChars);
+                clientRootDiagnostics.Add(display.Text);
+                clientRootsTruncated |= display.Truncated;
+            }
+
+            if (TryReadStringValue(obj["rootUri"]) is { Length: > 0 } rootUri)
+                AddRoot(rootUri);
+
+            if (obj["roots"] is JsonArray roots)
+            {
+                foreach (var root in roots)
+                {
+                    var uri = TryReadStringValue(root?["uri"]) ?? TryReadStringValue(root);
+                    if (!string.IsNullOrWhiteSpace(uri))
+                        AddRoot(uri);
+                }
             }
         }
+
+        return new PendingInitializeState(
+            ResolveCallerIdentity(initializeParams),
+            markClientRootsStale,
+            clientNameDisplay,
+            clientVersionDisplay,
+            clientCapabilities,
+            clientCapabilitiesSerializedBytes,
+            clientCapabilitiesTruncationReason,
+            clientSupportsRoots,
+            clientSupportsSampling,
+            clientRoots.ToArray(),
+            clientRootDiagnostics.ToArray(),
+            clientRootsTruncated);
     }
 
-    private void CaptureClientCapabilities(JsonNode capabilities)
+    private void CommitInitializeState(PendingInitializeState state)
     {
-        CaptureClientCapabilityFlags(capabilities);
-        if (!TryMeasureJsonUtf8BytesWithinLimit(capabilities, _jsonOptions, MaxClientCapabilitiesJsonBytes, out var serializedBytes))
+        lock (_initializeStateGate)
         {
-            _clientCapabilitiesSerializedBytes = serializedBytes;
-            TruncateClientCapabilities("byte_limit");
-            return;
+            var previous = CurrentInitializeState;
+            var caller = previous.Caller;
+
+            // Caller stickiness: allow upgrading from the default "unknown" bucket to a named
+            // identity, but reject successful re-initialize attempts that swap named identities.
+            // caller の sticky 制御: "unknown" から名前付き ID への昇格だけを許可し、成功した
+            // re-initialize による名前付き ID 同士のスワップは拒否する。
+            if (caller == "unknown")
+            {
+                caller = state.ResolvedCaller;
+            }
+            else if (state.ResolvedCaller != caller && state.ResolvedCaller != "unknown")
+            {
+                DeferFrameLog(BuildCallerSwapRejectionLog(caller, state.ResolvedCaller));
+            }
+
+            var committed = new InitializeSessionState(
+                true,
+                caller,
+                state.ClientNameDisplay,
+                state.ClientVersionDisplay,
+                state.ClientCapabilities,
+                state.ClientCapabilitiesSerializedBytes,
+                state.ClientCapabilitiesTruncationReason,
+                state.ClientSupportsRoots,
+                state.ClientSupportsSampling,
+                state.ClientRoots.ToArray(),
+                state.ClientRootDiagnostics.ToArray(),
+                state.ClientRootsTruncated,
+                state.MarkClientRootsStale || previous.ClientRootsStale);
+
+            // One release publication makes lifecycle and all negotiated metadata visible
+            // together; no reader can observe initialized=true with a partial state (#4540).
+            // lifecycle と交渉済み metadata を 1 回の release publication で同時に公開し、
+            // initialized=true と部分的な state の組み合わせを reader に見せない (#4540)。
+            Volatile.Write(ref _initializeState, committed);
+        }
+    }
+
+    private sealed record InitializeSessionState(
+        bool Initialized,
+        string Caller,
+        BoundedMcpText? ClientNameDisplay,
+        BoundedMcpText? ClientVersionDisplay,
+        JsonNode? ClientCapabilities,
+        int? ClientCapabilitiesSerializedBytes,
+        string? ClientCapabilitiesTruncationReason,
+        bool ClientSupportsRoots,
+        bool ClientSupportsSampling,
+        string[] ClientRoots,
+        string[] ClientRootDiagnostics,
+        bool ClientRootsTruncated,
+        bool ClientRootsStale)
+    {
+        internal static InitializeSessionState Empty { get; } = new(
+            false,
+            "unknown",
+            null,
+            null,
+            null,
+            null,
+            null,
+            false,
+            false,
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            false,
+            true);
+
+        internal string? ClientName => ClientNameDisplay?.Text;
+        internal string? ClientVersion => ClientVersionDisplay?.Text;
+        internal int ClientRootCount => ClientRoots.Length;
+    }
+
+    private sealed record PendingInitializeState(
+        string ResolvedCaller,
+        bool MarkClientRootsStale,
+        BoundedMcpText? ClientNameDisplay,
+        BoundedMcpText? ClientVersionDisplay,
+        JsonNode? ClientCapabilities,
+        int? ClientCapabilitiesSerializedBytes,
+        string? ClientCapabilitiesTruncationReason,
+        bool ClientSupportsRoots,
+        bool ClientSupportsSampling,
+        string[] ClientRoots,
+        string[] ClientRootDiagnostics,
+        bool ClientRootsTruncated);
+
+    /// <summary>
+    /// Tracks initialize drafts for one wire frame until the exact success response that owns
+    /// each draft has been serialized. The collection is frame-local but synchronized because
+    /// isolated request dispatch can finish on a worker after its caller has timed out.
+    /// initialize draft を wire frame 単位で追跡し、対応する success response の serialization
+    /// 成功後にだけ commit する。timeout 後も worker が完了し得るため collection は同期する。
+    /// </summary>
+    private sealed class DeferredInitializeCommits
+    {
+        private readonly object _gate = new();
+        private readonly List<Entry> _entries = [];
+
+        internal void Register(JsonNode response, PendingInitializeState state)
+        {
+            lock (_gate)
+                _entries.Add(new Entry(response, state));
         }
 
-        _clientCapabilitiesSerializedBytes = serializedBytes;
-        if (!IsJsonNodeDepthWithinLimit(capabilities, MaxClientCapabilitiesDepth))
+        internal PendingInitializeState[] GetIncludedStates(JsonNode serializedResponse)
         {
-            TruncateClientCapabilities("depth_limit");
-            return;
+            lock (_gate)
+            {
+                return _entries
+                    .Where(entry => IsIncludedResponse(serializedResponse, entry.Response))
+                    .Select(entry => entry.State)
+                    .ToArray();
+            }
         }
 
-        _clientCapabilities = McpJsonNode.Clone(capabilities);
+        private static bool IsIncludedResponse(JsonNode serializedResponse, JsonNode candidate)
+        {
+            if (ReferenceEquals(serializedResponse, candidate))
+                return true;
+
+            if (serializedResponse is not JsonArray batchResponse)
+                return false;
+
+            foreach (var item in batchResponse)
+            {
+                if (ReferenceEquals(item, candidate))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private sealed record Entry(JsonNode Response, PendingInitializeState State);
     }
 
     private static bool IsJsonNodeDepthWithinLimit(JsonNode node, int maxDepth)
@@ -2472,55 +2652,77 @@ public partial class McpServer : IDisposable
         return true;
     }
 
-    private void TruncateClientCapabilities(string reason)
+    private static ClientRootSnapshot BuildClientRootSnapshot(IEnumerable<string> roots)
     {
-        _clientCapabilities = new JsonObject();
-        _clientCapabilitiesTruncationReason = reason;
-    }
-
-    private void CaptureClientCapabilityFlags(JsonNode capabilities)
-    {
-        if (capabilities is not JsonObject obj)
-            return;
-
-        _clientSupportsRoots = obj.TryGetPropertyValue("roots", out var roots) && roots is not null;
-        _clientSupportsSampling = obj.TryGetPropertyValue("sampling", out var sampling) && sampling is not null;
-    }
-
-    private void CaptureClientRoot(string uri)
-    {
-        _clientRoots.Add(uri);
-        _clientRootCount++;
-        if (_clientRootDiagnostics.Count >= MaxClientRootCount)
+        var capturedRoots = new List<string>();
+        var diagnostics = new List<string>();
+        var truncated = false;
+        foreach (var uri in roots)
         {
-            _clientRootsTruncated = true;
-            return;
+            capturedRoots.Add(uri);
+            if (diagnostics.Count >= MaxClientRootCount)
+            {
+                truncated = true;
+                continue;
+            }
+
+            var display = McpBoundedText.ForDisplay(uri, MaxClientRootUriChars);
+            diagnostics.Add(display.Text);
+            truncated |= display.Truncated;
         }
 
-        var display = McpBoundedText.ForDisplay(uri, MaxClientRootUriChars);
-        _clientRootDiagnostics.Add(display.Text);
-        _clientRootsTruncated |= display.Truncated;
+        return new ClientRootSnapshot(capturedRoots.ToArray(), diagnostics.ToArray(), truncated);
     }
 
-    private void ResetClientRoots()
+    private void MarkClientRootsStale()
     {
-        _clientRoots = [];
-        _clientRootDiagnostics = [];
-        _clientRootCount = 0;
-        _clientRootsTruncated = false;
+        lock (_initializeStateGate)
+        {
+            var current = CurrentInitializeState;
+            // Always replace the reference, even when already stale, so a notification that
+            // races an in-flight roots/list refresh invalidates that refresh's expected state.
+            // 既に stale でも必ず reference を置き換え、進行中の roots/list refresh と競合した
+            // notification がその refresh の expected state を無効化できるようにする。
+            Volatile.Write(ref _initializeState, current with { ClientRootsStale = true });
+        }
     }
 
-    internal JsonNode? ClientCapabilitiesForTests => McpJsonNode.Clone(_clientCapabilities);
+    private sealed record ClientRootSnapshot(string[] Roots, string[] Diagnostics, bool Truncated);
 
-    internal string[] ClientRootsForTests => _clientRoots
-        .Select(root => root?.GetValue<string>())
-        .Where(root => !string.IsNullOrWhiteSpace(root))
-        .Cast<string>()
-        .ToArray();
+    internal JsonNode? ClientCapabilitiesForTests
+    {
+        get
+        {
+            var state = CurrentInitializeState;
+            return McpJsonNode.Clone(state.ClientCapabilities);
+        }
+    }
 
-    internal bool ClientSupportsRootsForTests => _clientSupportsRoots;
+    internal string[] ClientRootsForTests
+    {
+        get
+        {
+            var state = CurrentInitializeState;
+            return state.ClientRoots.ToArray();
+        }
+    }
 
-    internal bool ClientSupportsSamplingForTests => _clientSupportsSampling;
+    internal bool ClientSupportsRootsForTests => CurrentInitializeState.ClientSupportsRoots;
+
+    internal bool ClientSupportsSamplingForTests => CurrentInitializeState.ClientSupportsSampling;
+
+    internal bool ClientRootsStaleForTests
+    {
+        get => CurrentInitializeState.ClientRootsStale;
+        set
+        {
+            lock (_initializeStateGate)
+            {
+                var current = CurrentInitializeState;
+                Volatile.Write(ref _initializeState, current with { ClientRootsStale = value });
+            }
+        }
+    }
 
     internal string McpLogLevelForTests => _mcpLogLevel;
 
@@ -3225,6 +3427,12 @@ public partial class McpServer : IDisposable
         return version == null ? name : $"{name}/{version}";
     }
 
+    /// <summary>
+    /// Return the requested protocol version when supported, the preferred version when the
+    /// field is absent or malformed, and <see langword="null"/> when there is no overlap.
+    /// 対応する要求バージョン、未指定・不正型なら既定バージョン、対応外なら
+    /// <see langword="null"/> を返す。
+    /// </summary>
     internal static string? NegotiateProtocolVersion(JsonNode? initializeParams, out BoundedMcpText? requestedVersion)
     {
         requestedVersion = null;
@@ -3483,12 +3691,13 @@ public partial class McpServer : IDisposable
                 // disappearing into a direct return.
                 // (tool, caller) ごとのレート制限 (#1560)。既定は無効。opt-in 時もアサインしてから
                 // 監査出力する構造を保ち、refusal が audit log (#1562) から消えないようにする。
-                var decision = RateLimiter.TryAcquire(toolName, _caller);
+                var caller = CurrentInitializeState.Caller;
+                var decision = RateLimiter.TryAcquire(toolName, caller);
                 if (!decision.Allowed)
                 {
                     metricsError = "rate_limited";
-                    DeferFrameLog(BuildRateLimitedLog(toolName, _caller, decision.RetryAfterMs));
-                    response = CreateRateLimitedErrorResponse(id, toolName, _caller, decision.RetryAfterMs);
+                    DeferFrameLog(BuildRateLimitedLog(toolName, caller, decision.RetryAfterMs));
+                    response = CreateRateLimitedErrorResponse(id, toolName, caller, decision.RetryAfterMs);
                 }
                 else if (ValidateProjectFilterArguments(args) is JsonObject projectFilterError)
                 {
@@ -3763,6 +3972,7 @@ public partial class McpServer : IDisposable
 
         try
         {
+            var initializeState = CurrentInitializeState;
             var (errorCode, observedErrorType) = ExtractErrorCode(response);
             var resultCount = ExtractResultCount(response);
             var (argKeys, argLengths, argKeyLengths, argValuesEcho) =
@@ -3783,8 +3993,8 @@ public partial class McpServer : IDisposable
             var evt = new AuditLogSink.AuditEvent(
                 Timestamp: startedAt,
                 Tool: toolDisplay.Text,
-                CallerName: _clientName,
-                CallerVersion: _clientVersion,
+                CallerName: initializeState.ClientName,
+                CallerVersion: initializeState.ClientVersion,
                 RequestId: requestIdDisplay?.Text,
                 ArgKeys: argKeys,
                 ArgLengths: argLengths,
@@ -3806,10 +4016,10 @@ public partial class McpServer : IDisposable
                 ArgValuesSerializedBytes: argValuesSerializedBytes,
                 RequestIdLength: requestIdDisplay?.Truncated == true ? requestIdDisplay.Value.OriginalLength : null,
                 RequestIdTruncated: requestIdDisplay?.Truncated == true,
-                CallerNameLength: _clientNameDisplay?.Truncated == true ? _clientNameDisplay.Value.OriginalLength : null,
-                CallerNameTruncated: _clientNameDisplay?.Truncated == true,
-                CallerVersionLength: _clientVersionDisplay?.Truncated == true ? _clientVersionDisplay.Value.OriginalLength : null,
-                CallerVersionTruncated: _clientVersionDisplay?.Truncated == true);
+                CallerNameLength: initializeState.ClientNameDisplay?.Truncated == true ? initializeState.ClientNameDisplay.Value.OriginalLength : null,
+                CallerNameTruncated: initializeState.ClientNameDisplay?.Truncated == true,
+                CallerVersionLength: initializeState.ClientVersionDisplay?.Truncated == true ? initializeState.ClientVersionDisplay.Value.OriginalLength : null,
+                CallerVersionTruncated: initializeState.ClientVersionDisplay?.Truncated == true);
             _auditLog.Record(evt);
         }
         catch

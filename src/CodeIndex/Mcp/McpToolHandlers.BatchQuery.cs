@@ -155,6 +155,7 @@ public partial class McpServer
             failureCount++;
         }
 
+        var caller = CurrentInitializeState.Caller;
         for (var requestIndex = 0; requestIndex < queries.Count; requestIndex++)
         {
             using var slotCorrelation = BeginChildCorrelation(requestIndex + 1);
@@ -278,7 +279,7 @@ public partial class McpServer
             // だけで N 個の内側呼び出しが素通りし、(tool, caller) 制限が batch_query 経由で
             // 迂回されてしまう。判定は (内側ツール, caller) 単位なので、同一バッチ内で許可スロット
             // と超過スロットを併存させられる（#1560）。
-            var slotDecision = RateLimiter.TryAcquire(toolName, _caller);
+            var slotDecision = RateLimiter.TryAcquire(toolName, caller);
             if (!slotDecision.Allowed)
             {
                 AppendRateLimitedSlot(requestIndex, slotId, toolName, toolArgs, slotStopwatch, slotDecision.RetryAfterMs);
