@@ -103,6 +103,12 @@ public partial class McpServer : IDisposable
     private readonly AsyncLocal<Func<string, CancellationToken, Task>?> _currentOutOfBandFrameWriter = new();
     private readonly AsyncLocal<bool> _canAwaitClientResponses = new();
     private readonly AsyncLocal<DeferredFrameLogBuffer?> _deferredFrameLogs = new();
+    // Isolated actions can outlive their JSON-RPC response after deadline or transport
+    // cancellation. Collect them per frame so HTTP request-body reservations remain bounded
+    // until the underlying work actually exits (#4546).
+    // deadline / transport cancellation 後も response より長く残る isolated action を frame ごとに
+    // 収集し、実処理終了まで HTTP request-body reservation を維持する (#4546)。
+    private readonly AsyncLocal<ConcurrentQueue<Task>?> _currentDetachedIsolatedActions = new();
     // A successful initialize inside a JSON-RPC batch must order later items in that same
     // frame without publishing the new session globally before the exact response serializes.
     // JSON-RPC batch 内で成功した initialize は、対応 response の serialize 前に global 公開せず、
@@ -729,6 +735,42 @@ public partial class McpServer : IDisposable
         var tasks = new List<Task>();
         Task protocolBarrier = Task.CompletedTask;
         Task? terminalTransportWriteTask = null;
+        var hasRequestScopedWriters = transport is IConcurrentMcpTransport;
+
+        async Task WriteTransportFrameResponseAsync(
+            Func<string?, CancellationToken, Task> writeResponseAsync,
+            string? response)
+        {
+            // Concurrent transports provide one writer per request, so serializing those writers
+            // behind the base-transport gate lets an unrelated stuck response retain later HTTP
+            // request resources. Base transports (notably stdio) still require the shared gate.
+            // concurrent transport は request ごとの writer を持つため、base transport 用 gate
+            // に直列化すると無関係な stuck response が後続 HTTP resource を保持してしまう。
+            // stdio 等の base transport だけ shared gate を維持する (#4546)。
+            if (hasRequestScopedWriters)
+            {
+                await WriteFrameSafelyAsync(
+                    writeResponseAsync,
+                    response,
+                    externalCancellationToken).ConfigureAwait(false);
+                FlushDeferredFrameLogs();
+                return;
+            }
+
+            await writeGate.WaitAsync(externalCancellationToken).ConfigureAwait(false);
+            try
+            {
+                await WriteFrameSafelyAsync(
+                    writeResponseAsync,
+                    response,
+                    externalCancellationToken).ConfigureAwait(false);
+                FlushDeferredFrameLogs();
+            }
+            finally
+            {
+                writeGate.Release();
+            }
+        }
 
         try
         {
@@ -778,37 +820,34 @@ public partial class McpServer : IDisposable
                     break;
                 var frame = transportFrame.Frame;
                 var writeResponseAsync = transportFrame.WriteResponseAsync;
+                var transportRequestToken = transportFrame.RequestCancellationToken;
 
                 if (IsCancellationFrame(frame))
                 {
-                    BeginDeferredFrameLogs();
-                    var response = await ProcessFrameAsync(frame).ConfigureAwait(false);
-                    await writeGate.WaitAsync(externalCancellationToken).ConfigureAwait(false);
                     try
                     {
-                        await WriteFrameSafelyAsync(writeResponseAsync, response, externalCancellationToken).ConfigureAwait(false);
-                        FlushDeferredFrameLogs();
+                        BeginDeferredFrameLogs();
+                        var response = await ProcessFrameAsync(frame).ConfigureAwait(false);
+                        await WriteTransportFrameResponseAsync(writeResponseAsync, response).ConfigureAwait(false);
                     }
                     finally
                     {
-                        writeGate.Release();
+                        transportFrame.CompleteResourceRetentionWhen(Task.CompletedTask);
                     }
                     continue;
                 }
 
                 if (IsServerResponseFrame(frame))
                 {
-                    BeginDeferredFrameLogs();
-                    var response = await ProcessFrameAsync(frame).ConfigureAwait(false);
-                    await writeGate.WaitAsync(externalCancellationToken).ConfigureAwait(false);
                     try
                     {
-                        await WriteFrameSafelyAsync(writeResponseAsync, response, externalCancellationToken).ConfigureAwait(false);
-                        FlushDeferredFrameLogs();
+                        BeginDeferredFrameLogs();
+                        var response = await ProcessFrameAsync(frame).ConfigureAwait(false);
+                        await WriteTransportFrameResponseAsync(writeResponseAsync, response).ConfigureAwait(false);
                     }
                     finally
                     {
-                        writeGate.Release();
+                        transportFrame.CompleteResourceRetentionWhen(Task.CompletedTask);
                     }
                     continue;
                 }
@@ -822,29 +861,27 @@ public partial class McpServer : IDisposable
                 // HTTP context を保持し続けず、retry-safe overload response を返す (#4536)。
                 if (!admissionGate.Wait(0))
                 {
-                    // Keep every response-bearing id registered until its retry-safe overload
-                    // response has reached the transport. A cancellation before or during that
-                    // write then belongs to this rejected occurrence instead of poisoning a later
-                    // same-id retry (#4536, #4545).
-                    // retry-safe overload 応答が transport へ届くまで response-bearing id を登録する。
-                    // reject 前または write 中の cancel をこの occurrence に束縛し、同じ id の後続
-                    // retry へ持ち越さない (#4536, #4545)。
-                    using var capacityRejectedRegistrations = new CapacityRejectedFrameRegistrations(this);
-                    BeginDeferredFrameLogs();
-                    var response = await ProcessFrameAsync(
-                        frame,
-                        beforeDispatchAsync: null,
-                        rejectForCapacity: true,
-                        capacityRejectedRegistrations: capacityRejectedRegistrations).ConfigureAwait(false);
-                    await writeGate.WaitAsync(externalCancellationToken).ConfigureAwait(false);
                     try
                     {
-                        await WriteFrameSafelyAsync(writeResponseAsync, response, externalCancellationToken).ConfigureAwait(false);
-                        FlushDeferredFrameLogs();
+                        // Keep every response-bearing id registered until its retry-safe overload
+                        // response has reached the transport. A cancellation before or during that
+                        // write then belongs to this rejected occurrence instead of poisoning a later
+                        // same-id retry (#4536, #4545).
+                        // retry-safe overload 応答が transport へ届くまで response-bearing id を登録する。
+                        // reject 前または write 中の cancel をこの occurrence に束縛し、同じ id の後続
+                        // retry へ持ち越さない (#4536, #4545)。
+                        using var capacityRejectedRegistrations = new CapacityRejectedFrameRegistrations(this);
+                        BeginDeferredFrameLogs();
+                        var response = await ProcessFrameAsync(
+                            frame,
+                            beforeDispatchAsync: null,
+                            rejectForCapacity: true,
+                            capacityRejectedRegistrations: capacityRejectedRegistrations).ConfigureAwait(false);
+                        await WriteTransportFrameResponseAsync(writeResponseAsync, response).ConfigureAwait(false);
                     }
                     finally
                     {
-                        writeGate.Release();
+                        transportFrame.CompleteResourceRetentionWhen(Task.CompletedTask);
                     }
                     continue;
                 }
@@ -868,71 +905,106 @@ public partial class McpServer : IDisposable
                 // accepted frame と executing operation は別々に上限化する。request は protocol
                 // predecessor / execution gate を待つ前に id と cancellation state を登録するため、
                 // queue 中に cancellation が失効しない (#4536)。
-                var requestTask = Task.Run(async () =>
+                Task requestTask;
+                try
                 {
-                    try
+                    requestTask = Task.Run(async () =>
                     {
-                        requestTaskStarted.TrySetResult();
-                        string? response;
+                        var detachedIsolatedActions = new ConcurrentQueue<Task>();
+                        var previousDetachedIsolatedActions = _currentDetachedIsolatedActions.Value;
                         try
                         {
-                            _currentRequestToken.Value = loopToken;
-                            _currentOutOfBandFrameWriter.Value = transport is IOutOfBandMcpTransport outOfBandTransport
-                                ? (frameToWrite, writeToken) => outOfBandTransport.WriteOutOfBandFrameAsync(frameToWrite, writeToken)
-                                : string.Equals(transport.Name, "stdio", StringComparison.OrdinalIgnoreCase)
-                                    ? async (frameToWrite, writeToken) =>
+                            requestTaskStarted.TrySetResult();
+                            using var frameCts = transportRequestToken.CanBeCanceled
+                                ? CancellationTokenSource.CreateLinkedTokenSource(loopToken, transportRequestToken)
+                                : null;
+                            var frameToken = frameCts?.Token ?? loopToken;
+                            string? response = null;
+                            try
+                            {
+                                _currentDetachedIsolatedActions.Value = detachedIsolatedActions;
+                                _currentRequestToken.Value = frameToken;
+                                _currentOutOfBandFrameWriter.Value = transport is IOutOfBandMcpTransport outOfBandTransport
+                                    ? (frameToWrite, writeToken) => outOfBandTransport.WriteOutOfBandFrameAsync(frameToWrite, writeToken)
+                                    : string.Equals(transport.Name, "stdio", StringComparison.OrdinalIgnoreCase)
+                                        ? async (frameToWrite, writeToken) =>
+                                    {
+                                        await writeGate.WaitAsync(writeToken).ConfigureAwait(false);
+                                        try
+                                        {
+                                            await transport.WriteFrameAsync(frameToWrite, writeToken).ConfigureAwait(false);
+                                        }
+                                        finally
+                                        {
+                                            writeGate.Release();
+                                        }
+                                    }
+                                : null;
+                                _canAwaitClientResponses.Value = _currentOutOfBandFrameWriter.Value is not null
+                                    && (transport is not HttpMcpTransport httpResponseTransport || httpResponseTransport.HasEventStreams);
+                                BeginDeferredFrameLogs();
+                                response = await ProcessFrameAsync(
+                                    frame,
+                                    BeforeDispatchAsync,
+                                    rejectForCapacity: false).ConfigureAwait(false);
+                            }
+                            catch (OperationCanceledException) when (frameToken.IsCancellationRequested)
+                            {
+                                // Keep the transport's strict one-frame/one-writer contract. HTTP
+                                // observes its own terminal reason and aborts/finalizes the response
+                                // when the per-request lifetime expires (#4546).
+                                // transport の frame/writer 対応を維持する。request lifetime 期限切れ時は
+                                // HTTP 側が terminal reason を観測して response を abort/finalize する。
+                                response = null;
+                            }
+                            finally
+                            {
+                                _currentDetachedIsolatedActions.Value = previousDetachedIsolatedActions;
+                                _currentRequestToken.Value = CancellationToken.None;
+                                _canAwaitClientResponses.Value = false;
+                                _currentOutOfBandFrameWriter.Value = null;
+                            }
+
+                            // Malformed/unauthorized frames can return before normal dispatch. Start their
+                            // predecessor wait here so such a frame cannot collapse a protocol barrier.
+                            // malformed / unauthorized frame が dispatch 前に return しても protocol
+                            // barrier を消してしまわないよう、未開始ならここで predecessor を待つ。
+                            if (!predecessorTask.IsValueCreated)
+                            {
+                                try
                                 {
-                                    await writeGate.WaitAsync(writeToken).ConfigureAwait(false);
-                                    try
-                                    {
-                                        await transport.WriteFrameAsync(frameToWrite, writeToken).ConfigureAwait(false);
-                                    }
-                                    finally
-                                    {
-                                        writeGate.Release();
-                                    }
+                                    await predecessorTask.Value.WaitAsync(frameToken).ConfigureAwait(false);
                                 }
-                            : null;
-                            _canAwaitClientResponses.Value = _currentOutOfBandFrameWriter.Value is not null
-                                && (transport is not HttpMcpTransport httpResponseTransport || httpResponseTransport.HasEventStreams);
-                            BeginDeferredFrameLogs();
-                            response = await ProcessFrameAsync(
-                                frame,
-                                BeforeDispatchAsync,
-                                rejectForCapacity: false).ConfigureAwait(false);
+                                catch (OperationCanceledException) when (frameToken.IsCancellationRequested)
+                                {
+                                    // A canceled frame no longer needs protocol ordering, but its
+                                    // request-scoped writer still owns mandatory response cleanup.
+                                    // cancel 済み frame は protocol ordering を待たず、対応 writer
+                                    // による必須 cleanup だけを完了させる (#4546)。
+                                    response = null;
+                                }
+                            }
+
+                            await WriteTransportFrameResponseAsync(writeResponseAsync, response).ConfigureAwait(false);
                         }
                         finally
                         {
-                            _currentRequestToken.Value = CancellationToken.None;
-                            _canAwaitClientResponses.Value = false;
-                            _currentOutOfBandFrameWriter.Value = null;
+                            var retainedWork = detachedIsolatedActions.IsEmpty
+                                ? Task.CompletedTask
+                                : ObserveDetachedIsolatedActionsAsync(detachedIsolatedActions.ToArray());
+                            transportFrame.CompleteResourceRetentionWhen(retainedWork);
+                            Interlocked.Decrement(ref _acceptedConcurrentFrameCount);
+                            admissionGate.Release();
                         }
-
-                        // Malformed/unauthorized frames can return before normal dispatch. Start their
-                        // predecessor wait here so such a frame cannot collapse a protocol barrier.
-                        // malformed / unauthorized frame が dispatch 前に return しても protocol
-                        // barrier を消してしまわないよう、未開始ならここで predecessor を待つ。
-                        if (!predecessorTask.IsValueCreated)
-                            await predecessorTask.Value.ConfigureAwait(false);
-
-                        await writeGate.WaitAsync(externalCancellationToken).ConfigureAwait(false);
-                        try
-                        {
-                            await WriteFrameSafelyAsync(writeResponseAsync, response, externalCancellationToken).ConfigureAwait(false);
-                            FlushDeferredFrameLogs();
-                        }
-                        finally
-                        {
-                            writeGate.Release();
-                        }
-                        await predecessorTask.Value.ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        Interlocked.Decrement(ref _acceptedConcurrentFrameCount);
-                        admissionGate.Release();
-                    }
-                }, CancellationToken.None);
+                    }, CancellationToken.None);
+                }
+                catch
+                {
+                    transportFrame.CompleteResourceRetentionWhen(Task.CompletedTask);
+                    Interlocked.Decrement(ref _acceptedConcurrentFrameCount);
+                    admissionGate.Release();
+                    throw;
+                }
                 tasks.Add(requestTask);
                 if (isProtocolBarrier)
                     protocolBarrier = requestTask;
@@ -990,6 +1062,26 @@ public partial class McpServer : IDisposable
         {
             writeGate.Dispose();
             admissionGate.Dispose();
+        }
+    }
+
+    private static async Task ObserveDetachedIsolatedActionsAsync(Task[] actions)
+    {
+        try
+        {
+            await Task.WhenAll(actions).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Dispatch cleanup observes each action and owns its diagnostics. This aggregate is
+            // only a transport resource-lifetime signal and must always settle successfully.
+            // 各 action の例外と診断は dispatch cleanup が所有する。この aggregate は transport
+            // resource lifetime の signal に限るため、常に正常完了させる。
+            foreach (var action in actions)
+            {
+                if (action.IsFaulted)
+                    _ = action.Exception;
+            }
         }
     }
 
@@ -2363,12 +2455,18 @@ public partial class McpServer : IDisposable
         if (httpTransport is not null)
         {
             result["http_max_request_body_bytes"] = httpTransport.MaxRequestBodyBytes;
+            result["http_request_body_idle_timeout_ms"] = (long)httpTransport.RequestBodyIdleTimeout.TotalMilliseconds;
+            result["http_request_lifetime_timeout_ms"] = (long)httpTransport.RequestLifetimeTimeout.TotalMilliseconds;
             result["http_request_body_budget_limit_bytes"] = httpTransport.MaxInFlightRequestBodyBytes;
             result["http_request_body_bytes_in_flight"] = httpTransport.InFlightRequestBodyBytes;
             result["http_request_body_process_bytes_in_flight"] = httpTransport.ProcessInFlightRequestBodyBytes;
             result["http_request_body_peak_bytes"] = httpTransport.PeakInFlightRequestBodyBytes;
             result["http_request_body_budget_scope"] = "process";
             result["http_request_body_budget_rejection_count"] = httpTransport.RequestBodyBudgetLimitRejectionCount;
+            result["http_request_body_idle_timeout_count"] = httpTransport.RequestBodyIdleTimeoutCount;
+            result["http_request_lifetime_timeout_count"] = httpTransport.RequestLifetimeTimeoutCount;
+            result["http_client_disconnect_count"] = httpTransport.ClientDisconnectCount;
+            result["http_queued_request_cancellation_count"] = httpTransport.QueuedRequestCancellationCount;
             result["http_event_stream_count"] = httpTransport.EventStreamCount;
             result["http_event_stream_limit"] = httpTransport.MaxEventStreams;
             result["http_max_concurrent_handlers"] = httpTransport.MaxConcurrentHandlers;
@@ -3147,10 +3245,10 @@ public partial class McpServer : IDisposable
             executionSlotAcquired = true;
             requestCts.Token.ThrowIfCancellationRequested();
             stopwatch = Stopwatch.StartNew();
-            requestCts.CancelAfter(_requestTimeout);
 
             if (!isolateRequestDb)
             {
+                requestCts.CancelAfter(_requestTimeout);
                 var previousIsolation = _isolateDbForCurrentRequest.Value;
                 _isolateDbForCurrentRequest.Value = false;
                 try
@@ -3183,15 +3281,34 @@ public partial class McpServer : IDisposable
             var timeoutTask = remainingTimeout <= TimeSpan.Zero
                 ? Task.CompletedTask
                 : Task.Delay(remainingTimeout, timeoutDelayCts.Token);
-            var completed = await Task.WhenAny(actionTask, timeoutTask).ConfigureAwait(false);
+            var cancellationSignal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var cancellationRegistration = requestCts.Token.Register(
+                static state => ((TaskCompletionSource<bool>)state!).TrySetResult(true),
+                cancellationSignal);
+            var cancellationTask = cancellationSignal.Task;
+            var completed = await Task.WhenAny(actionTask, timeoutTask, cancellationTask).ConfigureAwait(false);
+            try { timeoutDelayCts.Cancel(); }
+            catch (ObjectDisposedException) { /* the timeout signal has already completed. */ }
+            if (completed == cancellationTask && _shutdownCts.IsCancellationRequested)
+            {
+                // EOF/server shutdown owns the bounded outer request-task drain. Keep this
+                // dispatch attached to non-cooperative work so teardown does not manufacture a
+                // late cancellation response or race a terminal protocol-error write (#4543).
+                // EOF/server shutdown は外側の bounded request-task drain が所有する。非協調 work を
+                // detach せず、遅延 cancel response や terminal protocol-error write との race を防ぐ。
+                return await actionTask.ConfigureAwait(false);
+            }
             if (completed != actionTask)
             {
-                try { requestCts.Cancel(); }
-                catch (ObjectDisposedException) { /* completed while timeout cancellation was being delivered. */ }
+                var timedOut = completed == timeoutTask;
+                if (timedOut)
+                    CancelRequestCts(requestCts);
                 var elapsed = stopwatch.Elapsed;
-                RecordTimedOutIsolatedActionDraining(telemetryRequestId, elapsed);
+                if (timedOut)
+                    RecordTimedOutIsolatedActionDraining(telemetryRequestId, elapsed);
                 cleanupNow = false;
                 releaseExecutionSlotNow = false;
+                _currentDetachedIsolatedActions.Value?.Enqueue(actionTask);
                 // This cleanup must run even after request timeout/shutdown cancellation;
                 // otherwise `_activeRequests`, the linked CTS, and the execution lease would leak
                 // when an isolated action eventually observes cancellation and exits. The lease
@@ -3207,7 +3324,8 @@ public partial class McpServer : IDisposable
                         _ = task.Exception;
                         if (registeredRequest)
                             _activeRequests.TryRemove(requestKey!, out _);
-                        RecordTimedOutIsolatedActionDrained(telemetryRequestId, task);
+                        if (timedOut)
+                            RecordTimedOutIsolatedActionDrained(telemetryRequestId, task);
                     }
                     finally
                     {
@@ -3215,10 +3333,11 @@ public partial class McpServer : IDisposable
                         _concurrencyGate.Release();
                     }
                 }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-                return CreateRequestTimeoutResponse(id, elapsed, isolatedActionDraining: true);
+                return timedOut
+                    ? CreateRequestTimeoutResponse(id, elapsed, isolatedActionDraining: true)
+                    : CreateCancelledResponse(id);
             }
 
-            timeoutDelayCts.Cancel();
             return await actionTask.ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (requestCts.IsCancellationRequested)

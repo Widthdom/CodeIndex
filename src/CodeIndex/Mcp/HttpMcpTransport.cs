@@ -29,13 +29,21 @@ namespace CodeIndex.Mcp;
 /// `/events` subscription はすべて同じ session に属する。サーバー起点の JSON-RPC 通知は
 /// 同じ logical session 向けの bounded SSE fan-out channel `/events` で公開する。
 /// </summary>
-internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport, IConcurrentMcpTransport, IMcpResponseSizeLimitProvider
+internal sealed partial class HttpMcpTransport :
+    IMcpTransport,
+    IOutOfBandMcpTransport,
+    IConcurrentMcpTransport,
+    IMcpResponseSizeLimitProvider
 {
     internal const int DefaultMaxRequestBodyBytes = 1_000_000;
     internal const int DefaultMaxInFlightRequestBodyBytes = 64 * 1024 * 1024;
     internal const int DefaultMaxResponseBodyBytes = 1_000_000;
     internal const int MaxConfiguredRequestBodyBytes = 16 * 1024 * 1024;
     internal const int MaxConfiguredInFlightRequestBodyBytes = 1024 * 1024 * 1024;
+    internal const int DefaultRequestBodyIdleTimeoutMilliseconds = 30_000;
+    internal const int MaxRequestBodyIdleTimeoutMilliseconds = 600_000;
+    internal const int DefaultRequestLifetimeTimeoutMilliseconds = 120_000;
+    internal const int MaxRequestLifetimeTimeoutMilliseconds = 3_600_000;
     internal const int MaxConfiguredResponseBodyBytes = 16 * 1024 * 1024;
     internal const int DefaultMaxQueuedRequests = 64;
     internal const int MaxConfiguredQueuedRequests = 1024;
@@ -43,6 +51,8 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     internal const int MaxConfiguredConcurrentHandlers = 1024;
     internal const int DefaultMaxEventStreams = 16;
     internal const int MaxConfiguredEventStreams = 1024;
+    internal const int EventStreamRejectionConcurrency = 8;
+    internal const int RetainedResponseOutputOperationCapacity = 1024;
     internal const int MaxRequestLogFieldCharacters = 256;
     internal const int DefaultRequestLogQueueCapacity = 1024;
     internal const int MaxConfiguredRequestLogQueueCapacity = 16 * 1024;
@@ -51,6 +61,8 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     internal const string RequestLogTruncationMarker = "...<truncated>";
     internal const string MaxRequestBodyBytesEnvVar = "CDIDX_MCP_HTTP_MAX_REQUEST_BYTES";
     internal const string MaxInFlightRequestBodyBytesEnvVar = "CDIDX_MCP_HTTP_MAX_IN_FLIGHT_REQUEST_BYTES";
+    internal const string RequestBodyIdleTimeoutMillisecondsEnvVar = "CDIDX_MCP_HTTP_BODY_IDLE_TIMEOUT_MS";
+    internal const string RequestLifetimeTimeoutMillisecondsEnvVar = "CDIDX_MCP_HTTP_REQUEST_TIMEOUT_MS";
     internal const string MaxResponseBodyBytesEnvVar = "CDIDX_MCP_HTTP_MAX_RESPONSE_BYTES";
     internal const string MaxQueueDepthEnvVar = "CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH";
     internal const string MaxConcurrentHandlersEnvVar = "CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS";
@@ -78,6 +90,11 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     internal const string UnsupportedMediaTypeDiagnostic = "unsupported_media_type";
     internal const string UnsupportedCharsetDiagnostic = "unsupported_charset";
     internal const string InvalidUtf8Diagnostic = "invalid_utf8";
+    internal const string RequestBodyIdleTimeoutDiagnostic = "timeout:http_request_body_idle";
+    internal const string RequestLifetimeTimeoutDiagnostic = "timeout:http_request_lifetime";
+    internal const string RequestDisconnectProbeWriteTimeoutDiagnostic = "timeout:http_disconnect_probe_write";
+    internal const string ClientDisconnectedDiagnostic = "client_disconnected";
+    internal const string TransportShutdownDiagnostic = "transport_shutdown";
     private const string BearerPrefix = "Bearer ";
     private const int SessionIdByteCount = 32;
     private const string DefaultStartingHealthJson = """{"status":"starting","db_open":false}""";
@@ -86,6 +103,8 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     private static readonly TimeSpan EventStreamWriteTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan ResponseWriteTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan DisposeAcceptLoopTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan RequestDisconnectProbeInterval = TimeSpan.FromSeconds(1);
+    private static readonly byte[] RequestDisconnectProbePayload = [(byte)' '];
     private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     private static readonly RequestBodyBudget ProcessRequestBodyBudget = new();
 
@@ -97,14 +116,26 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     private readonly Channel<HttpRequestLogRecord>? _requestLogQueue;
     private readonly Task? _requestLogTask;
     private readonly ConcurrentDictionary<Guid, EventStream> _eventStreams = new();
+    private readonly ConcurrentDictionary<Task, byte> _abandonedResponseOutputOperations = new();
+    private readonly ConcurrentDictionary<Task, byte> _requestCancellationDeliveries = new();
     private readonly CancellationTokenSource _acceptCts = new();
-    private readonly Channel<PendingRequest> _requestQueue;
+    private readonly LinkedList<PendingRequest> _requestQueue = new();
+    private readonly object _requestQueueSync = new();
+    private TaskCompletionSource<bool> _requestAvailable = CreateRequestAvailableSignal();
     private readonly SemaphoreSlim _requestQueueReaderSemaphore = new(1, 1);
     private readonly SemaphoreSlim _queueSlots;
     private readonly SemaphoreSlim _handlerSemaphore;
     private readonly SemaphoreSlim _eventStreamHandlerSemaphore;
+    private readonly SemaphoreSlim _eventStreamRejectionSemaphore =
+        new(EventStreamRejectionConcurrency, EventStreamRejectionConcurrency);
+    private readonly SemaphoreSlim _retainedResponseOutputOperationSlots =
+        new(RetainedResponseOutputOperationCapacity, RetainedResponseOutputOperationCapacity);
     private readonly int _maxRequestBodyBytes;
     private readonly int _maxInFlightRequestBodyBytes;
+    private readonly TimeSpan _requestBodyIdleTimeout;
+    private readonly TimeSpan _requestLifetimeTimeout;
+    private readonly TimeSpan _requestDisconnectProbeInterval;
+    private readonly TimeSpan _responseWriteTimeout;
     private readonly int _maxResponseBodyBytes;
     private readonly int _maxQueuedRequests;
     private readonly int _maxConcurrentHandlers;
@@ -120,6 +151,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     // 設定トークンの SHA-256 をコンストラクタで一度だけ計算し、リクエスト毎の auth では
     // 攻撃者入力のみハッシュ計算する。これにより設定トークン長による timing 漏洩を排除する。
     private readonly byte[]? _bearerTokenHash;
+    private readonly ConcurrentDictionary<PendingRequest, byte> _activeConcurrentRequests = new();
     private PendingRequest? _pendingRequest;
     private PendingRequest? _pendingInitializeRequest;
     private int _queuedRequestCount;
@@ -133,6 +165,10 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     private long _concurrentHandlerLimitRejectionCount;
     private long _requestQueueLimitRejectionCount;
     private long _requestBodyBudgetLimitRejectionCount;
+    private long _requestBodyIdleTimeoutCount;
+    private long _requestLifetimeTimeoutCount;
+    private long _clientDisconnectCount;
+    private long _queuedRequestCancellationCount;
     private long _eventStreamLimitRejectionCount;
     private long _eventStreamDropCount;
     private long _eventStreamWriteFailureDropCount;
@@ -152,6 +188,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     private string? _lastRequestLogDropReason;
     private int _disposeStarted;
     private int _sessionEstablished;
+    private bool _requestQueueCompleted;
     private bool _ownedSemaphoreGatesDisposed;
 
     /// <summary>
@@ -171,12 +208,16 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         Action<HttpRequestLogRecord>? requestLogger = null,
         int? maxRequestBodyBytes = null,
         int? maxInFlightRequestBodyBytes = null,
+        TimeSpan? requestBodyIdleTimeout = null,
+        TimeSpan? requestLifetimeTimeout = null,
         int? maxResponseBodyBytes = null,
         int? maxQueuedRequests = null,
         int? maxConcurrentHandlers = null,
         int? maxEventStreams = null,
         int? requestLogQueueCapacity = null,
         TimeSpan? eventStreamWriteTimeout = null,
+        TimeSpan? requestDisconnectProbeInterval = null,
+        TimeSpan? responseWriteTimeout = null,
         bool allowUnauthenticatedLoopback = false)
     {
         _maxRequestBodyBytes = ResolvePositiveIntOption(
@@ -197,6 +238,25 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         {
             throw new FormatException(
                 $"{MaxInFlightRequestBodyBytesEnvVar} ({_maxInFlightRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}) must be greater than or equal to {MaxRequestBodyBytesEnvVar} ({_maxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}).");
+        }
+        _requestBodyIdleTimeout = ResolveTimeoutOption(
+            requestBodyIdleTimeout,
+            nameof(requestBodyIdleTimeout),
+            RequestBodyIdleTimeoutMillisecondsEnvVar,
+            DefaultRequestBodyIdleTimeoutMilliseconds,
+            MaxRequestBodyIdleTimeoutMilliseconds,
+            "HTTP MCP request body idle timeout");
+        _requestLifetimeTimeout = ResolveTimeoutOption(
+            requestLifetimeTimeout,
+            nameof(requestLifetimeTimeout),
+            RequestLifetimeTimeoutMillisecondsEnvVar,
+            DefaultRequestLifetimeTimeoutMilliseconds,
+            MaxRequestLifetimeTimeoutMilliseconds,
+            "HTTP MCP total request timeout");
+        if (_requestLifetimeTimeout < _requestBodyIdleTimeout)
+        {
+            throw new FormatException(
+                $"{RequestLifetimeTimeoutMillisecondsEnvVar} ({_requestLifetimeTimeout.TotalMilliseconds.ToString("0", CultureInfo.InvariantCulture)}) must be greater than or equal to {RequestBodyIdleTimeoutMillisecondsEnvVar} ({_requestBodyIdleTimeout.TotalMilliseconds.ToString("0", CultureInfo.InvariantCulture)}).");
         }
         _maxResponseBodyBytes = ResolvePositiveIntOption(
             maxResponseBodyBytes,
@@ -227,19 +287,13 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             MaxConfiguredEventStreams,
             "HTTP MCP event stream limit");
         _eventStreamWriteTimeout = eventStreamWriteTimeout ?? EventStreamWriteTimeout;
+        _requestDisconnectProbeInterval = requestDisconnectProbeInterval ?? RequestDisconnectProbeInterval;
+        if (_requestDisconnectProbeInterval <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(requestDisconnectProbeInterval), "HTTP MCP disconnect probe interval must be positive.");
+        _responseWriteTimeout = responseWriteTimeout ?? ResponseWriteTimeout;
+        if (_responseWriteTimeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(responseWriteTimeout), "HTTP MCP response write timeout must be positive.");
         _requestLogQueueCapacity = ResolveRequestLogQueueCapacity(requestLogQueueCapacity);
-        _requestQueue = Channel.CreateBounded<PendingRequest>(new BoundedChannelOptions(_maxQueuedRequests)
-        {
-            SingleReader = true,
-            SingleWriter = false,
-            // Queue slots are acquired before TryWrite. FullMode.Wait is a defensive
-            // channel contract; a full queue is rejected via request_queue_limit rather
-            // than blocking an HTTP handler indefinitely.
-            // TryWrite 前に queue slot を取得する。FullMode.Wait は防御的な channel 契約で、
-            // 満杯時は HTTP handler を無期限 block せず request_queue_limit で拒否する。
-            FullMode = BoundedChannelFullMode.Wait,
-            AllowSynchronousContinuations = false,
-        });
         _queueSlots = new SemaphoreSlim(_maxQueuedRequests, _maxQueuedRequests);
         if (bearerToken is { Length: > 0 } && !McpAuthenticationLimits.IsTokenShapeValid(bearerToken))
             throw new ArgumentException(McpAuthenticationLimits.FormatTokenShapeError("Token"), nameof(bearerToken));
@@ -292,6 +346,20 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
 
     internal Func<CancellationToken, Task>? BeforeEventStreamWriteForTests { get; set; }
 
+    internal Func<CancellationToken, Task>? BeforeEventStreamPublishForTests { get; set; }
+
+    internal Func<CancellationToken, Task>? BeforeResponseWriteForTests { get; set; }
+
+    internal Func<CancellationToken, Task>? ResponseOutputWriteForTests { get; set; }
+
+    internal Func<byte[], CancellationToken, Task>? EventStreamOutputWriteForTests { get; set; }
+
+    internal Func<CancellationToken, Task>? BeforeRequestDisconnectProbeWriteForTests { get; set; }
+
+    internal Func<CancellationToken, Task>? RequestDisconnectProbeOutputWriteForTests { get; set; }
+
+    internal Action? BeforeRequestCancellationQueueRemovalForTests { get; set; }
+
     public string Name => "http";
 
     public string Endpoint => _endpoint;
@@ -306,6 +374,15 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
 
     internal bool OwnedSemaphoreGatesDisposedForTests => Volatile.Read(ref _ownedSemaphoreGatesDisposed);
 
+    internal bool RequestQueueSignalCompletedForTests
+    {
+        get
+        {
+            lock (_requestQueueSync)
+                return _requestAvailable.Task.IsCompleted;
+        }
+    }
+
     private bool IsDisposed => Volatile.Read(ref _disposeStarted) != 0;
 
     private bool IsSessionEstablished => Volatile.Read(ref _sessionEstablished) != 0;
@@ -318,11 +395,15 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
 
     internal Func<string>? KeepAliveFrameProvider { get; set; }
 
-    internal bool HasEventStreams => EventStreamCount > 0;
+    internal bool HasEventStreams => !_eventStreams.IsEmpty;
 
     internal int MaxRequestBodyBytes => _maxRequestBodyBytes;
 
     internal int MaxInFlightRequestBodyBytes => _maxInFlightRequestBodyBytes;
+
+    internal TimeSpan RequestBodyIdleTimeout => _requestBodyIdleTimeout;
+
+    internal TimeSpan RequestLifetimeTimeout => _requestLifetimeTimeout;
 
     internal int MaxResponseBodyBytes => _maxResponseBodyBytes;
 
@@ -337,6 +418,12 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     internal int PostHandlerCapacity => _maxConcurrentHandlers;
 
     internal int EventStreamHandlerCapacity => _maxEventStreams;
+
+    internal int EventStreamHandlerSlotsAvailableForTests
+        => _eventStreamHandlerSemaphore.CurrentCount;
+
+    internal int AbandonedResponseOutputOperationCount
+        => _abandonedResponseOutputOperations.Count;
 
     internal bool UsesSeparateEventStreamHandlers => true;
 
@@ -364,11 +451,22 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
 
     internal long RequestBodyBudgetLimitRejectionCount => Interlocked.Read(ref _requestBodyBudgetLimitRejectionCount);
 
+    internal long RequestBodyIdleTimeoutCount => Interlocked.Read(ref _requestBodyIdleTimeoutCount);
+
+    internal long RequestLifetimeTimeoutCount => Interlocked.Read(ref _requestLifetimeTimeoutCount);
+
+    internal long ClientDisconnectCount => Interlocked.Read(ref _clientDisconnectCount);
+
+    internal long QueuedRequestCancellationCount => Interlocked.Read(ref _queuedRequestCancellationCount);
+
     internal long InFlightRequestBodyBytes => Interlocked.Read(ref _inFlightRequestBodyBytes);
 
     internal long PeakInFlightRequestBodyBytes => Interlocked.Read(ref _peakInFlightRequestBodyBytes);
 
     internal long ProcessInFlightRequestBodyBytes => ProcessRequestBodyBudget.CurrentBytes;
+
+    internal CancellationToken CurrentRequestCancellationToken
+        => Volatile.Read(ref _pendingRequest)?.CancellationToken ?? CancellationToken.None;
 
     internal long EventStreamLimitRejectionCount => Interlocked.Read(ref _eventStreamLimitRejectionCount);
 
@@ -560,6 +658,37 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         return (int)parsed;
     }
 
+    private static TimeSpan ResolveTimeoutOption(
+        TimeSpan? explicitValue,
+        string explicitValueName,
+        string envVar,
+        int defaultMilliseconds,
+        int maximumMilliseconds,
+        string description)
+    {
+        if (explicitValue is { } configured)
+        {
+            if (configured < TimeSpan.FromMilliseconds(1)
+                || configured > TimeSpan.FromMilliseconds(maximumMilliseconds))
+            {
+                throw new ArgumentOutOfRangeException(
+                    explicitValueName,
+                    configured,
+                    $"{description} must be between 1 and {maximumMilliseconds.ToString(CultureInfo.InvariantCulture)} milliseconds.");
+            }
+
+            return configured;
+        }
+
+        return TimeSpan.FromMilliseconds(ResolvePositiveIntOption(
+            null,
+            explicitValueName,
+            envVar,
+            defaultMilliseconds,
+            maximumMilliseconds,
+            description));
+    }
+
     private static int ResolveRequestLogQueueCapacity(int? explicitValue)
     {
         var capacity = explicitValue ?? DefaultRequestLogQueueCapacity;
@@ -581,7 +710,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             if (Volatile.Read(ref _pendingRequest) is not null)
                 throw new InvalidOperationException("HttpMcpTransport: ReadFrameAsync called twice without an intervening WriteFrameAsync.");
 
-            var request = await ReadPendingRequestAsync(cancellationToken).ConfigureAwait(false);
+            var request = await DequeueRequestAsync(cancellationToken).ConfigureAwait(false);
             if (request is null)
                 return null;
             if (Interlocked.CompareExchange(ref _pendingRequest, request, null) is not null)
@@ -590,11 +719,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             {
                 var disposedRequest = Interlocked.Exchange(ref _pendingRequest, null);
                 if (disposedRequest is not null)
-                {
-                    AbortResponseBestEffort(disposedRequest.Context.Response, "dequeued request disposal");
-                    ReleasePendingInitialize(disposedRequest);
-                    ReleaseRequestBodyReservation(disposedRequest);
-                }
+                    _ = ReleaseRequestForDispose(disposedRequest, "dequeued request disposal");
                 return null;
             }
             return request.Body;
@@ -608,37 +733,114 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     public async Task<McpTransportFrame?> ReadConcurrentFrameAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
-        var request = await ReadPendingRequestAsync(cancellationToken).ConfigureAwait(false);
-        if (request is null)
-            return null;
-        if (IsDisposed)
-        {
-            AbortResponseBestEffort(request.Context.Response, "concurrent dequeued request disposal");
-            ReleasePendingInitialize(request);
-            ReleaseRequestBodyReservation(request);
-            return null;
-        }
-
-        return new McpTransportFrame(
-            request.Body ?? string.Empty,
-            (frame, writeToken) => WriteFrameAsync(request, frame, writeToken));
-    }
-
-    private async Task<PendingRequest?> ReadPendingRequestAsync(CancellationToken cancellationToken)
-    {
+        await _requestQueueReaderSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var request = await _requestQueue.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
-            Interlocked.Decrement(ref _queuedRequestCount);
-            _queueSlots.Release();
-            return request;
+            var request = await DequeueRequestAsync(cancellationToken).ConfigureAwait(false);
+            if (request is null)
+                return null;
+            if (IsDisposed)
+            {
+                _ = ReleaseRequestForDispose(request, "concurrent dequeued request disposal");
+                return null;
+            }
+
+            // Attach a request-local placeholder before publishing the frame. Disposal or the
+            // response writer may request body-budget release immediately after handoff, but the
+            // placeholder keeps that release deferred until the server identifies detached work.
+            // frame 公開前に request-local placeholder を接続する。handoff 直後に dispose / writer が
+            // body budget 解放を要求しても、server が detached work を確定するまで解放を遅延する。
+            var retentionBarrier = new RequestResourceRetentionBarrier();
+            if (!request.TryRetainRequestResourcesUntil(retentionBarrier.Completion))
+            {
+                _ = ReleaseRequestForDispose(request, "concurrent request retention handoff failure");
+                throw new InvalidOperationException(
+                    "HTTP MCP request resources were released before the frame-local retention barrier could be attached.");
+            }
+
+            if (!_activeConcurrentRequests.TryAdd(request, 0))
+            {
+                retentionBarrier.CompleteWhen(Task.CompletedTask);
+                _ = ReleaseRequestForDispose(request, "duplicate concurrent request handoff");
+                throw new InvalidOperationException("HTTP MCP concurrent request handoff was already active.");
+            }
+
+            if (IsDisposed)
+            {
+                _activeConcurrentRequests.TryRemove(request, out _);
+                retentionBarrier.CompleteWhen(Task.CompletedTask);
+                _ = ReleaseRequestForDispose(request, "concurrent request disposal after handoff");
+                return null;
+            }
+
+            return new McpTransportFrame(
+                request.Body ?? string.Empty,
+                (frame, writeToken) => WriteFrameAsync(request, frame, writeToken),
+                request.CancellationToken,
+                retentionBarrier.CompleteWhen);
         }
-        catch (ChannelClosedException)
+        finally
         {
-            return null;
+            _requestQueueReaderSemaphore.Release();
         }
     }
 
+    private async Task<PendingRequest?> DequeueRequestAsync(CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            Task? requestAvailableTask = null;
+            PendingRequest? request = null;
+            string? cancellationReason = null;
+            lock (_requestQueueSync)
+            {
+                if (_requestQueue.First is { } node)
+                {
+                    _requestQueue.Remove(node);
+                    ResetRequestAvailableSignalIfQueueEmpty();
+                    request = node.Value;
+                    request.QueueNode = null;
+                    Interlocked.Decrement(ref _queuedRequestCount);
+                    _queueSlots.Release();
+                    cancellationReason = request.CancellationReason;
+                }
+                else if (_requestQueueCompleted)
+                {
+                    return null;
+                }
+                else
+                {
+                    requestAvailableTask = _requestAvailable.Task;
+                }
+            }
+
+            if (request is not null)
+            {
+                if (cancellationReason is null)
+                    return request;
+
+                Interlocked.Increment(ref _queuedRequestCancellationCount);
+                request.Body = null;
+                AbortResponseBestEffort(request.Context.Response, "cancelled dequeued request");
+                ReleasePendingInitialize(request);
+                ReleaseRequestBodyReservation(request);
+                LogRequest(request, CancellationStatusCode(cancellationReason));
+                request.DisposeLifetime();
+                continue;
+            }
+
+            await requestAvailableTask!.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static TaskCompletionSource<bool> CreateRequestAvailableSignal()
+        => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private void ResetRequestAvailableSignalIfQueueEmpty()
+    {
+        if (_requestQueue.Count == 0 && !_requestQueueCompleted && _requestAvailable.Task.IsCompleted)
+            _requestAvailable = CreateRequestAvailableSignal();
+    }
     private async Task AcceptLoopAsync(CancellationToken cancellationToken)
     {
         try
@@ -666,7 +868,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
                 if (!admissionGate.Wait(0))
                 {
                     if (eventStreamRequest)
-                        await RejectEventStreamLimitAsync(context).ConfigureAwait(false);
+                        BeginEventStreamLimitRejection(context);
                     else
                         await RejectHandlerLimitAsync(context).ConfigureAwait(false);
                     continue;
@@ -685,7 +887,18 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         }
         finally
         {
-            _requestQueue.Writer.TryComplete();
+            CompleteRequestQueue();
+        }
+    }
+
+    private void CompleteRequestQueue()
+    {
+        lock (_requestQueueSync)
+        {
+            if (_requestQueueCompleted)
+                return;
+            _requestQueueCompleted = true;
+            _requestAvailable.TrySetResult(true);
         }
     }
 
@@ -728,6 +941,36 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         context.Response.AddHeader(RejectionReasonHeader, EventStreamLimitRejection);
         await RespondAsync(request, (int)HttpStatusCode.TooManyRequests, "MCP HTTP event stream limit is full.\n").ConfigureAwait(false);
         LogRequest(request, (int)HttpStatusCode.TooManyRequests);
+    }
+
+    private void BeginEventStreamLimitRejection(HttpListenerContext context)
+    {
+        // A saturated long-lived SSE gate must never make the single accept loop await a client
+        // that does not read its 429 response. A small independent pool owns bounded rejection
+        // writes; excess rejected connections are aborted immediately (#4550).
+        // 長寿命 SSE gate 飽和時に 429 を読まない client が単一 accept loop を塞がないよう、
+        // 独立した小さな pool が bounded rejection write を所有し、超過分は即時 abort する (#4550)。
+        if (!_eventStreamRejectionSemaphore.Wait(0))
+        {
+            Interlocked.Increment(ref _eventStreamLimitRejectionCount);
+            AbortResponseBestEffort(context.Response, "event stream rejection capacity full");
+            return;
+        }
+
+        _ = BackgroundTaskObserver.Run(
+            async () =>
+            {
+                try
+                {
+                    await RejectEventStreamLimitAsync(context).ConfigureAwait(false);
+                }
+                finally
+                {
+                    _eventStreamRejectionSemaphore.Release();
+                }
+            },
+            "cdidx-mcp-http",
+            "event stream limit rejection");
     }
 
     private async Task HandleContextAsync(HttpListenerContext context, CancellationToken cancellationToken)
@@ -798,6 +1041,10 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
                 return;
             }
 
+            request.StartLifetime(
+                _requestLifetimeTimeout,
+                OnRequestCancellation,
+                TrackRequestCancellationDelivery);
             if (!await TryValidateJsonContentTypeAsync(request).ConfigureAwait(false))
                 return;
 
@@ -845,7 +1092,8 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
                 return;
             }
 
-            if (await TryHandleOutOfBandFrameAsync(request, body, cancellationToken).ConfigureAwait(false))
+            request.ExpectsResponse = ExpectsJsonRpcResponse(body, _maxRequestBodyBytes);
+            if (await TryHandleOutOfBandFrameAsync(request, body, request.CancellationToken).ConfigureAwait(false))
             {
                 ReleasePendingInitialize(request);
                 return;
@@ -854,6 +1102,12 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             if (!TryQueueRequest(request))
             {
                 ReleasePendingInitialize(request);
+                if (request.CancellationToken.IsCancellationRequested)
+                {
+                    await CompletePreQueueCancellationAsync(request).ConfigureAwait(false);
+                    return;
+                }
+
                 MarkRejected(request, RequestQueueLimitRejection);
                 context.Response.AddHeader("Retry-After", "1");
                 context.Response.AddHeader(RejectionReasonHeader, RequestQueueLimitRejection);
@@ -870,12 +1124,126 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             if (!reservationTransferredToQueue)
             {
                 ReleasePendingInitialize(request);
+                request.Body = null;
                 ReleaseRequestBodyReservation(request);
+                request.DisposeLifetime();
             }
         }
     }
 
+    private bool OnRequestCancellation(PendingRequest request, string reason)
+    {
+        switch (reason)
+        {
+            case RequestBodyIdleTimeoutDiagnostic:
+                Interlocked.Increment(ref _requestBodyIdleTimeoutCount);
+                break;
+            case RequestLifetimeTimeoutDiagnostic:
+                Interlocked.Increment(ref _requestLifetimeTimeoutCount);
+                break;
+            case RequestDisconnectProbeWriteTimeoutDiagnostic:
+                break;
+            case ClientDisconnectedDiagnostic:
+                Interlocked.Increment(ref _clientDisconnectCount);
+                break;
+            case TransportShutdownDiagnostic:
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(reason), reason, "Unknown HTTP MCP request cancellation reason.");
+        }
+
+        request.Diagnostic = reason;
+        try { request.Context.Request.InputStream.Close(); } catch { /* unblock is best-effort */ }
+        BeforeRequestCancellationQueueRemovalForTests?.Invoke();
+
+        if (TryRemoveQueuedRequest(request))
+        {
+            Interlocked.Increment(ref _queuedRequestCancellationCount);
+            request.Body = null;
+            AbortResponseBestEffort(request.Context.Response, "cancelled queued request");
+            ReleasePendingInitialize(request);
+            ReleaseRequestBodyReservation(request);
+            LogRequest(request, CancellationStatusCode(reason));
+            return true;
+        }
+
+        if (ReferenceEquals(Volatile.Read(ref _pendingRequest), request)
+            || _activeConcurrentRequests.ContainsKey(request))
+            AbortResponseBestEffort(request.Context.Response, "cancelled executing request");
+        return false;
+    }
+
+    private bool TryRemoveQueuedRequest(PendingRequest request)
+    {
+        lock (_requestQueueSync)
+        {
+            if (request.QueueNode is not { List: not null } node)
+                return false;
+
+            _requestQueue.Remove(node);
+            ResetRequestAvailableSignalIfQueueEmpty();
+            request.QueueNode = null;
+            Interlocked.Decrement(ref _queuedRequestCount);
+            _queueSlots.Release();
+            return true;
+        }
+    }
+
+    private async Task CompletePreQueueCancellationAsync(PendingRequest request)
+    {
+        var reason = request.CancellationReason ?? TransportShutdownDiagnostic;
+        if (reason is RequestBodyIdleTimeoutDiagnostic
+            or RequestLifetimeTimeoutDiagnostic
+            or RequestDisconnectProbeWriteTimeoutDiagnostic)
+        {
+            await RespondAsync(
+                request.Context,
+                (int)HttpStatusCode.RequestTimeout,
+                "MCP HTTP request deadline expired.\n").ConfigureAwait(false);
+        }
+        else
+        {
+            AbortResponseBestEffort(request.Context.Response, "cancelled request before queue handoff");
+        }
+
+        LogRequest(request, CancellationStatusCode(reason));
+    }
+
+    private static int CancellationStatusCode(string reason)
+        => reason is RequestBodyIdleTimeoutDiagnostic
+            or RequestLifetimeTimeoutDiagnostic
+            or RequestDisconnectProbeWriteTimeoutDiagnostic
+            ? (int)HttpStatusCode.RequestTimeout
+            : 499;
+
     private async Task<string?> TryReadRequestBodyAsync(PendingRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await TryReadRequestBodyCoreAsync(request).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsRequestDeadlineCancellation(request, ex))
+        {
+            await CompletePreQueueCancellationAsync(request).ConfigureAwait(false);
+            return null;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            request.TryCancel(TransportShutdownDiagnostic);
+            AbortResponseBestEffort(request.Context.Response, "request body read shutdown");
+            LogRequest(request, 499);
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or HttpListenerException or ObjectDisposedException or SocketException)
+        {
+            request.TryCancel(ClientDisconnectedDiagnostic);
+            AbortResponseBestEffort(request.Context.Response, "request body client disconnect");
+            LogRequest(request, 499);
+            return null;
+        }
+    }
+
+    private async Task<string?> TryReadRequestBodyCoreAsync(PendingRequest request)
     {
         var context = request.Context;
         var contentLength = context.Request.ContentLength64;
@@ -902,11 +1270,12 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             while (buffer.Length < contentLength)
             {
                 var readSize = (int)Math.Min(scratch.Length, contentLength - buffer.Length);
-                var read = await context.Request.InputStream.ReadAsync(
-                    scratch.AsMemory(0, readSize),
-                    cancellationToken).ConfigureAwait(false);
+                var read = await ReadRequestBodyChunkAsync(request, scratch.AsMemory(0, readSize)).ConfigureAwait(false);
                 if (read == 0)
-                    break;
+                {
+                    request.TryCancel(ClientDisconnectedDiagnostic);
+                    throw new IOException("HTTP MCP request body ended before the declared Content-Length was received.");
+                }
                 buffer.Write(scratch, 0, read);
             }
         }
@@ -917,9 +1286,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
                 var remaining = _maxRequestBodyBytes - checked((int)buffer.Length);
                 if (remaining == 0)
                 {
-                    var overflowRead = await context.Request.InputStream.ReadAsync(
-                        scratch.AsMemory(0, 1),
-                        cancellationToken).ConfigureAwait(false);
+                    var overflowRead = await ReadRequestBodyChunkAsync(request, scratch.AsMemory(0, 1)).ConfigureAwait(false);
                     if (overflowRead == 0)
                         break;
 
@@ -938,9 +1305,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
                     // without retaining the byte and reject only when more body data exists.
                     // budget 満杯は body がちょうど収まった場合もある。保持しない 1 byte で
                     // EOF を確認し、追加データが実在するときだけ拒否する。
-                    var overBudgetRead = await context.Request.InputStream.ReadAsync(
-                        scratch.AsMemory(0, 1),
-                        cancellationToken).ConfigureAwait(false);
+                    var overBudgetRead = await ReadRequestBodyChunkAsync(request, scratch.AsMemory(0, 1)).ConfigureAwait(false);
                     if (overBudgetRead == 0)
                         break;
 
@@ -948,9 +1313,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
                     return null;
                 }
 
-                var read = await context.Request.InputStream.ReadAsync(
-                    scratch.AsMemory(0, reservedForRead),
-                    cancellationToken).ConfigureAwait(false);
+                var read = await ReadRequestBodyChunkAsync(request, scratch.AsMemory(0, reservedForRead)).ConfigureAwait(false);
                 if (read == 0)
                 {
                     ReleaseRequestBodyReservationBytes(request, reservedForRead);
@@ -981,6 +1344,43 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             return null;
         }
     }
+
+    private async ValueTask<int> ReadRequestBodyChunkAsync(PendingRequest request, Memory<byte> buffer)
+    {
+        using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(request.CancellationToken);
+        idleCts.CancelAfter(_requestBodyIdleTimeout);
+        var readTask = request.Context.Request.InputStream.ReadAsync(buffer, CancellationToken.None).AsTask();
+        try
+        {
+            return await readTask.WaitAsync(idleCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (
+            idleCts.IsCancellationRequested
+            && !request.CancellationToken.IsCancellationRequested)
+        {
+            request.TryCancel(RequestBodyIdleTimeoutDiagnostic);
+            ObserveAbandonedRequestBodyRead(readTask);
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            ObserveAbandonedRequestBodyRead(readTask);
+            throw;
+        }
+    }
+
+    private static void ObserveAbandonedRequestBodyRead(Task<int> readTask)
+    {
+        _ = readTask.ContinueWith(
+            static task => _ = task.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private static bool IsRequestDeadlineCancellation(PendingRequest request, Exception exception)
+        => request.CancellationReason is RequestBodyIdleTimeoutDiagnostic or RequestLifetimeTimeoutDiagnostic
+            && exception is OperationCanceledException or IOException or HttpListenerException or ObjectDisposedException or SocketException;
 
     private bool TryReserveRequestBodyBytesExact(PendingRequest request, int bytes)
     {
@@ -1020,19 +1420,44 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         if (bytes <= 0)
             return;
 
-        Interlocked.Add(ref request.ReservedBodyBytes, -bytes);
-        Interlocked.Add(ref _inFlightRequestBodyBytes, -bytes);
-        ProcessRequestBodyBudget.Release(bytes);
+        ReleaseRequestBodyReservationBytesCore(request, bytes);
     }
 
     private void ReleaseRequestBodyReservation(PendingRequest request)
     {
-        var bytes = Interlocked.Exchange(ref request.ReservedBodyBytes, 0);
-        if (bytes <= 0)
+        if (!request.TryRequestBodyReservationRelease(out var retainedCompletion))
             return;
 
-        Interlocked.Add(ref _inFlightRequestBodyBytes, -bytes);
-        ProcessRequestBodyBudget.Release(bytes);
+        if (retainedCompletion is null || retainedCompletion.IsCompleted)
+        {
+            if (retainedCompletion is { IsFaulted: true })
+                _ = retainedCompletion.Exception;
+            ReleaseRequestBodyReservationBytesCore(request, long.MaxValue);
+            return;
+        }
+
+        _ = retainedCompletion.ContinueWith(
+            static (completed, state) =>
+            {
+                if (completed.IsFaulted)
+                    _ = completed.Exception;
+                var (transport, retainedRequest) = ((HttpMcpTransport, PendingRequest))state!;
+                transport.ReleaseRequestBodyReservationBytesCore(retainedRequest, long.MaxValue);
+            },
+            (this, request),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private void ReleaseRequestBodyReservationBytesCore(PendingRequest request, long requestedBytes)
+    {
+        var releasedBytes = request.ReleaseReservedBodyBytes(requestedBytes);
+        if (releasedBytes <= 0)
+            return;
+
+        Interlocked.Add(ref _inFlightRequestBodyBytes, -releasedBytes);
+        ProcessRequestBodyBudget.Release(releasedBytes);
     }
 
     private async Task RejectRequestBodyBudgetAsync(PendingRequest request)
@@ -1283,16 +1708,192 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
 
     private bool TryQueueRequest(PendingRequest request)
     {
+        var requestCancellationToken = request.CancellationToken;
+        if (requestCancellationToken.IsCancellationRequested)
+            return false;
+        // A pending initialize cannot start a chunked probe: the first response headers must
+        // not be committed before a successful frame can publish Mcp-Session-Id. Its bounded
+        // total lifetime still cancels abandoned initialization work.
+        // pending initialize は成功 frame が Mcp-Session-Id を公開する前に response header を
+        // commit できないため probe 対象外とし、放棄 work は total lifetime で cancel する。
+        var shouldStartDisconnectProbe = request.ExpectsResponse && !request.OwnsInitializeClaim;
+        var disconnectProbeToken = shouldStartDisconnectProbe
+            ? requestCancellationToken
+            : CancellationToken.None;
         if (!_queueSlots.Wait(0))
             return false;
 
-        Interlocked.Increment(ref _queuedRequestCount);
-        if (_requestQueue.Writer.TryWrite(request))
-            return true;
+        lock (_requestQueueSync)
+        {
+            if (_requestQueueCompleted || requestCancellationToken.IsCancellationRequested)
+            {
+                _queueSlots.Release();
+                return false;
+            }
 
-        Interlocked.Decrement(ref _queuedRequestCount);
-        _queueSlots.Release();
-        return false;
+            request.QueueNode = _requestQueue.AddLast(request);
+            Interlocked.Increment(ref _queuedRequestCount);
+            if (shouldStartDisconnectProbe)
+                request.StartDisconnectProbe(disconnectProbeToken, RunRequestDisconnectProbeAsync);
+            _requestAvailable.TrySetResult(true);
+            return true;
+        }
+    }
+
+    private async Task RunRequestDisconnectProbeAsync(PendingRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(_requestDisconnectProbeInterval, cancellationToken).ConfigureAwait(false);
+                await request.ResponseWriteGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    if (Volatile.Read(ref request.ResponseCompletedState) != 0)
+                        return;
+
+                    var response = request.Context.Response;
+                    if (!request.ProbeResponseStarted)
+                    {
+                        response.StatusCode = (int)HttpStatusCode.OK;
+                        response.ContentType = "application/json; charset=utf-8";
+                        response.SendChunked = true;
+                        request.ProbeResponseStarted = true;
+                    }
+
+                    if (BeforeRequestDisconnectProbeWriteForTests is { } beforeProbeWrite)
+                        await beforeProbeWrite(cancellationToken).ConfigureAwait(false);
+
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await WriteAndFlushRequestDisconnectProbeAsync(request).ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+                catch (HttpMcpTimeoutException)
+                {
+                    // Publish terminal cancellation before the serialization gate is released.
+                    // This prevents the paired response writer from reusing an already-aborted
+                    // output while a non-cooperative probe operation is still unwinding.
+                    // serialization gate 解放前に terminal cancellation を公開し、abort 済み
+                    // output を paired response が再利用する race を防ぐ。
+                    request.TryCancel(RequestDisconnectProbeWriteTimeoutDiagnostic);
+                    return;
+                }
+                finally
+                {
+                    request.ResponseWriteGate.Release();
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Normal response completion, request deadline, and listener shutdown stop the probe.
+        }
+        catch (Exception ex) when (
+            cancellationToken.IsCancellationRequested
+            && ex is IOException or HttpListenerException or SocketException or ObjectDisposedException or HttpMcpTimeoutException)
+        {
+            // Some HttpListener implementations surface a cancelled response write as an I/O or
+            // disposed-object failure. The cancelled probe token, rather than that platform-specific
+            // exception shape, determines that this is normal probe shutdown.
+            // HttpListener 実装によっては、cancel 済み response write が I/O または disposed-object
+            // failure になる。platform 固有の例外型ではなく probe token の取消しを正常終了判定に使う。
+        }
+        catch (Exception ex) when (ex is IOException or HttpListenerException or SocketException or ObjectDisposedException)
+        {
+            request.TryCancel(ClientDisconnectedDiagnostic);
+        }
+        catch (Exception)
+        {
+            if (request.CancellationReason is null)
+                request.Diagnostic = "http_disconnect_probe_failure";
+        }
+    }
+
+    private async Task WriteAndFlushRequestDisconnectProbeAsync(PendingRequest request)
+    {
+        var response = request.Context.Response;
+        if (!_retainedResponseOutputOperationSlots.Wait(0))
+            throw new InvalidOperationException("HTTP MCP retained response output operation capacity is full.");
+
+        // Attach an incomplete lease before any probe I/O starts. Request lifetime/shutdown
+        // cancellation can otherwise release the body reservation before a later output timeout
+        // discovers that the underlying operation is non-cooperative (#4546).
+        // probe I/O 開始前に未完了 lease を接続する。request lifetime / shutdown cancellation が
+        // 先行しても、後続 timeout で非協調 I/O を検出する前に body reservation を解放させない。
+        var retentionBarrier = new RequestResourceRetentionBarrier();
+        if (!request.TryRetainRequestResourcesUntil(retentionBarrier.Completion))
+        {
+            _retainedResponseOutputOperationSlots.Release();
+            throw new InvalidOperationException(
+                "HTTP MCP request resources were released before the disconnect probe retention barrier could be attached.");
+        }
+
+        var outputSlotTransferred = false;
+        Task retainedOutputOperation = Task.CompletedTask;
+        using var writeScope = OperationTimeoutScope.Create(
+            OperationTimeoutCategories.HttpResponseWrite,
+            _responseWriteTimeout,
+            CancellationToken.None);
+        try
+        {
+            var operationTask = RequestDisconnectProbeOutputWriteForTests is { } writeForTests
+                ? writeForTests(writeScope.Token)
+                : response.OutputStream.WriteAsync(RequestDisconnectProbePayload.AsMemory(), writeScope.Token).AsTask();
+            retainedOutputOperation = operationTask;
+            await AwaitOutputOperationAsync(
+                operationTask,
+                writeScope,
+                CancellationToken.None,
+                OperationTimeoutCategories.HttpResponseWrite,
+                _responseWriteTimeout,
+                () => AbortResponseBestEffort(response, "request disconnect probe timeout"),
+                operation =>
+                {
+                    outputSlotTransferred = true;
+                    RetainAbandonedResponseOutputOperation(request: null, operation);
+                }).ConfigureAwait(false);
+            var flushTask = response.OutputStream.FlushAsync(writeScope.Token);
+            retainedOutputOperation = flushTask;
+            await AwaitOutputOperationAsync(
+                flushTask,
+                writeScope,
+                CancellationToken.None,
+                OperationTimeoutCategories.HttpResponseWrite,
+                _responseWriteTimeout,
+                () => AbortResponseBestEffort(response, "request disconnect probe flush timeout"),
+                operation =>
+                {
+                    outputSlotTransferred = true;
+                    RetainAbandonedResponseOutputOperation(request: null, operation);
+                }).ConfigureAwait(false);
+        }
+        finally
+        {
+            retentionBarrier.CompleteWhen(retainedOutputOperation);
+            if (!outputSlotTransferred)
+                _retainedResponseOutputOperationSlots.Release();
+        }
+    }
+
+    private static async Task StopRequestDisconnectProbeAsync(PendingRequest request)
+    {
+        Interlocked.Exchange(ref request.ResponseCompletedState, 1);
+        if (request.DisconnectProbeCts is { } probeCts)
+        {
+            try { probeCts.Cancel(); } catch (ObjectDisposedException) { /* request already finalized */ }
+        }
+
+        if (request.DisconnectProbeTask is { } probeTask)
+        {
+            try { await probeTask.ConfigureAwait(false); }
+            catch (OperationCanceledException) { /* probe cancellation is expected */ }
+            catch (Exception)
+            {
+                if (request.CancellationReason is null)
+                    request.Diagnostic = "http_disconnect_probe_failure";
+            }
+        }
     }
 
     private async Task<bool> TryHandleOutOfBandFrameAsync(PendingRequest request, string body, CancellationToken cancellationToken)
@@ -1340,6 +1941,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             context.Response.ContentType = "application/json; charset=utf-8";
             context.Response.ContentLength64 = payload.LongLength;
             await WriteResponseBytesAsync(
+                request,
                 context.Response,
                 payload,
                 cancellationToken,
@@ -1354,6 +1956,12 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             request.Diagnostic = FormatTimeoutDiagnostic(ex.Category);
             AbortResponseBestEffort(context.Response, "out-of-band response timeout");
             LogRequest(request, (int)HttpStatusCode.InternalServerError);
+            return true;
+        }
+        catch (Exception) when (request.CancellationReason is { } cancellationReason)
+        {
+            AbortResponseBestEffort(context.Response, "cancelled out-of-band response");
+            LogRequest(request, CancellationStatusCode(cancellationReason));
             return true;
         }
         catch
@@ -1557,15 +2165,18 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
 
     public async Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
     {
-        ObjectDisposedException.ThrowIf(IsDisposed, this);
-        var request = Interlocked.Exchange(ref _pendingRequest, null)
+        var request = Volatile.Read(ref _pendingRequest)
             ?? throw new InvalidOperationException("HttpMcpTransport: WriteFrameAsync called without a pending ReadFrameAsync.");
         await WriteFrameAsync(request, frame, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task WriteFrameAsync(PendingRequest request, string? frame, CancellationToken cancellationToken)
     {
+        if (Interlocked.CompareExchange(ref request.WriteStartedState, 1, 0) != 0)
+            throw new InvalidOperationException("HttpMcpTransport: WriteFrameAsync called more than once for the request.");
         var context = request.Context;
+        var responseWriteGateHeld = false;
+        CancellationTokenSource? responseCts = null;
 
         try
         {
@@ -1584,28 +2195,60 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
                 context.Response.AddHeader(SessionIdHeaderName, _sessionId);
             }
 
+            await StopRequestDisconnectProbeAsync(request).ConfigureAwait(false);
+            await request.ResponseWriteGate.WaitAsync().ConfigureAwait(false);
+            responseWriteGateHeld = true;
+            if (request.CancellationReason is { } cancellationReason)
+            {
+                AbortResponseBestEffort(context.Response, "cancelled request response");
+                LogRequest(request, CancellationStatusCode(cancellationReason));
+                return;
+            }
+            responseCts = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                request.CancellationToken);
+            var responseToken = responseCts.Token;
+            if (request.CancellationReason is { } cancellationAfterSetup)
+            {
+                AbortResponseBestEffort(context.Response, "cancelled request response setup");
+                LogRequest(request, CancellationStatusCode(cancellationAfterSetup));
+                return;
+            }
+
             if (frame is null)
             {
+                responseToken.ThrowIfCancellationRequested();
                 context.Response.StatusCode = (int)HttpStatusCode.NoContent;
                 CloseResponseOrThrow(context.Response, "request no-content response");
-                LogRequest(request, (int)HttpStatusCode.NoContent);
+                CompleteAndLogResponse(request, (int)HttpStatusCode.NoContent);
                 return;
             }
 
             var payload = Encoding.UTF8.GetBytes(frame);
             if (!await TryRejectOversizedResponseAsync(request, payload.LongLength).ConfigureAwait(false))
                 return;
-            context.Response.StatusCode = (int)HttpStatusCode.OK;
-            context.Response.ContentType = "application/json; charset=utf-8";
-            context.Response.ContentLength64 = payload.LongLength;
+            if (!request.ProbeResponseStarted)
+            {
+                context.Response.StatusCode = (int)HttpStatusCode.OK;
+                context.Response.ContentType = "application/json; charset=utf-8";
+                context.Response.ContentLength64 = payload.LongLength;
+            }
+            if (BeforeResponseWriteForTests is { } beforeResponseWrite)
+                await beforeResponseWrite(responseToken).ConfigureAwait(false);
             await WriteResponseBytesAsync(
+                request,
                 context.Response,
                 payload,
-                cancellationToken,
+                responseToken,
                 "request response body timeout",
                 OperationTimeoutCategories.HttpResponseWrite).ConfigureAwait(false);
             CloseOutputStreamOrThrow(context.Response.OutputStream, "request response body");
-            LogRequest(request, (int)HttpStatusCode.OK);
+            CompleteAndLogResponse(request, (int)HttpStatusCode.OK);
+        }
+        catch (Exception) when (request.CancellationReason is { } cancellationReason)
+        {
+            AbortResponseBestEffort(context.Response, "cancelled request response failure");
+            LogRequest(request, CancellationStatusCode(cancellationReason));
         }
         catch (HttpMcpTimeoutException ex)
         {
@@ -1624,8 +2267,53 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         finally
         {
             ReleasePendingInitialize(request);
+            responseCts?.Dispose();
+            if (responseWriteGateHeld)
+                request.ResponseWriteGate.Release();
+            request.Body = null;
+            var retainedResourceCompletion = request.RetainedResourceCompletion;
             ReleaseRequestBodyReservation(request);
+            request.DisposeLifetime();
+            ReleaseActiveConcurrentRequestWhenCompleted(request, retainedResourceCompletion);
+            _ = Interlocked.CompareExchange(ref _pendingRequest, null, request);
         }
+    }
+
+    private void ReleaseActiveConcurrentRequestWhenCompleted(
+        PendingRequest request,
+        Task? retainedResourceCompletion)
+    {
+        if (retainedResourceCompletion is null || retainedResourceCompletion.IsCompleted)
+        {
+            _activeConcurrentRequests.TryRemove(request, out _);
+            return;
+        }
+
+        _ = retainedResourceCompletion.ContinueWith(
+            static (completed, state) =>
+            {
+                if (completed.IsFaulted)
+                    _ = completed.Exception;
+                var (transport, retainedRequest) = ((HttpMcpTransport, PendingRequest))state!;
+                transport._activeConcurrentRequests.TryRemove(retainedRequest, out _);
+            },
+            (this, request),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private void CompleteAndLogResponse(PendingRequest request, int statusCode)
+    {
+        if (request.TryCompleteLifetime())
+        {
+            LogRequest(request, statusCode);
+            return;
+        }
+
+        var cancellationReason = request.CancellationReason ?? TransportShutdownDiagnostic;
+        AbortResponseBestEffort(request.Context.Response, "request cancelled at response completion");
+        LogRequest(request, CancellationStatusCode(cancellationReason));
     }
 
     private async Task<bool> TryRejectOversizedResponseAsync(PendingRequest request, long payloadBytes)
@@ -1634,45 +2322,254 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             return true;
 
         request.Diagnostic = "response_body_limit_exceeded";
+        if (request.ProbeResponseStarted)
+        {
+            AbortResponseBestEffort(request.Context.Response, "oversized response after disconnect probe");
+            CompleteAndLogResponse(request, (int)HttpStatusCode.InternalServerError);
+            return false;
+        }
         await RespondAsync(
             request,
             (int)HttpStatusCode.InternalServerError,
             $"MCP HTTP response body exceeds the configured {_maxResponseBodyBytes.ToString(CultureInfo.InvariantCulture)} byte limit.\n").ConfigureAwait(false);
-        LogRequest(request, (int)HttpStatusCode.InternalServerError);
+        CompleteAndLogResponse(request, (int)HttpStatusCode.InternalServerError);
         return false;
     }
 
     private async Task WriteResponseBytesAsync(
+        PendingRequest? request,
         HttpListenerResponse response,
         byte[] bytes,
         CancellationToken cancellationToken,
         string timeoutOperation,
         string timeoutCategory)
     {
-        using var writeScope = OperationTimeoutScope.Create(timeoutCategory, ResponseWriteTimeout, cancellationToken);
-        await AwaitOutputOperationAsync(
-            response.OutputStream.WriteAsync(bytes.AsMemory(), writeScope.Token).AsTask(),
-            writeScope,
-            cancellationToken,
-            timeoutCategory,
-            ResponseWriteTimeout,
-            () => AbortResponseBestEffort(response, timeoutOperation)).ConfigureAwait(false);
+        if (!_retainedResponseOutputOperationSlots.Wait(0))
+        {
+            AbortResponseBestEffort(response, "retained response output capacity full");
+            throw new InvalidOperationException(
+                "HTTP MCP retained response output operation capacity is full.");
+        }
+
+        var outputSlotTransferred = false;
+        using var writeScope = OperationTimeoutScope.Create(timeoutCategory, _responseWriteTimeout, cancellationToken);
+        try
+        {
+            var operation = ResponseOutputWriteForTests is { } writeForTests
+                ? writeForTests(writeScope.Token)
+                : response.OutputStream.WriteAsync(bytes.AsMemory(), writeScope.Token).AsTask();
+            await AwaitOutputOperationAsync(
+                operation,
+                writeScope,
+                cancellationToken,
+                timeoutCategory,
+                _responseWriteTimeout,
+                () => AbortResponseBestEffort(response, timeoutOperation),
+                operation =>
+                {
+                    outputSlotTransferred = true;
+                    RetainAbandonedResponseOutputOperation(request, operation);
+                }).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (!outputSlotTransferred)
+                _retainedResponseOutputOperationSlots.Release();
+        }
+    }
+
+    private void RetainAbandonedResponseOutputOperation(PendingRequest? request, Task operation)
+    {
+        // The output task may still own the response, payload, and the request body budget after
+        // its bounded caller has returned. Retain both the request lease and a transport-level
+        // drain entry until the underlying I/O actually settles (#4546).
+        // bounded caller の終了後も output task が response / payload / request body budget を
+        // 所有し得るため、実 I/O 完了まで request lease と transport drain entry を保持する (#4546)。
+        request?.TryRetainRequestResourcesUntil(operation);
+        if (!_abandonedResponseOutputOperations.TryAdd(operation, 0))
+        {
+            _retainedResponseOutputOperationSlots.Release();
+            return;
+        }
+
+        _ = operation.ContinueWith(
+            static (completed, state) =>
+            {
+                _ = completed.Exception;
+                var (transport, trackedOperation) = ((HttpMcpTransport, Task))state!;
+                transport._retainedResponseOutputOperationSlots.Release();
+                transport._abandonedResponseOutputOperations.TryRemove(trackedOperation, out _);
+            },
+            (this, operation),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     private async Task FlushResponseOutputAsync(
+        PendingRequest? request,
         HttpListenerResponse response,
         CancellationToken cancellationToken,
         string timeoutOperation,
         string timeoutCategory)
     {
-        using var writeScope = OperationTimeoutScope.Create(timeoutCategory, ResponseWriteTimeout, cancellationToken);
-        await AwaitOutputOperationAsync(
-            response.OutputStream.FlushAsync(writeScope.Token),
-            writeScope,
-            cancellationToken,
-            timeoutCategory,
-            ResponseWriteTimeout,
-            () => AbortResponseBestEffort(response, timeoutOperation)).ConfigureAwait(false);
+        if (!_retainedResponseOutputOperationSlots.Wait(0))
+        {
+            AbortResponseBestEffort(response, "retained response flush capacity full");
+            throw new InvalidOperationException(
+                "HTTP MCP retained response output operation capacity is full.");
+        }
+
+        var outputSlotTransferred = false;
+        using var writeScope = OperationTimeoutScope.Create(timeoutCategory, _responseWriteTimeout, cancellationToken);
+        try
+        {
+            await AwaitOutputOperationAsync(
+                response.OutputStream.FlushAsync(writeScope.Token),
+                writeScope,
+                cancellationToken,
+                timeoutCategory,
+                _responseWriteTimeout,
+                () => AbortResponseBestEffort(response, timeoutOperation),
+                operation =>
+                {
+                    outputSlotTransferred = true;
+                    RetainAbandonedResponseOutputOperation(request, operation);
+                }).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (!outputSlotTransferred)
+                _retainedResponseOutputOperationSlots.Release();
+        }
+    }
+
+    internal static async Task WriteSseBytesWithGateAsync(
+        Stream outputStream,
+        SemaphoreSlim writeGate,
+        byte[] bytes,
+        TimeSpan writeTimeout,
+        Func<CancellationToken, Task>? beforeWrite,
+        Func<bool>? canWrite,
+        Action onTimeout,
+        CancellationToken cancellationToken,
+        Func<bool>? tryAcquireOutputSlot = null,
+        Action<Task>? retainAbandonedOutputOperation = null,
+        Action? releaseOutputSlot = null,
+        Func<byte[], CancellationToken, Task>? outputWriteForTests = null)
+    {
+        using var gateScope = OperationTimeoutScope.Create(
+            OperationTimeoutCategories.SseWrite,
+            writeTimeout,
+            cancellationToken);
+        try
+        {
+            await writeGate.WaitAsync(gateScope.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException ex) when (gateScope.IsTimeoutCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            throw new HttpMcpTimeoutException(OperationTimeoutCategories.SseWrite, writeTimeout, ex);
+        }
+
+        Task? abandonedOutputOperation = null;
+        var outputSlotAcquired = false;
+        var outputSlotTransferred = false;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (canWrite is not null && !canWrite())
+                throw new ObjectDisposedException("HTTP MCP SSE output is no longer writable.");
+            if (beforeWrite is not null)
+                await beforeWrite(gateScope.Token).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (canWrite is not null && !canWrite())
+                throw new ObjectDisposedException("HTTP MCP SSE output is no longer writable.");
+
+            if (tryAcquireOutputSlot is not null)
+            {
+                if (!tryAcquireOutputSlot())
+                    throw new InvalidOperationException("HTTP MCP retained response output operation capacity is full.");
+                outputSlotAcquired = true;
+            }
+
+            // Once shared response I/O begins, it owns an independent bounded lifetime. Caller
+            // cancellation is observed only after write+flush settles. A transport-owned slot is
+            // transferred to any non-cooperative output so abandoned SSE operations are globally
+            // bounded even after their stream admission slots are released (#4546).
+            // shared response I/O 開始後は独立した bounded lifetime に所有権を移す。write+flush
+            // 完了後に caller cancellation を観測する。非協調 output には transport 所有 slot を
+            // 引き継ぎ、stream admission slot 解放後も放棄 SSE operation の総数を制限する (#4546)。
+            using var outputScope = OperationTimeoutScope.Create(
+                OperationTimeoutCategories.SseWrite,
+                writeTimeout,
+                CancellationToken.None);
+            var writeOperation = outputWriteForTests is { } writeForTests
+                ? writeForTests(bytes, outputScope.Token)
+                : outputStream.WriteAsync(bytes.AsMemory(), outputScope.Token).AsTask();
+            await AwaitOutputOperationAsync(
+                writeOperation,
+                outputScope,
+                CancellationToken.None,
+                OperationTimeoutCategories.SseWrite,
+                writeTimeout,
+                onTimeout,
+                operation =>
+                {
+                    abandonedOutputOperation = operation;
+                    if (!outputSlotAcquired || retainAbandonedOutputOperation is null)
+                        return;
+                    outputSlotTransferred = true;
+                    retainAbandonedOutputOperation(operation);
+                }).ConfigureAwait(false);
+            await AwaitOutputOperationAsync(
+                outputStream.FlushAsync(outputScope.Token),
+                outputScope,
+                CancellationToken.None,
+                OperationTimeoutCategories.SseWrite,
+                writeTimeout,
+                onTimeout,
+                operation =>
+                {
+                    abandonedOutputOperation = operation;
+                    if (!outputSlotAcquired || retainAbandonedOutputOperation is null)
+                        return;
+                    outputSlotTransferred = true;
+                    retainAbandonedOutputOperation(operation);
+                }).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch (OperationCanceledException ex) when (gateScope.IsTimeoutCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            throw new HttpMcpTimeoutException(OperationTimeoutCategories.SseWrite, writeTimeout, ex);
+        }
+        finally
+        {
+            if (outputSlotAcquired && !outputSlotTransferred)
+                releaseOutputSlot?.Invoke();
+            if (abandonedOutputOperation is { IsCompleted: false } abandoned)
+                _ = ReleaseOutputGateWhenCompletedAsync(abandoned, writeGate);
+            else
+                writeGate.Release();
+        }
+    }
+
+    private static async Task ReleaseOutputGateWhenCompletedAsync(Task operation, SemaphoreSlim writeGate)
+    {
+        try
+        {
+            await operation.ConfigureAwait(false);
+        }
+        catch
+        {
+            // The caller already received the bounded write failure. This continuation only owns
+            // the shared serialization gate and must release it after the abandoned I/O settles.
+            // caller には bounded write failure を返却済み。この continuation は shared gate の
+            // 所有権だけを持ち、放棄 I/O が終了した後に必ず解放する。
+        }
+        finally
+        {
+            writeGate.Release();
+        }
     }
 
     internal static async Task WriteBytesWithTimeoutForTestsAsync(
@@ -1715,7 +2612,8 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         CancellationToken cancellationToken,
         string timeoutCategory,
         TimeSpan timeout,
-        Action onTimeout)
+        Action onTimeout,
+        Action<Task>? onAbandoned = null)
     {
         try
         {
@@ -1723,9 +2621,16 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         }
         catch (OperationCanceledException ex) when (writeScope.IsTimeoutCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            onTimeout();
             ObserveAbandonedOutputOperation(operationTask);
+            onAbandoned?.Invoke(operationTask);
+            onTimeout();
             throw new HttpMcpTimeoutException(timeoutCategory, timeout, ex);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            ObserveAbandonedOutputOperation(operationTask);
+            onAbandoned?.Invoke(operationTask);
+            throw;
         }
     }
 
@@ -1766,7 +2671,10 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            RemoveEventStream(id, stream);
+            // This token belongs to the POST that emitted the out-of-band frame. Cancelling that
+            // request must not evict an otherwise healthy shared SSE subscriber (#4546).
+            // out-of-band frame を発行した POST の token なので、その取消しで正常な共有 SSE
+            // subscriber を削除しない (#4546)。
         }
         catch (Exception ex)
         {
@@ -1895,7 +2803,10 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             context.Response.ContentType = "text/plain; charset=utf-8";
             var bytes = Encoding.UTF8.GetBytes(body);
             context.Response.ContentLength64 = bytes.LongLength;
+            if (request is not null && BeforeResponseWriteForTests is { } beforeResponseWrite)
+                await beforeResponseWrite(cancellationToken).ConfigureAwait(false);
             await WriteResponseBytesAsync(
+                request,
                 context.Response,
                 bytes,
                 cancellationToken,
@@ -1928,6 +2839,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             var bytes = Encoding.UTF8.GetBytes(body);
             context.Response.ContentLength64 = bytes.LongLength;
             await WriteResponseBytesAsync(
+                request,
                 context.Response,
                 bytes,
                 cancellationToken,
@@ -1998,7 +2910,11 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             context.Response,
             _eventStreamWriteTimeout,
             BeforeEventStreamWriteForTests,
-            response => AbortResponseBestEffort(response, "sse write timeout"));
+            response => AbortResponseBestEffort(response, "sse write timeout"),
+            () => _retainedResponseOutputOperationSlots.Wait(0),
+            operation => RetainAbandonedResponseOutputOperation(request: null, operation),
+            () => _retainedResponseOutputOperationSlots.Release(),
+            EventStreamOutputWriteForTests);
         try
         {
             context.Response.StatusCode = (int)HttpStatusCode.OK;
@@ -2008,24 +2924,38 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             context.Response.AddHeader("Connection", "keep-alive");
             context.Response.AddHeader("X-Accel-Buffering", "no");
             context.Response.AddHeader("X-Cdidx-Mcp-Event-Stream-Id", streamId.ToString("N", CultureInfo.InvariantCulture));
-            _eventStreams[streamId] = stream;
 
             var prelude = Encoding.UTF8.GetBytes(": cdidx mcp event stream ready\n\n");
             await WriteResponseBytesAsync(
+                request,
                 context.Response,
                 prelude,
                 cancellationToken,
                 "event stream prelude timeout",
                 OperationTimeoutCategories.HttpResponseWrite).ConfigureAwait(false);
             await FlushResponseOutputAsync(
+                request,
                 context.Response,
                 cancellationToken,
                 "event stream prelude flush timeout",
                 OperationTimeoutCategories.HttpResponseWrite).ConfigureAwait(false);
+            // Do not publish the stream to out-of-band writers until the prelude has settled.
+            // The prelude uses the raw response path, while published SSE frames use the stream's
+            // write gate; publishing earlier would let both paths touch OutputStream concurrently.
+            // prelude 完了前は out-of-band writer に stream を公開しない。raw response 経路と
+            // SSE write gate 経路が OutputStream へ同時に書き込む race を防ぐ。
+            if (BeforeEventStreamPublishForTests is { } beforeEventStreamPublish)
+                await beforeEventStreamPublish(cancellationToken).ConfigureAwait(false);
+            _eventStreams[streamId] = stream;
 
-            await RunKeepAliveLoopAsync(stream, cancellationToken).ConfigureAwait(false);
+            using var streamLifetimeCts = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                stream.TerminationToken);
+            await RunKeepAliveLoopAsync(stream, streamLifetimeCts.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (
+            cancellationToken.IsCancellationRequested
+            || stream.IsReleased)
         {
             // Normal server shutdown.
         }
@@ -2104,15 +3034,23 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         HttpListenerResponse response,
         TimeSpan writeTimeout,
         Func<CancellationToken, Task>? beforeWriteForTests,
-        Action<HttpListenerResponse> abortResponseOnTimeout) : IDisposable
+        Action<HttpListenerResponse> abortResponseOnTimeout,
+        Func<bool> tryAcquireOutputSlot,
+        Action<Task> retainAbandonedOutputOperation,
+        Action releaseOutputSlot,
+        Func<byte[], CancellationToken, Task>? outputWriteForTests) : IDisposable
     {
         private readonly SemaphoreSlim _writeGate = new(1, 1);
+        private readonly CancellationTokenSource _terminationCts = new();
         private string? _diagnostic;
         private int _released;
+        private int _outputTerminal;
 
         public HttpListenerResponse Response { get; } = response;
 
         public bool IsReleased => Volatile.Read(ref _released) != 0;
+
+        public CancellationToken TerminationToken => _terminationCts.Token;
 
         public string? Diagnostic => Volatile.Read(ref _diagnostic);
 
@@ -2140,53 +3078,53 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         }
 
         public bool TryReleaseSlot()
-            => Interlocked.Exchange(ref _released, 1) == 0;
+        {
+            if (Interlocked.Exchange(ref _released, 1) != 0)
+                return false;
+
+            // Wake the keep-alive/disconnect-probe delay immediately. Aborting the response alone
+            // does not wake Task.Delay, which otherwise retains the SSE admission slot for up to
+            // the configured keep-alive interval (#4546).
+            // response abort だけでは Task.Delay は起きないため、keep-alive / disconnect probe
+            // を即時 cancel し SSE admission slot の長時間保持を防ぐ (#4546)。
+            try
+            {
+                var delivery = _terminationCts.CancelAsync();
+                ObserveLateCancellationDeliveryFailure(delivery);
+            }
+            catch { /* stream termination is best-effort */ }
+            return true;
+        }
 
         private async Task WriteSseBytesAsync(byte[] bytes, CancellationToken cancellationToken)
         {
-            using var writeScope = OperationTimeoutScope.Create(
-                OperationTimeoutCategories.SseWrite,
+            await WriteSseBytesWithGateAsync(
+                Response.OutputStream,
+                _writeGate,
+                bytes,
                 writeTimeout,
-                cancellationToken);
-            try
-            {
-                await _writeGate.WaitAsync(writeScope.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException ex) when (writeScope.IsTimeoutCancellationRequested && !cancellationToken.IsCancellationRequested)
-            {
-                throw new HttpMcpTimeoutException(OperationTimeoutCategories.SseWrite, writeTimeout, ex);
-            }
-
-            try
-            {
-                if (beforeWriteForTests is not null)
-                    await beforeWriteForTests(writeScope.Token).ConfigureAwait(false);
-                await AwaitOutputOperationAsync(
-                    Response.OutputStream.WriteAsync(bytes.AsMemory(), writeScope.Token).AsTask(),
-                    writeScope,
-                    cancellationToken,
-                    OperationTimeoutCategories.SseWrite,
-                    writeTimeout,
-                    () => abortResponseOnTimeout(Response)).ConfigureAwait(false);
-                await AwaitOutputOperationAsync(
-                    Response.OutputStream.FlushAsync(writeScope.Token),
-                    writeScope,
-                    cancellationToken,
-                    OperationTimeoutCategories.SseWrite,
-                    writeTimeout,
-                    () => abortResponseOnTimeout(Response)).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException ex) when (writeScope.IsTimeoutCancellationRequested && !cancellationToken.IsCancellationRequested)
-            {
-                throw new HttpMcpTimeoutException(OperationTimeoutCategories.SseWrite, writeTimeout, ex);
-            }
-            finally
-            {
-                _writeGate.Release();
-            }
+                beforeWriteForTests,
+                () => !IsReleased && Volatile.Read(ref _outputTerminal) == 0,
+                () =>
+                {
+                    Volatile.Write(ref _outputTerminal, 1);
+                    abortResponseOnTimeout(Response);
+                },
+                cancellationToken,
+                tryAcquireOutputSlot,
+                retainAbandonedOutputOperation,
+                releaseOutputSlot,
+                outputWriteForTests).ConfigureAwait(false);
         }
 
-        public void Dispose() => _writeGate.Dispose();
+        public void Dispose()
+        {
+            // SemaphoreSlim owns no native resource unless its wait handle is requested (it is
+            // not here). A concurrent timeout/removal can race an in-progress writer's finally;
+            // leaving this private gate for GC avoids Dispose/Release overlap on that path.
+            // wait handle を使わない SemaphoreSlim は native resource を所有しない。timeout
+            // removal と writer finally の Dispose/Release race を避け、private gate は GC に任せる。
+        }
     }
 
     private bool HashEqualsConfiguredToken(string provided)
@@ -2387,10 +3325,17 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
 
     private void LogRequest(PendingRequest request, int statusCode)
     {
-        if (_requestLogger is null || _requestLogQueue is null || request.Logged)
+        if (!request.TryCompleteLifetime() && request.CancellationReason is { } cancellationReason)
+        {
+            request.Diagnostic = cancellationReason;
+            statusCode = CancellationStatusCode(cancellationReason);
+        }
+
+        if (_requestLogger is null || _requestLogQueue is null)
             return;
 
-        request.Logged = true;
+        if (Interlocked.Exchange(ref request.LoggedState, 1) != 0)
+            return;
         var record = new HttpRequestLogRecord(
             request.CorrelationId,
             request.RequestId?.Token,
@@ -2490,6 +3435,36 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         }
     }
 
+    private static bool ExpectsJsonRpcResponse(string body, int maxRequestBodyBytes)
+    {
+        try
+        {
+            using var document = BoundedJson.ParseDocument(body, maxRequestBodyBytes, McpServer.MaxJsonDepth);
+            return document.RootElement.ValueKind switch
+            {
+                JsonValueKind.Object => !IsValidJsonRpcNotification(document.RootElement),
+                JsonValueKind.Array => document.RootElement.GetArrayLength() == 0
+                    || document.RootElement.EnumerateArray().Any(item => !IsValidJsonRpcNotification(item)),
+                _ => true,
+            };
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
+        {
+            // Parse errors produce a JSON-RPC error response, so they need disconnect probing too.
+            // parse error も JSON-RPC error response を返すため disconnect probe 対象にする。
+            return true;
+        }
+    }
+
+    private static bool IsValidJsonRpcNotification(JsonElement element)
+        => element.ValueKind == JsonValueKind.Object
+            && !element.TryGetProperty("id", out _)
+            && element.TryGetProperty("jsonrpc", out var jsonrpc)
+            && jsonrpc.ValueKind == JsonValueKind.String
+            && string.Equals(jsonrpc.GetString(), "2.0", StringComparison.Ordinal)
+            && element.TryGetProperty("method", out var method)
+            && method.ValueKind == JsonValueKind.String;
+
     private sealed class RequestBodyBudget
     {
         private long _currentBytes;
@@ -2527,9 +3502,53 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             => Interlocked.Add(ref _currentBytes, -bytes);
     }
 
+    private sealed class RequestResourceRetentionBarrier
+    {
+        private readonly TaskCompletionSource<bool> _completion =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _completionRegistered;
+
+        internal Task Completion => _completion.Task;
+
+        internal void CompleteWhen(Task retainedWork)
+        {
+            ArgumentNullException.ThrowIfNull(retainedWork);
+            if (Interlocked.Exchange(ref _completionRegistered, 1) != 0)
+                return;
+
+            _ = retainedWork.ContinueWith(
+                static (completed, state) =>
+                {
+                    if (completed.IsFaulted)
+                        _ = completed.Exception;
+                    ((TaskCompletionSource<bool>)state!).TrySetResult(true);
+                },
+                _completion,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+    }
+
     private sealed class PendingRequest
     {
         private readonly long _startedTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+        private readonly CancellationToken _transportCancellationToken;
+        private readonly object _lifetimeSync = new();
+        private readonly object _requestResourceSync = new();
+        private readonly TaskCompletionSource<bool> _cancellationDeliveryCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private CancellationTokenSource? _lifetimeCts;
+        private CancellationToken _requestCancellationToken;
+        private CancellationTokenRegistration _transportCancellationRegistration;
+        private Timer? _lifetimeTimer;
+        private Func<PendingRequest, string, bool>? _cancellationHandler;
+        private Action<Task>? _cancellationDeliveryTracker;
+        private string? _cancellationReason;
+        private Task? _retainedResourceCompletion;
+        private bool _bodyReservationReleaseRequested;
+        private bool _lifetimeDisposeContinuationScheduled;
+        private int _lifetimeDisposed;
+        private int _terminalState;
 
         internal PendingRequest(HttpListenerContext context, string correlationId, string remotePeer, string method, string path, CancellationToken cancellationToken)
         {
@@ -2538,18 +3557,46 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             RemotePeer = remotePeer;
             Method = method;
             Path = path;
-            CancellationToken = cancellationToken;
+            _transportCancellationToken = cancellationToken;
+            _requestCancellationToken = cancellationToken;
         }
 
         internal HttpListenerContext Context { get; }
 
-        internal CancellationToken CancellationToken { get; }
+        internal CancellationToken CancellationToken
+        {
+            get
+            {
+                lock (_lifetimeSync)
+                    return _requestCancellationToken;
+            }
+        }
+
+        internal string? CancellationReason => Volatile.Read(ref _cancellationReason);
+
+        internal Task CancellationDelivery => _cancellationDeliveryCompleted.Task;
 
         internal string CorrelationId { get; }
 
         internal McpRequestIdTelemetryData? RequestId { get; set; }
 
         internal string? Body { get; set; }
+
+        internal bool ExpectsResponse { get; set; }
+
+        internal LinkedListNode<PendingRequest>? QueueNode { get; set; }
+
+        internal SemaphoreSlim ResponseWriteGate { get; } = new(1, 1);
+
+        internal CancellationTokenSource? DisconnectProbeCts { get; private set; }
+
+        internal Task? DisconnectProbeTask { get; private set; }
+
+        internal bool ProbeResponseStarted { get; set; }
+
+        internal int ResponseCompletedState;
+
+        internal int WriteStartedState;
 
         internal string RemotePeer { get; }
 
@@ -2567,11 +3614,257 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
 
         internal bool OwnsInitializeClaim { get; set; }
 
-        internal bool Logged { get; set; }
+        internal int LoggedState;
 
         internal long ReservedBodyBytes;
 
         internal TimeSpan Elapsed => System.Diagnostics.Stopwatch.GetElapsedTime(_startedTimestamp);
+
+        internal Task? RetainedResourceCompletion
+        {
+            get
+            {
+                lock (_requestResourceSync)
+                    return _retainedResourceCompletion;
+            }
+        }
+
+        internal bool TryRetainRequestResourcesUntil(Task completion)
+        {
+            lock (_requestResourceSync)
+            {
+                if (_bodyReservationReleaseRequested)
+                    return false;
+
+                _retainedResourceCompletion = _retainedResourceCompletion is null
+                    ? completion
+                    : Task.WhenAll(_retainedResourceCompletion, completion);
+                return true;
+            }
+        }
+
+        internal bool TryRequestBodyReservationRelease(out Task? retainedCompletion)
+        {
+            lock (_requestResourceSync)
+            {
+                if (_bodyReservationReleaseRequested)
+                {
+                    retainedCompletion = null;
+                    return false;
+                }
+
+                _bodyReservationReleaseRequested = true;
+                retainedCompletion = _retainedResourceCompletion;
+                return true;
+            }
+        }
+
+        internal long ReleaseReservedBodyBytes(long requestedBytes)
+        {
+            while (true)
+            {
+                var reservedBytes = Interlocked.Read(ref ReservedBodyBytes);
+                if (reservedBytes <= 0)
+                    return 0;
+
+                var releasedBytes = Math.Min(reservedBytes, requestedBytes);
+                if (Interlocked.CompareExchange(
+                    ref ReservedBodyBytes,
+                    reservedBytes - releasedBytes,
+                    reservedBytes) == reservedBytes)
+                {
+                    return releasedBytes;
+                }
+            }
+        }
+
+        internal void StartDisconnectProbe(
+            CancellationToken requestCancellationToken,
+            Func<PendingRequest, CancellationToken, Task> probe)
+        {
+            DisconnectProbeCts = CancellationTokenSource.CreateLinkedTokenSource(requestCancellationToken);
+            DisconnectProbeTask = probe(this, DisconnectProbeCts.Token);
+        }
+
+        internal void StartLifetime(
+            TimeSpan timeout,
+            Func<PendingRequest, string, bool> cancellationHandler,
+            Action<Task> cancellationDeliveryTracker)
+        {
+            Timer lifetimeTimer;
+            lock (_lifetimeSync)
+            {
+                if (_lifetimeCts is not null)
+                    throw new InvalidOperationException("HTTP MCP request lifetime was already started.");
+                if (_lifetimeDisposed != 0)
+                    throw new ObjectDisposedException(nameof(PendingRequest));
+
+                _cancellationHandler = cancellationHandler;
+                _cancellationDeliveryTracker = cancellationDeliveryTracker;
+                _lifetimeCts = new CancellationTokenSource();
+                _requestCancellationToken = _lifetimeCts.Token;
+                lifetimeTimer = new Timer(
+                    static state => ((PendingRequest)state!).TryCancel(RequestLifetimeTimeoutDiagnostic),
+                    this,
+                    timeout,
+                    Timeout.InfiniteTimeSpan);
+                _lifetimeTimer = lifetimeTimer;
+            }
+
+            var transportRegistration = _transportCancellationToken.Register(
+                static state => ((PendingRequest)state!).TryCancel(TransportShutdownDiagnostic),
+                this);
+            lock (_lifetimeSync)
+            {
+                if (_lifetimeDisposed == 0)
+                {
+                    _transportCancellationRegistration = transportRegistration;
+                    return;
+                }
+            }
+
+            transportRegistration.Unregister();
+            lifetimeTimer.Dispose();
+        }
+
+        internal bool TryCancel(string reason)
+        {
+            Task cancellationCallbacks;
+            Func<PendingRequest, string, bool>? cancellationHandler;
+            Action<Task>? cancellationDeliveryTracker;
+            lock (_lifetimeSync)
+            {
+                if (_terminalState != 0)
+                    return false;
+
+                _terminalState = 1;
+                Volatile.Write(ref _cancellationReason, reason);
+                // CancelAsync marks the token before returning but runs callbacks without holding
+                // this lifetime lock. This closes the publish/cancel window without reintroducing
+                // lifetime -> queue or user-callback lock inversions.
+                // CancelAsync は return 前に token を cancel 状態へ遷移させ、callback は lifetime
+                // lock 外で実行する。publish/cancel 間の race と callback lock inversion を防ぐ。
+                cancellationCallbacks = _lifetimeCts?.CancelAsync() ?? Task.CompletedTask;
+                cancellationHandler = _cancellationHandler;
+                cancellationDeliveryTracker = _cancellationDeliveryTracker;
+            }
+
+            // Never wait for cancellation callbacks or transport cleanup on the timer, listener,
+            // or disposal caller. CancelAsync has already published token cancellation; a separate
+            // worker owns callback delivery and the queue/response cleanup that follows (#4546).
+            // timer / listener / dispose caller 上では cancellation callback や transport cleanup
+            // を待たない。token cancel は公開済みで、後続配送と queue/response cleanup は
+            // 独立 worker が所有する (#4546)。
+            _ = Task.Run(() => DeliverCancellationAsync(cancellationCallbacks, cancellationHandler, reason));
+            cancellationDeliveryTracker?.Invoke(_cancellationDeliveryCompleted.Task);
+            return true;
+        }
+
+        private async Task DeliverCancellationAsync(
+            Task cancellationCallbacks,
+            Func<PendingRequest, string, bool>? cancellationHandler,
+            string reason)
+        {
+            var disposeAfterDelivery = false;
+            try
+            {
+                try { await cancellationCallbacks.ConfigureAwait(false); }
+                catch { /* cancellation cleanup must still reach the transport owner */ }
+
+                try { disposeAfterDelivery = cancellationHandler?.Invoke(this, reason) ?? false; }
+                catch { /* request cancellation is best-effort during terminal cleanup */ }
+            }
+            finally
+            {
+                _cancellationDeliveryCompleted.TrySetResult(true);
+            }
+
+            if (disposeAfterDelivery)
+                DisposeLifetime();
+        }
+
+        internal bool TryCompleteLifetime()
+        {
+            lock (_lifetimeSync)
+            {
+                if (_terminalState != 0)
+                    return _terminalState == 2;
+
+                _terminalState = 2;
+                return true;
+            }
+        }
+
+        internal void DisposeLifetime()
+        {
+            Timer? lifetimeTimer = null;
+            CancellationTokenRegistration transportCancellationRegistration = default;
+            CancellationTokenSource? lifetimeCts = null;
+            CancellationTokenSource? disconnectProbeCts = null;
+            Task? disconnectProbeTask = null;
+            Task? cancellationDeliveryTask = null;
+            lock (_lifetimeSync)
+            {
+                if (_lifetimeDisposed != 0)
+                    return;
+
+                if (_terminalState == 1 && !_cancellationDeliveryCompleted.Task.IsCompleted)
+                {
+                    if (_lifetimeDisposeContinuationScheduled)
+                        return;
+                    _lifetimeDisposeContinuationScheduled = true;
+                    cancellationDeliveryTask = _cancellationDeliveryCompleted.Task;
+                }
+                else
+                {
+                    if (_terminalState == 0)
+                        _terminalState = 2;
+                    _lifetimeDisposed = 1;
+                    lifetimeTimer = _lifetimeTimer;
+                    transportCancellationRegistration = _transportCancellationRegistration;
+                    lifetimeCts = _lifetimeCts;
+                    disconnectProbeCts = DisconnectProbeCts;
+                    disconnectProbeTask = DisconnectProbeTask;
+                }
+            }
+
+            if (cancellationDeliveryTask is not null)
+            {
+                // Never synchronously wait for request cancellation delivery during shutdown.
+                // A callback may be non-cooperative; resume idempotent cleanup after the single
+                // delivery signal settles instead of bypassing ProgramRunner's bounded wait.
+                // shutdown 中に request cancellation delivery を同期 wait せず、single delivery
+                // signal 完了後の continuation で idempotent cleanup を再開する。
+                _ = cancellationDeliveryTask.ContinueWith(
+                    static (_, state) => ((PendingRequest)state!).DisposeLifetime(),
+                    this,
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+                return;
+            }
+
+            lifetimeTimer?.Dispose();
+            transportCancellationRegistration.Unregister();
+            lifetimeCts?.Dispose();
+            if (disconnectProbeCts is { } probeCts)
+            {
+                try { probeCts.Cancel(); } catch (ObjectDisposedException) { /* probe already stopped */ }
+                if (disconnectProbeTask is { IsCompleted: false } probeTask)
+                {
+                    _ = probeTask.ContinueWith(
+                        static (_, state) => ((CancellationTokenSource)state!).Dispose(),
+                        probeCts,
+                        CancellationToken.None,
+                        TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default);
+                }
+                else
+                {
+                    probeCts.Dispose();
+                }
+            }
+        }
     }
 
     private sealed class HttpMcpTimeoutException : TimeoutException

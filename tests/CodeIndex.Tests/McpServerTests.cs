@@ -4622,6 +4622,143 @@ public sealed class Caller
     }
 
     [Fact]
+    public async Task RunAsync_RequestLifetimeCancellation_CancelsWorkAndPreservesPairedWrite_Issue4546()
+    {
+        var transport = new RequestLifetimeProbeTransport();
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            maxConcurrency: 1);
+        var delayEntered = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var nextDelayEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseDelay = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var delayEnabled = 0;
+        var delayedRequestCount = 0;
+        server.RequestDelayForTests = async token =>
+        {
+            if (Volatile.Read(ref delayEnabled) == 0)
+                return;
+            if (Interlocked.Increment(ref delayedRequestCount) != 1)
+            {
+                nextDelayEntered.TrySetResult();
+                return;
+            }
+            delayEntered.TrySetResult(token);
+            // Deliberately ignore cancellation so the isolated dispatch path must detach and
+            // preserve the transport's matching write/cleanup contract while retaining its
+            // concurrency and request-resource leases (#4546).
+            // cancellation を意図的に無視し、isolated dispatch が detach して対応 write と
+            // cleanup、および concurrency / request-resource lease を維持することを確認する (#4546)。
+            await releaseDelay.Task;
+        };
+
+        var runTask = server.RunAsync(transport, CancellationToken.None);
+        await transport.InitializeWritten.WaitAsync(TestDeterminism.DefaultTimeout);
+        Volatile.Write(ref delayEnabled, 1);
+        transport.ReleaseRequestRead();
+
+        var requestWorkToken = await delayEntered.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+        transport.CancelRequestLifetime();
+        await transport.RequestWritten.WaitAsync(TestDeterminism.DefaultTimeout);
+
+        Assert.True(requestWorkToken.IsCancellationRequested);
+        Assert.Equal(2, transport.WriteCount);
+        Assert.False(transport.RequestWriteTokenWasCancelled);
+        await transport.NextRequestRead.WaitAsync(TestDeterminism.DefaultTimeout);
+        await transport.RetentionCaptured.WaitAsync(TestDeterminism.DefaultTimeout);
+        Assert.Equal(2, transport.RetainCallCount);
+        Assert.NotNull(transport.RetainedCompletion);
+        Assert.False(transport.RetainedCompletion!.IsCompleted);
+        Assert.False(nextDelayEntered.Task.IsCompleted);
+
+        transport.ReleaseNextRequestRead();
+        releaseDelay.TrySetResult();
+        await nextDelayEntered.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+        await transport.NextRequestWritten.WaitAsync(TestDeterminism.DefaultTimeout);
+        await transport.RetainedCompletion.WaitAsync(TestDeterminism.DefaultTimeout);
+        await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        Assert.Equal(3, transport.WriteCount);
+        Assert.Equal(3, transport.RetainCallCount);
+    }
+
+    [Fact]
+    public async Task RunAsync_CancelledFrameEscapesBlockedProtocolBarrierAndWriter_Issue4546()
+    {
+        var transport = new BlockedBarrierRequestLifetimeTransport();
+        using var server = new McpServer(_dbPath, "test");
+
+        var runTask = server.RunAsync(transport, CancellationToken.None);
+        await transport.InitializeWritten.WaitAsync(TestDeterminism.DefaultTimeout);
+        await transport.BarrierWriteEntered.WaitAsync(TestDeterminism.DefaultTimeout);
+        await transport.CancelledFrameRead.WaitAsync(TestDeterminism.DefaultTimeout);
+
+        transport.CancelFrameLifetime();
+        await transport.CancelledFrameWritten.WaitAsync(TestDeterminism.DefaultTimeout);
+        await transport.CancelledFrameRetentionCompleted.WaitAsync(TestDeterminism.DefaultTimeout);
+
+        Assert.Null(transport.CancelledFrameResponse);
+        Assert.False(transport.CancelledFrameWriteTokenWasCancelled);
+        Assert.False(transport.BarrierWriteCompleted);
+
+        transport.ReleaseBarrierWrite();
+        await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+    }
+
+    [Fact]
+    public async Task RunAsync_StdioCancellation_IgnoredActionRetainsConcurrencySlot_Issue4546()
+    {
+        var transport = new StdioDetachedActionProbeTransport();
+        using var server = new McpServer(
+            _dbPath,
+            "test",
+            dbPathExplicit: false,
+            serializeResponse: null,
+            authenticator: null,
+            toolFilter: null,
+            maxConcurrency: 1);
+        var delayEntered = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var nextDelayEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseDelay = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var delayEnabled = 0;
+        var delayedRequestCount = 0;
+        server.RequestDelayForTests = async token =>
+        {
+            if (Volatile.Read(ref delayEnabled) == 0)
+                return;
+            if (Interlocked.Increment(ref delayedRequestCount) != 1)
+            {
+                nextDelayEntered.TrySetResult();
+                return;
+            }
+
+            delayEntered.TrySetResult(token);
+            await releaseDelay.Task;
+        };
+
+        var runTask = server.RunAsync(transport, CancellationToken.None);
+        await transport.InitializeWritten.WaitAsync(TestDeterminism.DefaultTimeout);
+        Volatile.Write(ref delayEnabled, 1);
+        transport.ReleaseRequestRead();
+
+        var requestWorkToken = await delayEntered.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+        transport.ReleaseCancellationRead();
+        await transport.CancelledRequestWritten.WaitAsync(TestDeterminism.DefaultTimeout);
+        await transport.NextRequestRead.WaitAsync(TestDeterminism.DefaultTimeout);
+
+        Assert.True(requestWorkToken.IsCancellationRequested);
+        Assert.False(nextDelayEntered.Task.IsCompleted);
+
+        releaseDelay.TrySetResult();
+        await nextDelayEntered.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+        await transport.NextRequestWritten.WaitAsync(TestDeterminism.DefaultTimeout);
+        await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+    }
+
+    [Fact]
     public async Task RunAsync_InvalidUtf8DecodeFailure_ReturnsParseError()
     {
         var transport = new InvalidUtf8ReadTransport("stdio");
@@ -10607,6 +10744,258 @@ public sealed class Caller
             Disposed = true;
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class RequestLifetimeProbeTransport : IMcpTransport, IConcurrentMcpTransport
+    {
+        private readonly CancellationTokenSource _requestLifetimeCts = new();
+        private readonly TaskCompletionSource _releaseRequestRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _initializeWritten = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _requestWritten = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _nextRequestRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseNextRequestRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _nextRequestWritten = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _retentionCaptured = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _readCount;
+
+        public string Name => "memory";
+        public string Endpoint => "memory://request-lifetime";
+        public Task InitializeWritten => _initializeWritten.Task;
+        public Task RequestWritten => _requestWritten.Task;
+        public Task NextRequestRead => _nextRequestRead.Task;
+        public Task NextRequestWritten => _nextRequestWritten.Task;
+        public Task RetentionCaptured => _retentionCaptured.Task;
+        public int WriteCount { get; private set; }
+        public bool RequestWriteTokenWasCancelled { get; private set; }
+        public int RetainCallCount { get; private set; }
+        public Task? RetainedCompletion { get; private set; }
+
+        public Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
+            => throw new NotSupportedException("The request-lifetime probe uses request-scoped concurrent frames.");
+
+        public async Task<McpTransportFrame?> ReadConcurrentFrameAsync(CancellationToken cancellationToken)
+        {
+            var readCount = Interlocked.Increment(ref _readCount);
+            string? frame;
+            CancellationToken requestToken;
+            switch (readCount)
+            {
+                case 1:
+                    frame = """{"jsonrpc":"2.0","id":"init","method":"initialize","params":{}}""";
+                    requestToken = CancellationToken.None;
+                    break;
+                case 2:
+                    await _releaseRequestRead.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    frame = """{"jsonrpc":"2.0","id":"cancel-me","method":"tools/list"}""";
+                    requestToken = _requestLifetimeCts.Token;
+                    break;
+                case 3:
+                    _nextRequestRead.TrySetResult();
+                    await _releaseNextRequestRead.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    frame = """{"jsonrpc":"2.0","id":"after-cancel","method":"tools/list"}""";
+                    requestToken = CancellationToken.None;
+                    break;
+                default:
+                    return null;
+            }
+
+            RetainCallCount++;
+            return new McpTransportFrame(
+                frame,
+                (response, writeToken) => WriteResponseAsync(readCount, response, writeToken),
+                requestToken,
+                completion =>
+                {
+                    if (readCount != 2)
+                        return;
+                    RetainedCompletion = completion;
+                    _retentionCaptured.TrySetResult();
+                });
+        }
+
+        public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
+            => throw new NotSupportedException("The request-lifetime probe uses request-scoped response writers.");
+
+        private Task WriteResponseAsync(int readCount, string? frame, CancellationToken cancellationToken)
+        {
+            WriteCount++;
+            if (readCount == 1)
+                _initializeWritten.TrySetResult();
+            else if (readCount == 2)
+            {
+                RequestWriteTokenWasCancelled = cancellationToken.IsCancellationRequested;
+                _requestWritten.TrySetResult();
+            }
+            else
+            {
+                _nextRequestWritten.TrySetResult();
+            }
+            return Task.CompletedTask;
+        }
+
+        public void ReleaseRequestRead() => _releaseRequestRead.TrySetResult();
+
+        public void CancelRequestLifetime() => _requestLifetimeCts.Cancel();
+
+        public void ReleaseNextRequestRead() => _releaseNextRequestRead.TrySetResult();
+
+        public ValueTask DisposeAsync()
+        {
+            _requestLifetimeCts.Dispose();
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class BlockedBarrierRequestLifetimeTransport : IMcpTransport, IConcurrentMcpTransport
+    {
+        private readonly CancellationTokenSource _cancelledFrameCts = new();
+        private readonly TaskCompletionSource _initializeWritten = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _barrierWriteEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseBarrierWrite = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _cancelledFrameRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _cancelledFrameWritten = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _cancelledFrameRetentionCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _readCount;
+
+        public string Name => "memory";
+        public string Endpoint => "memory://blocked-barrier-request-lifetime";
+        public Task InitializeWritten => _initializeWritten.Task;
+        public Task BarrierWriteEntered => _barrierWriteEntered.Task;
+        public Task CancelledFrameRead => _cancelledFrameRead.Task;
+        public Task CancelledFrameWritten => _cancelledFrameWritten.Task;
+        public Task CancelledFrameRetentionCompleted => _cancelledFrameRetentionCompleted.Task;
+        public string? CancelledFrameResponse { get; private set; }
+        public bool CancelledFrameWriteTokenWasCancelled { get; private set; }
+        public bool BarrierWriteCompleted => _releaseBarrierWrite.Task.IsCompleted;
+
+        public Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
+            => throw new NotSupportedException("The probe uses request-scoped concurrent frames.");
+
+        public Task<McpTransportFrame?> ReadConcurrentFrameAsync(CancellationToken cancellationToken)
+        {
+            var readCount = Interlocked.Increment(ref _readCount);
+            McpTransportFrame? frame = readCount switch
+            {
+                1 => new McpTransportFrame(
+                    """{"jsonrpc":"2.0","id":"init","method":"initialize","params":{}}""",
+                    (response, token) => WriteResponseAsync(readCount, response, token)),
+                2 => new McpTransportFrame(
+                    """{"jsonrpc":"2.0","method":"notifications/roots/list_changed"}""",
+                    (response, token) => WriteResponseAsync(readCount, response, token)),
+                3 => CreateCancelledFrame(readCount),
+                _ => null,
+            };
+            return Task.FromResult(frame);
+        }
+
+        private McpTransportFrame CreateCancelledFrame(int readCount)
+        {
+            _cancelledFrameRead.TrySetResult();
+            return new McpTransportFrame(
+                "{",
+                (response, token) => WriteResponseAsync(readCount, response, token),
+                _cancelledFrameCts.Token,
+                completion =>
+                {
+                    _ = completion.ContinueWith(
+                        static (_, state) => ((TaskCompletionSource)state!).TrySetResult(),
+                        _cancelledFrameRetentionCompleted,
+                        CancellationToken.None,
+                        TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default);
+                });
+        }
+
+        public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
+            => throw new NotSupportedException("The probe uses request-scoped response writers.");
+
+        private async Task WriteResponseAsync(
+            int readCount,
+            string? response,
+            CancellationToken cancellationToken)
+        {
+            switch (readCount)
+            {
+                case 1:
+                    _initializeWritten.TrySetResult();
+                    break;
+                case 2:
+                    _barrierWriteEntered.TrySetResult();
+                    await _releaseBarrierWrite.Task.ConfigureAwait(false);
+                    break;
+                case 3:
+                    CancelledFrameResponse = response;
+                    CancelledFrameWriteTokenWasCancelled = cancellationToken.IsCancellationRequested;
+                    _cancelledFrameWritten.TrySetResult();
+                    break;
+            }
+        }
+
+        public void CancelFrameLifetime() => _cancelledFrameCts.Cancel();
+
+        public void ReleaseBarrierWrite() => _releaseBarrierWrite.TrySetResult();
+
+        public ValueTask DisposeAsync()
+        {
+            _releaseBarrierWrite.TrySetResult();
+            _cancelledFrameCts.Dispose();
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class StdioDetachedActionProbeTransport : IMcpTransport
+    {
+        private readonly TaskCompletionSource _releaseRequestRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseCancellationRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _initializeWritten = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _cancelledRequestWritten = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _nextRequestRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _nextRequestWritten = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _readCount;
+
+        public string Name => "stdio";
+        public string Endpoint => "memory://stdio-detached-action";
+        public Task InitializeWritten => _initializeWritten.Task;
+        public Task CancelledRequestWritten => _cancelledRequestWritten.Task;
+        public Task NextRequestRead => _nextRequestRead.Task;
+        public Task NextRequestWritten => _nextRequestWritten.Task;
+
+        public async Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
+        {
+            switch (Interlocked.Increment(ref _readCount))
+            {
+                case 1:
+                    return """{"jsonrpc":"2.0","id":"init","method":"initialize","params":{}}""";
+                case 2:
+                    await _releaseRequestRead.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    return """{"jsonrpc":"2.0","id":"cancel-me","method":"tools/list"}""";
+                case 3:
+                    await _releaseCancellationRead.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    return """{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":"cancel-me"}}""";
+                case 4:
+                    _nextRequestRead.TrySetResult();
+                    return """{"jsonrpc":"2.0","id":"after-cancel","method":"tools/list"}""";
+                default:
+                    return null;
+            }
+        }
+
+        public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
+        {
+            if (frame?.Contains("\"id\":\"init\"", StringComparison.Ordinal) == true)
+                _initializeWritten.TrySetResult();
+            else if (frame?.Contains("\"id\":\"cancel-me\"", StringComparison.Ordinal) == true)
+                _cancelledRequestWritten.TrySetResult();
+            else if (frame?.Contains("\"id\":\"after-cancel\"", StringComparison.Ordinal) == true)
+                _nextRequestWritten.TrySetResult();
+            return Task.CompletedTask;
+        }
+
+        public void ReleaseRequestRead() => _releaseRequestRead.TrySetResult();
+
+        public void ReleaseCancellationRead() => _releaseCancellationRead.TrySetResult();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class QueueMcpTransport : IMcpTransport, IOutOfBandMcpTransport

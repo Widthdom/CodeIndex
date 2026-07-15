@@ -2239,14 +2239,35 @@ malformed, or too-deep frames return `-32700` with `id: null`; MCP `status`
   the exact variable and accepted range. `/healthz` reports both effective
   admission capacities and `http_separate_event_stream_handlers: true`.
 - Request bodies share a process-wide weighted byte reservation from read admission through
-  queueing, MCP execution, and HTTP response completion. The effective
+  queueing, MCP execution, HTTP response completion, and any detached cancellation drain. The effective
   `CDIDX_MCP_HTTP_MAX_IN_FLIGHT_REQUEST_BYTES` budget defaults to 64 MiB, is capped at 1 GiB,
   and must be at least the per-request body limit. Known lengths reserve atomically before the
   first read; chunked bodies reserve before each bounded read. Exhaustion returns HTTP 429 with
   `request_body_budget_limit`. The handler owner, queue, pending frame, and writer transfer one
-  idempotent reservation, while shutdown serializes with the channel reader before draining
-  queued and pending requests. Health reports the limit, current local/process values, peak,
+  idempotent reservation. A canceled isolated action that ignores its token transfers both its
+  `McpServer` concurrency lease and this byte reservation to a completion continuation, so repeated
+  disconnects cannot accumulate work outside the configured bounds. Shutdown serializes with the
+  single queue reader before draining queued and pending requests. Health reports the limit, current local/process values, peak,
   process scope, and rejection count.
+- POST lifetime starts before body validation and is bounded by both a per-read idle deadline and
+  a total deadline. `CDIDX_MCP_HTTP_BODY_IDLE_TIMEOUT_MS` defaults to 30,000 ms and is capped at
+  600,000 ms; `CDIDX_MCP_HTTP_REQUEST_TIMEOUT_MS` defaults to 120,000 ms, is capped at 3,600,000
+  ms, and must be at least the idle deadline. The total deadline spans body reading, queueing, MCP
+  dispatch, tool/SQLite work, and response completion. A linked-list queue permits O(1) removal of
+  cancelled queued requests, and the single-winner lifetime state makes reservation, response,
+  timer, and semaphore cleanup idempotent across timeout, disconnect, shutdown, and normal write.
+  `IRequestLifetimeMcpTransport` links the selected HTTP request token into `McpServer`'s current
+  request token, which propagates cancellation through tool dispatch and `DbReader.Cancellation`.
+  Response-bearing JSON-RPC frames in an established session start a bounded chunked-response
+  probe after queue admission; each flushed ASCII space is valid leading JSON whitespace and
+  exposes a post-body disconnect. Once probe or SSE output starts, its stream-owned bounded write
+  lifetime settles or aborts under the serialization gate even if the originating POST is canceled;
+  a probe write timeout is terminal and cancels the matching request. The headerless initial `initialize` skips the probe so its
+  successful response can add `Mcp-Session-Id` before headers are committed, while notifications
+  also skip the probe and retain `204 No Content`. Request logs use
+  `timeout:http_request_body_idle`, `timeout:http_request_lifetime`,
+  `timeout:http_disconnect_probe_write`, and `client_disconnected`;
+  health reports both effective deadlines plus timeout, disconnect, and queued-cancellation counts.
 - SSE stream lifetime is represented by the active stream registry and a
   bounded active-stream counter only. Idle streams receive minimal SSE comment
   heartbeats so disconnected clients are detected and stream slots are
@@ -4483,7 +4504,8 @@ JSON-RPC batch array は最大 100 item を受け付ける。独立 item は glo
 
 - transport は server process ごとに論理 MCP client session を 1 つだけ扱う。最初に成功する `initialize` は `Mcp-Session-Id` なしで受理でき、その response が標準 `Mcp-Session-Id` header に新しい identifier を返す。以後のすべての POST と `GET /events` は完全に同じ値を提示する必要がある。欠落または誤った identifier は transport 境界で拒否し、`McpServer` の caller、roots、capability state へ到達させないため、別 client は確立済み session を置き換えられない。identifier は process scope で、再起動後に変わる。client は opaque な session selector として非公開に保つ必要があるが、認証の代替ではなく bearer-token gate とは独立している。identifier 欠落は `400` / `session_required`、不正・曖昧値は `404` / `session_not_found`、最初の initialize が pending 中の競合 headerless initialize は `409` / `session_initialization_in_progress` を返し、分類は `X-Cdidx-Mcp-Rejection` に入る。
 - HTTP POST 1 件 = JSON-RPC フレーム 1 件で、対応する応答は HTTP レスポンスのボディ（`200 OK` / `application/json; charset=utf-8`）に乗る。通知は `204 No Content`。`GET /events` は独立した `text/event-stream` subscription を開き、確立済み session は複数 subscription を保持して各 server notification をすべてで受信する。サーバーは `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification が opt-in された場合を除き、自発的な frame を送信しない。長寿命の event stream は独立した admission semaphore を使い、POST handler capacity を消費しない。`/` への POST 以外は `405 Method Not Allowed`。session 検証後、空 / 空白のみのボディは stdio の空行と同じ扱いで `204 No Content` を返し、ループは殺さない。リクエスト本文は `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`（既定: 1,000,000 bytes、最大: 16,777,216 bytes）で制限し、超過時は全量を buffer する前に `413 Payload Too Large` を返す。保留中 request queue は `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`（既定: 64、最大: 1,024）、POST などの短命 handler task は `CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS`（既定: 64、最大: 1,024）、独立 gate 上の同時 `/events` stream は `CDIDX_MCP_HTTP_MAX_EVENT_STREAMS`（既定: 16、最大: 1,024）で制限し、満杯時は無制限に work を保持せず `Retry-After: 1` 付きの `429 Too Many Requests` を返す。bearer 認証と session 検証後、mixed batch の cross-frame cancellation notification は queue 判定より先に out-of-band 処理し、same-batch target の control は raw batch に残す。残りの raw item だけが queue capacity を消費する。limit 環境変数は未設定の場合だけ既定値を使い、設定済みの非数値、ゼロ、負数、最大値超過は正確な変数名と受理範囲を示して listener 起動前に失敗する。`/healthz` は両 admission capacity と `http_separate_event_stream_handlers: true` を報告する。
-- request body は read admission から queue、MCP 実行、HTTP response 完了まで process-wide の weighted byte reservation を共有する。`CDIDX_MCP_HTTP_MAX_IN_FLIGHT_REQUEST_BYTES` の既定値は 64 MiB、最大値は 1 GiB で、request 単位 body limit 以上でなければならない。既知長は最初の read 前に全量を atomic に予約し、chunked body は各 bounded read 前に予約する。枯渇時は `request_body_budget_limit` 付き HTTP 429 を返す。handler owner、queue、pending frame、writer は idempotent な reservation 1 件の所有権を移し、shutdown は channel reader と直列化して queued / pending request を drain する。health は limit、local / process の現在値、peak、process scope、rejection count を報告する。
+- request body は read admission から queue、MCP 実行、HTTP response 完了、および cancellation 後の detached drain まで process-wide の weighted byte reservation を共有する。`CDIDX_MCP_HTTP_MAX_IN_FLIGHT_REQUEST_BYTES` の既定値は 64 MiB、最大値は 1 GiB で、request 単位 body limit 以上でなければならない。既知長は最初の read 前に全量を atomic に予約し、chunked body は各 bounded read 前に予約する。枯渇時は `request_body_budget_limit` 付き HTTP 429 を返す。handler owner、queue、pending frame、writer は idempotent な reservation 1 件の所有権を移す。cancel 済み isolated action が token を無視する場合は `McpServer` の concurrency lease と byte reservation の両方を completion continuation へ移し、切断の反復で設定上限外の work を蓄積させない。shutdown は単一 queue reader と直列化して queued / pending request を drain する。health は limit、local / process の現在値、peak、process scope、rejection count を報告する。
+- POST lifetime は body validation 前に開始し、read 単位の idle deadline と total deadline の両方で制限する。`CDIDX_MCP_HTTP_BODY_IDLE_TIMEOUT_MS` の既定値は 30,000 ms、最大値は 600,000 ms、`CDIDX_MCP_HTTP_REQUEST_TIMEOUT_MS` の既定値は 120,000 ms、最大値は 3,600,000 ms で、total deadline は idle deadline 以上でなければならない。total deadline は body read、queue、MCP dispatch、tool / SQLite work、response 完了までを含む。linked-list queue により cancelled queued request を O(1) で除去し、single-winner lifetime state により timeout、disconnect、shutdown、normal write が競合しても reservation、response、timer、semaphore cleanup を idempotent に保つ。`IRequestLifetimeMcpTransport` は選択中 HTTP request token を `McpServer` の current request token に link し、cancellation を tool dispatch と `DbReader.Cancellation` まで伝播する。session 確立後の応答を伴う JSON-RPC frame は queue admission 後に bounded な chunked-response probe を開始し、flush する ASCII space を有効な JSON 先頭空白として post-body disconnect を検出する。probe または SSE output の開始後は、起点 POST が cancel されても stream-owned の bounded write lifetime が serialization gate 内で完了または abort し、probe write timeout は matching request を terminal に cancel する。headerless initial `initialize` は response header commit 前に `Mcp-Session-Id` を返せるよう probe を開始せず、notification も probe を使わず `204 No Content` を維持する。request log は `timeout:http_request_body_idle`、`timeout:http_request_lifetime`、`timeout:http_disconnect_probe_write`、`client_disconnected` を使い、health は両方の有効 deadline と timeout、disconnect、queued-cancellation count を報告する。
 - POST は `application/json` Content-Type を 1 件だけ受理し、charset は省略または UTF-8 のみとする。strict UTF-8 decode を使うため、未対応 media type / charset は queueing 前に `415`、不正 UTF-8 は `400` で拒否する。native client 向けに `Origin` 欠落は受理するが、present Origin は listener の scheme・host・port と完全一致する単一値だけを許可する。malformed、`null`、ambiguous、cross-origin 値は認証前に `403` とし、CORS preflight は `Access-Control-Allow-*` header を出さず拒否する（#4549）。
 - SSE stream lifetime は active stream registry と上限付き active-stream counter だけで表現する。idle stream には最小限の SSE comment heartbeat を送り、切断済み client を検出して stream slot を解放する。その registry entry が削除された後に完了済み stream task を保持しない。
 - `ResolveListenSpec("host:port")` は prefix を事前に解決するため、CLI が stderr に `Listening on http://...` を出せる。ポート `0` は一時 `TcpListener` を probe して空きポートを取得する。probe から `HttpListener.Start()` までの TOCTOU window は、本トランスポートが local-only / single-tenant 想定であるため許容する。ワイルドカードホスト `+` / `*` はパース時点で拒否する。
