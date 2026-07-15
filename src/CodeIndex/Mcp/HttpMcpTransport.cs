@@ -17,15 +17,16 @@ namespace CodeIndex.Mcp;
 /// <summary>
 /// HTTP MCP transport (issue #1558). Each HTTP POST carries one JSON-RPC request frame in the
 /// body and the matching JSON-RPC response is returned as the response body (or 204 No Content
-/// for notifications). The implementation is intentionally single-session — one in-flight request
-/// at a time — to mirror the existing stdio loop's request/response pairing and to keep the
-/// JSON-RPC ordering invariant the rest of the MCP server depends on. Server-initiated JSON-RPC
-/// notifications are exposed through `/events` as a bounded, multi-client SSE fan-out channel.
+/// for notifications). The implementation is intentionally single-session — one logical client
+/// identified by `Mcp-Session-Id`, with one in-flight request at a time — to mirror the existing
+/// stdio loop's request/response pairing and to keep the JSON-RPC ordering invariant the rest of
+/// the MCP server depends on. Server-initiated JSON-RPC notifications are exposed through
+/// `/events` as a bounded SSE fan-out channel for that same logical session.
 /// HTTP MCP トランスポート (issue #1558)。HTTP POST 1 件が JSON-RPC リクエスト 1 件と対応し、
 /// 応答も同じ HTTP レスポンスのボディに乗せる（通知の場合は 204 No Content）。stdio ループと
-/// 同様にシングルセッションで「リクエスト 1 件 → レスポンス 1 件」の順序不変条件を維持する。
-/// サーバー起点の JSON-RPC 通知は `/events` で bounded な multi-client SSE fan-out channel
-/// として公開する。
+/// 同様に `Mcp-Session-Id` で識別する 1 logical client のシングルセッションとして
+/// 「リクエスト 1 件 → レスポンス 1 件」の順序不変条件を維持する。サーバー起点の JSON-RPC
+/// 通知は同じ logical session 向けの bounded SSE fan-out channel `/events` で公開する。
 /// </summary>
 internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 {
@@ -50,10 +51,14 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     internal const string MaxQueueDepthEnvVar = "CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH";
     internal const string MaxConcurrentHandlersEnvVar = "CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS";
     internal const string MaxEventStreamsEnvVar = "CDIDX_MCP_HTTP_MAX_EVENT_STREAMS";
+    internal const string SessionIdHeaderName = "Mcp-Session-Id";
     internal const string RejectionReasonHeader = "X-Cdidx-Mcp-Rejection";
     internal const string ConcurrentHandlerLimitRejection = "concurrent_handler_limit";
     internal const string RequestQueueLimitRejection = "request_queue_limit";
     internal const string EventStreamLimitRejection = "event_stream_limit";
+    internal const string SessionRequiredRejection = "session_required";
+    internal const string SessionNotFoundRejection = "session_not_found";
+    internal const string SessionInitializationInProgressRejection = "session_initialization_in_progress";
     internal const string EventStreamWriteFailureDrop = "write_failure";
     internal const string AuthDenialMissing = "missing";
     internal const string AuthDenialAmbiguous = "ambiguous";
@@ -69,6 +74,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     internal const string UnsupportedCharsetDiagnostic = "unsupported_charset";
     internal const string InvalidUtf8Diagnostic = "invalid_utf8";
     private const string BearerPrefix = "Bearer ";
+    private const int SessionIdByteCount = 32;
     private const string DefaultStartingHealthJson = """{"status":"starting","db_open":false}""";
     private const string InvalidHealthJson = """{"status":"degraded","db_open":false,"error":"health_provider_invalid"}""";
     private static readonly TimeSpan EventStreamDisconnectProbeInterval = TimeSpan.FromSeconds(1);
@@ -97,6 +103,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     private readonly TimeSpan _eventStreamWriteTimeout;
     private readonly Task _acceptLoop;
     private readonly object _disposeSync = new();
+    private readonly string _sessionId = Convert.ToHexString(RandomNumberGenerator.GetBytes(SessionIdByteCount)).ToLowerInvariant();
     // The configured bearer token's SHA-256 digest, precomputed once at construction so the
     // per-request auth path never hashes the secret. Storing the digest (not the token) keeps the
     // per-request work proportional only to the attacker-supplied input length, eliminating the
@@ -105,6 +112,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     // 攻撃者入力のみハッシュ計算する。これにより設定トークン長による timing 漏洩を排除する。
     private readonly byte[]? _bearerTokenHash;
     private PendingRequest? _pendingRequest;
+    private PendingRequest? _pendingInitializeRequest;
     private int _queuedRequestCount;
     private int _pendingRequestLogCount;
     private int _eventStreamCount;
@@ -131,6 +139,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     private string? _lastAuthDenialReason;
     private string? _lastRequestLogDropReason;
     private int _disposeStarted;
+    private int _sessionEstablished;
     private bool _ownedSemaphoreGatesDisposed;
 
     /// <summary>
@@ -268,6 +277,8 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     internal bool OwnedSemaphoreGatesDisposedForTests => Volatile.Read(ref _ownedSemaphoreGatesDisposed);
 
     private bool IsDisposed => Volatile.Read(ref _disposeStarted) != 0;
+
+    private bool IsSessionEstablished => Volatile.Read(ref _sessionEstablished) != 0;
 
     internal Func<string, CancellationToken, Task<string?>>? OutOfBandFrameHandler { get; set; }
 
@@ -645,6 +656,9 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
                 return;
             }
 
+            if (!await TryRequireEstablishedSessionAsync(request).ConfigureAwait(false))
+                return;
+
             await RunEventStreamAsync(request, cancellationToken).ConfigureAwait(false);
             return;
         }
@@ -660,9 +674,41 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         if (!await TryValidateJsonContentTypeAsync(request).ConfigureAwait(false))
             return;
 
+        // Once initialize succeeds, reject missing or foreign sessions before reading a POST
+        // body so an unrelated HTTP client cannot consume request-body or JSON-RPC resources.
+        // initialize 成功後は POST body を読む前に欠落・別 session を拒否し、無関係な HTTP
+        // client に request-body / JSON-RPC resource を消費させない。
+        if (IsSessionEstablished
+            && !await TryValidateSessionHeaderAsync(request).ConfigureAwait(false))
+        {
+            return;
+        }
+
         var body = await TryReadRequestBodyAsync(request, cancellationToken).ConfigureAwait(false);
         if (body is null)
             return;
+
+        request.Body = body;
+        request.RequestId = TryExtractJsonRpcId(body, _maxRequestBodyBytes);
+        if (!request.SessionValidated)
+        {
+            // The session can become established while this handler is reading its body. Recheck
+            // after the bounded read so no headerless frame can slip behind initialize in the
+            // single-reader queue. Before establishment, only one response-bearing initialize
+            // request may claim the pending session.
+            // body 読み込み中に session が確立し得るため、bounded read 後に再確認する。
+            // これにより header 無し frame が initialize の後ろへ queue される race を防ぐ。
+            // 確立前に pending session を claim できるのは応答対象 initialize 1 件だけ。
+            if (IsSessionEstablished)
+            {
+                if (!await TryValidateSessionHeaderAsync(request).ConfigureAwait(false))
+                    return;
+            }
+            else if (!await TryClaimPendingInitializeAsync(request, body).ConfigureAwait(false))
+            {
+                return;
+            }
+        }
 
         if (string.IsNullOrWhiteSpace(body))
         {
@@ -672,13 +718,15 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             return;
         }
 
-        request.Body = body;
-        request.RequestId = TryExtractJsonRpcId(body, _maxRequestBodyBytes);
         if (await TryHandleOutOfBandFrameAsync(request, body, cancellationToken).ConfigureAwait(false))
+        {
+            ReleasePendingInitialize(request);
             return;
+        }
 
         if (!TryQueueRequest(request))
         {
+            ReleasePendingInitialize(request);
             MarkRejected(request, RequestQueueLimitRejection);
             context.Response.AddHeader("Retry-After", "1");
             context.Response.AddHeader(RejectionReasonHeader, RequestQueueLimitRejection);
@@ -800,6 +848,176 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         return true;
     }
 
+    private async Task<bool> TryRequireEstablishedSessionAsync(PendingRequest request)
+    {
+        if (!IsSessionEstablished)
+        {
+            var headerResult = TryReadSessionIdHeader(request.Context.Request.Headers, out _);
+            var statusCode = headerResult == SessionIdHeaderReadResult.Missing
+                ? HttpStatusCode.BadRequest
+                : HttpStatusCode.NotFound;
+            var rejection = headerResult == SessionIdHeaderReadResult.Missing
+                ? SessionRequiredRejection
+                : SessionNotFoundRejection;
+            await RejectSessionAsync(request, statusCode, rejection).ConfigureAwait(false);
+            return false;
+        }
+
+        return await TryValidateSessionHeaderAsync(request).ConfigureAwait(false);
+    }
+
+    private async Task<bool> TryValidateSessionHeaderAsync(PendingRequest request)
+    {
+        var headerResult = TryReadSessionIdHeader(request.Context.Request.Headers, out var providedSessionId);
+        if (headerResult == SessionIdHeaderReadResult.Success
+            && SessionIdMatches(providedSessionId!))
+        {
+            request.SessionValidated = true;
+            return true;
+        }
+
+        var statusCode = headerResult == SessionIdHeaderReadResult.Missing
+            ? HttpStatusCode.BadRequest
+            : HttpStatusCode.NotFound;
+        var rejection = headerResult == SessionIdHeaderReadResult.Missing
+            ? SessionRequiredRejection
+            : SessionNotFoundRejection;
+        await RejectSessionAsync(request, statusCode, rejection).ConfigureAwait(false);
+        return false;
+    }
+
+    private async Task<bool> TryClaimPendingInitializeAsync(PendingRequest request, string body)
+    {
+        // The initial initialize request has no session header. Any supplied value before
+        // establishment is stale or fabricated and must not become a session oracle.
+        // 最初の initialize は session header を持たない。確立前の提示値は stale / forged
+        // として扱い、session oracle にしない。
+        if (TryReadSessionIdHeader(request.Context.Request.Headers, out _) != SessionIdHeaderReadResult.Missing)
+        {
+            await RejectSessionAsync(request, HttpStatusCode.NotFound, SessionNotFoundRejection).ConfigureAwait(false);
+            return false;
+        }
+
+        if (!IsResponseBearingInitialize(body))
+        {
+            if (Volatile.Read(ref _pendingInitializeRequest) is not null)
+            {
+                await RejectSessionAsync(
+                    request,
+                    HttpStatusCode.Conflict,
+                    SessionInitializationInProgressRejection).ConfigureAwait(false);
+            }
+            else
+            {
+                await RejectSessionAsync(request, HttpStatusCode.BadRequest, SessionRequiredRejection).ConfigureAwait(false);
+            }
+            return false;
+        }
+
+        if (Interlocked.CompareExchange(ref _pendingInitializeRequest, request, null) is not null)
+        {
+            await RejectSessionAsync(
+                request,
+                HttpStatusCode.Conflict,
+                SessionInitializationInProgressRejection).ConfigureAwait(false);
+            return false;
+        }
+
+        request.OwnsInitializeClaim = true;
+        if (!IsSessionEstablished)
+            return true;
+
+        // A successful initializer publishes the established flag before releasing its claim.
+        // Recheck after CAS so a handler that raced with that release cannot claim a second
+        // headerless initialize request.
+        // 成功 initializer は claim 解放前に established flag を公開する。CAS 後に再確認し、
+        // claim 解放と競合した handler が 2 件目の header 無し initialize を取るのを防ぐ。
+        ReleasePendingInitialize(request);
+        await RejectSessionAsync(request, HttpStatusCode.BadRequest, SessionRequiredRejection).ConfigureAwait(false);
+        return false;
+    }
+
+    private async Task RejectSessionAsync(
+        PendingRequest request,
+        HttpStatusCode statusCode,
+        string rejectionReason)
+    {
+        MarkRejected(request, rejectionReason);
+        request.Context.Response.AddHeader(RejectionReasonHeader, rejectionReason);
+        var message = rejectionReason switch
+        {
+            SessionRequiredRejection => "MCP HTTP session header is required.\n",
+            SessionInitializationInProgressRejection => "MCP HTTP session initialization is already in progress.\n",
+            _ => "MCP HTTP session was not found.\n",
+        };
+        await RespondAsync(request, (int)statusCode, message).ConfigureAwait(false);
+        LogRequest(request, (int)statusCode);
+    }
+
+    private static SessionIdHeaderReadResult TryReadSessionIdHeader(
+        NameValueCollection headers,
+        out string? sessionId)
+    {
+        sessionId = null;
+        var values = headers.GetValues(SessionIdHeaderName);
+        if (values is null || values.Length == 0)
+            return SessionIdHeaderReadResult.Missing;
+        if (values.Length != 1
+            || string.IsNullOrEmpty(values[0])
+            || values[0].IndexOf(',', StringComparison.Ordinal) >= 0)
+        {
+            return SessionIdHeaderReadResult.Invalid;
+        }
+
+        sessionId = values[0];
+        return SessionIdHeaderReadResult.Success;
+    }
+
+    private bool SessionIdMatches(string provided)
+    {
+        if (provided.Length != _sessionId.Length)
+            return false;
+
+        var difference = 0;
+        for (var i = 0; i < provided.Length; i++)
+            difference |= provided[i] ^ _sessionId[i];
+        return difference == 0;
+    }
+
+    private static bool IsResponseBearingInitialize(string body)
+    {
+        if (!JsonFrameParser.TryParseNode(body, McpServer.MaxJsonDepth, out var node, out _)
+            || node is not JsonObject obj
+            || obj["jsonrpc"] is not JsonValue jsonRpcValue
+            || !jsonRpcValue.TryGetValue<string>(out var jsonRpc)
+            || !string.Equals(jsonRpc, "2.0", StringComparison.Ordinal)
+            || obj["method"] is not JsonValue methodValue
+            || !methodValue.TryGetValue<string>(out var method)
+            || !string.Equals(method, "initialize", StringComparison.Ordinal)
+            || !obj.TryGetPropertyValue("id", out _))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private void ReleasePendingInitialize(PendingRequest request)
+    {
+        if (!request.OwnsInitializeClaim)
+            return;
+
+        request.OwnsInitializeClaim = false;
+        Interlocked.CompareExchange(ref _pendingInitializeRequest, null, request);
+    }
+
+    private enum SessionIdHeaderReadResult
+    {
+        Missing,
+        Success,
+        Invalid,
+    }
+
     private bool TryQueueRequest(PendingRequest request)
     {
         if (!_queueSlots.Wait(0))
@@ -891,6 +1109,25 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             && (obj.ContainsKey("result") || obj.ContainsKey("error"));
     }
 
+    private static bool IsSuccessfulInitializeResponse(string frame)
+    {
+        if (!JsonFrameParser.TryParseNode(frame, McpServer.MaxJsonDepth, out var node, out _)
+            || node is not JsonObject obj
+            || obj["jsonrpc"] is not JsonValue jsonRpcValue
+            || !jsonRpcValue.TryGetValue<string>(out var jsonRpc)
+            || !string.Equals(jsonRpc, "2.0", StringComparison.Ordinal)
+            || !obj.ContainsKey("id")
+            || obj.ContainsKey("error")
+            || obj["result"] is not JsonObject result
+            || result["protocolVersion"] is not JsonValue protocolValue
+            || !protocolValue.TryGetValue<string>(out var protocolVersion))
+        {
+            return false;
+        }
+
+        return !string.IsNullOrWhiteSpace(protocolVersion);
+    }
+
     public async Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
@@ -901,6 +1138,20 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
 
         try
         {
+            if (request.OwnsInitializeClaim
+                && frame is not null
+                && IsSuccessfulInitializeResponse(frame))
+            {
+                // McpServer has already committed its initialize state before handing us this
+                // success frame. Publish the transport session fail-closed before any response
+                // write: if header/body delivery fails, no second client may inherit that state.
+                // McpServer はこの success frame を渡す前に initialize state を commit 済み。
+                // response write 前に transport session を fail-closed で公開し、header/body
+                // 配送失敗時にも別 client が確立済み state を継承できないようにする。
+                Volatile.Write(ref _sessionEstablished, 1);
+                context.Response.AddHeader(SessionIdHeaderName, _sessionId);
+            }
+
             if (frame is null)
             {
                 context.Response.StatusCode = (int)HttpStatusCode.NoContent;
@@ -937,6 +1188,10 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             // best-effort で response を閉じる。listener が context を持ち続けないようにする。
             AbortResponseBestEffort(context.Response, "request response failure");
             throw;
+        }
+        finally
+        {
+            ReleasePendingInitialize(request);
         }
     }
 
@@ -1821,6 +2076,10 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         internal string? RejectionReason { get; set; }
 
         internal string? Diagnostic { get; set; }
+
+        internal bool SessionValidated { get; set; }
+
+        internal bool OwnsInitializeClaim { get; set; }
 
         internal bool Logged { get; set; }
 
