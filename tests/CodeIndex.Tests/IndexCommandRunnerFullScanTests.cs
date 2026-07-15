@@ -399,6 +399,44 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_CancelledDuringMutualRecursionRefresh_LeavesReadinessDegraded()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_mutual_refresh_cancel");
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
+        using var cancellation = new CancellationTokenSource();
+        var hookInvoked = false;
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "MutualRecursionA.cs"),
+                "public static class MutualRecursionA { public static void CrossCycleA() { CrossCycleB(); } }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "MutualRecursionB.cs"),
+                "public static class MutualRecursionB { public static void CrossCycleB() { CrossCycleA(); } }\n");
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                hookInvoked = true;
+                cancellation.Cancel();
+                previousRefreshHook?.Invoke();
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"], cancellation);
+
+            Assert.True(hookInvoked);
+            Assert.Equal(CommandExitCodes.Interrupted, exitCode);
+            Assert.Equal(CommandErrorCodes.Interrupted, json.GetProperty("error_code").GetString());
+            using var db = new DbContext(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Equal(0, db.GetUserVersion());
+        }
+        finally
+        {
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScanAfterTypeScriptConfigChange_ReprocessesUnchangedTypeScriptFiles()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_tsconfig_refresh");

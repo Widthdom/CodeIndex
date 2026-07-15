@@ -1113,7 +1113,7 @@ public static partial class IndexCommandRunner
 
         ThrowIfUpdateCancelled();
         if (mutualRecursionRefreshNeeded)
-            writer.RefreshMutualRecursionFlags();
+            writer.RefreshMutualRecursionFlags(cancellationToken);
         ThrowIfUpdateCancelled();
         PauseUpdateSpinnerForConsoleWrite();
 

@@ -289,6 +289,60 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void RefreshMutualRecursionFlags_CancellationInterruptsRunningSqlAndRollsBack()
+    {
+        var writer = new DbWriter(_db);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/mutual-cancel.cs",
+            Lang = "csharp",
+            Size = 100,
+            Lines = 4,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = "mutual-cancel",
+        });
+        writer.InsertReferences(
+        [
+            new ReferenceRecord { FileId = fileId, SymbolName = "Beta", ReferenceKind = "call", Line = 1, Column = 1, Context = "Beta();", ContainerName = "Alpha" },
+            new ReferenceRecord { FileId = fileId, SymbolName = "Alpha", ReferenceKind = "call", Line = 2, Column = 1, Context = "Alpha();", ContainerName = "Beta" },
+        ],
+        refreshMutualRecursionFlags: false);
+
+        using var cancellation = new CancellationTokenSource();
+        var cancellationFunctionCalls = 0;
+        _db.Connection.CreateFunction(
+            "cancel_mutual_refresh",
+            () =>
+            {
+                cancellationFunctionCalls++;
+                cancellation.Cancel();
+                return 1;
+            });
+        ExecuteNonQuery(_db.Connection, """
+            CREATE TRIGGER cancel_running_mutual_refresh
+            BEFORE UPDATE OF is_mutual_recursion ON symbol_references
+            BEGIN
+                SELECT cancel_mutual_refresh();
+            END;
+            """);
+
+        var exception = Assert.Throws<OperationCanceledException>(
+            () => writer.RefreshMutualRecursionFlags(cancellation.Token));
+
+        Assert.Equal(cancellation.Token, exception.CancellationToken);
+        Assert.IsType<SqliteException>(exception.InnerException);
+        Assert.True(cancellationFunctionCalls > 0);
+        Assert.Equal(0, ExecuteScalarLong("SELECT COUNT(*) FROM symbol_references WHERE is_mutual_recursion <> 0"));
+
+        ExecuteNonQuery(_db.Connection, "DROP TRIGGER cancel_running_mutual_refresh");
+        var hitsBeforeRetry = _db.PreparedCommands.HitCount;
+        writer.RefreshMutualRecursionFlags();
+
+        Assert.True(_db.PreparedCommands.HitCount > hitsBeforeRetry);
+        Assert.Equal(2, ExecuteScalarLong("SELECT COUNT(*) FROM symbol_references WHERE is_mutual_recursion = 1"));
+    }
+
+    [Fact]
     public void RefreshMutualRecursionFlags_NormalizesUnexpectedStoredValues()
     {
         var fileId = UpsertTestFile("src/mutual-normalize.cs", checksum: "mutual-normalize");
@@ -3130,6 +3184,59 @@ public class DatabaseTests : IDisposable
             Signature = "public interface IShape",
         }]);
         Assert.True(_writer.HasCSharpStaticInterfaceContractSymbols());
+    }
+
+    [Fact]
+    public void HasCSharpStaticInterfaceContractSymbols_CancellationInterruptsRunningSql()
+    {
+        var writer = new DbWriter(_db);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/ICancellable.cs",
+            Lang = "csharp",
+            Size = 100,
+            Lines = 4,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        writer.InsertSymbols(
+            Enumerable.Range(0, 256)
+                .Select(index => new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "function",
+                    Name = $"Create{index}",
+                    Line = index + 1,
+                    StartLine = index + 1,
+                    EndLine = index + 1,
+                    ContainerKind = "interface",
+                    Signature = $"public static abstract ICancellable Create{index}();",
+                })
+                .ToList());
+
+        using var cancellation = new CancellationTokenSource();
+        var likeCalls = 0;
+        var allowMatch = false;
+        _db.Connection.CreateFunction<string?, string?, long>(
+            "like",
+            (_, _) =>
+            {
+                likeCalls++;
+                if (!cancellation.IsCancellationRequested)
+                    cancellation.Cancel();
+                return allowMatch ? 1 : 0;
+            });
+
+        var exception = Assert.Throws<OperationCanceledException>(
+            () => writer.HasCSharpStaticInterfaceContractSymbols(cancellation.Token));
+
+        Assert.Equal(cancellation.Token, exception.CancellationToken);
+        Assert.IsType<SqliteException>(exception.InnerException);
+        Assert.True(likeCalls > 0);
+
+        allowMatch = true;
+        var hitsBeforeRetry = _db.PreparedCommands.HitCount;
+        Assert.True(writer.HasCSharpStaticInterfaceContractSymbols());
+        Assert.True(_db.PreparedCommands.HitCount > hitsBeforeRetry);
     }
 
     [Fact]

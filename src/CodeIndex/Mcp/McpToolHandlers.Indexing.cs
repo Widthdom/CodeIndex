@@ -328,7 +328,7 @@ public partial class McpServer
             writer.MarkBatchInProgress();
 
         var hadCSharpStaticInterfaceContractsBeforePurge = !startedWithNoIndexedFiles
-            && writer.HasCSharpStaticInterfaceContractSymbols();
+            && writer.HasCSharpStaticInterfaceContractSymbols(requestToken);
 
         // Purge stale files / 古いファイルをパージ
         var purged = startedWithNoIndexedFiles
@@ -765,7 +765,7 @@ public partial class McpServer
         {
             requestToken.ThrowIfCancellationRequested();
             await EmitProgressNotificationAsync(progressToken, processed, files.Count, "Finalizing reference graph.").ConfigureAwait(false);
-            writer.RefreshMutualRecursionFlags();
+            writer.RefreshMutualRecursionFlags(requestToken);
         }
 
         if (ftsBulkLoad != null)

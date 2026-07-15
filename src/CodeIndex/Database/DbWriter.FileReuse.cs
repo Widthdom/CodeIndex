@@ -448,13 +448,7 @@ public partial class DbWriter
             cmd.Parameters["@max_references"].Value = maxReferencesPerFile;
             if (hasIssuesTable)
                 cmd.Parameters["@generated_issue_kind"].Value = FileIndexer.GeneratedCodeExtractionSkippedIssueKind;
-            using var cancellationRegistration = cancellationToken.UnsafeRegister(
-                static state =>
-                {
-                    var connection = (SqliteConnection)state!;
-                    SQLitePCL.raw.sqlite3_interrupt(connection.Handle);
-                },
-                cmd.Connection);
+            using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
@@ -475,8 +469,9 @@ public partial class DbWriter
                     reader.GetString(4),
                     reader.GetInt64(5) != 0));
             }
+            cancellationToken.ThrowIfCancellationRequested();
         }
-        catch (SqliteException ex) when (cancellationToken.IsCancellationRequested)
+        catch (SqliteException ex) when (IsSqliteInterruptCancellation(ex, cancellationToken))
         {
             throw new OperationCanceledException("Reusable file stat snapshot was interrupted.", ex, cancellationToken);
         }

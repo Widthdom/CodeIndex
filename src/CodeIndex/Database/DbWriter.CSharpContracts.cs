@@ -1,4 +1,5 @@
 using CodeIndex.Models;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Database;
 
@@ -76,8 +77,12 @@ public partial class DbWriter
         return symbols;
     }
 
-    public bool HasCSharpStaticInterfaceContractSymbols()
+    public bool HasCSharpStaticInterfaceContractSymbols(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        CSharpContractPreflightForTesting?.Invoke();
+        cancellationToken.ThrowIfCancellationRequested();
+
         // The MCP purge preflight needs only a presence bit, so let SQLite stop at the first row.
         // MCP purge preflightは存在判定だけでよいため、SQLite側で最初の1行で打ち切る。
         const string sql = @"
@@ -90,8 +95,15 @@ public partial class DbWriter
         var cmd = RentCommand(sql, static _ => { });
         try
         {
+            using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             var raw = cmd.ExecuteScalar();
+            cancellationToken.ThrowIfCancellationRequested();
             return raw is long l ? l != 0 : raw is int i && i != 0;
+        }
+        catch (SqliteException ex) when (IsSqliteInterruptCancellation(ex, cancellationToken))
+        {
+            throw new OperationCanceledException("C# static-interface contract preflight was interrupted.", ex, cancellationToken);
         }
         finally
         {

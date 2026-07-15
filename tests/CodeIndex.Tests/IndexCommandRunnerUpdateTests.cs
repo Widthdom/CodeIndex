@@ -79,6 +79,56 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_CancelledDuringMutualRecursionRefresh_LeavesReadinessDegraded()
+    {
+        var projectRoot = CreateTempProject();
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
+        using var cancellation = new CancellationTokenSource();
+        var hookInvoked = false;
+        try
+        {
+            var firstPath = Path.Combine(projectRoot, "MutualRecursionA.cs");
+            var secondPath = Path.Combine(projectRoot, "MutualRecursionB.cs");
+            File.WriteAllText(
+                firstPath,
+                "public static class MutualRecursionA { public static void CrossCycleA() { CrossCycleB(); } }\n");
+            File.WriteAllText(
+                secondPath,
+                "public static class MutualRecursionB { public static void CrossCycleB() { CrossCycleA(); } }\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.AppendAllText(firstPath, "// changed A\n");
+            File.AppendAllText(secondPath, "// changed B\n");
+            File.SetLastWriteTimeUtc(firstPath, DateTime.UtcNow.AddSeconds(2));
+            File.SetLastWriteTimeUtc(secondPath, DateTime.UtcNow.AddSeconds(2));
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                hookInvoked = true;
+                cancellation.Cancel();
+                previousRefreshHook?.Invoke();
+            };
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRoot, "--files", "MutualRecursionA.cs", "MutualRecursionB.cs", "--json"],
+                cancellation);
+
+            Assert.True(hookInvoked);
+            Assert.Equal(CommandExitCodes.Interrupted, exitCode);
+            Assert.Equal(CommandErrorCodes.Interrupted, json.GetProperty("error_code").GetString());
+            using var db = new DbContext(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Equal(0, db.GetUserVersion());
+        }
+        finally
+        {
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_RejectsNewSymbolKindFilterPolicy()
     {
         var projectRoot = CreateTempProject();

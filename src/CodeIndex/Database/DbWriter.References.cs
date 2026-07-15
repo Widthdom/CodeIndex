@@ -144,7 +144,7 @@ public partial class DbWriter
         if (refreshMutualRecursionFlags)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            RefreshMutualRecursionFlags();
+            RefreshMutualRecursionFlags(cancellationToken);
         }
     }
 
@@ -292,13 +292,22 @@ public partial class DbWriter
            && left.Line == right.Line
            && string.Equals(left.Context, right.Context, StringComparison.Ordinal);
 
-    internal void RefreshMutualRecursionFlags()
+    internal void RefreshMutualRecursionFlags(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         MutualRecursionRefreshForTesting?.Invoke();
+        cancellationToken.ThrowIfCancellationRequested();
         var cmd = RentCommand(RefreshMutualRecursionFlagsSql, static _ => { });
         try
         {
+            using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             cmd.ExecuteNonQuery();
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch (SqliteException ex) when (IsSqliteInterruptCancellation(ex, cancellationToken))
+        {
+            throw new OperationCanceledException("Mutual recursion refresh was interrupted.", ex, cancellationToken);
         }
         finally
         {

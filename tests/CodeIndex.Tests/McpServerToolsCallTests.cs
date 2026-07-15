@@ -6241,6 +6241,67 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public async Task ToolsCall_Index_CancelledDuringCSharpContractPreflight_DoesNotPurgeStaleFiles()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"cdidx_mcp_contract_preflight_cancel_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_contract_preflight_cancel");
+        var previousPreflightHook = DbWriter.CSharpContractPreflightForTesting;
+        using var cancellation = new CancellationTokenSource();
+        var hookInvoked = false;
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "keep.cs"), "public class Keep { }\n");
+            var stalePath = Path.Combine(fixtureDir, "stale.cs");
+            File.WriteAllText(stalePath, "public class Stale { }\n");
+
+            using (var server = new McpServer(dbPath, ConsoleUi.LoadVersion()))
+            {
+                var firstResponse = CallIndex(server, fixtureDir);
+                Assert.False(firstResponse["result"]?["isError"]?.GetValue<bool>() ?? false, firstResponse.ToJsonString());
+                File.Delete(stalePath);
+
+                DbWriter.CSharpContractPreflightForTesting = () =>
+                {
+                    hookInvoked = true;
+                    cancellation.Cancel();
+                    previousPreflightHook?.Invoke();
+                };
+                var request = new JsonObject
+                {
+                    ["jsonrpc"] = "2.0",
+                    ["id"] = 1,
+                    ["method"] = "tools/call",
+                    ["params"] = new JsonObject
+                    {
+                        ["name"] = "index",
+                        ["arguments"] = new JsonObject { ["path"] = fixtureDir },
+                    },
+                };
+                var transport = new QueuedFrameTransport(request.ToJsonString());
+
+                await server.RunAsync(transport, cancellation.Token).WaitAsync(TimeSpan.FromSeconds(5));
+            }
+
+            Assert.True(hookInvoked);
+            using var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM files WHERE path = 'stale.cs'";
+            Assert.Equal(1L, (long)command.ExecuteScalar()!);
+        }
+        finally
+        {
+            DbWriter.CSharpContractPreflightForTesting = previousPreflightHook;
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_ReprocessesAfterPartialSymbolKindFilterChange_Issue3543()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_symbol_filter_partial_{Guid.NewGuid():N}");
