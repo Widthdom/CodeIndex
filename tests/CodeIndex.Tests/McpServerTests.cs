@@ -3359,10 +3359,7 @@ public sealed class Caller
         // 拒否された各 notification が応答も state 変更も残さないことをまとめて検証する。
         using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
             new TokenMcpAuthenticator("s3cret"));
-        var rootsStaleField = typeof(McpServer).GetField(
-            "_clientRootsStale",
-            BindingFlags.Instance | BindingFlags.NonPublic)!;
-        rootsStaleField.SetValue(server, false);
+        server.ClientRootsStaleForTests = false;
         var notification = new JsonObject
         {
             ["jsonrpc"] = "2.0",
@@ -3395,7 +3392,7 @@ public sealed class Caller
         Assert.Null(response);
         Assert.NotNull(ping?["result"]);
         Assert.True(ping!["result"]!["transport_ready"]!.GetValue<bool>());
-        Assert.False((bool)rootsStaleField.GetValue(server)!);
+        Assert.False(server.ClientRootsStaleForTests);
     }
 
     [Fact]

@@ -1328,30 +1328,55 @@ public partial class McpServer
 
     private async Task RefreshClientRootsIfNeededAsync()
     {
-        if (!_clientRootsStale || !HasClientCapability("roots"))
+        var expectedState = CurrentInitializeState;
+        if (!expectedState.ClientRootsStale || !HasClientCapability(expectedState, "roots"))
             return;
 
         var result = await SendClientRequestAsync("roots/list", null, _currentRequestToken.Value).ConfigureAwait(false);
         if (result?["roots"] is not JsonArray roots)
             return;
 
-        ResetClientRoots();
+        var rootUris = new List<string>();
         foreach (var root in roots)
         {
             var uri = TryReadStringValue(root?["uri"]) ?? TryReadStringValue(root);
             if (!string.IsNullOrWhiteSpace(uri))
-                CaptureClientRoot(uri);
+                rootUris.Add(uri);
         }
-        _clientRootsStale = false;
+
+        var refreshedRoots = BuildClientRootSnapshot(rootUris);
+        lock (_initializeStateGate)
+        {
+            var current = CurrentInitializeState;
+            if (!ReferenceEquals(current, expectedState))
+                return;
+
+            Volatile.Write(
+                ref _initializeState,
+                current with
+                {
+                    ClientRoots = refreshedRoots.Roots,
+                    ClientRootDiagnostics = refreshedRoots.Diagnostics,
+                    ClientRootsTruncated = refreshedRoots.Truncated,
+                    ClientRootsStale = false,
+                });
+        }
     }
 
     private bool IsPathWithinClientRoots(string path)
     {
-        if (!HasClientCapability("roots"))
+        var state = CurrentInitializeState;
+        if (!HasClientCapability(state, "roots"))
             return true;
 
-        var rootPaths = _clientRoots
-            .Select(root => TryReadStringValue(root))
+        // A completed roots/list_changed notification invalidates the previous authorization
+        // boundary immediately. Fail closed until a refresh publishes a non-stale snapshot.
+        // roots/list_changed notification の完了時点で以前の認可境界を直ちに無効化し、
+        // refresh が non-stale snapshot を公開するまでは fail closed にする。
+        if (state.ClientRootsStale)
+            return false;
+
+        var rootPaths = state.ClientRoots
             .Select(McpPathBoundary.TryResolveRootPath)
             .Where(root => !string.IsNullOrWhiteSpace(root))
             .Cast<string>()

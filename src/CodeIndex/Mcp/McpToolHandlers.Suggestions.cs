@@ -106,7 +106,8 @@ public partial class McpServer
                     "Tool invocation context appears to contain source code. Please describe the invocation without including code.");
         }
 
-        var samplingDecision = ResolveSuggestionSamplingDecision();
+        var initializeState = CurrentInitializeState;
+        var samplingDecision = ResolveSuggestionSamplingDecision(initializeState);
         var samplingAttempt = await TrySampleSuggestionMetadataAsync(
             category,
             language,
@@ -148,11 +149,11 @@ public partial class McpServer
             Description = description,
             Context = context,
             Hash = hash,
-            CreatedByAgent = ResolveSuggestionAgent(),
+            CreatedByAgent = ResolveSuggestionAgent(initializeState),
             SessionId = _sessionId,
             ClientVersion = _version,
-            McpClientName = _clientName,
-            McpClientVersion = _clientVersion,
+            McpClientName = initializeState.ClientName,
+            McpClientVersion = initializeState.ClientVersion,
             ToolInvocationContext = toolInvocationContext,
             SampledTitle = sampling?.Title,
             SampledTags = sampling?.Tags,
@@ -608,17 +609,17 @@ public partial class McpServer
         return value[..low];
     }
 
-    private bool HasClientCapability(string name)
+    private static bool HasClientCapability(InitializeSessionState state, string name)
         => name switch
         {
-            "roots" => _clientSupportsRoots,
-            "sampling" => _clientSupportsSampling,
-            _ => _clientCapabilities is JsonObject obj
+            "roots" => state.ClientSupportsRoots,
+            "sampling" => state.ClientSupportsSampling,
+            _ => state.ClientCapabilities is JsonObject obj
                 && obj.TryGetPropertyValue(name, out var node)
                 && node is not null,
         };
 
-    private SuggestionSamplingDecision ResolveSuggestionSamplingDecision()
+    private static SuggestionSamplingDecision ResolveSuggestionSamplingDecision(InitializeSessionState state)
     {
         var sampling = McpEnvironment.ReadOptInSwitch(SamplingEnabledEnvironmentVariable);
         if (sampling.State == McpEnvironmentSwitchState.Unset)
@@ -631,7 +632,7 @@ public partial class McpServer
 
         if (sampling.IsEnabled)
         {
-            return HasClientCapability("sampling")
+            return HasClientCapability(state, "sampling")
                 ? new SuggestionSamplingDecision(true, "enabled", null)
                 : new SuggestionSamplingDecision(
                     false,
@@ -746,9 +747,9 @@ public partial class McpServer
 
     internal static Action<string>? DeleteCdidxDirectoryWritableProbeForTesting { get; set; }
 
-    private string ResolveSuggestionAgent()
+    private static string ResolveSuggestionAgent(InitializeSessionState state)
     {
-        return string.IsNullOrWhiteSpace(_caller) ? "unknown" : _caller;
+        return string.IsNullOrWhiteSpace(state.Caller) ? "unknown" : state.Caller;
     }
 
 }
