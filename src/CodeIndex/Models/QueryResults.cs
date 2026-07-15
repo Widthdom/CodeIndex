@@ -383,8 +383,22 @@ public class FileExcerptResult
 /// A byte-bounded page reconstructed directly from indexed chunk blobs.
 /// インデックス済みチャンクBLOBから直接再構成したbyte上限付きページ。
 /// </summary>
+public enum BoundedFileReadStatus
+{
+    Success,
+    Empty,
+    FileNotFound,
+    InvalidContinuation,
+    IncompleteCoverage,
+    ContentUnavailable,
+    InvalidTopology,
+}
+
 public sealed class BoundedFileReadResult
 {
+    public BoundedFileReadStatus Status { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? FailureReason { get; set; }
     public string Path { get; set; } = string.Empty;
     public string? Lang { get; set; }
     public int TotalLines { get; set; }

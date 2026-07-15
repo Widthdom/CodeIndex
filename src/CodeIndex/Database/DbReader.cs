@@ -106,6 +106,21 @@ public partial class DbReader : IDisposable
             GeneratedColumnAvailableScope.Value = previousGeneratedColumnAvailable;
         }
     }
+
+    /// <summary>
+    /// Run a multi-statement read against one deferred SQLite snapshot.
+    /// 複数 statement の読み取りを単一の deferred SQLite snapshot 上で実行する。
+    /// </summary>
+    internal T RunInReadSnapshot<T>(Func<T> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        _cancellation.ThrowIfCancellationRequested();
+
+        using var transaction = _conn.BeginTransaction(deferred: true);
+        var result = action();
+        transaction.Commit();
+        return result;
+    }
     // #86: True when every symbols / symbol_references row has name_folded populated and
     // the Unicode fold path is safe to use for `--exact`. Legacy / partial-backfill DBs
     // read this as false and fall back to the ASCII-only `COLLATE NOCASE` path.

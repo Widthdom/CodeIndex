@@ -40,32 +40,36 @@ public class HttpMcpTransportTests : IDisposable
         _db.InitializeSchema();
     }
 
-    private void InsertIndexedFile(string path, string content, bool splitIntoProductionChunks = false)
+    private long InsertIndexedFile(string path, string content, bool splitIntoProductionChunks = false)
     {
         var normalized = content.Replace("\r\n", "\n", StringComparison.Ordinal);
+        var lineCount = normalized.Length == 0 ? 0 : normalized.Split('\n').Length;
         var writer = new DbWriter(_db.Connection);
         var fileId = writer.UpsertFile(new FileRecord
         {
             Path = path,
             Lang = "text",
             Size = Encoding.UTF8.GetByteCount(normalized),
-            Lines = normalized.Split('\n').Length,
+            Lines = lineCount,
             Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
             Checksum = Guid.NewGuid().ToString("N"),
         });
-        writer.InsertChunks(splitIntoProductionChunks
-            ? ChunkSplitter.Split(fileId, normalized)
-            :
+        writer.InsertChunks(normalized.Length == 0
+            ? []
+            : splitIntoProductionChunks
+                ? ChunkSplitter.Split(fileId, normalized)
+                :
             [
                 new ChunkRecord
                 {
                     FileId = fileId,
                     ChunkIndex = 0,
                     StartLine = 1,
-                    EndLine = normalized.Split('\n').Length,
+                    EndLine = lineCount,
                     Content = normalized,
                 },
             ]);
+        return fileId;
     }
 
     [Fact]
@@ -99,6 +103,109 @@ public class HttpMcpTransportTests : IDisposable
             Assert.True(metadata.GetProperty("truncated").GetBoolean());
             Assert.False(string.IsNullOrWhiteSpace(metadata.GetProperty("nextCursor").GetString()));
         }
+    }
+
+    [Fact]
+    public async Task HttpTransport_ResourcesReadAdaptsToEscapedResponseLimitAndReassembles_Issue4544()
+    {
+        const int responseLimit = 131_072;
+        const int requestedMaxBytes = 30_000;
+        var expected = new string('<', 60_000);
+        InsertIndexedFile("src/http-escaped.txt", expected);
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, maxResponseBodyBytes: responseLimit);
+        using (var initialize = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}"""))
+            Assert.Equal(HttpStatusCode.OK, initialize.StatusCode);
+
+        var reassembled = new StringBuilder();
+        string? cursor = null;
+        var completed = false;
+        for (var page = 0; page < 10; page++)
+        {
+            var readParams = new Dictionary<string, object?>
+            {
+                ["uri"] = "cdidx://file/src/http-escaped.txt",
+                ["maxBytes"] = requestedMaxBytes,
+            };
+            if (cursor != null)
+                readParams["cursor"] = cursor;
+            var request = JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = page + 1,
+                ["method"] = "resources/read",
+                ["params"] = readParams,
+            });
+
+            using var response = await harness.PostJsonAsync(request);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var body = await response.Content.ReadAsByteArrayAsync();
+            Assert.InRange(body.Length, 1, responseLimit);
+            using var document = JsonDocument.Parse(body);
+            var result = document.RootElement.GetProperty("result");
+            var text = result.GetProperty("contents")[0].GetProperty("text").GetString()!;
+            var metadata = result.GetProperty("_meta");
+            reassembled.Append(text);
+            Assert.Equal(Encoding.UTF8.GetByteCount(text), metadata.GetProperty("returnedBytes").GetInt32());
+            Assert.Equal(requestedMaxBytes, metadata.GetProperty("maxBytes").GetInt32());
+            Assert.InRange(
+                metadata.GetProperty("effectiveMaxBytes").GetInt32(),
+                McpServer.MinResourceReadMaxBytes,
+                requestedMaxBytes - 1);
+            if (!metadata.GetProperty("truncated").GetBoolean())
+            {
+                completed = true;
+                break;
+            }
+
+            Assert.Equal("maxResponseBytes", metadata.GetProperty("truncationReason").GetString());
+            cursor = metadata.GetProperty("nextCursor").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(cursor));
+        }
+
+        Assert.True(completed);
+        Assert.Equal(expected, reassembled.ToString());
+    }
+
+    [Fact]
+    public async Task HttpTransport_ResourcesReadRejectsStaleCursor_Issue4544()
+    {
+        const string path = "src/http-stale.txt";
+        InsertIndexedFile(path, "old-value");
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+        using (var initialize = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}"""))
+            Assert.Equal(HttpStatusCode.OK, initialize.StatusCode);
+        using var firstResponse = await harness.PostJsonAsync(
+            """{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"cdidx://file/src/http-stale.txt","maxBytes":4}}""");
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+        using var firstDocument = JsonDocument.Parse(await firstResponse.Content.ReadAsByteArrayAsync());
+        var cursor = firstDocument.RootElement
+            .GetProperty("result")
+            .GetProperty("_meta")
+            .GetProperty("nextCursor")
+            .GetString()!;
+
+        InsertIndexedFile(path, "new-value");
+        var staleRequest = JsonSerializer.Serialize(new
+        {
+            jsonrpc = "2.0",
+            id = 2,
+            method = "resources/read",
+            @params = new
+            {
+                uri = "cdidx://file/src/http-stale.txt",
+                cursor,
+            },
+        });
+        using var staleResponse = await harness.PostJsonAsync(staleRequest);
+
+        Assert.Equal(HttpStatusCode.OK, staleResponse.StatusCode);
+        using var staleDocument = JsonDocument.Parse(await staleResponse.Content.ReadAsByteArrayAsync());
+        var error = staleDocument.RootElement.GetProperty("error");
+        Assert.Equal(-32602, error.GetProperty("code").GetInt32());
+        var data = error.GetProperty("data");
+        Assert.Equal("invalid_argument", data.GetProperty("category").GetString());
+        Assert.Equal("cursor", data.GetProperty("argument").GetString());
+        Assert.True(data.GetProperty("cursorStale").GetBoolean());
     }
 
     [Fact]

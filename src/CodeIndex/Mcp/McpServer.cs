@@ -74,6 +74,7 @@ public partial class McpServer : IDisposable
     // 直後にリセットする。`WithDbReader` が `DbReader` にライブな cancellation token
     // を渡せるようにするため (#1567)。
     private readonly AsyncLocal<CancellationToken> _currentRequestToken = new();
+    private readonly AsyncLocal<int?> _currentTransportResponseByteLimit = new();
     private readonly AsyncLocal<bool> _isolateDbForCurrentRequest = new();
     private readonly AsyncLocal<Func<string, CancellationToken, Task>?> _currentOutOfBandFrameWriter = new();
     private readonly AsyncLocal<bool> _canAwaitClientResponses = new();
@@ -362,6 +363,7 @@ public partial class McpServer : IDisposable
 
     internal Action<JsonNode?>? RequestRegisteredForTests { get; set; }
     internal Func<CancellationToken, Task>? RequestDelayForTests { get; set; }
+    internal Action? ResourceReadMetadataLoadedForTests { get; set; }
     internal bool ShutdownRequestedForTests => _shutdownCts.IsCancellationRequested;
 
     /// <summary>
@@ -485,6 +487,9 @@ public partial class McpServer : IDisposable
     {
         ArgumentNullException.ThrowIfNull(transport);
         _enforceInitializationLifecycle = true;
+        _currentTransportResponseByteLimit.Value = transport is IMcpResponseSizeLimitProvider responseLimitProvider
+            ? responseLimitProvider.MaxResponseFrameBytes
+            : null;
 
         // Link the caller-supplied token (Ctrl+C / HTTP listener stop) with the server-internal
         // shutdown signal so `notifications/shutdown` also wakes any pending `ReadFrameAsync`.
@@ -594,6 +599,7 @@ public partial class McpServer : IDisposable
         }
         finally
         {
+            _currentTransportResponseByteLimit.Value = null;
             if (transport is HttpMcpTransport httpTransportToClear)
             {
                 httpTransportToClear.OutOfBandFrameHandler = null;
@@ -2455,7 +2461,7 @@ public partial class McpServer : IDisposable
             cursor = parsedCursor;
         }
 
-        return WithDbReader(id, args: null, reader =>
+        return WithDbReader(id, args: null, reader => reader.RunInReadSnapshot(() =>
         {
             var files = reader.ListFiles(query: path, limit: 2);
             var file = files.FirstOrDefault(f => string.Equals(f.Path, path, StringComparison.Ordinal));
@@ -2464,7 +2470,6 @@ public partial class McpServer : IDisposable
                     suggestion: "Call resources/list again and retry with one of the returned resource URIs.",
                     retrySafe: true);
 
-            var totalLines = Math.Max(1, file.Lines);
             var fingerprint = BuildResourceReadFingerprint(file.Path, file.Checksum, file.Size, file.Lines, file.Modified);
             if (cursor is { } suppliedCursor && !string.Equals(suppliedCursor.Fingerprint, fingerprint, StringComparison.Ordinal))
                 return CreateResourceReadArgumentError(id, "cursor",
@@ -2475,9 +2480,20 @@ public partial class McpServer : IDisposable
                         ["cursorStale"] = true,
                     });
 
-            var startLine = cursor?.Line ?? requestedStartLine ?? 1;
-            var endLine = cursor?.EndLine ?? requestedEndLine ?? totalLines;
-            if (startLine > totalLines)
+            ResourceReadMetadataLoadedForTests?.Invoke();
+
+            var isEmpty = file.Size == 0;
+            var totalLines = Math.Max(0, file.Lines);
+            if (!isEmpty && totalLines == 0)
+                return CreateResourceReadStorageError(id, BoundedFileReadStatus.ContentUnavailable, "resource_content_unavailable");
+            if (isEmpty && cursor.HasValue)
+                return CreateResourceReadArgumentError(id, "cursor",
+                    "resources/read params.cursor does not identify a readable position in this empty resource.",
+                    "Omit cursor and restart the resource read without line boundaries.");
+
+            var startLine = isEmpty ? 0 : cursor?.Line ?? requestedStartLine ?? 1;
+            var endLine = isEmpty ? 0 : cursor?.EndLine ?? requestedEndLine ?? totalLines;
+            if (!isEmpty && startLine > totalLines)
                 return CreateResourceReadArgumentError(id, "startLine",
                     $"resources/read params.startLine exceeds the resource line count ({file.Lines}).",
                     "Use a startLine from resources/read result._meta or restart at line 1.",
@@ -2485,46 +2501,81 @@ public partial class McpServer : IDisposable
                     {
                         ["totalLines"] = file.Lines,
                     });
-            endLine = Math.Min(endLine, totalLines);
-            if (endLine < startLine)
+            if (!isEmpty)
+                endLine = Math.Min(endLine, totalLines);
+            if (!isEmpty && endLine < startLine)
                 return CreateResourceReadArgumentError(id, "endLine",
                     "resources/read effective endLine is before startLine.",
                     "Restart the range with an endLine greater than or equal to startLine.");
 
+            var resourceUri = BuildResourceUri(file.Path);
+            var mimeType = GetResourceMimeType(file.Lang);
+            var effectiveMaxBytes = GetEffectiveResourceReadMaxBytes(
+                id,
+                resourceUri,
+                mimeType,
+                maxBytes);
+            if (effectiveMaxBytes < MinResourceReadMaxBytes)
+                return CreateErrorResponse(hasId: true, id: id, code: -32603,
+                    message: "The configured MCP response limit is too small for a resources/read page.",
+                    category: McpErrorEnvelope.CategoryInternalError,
+                    suggestion: "Increase CDIDX_MCP_RESPONSE_MAX_BYTES or CDIDX_MCP_HTTP_MAX_RESPONSE_BYTES, then retry.",
+                    retrySafe: false,
+                    extraData: new JsonObject
+                    {
+                        ["reason"] = "resource_response_budget_too_small",
+                        ["minimumContentBytes"] = MinResourceReadMaxBytes,
+                        ["responseLimitBytes"] = GetEffectiveResourceReadResponseLimit(),
+                    });
+
             var page = reader.GetBoundedFileContent(
                 file.Path,
-                startLine,
-                endLine,
-                maxBytes,
+                isEmpty ? 1 : startLine,
+                isEmpty ? 1 : endLine,
+                effectiveMaxBytes,
                 MaxResourceReadLinesPerPage,
                 cursor?.Line,
                 cursor?.ByteOffset ?? 0);
-            if (page is null && cursor.HasValue)
-                return CreateResourceReadArgumentError(id, "cursor",
-                    "resources/read params.cursor does not identify a readable position in this resource.",
-                    "Omit cursor and restart the range to obtain a fresh continuation token.");
+            switch (page.Status)
+            {
+                case BoundedFileReadStatus.FileNotFound:
+                    return CreateResourceUriError(id, uri, messagePrefix: "Resource not found",
+                        suggestion: "Call resources/list again and retry with one of the returned resource URIs.",
+                        retrySafe: true);
+                case BoundedFileReadStatus.InvalidContinuation:
+                    return CreateResourceReadArgumentError(id, "cursor",
+                        "resources/read params.cursor does not identify a readable UTF-8 position in this resource.",
+                        "Omit cursor and restart the range to obtain a fresh continuation token.");
+                case BoundedFileReadStatus.IncompleteCoverage:
+                case BoundedFileReadStatus.ContentUnavailable:
+                case BoundedFileReadStatus.InvalidTopology:
+                    return CreateResourceReadStorageError(id, page.Status, page.FailureReason);
+            }
 
-            var text = page?.Content ?? string.Empty;
-            var returnedBytes = page?.Utf8Bytes ?? 0;
-            var truncated = page?.Truncated == true && page.NextLine.HasValue;
+            var text = page.Content;
+            var returnedBytes = page.Utf8Bytes;
+            var truncated = page.Truncated && page.NextLine.HasValue;
             var metadata = new JsonObject
             {
                 ["startLine"] = startLine,
                 ["startLineByteOffset"] = cursor?.ByteOffset ?? 0,
                 ["endLine"] = endLine,
-                ["totalLines"] = file.Lines,
+                ["totalLines"] = totalLines,
                 ["maxBytes"] = maxBytes,
                 ["maxLines"] = MaxResourceReadLinesPerPage,
-                ["returnedStartLine"] = page?.StartLine ?? startLine,
-                ["returnedEndLine"] = page?.EndLine ?? startLine,
+                ["returnedStartLine"] = isEmpty ? 0 : page.StartLine,
+                ["returnedEndLine"] = isEmpty ? 0 : page.EndLine,
                 ["returnedBytes"] = returnedBytes,
                 ["truncated"] = truncated,
             };
-            if (truncated && page is not null)
+            if (effectiveMaxBytes != maxBytes)
+                metadata["effectiveMaxBytes"] = effectiveMaxBytes;
+            if (truncated)
             {
                 metadata["truncationReason"] = page.TruncationReason switch
                 {
                     "max_lines" => "maxLines",
+                    "max_bytes" when effectiveMaxBytes < maxBytes => "maxResponseBytes",
                     _ => "maxBytes",
                 };
                 metadata["nextLine"] = page.NextLine!.Value;
@@ -2540,8 +2591,8 @@ public partial class McpServer : IDisposable
             {
                 new JsonObject
                 {
-                    ["uri"] = BuildResourceUri(file.Path),
-                    ["mimeType"] = GetResourceMimeType(file.Lang),
+                    ["uri"] = resourceUri,
+                    ["mimeType"] = mimeType,
                     ["text"] = text,
                 }
             };
@@ -2550,7 +2601,112 @@ public partial class McpServer : IDisposable
                 ["contents"] = contents,
                 ["_meta"] = metadata,
             });
+        }));
+    }
+
+    private JsonObject CreateResourceReadStorageError(
+        JsonNode? id,
+        BoundedFileReadStatus status,
+        string? reason)
+    {
+        var normalizedReason = reason ?? status switch
+        {
+            BoundedFileReadStatus.IncompleteCoverage => "resource_chunk_coverage_incomplete",
+            BoundedFileReadStatus.ContentUnavailable => "resource_content_unavailable",
+            _ => "resource_chunk_topology_invalid",
+        };
+        var extraData = new JsonObject
+        {
+            ["reason"] = normalizedReason,
+        };
+        if (status == BoundedFileReadStatus.InvalidTopology)
+        {
+            extraData["maxChunks"] = DbReader.MaxBoundedFileReadChunks;
+            extraData["maxScannedBytes"] = DbReader.MaxBoundedFileReadScannedUtf8Bytes;
+        }
+
+        return status switch
+        {
+            BoundedFileReadStatus.IncompleteCoverage => CreateErrorResponse(hasId: true, id: id,
+                code: McpErrorEnvelope.CodeIndexStale,
+                message: "Indexed resource chunks do not cover the requested range.",
+                category: McpErrorEnvelope.CategoryIndexStale,
+                suggestion: "Refresh or rebuild the index, then call resources/list and retry the read.",
+                retrySafe: true,
+                extraData: extraData),
+            BoundedFileReadStatus.ContentUnavailable => CreateErrorResponse(hasId: true, id: id,
+                code: McpErrorEnvelope.CodeIndexMissing,
+                message: "Indexed content is unavailable for this non-empty resource.",
+                category: McpErrorEnvelope.CategoryIndexMissing,
+                suggestion: "Inspect file issues, resolve skipped-content diagnostics, and rebuild the index before retrying.",
+                retrySafe: true,
+                extraData: extraData),
+            _ => CreateErrorResponse(hasId: true, id: id,
+                code: McpErrorEnvelope.CodeIndexCorrupted,
+                message: "Indexed resource chunk topology exceeds safe read limits.",
+                category: McpErrorEnvelope.CategoryIndexCorrupted,
+                suggestion: "Delete the index database, rebuild it, and retry with a resource URI from resources/list.",
+                retrySafe: false,
+                extraData: extraData),
+        };
+    }
+
+    private int GetEffectiveResourceReadMaxBytes(
+        JsonNode? id,
+        string resourceUri,
+        string mimeType,
+        int requestedMaxBytes)
+    {
+        var worstCaseMetadata = new JsonObject
+        {
+            ["startLine"] = int.MaxValue,
+            ["startLineByteOffset"] = int.MaxValue,
+            ["endLine"] = int.MaxValue,
+            ["totalLines"] = int.MaxValue,
+            ["maxBytes"] = requestedMaxBytes,
+            ["effectiveMaxBytes"] = int.MaxValue,
+            ["maxLines"] = MaxResourceReadLinesPerPage,
+            ["returnedStartLine"] = int.MaxValue,
+            ["returnedEndLine"] = int.MaxValue,
+            ["returnedBytes"] = int.MaxValue,
+            ["truncated"] = true,
+            ["truncationReason"] = "maxResponseBytes",
+            ["nextLine"] = int.MaxValue,
+            ["nextLineByteOffset"] = int.MaxValue,
+            ["nextCursor"] = new string('x', MaxResourceReadCursorCharacters),
+        };
+        var worstCaseResponse = CreateSuccessResponse(true, id, new JsonObject
+        {
+            ["contents"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["uri"] = resourceUri,
+                    ["mimeType"] = mimeType,
+                    ["text"] = string.Empty,
+                },
+            },
+            ["_meta"] = worstCaseMetadata,
         });
+        var envelopeBytes = Encoding.UTF8.GetByteCount(worstCaseResponse.ToJsonString(_jsonOptions));
+        var availableEncodedTextBytes = GetEffectiveResourceReadResponseLimit() - envelopeBytes;
+        if (availableEncodedTextBytes <= 0)
+            return 0;
+
+        // System.Text.Json's default encoder expands any valid source UTF-8 byte by at most
+        // six bytes (`\uXXXX` for an ASCII control or HTML-sensitive character).
+        // System.Text.Json既定encoderで有効なsource UTF-8 1 byteが展開される最大は6 byte
+        // （ASCII control/HTML-sensitive文字の`\uXXXX`）。
+        const int worstCaseJsonExpansion = 6;
+        return Math.Min(requestedMaxBytes, availableEncodedTextBytes / worstCaseJsonExpansion);
+    }
+
+    private int GetEffectiveResourceReadResponseLimit()
+    {
+        var serverLimit = GetMaxResponseBytes();
+        return _currentTransportResponseByteLimit.Value is > 0 and var transportLimit
+            ? Math.Min(serverLimit, transportLimit)
+            : serverLimit;
     }
 
     private readonly record struct ResourceReadCursor(int Line, int ByteOffset, int EndLine, string Fingerprint);

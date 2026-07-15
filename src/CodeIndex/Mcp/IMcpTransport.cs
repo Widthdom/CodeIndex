@@ -43,3 +43,14 @@ internal interface IOutOfBandMcpTransport
 {
     Task WriteOutOfBandFrameAsync(string frame, CancellationToken cancellationToken);
 }
+
+/// <summary>
+/// Optional transport-level response-frame ceiling. The MCP server uses this when an
+/// individual method can page its own payload before the transport has to reject it.
+/// 任意のtransport-level response frame上限。method側でpagination可能な場合に、
+/// transportが拒否する前にpayloadを縮小するためMCP serverが参照する。
+/// </summary>
+internal interface IMcpResponseSizeLimitProvider
+{
+    int MaxResponseFrameBytes { get; }
+}

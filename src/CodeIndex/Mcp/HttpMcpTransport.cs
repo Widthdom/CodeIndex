@@ -27,7 +27,7 @@ namespace CodeIndex.Mcp;
 /// サーバー起点の JSON-RPC 通知は `/events` で bounded な multi-client SSE fan-out channel
 /// として公開する。
 /// </summary>
-internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
+internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport, IMcpResponseSizeLimitProvider
 {
     internal const int DefaultMaxRequestBodyBytes = 1_000_000;
     internal const int DefaultMaxResponseBodyBytes = 1_000_000;
@@ -282,6 +282,8 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
     internal int MaxRequestBodyBytes => _maxRequestBodyBytes;
 
     internal int MaxResponseBodyBytes => _maxResponseBodyBytes;
+
+    int IMcpResponseSizeLimitProvider.MaxResponseFrameBytes => _maxResponseBodyBytes;
 
     internal int MaxQueuedRequests => _maxQueuedRequests;
 

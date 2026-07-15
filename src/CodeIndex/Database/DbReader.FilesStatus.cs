@@ -12,14 +12,23 @@ public partial class DbReader
 {
     internal const int MaxBoundedFileReadUtf8Bytes = 4 * 1024 * 1024;
     internal const int MaxBoundedFileReadLines = 10_000;
+    internal const int MaxBoundedFileReadChunks = 256;
+    internal const int MaxBoundedFileReadScannedUtf8Bytes = 32 * 1024 * 1024;
     private const int BoundedFileReadBufferSize = 4 * 1024;
 
     private static readonly AsyncLocal<TimeSpan?> FindRegexMatchTimeoutOverride = new();
+    private static readonly AsyncLocal<int?> BoundedFileReadScanByteLimitOverride = new();
 
     internal static TimeSpan? FindRegexMatchTimeoutForTesting
     {
         get => FindRegexMatchTimeoutOverride.Value;
         set => FindRegexMatchTimeoutOverride.Value = value;
+    }
+
+    internal static int? BoundedFileReadScanByteLimitForTesting
+    {
+        get => BoundedFileReadScanByteLimitOverride.Value;
+        set => BoundedFileReadScanByteLimitOverride.Value = value;
     }
 
     public FindResults FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? focusLine = null, int? focusColumn = null, bool regex = false, int? maxCandidateFiles = null, int? maxLinesScanned = null)
@@ -639,7 +648,7 @@ public partial class DbReader
     /// Continuation offsets are zero-based UTF-8 byte offsets from the start of an absolute, one-based line.
     /// continuation offset は、絶対1始まり行の先頭から数えた0始まりUTF-8 byte offset。
     /// </remarks>
-    public BoundedFileReadResult? GetBoundedFileContent(
+    internal BoundedFileReadResult GetBoundedFileContent(
         string path,
         int startLine,
         int endLine,
@@ -649,7 +658,7 @@ public partial class DbReader
         int continuationByteOffset = 0)
     {
         if (string.IsNullOrWhiteSpace(path))
-            return null;
+            return new BoundedFileReadResult { Status = BoundedFileReadStatus.FileNotFound };
         if (maxUtf8Bytes is <= 0 or > MaxBoundedFileReadUtf8Bytes)
             throw new ArgumentOutOfRangeException(nameof(maxUtf8Bytes), maxUtf8Bytes,
                 $"UTF-8 byte budget must be between 1 and {MaxBoundedFileReadUtf8Bytes}.");
@@ -660,68 +669,120 @@ public partial class DbReader
             throw new ArgumentOutOfRangeException(nameof(continuationByteOffset), continuationByteOffset,
                 "Continuation byte offset must be non-negative.");
         if (!continuationLine.HasValue && continuationByteOffset != 0)
-            return null;
+            return new BoundedFileReadResult { Status = BoundedFileReadStatus.InvalidContinuation, Path = path };
 
         startLine = Math.Max(1, startLine);
         endLine = Math.Max(startLine, endLine);
         var nextLine = continuationLine ?? startLine;
         if (nextLine < startLine || nextLine > endLine)
-            return null;
+            return new BoundedFileReadResult { Status = BoundedFileReadStatus.InvalidContinuation, Path = path };
 
         long fileId;
         string? lang;
         int totalLines;
+        long fileSize;
         using (var fileCmd = _conn.CreateCommand())
         {
-            fileCmd.CommandText = "SELECT id, lang, lines FROM files WHERE path = @path";
+            fileCmd.CommandText = "SELECT id, lang, lines, size FROM files WHERE path = @path";
             SqliteCommandPolicy.AddText(fileCmd, "@path", path);
             using var fileReader = fileCmd.ExecuteTrackedReader();
             if (!fileReader.TrackedRead())
-                return null;
+                return new BoundedFileReadResult { Status = BoundedFileReadStatus.FileNotFound, Path = path };
 
             fileId = fileReader.GetInt64(0);
             lang = GetNullableString(fileReader, 1);
             totalLines = fileReader.GetInt32(2);
+            fileSize = fileReader.GetInt64(3);
         }
+
+        BoundedFileReadResult CreateResult(BoundedFileReadStatus status, string? failureReason = null) => new()
+        {
+            Status = status,
+            FailureReason = failureReason,
+            Path = path,
+            Lang = lang,
+            TotalLines = totalLines,
+            RequestedStartLine = startLine,
+            RequestedEndLine = endLine,
+            StartLine = nextLine,
+            EndLine = nextLine,
+        };
+
+        if (fileSize == 0)
+            return CreateResult(BoundedFileReadStatus.Empty);
+        if (totalLines <= 0)
+            return CreateResult(BoundedFileReadStatus.ContentUnavailable, "resource_content_unavailable");
+        if (!_hasChunksTable)
+            return CreateResult(BoundedFileReadStatus.ContentUnavailable, "resource_content_unavailable");
 
         var effectiveEndLine = Math.Min(endLine, totalLines);
         if (nextLine > effectiveEndLine)
-            return null;
+            return CreateResult(BoundedFileReadStatus.InvalidContinuation);
 
-        // The line cap also bounds chunk metadata. At most the chunks intersecting this
-        // page are retained; content still comes through incremental blob reads.
-        // 行上限でchunk metadataも制限する。このページと交差するchunkだけを保持し、
-        // content本体はincremental blob readで取得する。
+        // Bound chunk metadata independently from the line cap. Production chunks overlap by
+        // only ten lines, but a legacy or malformed DB can contain arbitrarily many rows for
+        // the same range. Fetch one sentinel row beyond the cap so that topology is rejected
+        // before any blob is opened, then sort only that bounded row set in memory so SQLite
+        // does not materialize an unbounded ORDER BY input.
+        // line上限とは独立してchunk metadataを制限する。production chunkの重複は10行だけだが、
+        // legacyまたは不正DBは同一範囲に任意件数を持ち得る。上限+1件を取得し、blobを開く前に
+        // topology異常を拒否する。そのbounded row setだけをmemory上でsortし、SQLiteが無制限な
+        // ORDER BY inputをmaterializeしないようにする。
         var scanEndLine = (int)Math.Min(effectiveEndLine, (long)nextLine + maxLines - 1L);
         var chunks = new List<BoundedFileChunk>();
         using (var chunkCmd = _conn.CreateCommand())
         {
             chunkCmd.CommandText = @"
-                SELECT c.id, c.start_line, c.end_line
+                SELECT c.id, c.start_line, c.end_line, c.chunk_index
                 FROM chunks c
                 WHERE c.file_id = @fileId
                   AND c.content IS NOT NULL
                   AND c.end_line >= @startLine
                   AND c.start_line <= @endLine
-                ORDER BY c.start_line, c.chunk_index";
+                LIMIT @chunkLimit";
             SqliteCommandPolicy.AddInt64(chunkCmd, "@fileId", fileId);
             SqliteCommandPolicy.AddInt32(chunkCmd, "@startLine", nextLine);
             SqliteCommandPolicy.AddInt32(chunkCmd, "@endLine", scanEndLine);
+            SqliteCommandPolicy.AddInt32(chunkCmd, "@chunkLimit", MaxBoundedFileReadChunks + 1);
 
             using var chunkReader = chunkCmd.ExecuteTrackedReader();
             while (chunkReader.TrackedRead())
             {
+                _cancellation.ThrowIfCancellationRequested();
                 chunks.Add(new BoundedFileChunk(
                     chunkReader.GetInt64(0),
                     chunkReader.GetInt32(1),
-                    chunkReader.GetInt32(2)));
+                    chunkReader.GetInt32(2),
+                    chunkReader.GetInt32(3)));
             }
         }
 
+        if (chunks.Count > MaxBoundedFileReadChunks)
+            return CreateResult(BoundedFileReadStatus.InvalidTopology, "chunk_limit_exceeded");
+        chunks.Sort(static (left, right) =>
+        {
+            var byStartLine = left.StartLine.CompareTo(right.StartLine);
+            return byStartLine != 0 ? byStartLine : left.ChunkIndex.CompareTo(right.ChunkIndex);
+        });
         if (chunks.Count == 0)
-            return null;
+        {
+            using var anyChunkCmd = _conn.CreateCommand();
+            anyChunkCmd.CommandText = @"
+                SELECT 1
+                FROM chunks
+                WHERE file_id = @fileId AND content IS NOT NULL
+                LIMIT 1";
+            SqliteCommandPolicy.AddInt64(anyChunkCmd, "@fileId", fileId);
+            var hasAnyStoredContent = anyChunkCmd.ExecuteScalar() != null;
+            return hasAnyStoredContent
+                ? CreateResult(BoundedFileReadStatus.IncompleteCoverage, "resource_chunk_coverage_incomplete")
+                : CreateResult(BoundedFileReadStatus.ContentUnavailable, "resource_content_unavailable");
+        }
 
         var state = new BoundedFileReadState(nextLine, continuationByteOffset);
+        var scanByteLimit = BoundedFileReadScanByteLimitOverride.Value ?? MaxBoundedFileReadScannedUtf8Bytes;
+        if (scanByteLimit <= 0 || scanByteLimit > MaxBoundedFileReadScannedUtf8Bytes)
+            scanByteLimit = MaxBoundedFileReadScannedUtf8Bytes;
         var content = new StringBuilder(Math.Min(maxUtf8Bytes, BoundedFileReadBufferSize));
         var buffer = ArrayPool<byte>.Shared.Rent(BoundedFileReadBufferSize);
         try
@@ -736,7 +797,7 @@ public partial class DbReader
                     continue;
                 if (chunk.StartLine > state.NextLine)
                 {
-                    state.InvalidContinuation = true;
+                    state.IncompleteCoverage = true;
                     break;
                 }
 
@@ -749,10 +810,18 @@ public partial class DbReader
                     maxLines,
                     content,
                     buffer,
+                    scanByteLimit,
                     _cancellation,
-                    isLastChunk: chunkIndex == chunks.Count - 1,
                     ref state);
             }
+        }
+        catch (BoundedFileScanLimitException)
+        {
+            state.ScanLimitExceeded = true;
+        }
+        catch (InvalidDataException)
+        {
+            state.InvalidTopologyReason = "invalid_utf8_content";
         }
         finally
         {
@@ -761,11 +830,18 @@ public partial class DbReader
             ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
         }
 
-        if (state.InvalidContinuation || (!state.Completed && state.TruncationReason == null))
-            return null;
+        if (state.ScanLimitExceeded)
+            return CreateResult(BoundedFileReadStatus.InvalidTopology, "scan_limit_exceeded");
+        if (state.InvalidTopologyReason != null)
+            return CreateResult(BoundedFileReadStatus.InvalidTopology, state.InvalidTopologyReason);
+        if (state.InvalidContinuation)
+            return CreateResult(BoundedFileReadStatus.InvalidContinuation, "invalid_continuation");
+        if (state.IncompleteCoverage || (!state.Completed && state.TruncationReason == null))
+            return CreateResult(BoundedFileReadStatus.IncompleteCoverage, "resource_chunk_coverage_incomplete");
 
         return new BoundedFileReadResult
         {
+            Status = BoundedFileReadStatus.Success,
             Path = path,
             Lang = lang,
             TotalLines = totalLines,
@@ -790,8 +866,8 @@ public partial class DbReader
         int maxLines,
         StringBuilder content,
         byte[] buffer,
+        int maxScannedUtf8Bytes,
         CancellationToken cancellationToken,
-        bool isLastChunk,
         ref BoundedFileReadState state)
     {
         var bufferOffset = 0;
@@ -801,7 +877,7 @@ public partial class DbReader
         Span<byte> runeBytes = stackalloc byte[4];
         Span<char> runeChars = stackalloc char[2];
 
-        while (TryReadBlobByte(blob, buffer, ref bufferOffset, ref bufferedBytes, cancellationToken, out var firstByte))
+        while (TryReadBlobByte(blob, buffer, ref bufferOffset, ref bufferedBytes, maxScannedUtf8Bytes, cancellationToken, ref state, out var firstByte))
         {
             if (localLine > chunk.EndLine)
                 break;
@@ -857,7 +933,9 @@ public partial class DbReader
                 buffer,
                 ref bufferOffset,
                 ref bufferedBytes,
+                maxScannedUtf8Bytes,
                 cancellationToken,
+                ref state,
                 runeBytes,
                 out var rune);
             var scalarStartOffset = localByteOffset;
@@ -903,27 +981,14 @@ public partial class DbReader
                 return;
             }
 
-            if (isLastChunk && localLine < chunk.EndLine)
-            {
-                // Legacy/test databases can overstate end_line relative to the stored text.
-                // The final blob EOF is the only safe available-content boundary: return what
-                // was actually stored instead of discarding it or inventing missing lines.
-                // legacy/test DBではend_lineが保存textより大きい場合がある。最終blob EOFを
-                // 利用可能contentの安全な終端とし、取得済み本文を捨てたり欠落行を合成しない。
-                if (TryEnterBoundedLine(localLine, maxLines, ref state))
-                    state.Completed = true;
-            }
-            else
-            {
-                _ = CompleteBoundedLine(
-                    localLine,
-                    localByteOffset,
-                    effectiveEndLine,
-                    maxUtf8Bytes,
-                    maxLines,
-                    content,
-                    ref state);
-            }
+            _ = CompleteBoundedLine(
+                localLine,
+                localByteOffset,
+                effectiveEndLine,
+                maxUtf8Bytes,
+                maxLines,
+                content,
+                ref state);
         }
     }
 
@@ -988,7 +1053,9 @@ public partial class DbReader
         byte[] buffer,
         ref int bufferOffset,
         ref int bufferedBytes,
+        int maxScannedUtf8Bytes,
         CancellationToken cancellationToken,
+        ref BoundedFileReadState state,
         Span<byte> runeBytes,
         out Rune rune)
     {
@@ -1004,7 +1071,7 @@ public partial class DbReader
         runeBytes[0] = firstByte;
         for (var i = 1; i < byteCount; i++)
         {
-            if (!TryReadBlobByte(blob, buffer, ref bufferOffset, ref bufferedBytes, cancellationToken, out runeBytes[i]))
+            if (!TryReadBlobByte(blob, buffer, ref bufferOffset, ref bufferedBytes, maxScannedUtf8Bytes, cancellationToken, ref state, out runeBytes[i]))
                 throw new InvalidDataException("Indexed chunk ends inside a UTF-8 scalar value.");
         }
 
@@ -1019,13 +1086,23 @@ public partial class DbReader
         byte[] buffer,
         ref int bufferOffset,
         ref int bufferedBytes,
+        int maxScannedUtf8Bytes,
         CancellationToken cancellationToken,
+        ref BoundedFileReadState state,
         out byte value)
     {
         if (bufferOffset >= bufferedBytes)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            bufferedBytes = blob.Read(buffer, 0, buffer.Length);
+            if (blob.Position >= blob.Length)
+            {
+                value = 0;
+                return false;
+            }
+            var remaining = maxScannedUtf8Bytes - state.ScannedUtf8Bytes;
+            if (remaining <= 0)
+                throw new BoundedFileScanLimitException();
+            bufferedBytes = blob.Read(buffer, 0, Math.Min(buffer.Length, remaining));
             bufferOffset = 0;
             if (bufferedBytes == 0)
             {
@@ -1035,23 +1112,30 @@ public partial class DbReader
         }
 
         value = buffer[bufferOffset++];
+        state.ScannedUtf8Bytes++;
         return true;
     }
 
-    private readonly record struct BoundedFileChunk(long RowId, int StartLine, int EndLine);
+    private readonly record struct BoundedFileChunk(long RowId, int StartLine, int EndLine, int ChunkIndex);
+
+    private sealed class BoundedFileScanLimitException : Exception;
 
     private struct BoundedFileReadState(int nextLine, int nextByteOffset)
     {
         public int NextLine = nextLine;
         public int NextByteOffset = nextByteOffset;
         public int Utf8Bytes;
+        public int ScannedUtf8Bytes;
         public int ReturnedLineCount;
         public int? FirstReturnedLine;
         public int? LastReturnedLine;
         public string? TruncationReason;
+        public string? InvalidTopologyReason;
         public bool Completed;
         public bool InvalidContinuation;
-        public readonly bool Stopped => Completed || InvalidContinuation || TruncationReason != null;
+        public bool IncompleteCoverage;
+        public bool ScanLimitExceeded;
+        public readonly bool Stopped => Completed || InvalidContinuation || IncompleteCoverage || ScanLimitExceeded || TruncationReason != null;
     }
 
     /// <summary>
