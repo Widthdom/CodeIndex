@@ -996,7 +996,7 @@ public partial class McpServer : IDisposable
         {
             request = JsonFrameParser.ParseNode(line, MaxJsonDepth);
             if (request == null)
-                return null;
+                return CreateExpectedJsonObjectErrorResponse().ToJsonString(_jsonOptions);
 
             if (TryCompletePendingClientRequest(request))
                 return null;
@@ -1368,10 +1368,7 @@ public partial class McpServer : IDisposable
             return await HandleBatchMessageAsync(batch, isolateRequestDb).ConfigureAwait(false);
 
         if (request is not JsonObject obj)
-            return CreateErrorResponse(hasId: false, id: null, code: -32600, message: "Invalid request: expected JSON object",
-                category: McpErrorEnvelope.CategoryInvalidRequest,
-                suggestion: "Send a JSON-RPC 2.0 object (e.g. {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}).",
-                retrySafe: false);
+            return CreateExpectedJsonObjectErrorResponse();
 
         _lastRequestAt = _timeProvider.GetUtcNow();
 
@@ -1503,6 +1500,12 @@ public partial class McpServer : IDisposable
                 retrySafe: false)),
         }).ConfigureAwait(false);
     }
+
+    private static JsonObject CreateExpectedJsonObjectErrorResponse()
+        => CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: expected JSON object",
+            category: McpErrorEnvelope.CategoryInvalidRequest,
+            suggestion: "Send a JSON-RPC 2.0 object (e.g. {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}).",
+            retrySafe: false);
 
     private string BuildHealthJson(HttpMcpTransport? httpTransport = null)
         => BuildHealthResult(httpTransport).ToJsonString(_jsonOptions);

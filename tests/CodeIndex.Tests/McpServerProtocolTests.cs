@@ -52,7 +52,7 @@ public partial class McpServerTests
         var response = server.HandleMessage(request)!;
 
         Assert.Equal(-32600, response["error"]!["code"]!.GetValue<int>());
-        Assert.Null(response["id"]);
+        AssertJsonNullId(response);
     }
 
     [Fact]
@@ -812,5 +812,21 @@ public partial class McpServerTests
         Assert.Single(response);
         Assert.Equal(-32600, response[0]!["error"]!["code"]!.GetValue<int>());
         AssertJsonNullId(response[0]!);
+    }
+
+    [Theory]
+    [InlineData("42")]
+    [InlineData("null")]
+    [InlineData("{}")]
+    public void ProcessFrame_InvalidTopLevelRequestWithoutRecoverableId_ReturnsInvalidRequestWithNullId_Issue4538(
+        string frame)
+    {
+        var raw = _server.ProcessFrame(frame);
+
+        Assert.NotNull(raw);
+        var response = JsonNode.Parse(raw!)!;
+        Assert.Equal(-32600, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("invalid_request", response["error"]!["data"]!["category"]!.GetValue<string>());
+        AssertJsonNullId(response);
     }
 }
