@@ -11,6 +11,155 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.38.0] - 2026-07-15
+
+#### Added
+
+- **GitHub Actions workflows now expose dependency references (#4410)** — YAML extraction records pinned `uses` actions, `needs` job edges, and unambiguous repository-local script and project paths from `run` steps for impact and dependency analysis.
+- **Suggestion categories now cover exhaustive audit findings (#4423)** — CLI and MCP suggestion submission now accept `security`, `performance`, `bug`, `cleanup`, `documentation`, and `feature_request`, preserving useful filtering and issue-draft detail instead of forcing these findings into `other`.
+- **Local suggestion drafts can now be corrected or removed (#4441)** — `cdidx suggestions update <id>` atomically updates editable draft fields and recalculates the deduplication identity, while `cdidx suggestions delete <id>` removes an unwanted stored record. Both commands support human and JSON output.
+- **JSON Lines files now receive record-aware structural symbols (#4458)** — `.jsonl` and `.ndjson` records are parsed independently, retain physical source lines, and use stable zero-based record paths so repeated nested keys do not collide.
+- **NuGet.config security policy is now directly searchable (#4459)** — XML extraction promotes package sources, source mappings, signature validation mode, trusted signer names, certificate fingerprints, and `allowUntrustedRoot` values to bounded semantic symbols.
+- **JSON configuration now contributes repository-local file references (#4460)** — JSON string values, including command strings, now emit conservative `project_reference` edges for repository-local paths while excluding URLs, parent-directory paths, and ambiguous bare filenames.
+- **Added explicit active-workspace deactivation (#4475)** — `cdidx workspace clear` and its `workspace deactivate` alias now remove the persisted active workspace without rebinding `default` to the current directory, while clearly reporting when `CDIDX_ACTIVE_WORKSPACE` still overrides persisted state.
+
+#### Changed
+
+- Reduce existing-file reindex cleanup from six prepared-command executions to two by reusing the UPSERT-returned file ID and batching child-table deletes while preserving FTS and rollback semantics.
+- Delete stale file rows in 500-ID batches within the existing atomic purge transaction, reducing thousands of per-file SQLite statements while preserving cascade, FTS, callback, and rollback behavior.
+- **Repository-wide incremental scans now batch unchanged-file metadata reads** — CLI and MCP full scans load reusable stat candidates with one SQLite statement and then validate live filesystem metadata, avoiding a database query per file while preserving extractor-version, row-cap, issue-metadata, and generated-code safeguards.
+- **Adjacent references reuse their reference-line identity work** — Reference
+  insertion now coalesces consecutive references with the same file, line, and
+  context while building line rows and assigning their IDs. Dense same-line
+  references in every language avoid repeatedly hashing long source contexts,
+  while distinct contexts on the same line remain separate.
+- Coalesce mutual-recursion graph maintenance into one final pass for multi-file updates, including reference removals caused by deleted, renamed, skipped, or capped files.
+- **Index batch writes use compact sequential SQLite parameters** — Chunk,
+  symbol, reference-line, and reference inserts now prepare shorter parameter
+  names and SQL text across every indexed language. This reduces full-index
+  parameter binding time without changing ordinal value assignment or stored rows.
+- Stop MCP update preflight after finding the first existing C# static-interface contract candidate instead of loading every matching symbol and all of its metadata into memory.
+- Refresh mutual-recursion flags only for references whose stored value differs from the current graph result, avoiding rewrites of every reference row while preserving legacy normalization and statement atomicity.
+- **Reference container ownership now uses name-indexed candidates** — C#
+  declaration/range resolution and GitHub Actions job lookup no longer rescan
+  every container symbol for each reference. Dense C# and YAML fixtures keep
+  the lookup allocation bounded.
+- Index existing C++ same-line class members once per file, avoiding a growing full-symbol-list scan for every generated one-line class while preserving name-based overload deduplication and source order.
+- **Declared-container resolution is now indexed once per file** — Symbol-dense
+  C#, JavaScript, TypeScript, Solidity, markup, assembly, Lisp, and other
+  supported sources avoid quadratic owner scans while preserving nested
+  qualified names.
+- Index record and primary-constructor parent/property lookups across C#, Java, and Kotlin, and index Java compact-constructor candidates, removing repeated full-symbol-list scans for files with many generated types.
+- **Large full indexes retain more prepared SQLite batch shapes** — The default
+  prepared-command cache now holds 64 statements, reducing repeated SQLite
+  parameter binding across varied chunk, symbol, and reference batches while
+  preserving the existing environment override.
+- **Reference extraction now reuses file-local symbol membership lookups** — C#
+  private-property receivers and Python classes/import bindings no longer cause
+  a full extracted-symbol rescan for every matching call site. A bounded
+  allocation guard covers dense fixtures in both languages.
+- **Large-file writes reuse folded-name results across SQL batches** — Symbol
+  and reference inserts now retain a size-capped folded-name cache for the full
+  file call, avoiding repeated normalization of common names and containers when
+  a file spans multiple 500-row batches in any language without retaining an
+  unbounded set of generated names.
+- **Incremental finalization now verifies folded lookup rows once** — CLI and MCP readiness stamping combines missing-row and current-fold validation inside one protected transaction, avoiding the duplicate full-table folded-value scan on successful no-op indexes while retaining precise degradation reasons.
+- Make update-mode cleanup of references from unsupported languages a single transactional delete, avoiding a redundant full count scan while keeping graph readiness demotion atomic.
+- **Dense delimited extraction no longer allocates temporary split arrays** —
+  Python import aliases, GitHub Actions needs lists, JSON repository paths, and
+  Fortran procedure declarations now use index/span walks while preserving
+  trimming and quote semantics. A four-language allocation guard covers the hot
+  shapes.
+- Avoid allocating identifier strings while lexing JavaScript and TypeScript, reducing dense-identifier symbol extraction allocations while preserving regex-literal and control-flow handling.
+- **Reference deduplication now keeps structured value keys across all languages** —
+  Extractors no longer allocate and retain a concatenated string containing the
+  file, language, location, kind, container, and name for every candidate. Dense
+  long-identity coverage reduces the dedicated allocation fixture by about 89%
+  while preserving file/language/container identity semantics.
+- Replace concatenated symbol-deduplication keys with allocation-free structured identities across PHP, Swift, C++, Python, Rust, and CSS extraction paths.
+- **Suggestion list JSON now uses a page envelope (#4464)** — `suggestions list --json` returns `total_count`, `returned_count`, `offset`, `has_more`, `next_offset`, and a `results` array so automation can continue bounded pages without a separate full scan.
+
+#### Fixed
+
+- Make CLI and MCP indexing cancellation interrupt long-running SQLite work during mutual-recursion refresh and C# contract preflight, so large interrupted runs stop promptly without continuing into stale-file purge or readiness stamping.
+- **Restored the default NuGet package icon** — removed the broken custom icon declaration and bundled image so NuGet.org uses its default package icon for `cdidx`.
+- **Bulk stat reuse now handles legacy rows safely and remains cancellable** — Repository-wide CLI and MCP scans skip incomplete or malformed legacy stat rows for normal repair instead of failing the scan, and cancellation now interrupts the SQLite snapshot read.
+- **Markdown anchor dependencies now respect file scope and explicit paths (#4400)** — local fragments no longer create cross-file dependency cycles, while `file.md#fragment` links resolve directionally to the linked file.
+- **CLI count and maintenance JSON envelopes now expose `api_version: "1"` (#4401)** — scalar counts, config validation, database integrity/schema/prune/checkpoint operations, fold backfill, optimize, vacuum, and report output now use the same versioned contract as neighboring query payloads without removing existing fields.
+- **MCP compact search now reports actual match lines and only emits a cursor when more results exist (#4402)** — compact locations now agree with full search results, and terminal pages no longer expose a misleading `next_cursor` when `truncated` and `more_available` are false.
+- **Suggestion persistence preserves ordinary identifiers and recipe IDs (#4403)** — high-entropy detection now requires uppercase, lowercase, and numeric signals inside the same token, so later text no longer causes long PascalCase method names or slash/hyphen audit identifiers to be redacted while actual mixed-character secrets remain protected.
+- **C# static type qualifiers now emit one semantic edge (#4404)** — qualifiers such as `LspServer` in `LspServer.PathToUri(...)` are recorded once as `type_reference` instead of being duplicated as a phantom `call` edge.
+- **C# constants and static readonly members are classified as fields (#4405)** — `const` and `static readonly` declarations now emit `field` symbols instead of polluting function results, CodeLens, LSP kinds, and graph output.
+- **Makefile `.PHONY` declarations are now metadata with target references (#4406)** — `.PHONY` is no longer reported as a callable function, and its listed targets plus ordinary target prerequisites now produce call edges to declared targets.
+- **MSBuild dependencies now follow real project references (#4407)** — `deps --lang msbuild` resolves `ProjectReference` and import paths relative to the declaring project and no longer invents bidirectional project edges from shared package names.
+- **Generated installer bundles no longer inflate definition and graph results (#4408)** — `install.sh` now records that its canonical sources live under `install_modules/`, so default queries exclude the copied generated implementations while `--include-generated` remains available for bundle audits.
+- **Lock-file graphs now follow package dependency edges (#4409)** — NuGet and npm lock files connect each parent package to its declared child dependencies, so `callers` identifies the requiring package and `deps` no longer creates similarity edges between lock files that merely share resolved packages.
+- **YAML sequence mappings now have stable indexed paths and block scalars remain properties (#4411)** — repeated mappings in sequences use paths such as `steps[0]` and `steps[1]`, while `run: |` and `path: >` are classified as scalar properties instead of namespaces.
+- **Python file dependencies now honor local imports and module ownership (#4412)** — `deps` no longer connects unrelated Python files merely because they share short names such as `Path`, `main`, `json`, or `dataclass`.
+- **C# parameter modifiers stay out of symbols and references (#4413)** — regression coverage now locks down multiline `out` parameters so `out` cannot leak into function or type-reference results.
+- **C# field receivers now preserve their containing-type identity (#4414)** — member receivers such as `_reader` are recorded as qualified references rather than calls, preventing private fields and common member names from creating dependencies across unrelated classes and files.
+- **JSON arrays now preserve element identity and container kinds (#4415)** — array and object containers use dedicated symbol kinds, array elements receive stable indexed paths, and primitive elements are emitted as bounded `value` symbols.
+- **Audit recipes now prioritize executable risk sites (#4416)** — noisy recipe families use code origins and positive-evidence exclusions for shared bounded readers, sanitizers, secret classifiers, and subprocess policies. MCP tool schema examples now have a dedicated `schema_description` origin that source-scoped searches exclude by default.
+- **Symbol and caller locations now preserve precise columns and identifier-sized ranges (#4417)** — persisted symbol columns and signatures resolve definition identifiers, while grouped callers retain their first reference column for editor formats, LSP definitions, declaration references, document highlights, and semantic tokens.
+- **LSP inlay hints now honor the requested range and avoid redundant explicit types (#4418)** — `textDocument/inlayHint` applies the end-exclusive request range before its result cap and suppresses labels for types already written before a symbol name.
+- **Generic XML now exposes bounded structural symbols (#4419)** — valid non-XAML XML files emit namespace symbols for element paths and property symbols for non-namespace attributes, with containment and document limits preserved.
+- **LSP no longer advertises false type-definition or implementation semantics (#4420)** — `textDocument/typeDefinition` and `textDocument/implementation` are omitted until the index can distinguish their targets correctly, while workspace reference requests continue to return indexed usages and honor `includeDeclaration`.
+- **Shell and PowerShell top-level calls now participate in caller and dependency graphs (#4421)** — script files receive a synthetic `<script>` function scope, so top-level calls retain a graph container while calls inside declared functions keep their existing function container.
+- **`suggestions add --help` now documents its complete write contract (#4422)** — command-specific help lists required fields, category values, defaults, export limits, deduplication behavior, issue-draft-only flags, and examples.
+- **Removed an unused database-open failure wrapper (#4424)** — database-open diagnostics now rely directly on the JSON-aware implementation, while retaining regression coverage for sanitized human-readable errors.
+- **Map issue drafts now support duplicate preflight (#4425)** — `map --format issue-drafts` accepts `--open-issues` and `--repo`, and emits duplicate metadata for every maintenance draft.
+- **Constrained CLI values are now completed consistently across shells (#4426)** — Bash, Zsh, Fish, and PowerShell derive enum candidates from the shared flag schema for status, formats, grouping, upgrade channels, indexing modes, suggestions, and other constrained options.
+- **Shell completions no longer offer query flags to utility commands (#4427)** — every known command now uses its own schema-backed completion branch, while the unknown-command fallback exposes only help.
+- **Markdown prose is now classified as `help_text` instead of `code` (#4428)** — search origin filters distinguish documentation text from content inside fenced code blocks.
+- **Global search now refocuses deduplicated overlap results (#4429)** — when overlap deduplication removes a chunk's original focused match but leaves another match, search rebuilds the snippet and highlights around the remaining line so `match_lines`, `focus_line`, and snippet evidence stay consistent.
+- **GitHub duplicate preflight can inspect closed issue history (#4430)** — `--issue-state closed|all` includes resolved issues and classifies closed matches as possible regressions.
+- **MCP status now populates summary and symbol-kind counts (#4431)** — full and compact MCP status responses now share the CLI status summary construction and return the bounded symbol-kind histogram instead of null fields.
+- **Suggestion list JSON now uses the sampled title (#4432)** — `suggestions list --json` returns the concise `sampled_title` as `title` when available, while retaining the description-derived fallback for older records.
+- **MCP servers no longer emit the client-owned `notifications/initialized` notification (#4433)** — after replying to `initialize`, cdidx now waits for the client notification instead of synthesizing an extra server frame.
+- **Finite stdio MCP streams now drain valid requests after EOF (#4434)** — stdin EOF no longer cancels legitimate long-running tool calls after a fixed grace period, so batch clients receive every response.
+- **MCP EOF diagnostics now count only unfinished requests (#4435)** — requests that finish during the drain grace period are pruned before cdidx reports the remaining in-flight count.
+- **Every MCP structured-content envelope now exposes its API version (#4436)** — object-shaped `structuredContent` responses consistently include root-level `api_version`, allowing clients to apply one schema-version gate across tools such as `search`, `definition`, and `unused_symbols`.
+- **Search editor formats now enforce `--limit` after occurrence expansion (#4437)** — LSP, quickfix, SARIF, and formatted-location output no longer emit more locations than the requested result cap when one indexed chunk contains multiple matches.
+- **SARIF search locations now preserve exact match spans (#4438)** — search results emit the matched token's 1-based `startColumn` and exclusive `endColumn` instead of pointing every annotation at column 1.
+- **Zero-row search NDJSON interruptions now explain byte-budget exhaustion (#4439)** — terminal records report the interruption reason, configured budget, first omitted row size, omitted count, and recovery guidance when `--max-json-bytes` prevents even the first result from being emitted.
+- **Suggestion sidecars no longer make a fresh workspace stale (#4442)** — workspace scans now exclude built-in `suggestions-*` files under `.cdidx` consistently without hiding `.cdidx/patterns` configuration, so creating `.cdidx/suggestions-codeindex.json` does not produce an `unindexed_workspace_files` status failure.
+- **Position-based C# LSP lookup now distinguishes types from same-named constructors (#4443)** — hover, definition, and references anchor declaration tokens by their indexed line, column, and symbol kind instead of merging a class with its constructor solely because their names match.
+- **C# semantic tokens now report accurate language roles (#4444)** — the LSP stream distinguishes keywords, modifiers, namespace components, types, fields, methods, and declarations instead of coloring lexical keywords or dotted namespace names as variables and types.
+- **Bounded C# field initializer signatures (#4445)** — C# field signatures now retain at most 1,024 characters when an initializer is present, preventing large object and collection initializers from consuming CLI, JSON, database, MCP, and LSP response budgets.
+- **PowerShell hashtable keys are no longer reported as enum members (#4446)** — indented key-value entries such as `Path = ...` and `Reason = ...` are excluded from outlines and symbol results unless they occur inside an actual PowerShell `enum` body.
+- **NDJSON search completion records now expose limit truncation (#4447)** — the terminal record includes `truncated` and `has_more`, allowing streaming consumers to distinguish an exhaustive page from one capped by `--limit`.
+- **Markdown reference signatures now contain only the link span (#4448)** — definition and symbol output no longer carry unrelated prose from the entire containing line.
+- **Python class construction is now distinct from ordinary calls (#4449)** — calls to locally declared classes and imported type-like names emit `instantiate` edges while ordinary functions remain `call` edges.
+- **Machine-readable `deps` queries keep progress diagnostics opt-in (#4450)** — JSON and JSON graph output no longer writes `Progress:` phases to stderr solely because of a large `--limit`; pass `--verbose` when those diagnostics are wanted.
+- **Dockerfile stage references now traverse every graph view (#4451)** — named-stage edges such as `COPY --from=build` now appear consistently in `callers`, `impact`, and `deps`, including the intentional same-file stage dependency reported by `deps`.
+- **Solution project references now participate in graph analysis (#4452)** — solution project names and normalized project paths now connect to indexed project files, so `deps --lang solution` exposes represented projects and `impact` recognizes project-name/path aliases.
+- **Static lambdas no longer surface as phantom functions (#4453)** — regression coverage ensures a stateful static lambda inside a method never emits a function named `static`.
+- **C# raw-string contents stay excluded from symbol extraction (#4454)** — regression coverage ensures SQL clauses inside multiline raw strings cannot become phantom C# functions.
+- **Small C# `deps` limits now bound dependency matching work (#4455)** — C# file-dependency queries apply the existing limit-scaled ranking candidate window before the expensive name-to-target join, so commands such as `deps --lang csharp --limit 5` no longer compare the complete C# graph before limiting output; `reference_count` is candidate-scoped when that window truncates source/name groups.
+- **C# multiline tuple-return methods retain their real names (#4456)** — method-header merging now recognizes tuple return types that start on a modifier line, preventing phantom functions named `static`.
+- **VSTest runsettings now expose configuration structure (#4457)** — `.runsettings` files emit searchable nested section and value-element paths, while signatures retain configured values such as result directories and timeouts.
+- **Ad hoc compact searches now emit location-only rows (#4461)** — `search --format compact` omits snippets, highlights, facets, and ranking metadata so bounded machine output stays small.
+- **Issue-draft exports now use the available GitHub title capacity (#4462)** — suggestion titles retain their differentiating text up to GitHub's 255-character title limit instead of being clipped to 63 characters after the category prefix.
+- **Application-manifest symbols now preserve XML containment (#4463)** — manifest elements emit their complete structural paths, including intermediate containers, so settings such as `assembly.application.windowsSettings.longPathAware` appear at the correct outline depth.
+- **LSP no longer returns CodeLens commands that the server cannot execute (#4465)** — the server omits `codeLensProvider` and returns method-not-found for `textDocument/codeLens` instead of emitting the unsupported `cdidx.showSymbol` command.
+- **Definition SARIF locations are no longer reported as warnings (#4466)** — `definition --format sarif` now emits matching rule and result levels as informational `note` entries, so ordinary navigation results do not appear as false findings in SARIF consumers or CI security dashboards.
+- **Compact CLI locations now use a versioned envelope (#4467)** — compact location output reports `api_version`, returned counts, limit truncation metadata, query context, and lightweight result rows instead of an unversioned bare array.
+- **MCP now enforces initialization and exact JSON-RPC 2.0 framing (#4468)** — non-initialize requests are rejected until a successful handshake, and missing or non-`2.0` `jsonrpc` members return Invalid Request.
+- **Empty prerelease channels are no longer reported as malformed metadata (#4469)** — `upgrade --check-only --channel prerelease --json` now allows the bounded multi-release response size needed by GitHub's releases endpoint, so a repository with no eligible prerelease returns `prerelease_not_found` while malformed or oversized metadata still returns `invalid_response`.
+- **Index dry-run now models symbol-kind filters (#4470)** — dry-run JSON exposes the normalized include/exclude policy, applies it to the DB-backed symbol mutation estimate, and reports the estimated number of filtered symbols while preserving the documented exclude-wins precedence.
+- **Targeted dry-runs now reject an entirely invalid `--files` selection (#4471)** — when no supplied path resolves to an existing in-project file or a path already present in the index, dry-run returns a structured usage error instead of a misleading zero-work success.
+- **Audit summary-only now matches its advertised command contract (#4472)** — `cdidx audit <recipe> --json --summary-only` now selects the compact recipe summary when no output format is specified, while preserving explicit `--format` choices.
+- **Zero-width regex matches now keep `length: 0` in `find` results (#4473)** — anchor-only matches such as `^` and `$` retain their insertion-point span in CLI JSON and MCP output instead of being reported as one-character matches.
+- **Per-command output format help and completions now match implemented formats (#4474)** — all 65 location command/format combinations, including `search --format grouped`, are checked against parser acceptance and each command's usage line; `files` and `inspect` retain explicit usage errors for recognized formats they do not implement, and `deps` rejects the undocumented `text` / `json` format aliases instead of silently treating them as `edgelist`.
+- **Made the checked-in workspace manifest runnable (#4476)** — the example manifest now lives at the repository root, so its `src/CodeIndex` and `tests/CodeIndex.Tests` members resolve to the real project directories and report `exists=true`.
+- **Invalid database checkpoint names are now reported as input errors (#4477)** — `db checkpoint` returns `E010_USAGE_ERROR` with the allowed single-file-name syntax instead of `E008_DB_ERROR` and a misleading storage-writability hint.
+- **Database diff now compares semantic reference-line links after export/import (#4478)** — `diff` compares linked reference-line paths, lines, and contexts instead of SQLite surrogate row IDs, so rehydrated databases with equivalent index content report `identical=true`.
+- **`status --log-path --json` now returns a structured path envelope (#4479)** — the command uses its source-generated JSON contract and returns `log_path` plus `api_version` instead of falling through to a generic serialization failure.
+
+#### Documentation
+
+- **Command help now states each effective `--max-json-bytes` overflow policy (#4440)** — help distinguishes row-truncating `symbols` and search NDJSON output from whole-response rejection in search arrays, inspect, and map output.
+
 ### [1.37.2] - 2026-07-12
 
 #### Fixed
@@ -5779,6 +5928,151 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.38.0] - 2026-07-15
+
+#### 追加
+
+- **GitHub Actions workflow が依存参照を公開するようになりました (#4410)** — YAML 抽出は pinned `uses` action、`needs` の job edge、`run` step に含まれる明確なリポジトリローカル script / project path を impact・依存分析向けに記録します。
+- **提案カテゴリが網羅的な監査結果に対応しました (#4423)** — CLI と MCP の提案送信で `security`、`performance`、`bug`、`cleanup`、`documentation`、`feature_request` を受け付けるようになり、これらを `other` にまとめず有用な絞り込みと Issue 下書きの詳細を維持できます。
+- **ローカル suggestion draft を修正または削除できるようになりました (#4441)** — `cdidx suggestions update <id>` は編集可能な draft フィールドを原子的に更新して重複排除 identity を再計算し、`cdidx suggestions delete <id>` は不要な保存済みレコードを削除します。両コマンドとも human / JSON 出力に対応します。
+- **JSON Lines file に record-aware な構造 symbol を追加しました (#4458)** — `.jsonl` と `.ndjson` の各 record を個別に parse し、物理 source line と安定した 0 始まり record path を保持するため、繰り返される nested key が衝突しません。
+- **NuGet.config のセキュリティポリシーを直接検索できるようになりました (#4459)** — XML 抽出は package source、source mapping、署名検証モード、trusted signer 名、証明書 fingerprint、`allowUntrustedRoot` の値を上限付き semantic symbol として出力します。
+- **JSON 設定からリポジトリローカルなファイル参照を抽出するようになりました (#4460)** — command 文字列を含む JSON の string value から保守的に `project_reference` edge を記録し、URL、親ディレクトリ path、曖昧な basename だけのファイル名は除外します。
+- **active workspace を明示的に解除できるようになりました (#4475)** — `cdidx workspace clear` と alias の `workspace deactivate` は、`default` を current directory に再設定せず保存済み active workspace を削除し、`CDIDX_ACTIVE_WORKSPACE` が persisted state を引き続き上書きする場合は明確に報告します。
+
+#### 変更
+
+- UPSERTが返すfile IDを再利用し、子テーブル削除を一括実行することで、既存ファイル再インデックス時のprepared command実行を6回から2回へ削減しつつ、FTSとrollbackの意味論を維持しました。
+- stale file行を既存のatomicなpurge transaction内で500 IDずつ一括削除し、cascade・FTS・callback・rollbackの挙動を維持しながら、数千回のfile単位SQLite statementを削減しました。
+- **リポジトリ全体の incremental scan で unchanged-file metadata を一括取得するようになりました** — CLI と MCP の full scan は再利用可能な stat 候補を 1 回の SQLite statement で読み、実 filesystem metadata を照合します。file ごとの database query を避けながら、extractor version、row cap、issue metadata、generated-code の安全条件を維持します。
+- **隣接する参照で reference-line identity 処理を再利用します** — reference の
+  INSERT は line row の構築時とID設定時に、同じ file・line・context が連続する
+  参照をまとめて扱うようになりました。全言語の同一行に密集した参照で長い source
+  context の反復 hash 計算を避けつつ、同じ行の異なる context は分離したままです。
+- 複数ファイル更新時の相互再帰グラフ保守を終了時の1回に集約し、削除・rename・skip・上限超過による参照削除も正しく反映するようにしました。
+- **索引バッチ書き込みで短い連番 SQLite parameter を使用します** — 全索引言語の
+  chunk・symbol・reference-line・reference INSERT が短い parameter 名と SQL text を
+  prepare するようになりました。ordinal の値設定と保存行を変えずに、フル索引時の
+  parameter binding 時間を削減します。
+- MCP更新のpreflightで既存のC# static-interface contract候補を最初に1件見つけた時点で打ち切り、該当する全symbolと全metadataをメモリへ読み込まないようにしました。
+- 相互再帰フラグの保存値が現在のグラフ判定と異なる参照だけを更新し、legacy値の正規化とstatementのatomicityを維持しながら、全参照行の再書き込みを省きました。
+- **reference の container ownership が name-indexed candidate を使うようになりました** —
+  C# の declaration / range 解決と GitHub Actions の job lookup は、reference ごとに全
+  container symbol を再走査しません。密な C# / YAML fixture で lookup allocation の
+  上限を維持します。
+- C++の同一行class memberをファイル単位で一度だけ索引化し、名前ベースのoverload重複排除とsource順を維持しながら、生成された一行classごとに増大していた全symbol list走査を省きました。
+- **宣言コンテナ解決をファイルごとに一度索引化するようになりました** — ネストした完全修飾名を
+  維持したまま、C#・JavaScript・TypeScript・Solidity・マークアップ・アセンブリ・Lisp などの
+  シンボル密集ファイルで二乗的な所有者探索を回避します。
+- C#・Java・Kotlinのrecord／primary constructorにおけるparent・property検索と、Java compact constructor候補を索引化し、多数の生成型を含むファイルで繰り返されていた全symbol list走査を省きました。
+- **巨大なフル索引でより多くの prepared SQLite batch 形状を保持します** —
+  prepared-command cache の既定容量を64件へ増やし、既存の環境変数 override を
+  維持したまま、多様な chunk・symbol・reference batch 間の SQLite parameter
+  再束縛を削減しました。
+- **reference extraction が file-local symbol membership lookup を再利用するようになりました** —
+  C# の private-property receiver と Python の class / import binding は、一致する call site
+  ごとの全 extracted-symbol 再走査を行いません。両言語の密な fixture を使う bounded
+  allocation guard も追加しました。
+- **巨大ファイルの書き込みで SQL batch 間の folded-name 結果を再利用します** —
+  symbol と reference の INSERT が、件数上限付き folded-name cache をファイル
+  呼び出し全体で保持するようになりました。任意の言語で1ファイルが500行超の
+  複数 batch に跨る場合も、生成された一意名を無制限に保持せず、共通名と
+  container の再正規化を避けます。
+- **incremental finalization の folded lookup row 検証を 1 回にまとめました** — CLI と MCP の readiness stamp は missing row と current fold の検証を 1 つの保護された transaction 内で行い、成功する no-op index の重複した full-table folded-value scan を避けつつ、正確な degradation reason を維持します。
+- 更新モードにおける未対応言語の参照削除を単一トランザクションのDELETEへまとめ、グラフreadinessの降格をatomicに保ちながら、重複していた全件COUNT走査を省きました。
+- **密な delimiter list の抽出で一時 split array を作らなくなりました** — Python の
+  import alias、GitHub Actions の needs list、JSON repository path、Fortran procedure
+  declaration は、trim / quote semantics を維持した index / span walk を使います。
+  4言語の hot shape を allocation guard で保護します。
+- JavaScript／TypeScript の字句解析で識別子文字列の生成を避け、正規表現リテラルと制御構文の判定を維持したまま、識別子が密なファイルのシンボル抽出割り当てを削減しました。
+- **全言語の reference deduplication が structured value key を保持するようになりました** —
+  extractor は candidate ごとに file、language、location、kind、container、name を連結した
+  string を作って保持しません。file / language / container の identity semantics を維持しつつ、
+  長い identity の密な専用 fixture で allocation を約89%削減します。
+- PHP・Swift・C++・Python・Rust・CSS のシンボル抽出経路で、連結文字列による重複排除キーを割り当て不要な構造化identityへ置き換えました。
+- **suggestion 一覧 JSON がページ envelope を返すようになりました (#4464)** — `suggestions list --json` は `total_count`、`returned_count`、`offset`、`has_more`、`next_offset` と `results` 配列を返すため、自動化処理は別途全件 scan せずに上限付きページを継続取得できます。
+
+#### 修正
+
+- CLIとMCPのインデックス作成で、相互再帰更新およびC#契約preflight中の長時間SQLite処理をキャンセル時に中断し、大規模処理の中断後に古いファイルのpurgeやreadiness stampへ進まないようにしました。
+- **NuGet パッケージの既定アイコンへ戻しました** — 壊れたカスタムアイコン指定と同梱画像を削除し、NuGet.org が `cdidx` に既定のパッケージアイコンを表示するようにしました。
+- **一括 stat 再利用が旧形式 row を安全に扱い、キャンセル可能になりました** — リポジトリ全体を対象にする CLI / MCP scan は、欠損または不正な旧 stat row で失敗せず通常の修復対象として除外し、キャンセル時には SQLite snapshot 読み取りも中断します。
+- **Markdown anchor の依存関係がファイルscopeと明示pathを尊重するようになりました (#4400)** — ローカルfragmentはファイル間の偽cycleを作らず、`file.md#fragment` linkはリンク先ファイルへの方向付き依存として解決されます。
+- **CLI の count およびメンテナンス JSON envelope が `api_version: "1"` を公開するようになりました (#4401)** — scalar count、config validation、database integrity/schema/prune/checkpoint、fold backfill、optimize、vacuum、report の出力が、既存フィールドを削除せず隣接する query payload と同じ versioned contract を使用するようになりました。
+- **MCP compact search が実際の一致行を返し、続きがある場合だけ cursor を出力するようになりました (#4402)** — compact の位置情報が full search の結果と一致し、`truncated` と `more_available` が false の終端ページでは誤解を招く `next_cursor` を返さなくなりました。
+- **提案の永続化で通常の識別子と recipe ID を保持するようになりました (#4403)** — high-entropy 判定で大文字・小文字・数字が同じ token 内にあることを必須にしたため、後続テキストの影響で長い PascalCase メソッド名や slash/hyphen 形式の audit 識別子が伏字になることを防ぎつつ、実際の混合文字 secret は引き続き保護します。
+- **C# の static 型修飾子が意味的に正しい edge を 1 件だけ発行するようになりました (#4404)** — `LspServer.PathToUri(...)` の `LspServer` のような修飾子は、誤った `call` edge と重複せず、`type_reference` として 1 件だけ記録されます。
+- **C# の定数と static readonly メンバーを field として分類するようになりました (#4405)** — `const` と `static readonly` 宣言が `function` ではなく `field` シンボルを出力するため、関数検索、CodeLens、LSP kind、グラフ出力を汚染しなくなりました。
+- **Makefile の `.PHONY` 宣言をターゲット参照を持つメタデータとして扱うようになりました (#4406)** — `.PHONY` を呼び出し可能な関数として報告せず、列挙されたターゲットと通常ターゲットの前提条件から宣言済みターゲットへの call edge を生成します。
+- **MSBuild の依存関係が実際の project reference に従うようになりました (#4407)** — `deps --lang msbuild` は `ProjectReference` と import path を宣言元 project 相対で解決し、共有 package 名から偽の双方向 project edge を生成しなくなりました。
+- **生成された installer bundle が definition / graph 結果を水増ししなくなりました (#4408)** — `install.sh` は canonical source が `install_modules/` 配下にあることを記録するようになり、既定の query はコピーされた生成実装を除外します。bundle の監査には引き続き `--include-generated` を使用できます。
+- **lock file graph が package の依存 edge をたどるようになりました（#4409）** — NuGet と npm の lock file は各親 package を宣言済みの子依存 package に接続するため、`callers` は依存元 package を特定でき、`deps` は resolved package を共有するだけの lock file 間に類似 edge を作成しなくなりました。
+- **YAML sequence mapping に安定した index path を付与し、block scalar を property として維持するようにしました (#4411)** — sequence 内の反復 mapping は `steps[0]`、`steps[1]` のような path を使い、`run: |` や `path: >` は namespace ではなく scalar property として分類されます。
+- **Python のファイル依存関係がローカル import と module ownership を考慮するようになりました (#4412)** — `deps` は `Path`、`main`、`json`、`dataclass` などの短い名前が共通するだけの無関係な Python ファイルを接続しなくなりました。
+- **C# のパラメーター修飾子がシンボルや参照へ混入しないことを保証しました (#4413)** — 複数行の `out` パラメーターについて回帰テストを追加し、`out` が function や type-reference の結果へ漏れないようにしました。
+- **C# の field receiver が containing type の identity を維持するようになりました (#4414)** — `_reader` のような member receiver は call ではなく修飾済み reference として記録され、private field や一般的な member 名による無関係な class / file 間の依存を防ぎます。
+- **JSON 配列が要素 identity と container kind を保持するようになりました (#4415)** — 配列と object container に専用の symbol kind を使い、配列要素へ安定した index 付き path を与え、primitive 要素を上限付きの `value` symbol として出力します。
+- **audit recipe が実行可能なリスク箇所を優先するようになりました (#4416)** — ノイズが多かった recipe 群は code origin と positive-evidence 除外を使い、共通の bounded reader、sanitizer、secret classifier、subprocess policy 自体を候補から外します。MCP tool schema 内の例には専用の `schema_description` origin を付け、source scope の検索では既定で除外します。
+- **シンボルと caller の位置が正確な列と識別子サイズの範囲を保持するようになりました (#4417)** — 永続化済みのシンボル列と signature から definition 識別子を解決し、group 化した caller は editor 形式、LSP definition、宣言参照、document highlight、semantic token 向けに最初の参照列を保持します。
+- **LSP inlay hint が requested range を尊重し、明示型の重複を避けるようになりました (#4418)** — `textDocument/inlayHint` は result 上限の前に end-exclusive な request range を適用し、symbol name の前にすでに記述された型の label を抑制します。
+- **汎用 XML が上限付きの構造シンボルを公開するようになりました (#4419)** — 有効な非 XAML XML ファイルは、要素パスを namespace シンボル、名前空間宣言以外の属性を property シンボルとして出力し、包含関係と文書上限も維持します。
+- **LSP が誤った型定義・実装セマンティクスを通知しないようになりました (#4420)** — index が対象を正しく区別できるようになるまで `textDocument/typeDefinition` と `textDocument/implementation` を通知対象から外し、workspace の参照リクエストは引き続き index 済み usage を返して `includeDeclaration` を尊重します。
+- **Shell と PowerShell のトップレベル呼び出しが caller / dependency graph に含まれるようになりました (#4421)** — スクリプトファイルに合成 `<script>` 関数スコープを追加し、トップレベル呼び出しにも graph container を保持させつつ、宣言済み関数内の呼び出しは従来の関数 container を維持します。
+- **`suggestions add --help` が書き込み契約全体を説明するようになりました (#4422)** — コマンド固有ヘルプに必須フィールド、category 値、既定値、export 上限、重複排除動作、issue draft 専用フラグ、使用例を記載しました。
+- **未使用のデータベースオープン失敗 wrapper を削除しました (#4424)** — データベースオープン診断は JSON 対応実装を直接使用し、サニタイズされた人間向けエラーの回帰テストを維持します。
+- **map の issue draft が重複事前確認に対応しました (#4425)** — `map --format issue-drafts` で `--open-issues` と `--repo` を受け付け、各 maintenance draft に重複情報を出力します。
+- **制約付き CLI 値を全シェルで一貫して補完するようになりました (#4426)** — Bash、Zsh、Fish、PowerShell が共通フラグスキーマから status、format、grouping、upgrade channel、index mode、suggestions などの enum 候補を生成します。
+- **utility コマンドに query 専用フラグを補完しないようになりました (#4427)** — 既知の全コマンドが固有の schema ベース補完ブランチを使い、未知コマンド用 fallback は help のみを提示します。
+- **Markdown の文章を `code` ではなく `help_text` として分類するようになりました (#4428)** — search の origin filter でドキュメント本文と fenced code block 内の内容を区別できます。
+- **グローバル検索が overlap 重複排除後の結果へフォーカスし直すようになりました (#4429)** — overlap 重複排除によって chunk の元のフォーカス一致が削除されても別の一致が残る場合、検索は残存行を中心に snippet と highlight を再構築し、`match_lines`、`focus_line`、snippet の根拠を一貫させます。
+- **GitHub の重複事前確認で closed issue 履歴を調査できます (#4430)** — `--issue-state closed|all` で解決済み issue を含め、closed の一致候補を再発の可能性として分類します。
+- **MCP status が summary とシンボル種別件数を返すようになりました (#4431)** — full および compact の MCP status 応答は CLI status と同じサマリー生成を使用し、上限付きシンボル種別ヒストグラムも返すことで、該当フィールドが null にならなくなりました。
+- **提案一覧 JSON が sampled title を使用するようになりました (#4432)** — `suggestions list --json` は `sampled_title` がある場合に簡潔な値を `title` として返し、古いレコードでは従来どおり description から生成した値へフォールバックします。
+- **MCP server が client 側の `notifications/initialized` 通知を送信しなくなりました (#4433)** — `initialize` への応答後、cdidx は余分な server frame を生成せず client からの通知を待つようになりました。
+- **有限の stdio MCP stream が EOF 後も有効な request を完了まで drain するようになりました (#4434)** — stdin EOF で正当な長時間 tool call を固定 grace period 後に cancel しないため、batch client はすべての response を受信できます。
+- **MCP EOF diagnostic が未完了の request だけを数えるようになりました (#4435)** — drain grace period 中に完了した request を除外してから、cdidx が残りの in-flight 数を報告します。
+- **すべての MCP structured-content envelope が API version を公開するようになりました (#4436)** — object 形式の `structuredContent` レスポンスは root level の `api_version` を一貫して含むため、クライアントは `search`、`definition`、`unused_symbols` などのツールに同じ schema-version gate を適用できます。
+- **検索のエディター向け形式が occurrence 展開後にも `--limit` を適用するようになりました (#4437)** — 1 つのインデックス chunk に複数の一致がある場合でも、LSP、quickfix、SARIF、および location 形式の出力が指定された結果上限を超えなくなりました。
+- **SARIF の検索位置が正確な一致範囲を保持するようになりました (#4438)** — 検索結果はすべての注釈を 1 列目に置くのではなく、一致 token の 1 始まり `startColumn` と終端を含まない `endColumn` を出力します。
+- **search NDJSON が 0 行で中断した場合も byte budget 超過を説明するようになりました (#4439)** — `--max-json-bytes` により最初の結果さえ出力できない場合、終端レコードは中断理由、設定された上限、最初に省略した行のサイズ、省略件数、復旧方法を返します。
+- **suggestion sidecar によって fresh な workspace が stale にならなくなりました (#4442)** — workspace scan が `.cdidx/patterns` の設定を隠さず、`.cdidx` 配下の組み込み `suggestions-*` ファイルだけを一貫して除外するようになり、`.cdidx/suggestions-codeindex.json` の作成によって status が `unindexed_workspace_files` で失敗しなくなりました。
+- **位置ベースの C# LSP lookup が型と同名コンストラクターを区別するようになりました (#4443)** — hover、definition、references は宣言 token を index 済みの行、列、symbol kind で特定し、名前が一致するという理由だけで class と constructor を混同しなくなりました。
+- **C# semantic token が正確な言語上の役割を返すようになりました (#4444)** — LSP stream は keyword、modifier、namespace component、type、field、method、declaration を区別し、字句 keyword や dotted namespace 名を variable / type として誤って色付けしなくなりました。
+- **C# フィールド初期化子の signature を制限しました (#4445)** — 初期化子を含む C# フィールドの signature を最大1,024文字に制限し、巨大な object / collection initializer が CLI、JSON、データベース、MCP、LSP の応答予算を使い切ることを防ぎます。
+- **PowerShell のハッシュテーブルキーを enum メンバーとして報告しないよう修正しました (#4446)** — `Path = ...` や `Reason = ...` のようなインデントされたキー・値エントリは、実際の PowerShell `enum` 本体内にある場合を除き、アウトラインとシンボル結果から除外されます。
+- **NDJSON 検索の完了レコードが上限による切り詰めを公開するようになりました (#4447)** — terminal record に `truncated` と `has_more` が含まれ、ストリーミング consumer は全件取得済みのページと `--limit` で制限されたページを区別できます。
+- **Markdown reference の signature がリンク範囲のみを含むようになりました (#4448)** — definition と symbol の出力に、リンクを含む行全体の無関係な文章が混入しなくなりました。
+- **Python のクラス生成を通常の関数呼び出しと区別するようになりました (#4449)** — ローカル宣言クラスと import 済みの型らしい名前の呼び出しは `instantiate` edge を生成し、通常の関数は `call` edge のまま維持されます。
+- **machine-readable な `deps` query の進捗診断を明示指定時だけ出すようにしました (#4450)** — JSON および JSON graph 出力では、大きい `--limit` だけを理由に stderr へ `Progress:` phase を出さなくなり、必要な場合は `--verbose` で有効化できます。
+- **Dockerfile の stage 参照をすべての graph view で辿れるようになりました (#4451)** — `COPY --from=build` のような named-stage edge が `callers`、`impact`、`deps` に一貫して表示され、`deps` では意図した同一ファイル内の stage 依存も報告されます。
+- **solution の project reference が graph 分析に参加するようになりました (#4452)** — solution の project 名と正規化済み project path を indexed project file に接続し、`deps --lang solution` が project を表示するとともに、`impact` が project 名/path alias を認識するようになりました。
+- **static lambda が phantom function として現れないことを保証しました (#4453)** — メソッド内の状態付き static lambda が `static` という function を出力しないよう回帰テストを追加しました。
+- **C# raw string の内容がシンボル抽出から除外されることを保証しました (#4454)** — 複数行 raw string 内の SQL 句が phantom C# function にならないよう回帰テストを追加しました。
+- **C# の小さな `deps` 上限が依存関係の照合作業量も制限するようになりました (#4455)** — C# のファイル依存クエリは、高コストな name-to-target join の前に既存の limit 連動 ranking 候補窓を適用するため、`deps --lang csharp --limit 5` のようなコマンドが出力制限前に C# グラフ全体を比較しなくなりました。この窓で source/name group が切り詰められた場合、`reference_count` は候補範囲内の値になります。
+- **C# の複数行 tuple 戻り値メソッドで実際の名前を保持するようになりました (#4456)** — 修飾子行から始まる tuple 戻り値型をメソッドヘッダー結合が認識し、`static` という phantom function を防ぎます。
+- **VSTest runsettings が構成構造を公開するようになりました (#4457)** — `.runsettings` ファイルは入れ子になった section と値要素のパスを検索可能な形で出力し、signature には結果ディレクトリや timeout などの設定値を保持します。
+- **ad hoc compact search が location-only row を返すようになりました (#4461)** — `search --format compact` は snippet、highlight、facet、ranking metadata を省略し、上限付きの機械向け出力を小さく保ちます。
+- **issue draft export が GitHub の利用可能なタイトル長を使うようになりました (#4462)** — 提案タイトルは category prefix の後で63文字に切り詰められず、GitHub の255文字上限まで識別に役立つテキストを保持します。
+- **アプリケーションマニフェストのシンボルが XML の包含関係を維持するようになりました (#4463)** — manifest 要素は中間コンテナを含む完全な構造パスを出力し、`assembly.application.windowsSettings.longPathAware` などの設定が正しい outline depth に表示されます。
+- **LSP が server で実行できない CodeLens command を返さないようになりました (#4465)** — 未対応の `cdidx.showSymbol` command を生成する代わりに `codeLensProvider` を通知対象から外し、`textDocument/codeLens` には method-not-found を返します。
+- **definition の SARIF location を warning として報告しないようになりました (#4466)** — `definition --format sarif` は rule と result の level を情報レベルの `note` として一致させて出力するため、通常の navigation 結果が SARIF consumer や CI security dashboard で誤検知として表示されなくなりました。
+- **compact CLI location が versioned envelope を使うようになりました (#4467)** — compact location output は version 未指定の bare array ではなく、`api_version`、返却件数、limit truncation metadata、query context、軽量 result row を返します。
+- **MCP が initialize と厳密な JSON-RPC 2.0 framing を検証するようになりました (#4468)** — handshake 成功前の initialize 以外の request を拒否し、`jsonrpc` が欠落または `2.0` 以外の場合は Invalid Request を返します。
+- **空の prerelease channel を不正な metadata として報告しないようにしました (#4469)** — `upgrade --check-only --channel prerelease --json` は GitHub の releases endpoint に必要な複数 release 応答を専用上限内で受け取るため、対象 prerelease がない場合は `prerelease_not_found` を返し、不正または上限超過の metadata は引き続き `invalid_response` を返します。
+- **index dry-run が symbol-kind filter を推計へ反映するようになりました (#4470)** — dry-run JSON は正規化済みの include/exclude policy を公開し、DB ベースの symbol mutation 推計へ適用して、除外された symbol の推計数を報告します。既存の exclude 優先規則も維持します。
+- **対象指定 dry-run がすべて無効な `--files` 選択を拒否するようになりました (#4471)** — 指定 path が既存の project 内ファイルにも index 内の既存 path にも解決されない場合、dry-run は誤解を招く作業件数 0 の成功ではなく、構造化された usage error を返します。
+- **audit の summary-only が案内済みのコマンド契約どおり動作するようになりました (#4472)** — `cdidx audit <recipe> --json --summary-only` は出力形式が未指定の場合にコンパクトなレシピ要約を選択し、明示された `--format` は従来どおり維持します。
+- **`find` 結果でゼロ幅の正規表現一致が `length: 0` を保持するようになりました (#4473)** — `^` や `$` のようなアンカーのみの一致は、1文字一致として報告されず、CLI JSON と MCP 出力で挿入位置 span を維持します。
+- **コマンド別の出力形式 help と補完を実装済み形式に一致させました (#4474)** — `search --format grouped` を含む location command と format の全 65 組み合わせについて parser の受理と各コマンドの usage line を照合します。`files` と `inspect` は実装していない認識済み形式を引き続き明示的な usage error として拒否し、`deps` は未記載の `text` / `json` 形式を `edgelist` として暗黙に扱わず拒否します。
+- **checked-in workspace manifest をそのまま実行できるようにしました (#4476)** — example manifest をリポジトリルートへ移動したため、`src/CodeIndex` と `tests/CodeIndex.Tests` member は実在する project directory に解決され、`exists=true` を報告します。
+- **不正な database checkpoint 名を入力エラーとして報告するようになりました (#4477)** — `db checkpoint` は `E008_DB_ERROR` と誤解を招く storage writability hint の代わりに、許可される単一 file 名の構文を添えて `E010_USAGE_ERROR` を返します。
+- **database diff が export/import 後の reference-line link を意味的に比較するようになりました (#4478)** — `diff` は SQLite の surrogate row ID ではなく link 先の path、line、context を比較するため、同等の index content を再構築した database は `identical=true` を返します。
+- **`status --log-path --json` が構造化された path envelope を返すようになりました (#4479)** — source-generated JSON contract を使用して `log_path` と `api_version` を返し、汎用的な serialization failure にフォールスルーしなくなりました。
+
+#### ドキュメント
+
+- **各コマンドの help に有効な `--max-json-bytes` overflow policy を明記しました (#4440)** — 行を切り詰める `symbols` / search NDJSON と、応答全体をエラーにする search array / inspect / map を区別して説明します。
+
 ### [1.37.2] - 2026-07-12
 
 #### 修正
@@ -11529,7 +11823,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.37.2...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.38.0...HEAD
+[1.38.0]: https://github.com/Widthdom/CodeIndex/compare/v1.37.2...v1.38.0
 [1.37.2]: https://github.com/Widthdom/CodeIndex/compare/v1.37.1...v1.37.2
 [1.37.1]: https://github.com/Widthdom/CodeIndex/compare/v1.37.0...v1.37.1
 [1.37.0]: https://github.com/Widthdom/CodeIndex/compare/v1.36.3...v1.37.0
