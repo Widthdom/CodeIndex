@@ -1760,6 +1760,74 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_PrimaryComponentsWithSameParentNameStayInTheirOuterContainers()
+    {
+        var content = """
+            public class OuterA
+            {
+                public record Item(int Left);
+            }
+
+            public class OuterB
+            {
+                public record Item(string Right);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var left = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Left"));
+        Assert.Equal("Item", left.ContainerName);
+        Assert.Equal("OuterA.Item", left.ContainerQualifiedName);
+        Assert.Equal("int", left.ReturnType);
+
+        var right = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Right"));
+        Assert.Equal("Item", right.ContainerName);
+        Assert.Equal("OuterB.Item", right.ContainerQualifiedName);
+        Assert.Equal("string", right.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_PrimaryComponentDoesNotDuplicateExistingContainedProperty()
+    {
+        var content = """
+            public class Worker(string name)
+            {
+                public string name { get; } = name;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var name = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "name" && s.ContainerName == "Worker"));
+        Assert.Contains("get", name.Signature, StringComparison.Ordinal);
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void Extract_CSharp_ManyPrimaryConstructorTypes_CompletesWithinPracticalBudget()
+    {
+        const int typeCount = 40_000;
+        _ = SymbolExtractor.Extract(0, "csharp", "public record Warmup(int Value);");
+        var content = string.Join('\n', Enumerable.Range(0, typeCount).Select(i => $"public record Item{i}(int Value{i});"));
+
+        var stopwatch = Stopwatch.StartNew();
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        stopwatch.Stop();
+
+        Assert.Equal(typeCount, symbols.Count(s => s.Kind == "property" && s.ContainerName?.StartsWith("Item", StringComparison.Ordinal) == true));
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Value0" && s.ContainerName == "Item0");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == $"Value{typeCount - 1}" && s.ContainerName == $"Item{typeCount - 1}");
+        var runawayBudget = TimeSpan.FromSeconds(10);
+        Assert.True(
+            stopwatch.Elapsed < runawayBudget,
+            $"Dense C# primary-constructor extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
+    }
+
+    [Fact]
     public void Extract_CSharp_GenericConstraintNewCall_IsNotPrimaryConstructorParameter()
     {
         var content = """

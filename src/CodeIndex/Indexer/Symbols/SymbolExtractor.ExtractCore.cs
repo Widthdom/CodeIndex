@@ -213,6 +213,7 @@ public static partial class SymbolExtractor
         var symbols = new SymbolExtractionList(initialSymbolCapacity);
         var extractionState = symbols.ExtractionState;
         List<PendingRecordPrimaryComponents>? pendingRecordPrimaryComponents = null;
+        RecordPrimaryComponentParentIndex? recordPrimaryComponentParentIndex = null;
         var cssSeenSymbols = lang == "css"
             ? new HashSet<SymbolLineIdentity>()
             : null;
@@ -1652,6 +1653,7 @@ public static partial class SymbolExtractor
                             kind,
                             name,
                             ref pendingRecordPrimaryComponents,
+                            ref recordPrimaryComponentParentIndex,
                             symbols);
 
                         // C# plain-field (kind `property`, BodyStyle.None) matches need their own

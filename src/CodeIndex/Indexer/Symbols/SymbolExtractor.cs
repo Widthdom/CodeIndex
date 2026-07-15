@@ -622,6 +622,64 @@ public static partial class SymbolExtractor
         int RecordStartLine,
         List<RecordPrimaryComponent> Components);
 
+    private readonly record struct RecordPrimaryComponentParentKey(
+        long FileId,
+        string Kind,
+        string Name,
+        int StartLine);
+
+    private readonly record struct RecordPrimaryComponentPropertyKey(
+        long FileId,
+        string ContainerKind,
+        string ContainerName);
+
+    private sealed class RecordPrimaryComponentParentIndex
+    {
+        private readonly Dictionary<RecordPrimaryComponentParentKey, SymbolRecord> _parents = [];
+        private int _indexedCount;
+        private SymbolRecord? _lastIndexedSymbol;
+
+        public SymbolRecord? FindLast(
+            List<SymbolRecord> symbols,
+            RecordPrimaryComponentParentKey key)
+        {
+            Synchronize(symbols);
+            return _parents.TryGetValue(key, out var parent) ? parent : null;
+        }
+
+        private void Synchronize(List<SymbolRecord> symbols)
+        {
+            // AddSymbolRecord can remove declaration-only functions from the list tail.
+            // Rebuild if that invalidated the indexed boundary; otherwise consume only
+            // symbols appended since the previous record declaration.
+            // AddSymbolRecord は末尾の declaration-only function を除くことがあるため、
+            // index境界が無効なら再構築し、それ以外は追加分だけを取り込む。
+            if (_indexedCount > symbols.Count
+                || (_indexedCount > 0
+                    && !ReferenceEquals(symbols[_indexedCount - 1], _lastIndexedSymbol)))
+            {
+                _parents.Clear();
+                _indexedCount = 0;
+            }
+
+            for (var index = _indexedCount; index < symbols.Count; index++)
+            {
+                var symbol = symbols[index];
+                if (symbol.Kind is not ("class" or "struct" or "enum"))
+                    continue;
+
+                _parents[new RecordPrimaryComponentParentKey(
+                    symbol.FileId,
+                    symbol.Kind,
+                    symbol.Name,
+                    symbol.StartLine)] = symbol;
+            }
+
+            _indexedCount = symbols.Count;
+            _lastIndexedSymbol = symbols.Count > 0 ? symbols[^1] : null;
+        }
+    }
+
     private readonly record struct StrippedRecordComponentText(
         string Text,
         int ConsumedNewlines);
@@ -5463,6 +5521,7 @@ public static partial class SymbolExtractor
         string kind,
         string recordName,
         ref List<PendingRecordPrimaryComponents>? pendingRecordPrimaryComponents,
+        ref RecordPrimaryComponentParentIndex? parentIndex,
         List<SymbolRecord> symbols)
     {
         if (lang == "kotlin")
@@ -5486,11 +5545,13 @@ public static partial class SymbolExtractor
             out var declarationEndLine))
             return;
 
-        var parentSymbol = symbols.LastOrDefault(symbol =>
-            symbol.FileId == fileId
-            && symbol.Kind == kind
-            && symbol.Name == recordName
-            && symbol.StartLine == declarationLineIndex + 1);
+        var parentKey = new RecordPrimaryComponentParentKey(
+            fileId,
+            kind,
+            recordName,
+            declarationLineIndex + 1);
+        var parentSymbol = (parentIndex ??= new RecordPrimaryComponentParentIndex())
+            .FindLast(symbols, parentKey);
         if (parentSymbol != null)
             parentSymbol.EndLine = Math.Max(parentSymbol.EndLine, declarationEndLine);
 
@@ -5512,20 +5573,78 @@ public static partial class SymbolExtractor
         if (pendingRecordPrimaryComponents is not { Count: > 0 })
             return;
 
+        var parents = new Dictionary<RecordPrimaryComponentParentKey, SymbolRecord?>();
+        var propertyBuckets = new Dictionary<RecordPrimaryComponentPropertyKey, List<SymbolRecord>>();
         foreach (var pending in pendingRecordPrimaryComponents)
         {
-            var parentSymbol = FindRecordPrimaryComponentParent(symbols, pending);
+            parents.TryAdd(
+                new RecordPrimaryComponentParentKey(
+                    pending.FileId,
+                    pending.Kind,
+                    pending.RecordName,
+                    pending.RecordStartLine),
+                null);
+            propertyBuckets.TryAdd(
+                new RecordPrimaryComponentPropertyKey(
+                    pending.FileId,
+                    pending.Kind,
+                    pending.RecordName),
+                []);
+        }
+
+        // Build both final-state indexes after AssignContainers. Forward overwrite preserves
+        // the previous reverse-search "last parent wins" rule, and property buckets retain
+        // source-list order for overlapping/nested parent ranges.
+        // AssignContainers 後の最終状態から両indexを構築する。forward上書きで従来の
+        // 「最後のparent優先」を保ち、property bucketは重複range向けにlist順を保つ。
+        foreach (var symbol in symbols)
+        {
+            var parentKey = new RecordPrimaryComponentParentKey(
+                symbol.FileId,
+                symbol.Kind,
+                symbol.Name,
+                symbol.StartLine);
+            if (parents.ContainsKey(parentKey))
+                parents[parentKey] = symbol;
+
+            if (symbol.Kind == "property"
+                && symbol.ContainerKind != null
+                && symbol.ContainerName != null
+                && propertyBuckets.TryGetValue(
+                    new RecordPrimaryComponentPropertyKey(
+                        symbol.FileId,
+                        symbol.ContainerKind,
+                        symbol.ContainerName),
+                    out var propertyBucket))
+            {
+                propertyBucket.Add(symbol);
+            }
+        }
+
+        foreach (var pending in pendingRecordPrimaryComponents)
+        {
+            var parentKey = new RecordPrimaryComponentParentKey(
+                pending.FileId,
+                pending.Kind,
+                pending.RecordName,
+                pending.RecordStartLine);
+            var parentSymbol = parents[parentKey];
             if (parentSymbol == null)
                 continue;
 
-            var existingComponentNames = BuildExistingRecordPrimaryComponentNameSet(symbols, pending, parentSymbol);
+            var propertyKey = new RecordPrimaryComponentPropertyKey(
+                pending.FileId,
+                pending.Kind,
+                pending.RecordName);
+            var propertyBucket = propertyBuckets[propertyKey];
+            var existingComponentNames = BuildExistingRecordPrimaryComponentNameSet(propertyBucket, parentSymbol);
 
             foreach (var component in pending.Components)
             {
                 if (!existingComponentNames.Add(component.Name))
                     continue;
 
-                symbols.Add(new SymbolRecord
+                var componentSymbol = new SymbolRecord
                 {
                     FileId = pending.FileId,
                     Kind = "property",
@@ -5538,43 +5657,21 @@ public static partial class SymbolExtractor
                     ContainerName = pending.RecordName,
                     Visibility = component.Visibility ?? "public",
                     ReturnType = component.Type,
-                });
+                };
+                symbols.Add(componentSymbol);
+                propertyBucket.Add(componentSymbol);
             }
         }
-    }
-
-    private static SymbolRecord? FindRecordPrimaryComponentParent(
-        IReadOnlyList<SymbolRecord> symbols,
-        PendingRecordPrimaryComponents pending)
-    {
-        for (var i = symbols.Count - 1; i >= 0; i--)
-        {
-            var symbol = symbols[i];
-            if (symbol.FileId == pending.FileId
-                && symbol.Kind == pending.Kind
-                && symbol.Name == pending.RecordName
-                && symbol.StartLine == pending.RecordStartLine)
-            {
-                return symbol;
-            }
-        }
-
-        return null;
     }
 
     private static HashSet<string> BuildExistingRecordPrimaryComponentNameSet(
-        IReadOnlyList<SymbolRecord> symbols,
-        PendingRecordPrimaryComponents pending,
+        IReadOnlyList<SymbolRecord> propertyCandidates,
         SymbolRecord parentSymbol)
     {
         var existingComponentNames = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var symbol in symbols)
+        foreach (var symbol in propertyCandidates)
         {
-            if (symbol.FileId == pending.FileId
-                && symbol.Kind == "property"
-                && symbol.ContainerKind == pending.Kind
-                && symbol.ContainerName == pending.RecordName
-                && symbol.StartLine >= parentSymbol.StartLine
+            if (symbol.StartLine >= parentSymbol.StartLine
                 && symbol.EndLine <= parentSymbol.EndLine)
             {
                 existingComponentNames.Add(symbol.Name);

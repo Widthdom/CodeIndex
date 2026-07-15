@@ -5935,6 +5935,57 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_RecordComponentsWithSameParentNameStayInTheirOuterContainers()
+    {
+        var content = """
+            public class OuterA {
+                public record Item(int left) {}
+            }
+            public class OuterB {
+                public record Item(String right) {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var left = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "left"));
+        Assert.Equal("Item", left.ContainerName);
+        Assert.Equal("OuterA.Item", left.ContainerQualifiedName);
+        Assert.Equal("int", left.ReturnType);
+
+        var right = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "right"));
+        Assert.Equal("Item", right.ContainerName);
+        Assert.Equal("OuterB.Item", right.ContainerQualifiedName);
+        Assert.Equal("String", right.ReturnType);
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void Extract_Java_ManyRecordsAndCompactConstructors_CompletesWithinPracticalBudget()
+    {
+        const int typeCount = 26_000;
+        _ = SymbolExtractor.Extract(0, "java", "public record Warmup(int value) { public Warmup { } }");
+        var content = string.Join('\n', Enumerable.Range(0, typeCount).Select(i =>
+            $"public record Item{i}(int value{i}) {{ public Item{i} {{ }} }}"));
+
+        var stopwatch = Stopwatch.StartNew();
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        stopwatch.Stop();
+
+        Assert.Equal(typeCount, symbols.Count(s => s.Kind == "property" && s.ContainerName?.StartsWith("Item", StringComparison.Ordinal) == true));
+        Assert.Equal(typeCount, symbols.Count(s => s.Kind == "function" && s.Name.StartsWith("Item", StringComparison.Ordinal) && s.ContainerName == s.Name));
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value0" && s.ContainerName == "Item0");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == $"Item{typeCount - 1}" && s.ContainerName == $"Item{typeCount - 1}");
+        var runawayBudget = TimeSpan.FromSeconds(10);
+        Assert.True(
+            stopwatch.Elapsed < runawayBudget,
+            $"Dense Java record extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
+    }
+
+    [Fact]
     public void Extract_Java_DetectsRecordPrimaryComponentsWithSpacedGenericTypes()
     {
         var content = """
@@ -6172,7 +6223,10 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Compact");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "x" && s.ContainerName == "Empty");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "twice" && s.ContainerKind == "class" && s.ContainerName == "Inline");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Compact" && s.ContainerKind == "class" && s.ContainerName == "Compact");
+        var compactConstructor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Compact"));
+        Assert.Equal("class", compactConstructor.ContainerKind);
+        Assert.Equal("Compact", compactConstructor.ContainerName);
+        Assert.Null(compactConstructor.ReturnType);
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name is "Empty" or "Inline" && s.ReturnType == "record");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Compact" && s.ReturnType == "record");
     }
@@ -6666,6 +6720,56 @@ public partial class SymbolExtractorTests
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"Large Kotlin primary constructor extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
+    }
+
+    [Fact]
+    public void Extract_Kotlin_PrimaryComponentsWithSameParentNameStayInTheirOuterContainers()
+    {
+        var content = """
+            class OuterA {
+                data class Item(val left: Int) { }
+            }
+            class OuterB {
+                data class Item(val right: String) { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+
+        var left = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "left"));
+        Assert.Equal("Item", left.ContainerName);
+        Assert.Equal("OuterA.Item", left.ContainerQualifiedName);
+        Assert.Equal("Int", left.ReturnType);
+
+        var right = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "right"));
+        Assert.Equal("Item", right.ContainerName);
+        Assert.Equal("OuterB.Item", right.ContainerQualifiedName);
+        Assert.Equal("String", right.ReturnType);
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void Extract_Kotlin_ManyPrimaryConstructorTypes_CompletesWithinPracticalBudget()
+    {
+        const int typeCount = 40_000;
+        _ = SymbolExtractor.Extract(0, "kotlin", "data class Warmup(val value: Int)");
+        var content = string.Join('\n', Enumerable.Range(0, typeCount).Select(i =>
+            $"data class Item{i}(val value{i}: Int) {{ }}"));
+
+        var stopwatch = Stopwatch.StartNew();
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        stopwatch.Stop();
+
+        Assert.Equal(typeCount, symbols.Count(s => s.Kind == "property" && s.ContainerName?.StartsWith("Item", StringComparison.Ordinal) == true));
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value0" && s.ContainerName == "Item0");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == $"value{typeCount - 1}" && s.ContainerName == $"Item{typeCount - 1}");
+        var runawayBudget = TimeSpan.FromSeconds(10);
+        Assert.True(
+            stopwatch.Elapsed < runawayBudget,
+            $"Dense Kotlin primary-constructor extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
     }
 
     [Fact]
