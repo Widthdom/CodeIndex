@@ -181,8 +181,9 @@ public sealed class LocalStdioAuthenticator : IMcpAuthenticator
 /// clients cannot force unbounded hashing work. For in-cap inputs, the hash-and-compare runs
 /// unconditionally — even on a missing token — so callers cannot distinguish "missing",
 /// "wrong length", and "wrong value" by timing. Identity is <c>stdio-token</c> /
-/// <c>token</c>. Notifications skip the check upstream because they produce no response and
-/// cannot be acted on.
+/// <c>token</c>. Side-effect-free notifications may skip the upstream check, while
+/// state-changing notifications are authenticated before any mutation and remain response-free
+/// when authentication fails.
 /// トークン認証 authenticator。各 JSON-RPC リクエストは <c>params.auth.token</c> に
 /// 一致するトークンを含む必要がある。期待トークンは固定長 (SHA-256 32 バイト) のダイジェスト
 /// として保持し、提示トークンも同じ長さにハッシュしてから
@@ -192,7 +193,8 @@ public sealed class LocalStdioAuthenticator : IMcpAuthenticator
 /// hash 前に拒否し、悪意あるクライアントが無制限の hash 処理を強制できないようにする。上限内の
 /// 入力では、トークン未提示でも必ずハッシュ＋比較を走らせるため、呼び出し元は「未提示」
 /// 「長さ違い」「値違い」を時間差で区別できない。アイデンティティは <c>stdio-token</c> /
-/// <c>token</c>。通知は応答が無く副作用も持たないので呼び出し側でチェック前にスキップされる。
+/// <c>token</c>。副作用のない通知は呼び出し側で認証を省略できるが、state-changing notification
+/// は変更前に認証し、認証失敗時も notification の no-response 契約を維持する。
 /// </summary>
 public sealed class TokenMcpAuthenticator : IMcpAuthenticator
 {

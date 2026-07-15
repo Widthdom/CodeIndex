@@ -9,18 +9,30 @@ any enabled MCP tool. Treat that stdin boundary as the authorization boundary
 unless you explicitly add the optional token controls below.
 
 The optional HTTP transport is also a local operator surface, not a public
-multi-tenant service. It rejects wildcard listen hosts, refuses non-loopback
-binds unless `CDIDX_MCP_HTTP_TOKEN` or `CDIDX_MCP_AUTH_TOKEN` is set, and
-requires `Authorization: Bearer <token>` on every HTTP request when a bearer
-secret is configured. `CDIDX_MCP_HTTP_TOKEN` takes precedence when both
-variables are set; `CDIDX_MCP_AUTH_TOKEN` is the HTTP bearer fallback and does
-not make HTTP clients also send `params.auth.token`.
+multi-tenant service. It rejects wildcard listen hosts and requires a bearer
+secret on every listener by default, including loopback. Set
+`CDIDX_MCP_HTTP_TOKEN` (preferred) or the `CDIDX_MCP_AUTH_TOKEN` fallback, then
+send `Authorization: Bearer <token>` on every HTTP request; HTTP clients do not
+also send `params.auth.token`. `--allow-unauthenticated-http` is an explicit
+unsafe exception for loopback only and is refused on non-loopback listeners.
+
+Native clients may omit `Origin`. When it is present, the HTTP transport
+requires one exact match for the configured listener origin and rejects
+malformed, `null`, ambiguous, or cross-origin values before authentication.
+CORS preflight is rejected without permissive response headers. POST accepts
+only `application/json` with an omitted or UTF-8 charset and uses strict UTF-8
+decoding, preventing browser-simple media types and malformed byte sequences
+from reaching JSON-RPC dispatch.
 
 Stdio requests can require a shared secret by setting `CDIDX_MCP_AUTH_TOKEN`.
 When the variable is unset, stdio keeps the historical local-trusted-client
 behavior and does not authenticate individual JSON-RPC frames. Tool allow/deny
 environment variables can reduce the advertised/callable tool set, but they are
 not a substitute for trusting the client or protecting the transport.
+When the token is configured, it protects both responded requests and every
+state-changing notification (cancellation, roots invalidation, shutdown, and
+exit). A rejected notification remains response-free as required by JSON-RPC
+and cannot mutate server state; only a bounded local diagnostic is emitted.
 
 ### Write-Shaped MCP Tools
 

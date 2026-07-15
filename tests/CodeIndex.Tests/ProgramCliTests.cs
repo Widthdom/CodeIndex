@@ -52,7 +52,11 @@ public class ProgramCliTests
         var oversized = (HttpMcpTransport.MaxConfiguredRequestBodyBytes + 1).ToString(CultureInfo.InvariantCulture);
         var (exitCode, _, stderr) = RunCliInSubprocess(
             ["mcp", "--transport", "http"],
-            new Dictionary<string, string?> { [HttpMcpTransport.MaxRequestBodyBytesEnvVar] = oversized });
+            new Dictionary<string, string?>
+            {
+                [HttpMcpTransport.MaxRequestBodyBytesEnvVar] = oversized,
+                [ProgramRunner.McpHttpTokenEnvVar] = "test-token",
+            });
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains(HttpMcpTransport.MaxRequestBodyBytesEnvVar, stderr);

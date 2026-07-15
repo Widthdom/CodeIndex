@@ -414,6 +414,7 @@ internal static class CliFlagSchema
             new() { Name = "--log-lines", ValuePlaceholder = "<n>", Description = "Number of log lines to include in bundle (clamped to 2000)", Commands = Set("report") },
             new() { Name = "--transport", ValuePlaceholder = "<stdio|http>", Description = "MCP transport", Commands = Set("mcp") },
             new() { Name = "--http-listen", ValuePlaceholder = "<host:port>", Description = "MCP HTTP listen address", Commands = Set("mcp") },
+            new() { Name = "--allow-unauthenticated-http", Description = "MCP HTTP: explicitly allow unsafe unauthenticated loopback mode", Commands = Set("mcp") },
         };
     }
 

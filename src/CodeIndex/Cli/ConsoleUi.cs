@@ -134,7 +134,7 @@ public static class ConsoleUi
         ("hooks-install", "cdidx hooks install [--project <path>] [--force] [--json]"),
         ("hooks-uninstall", "cdidx hooks uninstall [--project <path>] [--force] [--json]"),
         ("hooks-status", "cdidx hooks status [--project <path>] [--json]"),
-        ("mcp", "cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--suggestion-dedup-threshold <0..1>]"),
+        ("mcp", "cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [--allow-unauthenticated-http] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--suggestion-dedup-threshold <0..1>]"),
         ("lsp", "cdidx lsp [--db <path>]"),
         ("completions", "cdidx completions <shell>"),
         ("--completions", "cdidx --completions <shell>"),
@@ -146,6 +146,7 @@ public static class ConsoleUi
     [
         ("mcp", "--json is not supported; MCP requests and responses are JSON-RPC over the selected transport."),
         ("mcp", "stdio transport uses one UTF-8 JSON-RPC object per LF-delimited line, not LSP Content-Length framing; lifecycle diagnostics go to stderr."),
+        ("mcp", "HTTP requires bearer authentication by default; --allow-unauthenticated-http is an explicit unsafe loopback-only opt-in."),
         ("lsp", "LSP stdio uses Content-Length framing; unsupported optional methods are not advertised and return JSON-RPC -32601."),
         ("lsp", "Completion is index-backed symbol completion with resolveProvider=false; unmatched or no-token positions return an empty item list."),
         ("completions", "--json is not supported; output is a shell script for the selected shell."),
