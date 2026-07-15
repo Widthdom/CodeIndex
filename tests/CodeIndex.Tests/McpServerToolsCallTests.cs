@@ -9493,6 +9493,132 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_PreValidationFailuresConsumeRateLimitQuota_Issue4547()
+    {
+        JsonNode Send(int id, Func<JsonObject> createParams) => _server.HandleMessage(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = id,
+            ["method"] = "tools/call",
+            ["params"] = createParams(),
+        })!;
+
+        void AssertSecondCallIsRateLimited(Func<JsonObject> createParams, Action<JsonNode> assertFirstResponse)
+        {
+            InstallRateLimiter(_server, new RateLimiterOptions
+            {
+                RefillTokensPerSecond = 1.0,
+                BurstCapacity = 1.0,
+            });
+
+            assertFirstResponse(Send(1, createParams));
+            var throttled = Send(2, createParams);
+
+            Assert.Equal(McpErrorEnvelope.CodeRateLimited, throttled["error"]!["code"]!.GetValue<int>());
+            Assert.Equal(McpErrorEnvelope.CategoryRateLimited, throttled["error"]!["data"]!["category"]!.GetValue<string>());
+            Assert.Equal(1, _server.RateLimiter.BucketCount);
+        }
+
+        // Missing/non-string names, empty/oversized/unknown names, and known-tool argument
+        // failures must all consume quota before their detailed validation response (#4547).
+        // missing/non-string、empty/oversized/unknown 名、既知 tool の argument failure は
+        // すべて詳細検証レスポンスより先に quota を消費する（#4547）。
+        AssertSecondCallIsRateLimited(
+            () => new JsonObject { ["arguments"] = new JsonObject() },
+            first => Assert.Equal(McpErrorEnvelope.CategoryMissingParameter, first["error"]!["data"]!["category"]!.GetValue<string>()));
+        AssertSecondCallIsRateLimited(
+            () => new JsonObject { ["name"] = 42, ["arguments"] = new JsonObject() },
+            first => Assert.Equal(McpErrorEnvelope.CategoryMissingParameter, first["error"]!["data"]!["category"]!.GetValue<string>()));
+        AssertSecondCallIsRateLimited(
+            () => new JsonObject { ["name"] = string.Empty, ["arguments"] = new JsonObject() },
+            first => Assert.Equal(McpErrorEnvelope.CategoryToolUnknown, first["error"]!["data"]!["category"]!.GetValue<string>()));
+        AssertSecondCallIsRateLimited(
+            () => new JsonObject { ["name"] = "SEARCH", ["arguments"] = new JsonObject() },
+            first => Assert.Equal(McpErrorEnvelope.CategoryToolUnknown, first["error"]!["data"]!["category"]!.GetValue<string>()));
+        AssertSecondCallIsRateLimited(
+            () => new JsonObject { ["name"] = new string('x', McpBoundedText.MaxToolNameChars + 1), ["arguments"] = new JsonObject() },
+            first => Assert.Equal(McpErrorEnvelope.CategoryToolUnknown, first["error"]!["data"]!["category"]!.GetValue<string>()));
+        AssertSecondCallIsRateLimited(
+            () => new JsonObject
+            {
+                ["name"] = "search",
+                ["arguments"] = new JsonObject { ["query"] = "abc", ["limt"] = 1 },
+            },
+            first => Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, first["result"]!["structuredContent"]!["category"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public void ToolsCall_UniqueUnknownNamesStayBoundedAndLegitimateToolRecoversAtAdvertisedExpiry_Issue4547()
+    {
+        var clock = InstallRateLimiter(_server, new RateLimiterOptions
+        {
+            RefillTokensPerSecond = 1.0,
+            BurstCapacity = 16.0,
+            MaxBucketCount = 2,
+            BucketIdleTtl = TimeSpan.FromSeconds(10),
+        });
+
+        for (var i = 0; i < 16; i++)
+        {
+            var unknown = _server.HandleMessage(new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = i,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = $"unknown-{i}",
+                    ["arguments"] = new JsonObject(),
+                },
+            })!;
+            Assert.Equal(McpErrorEnvelope.CategoryToolUnknown, unknown["error"]!["data"]!["category"]!.GetValue<string>());
+        }
+        Assert.Equal(1, _server.RateLimiter.BucketCount);
+
+        var exhaustedInvalidPartition = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"another-unknown","arguments":{}}}""")!)!;
+        Assert.Equal(McpErrorEnvelope.CodeRateLimited, exhaustedInvalidPartition["error"]!["code"]!.GetValue<int>());
+        Assert.Equal(1, _server.RateLimiter.BucketCount);
+
+        clock.Now = clock.Now.AddSeconds(1);
+        var languages = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"languages"}}""")!)!;
+        Assert.Null(languages["error"]);
+        Assert.Equal(2, _server.RateLimiter.BucketCount);
+
+        clock.Now = clock.Now.AddSeconds(8);
+        var saturated = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"status"}}""")!)!;
+        Assert.Equal(McpErrorEnvelope.CodeRateLimited, saturated["error"]!["code"]!.GetValue<int>());
+        var retryAfterMs = saturated["error"]!["data"]!["retry_after_ms"]!.GetValue<long>();
+        Assert.Equal(1000, retryAfterMs);
+
+        clock.Now = clock.Now.AddMilliseconds(retryAfterMs);
+        var recovered = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"status"}}""")!)!;
+        Assert.Null(recovered["error"]);
+        Assert.Equal(2, _server.RateLimiter.BucketCount);
+    }
+
+    [Fact]
+    public void ToolsCall_DisabledKnownToolConsumesQuotaBeforeEnablementCheck_Issue4547()
+    {
+        var deny = McpToolFilter.Parse(null, "status");
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false, deny);
+        InstallRateLimiter(server, new RateLimiterOptions { RefillTokensPerSecond = 1.0, BurstCapacity = 1.0 });
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!;
+
+        var disabled = server.HandleMessage(request)!;
+        var throttled = server.HandleMessage(McpJsonNode.Clone(request)!)!;
+
+        Assert.Equal(-32601, disabled["error"]!["code"]!.GetValue<int>());
+        Assert.Equal(McpErrorEnvelope.CategoryToolDisabled, disabled["error"]!["data"]!["category"]!.GetValue<string>());
+        Assert.Equal(McpErrorEnvelope.CodeRateLimited, throttled["error"]!["code"]!.GetValue<int>());
+        Assert.Equal(1, server.RateLimiter.BucketCount);
+    }
+
+    [Fact]
     public void ToolsCall_RateLimited_ReturnsStructuredNegative32000()
     {
         // Bucket of capacity 1, refilling at 1/sec. First call succeeds, second is denied

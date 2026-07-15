@@ -13,6 +13,7 @@ namespace CodeIndex.Mcp;
 internal sealed class RateLimiter
 {
     internal const long MaxDiagnosticIntervalMilliseconds = int.MaxValue;
+    internal const string InvalidToolBucketName = "(invalid tools/call)";
     private readonly object _gate = new();
     private readonly Dictionary<RateLimiterBucketKey, TokenBucket> _buckets = new();
     private readonly RateLimiterOptions _options;
@@ -27,6 +28,8 @@ internal sealed class RateLimiter
         _options = options ?? throw new ArgumentNullException(nameof(options));
         if (_options.MaxBucketCount < 1)
             throw new ArgumentOutOfRangeException(nameof(options), _options.MaxBucketCount, "Rate limiter bucket cap must be at least 1.");
+        if (_options.BucketIdleTtl <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(options), _options.BucketIdleTtl, "Rate limiter bucket idle TTL must be positive.");
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
     }
 
@@ -59,16 +62,31 @@ internal sealed class RateLimiter
             return RateLimiterDecision.Allow;
 
         var key = BuildKey(tool, caller);
-        var now = _clock();
         lock (_gate)
         {
+            // Read the decision timestamp under the same lock as bucket mutation. A caller
+            // waiting on the gate must not receive retry timing based on a stale pre-wait
+            // timestamp, and concurrent calls must observe clock values in decision order.
+            // bucket 更新と同じ lock 内で判定時刻を読む。gate 待機前の古い時刻で retry を
+            // 算出せず、並行 call が判定順に clock 値を観測するようにする。
+            var now = _clock();
             PruneIdleBuckets(now);
             if (!_buckets.TryGetValue(key, out var bucket))
             {
                 if (_buckets.Count >= _options.MaxBucketCount)
                 {
-                    _bucketLimitRejectionCount++;
-                    return RateLimiterDecision.Deny(RateLimiterOptions.BucketLimitRetryAfterMs);
+                    // The scheduled sweep is an amortization detail, not a reason to keep an
+                    // already-expired bucket when capacity is exhausted. Re-check expiry now
+                    // before denying a legitimate new key (#4547).
+                    // 定期 sweep は償却のための実装詳細。容量枯渇時に期限切れ bucket を保持して
+                    // 正常な新規キーを拒否しないよう、拒否前に現在時刻で再確認する（#4547）。
+                    if (_lastPruneAt != now)
+                        PruneIdleBuckets(now, force: true);
+                    if (_buckets.Count >= _options.MaxBucketCount)
+                    {
+                        _bucketLimitRejectionCount++;
+                        return RateLimiterDecision.Deny(ComputeBucketLimitRetryAfterMilliseconds(now));
+                    }
                 }
 
                 bucket = new TokenBucket(_options.BurstCapacity, now);
@@ -96,10 +114,42 @@ internal sealed class RateLimiter
 
     internal static RateLimiterBucketKey BuildKey(string tool, string caller) => new(tool, caller);
 
-    private void PruneIdleBuckets(DateTimeOffset now)
+    private long ComputeBucketLimitRetryAfterMilliseconds(DateTimeOffset now)
+    {
+        // The cap can recover only when the least-recently-touched bucket becomes idle.
+        // Report that real interval instead of a fixed short retry that would make a
+        // legitimate caller spin until the normal idle-prune window opens (#4547).
+        // cap から回復できる最短時刻は、最も古く触れられた bucket が idle になる時刻。
+        // 固定の短い retry 値ではなく実際の残り時間を返し、通常の idle prune まで
+        // 正常な caller が再試行ループに入ることを防ぐ（#4547）。
+        var earliestLastTouched = _buckets.Values.Min(bucket => bucket.LastTouched);
+        DateTimeOffset expiresAt;
+        try
+        {
+            expiresAt = earliestLastTouched + _options.BucketIdleTtl;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            expiresAt = DateTimeOffset.MaxValue;
+        }
+
+        if (expiresAt <= now)
+            return 1;
+
+        try
+        {
+            return Math.Max(1, (long)Math.Ceiling((expiresAt - now).TotalMilliseconds));
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return (long)Math.Ceiling((DateTimeOffset.MaxValue - now).TotalMilliseconds);
+        }
+    }
+
+    private void PruneIdleBuckets(DateTimeOffset now, bool force = false)
     {
         var idleTtl = _options.BucketIdleTtl;
-        if (idleTtl <= TimeSpan.Zero || now < _nextPruneAt)
+        if (idleTtl <= TimeSpan.Zero || (!force && now < _nextPruneAt))
             return;
 
         var cutoff = ComputeIdleCutoff(now, idleTtl);
@@ -284,7 +334,6 @@ internal sealed class RateLimiterOptions
 {
     internal static readonly TimeSpan DefaultBucketIdleTtl = TimeSpan.FromMinutes(15);
     internal const int DefaultMaxBucketCount = 4096;
-    internal const long BucketLimitRetryAfterMs = 1000;
     internal const string RpsEnvVar = "CDIDX_MCP_RATE_LIMIT_RPS";
     internal const string BurstEnvVar = "CDIDX_MCP_RATE_LIMIT_BURST";
     internal const string BucketIdleSecondsEnvVar = "CDIDX_MCP_RATE_LIMIT_BUCKET_IDLE_SECONDS";

@@ -3531,6 +3531,26 @@ public partial class McpServer : IDisposable
     private static BoundedMcpText BoundClientIdentityForDisplay(string value)
         => McpBoundedText.ForDisplay(value, McpBoundedText.MaxClientIdentityChars);
 
+    private static string ResolveRateLimitBucketName(string? toolName)
+    {
+        // Only canonical known-tool names receive independent buckets. Missing, malformed,
+        // oversized, case-variant aliases, and unknown names collapse into one bounded key
+        // per caller so untrusted names cannot consume the global bucket budget (#4547).
+        // canonical な既知ツール名だけに独立 bucket を割り当てる。missing / malformed /
+        // oversized / 大文字小文字 variant / unknown は caller ごとの固定キーへ集約し、
+        // 未信頼の名前で global bucket budget を消費できないようにする（#4547）。
+        if (toolName is not null)
+        {
+            foreach (var knownToolName in McpToolFilter.KnownToolNames)
+            {
+                if (string.Equals(knownToolName, toolName, StringComparison.Ordinal))
+                    return knownToolName;
+            }
+        }
+
+        return RateLimiter.InvalidToolBucketName;
+    }
+
     /// <summary>
     /// Build a structured `-32000` JSON-RPC error for a rate-limited tool call. Surfacing
     /// the limit category in `error.data.error_category` (alongside `tool`, `caller`, and
@@ -3586,53 +3606,13 @@ public partial class McpServer : IDisposable
     /// </summary>
     private async Task<JsonNode> HandleToolsCallAsync(JsonNode? id, JsonNode? callParams)
     {
-        var toolName = callParams?["name"]?.GetValue<string>();
-        var args = callParams?["arguments"];
-        var progressToken = TryReadProgressToken(callParams);
-
-        if (toolName == null)
-        {
-            var missingNameResponse = CreateErrorResponse(hasId: true, id: id, code: -32602, message: "Missing tool name",
-                category: McpErrorEnvelope.CategoryMissingParameter,
-                suggestion: "tools/call requires `params.name`. Send the tool identifier (e.g. \"search\", \"definition\") as a string.",
-                retrySafe: false);
-            // Even malformed tool-call requests are audited so a misbehaving client cannot
-            // hide its activity by sending invalid params on every call (#1562).
-            // 不正な tools/call も audit する。不正引数でログから消えるのを防ぐため (#1562)。
-            TryEmitAudit("(missing)", id, args, missingNameResponse, _timeProvider.GetUtcNow(), 0.0, errorType: "missing_tool_name");
-            return missingNameResponse;
-        }
-        var toolNameTooLong = toolName.Length > McpBoundedText.MaxToolNameChars;
-
-        // Per-deployment enablement gate (#1561). Disabled known tools return `-32601 method
-        // not found` so clients can branch on a structured JSON-RPC code; truly unknown names
-        // still fall through to the existing `-32602 Unknown tool` path so typos remain
-        // distinguishable from operator-disabled tools.
-        // デプロイ単位の有効化ゲート (#1561)。既知ツールが無効化されている場合は `-32601`
-        // を返し、クライアントが構造化 code で判定できるようにする。サーバーに無い名前は
-        // 既存の `-32602 Unknown tool` 経路に流し、オペレータによる無効化と typo を区別する。
-        if (McpToolFilter.IsKnownTool(toolName) && !_toolFilter.IsEnabled(toolName))
-        {
-            // Wire code stays at -32601 (#1561 contract) so existing clients keep working;
-            // the `data.category = "tool_disabled"` envelope (#1581) is what new clients should
-            // branch on to distinguish operator-disabled tools from typos (`tool_unknown`) and
-            // missing methods (`method_not_found`).
-            // ワイヤコードは #1561 契約に従い -32601 のまま維持し、既存クライアントを壊さない。
-            // 新クライアントは `data.category = "tool_disabled"` で typo (`tool_unknown`) や
-            // 未知メソッド (`method_not_found`) と区別する（#1581）。
-            var disabledResponse = CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Tool not enabled: {toolName}",
-                category: McpErrorEnvelope.CategoryToolDisabled,
-                suggestion: "This tool is disabled on the server (CDIDX_MCP_TOOLS_ALLOW / CDIDX_MCP_TOOLS_DENY). Ask the operator to enable it or use a different tool.",
-                retrySafe: false,
-                extraData: new JsonObject { ["tool"] = toolName });
-            // Audit operator-disabled attempts so the policy can be reviewed after the fact;
-            // skipping them would let a deny-listed caller silently retry without trace
-            // even though missing/unknown tools are captured (#1562 review).
-            // オペレータ拒否された呼び出しも audit する。missing/unknown は記録されるのに
-            // disabled だけ消えると、deny リストの効果を後から検証できなくなる。
-            TryEmitAudit(toolName, id, args, disabledResponse, _timeProvider.GetUtcNow(), 0.0, errorType: "tool_disabled");
-            return disabledResponse;
-        }
+        var callParamsObject = callParams as JsonObject;
+        var args = callParamsObject?["arguments"];
+        var toolName = callParamsObject?["name"] is JsonValue toolNameValue
+            && toolNameValue.TryGetValue<string>(out var parsedToolName)
+                ? parsedToolName
+                : null;
+        var observedToolName = toolName ?? "(missing)";
 
         Database.DbDebug.ResetContext();
         var metricsStartedAt = _timeProvider.GetUtcNow();
@@ -3642,62 +3622,80 @@ public partial class McpServer : IDisposable
         JsonObject CreateUnknownToolResponseForMetrics()
         {
             metricsError = "unknown_tool";
-            return CreateUnknownToolErrorResponse(hasId: true, id: id, toolName);
+            return CreateUnknownToolErrorResponse(hasId: true, id: id, observedToolName);
         }
 
         try
         {
-            if (toolNameTooLong)
+            var caller = CurrentInitializeState.Caller;
+            var rateLimitBucketName = ResolveRateLimitBucketName(toolName);
+            var decision = RateLimiter.TryAcquire(rateLimitBucketName, caller);
+            if (!decision.Allowed)
             {
-                response = CreateUnknownToolResponseForMetrics();
+                metricsError = "rate_limited";
+                DeferFrameLog(BuildRateLimitedLog(observedToolName, caller, decision.RetryAfterMs));
+                response = CreateRateLimitedErrorResponse(id, observedToolName, caller, decision.RetryAfterMs);
             }
-            else if (ValidateToolArguments(toolName, args) is JsonObject argumentError)
+            else if (toolName is null)
             {
-                metricsError = "invalid_argument";
-                if (argumentError["jsonrpc_invalid_params"] is JsonValue invalidParamsMarker
-                    && invalidParamsMarker.TryGetValue<bool>(out var invalidParams)
-                    && invalidParams)
-                {
-                    argumentError.Remove("jsonrpc_invalid_params");
-                    response = CreateErrorResponse(hasId: true, id: id, code: -32602, message: argumentError["message"]!.GetValue<string>(),
-                        category: McpErrorEnvelope.CategoryInvalidArgument,
-                        suggestion: "Use the JSON types advertised by tools/list for this tool.",
-                        retrySafe: false,
-                        extraData: argumentError);
-                }
-                else
-                {
-                    response = CreateToolErrorResponse(id, argumentError["message"]!.GetValue<string>(),
-                        category: McpErrorEnvelope.CategoryInvalidArgument,
-                        suggestion: "Use exactly the argument names advertised by tools/list for this tool.",
-                        retrySafe: false,
-                        extraData: argumentError);
-                }
+                metricsError = "missing_tool_name";
+                response = CreateErrorResponse(hasId: true, id: id, code: -32602, message: "Missing tool name",
+                    category: McpErrorEnvelope.CategoryMissingParameter,
+                    suggestion: "tools/call requires `params.name`. Send the tool identifier (e.g. \"search\", \"definition\") as a string.",
+                    retrySafe: false);
             }
-            else if (ValidateCommonListArguments(args) is JsonObject listArgumentError)
+            // Per-deployment enablement gate (#1561). The rate-limit check deliberately runs
+            // first so disabled-tool retries cannot bypass request-cost protection (#4547).
+            // デプロイ単位の有効化ゲート (#1561)。disabled tool の再試行で request-cost
+            // protection を回避できないよう、rate-limit check を先に実行する（#4547）。
+            else if (McpToolFilter.IsKnownTool(toolName) && !_toolFilter.IsEnabled(toolName))
             {
-                metricsError = "invalid_list_argument";
-                response = CreateToolErrorResponse(id, listArgumentError["message"]!.GetValue<string>(),
-                    category: McpErrorEnvelope.CategoryInvalidArgument,
-                    suggestion: "Send only non-empty string entries within the documented MCP array bounds.",
+                metricsError = "tool_disabled";
+                response = CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Tool not enabled: {toolName}",
+                    category: McpErrorEnvelope.CategoryToolDisabled,
+                    suggestion: "This tool is disabled on the server (CDIDX_MCP_TOOLS_ALLOW / CDIDX_MCP_TOOLS_DENY). Ask the operator to enable it or use a different tool.",
                     retrySafe: false,
-                    extraData: listArgumentError);
+                    extraData: new JsonObject { ["tool"] = toolName });
             }
             else
             {
-                // Per-(tool, caller) rate limiter check (#1560). Disabled by default; when an
-                // operator opts in via CDIDX_MCP_RATE_LIMIT_RPS we still keep the assignment-then-
-                // emit pattern so the rate-limit refusal lands in the audit log (#1562) instead of
-                // disappearing into a direct return.
-                // (tool, caller) ごとのレート制限 (#1560)。既定は無効。opt-in 時もアサインしてから
-                // 監査出力する構造を保ち、refusal が audit log (#1562) から消えないようにする。
-                var caller = CurrentInitializeState.Caller;
-                var decision = RateLimiter.TryAcquire(toolName, caller);
-                if (!decision.Allowed)
+                var progressToken = TryReadProgressToken(callParamsObject);
+                var toolNameTooLong = toolName.Length > McpBoundedText.MaxToolNameChars;
+                if (toolNameTooLong)
                 {
-                    metricsError = "rate_limited";
-                    DeferFrameLog(BuildRateLimitedLog(toolName, caller, decision.RetryAfterMs));
-                    response = CreateRateLimitedErrorResponse(id, toolName, caller, decision.RetryAfterMs);
+                    response = CreateUnknownToolResponseForMetrics();
+                }
+                else if (ValidateToolArguments(toolName, args) is JsonObject argumentError)
+                {
+                    metricsError = "invalid_argument";
+                    if (argumentError["jsonrpc_invalid_params"] is JsonValue invalidParamsMarker
+                        && invalidParamsMarker.TryGetValue<bool>(out var invalidParams)
+                        && invalidParams)
+                    {
+                        argumentError.Remove("jsonrpc_invalid_params");
+                        response = CreateErrorResponse(hasId: true, id: id, code: -32602, message: argumentError["message"]!.GetValue<string>(),
+                            category: McpErrorEnvelope.CategoryInvalidArgument,
+                            suggestion: "Use the JSON types advertised by tools/list for this tool.",
+                            retrySafe: false,
+                            extraData: argumentError);
+                    }
+                    else
+                    {
+                        response = CreateToolErrorResponse(id, argumentError["message"]!.GetValue<string>(),
+                            category: McpErrorEnvelope.CategoryInvalidArgument,
+                            suggestion: "Use exactly the argument names advertised by tools/list for this tool.",
+                            retrySafe: false,
+                            extraData: argumentError);
+                    }
+                }
+                else if (ValidateCommonListArguments(args) is JsonObject listArgumentError)
+                {
+                    metricsError = "invalid_list_argument";
+                    response = CreateToolErrorResponse(id, listArgumentError["message"]!.GetValue<string>(),
+                        category: McpErrorEnvelope.CategoryInvalidArgument,
+                        suggestion: "Send only non-empty string entries within the documented MCP array bounds.",
+                        retrySafe: false,
+                        extraData: listArgumentError);
                 }
                 else if (ValidateProjectFilterArguments(args) is JsonObject projectFilterError)
                 {
@@ -3759,16 +3757,16 @@ public partial class McpServer : IDisposable
             // (#1530 / #4124)。
             DeferFrameLog(() =>
             {
-                WriteMcpLogLine(BuildToolErrorLog(toolName, ex));
+                WriteMcpLogLine(BuildToolErrorLog(observedToolName, ex));
                 Database.DbDebug.DumpToStderr(ex);
             });
             metricsError = ex.GetType().Name;
             var classification = McpErrorEnvelope.ClassifyException(ex);
-            response = CreateToolErrorResponse(true, id, BuildSanitizedToolErrorMessage(toolName, ex),
+            response = CreateToolErrorResponse(true, id, BuildSanitizedToolErrorMessage(observedToolName, ex),
                 category: classification.Category,
                 suggestion: classification.Suggestion,
                 retrySafe: classification.RetrySafe,
-                extraData: BuildToolExceptionData(toolName, ex.GetType().Name));
+                extraData: BuildToolExceptionData(observedToolName, ex.GetType().Name));
         }
         finally
         {
@@ -3776,7 +3774,7 @@ public partial class McpServer : IDisposable
             if (MetricsSink.IsActive)
             {
                 metricsStopwatch.Stop();
-                var metricsTool = BoundToolNameForDisplay(toolName).Text;
+                var metricsTool = BoundToolNameForDisplay(observedToolName).Text;
                 MetricsSink.Record(new MetricsEvent(
                     Timestamp: metricsStartedAt,
                     Tool: metricsTool,
@@ -3796,8 +3794,8 @@ public partial class McpServer : IDisposable
         // 出力する。Stopwatch.Stop は冪等。TryEmitAudit 内部でベストエフォート化済み (#1562)。
         metricsStopwatch.Stop();
         var auditErrorType = metricsError == "unknown_tool" ? null : metricsError;
-        TryEmitAudit(toolName, id, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, errorType: auditErrorType);
-        EmitToolInvocationTelemetry(toolName, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, metricsError);
+        TryEmitAudit(observedToolName, id, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, errorType: auditErrorType);
+        EmitToolInvocationTelemetry(observedToolName, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, metricsError);
         return response;
     }
 

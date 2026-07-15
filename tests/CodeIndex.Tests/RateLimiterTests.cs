@@ -103,7 +103,7 @@ public class RateLimiterTests
     }
 
     [Fact]
-    public void HighCardinalityCallers_DoNotGrowBeyondBucketLimit_Issue3780()
+    public void BucketLimit_ReportsEarliestExpiryAndRecoversAtAdvertisedTime_Issues3780And4547()
     {
         var clock = new TestClock();
         var options = new RateLimiterOptions
@@ -111,20 +111,58 @@ public class RateLimiterTests
             RefillTokensPerSecond = 1.0,
             BurstCapacity = 1.0,
             MaxBucketCount = 2,
+            BucketIdleTtl = TimeSpan.FromSeconds(10),
         };
         var limiter = new RateLimiter(options, clock.Read);
 
         Assert.True(limiter.TryAcquire("search", "client-a").Allowed);
+        clock.Now = clock.Now.AddSeconds(1);
+        Assert.True(limiter.TryAcquire("search", "client-b").Allowed);
+
+        // A scheduled prune at t=9 advances the ordinary sweep to t=11.5, but client-a
+        // expires at t=10. The cap retry must report that real 1-second boundary, and the
+        // retry at t=10 must force an expiry check instead of waiting for the schedule.
+        // t=9 の scheduled prune は通常 sweep を t=11.5 へ進めるが client-a は t=10 に
+        // expire する。cap retry は実際の 1 秒境界を返し、t=10 の再試行では schedule を
+        // 待たず強制 expiry check を行う必要がある。
+        clock.Now = clock.Now.AddSeconds(8);
+        var denied = limiter.TryAcquire("search", "client-c");
+
+        Assert.False(denied.Allowed);
+        Assert.Equal(1000, denied.RetryAfterMs);
+        Assert.Equal(2, limiter.BucketCount);
+        var diagnostics = limiter.SnapshotDiagnostics();
+        Assert.Equal(2, diagnostics.MaxBucketCount);
+        Assert.Equal(1, diagnostics.BucketLimitRejectionCount);
+
+        clock.Now = clock.Now.AddMilliseconds(denied.RetryAfterMs);
+        Assert.True(limiter.TryAcquire("search", "client-c").Allowed);
+        Assert.Equal(2, limiter.BucketCount);
+        var recoveredDiagnostics = limiter.SnapshotDiagnostics();
+        Assert.Equal(1, recoveredDiagnostics.BucketLimitRejectionCount);
+        Assert.Equal(1, recoveredDiagnostics.LastPrunedBucketCount);
+    }
+
+    [Fact]
+    public void BucketLimitRetryAfter_TracksEarliestRemainingIdleTtl_Issue4547()
+    {
+        var clock = new TestClock();
+        var limiter = new RateLimiter(new RateLimiterOptions
+        {
+            RefillTokensPerSecond = 1.0,
+            BurstCapacity = 1.0,
+            MaxBucketCount = 2,
+            BucketIdleTtl = TimeSpan.FromSeconds(30),
+        }, clock.Read);
+
+        Assert.True(limiter.TryAcquire("search", "client-a").Allowed);
+        clock.Now = clock.Now.AddSeconds(7);
         Assert.True(limiter.TryAcquire("search", "client-b").Allowed);
 
         var denied = limiter.TryAcquire("search", "client-c");
 
         Assert.False(denied.Allowed);
-        Assert.Equal(RateLimiterOptions.BucketLimitRetryAfterMs, denied.RetryAfterMs);
-        Assert.Equal(2, limiter.BucketCount);
-        var diagnostics = limiter.SnapshotDiagnostics();
-        Assert.Equal(2, diagnostics.MaxBucketCount);
-        Assert.Equal(1, diagnostics.BucketLimitRejectionCount);
+        Assert.Equal(23_000, denied.RetryAfterMs);
     }
 
     [Fact]

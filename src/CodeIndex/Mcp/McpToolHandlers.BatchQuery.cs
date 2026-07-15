@@ -273,13 +273,16 @@ public partial class McpServer
 
             // Throttle each inner slot too, otherwise a single allowed batch_query call could
             // still drive N inner searches through and defeat the per-(tool, caller) limiter
-            // the outer dispatch enforces. The decision is per (inner-tool, caller) so an
-            // over-quota slot can coexist with allowed slots in the same batch (#1560).
+            // the outer dispatch enforces. Unknown names use the same fixed invalid-name bucket
+            // as top-level calls so one batch cannot allocate untrusted high-cardinality keys
+            // (#1560 / #4547).
             // 内側スロット単位でもスロットルする。これを行わないと外側の batch_query が 1 回通った
             // だけで N 個の内側呼び出しが素通りし、(tool, caller) 制限が batch_query 経由で
             // 迂回されてしまう。判定は (内側ツール, caller) 単位なので、同一バッチ内で許可スロット
-            // と超過スロットを併存させられる（#1560）。
-            var slotDecision = RateLimiter.TryAcquire(toolName, caller);
+            // と超過スロットを併存させられる。unknown 名は top-level と同じ固定 invalid-name
+            // bucket に集約し、1 batch で未信頼の高 cardinality key を確保できないようにする
+            // （#1560 / #4547）。
+            var slotDecision = RateLimiter.TryAcquire(ResolveRateLimitBucketName(toolName), caller);
             if (!slotDecision.Allowed)
             {
                 AppendRateLimitedSlot(requestIndex, slotId, toolName, toolArgs, slotStopwatch, slotDecision.RetryAfterMs);

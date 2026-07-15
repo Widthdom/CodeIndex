@@ -872,7 +872,7 @@ public sealed class Caller
     }
 
     [Fact]
-    public async Task ProcessLineAsync_FallbackErrorIncludesCorrelationData()
+    public async Task ProcessLineAsync_NonStringToolNameUsesControlledValidationAndCorrelationData_Issue4547()
     {
         using var writer = new StringWriter();
         using var error = new StringWriter();
@@ -898,9 +898,12 @@ public sealed class Caller
 
         var response = JsonNode.Parse(writer.ToString())!;
         var data = response["error"]!["data"]!;
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal(McpErrorEnvelope.CategoryMissingParameter, data["category"]!.GetValue<string>());
         Assert.Equal("321", data["request_id"]!.GetValue<string>());
         Assert.False(string.IsNullOrWhiteSpace(data["correlation_id"]!.GetValue<string>()));
-        Assert.Contains("[cdidx-mcp] [rid=321 cid=", error.ToString());
+        Assert.Contains("[rid=321 cid=", error.ToString());
+        Assert.DoesNotContain("[cdidx-mcp] Error:", error.ToString());
     }
 
 
