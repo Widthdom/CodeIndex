@@ -16,6 +16,18 @@ public static partial class QueryCommandRunner
             AddReadOnlyFallbackDiagnostics(payload, reader);
     }
 
+    private static void WriteActiveSqliteDiagnosticsProperties(TextWriter writer, JsonSerializerOptions jsonOptions)
+    {
+        var payload = new JsonObject();
+        AddActiveSqliteDiagnostics(payload);
+        if (payload.Count == 0)
+            return;
+
+        var json = payload.ToJsonString(jsonOptions);
+        writer.Write(',');
+        writer.Write(json.AsSpan(1, json.Length - 2));
+    }
+
     private static string SerializeQueryJson<T>(T value, JsonTypeInfo<T> jsonTypeInfo, JsonSerializerOptions jsonOptions)
     {
         var reader = ActiveSqliteDiagnosticsReader.Value;

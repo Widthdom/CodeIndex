@@ -3075,6 +3075,34 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, outlineExit);
             Assert.Equal(string.Empty, outlineStderr);
             Assert.True(outlineDocument.RootElement.GetProperty("wal_stale_snapshot_risk").GetBoolean());
+
+            var (sarifExit, sarifStdout, sarifStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["class", "--db", options.DbPath, "--format", "sarif", "--limit", "1"],
+                _jsonOptions));
+            using var sarifDocument = ParseJsonOutput(sarifStdout);
+            Assert.Equal(CommandExitCodes.Success, sarifExit);
+            Assert.Equal(string.Empty, sarifStderr);
+            Assert.True(sarifDocument.RootElement.GetProperty("wal_stale_snapshot_risk").GetBoolean());
+            Assert.Equal("explicit_immutable_read_only", sarifDocument.RootElement.GetProperty("wal_stale_snapshot_reason").GetString());
+
+            var (lspExit, lspStdout, lspStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["class", "--db", options.DbPath, "--format", "lsp", "--limit", "1"],
+                _jsonOptions));
+            using var lspDocument = ParseJsonOutput(lspStdout);
+            Assert.Equal(CommandExitCodes.Success, lspExit);
+            Assert.Equal(string.Empty, lspStderr);
+            Assert.True(lspDocument.RootElement[0].GetProperty("wal_stale_snapshot_risk").GetBoolean());
+
+            var (ndjsonExit, ndjsonStdout, ndjsonStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["class", "--db", options.DbPath, "--json=ndjson", "--limit", "1"],
+                _jsonOptions));
+            var ndjsonLines = ndjsonStdout.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            using var ndjsonResult = JsonDocument.Parse(ndjsonLines[0]);
+            using var ndjsonDone = JsonDocument.Parse(ndjsonLines[1]);
+            Assert.Equal(CommandExitCodes.Success, ndjsonExit);
+            Assert.Equal(string.Empty, ndjsonStderr);
+            Assert.True(ndjsonResult.RootElement.GetProperty("wal_stale_snapshot_risk").GetBoolean());
+            Assert.True(ndjsonDone.RootElement.GetProperty("wal_stale_snapshot_risk").GetBoolean());
         }
         finally
         {

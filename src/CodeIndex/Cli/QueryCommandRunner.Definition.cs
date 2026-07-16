@@ -258,7 +258,7 @@ public static partial class QueryCommandRunner
             {
                 if (TrySelectLogicalPartialDefinition(results, out var representative))
                 {
-                    Console.WriteLine(JsonSerializer.Serialize(ToLspLocation(representative), CliJsonSerializerContextFactory.Create(jsonOptions).LspLocation));
+                    Console.WriteLine(SerializeQueryJson(ToLspLocation(representative), CliJsonSerializerContextFactory.Create(jsonOptions).LspLocation, jsonOptions));
                     return CommandExitCodes.Success;
                 }
 
