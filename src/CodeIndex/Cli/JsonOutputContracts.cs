@@ -724,6 +724,10 @@ internal sealed record VersionInfoJsonResult(
     [property: JsonPropertyName("dirty")] string Dirty,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
+internal sealed record TestExtractorJsonResult(
+    [property: JsonPropertyName("symbols")] JsonElement Symbols,
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
+
 internal sealed record ValidateConfigJsonResult(
     [property: JsonPropertyName("valid")] bool Valid,
     [property: JsonPropertyName("path")]
@@ -962,6 +966,7 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(SymbolAnalysisResult))]
 [JsonSerializable(typeof(SymbolHotspotJsonResult))]
 [JsonSerializable(typeof(SymbolResult))]
+[JsonSerializable(typeof(TestExtractorJsonResult))]
 [JsonSerializable(typeof(UnusedSymbolResult))]
 [JsonSerializable(typeof(CodeIndex.Models.UpdateCheckResult))]
 [JsonSerializable(typeof(UpgradeJsonResult))]

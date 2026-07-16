@@ -71,6 +71,8 @@ public class JsonOutputApiVersionTests
     [InlineData(typeof(IndexFullScanJsonResult))]
     [InlineData(typeof(IndexWatchStartedJsonResult))]
     [InlineData(typeof(IndexWatchEventJsonResult))]
+    [InlineData(typeof(UpdateCheckResult))]
+    [InlineData(typeof(TestExtractorJsonResult))]
     public void UtilityTopLevelDto_ImplementsSharedApiVersionContract(Type dtoType)
     {
         Assert.True(
@@ -125,6 +127,19 @@ public class JsonOutputApiVersionTests
                 ["--version", "--json"],
                 _jsonOptions,
                 "9.9.9-test"));
+            using var updateCheckEnvironment = EnvironmentVariableScope.Capture(UpdateChecker.DisableEnvVar);
+            updateCheckEnvironment.Set(UpdateChecker.DisableEnvVar, "1");
+            AssertCommandApiVersion(() => ProgramRunner.Run(
+                ["--check-updates", "--json"],
+                _jsonOptions,
+                "9.9.9-test"));
+
+            var extractorPath = Path.Combine(projectRoot, "ExtractorFixture.cs");
+            File.WriteAllText(extractorPath, "namespace Demo; class ExtractorFixture {}\n");
+            AssertCommandApiVersion(() => ProgramRunner.Run(
+                ["test-extractor", "--language", "csharp", "--file", extractorPath, "--json"],
+                _jsonOptions,
+                "9.9.9-test"));
             AssertCommandApiVersion(() => IndexCommandRunner.Run(
                 [projectRoot, "--db", dbPath, "--json", "--quiet"],
                 _jsonOptions));
@@ -134,6 +149,13 @@ public class JsonOutputApiVersionTests
                 _jsonOptions));
             Assert.Equal(CommandExitCodes.UsageError, errorExitCode);
             AssertApiVersion(errorStdout);
+
+            var (extractorErrorExitCode, extractorErrorStdout, _) = CaptureConsole(() => ProgramRunner.Run(
+                ["test-extractor", "--json"],
+                _jsonOptions,
+                "9.9.9-test"));
+            Assert.Equal(CommandExitCodes.InvalidArgument, extractorErrorExitCode);
+            AssertApiVersion(extractorErrorStdout);
         }
         finally
         {
