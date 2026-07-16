@@ -425,7 +425,7 @@ public partial class IndexCommandRunnerTests
             Assert.True(hookInvoked);
             Assert.Equal(CommandExitCodes.Interrupted, exitCode);
             Assert.Equal(CommandErrorCodes.Interrupted, json.GetProperty("error_code").GetString());
-            using var db = new DbContext(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            using var db = new DbContext(DbOpenIntent.WriteIndex, Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
             Assert.Equal(0, db.GetUserVersion());
         }
         finally
@@ -712,7 +712,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 Assert.Equal(Path.GetFullPath(projectRootA), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
             }
@@ -754,7 +754,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal("success", json.GetProperty("status").GetString());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("files_skipped").GetInt32());
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 Assert.Equal(Path.GetFullPath(projectRoot), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
             }
@@ -975,7 +975,7 @@ public partial class IndexCommandRunnerTests
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             int initialReadiness;
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 initialReadiness = db.GetUserVersion();
             Assert.Equal(DbContext.CurrentSchemaVersion, initialReadiness);
             Assert.Contains("app.cs", ReadIndexedPaths(dbPath));
@@ -1017,7 +1017,7 @@ public partial class IndexCommandRunnerTests
             Assert.Contains("rolled back", interruptedJson.GetProperty("hint").GetString(), StringComparison.Ordinal);
             var reopenWarning = ConsoleCapture.CaptureError(() =>
             {
-                using var db = new DbContext(dbPath);
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
                 Assert.Equal(initialReadiness, db.GetUserVersion());
             });
             Assert.DoesNotContain("Last batch did not complete", reopenWarning);
@@ -2159,7 +2159,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal("success", json1.GetProperty("status").GetString());
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            using (var seededDb = new DbContext(dbPath))
+            using (var seededDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
 
             File.WriteAllText(Path.Combine(projectRoot, "Extra.csproj"), "<Project />");
@@ -2168,7 +2168,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode2);
             Assert.Equal("success", json2.GetProperty("status").GetString());
 
-            using var verifyDb = new DbContext(dbPath);
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal(
                 DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
@@ -2204,7 +2204,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal("success", rerunJson.GetProperty("status").GetString());
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            using var verifyDb = new DbContext(dbPath);
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
 
             var (hotspotsExitCode, hotspotsJson) = RunHotspotsJson(dbPath, "csharp", "function");
@@ -2237,7 +2237,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal("success", initialJson.GetProperty("status").GetString());
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), null);
@@ -2250,7 +2250,7 @@ public partial class IndexCommandRunnerTests
             Assert.True(rerunJson.GetProperty("summary").GetProperty("files_skipped").GetInt32() > 0);
             Assert.True(rerunJson.GetProperty("hotspot_family_ready").GetBoolean());
 
-            using (var verifyDb = new DbContext(dbPath))
+            using (var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 Assert.Equal(
                     DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -2676,7 +2676,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal(expectedHead, db.GetMetaString(DbContext.IndexedHeadCommitMetaKey));
         }
         finally
@@ -2724,7 +2724,7 @@ public partial class IndexCommandRunnerTests
             // After a successful re-scan the HEAD pointer should be updated to the new value.
             // 再スキャン成功後は HEAD が新しい値に更新される。
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal(secondHead, db.GetMetaString(DbContext.IndexedHeadCommitMetaKey));
         }
         finally

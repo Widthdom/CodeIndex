@@ -174,7 +174,14 @@ internal static class ExportImportCommandRunner
             }
 
             phase = PhaseSqliteValidate;
-            if (!DbContext.TryValidateExistingCodeIndexDb(tempPath, out var validationMessage, out _, cancellationToken: cancellationToken))
+            if (!DbContext.TryValidateExistingCodeIndexDb(
+                    tempPath,
+                    requireWritable: true,
+                    requireSupportedUserVersion: false,
+                    out var validationMessage,
+                    out _,
+                    out _,
+                    cancellationToken))
                 return WriteImportError(wantsJson, jsonOptions, PhaseSqliteValidate, "import_database_invalid", $"archive database is invalid: {validationMessage}.", "re-export from a compatible CodeIndex database.", ImportUsage);
             AddImportValidationPhase(validationPhases, PhaseSqliteValidate);
             SqliteConnection.ClearAllPools();
@@ -345,7 +352,13 @@ internal static class ExportImportCommandRunner
 
         dbPath ??= DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null).DbPath;
         var normalizedDbPath = DbPathResolver.NormalizeDbPath(dbPath);
-        if (!DbContext.TryValidateExistingCodeIndexDb(normalizedDbPath, out var validationMessage, out _))
+        if (!DbContext.TryValidateExistingCodeIndexDb(
+                normalizedDbPath,
+                requireWritable: false,
+                requireSupportedUserVersion: false,
+                out var validationMessage,
+                out _,
+                out _))
             return WriteExportError(wantsJson, jsonOptions, PhaseSqliteValidate, "export_database_invalid", validationMessage, "run `cdidx index <projectPath>` first or pass `--db <path>`.", "cdidx export <archive> [--db <path>] [--json]");
 
         var fullSourceDbPath = Path.GetFullPath(normalizedDbPath);
@@ -492,14 +505,19 @@ internal static class ExportImportCommandRunner
             return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "ctags_export_output_overlaps_database", "ctags output path must not be the source database or a SQLite sidecar.", "choose a separate tags path, for example `tags`.", CtagsExportUsage);
         }
 
-        if (!DbContext.TryValidateExistingCodeIndexDb(normalizedDbPath, out var validationMessage, out _))
+        if (!DbContext.TryValidateExistingCodeIndexDb(
+                normalizedDbPath,
+                requireWritable: false,
+                requireSupportedUserVersion: false,
+                out var validationMessage,
+                out _,
+                out _))
             return WriteExportError(wantsJson, jsonOptions, PhaseSqliteValidate, "ctags_export_database_invalid", validationMessage, "run `cdidx index <projectPath>` first or pass `--db <path>`.", CtagsExportUsage);
 
         var filters = new CtagsExportOptions(lang, pathPatterns.ToArray(), excludePathPatterns.ToArray(), excludeTests);
         try
         {
-            using var db = new DbContext(normalizedDbPath);
-            db.TryMigrateForRead();
+            using var db = new DbContext(DbOpenIntent.QueryOnly, normalizedDbPath);
             var outputDirectory = Path.GetDirectoryName(fullOutputPath);
             if (!string.IsNullOrWhiteSpace(outputDirectory))
                 Directory.CreateDirectory(outputDirectory);
@@ -1194,7 +1212,7 @@ internal static class ExportImportCommandRunner
     internal static void CreateDatabaseSnapshot(string sourceDbPath, string snapshotPath, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var source = new SqliteConnection(CreateUnpooledConnectionString(sourceDbPath));
+        using var source = new SqliteConnection(CreateReadOnlyUnpooledConnectionString(sourceDbPath));
         using var destination = new SqliteConnection(CreateUnpooledConnectionString(snapshotPath));
         source.Open();
         destination.Open();

@@ -13,8 +13,8 @@
   "read_only_immutable_fallback": false,
   "wal_stale_snapshot_risk": false,
   "sqlite_connection_policy": {
-    "active_mode": "read_write",
-    "open_mode": "read_write",
+    "active_mode": "read_only",
+    "open_mode": "read_only",
     "pooling": true,
     "immutable_uri": false,
     "command_timeout_seconds": 30,
@@ -198,7 +198,7 @@
   "index_newer_than_reader": false,
   "db_pragma_settings": {
     "journal_mode": "wal",
-    "synchronous": "NORMAL",
+    "synchronous": "FULL",
     "wal_autocheckpoint": 1000,
     "busy_timeout_ms": 5000,
     "page_count": "\u003CCOUNT\u003E",

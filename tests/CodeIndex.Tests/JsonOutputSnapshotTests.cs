@@ -197,7 +197,7 @@ public class Probe
 
     private static void MarkGraphAndFoldReady(string dbPath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
         writer.MarkFoldReady();

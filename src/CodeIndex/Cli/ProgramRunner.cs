@@ -2517,14 +2517,13 @@ internal static partial class ProgramRunner
                 return CommandExitCodes.DatabaseError;
             }
 
-            using var db = new DbContext(options.DbPath);
+            using var db = new DbContext(DbOpenIntent.QueryOnly, options.DbPath);
             if (!db.TryValidateIsCodeIndexDb(out var validationReason))
             {
                 CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: invalid CodeIndex database: {validationReason}");
                 return CommandExitCodes.DatabaseError;
             }
 
-            db.TryMigrateForRead();
             var indexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
             if (!string.IsNullOrWhiteSpace(indexedProjectRoot)
                 && bool.TryParse(db.GetMetaString(DbContext.WorkspacePathCaseSensitiveMetaKey), out var pathCaseSensitive))

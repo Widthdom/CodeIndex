@@ -30,7 +30,7 @@ public class DbRecoveryTests : IDisposable
         // 破損DBを開くとSQLiteレベルで例外が出るがプロセスはクラッシュしない
         Assert.ThrowsAny<Exception>(() =>
         {
-            using var db = new DbContext(_dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
             db.TryMigrateForRead();
         });
     }
@@ -39,7 +39,7 @@ public class DbRecoveryTests : IDisposable
     public void RebuildAfterCorruption_CreatesCleanIndex()
     {
         // Create a valid DB first / まず有効なDBを作成
-        using (var db = new DbContext(_dbPath))
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, _dbPath))
         {
             db.InitializeSchema();
         }
@@ -54,7 +54,7 @@ public class DbRecoveryTests : IDisposable
         // Delete and recreate — simulates user running --rebuild after corruption
         // 削除して再作成 — ユーザーが破損後に --rebuild を実行するシミュレート
         File.Delete(_dbPath);
-        using var newDb = new DbContext(_dbPath);
+        using var newDb = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         newDb.InitializeSchema();
 
         var writer = new DbWriter(newDb.Connection);

@@ -1074,7 +1074,7 @@ public class IndexWatchRunnerTests
 
     private static bool HasIndexedFile(string dbPath, string filePath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         using var cmd = db.Connection.CreateCommand();
         cmd.CommandText = "SELECT 1 FROM files WHERE path = @path";
         cmd.Parameters.AddWithValue("@path", filePath);

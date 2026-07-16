@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Security.Cryptography;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer.Extensibility;
@@ -11,6 +12,95 @@ namespace CodeIndex.Tests;
 
 public partial class QueryCommandRunnerTests
 {
+    [Fact]
+    public void ReadCommands_OpenQueryOnlyAndLeaveDatabaseArtifactsUnchanged_Issue4557()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_only_issue4557");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App {}\n");
+            SqliteConnection.ClearAllPools();
+            using (var connection = new SqliteConnection(
+                new SqliteConnectionStringBuilder { DataSource = dbPath, Pooling = false }.ConnectionString))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "PRAGMA journal_mode=DELETE";
+                Assert.Equal("delete", (string?)command.ExecuteScalar());
+            }
+
+            SqliteConnection.ClearAllPools();
+            var expectedArtifacts = CaptureDatabaseArtifacts(dbPath);
+            var expectedUserVersion = ReadPragmaInt64(dbPath, "user_version");
+            var expectedApplicationId = ReadPragmaInt64(dbPath, "application_id");
+
+            var commands = new (string Name, Func<int> Run)[]
+            {
+                ("status", () => QueryCommandRunner.RunStatus(["--db", dbPath, "--json"], _jsonOptions)),
+                ("search", () => QueryCommandRunner.RunSearch(["App", "--db", dbPath, "--json"], _jsonOptions)),
+                ("files", () => QueryCommandRunner.RunFiles(["--db", dbPath, "--json"], _jsonOptions)),
+            };
+
+            foreach (var (name, run) in commands)
+            {
+                var (exitCode, stdout, _) = CaptureConsole(run);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.False(string.IsNullOrWhiteSpace(stdout));
+                Assert.Equal(expectedArtifacts, CaptureDatabaseArtifacts(dbPath));
+                Assert.Equal(expectedUserVersion, ReadPragmaInt64(dbPath, "user_version"));
+                Assert.Equal(expectedApplicationId, ReadPragmaInt64(dbPath, "application_id"));
+
+                if (name == "status")
+                {
+                    using var document = ParseJsonOutput(stdout);
+                    var policy = document.RootElement.GetProperty("sqlite_connection_policy");
+                    Assert.Equal("read_only", policy.GetProperty("active_mode").GetString());
+                    Assert.Equal("read_only", policy.GetProperty("open_mode").GetString());
+                    Assert.Equal("delete", document.RootElement.GetProperty("db_pragma_settings").GetProperty("journal_mode").GetString());
+                }
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    private static Dictionary<string, (long Length, DateTime LastWriteTimeUtc, string Sha256)> CaptureDatabaseArtifacts(string dbPath)
+    {
+        var result = new Dictionary<string, (long, DateTime, string)>(StringComparer.Ordinal);
+        foreach (var path in new[] { dbPath, dbPath + "-wal", dbPath + "-shm" })
+        {
+            if (!File.Exists(path))
+                continue;
+
+            var info = new FileInfo(path);
+            result[Path.GetFileName(path)] = (
+                info.Length,
+                info.LastWriteTimeUtc,
+                Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))));
+        }
+
+        return result;
+    }
+
+    private static long ReadPragmaInt64(string dbPath, string pragmaName)
+    {
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ConnectionString);
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA {pragmaName}";
+        return (long)command.ExecuteScalar()!;
+    }
+
     [Fact]
     public void RunFilesAndSearch_IndexRepositoryConfigurationFiles_Issue3898()
     {
@@ -524,7 +614,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
@@ -555,7 +645,7 @@ public partial class QueryCommandRunnerTests
 
     private static void InsertStatusKindCapFixture(string dbPath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         db.InitializeSchema();
         var writer = new DbWriter(db.Connection);
         var fileId = writer.UpsertFile(new FileRecord
@@ -620,7 +710,7 @@ public partial class QueryCommandRunnerTests
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var staleHead = new string('b', 40);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, staleHead);
@@ -671,7 +761,7 @@ public partial class QueryCommandRunnerTests
             var indexedBranch = TestProjectHelper.RunGit(projectRoot, "rev-parse", "--abbrev-ref", "HEAD").Trim();
             TestProjectHelper.RunGit(projectRoot, "checkout", "--detach", indexedHead);
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, indexedHead);
@@ -755,7 +845,7 @@ public partial class QueryCommandRunnerTests
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var staleHead = new string('c', 40);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, staleHead);
@@ -790,7 +880,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
@@ -826,7 +916,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
@@ -876,7 +966,7 @@ public partial class QueryCommandRunnerTests
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var dbDirectory = Path.GetDirectoryName(dbPath)!;
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
@@ -925,7 +1015,7 @@ public partial class QueryCommandRunnerTests
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var dbDirectory = Path.GetDirectoryName(dbPath)!;
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
@@ -1204,7 +1294,7 @@ public partial class QueryCommandRunnerTests
             var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.LastIndexRunStartedAtMetaKey, "2030-01-02T03:04:05.0000000Z");
@@ -1237,7 +1327,7 @@ public partial class QueryCommandRunnerTests
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.LastIndexRunStartedAtMetaKey, "2030-01-02T03:04:05.0000000Z");
@@ -1572,7 +1662,7 @@ public partial class QueryCommandRunnerTests
             var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
             var indexedAt = new DateTime(2025, 1, 2, 0, 0, 0, DateTimeKind.Utc);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n", modified);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = "UPDATE files SET indexed_at = @indexed_at WHERE path = @path";
@@ -1594,7 +1684,7 @@ public partial class QueryCommandRunnerTests
             Assert.DoesNotContain("index stale", json.GetProperty("summary").GetString());
             var pragmas = json.GetProperty("db_pragma_settings");
             Assert.Equal("wal", pragmas.GetProperty("journal_mode").GetString());
-            Assert.Equal(DbContext.DefaultSynchronousMode, pragmas.GetProperty("synchronous").GetString());
+            Assert.Equal("FULL", pragmas.GetProperty("synchronous").GetString());
             Assert.Equal(DbContext.DefaultWalAutocheckpointPages, pragmas.GetProperty("wal_autocheckpoint").GetInt32());
             Assert.Equal(DbPragmaPolicy.DefaultBusyTimeoutMs, pragmas.GetProperty("busy_timeout_ms").GetInt32());
             var preparedCommandCache = json.GetProperty("prepared_command_cache");
@@ -1627,7 +1717,7 @@ public partial class QueryCommandRunnerTests
             var modified = new DateTime(2025, 1, 2, 0, 0, 0, DateTimeKind.Utc);
             var indexedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n", modified);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = "UPDATE files SET indexed_at = @indexed_at WHERE path = @path";
@@ -1661,7 +1751,7 @@ public partial class QueryCommandRunnerTests
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.MarkBatchInProgress();
@@ -1913,7 +2003,7 @@ public partial class QueryCommandRunnerTests
             File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();
@@ -1959,7 +2049,7 @@ public partial class QueryCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
             MarkStatusReadinessReady(dbPath);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.LastFailedIndexRunStatusMetaKey, "partial");
@@ -2209,7 +2299,7 @@ public partial class QueryCommandRunnerTests
             File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = "PRAGMA user_version = 0";
@@ -2255,7 +2345,7 @@ public partial class QueryCommandRunnerTests
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
             TestProjectHelper.InsertIndexedFile(dbPath, "src/query.sql", "sql", "SELECT run_me();\n");
             MarkStatusReadinessReady(dbPath);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 switch (scope)
@@ -2394,14 +2484,14 @@ public partial class QueryCommandRunnerTests
             TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
 
             var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
             }
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
@@ -2450,7 +2540,7 @@ public partial class QueryCommandRunnerTests
 
             var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
             Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -2495,7 +2585,7 @@ public partial class QueryCommandRunnerTests
 
             var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
@@ -2540,14 +2630,14 @@ public partial class QueryCommandRunnerTests
 
             var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
                 cmd.Parameters.AddWithValue("@key", DbContext.IndexedProjectRootMetaKey);
                 cmd.ExecuteNonQuery();
             }
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
@@ -2595,7 +2685,7 @@ public partial class QueryCommandRunnerTests
 
             var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
             Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -2645,7 +2735,7 @@ public partial class QueryCommandRunnerTests
 
             var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
             Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -2696,12 +2786,12 @@ public partial class QueryCommandRunnerTests
             TestProjectHelper.RunGit(dbContainerRoot, "commit", "-m", "initial");
 
             Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
             }
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", indexedContent);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";

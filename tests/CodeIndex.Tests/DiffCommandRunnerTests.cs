@@ -846,7 +846,7 @@ public class DiffCommandRunnerTests
 
     private static void SetMeta(string dbPath, string key, string? value)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
         writer.SetMeta(key, value);
     }

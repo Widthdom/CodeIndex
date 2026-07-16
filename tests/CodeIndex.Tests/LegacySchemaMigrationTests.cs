@@ -119,7 +119,7 @@ public class LegacySchemaMigrationTests : IDisposable
 
     private static void SeedGraphDbWithoutExactFallbackIndexes(string dbPath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         db.InitializeSchema();
         var writer = new DbWriter(db.Connection);
 
@@ -191,7 +191,7 @@ public class LegacySchemaMigrationTests : IDisposable
 
     private static void DropSymbolExactFallbackIndex(string dbPath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         using var cmd = db.Connection.CreateCommand();
         cmd.CommandText = """
             DROP INDEX IF EXISTS idx_symbols_name_nocase;
@@ -235,7 +235,7 @@ public class LegacySchemaMigrationTests : IDisposable
     {
         // Open through the normal read path — TryMigrateForRead adds the missing columns as NULL.
         // 通常の read path で開くと TryMigrateForRead が欠損カラムを NULL で追加する。
-        using var db = new DbContext(_dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         db.TryMigrateForRead();
 
         // Confirm the migration actually ran: the new columns should now exist and be NULL.
@@ -310,7 +310,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // and the reader fallback expressions must still drive the query paths without crashing.
         // read-only 契約: 書き込みできない接続では TryMigrateForRead が黙って no-op になり、
         // レガシーカラムは追加されないまま、fallback 式で read path が動き続ける必要がある。
-        using var db = new DbContext(_dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
 
         // Simulate a read-only connection at the SQL layer so ALTER TABLE fails with SQLITE_READONLY.
         // query_only は SQL レイヤで書き込みを禁止し、ALTER TABLE が SQLITE_READONLY で失敗する。
@@ -403,7 +403,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // #1516: 部分 DDL 失敗時にステップ名と SQLite error code を記録し、stderr に
         // writable storage への誘導を 1 行で出すことで、後続の cryptic な「no such column」を
         // 行動可能な診断に置き換える契約。
-        using var db = new DbContext(_dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
 
         // query_only = ON makes any DDL fail with SQLITE_READONLY (code 8) — the same surface
         // as a real restricted-mount partial-migration failure. The first step in the read
@@ -447,7 +447,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // The diagnostic must stay opt-in: a normal migration on writable storage records
         // nothing, so callers can use `LastMigrationFailure is not null` as a clean signal.
         // 正常完了時は LastMigrationFailure が null のまま — シグナルとして利用できる契約。
-        using var db = new DbContext(_dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
 
         var stderr = ConsoleCapture.CaptureError(db.TryMigrateForRead);
 
@@ -464,7 +464,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // user should re-run on writable storage. This is the link the issue calls out:
         // "Cryptic `no such column` errors instead of a single clear ... message".
         // 失敗情報は呼び出し後も残り、後続の no-such-column エラーと突き合わせて原因を説明できる必要がある。
-        using var db = new DbContext(_dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         using (var pragma = db.Connection.CreateCommand())
         {
             pragma.CommandText = "PRAGMA query_only = ON";
@@ -512,7 +512,7 @@ public class LegacySchemaMigrationTests : IDisposable
     [Fact]
     public void InitializeSchema_ForeignKeysRestoredWhenMigrationWindowFailsInsideTransaction_Issue3678()
     {
-        using var db = new DbContext(_dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         Assert.Equal(1, ReadForeignKeys(db));
 
         var previousHook = DbContext.ForeignKeysDisabledForTesting;
@@ -538,7 +538,7 @@ public class LegacySchemaMigrationTests : IDisposable
     [Fact]
     public void MigrationWindow_ForeignKeysRestoredWhenFailureOccursOutsideActiveTransaction_Issue3678()
     {
-        using var db = new DbContext(_dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         db.InitializeSchema();
         SetForeignKeys(db, enabled: false);
         Assert.Equal(0, ReadForeignKeys(db));
@@ -568,7 +568,7 @@ public class LegacySchemaMigrationTests : IDisposable
     [Fact]
     public void InitializeSchema_ForeignKeyRestoreFailureReportsActionableDatabaseError_Issue3678()
     {
-        using var db = new DbContext(_dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         var previousHook = DbContext.ForeignKeysRestoringForTesting;
         DbContext.ForeignKeysRestoringForTesting = (operation, _) =>
         {
@@ -617,7 +617,7 @@ public class LegacySchemaMigrationTests : IDisposable
             // 書き込み・グループ・other を落として、副ファイル生成を禁止する。
             File.SetUnixFileMode(_dbDir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
 
-            using var db = new DbContext(_dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
             Assert.True(db.IsReadOnly, "DbContext should have fallen back to read-only open.");
             Assert.True(db.ReadOnlyFallback);
             Assert.True(db.WalCheckpointAttempted);
@@ -658,7 +658,7 @@ public class LegacySchemaMigrationTests : IDisposable
     [Fact]
     public void ReadOnlyFallbackDiagnostics_AddsStaleWalRiskToQueryPayload()
     {
-        using var db = new DbContext(_dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         SetDbContextField(db, "_readOnlyFallback", true);
         SetDbContextField(db, "_walCheckpointAttempted", true);
         SetDbContextField(db, "_walCheckpointSucceeded", false);
@@ -693,7 +693,7 @@ public class LegacySchemaMigrationTests : IDisposable
         Assert.True(File.Exists(walPath));
         Assert.True(new FileInfo(walPath).Length > 0);
 
-        using var immutableDb = new DbContext(DbConnectionFactory.ToReadOnlyUri(_dbPath) + "&cache=shared");
+        using var immutableDb = new DbContext(DbOpenIntent.QueryOnly, DbConnectionFactory.ToReadOnlyUri(_dbPath) + "&cache=shared");
         var reader = new DbReader(immutableDb);
         var payload = new JsonObject();
         QueryCommandRunner.AddReadOnlyFallbackDiagnostics(payload, reader);
@@ -793,7 +793,7 @@ public class LegacySchemaMigrationTests : IDisposable
         var dbPath = Path.Combine(tempDir, "codeindex.db");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 db.InitializeSchema();
 
             var attempts = 0;
@@ -841,7 +841,7 @@ public class LegacySchemaMigrationTests : IDisposable
         var dbPath = Path.Combine(tempDir, "codeindex.db");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 db.InitializeSchema();
 
             var valid = DbContext.TryValidateExistingCodeIndexDb(dbPath, out var message, out var isNotFound);
@@ -970,7 +970,7 @@ public class LegacySchemaMigrationTests : IDisposable
         var interruptedDb = Path.Combine(interruptedDir, "codeindex.db");
         try
         {
-            using (var db = new DbContext(interruptedDb))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, interruptedDb))
             {
                 db.InitializeSchema();
                 // simulate interruption: no writes, no MarkIndexComplete.
@@ -980,7 +980,7 @@ public class LegacySchemaMigrationTests : IDisposable
 
             SqliteConnection.ClearAllPools();
 
-            using (var db = new DbContext(interruptedDb))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, interruptedDb))
             {
                 var reader = new DbReader(db.Connection);
                 // Empty graph/issues tables on an unstamped DB must be reported degraded.
@@ -1008,7 +1008,7 @@ public class LegacySchemaMigrationTests : IDisposable
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 db.ClearReadyFlags();
@@ -1038,7 +1038,7 @@ public class LegacySchemaMigrationTests : IDisposable
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -1075,7 +1075,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // mark the connection read-only.
         // --db に URI を渡された場合は writable open をスキップし read-only で開くこと。
         var fileUri = new Uri(_dbPath).AbsoluteUri + "?immutable=1";
-        using var db = new DbContext(fileUri);
+        using var db = new DbContext(DbOpenIntent.QueryOnly, fileUri);
         Assert.True(db.IsReadOnly);
 
         var reader = new DbReader(db.Connection);
@@ -1094,7 +1094,7 @@ public class LegacySchemaMigrationTests : IDisposable
             SeedGraphDbWithoutExactFallbackIndexes(dbPath);
 
             var fileUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
-            using var db = new DbContext(fileUri);
+            using var db = new DbContext(DbOpenIntent.QueryOnly, fileUri);
             db.TryMigrateForRead();
             var reader = new DbReader(db.Connection, db.IsReadOnly);
 
@@ -1137,7 +1137,7 @@ public class LegacySchemaMigrationTests : IDisposable
             DropSymbolExactFallbackIndex(dbPath);
 
             var fileUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
-            using var db = new DbContext(fileUri);
+            using var db = new DbContext(DbOpenIntent.QueryOnly, fileUri);
             db.TryMigrateForRead();
             var reader = new DbReader(db.Connection, db.IsReadOnly);
 
@@ -1169,7 +1169,7 @@ public class LegacySchemaMigrationTests : IDisposable
             SeedGraphDbWithoutExactFallbackIndexes(dbPath);
             DropSymbolExactFallbackIndex(dbPath);
 
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.TryMigrateForRead();
             var reader = new DbReader(db.Connection, db.IsReadOnly);
 
@@ -1198,7 +1198,7 @@ public class LegacySchemaMigrationTests : IDisposable
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
-            using (var seedDb = new DbContext(dbPath))
+            using (var seedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 seedDb.InitializeSchema();
                 var writer = new DbWriter(seedDb.Connection);
@@ -1272,7 +1272,7 @@ public class LegacySchemaMigrationTests : IDisposable
             DropSymbolExactFallbackIndex(dbPath);
 
             var fileUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
-            using var readOnlyDb = new DbContext(fileUri);
+            using var readOnlyDb = new DbContext(DbOpenIntent.QueryOnly, fileUri);
             readOnlyDb.TryMigrateForRead();
             var reader = new DbReader(readOnlyDb.Connection, readOnlyDb.IsReadOnly);
 
@@ -1309,7 +1309,7 @@ public class LegacySchemaMigrationTests : IDisposable
             // Seed a legacy-shaped DB: InitializeSchema ran but readiness never stamped
             // (simulates a DB created by an older binary or a prior partial run).
             // 旧版バイナリ相当: スキーマだけ作って readiness は打たれていない状態。
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 Assert.Equal(0, db.GetUserVersion());
@@ -1319,7 +1319,7 @@ public class LegacySchemaMigrationTests : IDisposable
             // starting user_version is 0, wasFullyReady is false, so canStampReadiness is
             // false in update mode — MarkReady must not fire.
             // RunIndex を模擬: wasFullyReady=false のため update モードでは stamp しない。
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var wasFullyReady = db.GetUserVersion() == DbContext.CurrentSchemaVersion;
                 Assert.False(wasFullyReady);
@@ -1379,7 +1379,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // a `status` on a missing-path URI into silent DB creation. Instead, DbContext
         // normalizes the URI to a filesystem path and uses the normal writable-open path.
         // 明示的 read-only 要求なしの file: URI は writable-open ではなく通常経路にフォールバック。
-        using var db = new DbContext(new Uri(_dbPath).AbsoluteUri);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, new Uri(_dbPath).AbsoluteUri);
         Assert.False(db.IsReadOnly);
         var reader = new DbReader(db.Connection);
         Assert.NotNull(reader.GetOutline("src/Legacy.cs"));
@@ -1398,7 +1398,7 @@ public class LegacySchemaMigrationTests : IDisposable
         try
         {
             // Stamp the DB as a previously-successful index.
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -1412,7 +1412,7 @@ public class LegacySchemaMigrationTests : IDisposable
             // Simulate the production rebuild sequence: open → ClearReadyFlags → DropAll →
             // InitializeSchema. Interrupt before any writes or MarkReady. Bits must be 0.
             // 本番の rebuild 順序を模擬し、stamp 前に中断。readiness は 0 でなければならない。
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.ClearReadyFlags();
                 db.DropAll();
@@ -1444,7 +1444,7 @@ public class LegacySchemaMigrationTests : IDisposable
         var completedDb = Path.Combine(completedDir, "codeindex.db");
         try
         {
-            using (var db = new DbContext(completedDb))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, completedDb))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -1472,7 +1472,7 @@ public class LegacySchemaMigrationTests : IDisposable
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.InitializeSchema();
             var writer = new DbWriter(db.Connection);
 
@@ -1533,7 +1533,7 @@ public class LegacySchemaMigrationTests : IDisposable
             // Seed a fully modern schema with a C# attribute class + a user that references it
             // via `[Audit]`, then stamp GraphReady so `_hasReferencesTable` becomes true.
             // 現行スキーマで index した後に GraphReady を立て、C# の attribute 依存を 1 本仕込む。
-            using (var seed = new DbContext(dbPath))
+            using (var seed = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 seed.InitializeSchema();
                 var writer = new DbWriter(seed.Connection);
@@ -1639,7 +1639,7 @@ public class LegacySchemaMigrationTests : IDisposable
             // immutable=1 で read-only open。TryMigrateForRead は早期 return するため
             // signature 列は復活せず、reader 側の `_symbolColumns` から抜けたままになる。
             var fileUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
-            using var db = new DbContext(fileUri);
+            using var db = new DbContext(DbOpenIntent.QueryOnly, fileUri);
             Assert.True(db.IsReadOnly);
             db.TryMigrateForRead();
 
@@ -1722,7 +1722,7 @@ public class LegacySchemaMigrationTests : IDisposable
             // DbContext still uses DbColumnEnsurer for normal migrations: a later migration
             // sees start_line already present and completes the remaining columns.
             // DbContext の通常 migration も同じ helper を使い、後続列を追加できることを確認する。
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.TryMigrateForRead();
             Assert.Null(db.LastMigrationFailure);
             using (var check = db.Connection.CreateCommand())
@@ -1840,7 +1840,7 @@ public class LegacySchemaMigrationTests : IDisposable
                 cmd.ExecuteNonQuery();
             }
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
             }
@@ -1872,13 +1872,13 @@ public class LegacySchemaMigrationTests : IDisposable
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
-            using (var setup = new DbContext(dbPath))
+            using (var setup = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 setup.InitializeSchema();
             }
 
-            using var readDb = new DbContext(dbPath);
-            using var writeDb = new DbContext(dbPath);
+            using var readDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var writeDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             var writer = new DbWriter(writeDb.Connection);
             using var txn = writer.BeginTransaction();
             writer.UpsertFile(new FileRecord
@@ -1916,7 +1916,7 @@ public class LegacySchemaMigrationTests : IDisposable
                 .Select(_ => Task.Run(() =>
                 {
                     gate.Wait();
-                    using var db = new DbContext(dbPath);
+                    using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
                     db.TryMigrateForRead();
                     Assert.Null(db.LastMigrationFailure);
                 }))

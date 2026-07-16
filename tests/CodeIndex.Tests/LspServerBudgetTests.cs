@@ -26,7 +26,7 @@ public class LspServerBudgetTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var text = new string('x', LspServer.MaxPositionDocumentBytes);
             for (var i = 0; i < 5; i++)
@@ -57,7 +57,7 @@ public class LspServerBudgetTests
             var latestSource = "class App { void Needle() { } void Call() { Needle(); } }\n";
             File.WriteAllText(sourcePath, diskSource);
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", diskSource);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var contentChanges = Enumerable.Range(0, LspServer.MaxContentChangesPerNotification + 5)
                 .Select(i => new { text = i == LspServer.MaxContentChangesPerNotification + 4 ? latestSource : diskSource })
@@ -107,7 +107,7 @@ public class LspServerBudgetTests
             File.WriteAllText(sourcePath, source);
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
             MarkGraphReady(dbPath);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
 
             var hover = server.HandleMessage(CreatePositionRequest(
@@ -140,7 +140,7 @@ public class LspServerBudgetTests
             File.WriteAllText(sourcePath, source);
             TestProjectHelper.InsertIndexedFile(dbPath, sourcePath, "csharp", source);
             MarkGraphReady(dbPath);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions());
 
             var hover = server.HandleMessage(CreatePositionRequest(
@@ -196,7 +196,7 @@ public class LspServerBudgetTests
 
     private static void MarkGraphReady(string dbPath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
     }

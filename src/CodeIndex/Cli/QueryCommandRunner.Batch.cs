@@ -63,11 +63,10 @@ public static partial class QueryCommandRunner
 
         try
         {
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.QueryOnly, dbPath);
             if (!db.TryValidateIsCodeIndexDb(out var validationReason))
                 return WriteInvalidCodeIndexDbError(dbPath, validationReason, json: false, jsonOptions);
 
-            db.TryMigrateForRead();
             s_batchReader = new DbReader(db);
             s_batchDbPath = dbPath;
             s_batchDbPathExplicit = dbPathExplicit;

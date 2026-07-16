@@ -43,7 +43,7 @@ public partial class FileIndexerTests
 
     private static string ReadSingleChunkContent(string dbPath, string filePath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         using var cmd = db.Connection.CreateCommand();
         cmd.CommandText = """
             SELECT c.content
@@ -58,7 +58,7 @@ public partial class FileIndexerTests
 
     private static bool HasIndexedFile(string dbPath, string filePath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         using var cmd = db.Connection.CreateCommand();
         cmd.CommandText = "SELECT 1 FROM files WHERE path = @path";
         cmd.Parameters.AddWithValue("@path", filePath);
@@ -67,7 +67,7 @@ public partial class FileIndexerTests
 
     private static bool HasFileIssue(string dbPath, string filePath, string kind)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         using var cmd = db.Connection.CreateCommand();
         cmd.CommandText = """
             SELECT 1

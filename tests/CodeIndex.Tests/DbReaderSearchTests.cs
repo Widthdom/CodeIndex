@@ -1762,7 +1762,7 @@ public partial class DbReaderTests
         var mismatchPath = Path.Combine(mismatchDir, "codeindex.db");
         try
         {
-            using var db = new DbContext(mismatchPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, mismatchPath);
             db.InitializeSchema();
             var writer = new DbWriter(db.Connection);
             var fileId = writer.UpsertFile(new FileRecord
@@ -1810,7 +1810,7 @@ public partial class DbReaderTests
         var mismatchPath = Path.Combine(mismatchDir, "codeindex.db");
         try
         {
-            using var db = new DbContext(mismatchPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, mismatchPath);
             db.InitializeSchema();
             var writer = new DbWriter(db.Connection);
             var fileId = writer.UpsertFile(new FileRecord
@@ -1852,7 +1852,7 @@ public partial class DbReaderTests
         var legacyPath = Path.Combine(legacyDir, "codeindex.db");
         try
         {
-            using var legacyDb = new DbContext(legacyPath);
+            using var legacyDb = new DbContext(DbOpenIntent.WriteIndex, legacyPath);
             legacyDb.InitializeSchema();
             var writer = new DbWriter(legacyDb.Connection);
             var fileId = writer.UpsertFile(new FileRecord

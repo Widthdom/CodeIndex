@@ -1425,8 +1425,7 @@ public static partial class QueryCommandRunner
         foreach (var normalizedDbPath in memberDbs.Skip(1))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            using var db = new DbContext(normalizedDbPath, cancellationToken);
-            db.TryMigrateForRead();
+            using var db = new DbContext(DbOpenIntent.QueryOnly, normalizedDbPath, cancellationToken);
             var reader = new DbReader(db) { IncludeGenerated = primaryReader.IncludeGenerated };
             var memberResults = reader.GetFileDependencies(limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse, cancellationToken);
             TagFileDependencyResults(memberResults, normalizedDbPath);
@@ -1483,8 +1482,7 @@ public static partial class QueryCommandRunner
         foreach (var normalizedDbPath in memberDbs.Skip(1))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            using var db = new DbContext(normalizedDbPath, cancellationToken);
-            db.TryMigrateForRead();
+            using var db = new DbContext(DbOpenIntent.QueryOnly, normalizedDbPath, cancellationToken);
             var reader = new DbReader(db) { IncludeGenerated = primaryReader.IncludeGenerated };
             var memberResults = reader.GetFileDependencyCycleCandidates(
                 limit,
@@ -1586,8 +1584,7 @@ public static partial class QueryCommandRunner
 
     private static List<FileDependencyResult> GetCrossDatabaseFileDependencies(string sourceDbPath, string targetDbPath, QueryCommandOptions options, bool reverse, int limit)
     {
-        using var sourceDb = new DbContext(sourceDbPath);
-        sourceDb.TryMigrateForRead();
+        using var sourceDb = new DbContext(DbOpenIntent.QueryOnly, sourceDbPath);
         var connection = sourceDb.Connection;
         AttachCrossDatabaseTarget(connection, targetDbPath);
 
@@ -1683,6 +1680,8 @@ public static partial class QueryCommandRunner
     {
         try
         {
+            // The owning QueryOnly connection is opened with Mode=ReadOnly and
+            // PRAGMA query_only=ON, so attached databases inherit a non-mutating session.
             AttachCrossDatabaseTargetCore(connection, targetDbPath);
         }
         catch (SqliteException) when (!SqliteFileUri.StartsWithFileScheme(targetDbPath) && File.Exists(LongPath.EnsureWindowsPrefix(targetDbPath)))

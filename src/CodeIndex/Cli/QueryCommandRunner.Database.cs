@@ -77,10 +77,9 @@ public static partial class QueryCommandRunner
             }
             else
             {
-                db = new DbContext(dbPath, cancellationToken);
+                db = new DbContext(DbOpenIntent.QueryOnly, dbPath, cancellationToken);
                 if (!db.TryValidateIsCodeIndexDb(out var validationReason))
                     return WriteInvalidCodeIndexDbError(dbPath, validationReason, options.Json, jsonOptions);
-                db.TryMigrateForRead();
                 reader = new DbReader(db);
                 databaseReadyForQueries = true;
             }

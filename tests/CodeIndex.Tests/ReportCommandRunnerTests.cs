@@ -336,7 +336,7 @@ public class ReportCommandRunnerTests
         var dbPath = Path.Combine(workDir, "codeindex.db");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 db.InitializeSchema();
             SqliteConnection.ClearAllPools();
 
@@ -388,7 +388,7 @@ public class ReportCommandRunnerTests
         var dbPath = Path.Combine(workDir, "codeindex.db");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 db.InitializeSchema();
             SqliteConnection.ClearAllPools();
 
@@ -988,7 +988,7 @@ public class ReportCommandRunnerTests
         var dbPath = Path.Combine(workDir, "codeindex.db");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 db.InitializeSchema();
             SqliteConnection.ClearAllPools();
 
@@ -1019,7 +1019,7 @@ public class ReportCommandRunnerTests
         var dbPath = Path.Combine(workDir, "codeindex.db");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 db.InitializeSchema();
             SqliteConnection.ClearAllPools();
 
@@ -1274,7 +1274,7 @@ public class ReportCommandRunnerTests
         var dbPath = Path.Combine(workDir, "legacy-source.db");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 db.InitializeSchema();
             using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
             {

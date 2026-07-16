@@ -54,7 +54,7 @@ public class IndexFreshnessProbeOverrideTests
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.InitializeSchema();
             var reader = new DbReader(db);
             GitHelper.FileSystemIgnoreCaseProbeForTesting = _ => throw new IOException("git case probe should not run");
