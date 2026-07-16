@@ -3414,7 +3414,11 @@ public partial class McpServerTests
         Assert.True(rateLimit["enabled"]!.GetValue<bool>());
         Assert.Equal(RateLimiterOptions.MaxRefillTokensPerSecond, rateLimit["rps"]!.GetValue<double>());
         Assert.Equal(RateLimiterOptions.MaxBurstCapacity, rateLimit["burst"]!.GetValue<double>());
-        Assert.Equal(1, rateLimit["bucket_count"]!.GetValue<int>());
+        // A canonical direct call consumes the fixed caller-wide pre-validation bucket and
+        // its secondary per-tool bucket (#4547).
+        // canonical な direct call は固定 caller-wide pre-validation bucket と secondary
+        // per-tool bucket の両方を消費する（#4547）。
+        Assert.Equal(2, rateLimit["bucket_count"]!.GetValue<int>());
         Assert.True(rateLimit["bucket_idle_ttl_seconds"]!.GetValue<double>() > 0);
         Assert.True(rateLimit["next_prune_in_ms"]!.GetValue<long>() >= 0);
         Assert.True(rateLimit["last_prune_age_ms"]!.GetValue<long>() >= 0);
@@ -6417,6 +6421,11 @@ public partial class McpServerTests
             Assert.Equal(languageDisplay.Text, root.GetProperty("language").GetString());
             Assert.Equal(1, root.GetProperty("exit_code").GetInt32());
             Assert.Equal("unknown_tool", root.GetProperty("error").GetString());
+            var requestId = root.GetProperty("request_id").GetString()!;
+            Assert.StartsWith(McpRequestIdTelemetry.TokenPrefix, requestId, StringComparison.Ordinal);
+            Assert.Equal(McpRequestIdTelemetry.TokenLength, requestId.Length);
+            Assert.Equal("number", root.GetProperty("request_id_type").GetString());
+            Assert.Equal(1, root.GetProperty("request_id_length").GetInt32());
         }
         finally
         {
@@ -6457,6 +6466,241 @@ public partial class McpServerTests
             releaseWriter.Set();
             DeleteFileRobust(metricsPath);
         }
+    }
+
+    [Fact]
+    public void ToolsCall_HighCardinalityCredentialRequestIds_KeepMetricsTokensFixedAndOpaque_Issue4551()
+    {
+        var metricsPath = TestProjectHelper.CreateTempFilePath("cdidx_mcp_metrics_request_ids", ".jsonl");
+        var ids = Enumerable.Range(0, 32)
+            .Select(index => $"Bearer metrics-secret-{index:D2}-" + new string((char)('a' + (index % 26)), 64))
+            .ToArray();
+        try
+        {
+            using var session = MetricsSink.TryStartForTesting(metricsPath, maxBytes: 1024 * 1024);
+            Assert.NotNull(session);
+            foreach (var id in ids)
+            {
+                var request = new JsonObject
+                {
+                    ["jsonrpc"] = "2.0",
+                    ["id"] = id,
+                    ["method"] = "tools/call",
+                    ["params"] = new JsonObject
+                    {
+                        ["name"] = "ping",
+                        ["arguments"] = new JsonObject(),
+                    },
+                };
+
+                var response = _server.HandleMessage(request)!;
+                Assert.Equal(id, response["id"]!.GetValue<string>());
+            }
+
+            Assert.True(session.WaitForIdle(TimeSpan.FromSeconds(5)), "metrics writer did not become idle");
+            var lines = File.ReadAllLines(metricsPath);
+            Assert.Equal(ids.Length, lines.Length);
+            var rawMetrics = string.Join('\n', lines);
+            Assert.All(ids, id => Assert.DoesNotContain(id, rawMetrics, StringComparison.Ordinal));
+            var records = lines
+                .Select(ParseTelemetryRecord)
+                .ToArray();
+            Assert.All(records, record =>
+            {
+                var token = record.GetProperty("request_id").GetString()!;
+                Assert.StartsWith(McpRequestIdTelemetry.TokenPrefix, token, StringComparison.Ordinal);
+                Assert.Equal(McpRequestIdTelemetry.TokenLength, token.Length);
+                Assert.Equal("string", record.GetProperty("request_id_type").GetString());
+                Assert.Equal(ids[0].Length, record.GetProperty("request_id_length").GetInt32());
+            });
+            Assert.Equal(ids.Length, records
+                .Select(record => record.GetProperty("request_id").GetString())
+                .Distinct(StringComparer.Ordinal)
+                .Count());
+        }
+        finally
+        {
+            DeleteFileRobust(metricsPath);
+        }
+    }
+
+    [Fact]
+    public void ProcessFrame_BatchToolCallsUseItemRequestIdsAcrossStderrAndMetrics_Issue4551()
+    {
+        var metricsPath = TestProjectHelper.CreateTempFilePath("cdidx_mcp_batch_request_ids", ".jsonl");
+        var auditPath = TestProjectHelper.CreateTempFilePath("cdidx_mcp_batch_request_ids_audit", ".jsonl");
+        var ids = new[]
+        {
+            "Bearer batch-secret-alpha-4551",
+            "sk-proj-batch-secret-beta-4551",
+        };
+        var expected = ids
+            .Select(id => McpRequestIdTelemetry.Create(JsonValue.Create(id)))
+            .ToArray();
+        var batch = new JsonArray();
+        foreach (var id in ids)
+        {
+            batch.Add(new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = id,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "ping",
+                    ["arguments"] = new JsonObject(),
+                },
+            });
+        }
+
+        try
+        {
+            using var session = MetricsSink.TryStartForTesting(metricsPath, maxBytes: 1024 * 1024);
+            Assert.NotNull(session);
+            using var auditSink = new AuditLogSink(
+                auditPath,
+                AuditLogSink.DefaultMaxBytes,
+                includeValues: false);
+            using var server = new McpServer(
+                _dbPath,
+                ConsoleUi.LoadVersion(),
+                dbPathExplicit: false,
+                authenticator: null,
+                auditLog: auditSink);
+            using var error = new StringWriter();
+            string? response;
+            lock (TestConsoleLock.Gate)
+            {
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(error);
+                    response = server.ProcessFrame(batch.ToJsonString());
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
+            }
+
+            Assert.NotNull(response);
+            using (var responseDocument = JsonDocument.Parse(response))
+            {
+                Assert.Equal(
+                    ids,
+                    responseDocument.RootElement.EnumerateArray()
+                        .Select(item => item.GetProperty("id").GetString())
+                        .ToArray());
+            }
+
+            Assert.True(session.WaitForIdle(TimeSpan.FromSeconds(5)), "metrics writer did not become idle");
+            var metricsText = File.ReadAllText(metricsPath);
+            Assert.True(auditSink.WaitForIdle(TimeSpan.FromSeconds(5)), "audit log writer did not become idle");
+            var auditText = File.ReadAllText(auditPath);
+            var stderrText = error.ToString();
+            Assert.All(ids, id =>
+            {
+                Assert.DoesNotContain(id, metricsText, StringComparison.Ordinal);
+                Assert.DoesNotContain(id, auditText, StringComparison.Ordinal);
+                Assert.DoesNotContain(id, stderrText, StringComparison.Ordinal);
+            });
+
+            var metricsRecords = File.ReadAllLines(metricsPath)
+                .Select(ParseTelemetryRecord)
+                .ToDictionary(
+                    record => record.GetProperty("request_id").GetString()!,
+                    StringComparer.Ordinal);
+            var auditRecords = File.ReadAllLines(auditPath)
+                .Select(ParseTelemetryRecord)
+                .ToDictionary(
+                    record => record.GetProperty("request_id").GetString()!,
+                    StringComparer.Ordinal);
+            var stderrRecords = stderrText
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Where(line => line.Contains("\"event\":\"mcp.tool.invocation\"", StringComparison.Ordinal))
+                .Select(line => ParseTelemetryRecord(line[line.IndexOf('{')..]))
+                .ToDictionary(
+                    record => record.GetProperty("request_id").GetString()!,
+                    StringComparer.Ordinal);
+
+            Assert.Equal(ids.Length, metricsRecords.Count);
+            Assert.Equal(ids.Length, auditRecords.Count);
+            Assert.Equal(ids.Length, stderrRecords.Count);
+            foreach (var requestId in expected)
+            {
+                var metric = metricsRecords[requestId.Token];
+                var audit = auditRecords[requestId.Token];
+                var stderr = stderrRecords[requestId.Token];
+                Assert.Equal(requestId.Type, metric.GetProperty("request_id_type").GetString());
+                Assert.Equal(requestId.Length, metric.GetProperty("request_id_length").GetInt32());
+                Assert.Equal(requestId.Type, audit.GetProperty("request_id_type").GetString());
+                Assert.Equal(requestId.Length, audit.GetProperty("request_id_length").GetInt32());
+                Assert.Equal(requestId.Type, stderr.GetProperty("request_id_type").GetString());
+                Assert.Equal(requestId.Length, stderr.GetProperty("request_id_length").GetInt32());
+            }
+        }
+        finally
+        {
+            DeleteFileRobust(metricsPath);
+            DeleteFileRobust(auditPath);
+        }
+    }
+
+    [Fact]
+    public void ProcessFrame_BatchExplicitNullIdIsDistinctFromAbsentAndInvalidTelemetry_Issue4551()
+    {
+        var metricsPath = TestProjectHelper.CreateTempFilePath("cdidx_mcp_batch_null_request_id", ".jsonl");
+        var batch = JsonNode.Parse(
+            """[{"jsonrpc":"2.0","id":null,"method":"tools/call","params":{"name":"ping","arguments":{}}},{"jsonrpc":"2.0","method":"tools/call","params":{"name":"ping","arguments":{}}},{"jsonrpc":"2.0","id":true,"method":"tools/call","params":{"name":"ping","arguments":{}}}]""")!;
+        var expected = McpRequestIdTelemetry.Create(id: (JsonNode?)null);
+
+        try
+        {
+            using var session = MetricsSink.TryStartForTesting(metricsPath, maxBytes: 1024 * 1024);
+            Assert.NotNull(session);
+            using var error = new StringWriter();
+            string? response;
+            lock (TestConsoleLock.Gate)
+            {
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(error);
+                    response = _server.ProcessFrame(batch.ToJsonString());
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
+            }
+
+            Assert.NotNull(response);
+            using (var responseDocument = JsonDocument.Parse(response))
+                Assert.Equal(2, responseDocument.RootElement.GetArrayLength());
+
+            Assert.True(session.WaitForIdle(TimeSpan.FromSeconds(5)), "metrics writer did not become idle");
+            var metric = Assert.Single(File.ReadAllLines(metricsPath).Select(ParseTelemetryRecord));
+            Assert.Equal(expected.Token, metric.GetProperty("request_id").GetString());
+            Assert.Equal("null", metric.GetProperty("request_id_type").GetString());
+            Assert.Equal(0, metric.GetProperty("request_id_length").GetInt32());
+
+            var invocation = Assert.Single(error.ToString()
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Where(line => line.Contains("\"event\":\"mcp.tool.invocation\"", StringComparison.Ordinal)));
+            Assert.Contains(expected.Token, invocation, StringComparison.Ordinal);
+            Assert.Contains("\"request_id_type\":\"null\"", invocation, StringComparison.Ordinal);
+            Assert.Contains("\"request_id_length\":0", invocation, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteFileRobust(metricsPath);
+        }
+    }
+
+    private static JsonElement ParseTelemetryRecord(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.Clone();
     }
 
     [Fact]
@@ -9529,6 +9773,193 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_PreValidationFailuresConsumeRateLimitQuota_Issue4547()
+    {
+        JsonNode Send(int id, Func<JsonObject> createParams) => _server.HandleMessage(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = id,
+            ["method"] = "tools/call",
+            ["params"] = createParams(),
+        })!;
+
+        void AssertSecondCallIsRateLimited(
+            Func<JsonObject> createParams,
+            Action<JsonNode> assertFirstResponse,
+            int expectedBucketCount = 1)
+        {
+            InstallRateLimiter(_server, new RateLimiterOptions
+            {
+                RefillTokensPerSecond = 1.0,
+                BurstCapacity = 1.0,
+            });
+
+            assertFirstResponse(Send(1, createParams));
+            var throttled = Send(2, createParams);
+
+            Assert.Equal(McpErrorEnvelope.CodeRateLimited, throttled["error"]!["code"]!.GetValue<int>());
+            Assert.Equal(McpErrorEnvelope.CategoryRateLimited, throttled["error"]!["data"]!["category"]!.GetValue<string>());
+            Assert.Equal(expectedBucketCount, _server.RateLimiter.BucketCount);
+        }
+
+        // Missing/non-string names, empty/oversized/unknown names, and known-tool argument
+        // failures must all consume quota before their detailed validation response (#4547).
+        // missing/non-string、empty/oversized/unknown 名、既知 tool の argument failure は
+        // すべて詳細検証レスポンスより先に quota を消費する（#4547）。
+        AssertSecondCallIsRateLimited(
+            () => new JsonObject { ["arguments"] = new JsonObject() },
+            first => Assert.Equal(McpErrorEnvelope.CategoryMissingParameter, first["error"]!["data"]!["category"]!.GetValue<string>()));
+        AssertSecondCallIsRateLimited(
+            () => new JsonObject { ["name"] = 42, ["arguments"] = new JsonObject() },
+            first => Assert.Equal(McpErrorEnvelope.CategoryMissingParameter, first["error"]!["data"]!["category"]!.GetValue<string>()));
+        AssertSecondCallIsRateLimited(
+            () => new JsonObject { ["name"] = string.Empty, ["arguments"] = new JsonObject() },
+            first => Assert.Equal(McpErrorEnvelope.CategoryToolUnknown, first["error"]!["data"]!["category"]!.GetValue<string>()));
+        AssertSecondCallIsRateLimited(
+            () => new JsonObject { ["name"] = "SEARCH", ["arguments"] = new JsonObject() },
+            first => Assert.Equal(McpErrorEnvelope.CategoryToolUnknown, first["error"]!["data"]!["category"]!.GetValue<string>()));
+        AssertSecondCallIsRateLimited(
+            () => new JsonObject { ["name"] = new string('x', McpBoundedText.MaxToolNameChars + 1), ["arguments"] = new JsonObject() },
+            first => Assert.Equal(McpErrorEnvelope.CategoryToolUnknown, first["error"]!["data"]!["category"]!.GetValue<string>()));
+        AssertSecondCallIsRateLimited(
+            () => new JsonObject
+            {
+                ["name"] = "search",
+                ["arguments"] = new JsonObject { ["query"] = "abc", ["limt"] = 1 },
+            },
+            first => Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, first["result"]!["structuredContent"]!["category"]!.GetValue<string>()),
+            expectedBucketCount: 2);
+    }
+
+    [Fact]
+    public void ToolsCall_CoarsePreValidationQuotaSpansCanonicalNames_Issue4547()
+    {
+        InstallRateLimiter(_server, new RateLimiterOptions
+        {
+            RefillTokensPerSecond = 1.0,
+            BurstCapacity = 1.0,
+        });
+
+        var malformedSearch = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"abc","limt":1}}}""")!)!;
+        var malformedDefinition = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"definition","arguments":{"symbol":"Thing","limt":1}}}""")!)!;
+
+        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument,
+            malformedSearch["result"]!["structuredContent"]!["category"]!.GetValue<string>());
+        Assert.Equal(McpErrorEnvelope.CodeRateLimited, malformedDefinition["error"]!["code"]!.GetValue<int>());
+        Assert.Equal(McpErrorEnvelope.CategoryRateLimited,
+            malformedDefinition["error"]!["data"]!["category"]!.GetValue<string>());
+        // Only the caller-wide bucket and the admitted canonical search bucket exist;
+        // the rejected definition call must not allocate another per-tool key (#4547).
+        // caller-wide bucket と許可済み canonical search bucket だけが存在し、拒否された
+        // definition call は追加の per-tool key を確保してはならない（#4547）。
+        Assert.Equal(2, _server.RateLimiter.BucketCount);
+    }
+
+    [Fact]
+    public void ToolsCall_UniqueUnknownNamesStayBoundedAndLegitimateToolRecoversAtAdvertisedExpiry_Issue4547()
+    {
+        var clock = InstallRateLimiter(_server, new RateLimiterOptions
+        {
+            RefillTokensPerSecond = 1.0,
+            BurstCapacity = 16.0,
+            MaxBucketCount = 2,
+            BucketIdleTtl = TimeSpan.FromSeconds(10),
+        });
+
+        for (var i = 0; i < 16; i++)
+        {
+            var unknown = _server.HandleMessage(new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = i,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = $"unknown-{i}",
+                    ["arguments"] = new JsonObject(),
+                },
+            })!;
+            Assert.Equal(McpErrorEnvelope.CategoryToolUnknown, unknown["error"]!["data"]!["category"]!.GetValue<string>());
+        }
+        Assert.Equal(1, _server.RateLimiter.BucketCount);
+
+        var exhaustedInvalidPartition = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"another-unknown","arguments":{}}}""")!)!;
+        Assert.Equal(McpErrorEnvelope.CodeRateLimited, exhaustedInvalidPartition["error"]!["code"]!.GetValue<int>());
+        Assert.Equal(1, _server.RateLimiter.BucketCount);
+
+        clock.Now = clock.Now.AddSeconds(1);
+        var languages = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"languages"}}""")!)!;
+        Assert.Null(languages["error"]);
+        Assert.Equal(2, _server.RateLimiter.BucketCount);
+
+        clock.Now = clock.Now.AddSeconds(8);
+        var saturated = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"status"}}""")!)!;
+        Assert.Equal(McpErrorEnvelope.CodeRateLimited, saturated["error"]!["code"]!.GetValue<int>());
+        var retryAfterMs = saturated["error"]!["data"]!["retry_after_ms"]!.GetValue<long>();
+        Assert.Equal(2000, retryAfterMs);
+
+        clock.Now = clock.Now.AddMilliseconds(retryAfterMs);
+        var recovered = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"status"}}""")!)!;
+        Assert.Null(recovered["error"]);
+        Assert.Equal(2, _server.RateLimiter.BucketCount);
+    }
+
+    [Fact]
+    public void ToolsCall_HierarchyRetryIncludesChargedCoarseRefillAfterCapDenial_Issue4547()
+    {
+        var clock = InstallRateLimiter(_server, new RateLimiterOptions
+        {
+            RefillTokensPerSecond = 0.1,
+            BurstCapacity = 1.0,
+            MaxBucketCount = 2,
+            BucketIdleTtl = TimeSpan.FromSeconds(11),
+        });
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"clientInfo":{"name":"client-a","version":"1.0"}}}""")!);
+        const string caller = "client-a/1.0";
+        Assert.True(_server.RateLimiter.TryAcquire(RateLimiter.ToolsCallPreValidationBucketName, caller).Allowed);
+        Assert.True(_server.RateLimiter.TryAcquire("unrelated", "other-client").Allowed);
+        clock.Now = clock.Now.AddSeconds(10);
+
+        var denied = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!;
+
+        Assert.Equal(McpErrorEnvelope.CodeRateLimited, denied["error"]!["code"]!.GetValue<int>());
+        var retryAfterMs = denied["error"]!["data"]!["retry_after_ms"]!.GetValue<long>();
+        Assert.Equal(10_000, retryAfterMs);
+
+        clock.Now = clock.Now.AddMilliseconds(retryAfterMs);
+        var recovered = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status"}}""")!)!;
+        Assert.Null(recovered["error"]);
+        Assert.Equal(2, _server.RateLimiter.BucketCount);
+    }
+
+    [Fact]
+    public void ToolsCall_DisabledKnownToolConsumesQuotaBeforeEnablementCheck_Issue4547()
+    {
+        var deny = McpToolFilter.Parse(null, "status");
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false, deny);
+        InstallRateLimiter(server, new RateLimiterOptions { RefillTokensPerSecond = 1.0, BurstCapacity = 1.0 });
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!;
+
+        var disabled = server.HandleMessage(request)!;
+        var throttled = server.HandleMessage(McpJsonNode.Clone(request)!)!;
+
+        Assert.Equal(-32601, disabled["error"]!["code"]!.GetValue<int>());
+        Assert.Equal(McpErrorEnvelope.CategoryToolDisabled, disabled["error"]!["data"]!["category"]!.GetValue<string>());
+        Assert.Equal(McpErrorEnvelope.CodeRateLimited, throttled["error"]!["code"]!.GetValue<int>());
+        Assert.Equal(2, server.RateLimiter.BucketCount);
+    }
+
+    [Fact]
     public void ToolsCall_RateLimited_ReturnsStructuredNegative32000()
     {
         // Bucket of capacity 1, refilling at 1/sec. First call succeeds, second is denied
@@ -9590,21 +10021,24 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsCall_RateLimit_KeysByTool()
+    public void ToolsCall_RateLimit_LayersCallerWideAndKnownToolBuckets_Issue4547()
     {
-        // Different tools have independent buckets, so once `status` is throttled the
-        // sibling tool `languages` still goes through (#1560).
-        // 別ツールは独立バケットを持つため、`status` がスロットルされても `languages` は通る（#1560）。
-        InstallRateLimiter(_server, new RateLimiterOptions { RefillTokensPerSecond = 1.0, BurstCapacity = 1.0 });
+        // Known tools retain secondary per-tool buckets while all calls also consume the
+        // shared caller-wide quota (#1560 / #4547).
+        // 既知 tool は secondary per-tool bucket を維持しつつ、全 call が共有 caller-wide
+        // quota も消費する（#1560 / #4547）。
+        InstallRateLimiter(_server, new RateLimiterOptions { RefillTokensPerSecond = 1.0, BurstCapacity = 2.0 });
 
         Assert.Null(_server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!["error"]);
-        Assert.NotNull(_server.HandleMessage(JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status"}}""")!)!["error"]);
-
         var languages = _server.HandleMessage(JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"languages"}}""")!)!;
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"languages"}}""")!)!;
         Assert.Null(languages["error"]);
+        Assert.Equal(3, _server.RateLimiter.BucketCount);
+
+        var throttled = _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"status"}}""")!)!;
+        Assert.Equal(McpErrorEnvelope.CodeRateLimited, throttled["error"]!["code"]!.GetValue<int>());
     }
 
     [Fact]

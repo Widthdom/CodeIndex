@@ -1165,6 +1165,8 @@ public class HttpMcpTransportTests : IDisposable
             ok.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "token");
             using var okResponse = await client.SendAsync(ok);
             Assert.Equal(HttpStatusCode.OK, okResponse.StatusCode);
+            using var okDocument = JsonDocument.Parse(await okResponse.Content.ReadAsStringAsync());
+            Assert.Equal(7, okDocument.RootElement.GetProperty("id").GetInt32());
         }
 
         // Issue #2419: full-suite runs can be slow enough that the successful POST response
@@ -1189,12 +1191,11 @@ public class HttpMcpTransportTests : IDisposable
             record.Method == "GET");
         Assert.Equal((int)HttpStatusCode.Unauthorized, unauthorizedGet.StatusCode);
 
-        var okPost = Assert.Single(snapshot, record =>
-            record.AuthOutcome == "ok" &&
-            record.RequestId == "7");
+        var okPost = Assert.Single(snapshot, record => record.AuthOutcome == "ok");
         Assert.Equal("POST", okPost.Method);
         Assert.Equal("/", okPost.Path);
         Assert.Equal((int)HttpStatusCode.OK, okPost.StatusCode);
+        Assert.NotEqual("7", AssertOpaqueRequestId(okPost, "number", 1));
     }
 
     [Fact]
@@ -1259,7 +1260,7 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_RequestLogger_BoundsPathAndJsonRpcIdMetadata_Issue3014()
+    public async Task HttpTransport_RequestLogger_BoundsPathAndRedactsJsonRpcIdMetadata_Issue3014_4551()
     {
         var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, requestLogger: records.Enqueue);
@@ -1273,22 +1274,20 @@ public class HttpMcpTransportTests : IDisposable
         Assert.Equal(HttpMcpTransport.MaxRequestLogFieldCharacters, pathRecord.Path.Length);
         Assert.EndsWith(HttpMcpTransport.RequestLogTruncationMarker, pathRecord.Path, StringComparison.Ordinal);
 
-        var oversizedId = new string('i', HttpMcpTransport.MaxRequestLogFieldCharacters + 100);
+        var longestValidId = new string('i', McpServer.MaxRequestIdCharacterCount);
         var body = """{"jsonrpc":"2.0","id":"""
-            + JsonSerializer.Serialize(oversizedId)
+            + JsonSerializer.Serialize(longestValidId)
             + ""","method":"initialize","params":{}}""";
 
-        using var oversizedIdResponse = await harness.PostJsonAsync(body);
+        using var longestIdResponse = await harness.PostJsonAsync(body);
 
-        Assert.Equal(HttpStatusCode.OK, oversizedIdResponse.StatusCode);
-        var oversizedIdRecords = await WaitForRequestLogRecordsAsync(records, 2);
-        var oversizedIdRecord = Assert.Single(oversizedIdRecords, record => record.Method == "POST");
-        Assert.NotNull(oversizedIdRecord.RequestId);
-        Assert.Equal(HttpMcpTransport.MaxRequestLogFieldCharacters, oversizedIdRecord.RequestId.Length);
-        Assert.EndsWith(HttpMcpTransport.RequestLogTruncationMarker, oversizedIdRecord.RequestId, StringComparison.Ordinal);
-
-        using (var initialize = await harness.InitializeAsync())
-            Assert.Equal(HttpStatusCode.OK, initialize.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, longestIdResponse.StatusCode);
+        using (var longestIdDocument = JsonDocument.Parse(await longestIdResponse.Content.ReadAsStringAsync()))
+            Assert.Equal(longestValidId, longestIdDocument.RootElement.GetProperty("id").GetString());
+        var longestIdRecords = await WaitForRequestLogRecordsAsync(records, 2);
+        var longestIdRecord = Assert.Single(longestIdRecords, record => record.Method == "POST");
+        var longestIdToken = AssertOpaqueRequestId(longestIdRecord, "string", longestValidId.Length);
+        Assert.DoesNotContain(longestValidId, longestIdToken, StringComparison.Ordinal);
 
         using var deepIdResponse = await harness.PostJsonAsync(BuildNestedJsonRpcRequest(McpServer.MaxJsonDepth + 1));
 
@@ -1296,9 +1295,105 @@ public class HttpMcpTransportTests : IDisposable
         Assert.True(
             deepIdResponse.StatusCode == HttpStatusCode.OK,
             $"Expected deep JSON-RPC payload to reach normal handling; status={deepIdResponse.StatusCode}; body={deepIdBody}");
-        var deepIdRecords = await WaitForRequestLogRecordsAsync(records, 4);
+        var deepIdRecords = await WaitForRequestLogRecordsAsync(records, 3);
         var deepIdRecord = Assert.Single(deepIdRecords, record => record.Method == "POST" && record.RequestId is null);
         Assert.Null(deepIdRecord.RequestId);
+        Assert.Null(deepIdRecord.RequestIdType);
+        Assert.Null(deepIdRecord.RequestIdLength);
+    }
+
+    [Fact]
+    public async Task HttpTransport_RequestLogger_UsesOpaqueTokensForCredentialShapedAndDistinctIds_Issue4551()
+    {
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, requestLogger: records.Enqueue);
+        var rawIds = new[]
+        {
+            "postgresql://admin:s3cr3t@example.test/db?sslmode=require",
+            "customer-session-0001",
+            "customer-session-00002",
+            "customer-session-000003",
+            "customer-session-0000004",
+        };
+
+        for (var i = 0; i < rawIds.Length; i++)
+        {
+            var requestBody = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = rawIds[i],
+                method = i == 0 ? "initialize" : "ping",
+                @params = new { },
+            });
+            using var response = await harness.PostJsonAsync(requestBody);
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var responseDocument = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(rawIds[i], responseDocument.RootElement.GetProperty("id").GetString());
+        }
+
+        var snapshot = await WaitForRequestLogRecordsAsync(records, rawIds.Length);
+        var tokens = snapshot
+            .Select(record => AssertOpaqueRequestId(record, "string", Assert.IsType<int>(record.RequestIdLength)))
+            .ToArray();
+
+        Assert.Equal(rawIds.Length, tokens.Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(
+            rawIds.Select(static id => id.Length).Order(),
+            snapshot.Select(record => Assert.IsType<int>(record.RequestIdLength)).Order());
+        Assert.All(rawIds, rawId => Assert.DoesNotContain(rawId, tokens));
+    }
+
+    [Fact]
+    public async Task HttpTransport_RequestLogger_DistinguishesNullAndOmitsInvalidOrAbsentIds_Issue4551()
+    {
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, requestLogger: records.Enqueue);
+
+        using (var explicitNull = await harness.PostJsonAsync(
+            """{"jsonrpc":"2.0","id":null,"method":"initialize","params":{}}"""))
+        {
+            Assert.Equal(HttpStatusCode.OK, explicitNull.StatusCode);
+            using var response = JsonDocument.Parse(await explicitNull.Content.ReadAsStringAsync());
+            Assert.Equal(JsonValueKind.Null, response.RootElement.GetProperty("id").ValueKind);
+        }
+        var explicitNullRecord = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
+        _ = AssertOpaqueRequestId(explicitNullRecord, "null", 0);
+        records.Clear();
+
+        using (var notification = await harness.PostJsonAsync(
+            """{"jsonrpc":"2.0","method":"notifications/initialized"}"""))
+            Assert.Equal(HttpStatusCode.NoContent, notification.StatusCode);
+        AssertRequestIdTupleAbsent(Assert.Single(await WaitForRequestLogRecordsAsync(records, 1)));
+        records.Clear();
+
+        using (var invalidType = await harness.PostJsonAsync(
+            """{"jsonrpc":"2.0","id":true,"method":"tools/list"}"""))
+        {
+            Assert.Equal(HttpStatusCode.OK, invalidType.StatusCode);
+            using var response = JsonDocument.Parse(await invalidType.Content.ReadAsStringAsync());
+            Assert.Equal(JsonValueKind.Null, response.RootElement.GetProperty("id").ValueKind);
+        }
+        AssertRequestIdTupleAbsent(Assert.Single(await WaitForRequestLogRecordsAsync(records, 1)));
+        records.Clear();
+
+        var oversizedId = "Bearer oversized-request-id-4551-"
+            + new string('x', McpServer.MaxRequestIdCharacterCount);
+        var oversizedBody = JsonSerializer.Serialize(new
+        {
+            jsonrpc = "2.0",
+            id = oversizedId,
+            method = "tools/list",
+        });
+        using (var oversized = await harness.PostJsonAsync(oversizedBody))
+        {
+            Assert.Equal(HttpStatusCode.OK, oversized.StatusCode);
+            var responseBody = await oversized.Content.ReadAsStringAsync();
+            Assert.DoesNotContain(oversizedId, responseBody, StringComparison.Ordinal);
+            using var response = JsonDocument.Parse(responseBody);
+            Assert.Equal(JsonValueKind.Null, response.RootElement.GetProperty("id").ValueKind);
+        }
+        AssertRequestIdTupleAbsent(Assert.Single(await WaitForRequestLogRecordsAsync(records, 1)));
     }
 
     [Fact]
@@ -1627,9 +1722,11 @@ public class HttpMcpTransportTests : IDisposable
         using var response = await client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var responseDocument = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(3755, responseDocument.RootElement.GetProperty("id").GetInt32());
         var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
         Assert.Equal("request_body_length_unknown", record.Diagnostic);
-        Assert.Equal("3755", record.RequestId);
+        Assert.NotEqual("3755", AssertOpaqueRequestId(record, "number", 4));
     }
 
     [Fact]
@@ -2693,6 +2790,29 @@ public class HttpMcpTransportTests : IDisposable
             });
 
         return records.ToArray();
+    }
+
+    private static string AssertOpaqueRequestId(
+        HttpMcpTransport.HttpRequestLogRecord record,
+        string expectedType,
+        int expectedLength)
+    {
+        var token = Assert.IsType<string>(record.RequestId);
+        Assert.StartsWith(McpRequestIdTelemetry.TokenPrefix, token, StringComparison.Ordinal);
+        Assert.Equal(McpRequestIdTelemetry.TokenLength, token.Length);
+        Assert.True(
+            token.AsSpan(McpRequestIdTelemetry.TokenPrefix.Length).ToString().All(char.IsAsciiHexDigit),
+            $"Expected an opaque hexadecimal request-id token, got '{token}'.");
+        Assert.Equal(expectedType, record.RequestIdType);
+        Assert.Equal(expectedLength, record.RequestIdLength);
+        return token;
+    }
+
+    private static void AssertRequestIdTupleAbsent(HttpMcpTransport.HttpRequestLogRecord record)
+    {
+        Assert.Null(record.RequestId);
+        Assert.Null(record.RequestIdType);
+        Assert.Null(record.RequestIdLength);
     }
 
     private static async Task WaitForRequestLogDropAsync(McpHttpHarness harness)

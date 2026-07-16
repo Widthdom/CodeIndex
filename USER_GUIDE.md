@@ -1821,6 +1821,9 @@ Each record is a single JSON object on its own line with these fields:
 | `elapsed_ms` | number | Wall-clock duration in milliseconds (3 decimal places) |
 | `exit_code` | number | CLI exit code; `0` for successful MCP tool calls, `1` for tool calls that threw |
 | `language` | string (optional) | `--lang` / `language` argument, when present and known |
+| `request_id` | string (optional, MCP only) | Process-salted fixed-length opaque token for the JSON-RPC request id |
+| `request_id_type` | string (optional, MCP only) | JSON-RPC id type: `string`, `number`, or `null` |
+| `request_id_length` | number (optional, MCP only) | Decoded string-value UTF-16 code-unit count, numeric JSON-text character count, or `0` for `null` |
 | `bytes_read` | number (optional) | Reserved for future per-call IO accounting |
 | `bytes_written` | number (optional) | Reserved for future per-call IO accounting |
 | `wal_checkpoint_ms` | number (optional) | Reserved for future WAL checkpoint timing |
@@ -1835,8 +1838,26 @@ Example output:
 
 ```jsonl
 {"timestamp":"2026-05-16T09:00:01.1234567+00:00","tool":"search","source":"cli","elapsed_ms":221.574,"exit_code":0,"language":"csharp"}
-{"timestamp":"2026-05-16T09:00:02.4567890+00:00","tool":"definition","source":"mcp","elapsed_ms":18.402,"exit_code":0}
+{"timestamp":"2026-05-16T09:00:02.4567890+00:00","tool":"definition","source":"mcp","elapsed_ms":18.402,"exit_code":0,"request_id":"rid:v1:0123456789abcdef0123456789abcdef","request_id_type":"number","request_id_length":1}
 ```
+
+### MCP request-id privacy
+
+Externally supplied JSON-RPC ids are echoed verbatim only on the JSON-RPC wire
+and retained where the protocol needs them for internal routing or cancellation.
+Telemetry never copies the raw value. Wherever MCP telemetry exposes
+`request_id`—stderr diagnostics and invocation events, persistent HTTP request
+logs, Activity tags (`rpc.request_id`), MCP metrics, audit records, or request
+timeout status/logs—it is a fixed-length opaque `rid:v1:...` token derived with
+a process-local random salt. The accompanying `request_id_type` and
+`request_id_length` fields preserve only the id type and length: decoded string
+value UTF-16 code units for strings, JSON text characters for numbers, and `0`
+for `null`. Up to 4,096 distinct ids retain individual tokens in one process;
+after that budget is exhausted, every previously unseen id uses the same salted
+fixed-length overflow token, bounding `request_id` to 4,097 distinct values.
+Already registered ids remain correlatable. Restarting the server changes the
+salt and therefore every token. CLI metrics have no JSON-RPC id and omit all
+three request-id fields.
 
 ### MCP audit log
 
@@ -1857,9 +1878,10 @@ Each record is a single JSON object on its own line with these fields:
 | `tool` | string | MCP tool name (`search`, `definition`, …) or `(missing)` for malformed `tools/call` |
 | `caller` | string (optional) | `initialize.clientInfo.name` from the connected MCP client |
 | `caller_version` | string (optional) | `initialize.clientInfo.version` from the connected MCP client |
-| `request_id` | string (optional) | JSON-encoded JSON-RPC request id, when present |
-| `request_id_length` | number (optional) | Original request id length when `request_id` is truncated |
-| `request_id_truncated` | boolean (optional) | `true` when `request_id` was shortened for the audit record |
+| `request_id` | string (optional) | Process-salted fixed-length opaque token for the JSON-RPC request id |
+| `request_id_type` | string (optional) | JSON-RPC id type: `string`, `number`, or `null` |
+| `request_id_length` | number (optional) | Decoded string-value UTF-16 code-unit count, numeric JSON-text character count, or `0` for `null` |
+| `request_id_truncated` | boolean (optional) | Compatibility guard; normally omitted because the opaque token is fixed-length |
 | `arg_keys` | string[] | Ordered list of argument names supplied to the tool |
 | `arg_key_lengths` | object (optional) | Original key lengths for truncated argument names |
 | `arg_keys_truncated` | boolean (optional) | `true` when argument names or the argument-key list were truncated |
@@ -1883,7 +1905,7 @@ Full MCP `status` exposes an enabled sink under `mcp_session.audit_log`, and MCP
 Example output:
 
 ```jsonl
-{"timestamp":"2026-05-16T09:00:01.1234567+00:00","tool":"search","caller":"claude-code","caller_version":"1.4.2","request_id":"7","arg_keys":["query","limit"],"arg_lengths":{"query":12,"limit":0},"result_count":4,"elapsed_ms":18.402,"error_code":0}
+{"timestamp":"2026-05-16T09:00:01.1234567+00:00","tool":"search","caller":"claude-code","caller_version":"1.4.2","request_id":"rid:v1:0123456789abcdef0123456789abcdef","request_id_type":"number","request_id_length":1,"arg_keys":["query","limit"],"arg_lengths":{"query":12,"limit":0},"result_count":4,"elapsed_ms":18.402,"error_code":0}
 {"timestamp":"2026-05-16T09:00:02.4567890+00:00","tool":"(missing)","arg_keys":[],"arg_lengths":{},"elapsed_ms":0.412,"error_code":-32602,"error":"missing_tool_name"}
 ```
 
@@ -2732,7 +2754,7 @@ the session, or restart the server to create a fresh one. This transport gate
 is separate from the pre-commit `CDIDX_MCP_RESPONSE_MAX_BYTES` fallback
 (#4540).
 
-Each HTTP `POST /` carries one JSON-RPC frame in the request body, the matching response is returned in the same HTTP body (`200 OK`, `application/json`), and notifications return `204 No Content`. POST bodies must declare exactly one `Content-Type: application/json`; the charset may be omitted or be UTF-8, and malformed UTF-8 is rejected instead of replacement-decoded. Unsupported media types or charsets return `415`, while invalid UTF-8 returns `400`. `GET /events` opens a `text/event-stream` channel for server-to-client frames; multiple concurrent streams from the established session can hold `/events`, and server notifications are broadcast to every connected stream in that session. Event responses include `X-Accel-Buffering: no` and a per-stream `X-Cdidx-Mcp-Event-Stream-Id`. The server emits no unsolicited JSON-RPC frames unless keep-alive notifications are opted in with `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S`. Accepted keep-alive values are finite seconds from `1` to `300`; invalid or out-of-range values leave keep-alive disabled with a `stderr` warning. The stream is independent and does not block normal POST requests. Bearer authentication is required for loopback HTTP too. The only no-token mode is the explicit `--allow-unauthenticated-http` opt-in, which is refused for non-loopback listeners; startup emits a security warning and `/healthz` then reports `http_auth_required: false`, `http_auth_disabled: true`, and `http_auth_disabled_warning`. Non-POST verbs on `/` return `405 Method Not Allowed`, while CORS preflight is rejected with `403`. Request bodies are capped at 1,000,000 bytes by default and oversized requests return `413 Payload Too Large`; the pending POST queue and accepted handler tasks are capped at 64 by default, and concurrent `/events` streams are capped at 16. Full queues, handler pools, or stream slots return `429 Too Many Requests` with `Retry-After: 1` and `X-Cdidx-Mcp-Rejection` set to `request_queue_limit`, `concurrent_handler_limit`, or `event_stream_limit`. Tune those positive-integer limits with `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`, `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`, `CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS`, and `CDIDX_MCP_HTTP_MAX_EVENT_STREAMS`; accepted ranges are `1..16777216` bytes and `1..1024` for each count limit. Invalid non-positive or non-numeric values fall back to the defaults, while values above those maximums are rejected before the listener starts. `/healthz` includes `http_event_stream_count`, `http_event_stream_limit`, `http_max_concurrent_handlers`, `http_queued_request_count`, `http_request_queue_limit`, HTTP auth state, and separate rejection counts for concurrent handler, request queue, and event stream limits. Idle event streams receive minimal SSE comment heartbeats so disconnected clients release their stream slots. When the persistent lifecycle log is enabled, HTTP mode also writes one `mcp_http_request` record per request with method, path, status, duration, auth outcome, remote peer, correlation id, JSON-RPC request id when available, and the rejection reason for classified overload responses. Method, path, remote peer, and request id fields are capped at 256 characters with a `...<truncated>` marker. Origin, Content-Type, request bodies, and response bodies are not logged.
+Each HTTP `POST /` carries one JSON-RPC frame in the request body, the matching response is returned in the same HTTP body (`200 OK`, `application/json`), and notifications return `204 No Content`. POST bodies must declare exactly one `Content-Type: application/json`; the charset may be omitted or be UTF-8, and malformed UTF-8 is rejected instead of replacement-decoded. Unsupported media types or charsets return `415`, while invalid UTF-8 returns `400`. `GET /events` opens a `text/event-stream` channel for server-to-client frames; multiple concurrent streams from the established session can hold `/events`, and server notifications are broadcast to every connected stream in that session. Event responses include `X-Accel-Buffering: no` and a per-stream `X-Cdidx-Mcp-Event-Stream-Id`. The server emits no unsolicited JSON-RPC frames unless keep-alive notifications are opted in with `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S`. Accepted keep-alive values are finite seconds from `1` to `300`; invalid or out-of-range values leave keep-alive disabled with a `stderr` warning. The stream is independent and does not block normal POST requests. Bearer authentication is required for loopback HTTP too. The only no-token mode is the explicit `--allow-unauthenticated-http` opt-in, which is refused for non-loopback listeners; startup emits a security warning and `/healthz` then reports `http_auth_required: false`, `http_auth_disabled: true`, and `http_auth_disabled_warning`. Non-POST verbs on `/` return `405 Method Not Allowed`, while CORS preflight is rejected with `403`. Request bodies are capped at 1,000,000 bytes by default and oversized requests return `413 Payload Too Large`; the pending POST queue and accepted handler tasks are capped at 64 by default, and concurrent `/events` streams are capped at 16. Full queues, handler pools, or stream slots return `429 Too Many Requests` with `Retry-After: 1` and `X-Cdidx-Mcp-Rejection` set to `request_queue_limit`, `concurrent_handler_limit`, or `event_stream_limit`. Tune those positive-integer limits with `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`, `CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`, `CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS`, and `CDIDX_MCP_HTTP_MAX_EVENT_STREAMS`; accepted ranges are `1..16777216` bytes and `1..1024` for each count limit. Invalid non-positive or non-numeric values fall back to the defaults, while values above those maximums are rejected before the listener starts. `/healthz` includes `http_event_stream_count`, `http_event_stream_limit`, `http_max_concurrent_handlers`, `http_queued_request_count`, `http_request_queue_limit`, HTTP auth state, and separate rejection counts for concurrent handler, request queue, and event stream limits. Idle event streams receive minimal SSE comment heartbeats so disconnected clients release their stream slots. When the persistent lifecycle log is enabled, HTTP mode also writes one `mcp_http_request` record per request with method, path, status, duration, auth outcome, remote peer, correlation id, an opaque JSON-RPC request-id token plus its type and decoded-value length when available, and the rejection reason for classified overload responses. Method, path, and remote peer fields are capped at 256 characters with a `...<truncated>` marker. The request-id token is already fixed-length; the raw JSON-RPC id, Origin, Content-Type, request bodies, and response bodies are not logged.
 
 Security defaults:
 
@@ -4690,6 +4712,9 @@ MCP の full `status` は常に `mcp_session.metrics` object を含み、metrics
 | `elapsed_ms` | number | ウォールクロック経過ミリ秒（小数 3 桁） |
 | `exit_code` | number | CLI 終了コード。MCP は成功時 `0`、ツール内で例外が出た場合 `1` |
 | `language` | string（任意） | `--lang` / `language` 引数が指定され言語が判定できた場合に付与 |
+| `request_id` | string（任意、MCP のみ） | JSON-RPC request id から生成した process-salted な固定長 opaque token |
+| `request_id_type` | string（任意、MCP のみ） | JSON-RPC id の型: `string`、`number`、`null` |
+| `request_id_length` | number（任意、MCP のみ） | string は decode 後の値の UTF-16 code unit 数、number は JSON text の文字数、`null` は `0` |
 | `bytes_read` | number（任意） | 将来の per-call IO 計測用に予約 |
 | `bytes_written` | number（任意） | 将来の per-call IO 計測用に予約 |
 | `wal_checkpoint_ms` | number（任意） | 将来の WAL チェックポイント時間計測用に予約 |
@@ -4704,8 +4729,25 @@ MCP の full `status` は常に `mcp_session.metrics` object を含み、metrics
 
 ```jsonl
 {"timestamp":"2026-05-16T09:00:01.1234567+00:00","tool":"search","source":"cli","elapsed_ms":221.574,"exit_code":0,"language":"csharp"}
-{"timestamp":"2026-05-16T09:00:02.4567890+00:00","tool":"definition","source":"mcp","elapsed_ms":18.402,"exit_code":0}
+{"timestamp":"2026-05-16T09:00:02.4567890+00:00","tool":"definition","source":"mcp","elapsed_ms":18.402,"exit_code":0,"request_id":"rid:v1:0123456789abcdef0123456789abcdef","request_id_type":"number","request_id_length":1}
 ```
+
+### MCP request id のプライバシー
+
+外部から渡された JSON-RPC id の生値は、JSON-RPC wire での echo と、
+protocol の内部 routing / cancellation に必要な範囲だけで保持します。
+telemetry へ生値をコピーすることはありません。MCP telemetry の
+`request_id`（stderr の診断と invocation event、永続 HTTP request log、
+Activity tag の `rpc.request_id`、MCP metrics、audit record、request timeout の
+status / log）はすべて、process-local な random salt から導出した固定長の
+opaque `rid:v1:...` token です。同伴する `request_id_type` と
+`request_id_length` が保持するのは型と長さだけで、string は decode 後の値の
+UTF-16 code unit 数、number は JSON text の文字数、`null` は `0` です。同じ
+server process 内では最大 4,096 件の distinct id が個別 token を保持します。
+budget を使い切った後の未観測 id はすべて同じ salted 固定長 overflow token を使い、
+`request_id` の distinct 値を 4,097 件までに制限します。登録済み id の相関は維持され、
+server process を再起動すると salt とすべての token が変わります。
+CLI metrics には JSON-RPC id がないため、この 3 field をすべて省略します。
 
 ### MCP 監査ログ
 
@@ -4726,9 +4768,10 @@ MCP の full `status` は常に `mcp_session.metrics` object を含み、metrics
 | `tool` | string | MCP ツール名（`search`、`definition` …）。`tools/call` が壊れていた場合は `(missing)` |
 | `caller` | string（任意） | 接続中クライアントの `initialize.clientInfo.name` |
 | `caller_version` | string（任意） | 接続中クライアントの `initialize.clientInfo.version` |
-| `request_id` | string（任意） | JSON-RPC リクエスト id を JSON エンコードしたもの |
-| `request_id_length` | number（任意） | `request_id` が短縮された場合の元の長さ |
-| `request_id_truncated` | boolean（任意） | audit record 用に `request_id` が短縮された場合に `true` |
+| `request_id` | string（任意） | JSON-RPC request id から生成した process-salted な固定長 opaque token |
+| `request_id_type` | string（任意） | JSON-RPC id の型: `string`、`number`、`null` |
+| `request_id_length` | number（任意） | string は decode 後の値の UTF-16 code unit 数、number は JSON text の文字数、`null` は `0` |
+| `request_id_truncated` | boolean（任意） | 互換性用 guard。opaque token は固定長のため通常は省略 |
 | `arg_keys` | string[] | ツールへ渡された引数名の順序付きリスト |
 | `arg_key_lengths` | object（任意） | 短縮された引数名の元の長さ |
 | `arg_keys_truncated` | boolean（任意） | 引数名または引数キー一覧が短縮された場合に `true` |
@@ -4752,7 +4795,7 @@ MCP の full `status` は有効な sink を `mcp_session.audit_log` に公開し
 出力例:
 
 ```jsonl
-{"timestamp":"2026-05-16T09:00:01.1234567+00:00","tool":"search","caller":"claude-code","caller_version":"1.4.2","request_id":"7","arg_keys":["query","limit"],"arg_lengths":{"query":12,"limit":0},"result_count":4,"elapsed_ms":18.402,"error_code":0}
+{"timestamp":"2026-05-16T09:00:01.1234567+00:00","tool":"search","caller":"claude-code","caller_version":"1.4.2","request_id":"rid:v1:0123456789abcdef0123456789abcdef","request_id_type":"number","request_id_length":1,"arg_keys":["query","limit"],"arg_lengths":{"query":12,"limit":0},"result_count":4,"elapsed_ms":18.402,"error_code":0}
 {"timestamp":"2026-05-16T09:00:02.4567890+00:00","tool":"(missing)","arg_keys":[],"arg_lengths":{},"elapsed_ms":0.412,"error_code":-32602,"error":"missing_tool_name"}
 ```
 
@@ -5572,7 +5615,7 @@ initialize state は server-side JSON-RPC serialization 後、HTTP 配送前に 
 header を保持し、新しい session が必要なら server を再起動してください。この transport
 gate は commit 前の `CDIDX_MCP_RESPONSE_MAX_BYTES` fallback（#4540）とは別です。
 
-HTTP の `POST /` 1 件が JSON-RPC フレーム 1 件に対応し、応答は同じ HTTP レスポンスのボディに `200 OK` / `application/json` で返ります。通知は `204 No Content` です。POST body は `Content-Type: application/json` を 1 件だけ宣言する必要があり、charset は省略または UTF-8 だけを受理します。不正 UTF-8 を replacement decode せず、未対応 media type / charset は `415`、不正 UTF-8 は `400` で拒否します。`GET /events` はサーバー→クライアントフレーム用の `text/event-stream` channel を開きます。確立済み session の複数 stream が同時に `/events` を保持でき、server notification はその session で接続中の全 stream に broadcast されます。event response には `X-Accel-Buffering: no` と stream ごとの `X-Cdidx-Mcp-Event-Stream-Id` が付きます。server-initiated JSON-RPC frame は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification を opt-in した場合だけ送信されます。受理される値は有限な `1`〜`300` 秒で、不正値や範囲外の値では `stderr` に警告を出して keep-alive を無効のままにします。この stream は独立しており通常の POST リクエストを塞ぎません。loopback HTTP も既定では bearer 認証が必須です。token なし mode は明示的な `--allow-unauthenticated-http` opt-in だけで、non-loopback listener では拒否します。この場合は起動時に security warning を出し、`/healthz` は `http_auth_required: false`、`http_auth_disabled: true`、`http_auth_disabled_warning` を報告します。`/` への POST 以外は `405 Method Not Allowed`、CORS preflight は `403` です。リクエスト本文は既定で 1,000,000 bytes までに制限され、超過時は `413 Payload Too Large` を返します。保留中 POST queue と受理済み handler task は既定で 64 件まで、同時 `/events` stream は既定で 16 件までに制限されます。queue、handler pool、stream slot が満杯の場合は `Retry-After: 1` と、`request_queue_limit`、`concurrent_handler_limit`、`event_stream_limit` のいずれかを示す `X-Cdidx-Mcp-Rejection` 付きの `429 Too Many Requests` を返します。正の整数の `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`、`CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`、`CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS`、`CDIDX_MCP_HTTP_MAX_EVENT_STREAMS` で調整でき、受理範囲は本文が `1..16777216` bytes、各件数 limit が `1..1024` 件です。正でない値や数値でない値は既定にフォールバックし、最大値を超える値は listener 起動前に拒否されます。`/healthz` は transport diagnostic として `http_event_stream_count`、`http_event_stream_limit`、`http_max_concurrent_handlers`、`http_queued_request_count`、`http_request_queue_limit`、HTTP auth state、および concurrent handler、request queue、event stream limit ごとの rejection count を含みます。idle event stream には最小限の SSE comment heartbeat を送り、切断済み client の stream slot を解放します。永続 lifecycle log が有効な場合、HTTP mode はリクエストごとに `mcp_http_request` レコードも出力し、method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id、分類済み overload response の rejection reason を記録します。method、path、remote peer、request id は 256 文字を上限に `...<truncated>` marker 付きで切り詰めます。Origin、Content-Type、リクエスト／レスポンス本文は記録しません。
+HTTP の `POST /` 1 件が JSON-RPC フレーム 1 件に対応し、応答は同じ HTTP レスポンスのボディに `200 OK` / `application/json` で返ります。通知は `204 No Content` です。POST body は `Content-Type: application/json` を 1 件だけ宣言する必要があり、charset は省略または UTF-8 だけを受理します。不正 UTF-8 を replacement decode せず、未対応 media type / charset は `415`、不正 UTF-8 は `400` で拒否します。`GET /events` はサーバー→クライアントフレーム用の `text/event-stream` channel を開きます。確立済み session の複数 stream が同時に `/events` を保持でき、server notification はその session で接続中の全 stream に broadcast されます。event response には `X-Accel-Buffering: no` と stream ごとの `X-Cdidx-Mcp-Event-Stream-Id` が付きます。server-initiated JSON-RPC frame は `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` で keep-alive notification を opt-in した場合だけ送信されます。受理される値は有限な `1`〜`300` 秒で、不正値や範囲外の値では `stderr` に警告を出して keep-alive を無効のままにします。この stream は独立しており通常の POST リクエストを塞ぎません。loopback HTTP も既定では bearer 認証が必須です。token なし mode は明示的な `--allow-unauthenticated-http` opt-in だけで、non-loopback listener では拒否します。この場合は起動時に security warning を出し、`/healthz` は `http_auth_required: false`、`http_auth_disabled: true`、`http_auth_disabled_warning` を報告します。`/` への POST 以外は `405 Method Not Allowed`、CORS preflight は `403` です。リクエスト本文は既定で 1,000,000 bytes までに制限され、超過時は `413 Payload Too Large` を返します。保留中 POST queue と受理済み handler task は既定で 64 件まで、同時 `/events` stream は既定で 16 件までに制限されます。queue、handler pool、stream slot が満杯の場合は `Retry-After: 1` と、`request_queue_limit`、`concurrent_handler_limit`、`event_stream_limit` のいずれかを示す `X-Cdidx-Mcp-Rejection` 付きの `429 Too Many Requests` を返します。正の整数の `CDIDX_MCP_HTTP_MAX_REQUEST_BYTES`、`CDIDX_MCP_HTTP_MAX_QUEUE_DEPTH`、`CDIDX_MCP_HTTP_MAX_CONCURRENT_HANDLERS`、`CDIDX_MCP_HTTP_MAX_EVENT_STREAMS` で調整でき、受理範囲は本文が `1..16777216` bytes、各件数 limit が `1..1024` 件です。正でない値や数値でない値は既定にフォールバックし、最大値を超える値は listener 起動前に拒否されます。`/healthz` は transport diagnostic として `http_event_stream_count`、`http_event_stream_limit`、`http_max_concurrent_handlers`、`http_queued_request_count`、`http_request_queue_limit`、HTTP auth state、および concurrent handler、request queue、event stream limit ごとの rejection count を含みます。idle event stream には最小限の SSE comment heartbeat を送り、切断済み client の stream slot を解放します。永続 lifecycle log が有効な場合、HTTP mode はリクエストごとに `mcp_http_request` レコードも出力し、method、path、status、duration、auth outcome、remote peer、correlation id、および利用可能な場合は opaque な JSON-RPC request-id token とその型・decode 後の値長、分類済み overload response の rejection reason を記録します。method、path、remote peer は 256 文字を上限に `...<truncated>` marker 付きで切り詰めます。request-id token は固定長であり、JSON-RPC id の生値、Origin、Content-Type、リクエスト／レスポンス本文は記録しません。
 
 セキュリティ既定:
 

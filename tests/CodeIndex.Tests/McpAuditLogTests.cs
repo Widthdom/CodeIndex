@@ -162,6 +162,40 @@ public class McpAuditLogTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_ExplicitNullId_EmitsNullTypeAuditToken_Issue4551()
+    {
+        using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
+        using var server = CreateServer(sink);
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":null,"method":"tools/call","params":{"name":"ping","arguments":{}}}""")!;
+
+        var response = server.HandleMessage(request)!;
+
+        AssertJsonNullId(response);
+        var record = ReadOnlyRecord();
+        var expected = McpRequestIdTelemetry.Create(id: null);
+        Assert.Equal(expected.Token, record.GetProperty("request_id").GetString());
+        Assert.Equal("null", record.GetProperty("request_id_type").GetString());
+        Assert.Equal(0, record.GetProperty("request_id_length").GetInt32());
+    }
+
+    [Fact]
+    public void ToolsCall_NotificationWithoutId_DoesNotFabricateAuditRequestId_Issue4551()
+    {
+        using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
+        using var server = CreateServer(sink);
+        var notification = JsonNode.Parse(
+            """{"jsonrpc":"2.0","method":"tools/call","params":{"name":"ping","arguments":{}}}""")!;
+
+        var response = server.HandleMessage(notification);
+
+        Assert.Null(response);
+        Assert.True(sink.WaitForIdle(TimeSpan.FromSeconds(5)), "audit log writer did not become idle");
+        if (File.Exists(_auditPath))
+            Assert.True(string.IsNullOrWhiteSpace(File.ReadAllText(_auditPath)));
+    }
+
+    [Fact]
     public void ToolsCall_DisabledTool_EmitsAuditRecordWithToolDisabledError()
     {
         // Regression for #1562 codex review: operator-denied tools must show up in the
@@ -469,13 +503,49 @@ public class McpAuditLogTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_MaxLengthRequestId_PreservesAuditRequestId_Issue3237_3307()
+    public void ToolsCall_CredentialRequestId_UsesOpaqueAuditToken_Issue4551()
     {
         using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
         using var server = CreateServer(sink);
-        var id = new string('r', McpServer.MaxRequestIdCharacterCount);
-        var serializedId = JsonSerializer.Serialize(id);
-        Assert.True(serializedId.Length <= AuditLogSink.MaxRequestIdChars);
+        const string credentialPrefix = "Bearer audit-secret-";
+        var id = credentialPrefix + new string('r', McpServer.MaxRequestIdCharacterCount - credentialPrefix.Length);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = id,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "ping",
+                ["arguments"] = new JsonObject(),
+            },
+        };
+
+        var response = server.HandleMessage(request)!;
+
+        Assert.False(response.AsObject().ContainsKey("error"));
+        Assert.NotNull(response["result"]);
+        Assert.Equal(id, response["id"]!.GetValue<string>());
+        var rawLog = ReadAuditText();
+        Assert.DoesNotContain(id, rawLog, StringComparison.Ordinal);
+        Assert.DoesNotContain("request_id_truncated", rawLog, StringComparison.Ordinal);
+        var record = ReadOnlyRecord();
+        var requestId = record.GetProperty("request_id").GetString()!;
+        Assert.StartsWith(McpRequestIdTelemetry.TokenPrefix, requestId, StringComparison.Ordinal);
+        Assert.Equal(McpRequestIdTelemetry.TokenLength, requestId.Length);
+        Assert.Equal("string", record.GetProperty("request_id_type").GetString());
+        Assert.Equal(id.Length, record.GetProperty("request_id_length").GetInt32());
+        Assert.False(record.TryGetProperty("request_id_truncated", out _));
+    }
+
+    [Fact]
+    public void ToolsCall_EscapedRequestId_UsesDecodedLengthWithOpaqueAuditToken_Issue4551()
+    {
+        using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
+        using var server = CreateServer(sink);
+        var id = new string('\u3042', 43);
+        Assert.True(id.Length <= McpServer.MaxRequestIdCharacterCount);
+        Assert.True(Encoding.UTF8.GetByteCount(id) <= McpServer.MaxRequestIdByteLength);
         var request = new JsonObject
         {
             ["jsonrpc"] = "2.0",
@@ -493,44 +563,67 @@ public class McpAuditLogTests : IDisposable
         Assert.False(response.AsObject().ContainsKey("error"));
         Assert.NotNull(response["result"]);
         var rawLog = ReadAuditText();
-        Assert.DoesNotContain("request_id_truncated", rawLog, StringComparison.Ordinal);
+        Assert.DoesNotContain(id, rawLog, StringComparison.Ordinal);
         var record = ReadOnlyRecord();
-        Assert.Equal(serializedId, record.GetProperty("request_id").GetString());
-        Assert.False(record.TryGetProperty("request_id_length", out _));
+        var requestId = record.GetProperty("request_id").GetString()!;
+        Assert.StartsWith(McpRequestIdTelemetry.TokenPrefix, requestId, StringComparison.Ordinal);
+        Assert.Equal(McpRequestIdTelemetry.TokenLength, requestId.Length);
+        Assert.Equal("string", record.GetProperty("request_id_type").GetString());
+        Assert.Equal(id.Length, record.GetProperty("request_id_length").GetInt32());
         Assert.False(record.TryGetProperty("request_id_truncated", out _));
     }
 
     [Fact]
-    public void ToolsCall_EscapedRequestId_TruncatesAuditRequestId_Issue3306()
+    public void ToolsCall_HighCardinalityRequestIds_KeepAuditTokensFixedAndOpaque_Issue4551()
     {
         using var sink = new AuditLogSink(_auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
         using var server = CreateServer(sink);
-        var id = new string('\u3042', 43);
-        Assert.True(id.Length <= McpServer.MaxRequestIdCharacterCount);
-        Assert.True(Encoding.UTF8.GetByteCount(id) <= McpServer.MaxRequestIdByteLength);
-        var serializedId = JsonSerializer.Serialize(id);
-        Assert.True(serializedId.Length > AuditLogSink.MaxRequestIdChars);
-        var requestIdDisplay = McpBoundedText.ForDisplay(serializedId, AuditLogSink.MaxRequestIdChars);
-        var request = new JsonObject
+        var ids = Enumerable.Range(0, 32)
+            .Select(index => $"credential-{index:D2}-" + new string((char)('a' + (index % 26)), 80))
+            .ToArray();
+
+        foreach (var id in ids)
         {
-            ["jsonrpc"] = "2.0",
-            ["id"] = id,
-            ["method"] = "tools/call",
-            ["params"] = new JsonObject
+            var request = new JsonObject
             {
-                ["name"] = "ping",
-                ["arguments"] = new JsonObject(),
-            },
-        };
+                ["jsonrpc"] = "2.0",
+                ["id"] = id,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "ping",
+                    ["arguments"] = new JsonObject(),
+                },
+            };
 
-        var response = server.HandleMessage(request)!;
+            var response = server.HandleMessage(request)!;
+            Assert.Equal(id, response["id"]!.GetValue<string>());
+        }
 
-        Assert.False(response.AsObject().ContainsKey("error"));
-        Assert.NotNull(response["result"]);
-        var record = ReadOnlyRecord();
-        Assert.Equal(requestIdDisplay.Text, record.GetProperty("request_id").GetString());
-        Assert.Equal(serializedId.Length, record.GetProperty("request_id_length").GetInt32());
-        Assert.True(record.GetProperty("request_id_truncated").GetBoolean());
+        var rawLog = ReadAuditText();
+        Assert.All(ids, id => Assert.DoesNotContain(id, rawLog, StringComparison.Ordinal));
+        var records = File.ReadAllLines(_auditPath)
+            .Select(ParseAuditRecord)
+            .ToArray();
+        Assert.Equal(ids.Length, records.Length);
+        Assert.All(records, record =>
+        {
+            var token = record.GetProperty("request_id").GetString()!;
+            Assert.StartsWith(McpRequestIdTelemetry.TokenPrefix, token, StringComparison.Ordinal);
+            Assert.Equal(McpRequestIdTelemetry.TokenLength, token.Length);
+            Assert.Equal("string", record.GetProperty("request_id_type").GetString());
+            Assert.Equal(ids[0].Length, record.GetProperty("request_id_length").GetInt32());
+        });
+        Assert.Equal(ids.Length, records
+            .Select(record => record.GetProperty("request_id").GetString())
+            .Distinct(StringComparer.Ordinal)
+            .Count());
+    }
+
+    private static JsonElement ParseAuditRecord(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.Clone();
     }
 
     [Fact]

@@ -1461,9 +1461,20 @@ public partial class McpServer : IDisposable
 
             capacityRejectedRegistrations?.Register(request);
             ExtractResponseId(request, out responseHasId, out responseId);
-            if (responseHasId && CurrentCorrelationContext.Value is null)
-                frameCorrelationScope = BeginRequestCorrelation(responseId);
-            using var activity = StartMcpActivity(request, responseId);
+            // A batch frame has no single JSON-RPC id. Invalid ids and malformed scalar frames
+            // also use id:null only for the JSON-RPC error response; that wire fallback must not
+            // be mistaken for an explicit null request id in telemetry. Batch items establish
+            // their own valid-id contexts in HandleMessageAsync.
+            // batch frame 自体には単一の JSON-RPC id がない。invalid id や scalar frame の
+            // id:null は error response 専用で、telemetry 上の明示 null id と混同しない。
+            // batch item は HandleMessageAsync で valid id ごとの context を作る。
+            var frameHasRequestId = request is JsonObject requestObject
+                && TryGetRequestId(requestObject, out var requestObjectHasId, out _)
+                && requestObjectHasId;
+            var frameHasCorrelation = responseHasId && request is not JsonArray;
+            if (frameHasCorrelation && CurrentCorrelationContext.Value is null)
+                frameCorrelationScope = BeginRequestCorrelation(responseId, frameHasRequestId);
+            using var activity = StartMcpActivity(request, frameHasRequestId, responseId);
             var response = await HandleMessageAsync(
                 request,
                 isolateRequestDb: true,
@@ -1526,7 +1537,7 @@ public partial class McpServer : IDisposable
         }
     }
 
-    private static Activity? StartMcpActivity(JsonNode request, JsonNode? responseId)
+    private static Activity? StartMcpActivity(JsonNode request, bool responseHasId, JsonNode? responseId)
     {
         var method = request is JsonObject obj ? TryGetStringMember(obj, "method") : null;
         var traceParent = TryGetMcpTraceParent(request);
@@ -1541,8 +1552,13 @@ public partial class McpServer : IDisposable
         activity?.SetTag("rpc.service", "mcp");
         if (!string.IsNullOrWhiteSpace(method))
             activity?.SetTag("rpc.method", method);
-        if (responseId != null)
-            activity?.SetTag("rpc.request_id", responseId.ToJsonString());
+        if (responseHasId)
+        {
+            var requestId = McpRequestIdTelemetry.Create(responseId);
+            activity?.SetTag("rpc.request_id", requestId.Token);
+            activity?.SetTag("rpc.request_id_type", requestId.Type);
+            activity?.SetTag("rpc.request_id_length", requestId.Length);
+        }
         return activity;
     }
 
@@ -1935,9 +1951,10 @@ public partial class McpServer : IDisposable
         if (context is null)
             return message;
 
-        var prefix = context.RequestId == null
-            ? $"[cid={context.CorrelationId}] "
-            : $"[rid={context.RequestId} cid={context.CorrelationId}] ";
+        var requestId = context.TelemetryRequestId;
+        var prefix = requestId is { } presentRequestId
+            ? $"[rid={presentRequestId.Token} rid_type={presentRequestId.Type} rid_length={presentRequestId.Length.ToString(CultureInfo.InvariantCulture)} cid={context.CorrelationId}] "
+            : $"[cid={context.CorrelationId}] ";
         return message.StartsWith("[cdidx-mcp] ", StringComparison.Ordinal)
             ? "[cdidx-mcp] " + prefix + message["[cdidx-mcp] ".Length..]
             : prefix + message;
@@ -1984,10 +2001,10 @@ public partial class McpServer : IDisposable
 
         builder.Append(",\"data\":{\"correlation_id\":");
         builder.Append(JsonSerializer.Serialize(context.CorrelationId));
-        if (context.RequestId != null)
+        if (context.WireRequestId != null)
         {
             builder.Append(",\"request_id\":");
-            builder.Append(JsonSerializer.Serialize(context.RequestId));
+            builder.Append(JsonSerializer.Serialize(context.WireRequestId));
         }
         builder.Append('}');
     }
@@ -2247,7 +2264,7 @@ public partial class McpServer : IDisposable
                     request["params"],
                     deferredInitializeCommits)),
                 "tools/list" => Task.FromResult<JsonNode>(HandleToolsList(id, request["params"])),
-                "tools/call" => HandleToolsCallAsync(id, request["params"]),
+                "tools/call" => HandleToolsCallAsync(hasId, id, request["params"]),
                 "resources/list" => Task.FromResult<JsonNode>(HandleResourcesList(id, request["params"])),
                 "resources/read" => Task.FromResult<JsonNode>(HandleResourcesRead(id, request["params"])),
                 "prompts/list" => Task.FromResult<JsonNode>(HandlePromptsList(id)),
@@ -2898,7 +2915,10 @@ public partial class McpServer : IDisposable
         _currentBatchResponseItemMaxBytes.Value = responseItemMaxBytes;
         Database.DbDebug.ResetContext();
         ExtractResponseId(item, out var hasId, out var id);
-        using var correlationScope = BeginBatchItemCorrelation(id, index);
+        var hasTelemetryRequestId = item is JsonObject itemObject
+            && TryGetRequestId(itemObject, out var itemHasId, out _)
+            && itemHasId;
+        using var correlationScope = BeginBatchItemCorrelation(id, index, hasTelemetryRequestId);
         try
         {
             var response = await HandleMessageAsync(
@@ -3077,6 +3097,7 @@ public partial class McpServer : IDisposable
         Func<Task<JsonNode>> action)
     {
         var requestKey = SerializeRequestId(id);
+        var telemetryRequestId = McpRequestIdTelemetry.Create(id);
         var requestCts = queuedBatchRegistration is null
             ? CancellationTokenSource.CreateLinkedTokenSource(_currentRequestToken.Value, _shutdownCts.Token)
             : CancellationTokenSource.CreateLinkedTokenSource(
@@ -3159,8 +3180,7 @@ public partial class McpServer : IDisposable
                 try { requestCts.Cancel(); }
                 catch (ObjectDisposedException) { /* completed while timeout cancellation was being delivered. */ }
                 var elapsed = stopwatch.Elapsed;
-                var diagnosticRequestKey = requestKey ?? "null";
-                RecordTimedOutIsolatedActionDraining(diagnosticRequestKey, elapsed);
+                RecordTimedOutIsolatedActionDraining(telemetryRequestId, elapsed);
                 cleanupNow = false;
                 releaseExecutionSlotNow = false;
                 // This cleanup must run even after request timeout/shutdown cancellation;
@@ -3178,7 +3198,7 @@ public partial class McpServer : IDisposable
                         _ = task.Exception;
                         if (registeredRequest)
                             _activeRequests.TryRemove(requestKey!, out _);
-                        RecordTimedOutIsolatedActionDrained(diagnosticRequestKey, task);
+                        RecordTimedOutIsolatedActionDrained(telemetryRequestId, task);
                     }
                     finally
                     {
@@ -3237,21 +3257,21 @@ public partial class McpServer : IDisposable
                 ["isolated_action_draining"] = isolatedActionDraining,
             });
 
-    private void RecordTimedOutIsolatedActionDraining(string requestKey, TimeSpan elapsed)
+    private void RecordTimedOutIsolatedActionDraining(McpRequestIdTelemetryData requestId, TimeSpan elapsed)
     {
         var elapsedMs = (long)Math.Ceiling(elapsed.TotalMilliseconds);
         Interlocked.Increment(ref _timedOutIsolatedActionDrainingCount);
         lock (_requestTimeoutDiagnosticsGate)
         {
             _lastRequestTimeoutDrainDiagnostic = new RequestTimeoutDrainDiagnostic(
-                McpBoundedText.ForDisplay(requestKey, MaxRequestIdCharacterCount).Text,
+                requestId,
                 elapsedMs,
                 "draining");
         }
-        CommandErrorWriter.WriteStderr(BuildTimedOutIsolatedActionDrainingLog(requestKey, elapsedMs));
+        CommandErrorWriter.WriteStderr(BuildTimedOutIsolatedActionDrainingLog(requestId, elapsedMs));
     }
 
-    private void RecordTimedOutIsolatedActionDrained(string requestKey, Task task)
+    private void RecordTimedOutIsolatedActionDrained(McpRequestIdTelemetryData requestId, Task task)
     {
         Interlocked.Decrement(ref _timedOutIsolatedActionDrainingCount);
         Interlocked.Increment(ref _timedOutIsolatedActionDrainedCount);
@@ -3259,7 +3279,7 @@ public partial class McpServer : IDisposable
         lock (_requestTimeoutDiagnosticsGate)
         {
             _lastRequestTimeoutDrainDiagnostic = new RequestTimeoutDrainDiagnostic(
-                McpBoundedText.ForDisplay(requestKey, MaxRequestIdCharacterCount).Text,
+                requestId,
                 null,
                 state);
         }
@@ -3283,7 +3303,9 @@ public partial class McpServer : IDisposable
         {
             payload["last"] = new JsonObject
             {
-                ["request_id"] = last.RequestId,
+                ["request_id"] = last.RequestId.Token,
+                ["request_id_type"] = last.RequestId.Type,
+                ["request_id_length"] = last.RequestId.Length,
                 ["elapsed_ms"] = last.ElapsedMs.HasValue ? JsonValue.Create(last.ElapsedMs.Value) : null,
                 ["state"] = last.State,
             };
@@ -3291,41 +3313,52 @@ public partial class McpServer : IDisposable
         return payload;
     }
 
-    internal static string BuildTimedOutIsolatedActionDrainingLog(string requestKey, long elapsedMs)
-        => $"[cdidx-mcp] Request timed out while isolated action is still draining: request_id={McpBoundedText.ForDisplay(requestKey, MaxRequestIdCharacterCount).Text} elapsed_ms={elapsedMs}. The response has been sent; cleanup will continue in the background.";
+    internal static string BuildTimedOutIsolatedActionDrainingLog(McpRequestIdTelemetryData requestId, long elapsedMs)
+        => $"[cdidx-mcp] Request timed out while isolated action is still draining: request_id={requestId.Token} request_id_type={requestId.Type} request_id_length={requestId.Length.ToString(CultureInfo.InvariantCulture)} elapsed_ms={elapsedMs}. The response has been sent; cleanup will continue in the background.";
 
-    private static IDisposable BeginRequestCorrelation(JsonNode? id)
+    private static IDisposable BeginRequestCorrelation(JsonNode? id, bool includeRequestId = true)
     {
         var previous = CurrentCorrelationContext.Value;
         CurrentCorrelationContext.Value = new RequestCorrelationContext(
             SerializeRequestId(id),
+            includeRequestId ? McpRequestIdTelemetry.Create(id) : null,
             Guid.NewGuid().ToString("D"));
         return new CorrelationScope(previous);
     }
 
-    private static IDisposable BeginBatchItemCorrelation(JsonNode? id, int itemIndex)
+    private static IDisposable BeginBatchItemCorrelation(JsonNode? id, int itemIndex, bool includeRequestId = false)
     {
         var previous = CurrentCorrelationContext.Value;
         var correlationId = previous is null
             ? Guid.NewGuid().ToString("D")
             : $"{previous.CorrelationId}.{itemIndex.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
-        CurrentCorrelationContext.Value = new RequestCorrelationContext(SerializeRequestId(id), correlationId);
+        CurrentCorrelationContext.Value = new RequestCorrelationContext(
+            SerializeRequestId(id),
+            includeRequestId ? McpRequestIdTelemetry.Create(id) : null,
+            correlationId);
         return new CorrelationScope(previous);
     }
 
     private static IDisposable BeginChildCorrelation(int childIndex)
     {
         var previous = CurrentCorrelationContext.Value;
-        var requestId = previous?.RequestId;
+        var requestId = previous?.WireRequestId;
+        var telemetryRequestId = previous?.TelemetryRequestId;
         var correlationId = previous == null
             ? Guid.NewGuid().ToString("D")
             : $"{previous.CorrelationId}.{childIndex.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
-        CurrentCorrelationContext.Value = new RequestCorrelationContext(requestId, correlationId);
+        CurrentCorrelationContext.Value = new RequestCorrelationContext(requestId, telemetryRequestId, correlationId);
         return new CorrelationScope(previous);
     }
 
-    private sealed record RequestCorrelationContext(string? RequestId, string CorrelationId);
-    private sealed record RequestTimeoutDrainDiagnostic(string? RequestId, long? ElapsedMs, string State);
+    private sealed record RequestCorrelationContext(
+        string? WireRequestId,
+        McpRequestIdTelemetryData? TelemetryRequestId,
+        string CorrelationId);
+    private sealed record RequestTimeoutDrainDiagnostic(
+        McpRequestIdTelemetryData RequestId,
+        long? ElapsedMs,
+        string State);
 
     private sealed class CorrelationScope : IDisposable
     {
@@ -5211,6 +5244,27 @@ public partial class McpServer : IDisposable
     private static BoundedMcpText BoundClientIdentityForDisplay(string value)
         => McpBoundedText.ForDisplay(value, McpBoundedText.MaxClientIdentityChars);
 
+    private static string? ResolveKnownRateLimitBucketName(string? toolName)
+    {
+        // Only canonical known-tool names receive a secondary per-tool bucket. Missing,
+        // malformed, oversized, case-variant, and unknown names are covered solely by the
+        // fixed caller-wide pre-validation bucket, so they cannot create name-derived keys
+        // (#4547).
+        // canonical な既知ツール名だけに secondary per-tool bucket を割り当てる。missing /
+        // malformed / oversized / 大文字小文字 variant / unknown は caller-wide の固定
+        // pre-validation bucket だけで扱い、名前由来キーを作成させない（#4547）。
+        if (toolName is not null)
+        {
+            foreach (var knownToolName in McpToolFilter.KnownToolNames)
+            {
+                if (string.Equals(knownToolName, toolName, StringComparison.Ordinal))
+                    return knownToolName;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// Build a structured `-32000` JSON-RPC error for a rate-limited tool call. Surfacing
     /// the limit category in `error.data.error_category` (alongside `tool`, `caller`, and
@@ -5264,55 +5318,15 @@ public partial class McpServer : IDisposable
     /// Execute a tool call.
     /// ツール呼び出しを実行。
     /// </summary>
-    private async Task<JsonNode> HandleToolsCallAsync(JsonNode? id, JsonNode? callParams)
+    private async Task<JsonNode> HandleToolsCallAsync(bool hasId, JsonNode? id, JsonNode? callParams)
     {
-        var toolName = callParams?["name"]?.GetValue<string>();
-        var args = callParams?["arguments"];
-        var progressToken = TryReadProgressToken(callParams);
-
-        if (toolName == null)
-        {
-            var missingNameResponse = CreateErrorResponse(hasId: true, id: id, code: -32602, message: "Missing tool name",
-                category: McpErrorEnvelope.CategoryMissingParameter,
-                suggestion: "tools/call requires `params.name`. Send the tool identifier (e.g. \"search\", \"definition\") as a string.",
-                retrySafe: false);
-            // Even malformed tool-call requests are audited so a misbehaving client cannot
-            // hide its activity by sending invalid params on every call (#1562).
-            // 不正な tools/call も audit する。不正引数でログから消えるのを防ぐため (#1562)。
-            TryEmitAudit("(missing)", id, args, missingNameResponse, _timeProvider.GetUtcNow(), 0.0, errorType: "missing_tool_name");
-            return missingNameResponse;
-        }
-        var toolNameTooLong = toolName.Length > McpBoundedText.MaxToolNameChars;
-
-        // Per-deployment enablement gate (#1561). Disabled known tools return `-32601 method
-        // not found` so clients can branch on a structured JSON-RPC code; truly unknown names
-        // still fall through to the existing `-32602 Unknown tool` path so typos remain
-        // distinguishable from operator-disabled tools.
-        // デプロイ単位の有効化ゲート (#1561)。既知ツールが無効化されている場合は `-32601`
-        // を返し、クライアントが構造化 code で判定できるようにする。サーバーに無い名前は
-        // 既存の `-32602 Unknown tool` 経路に流し、オペレータによる無効化と typo を区別する。
-        if (McpToolFilter.IsKnownTool(toolName) && !_toolFilter.IsEnabled(toolName))
-        {
-            // Wire code stays at -32601 (#1561 contract) so existing clients keep working;
-            // the `data.category = "tool_disabled"` envelope (#1581) is what new clients should
-            // branch on to distinguish operator-disabled tools from typos (`tool_unknown`) and
-            // missing methods (`method_not_found`).
-            // ワイヤコードは #1561 契約に従い -32601 のまま維持し、既存クライアントを壊さない。
-            // 新クライアントは `data.category = "tool_disabled"` で typo (`tool_unknown`) や
-            // 未知メソッド (`method_not_found`) と区別する（#1581）。
-            var disabledResponse = CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Tool not enabled: {toolName}",
-                category: McpErrorEnvelope.CategoryToolDisabled,
-                suggestion: "This tool is disabled on the server (CDIDX_MCP_TOOLS_ALLOW / CDIDX_MCP_TOOLS_DENY). Ask the operator to enable it or use a different tool.",
-                retrySafe: false,
-                extraData: new JsonObject { ["tool"] = toolName });
-            // Audit operator-disabled attempts so the policy can be reviewed after the fact;
-            // skipping them would let a deny-listed caller silently retry without trace
-            // even though missing/unknown tools are captured (#1562 review).
-            // オペレータ拒否された呼び出しも audit する。missing/unknown は記録されるのに
-            // disabled だけ消えると、deny リストの効果を後から検証できなくなる。
-            TryEmitAudit(toolName, id, args, disabledResponse, _timeProvider.GetUtcNow(), 0.0, errorType: "tool_disabled");
-            return disabledResponse;
-        }
+        var callParamsObject = callParams as JsonObject;
+        var args = callParamsObject?["arguments"];
+        var toolName = callParamsObject?["name"] is JsonValue toolNameValue
+            && toolNameValue.TryGetValue<string>(out var parsedToolName)
+                ? parsedToolName
+                : null;
+        var observedToolName = toolName ?? "(missing)";
 
         Database.DbDebug.ResetContext();
         var metricsStartedAt = _timeProvider.GetUtcNow();
@@ -5322,62 +5336,89 @@ public partial class McpServer : IDisposable
         JsonObject CreateUnknownToolResponseForMetrics()
         {
             metricsError = "unknown_tool";
-            return CreateUnknownToolErrorResponse(hasId: true, id: id, toolName);
+            return CreateUnknownToolErrorResponse(hasId: true, id: id, observedToolName);
         }
 
         try
         {
-            if (toolNameTooLong)
+            var caller = CurrentInitializeState.Caller;
+            // Charge every direct tools/call to one caller-wide bucket before detailed
+            // name, enablement, or argument validation. Canonical known tools then retain
+            // their existing secondary per-tool limit. This prevents a caller from rotating
+            // malformed requests across known names to multiply its effective burst (#4547).
+            // direct tools/call はすべて、名前・enablement・argument の詳細検証前に caller-wide
+            // bucket へ課金する。canonical な既知 tool は既存の secondary per-tool 制限も維持し、
+            // malformed request の既知名ローテーションによる burst 増幅を防ぐ（#4547）。
+            var decision = RateLimiter.TryAcquireHierarchy(
+                RateLimiter.ToolsCallPreValidationBucketName,
+                ResolveKnownRateLimitBucketName(toolName),
+                caller);
+            if (!decision.Allowed)
             {
-                response = CreateUnknownToolResponseForMetrics();
+                metricsError = "rate_limited";
+                DeferFrameLog(BuildRateLimitedLog(observedToolName, caller, decision.RetryAfterMs));
+                response = CreateRateLimitedErrorResponse(id, observedToolName, caller, decision.RetryAfterMs);
             }
-            else if (ValidateToolArguments(toolName, args) is JsonObject argumentError)
+            else if (toolName is null)
             {
-                metricsError = "invalid_argument";
-                if (argumentError["jsonrpc_invalid_params"] is JsonValue invalidParamsMarker
-                    && invalidParamsMarker.TryGetValue<bool>(out var invalidParams)
-                    && invalidParams)
-                {
-                    argumentError.Remove("jsonrpc_invalid_params");
-                    response = CreateErrorResponse(hasId: true, id: id, code: -32602, message: argumentError["message"]!.GetValue<string>(),
-                        category: McpErrorEnvelope.CategoryInvalidArgument,
-                        suggestion: "Use the JSON types advertised by tools/list for this tool.",
-                        retrySafe: false,
-                        extraData: argumentError);
-                }
-                else
-                {
-                    response = CreateToolErrorResponse(id, argumentError["message"]!.GetValue<string>(),
-                        category: McpErrorEnvelope.CategoryInvalidArgument,
-                        suggestion: "Use exactly the argument names advertised by tools/list for this tool.",
-                        retrySafe: false,
-                        extraData: argumentError);
-                }
+                metricsError = "missing_tool_name";
+                response = CreateErrorResponse(hasId: true, id: id, code: -32602, message: "Missing tool name",
+                    category: McpErrorEnvelope.CategoryMissingParameter,
+                    suggestion: "tools/call requires `params.name`. Send the tool identifier (e.g. \"search\", \"definition\") as a string.",
+                    retrySafe: false);
             }
-            else if (ValidateCommonListArguments(args) is JsonObject listArgumentError)
+            // Per-deployment enablement gate (#1561). The rate-limit check deliberately runs
+            // first so disabled-tool retries cannot bypass request-cost protection (#4547).
+            // デプロイ単位の有効化ゲート (#1561)。disabled tool の再試行で request-cost
+            // protection を回避できないよう、rate-limit check を先に実行する（#4547）。
+            else if (McpToolFilter.IsKnownTool(toolName) && !_toolFilter.IsEnabled(toolName))
             {
-                metricsError = "invalid_list_argument";
-                response = CreateToolErrorResponse(id, listArgumentError["message"]!.GetValue<string>(),
-                    category: McpErrorEnvelope.CategoryInvalidArgument,
-                    suggestion: "Send only non-empty string entries within the documented MCP array bounds.",
+                metricsError = "tool_disabled";
+                response = CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Tool not enabled: {toolName}",
+                    category: McpErrorEnvelope.CategoryToolDisabled,
+                    suggestion: "This tool is disabled on the server (CDIDX_MCP_TOOLS_ALLOW / CDIDX_MCP_TOOLS_DENY). Ask the operator to enable it or use a different tool.",
                     retrySafe: false,
-                    extraData: listArgumentError);
+                    extraData: new JsonObject { ["tool"] = toolName });
             }
             else
             {
-                // Per-(tool, caller) rate limiter check (#1560). Disabled by default; when an
-                // operator opts in via CDIDX_MCP_RATE_LIMIT_RPS we still keep the assignment-then-
-                // emit pattern so the rate-limit refusal lands in the audit log (#1562) instead of
-                // disappearing into a direct return.
-                // (tool, caller) ごとのレート制限 (#1560)。既定は無効。opt-in 時もアサインしてから
-                // 監査出力する構造を保ち、refusal が audit log (#1562) から消えないようにする。
-                var caller = CurrentInitializeState.Caller;
-                var decision = RateLimiter.TryAcquire(toolName, caller);
-                if (!decision.Allowed)
+                var progressToken = TryReadProgressToken(callParamsObject);
+                var toolNameTooLong = toolName.Length > McpBoundedText.MaxToolNameChars;
+                if (toolNameTooLong)
                 {
-                    metricsError = "rate_limited";
-                    DeferFrameLog(BuildRateLimitedLog(toolName, caller, decision.RetryAfterMs));
-                    response = CreateRateLimitedErrorResponse(id, toolName, caller, decision.RetryAfterMs);
+                    response = CreateUnknownToolResponseForMetrics();
+                }
+                else if (ValidateToolArguments(toolName, args) is JsonObject argumentError)
+                {
+                    metricsError = "invalid_argument";
+                    if (argumentError["jsonrpc_invalid_params"] is JsonValue invalidParamsMarker
+                        && invalidParamsMarker.TryGetValue<bool>(out var invalidParams)
+                        && invalidParams)
+                    {
+                        argumentError.Remove("jsonrpc_invalid_params");
+                        response = CreateErrorResponse(hasId: true, id: id, code: -32602, message: argumentError["message"]!.GetValue<string>(),
+                            category: McpErrorEnvelope.CategoryInvalidArgument,
+                            suggestion: "Use the JSON types advertised by tools/list for this tool.",
+                            retrySafe: false,
+                            extraData: argumentError);
+                    }
+                    else
+                    {
+                        response = CreateToolErrorResponse(id, argumentError["message"]!.GetValue<string>(),
+                            category: McpErrorEnvelope.CategoryInvalidArgument,
+                            suggestion: "Use exactly the argument names advertised by tools/list for this tool.",
+                            retrySafe: false,
+                            extraData: argumentError);
+                    }
+                }
+                else if (ValidateCommonListArguments(args) is JsonObject listArgumentError)
+                {
+                    metricsError = "invalid_list_argument";
+                    response = CreateToolErrorResponse(id, listArgumentError["message"]!.GetValue<string>(),
+                        category: McpErrorEnvelope.CategoryInvalidArgument,
+                        suggestion: "Send only non-empty string entries within the documented MCP array bounds.",
+                        retrySafe: false,
+                        extraData: listArgumentError);
                 }
                 else if (ValidateProjectFilterArguments(args) is JsonObject projectFilterError)
                 {
@@ -5418,16 +5459,16 @@ public partial class McpServer : IDisposable
             var dbDebugDump = Database.DbDebug.CaptureDump(ex);
             DeferFrameLog(() =>
             {
-                WriteMcpLogLine(BuildToolErrorLog(toolName, ex));
+                WriteMcpLogLine(BuildToolErrorLog(observedToolName, ex));
                 Database.DbDebug.WriteCapturedDumpToStderr(dbDebugDump);
             });
             metricsError = ex.GetType().Name;
             var classification = McpErrorEnvelope.ClassifyException(ex);
-            response = CreateToolErrorResponse(true, id, BuildSanitizedToolErrorMessage(toolName, ex),
+            response = CreateToolErrorResponse(true, id, BuildSanitizedToolErrorMessage(observedToolName, ex),
                 category: classification.Category,
                 suggestion: classification.Suggestion,
                 retrySafe: classification.RetrySafe,
-                extraData: BuildToolExceptionData(toolName, ex.GetType().Name));
+                extraData: BuildToolExceptionData(observedToolName, ex.GetType().Name));
         }
         finally
         {
@@ -5435,7 +5476,8 @@ public partial class McpServer : IDisposable
             if (MetricsSink.IsActive)
             {
                 metricsStopwatch.Stop();
-                var metricsTool = BoundToolNameForDisplay(toolName).Text;
+                var metricsTool = BoundToolNameForDisplay(observedToolName).Text;
+                var requestId = CurrentCorrelationContext.Value?.TelemetryRequestId;
                 MetricsSink.Record(new MetricsEvent(
                     Timestamp: metricsStartedAt,
                     Tool: metricsTool,
@@ -5443,7 +5485,10 @@ public partial class McpServer : IDisposable
                     ElapsedMs: metricsStopwatch.Elapsed.TotalMilliseconds,
                     ExitCode: metricsError == null ? 0 : 1,
                     Language: TryReadMetricStringArg(args, "language") ?? TryReadMetricStringArg(args, "lang"),
-                    Error: metricsError));
+                    Error: metricsError,
+                    RequestId: requestId?.Token,
+                    RequestIdType: requestId?.Type,
+                    RequestIdLength: requestId?.Length));
             }
         }
 
@@ -5455,8 +5500,8 @@ public partial class McpServer : IDisposable
         // 出力する。Stopwatch.Stop は冪等。TryEmitAudit 内部でベストエフォート化済み (#1562)。
         metricsStopwatch.Stop();
         var auditErrorType = metricsError == "unknown_tool" ? null : metricsError;
-        TryEmitAudit(toolName, id, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, errorType: auditErrorType);
-        EmitToolInvocationTelemetry(toolName, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, metricsError);
+        TryEmitAudit(hasId, observedToolName, id, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, errorType: auditErrorType);
+        EmitToolInvocationTelemetry(observedToolName, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, metricsError);
         return response;
     }
 
@@ -5536,7 +5581,9 @@ public partial class McpServer : IDisposable
             ["event"] = "mcp.tool.invocation",
             ["timestamp"] = startedAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
             ["tool"] = toolDisplay.Text,
-            ["request_id"] = context?.RequestId,
+            ["request_id"] = context?.TelemetryRequestId?.Token,
+            ["request_id_type"] = context?.TelemetryRequestId?.Type,
+            ["request_id_length"] = context?.TelemetryRequestId?.Length,
             ["correlation_id"] = context?.CorrelationId,
             ["elapsed_ms"] = Math.Round(elapsedMs, 3),
             ["status"] = errorCode == 0 ? "success" : "error",
@@ -5674,7 +5721,7 @@ public partial class McpServer : IDisposable
     /// 値と一致させるため、wire response から result count / error code を抽出する (#1562)。
     /// audit 失敗で本体ツール呼び出しを壊さないようベストエフォート化する。
     /// </summary>
-    private void TryEmitAudit(string toolName, JsonNode? id, JsonNode? args, JsonNode response, DateTimeOffset startedAt, double elapsedMs, string? errorType)
+    private void TryEmitAudit(bool hasId, string toolName, JsonNode? id, JsonNode? args, JsonNode response, DateTimeOffset startedAt, double elapsedMs, string? errorType)
     {
         if (_auditLog is null)
             return;
@@ -5695,16 +5742,15 @@ public partial class McpServer : IDisposable
                     out var argKeysOmittedCount,
                     out var argKeyNamesTruncatedCount);
             var toolDisplay = BoundToolNameForDisplay(toolName);
-            var requestId = SerializeRequestId(id);
-            BoundedMcpText? requestIdDisplay = requestId is null
-                ? null
-                : McpBoundedText.ForDisplay(requestId, AuditLogSink.MaxRequestIdChars);
+            McpRequestIdTelemetryData? requestId = hasId
+                ? McpRequestIdTelemetry.Create(id)
+                : null;
             var evt = new AuditLogSink.AuditEvent(
                 Timestamp: startedAt,
                 Tool: toolDisplay.Text,
                 CallerName: initializeState.ClientName,
                 CallerVersion: initializeState.ClientVersion,
-                RequestId: requestIdDisplay?.Text,
+                RequestId: requestId?.Token,
                 ArgKeys: argKeys,
                 ArgLengths: argLengths,
                 ArgValues: argValuesEcho,
@@ -5723,8 +5769,8 @@ public partial class McpServer : IDisposable
                 ArgValuesTruncated: argValuesTruncated,
                 ArgValueTruncationReasons: argValueTruncationReasons,
                 ArgValuesSerializedBytes: argValuesSerializedBytes,
-                RequestIdLength: requestIdDisplay?.Truncated == true ? requestIdDisplay.Value.OriginalLength : null,
-                RequestIdTruncated: requestIdDisplay?.Truncated == true,
+                RequestIdType: requestId?.Type,
+                RequestIdLength: requestId?.Length,
                 CallerNameLength: initializeState.ClientNameDisplay?.Truncated == true ? initializeState.ClientNameDisplay.Value.OriginalLength : null,
                 CallerNameTruncated: initializeState.ClientNameDisplay?.Truncated == true,
                 CallerVersionLength: initializeState.ClientVersionDisplay?.Truncated == true ? initializeState.ClientVersionDisplay.Value.OriginalLength : null,
@@ -6396,8 +6442,8 @@ public partial class McpServer : IDisposable
 
         var meta = obj["_meta"] as JsonObject ?? new JsonObject();
         meta["correlation_id"] = context.CorrelationId;
-        if (context.RequestId != null)
-            meta["request_id"] = context.RequestId;
+        if (context.WireRequestId != null)
+            meta["request_id"] = context.WireRequestId;
         obj["_meta"] = meta;
     }
 
@@ -6409,8 +6455,8 @@ public partial class McpServer : IDisposable
 
         var data = extraData is null ? new JsonObject() : (JsonObject)extraData.DeepClone();
         data["correlation_id"] = context.CorrelationId;
-        if (context.RequestId != null)
-            data["request_id"] = context.RequestId;
+        if (context.WireRequestId != null)
+            data["request_id"] = context.WireRequestId;
         return data;
     }
 

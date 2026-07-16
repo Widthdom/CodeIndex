@@ -636,6 +636,9 @@ public class MetricsSinkTests
         Assert.False(root.TryGetProperty("wal_checkpoint_ms", out _));
         Assert.False(root.TryGetProperty("files_indexed", out _));
         Assert.False(root.TryGetProperty("error", out _));
+        Assert.False(root.TryGetProperty("request_id", out _));
+        Assert.False(root.TryGetProperty("request_id_type", out _));
+        Assert.False(root.TryGetProperty("request_id_length", out _));
     }
 
     [Fact]
@@ -652,7 +655,10 @@ public class MetricsSinkTests
             BytesWritten: 8192,
             WalCheckpointMs: 1.234,
             FilesIndexed: 42,
-            Error: null);
+            Error: null,
+            RequestId: "rid:v1:0123456789abcdef0123456789abcdef",
+            RequestIdType: "string",
+            RequestIdLength: 47);
 
         var json = MetricsSink.SerializeEvent(evt);
         using var doc = JsonDocument.Parse(json);
@@ -664,6 +670,9 @@ public class MetricsSinkTests
         Assert.Equal(1.234, root.GetProperty("wal_checkpoint_ms").GetDouble());
         Assert.Equal(42, root.GetProperty("files_indexed").GetInt32());
         Assert.False(root.TryGetProperty("error", out _));
+        Assert.Equal("rid:v1:0123456789abcdef0123456789abcdef", root.GetProperty("request_id").GetString());
+        Assert.Equal("string", root.GetProperty("request_id_type").GetString());
+        Assert.Equal(47, root.GetProperty("request_id_length").GetInt32());
     }
 
     [Fact]

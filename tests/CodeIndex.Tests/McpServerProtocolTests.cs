@@ -1171,6 +1171,51 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void BatchQuery_UniqueUnknownSlotNamesShareBoundedRateLimitBucket_Issue4547()
+    {
+        InstallRateLimiter(_server, new RateLimiterOptions
+        {
+            RefillTokensPerSecond = 1.0,
+            BurstCapacity = 16.0,
+            MaxBucketCount = 4,
+        });
+        var queries = new JsonArray();
+        for (var i = 0; i < 8; i++)
+        {
+            queries.Add(new JsonObject
+            {
+                ["tool"] = $"unknown-slot-{i}",
+                ["arguments"] = new JsonObject(),
+            });
+        }
+        queries.Add(new JsonObject { ["tool"] = "status" });
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "batch_query",
+                ["arguments"] = new JsonObject { ["queries"] = queries },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["error"]);
+        var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
+        Assert.Equal(9, results.Count);
+        for (var i = 0; i < 8; i++)
+        {
+            Assert.False(results[i]!["ok"]!.GetValue<bool>());
+            Assert.Equal(McpErrorEnvelope.CategoryToolUnknown, results[i]!["category"]!.GetValue<string>());
+        }
+        Assert.True(results[8]!["ok"]!.GetValue<bool>());
+        Assert.Equal(4, _server.RateLimiter.BucketCount);
+    }
+
+    [Fact]
     public void HandleMessage_BatchMixedRequests_ReturnsResponseArray()
     {
         var batch = JsonNode.Parse("""[{"jsonrpc":"2.0","id":1,"method":"ping"},{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","id":2,"method":"nope"}]""")!;

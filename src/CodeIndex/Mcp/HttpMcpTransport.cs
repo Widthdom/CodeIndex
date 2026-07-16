@@ -709,7 +709,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             return;
 
         request.Body = body;
-        request.RequestId = TryExtractJsonRpcId(body, _maxRequestBodyBytes);
+        request.RequestId = TryExtractJsonRpcIdTelemetry(body, _maxRequestBodyBytes);
         if (!request.SessionValidated)
         {
             // The session can become established while this handler is reading its body. Recheck
@@ -1078,7 +1078,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
                 // The extracted cancellation notifications have already been dispatched. Queue only
                 // the remaining raw batch items so cancellation side effects cannot be replayed.
                 request.Body = remainingBatch;
-                request.RequestId = TryExtractJsonRpcId(remainingBatch, _maxRequestBodyBytes);
+                request.RequestId = TryExtractJsonRpcIdTelemetry(remainingBatch, _maxRequestBodyBytes);
                 return false;
             }
 
@@ -2113,7 +2113,9 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         double DurationMs,
         string AuthOutcome,
         string? RejectionReason,
-        string? Diagnostic);
+        string? Diagnostic,
+        string? RequestIdType = null,
+        int? RequestIdLength = null);
 
     private PendingRequest BeginRequest(HttpListenerContext context, CancellationToken cancellationToken = default)
     {
@@ -2146,7 +2148,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         request.Logged = true;
         var record = new HttpRequestLogRecord(
             request.CorrelationId,
-            request.RequestId,
+            request.RequestId?.Token,
             request.RemotePeer,
             request.Method,
             request.Path,
@@ -2154,7 +2156,9 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             request.Elapsed.TotalMilliseconds,
             request.AuthOutcome,
             request.RejectionReason,
-            request.Diagnostic);
+            request.Diagnostic,
+            request.RequestId?.Type,
+            request.RequestId?.Length);
         Interlocked.Increment(ref _pendingRequestLogCount);
         if (_requestLogQueue.Writer.TryWrite(record))
             return;
@@ -2206,7 +2210,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         Volatile.Write(ref _lastRequestLogDropReason, $"{reason}:{category}:{exceptionType}");
     }
 
-    private static string? TryExtractJsonRpcId(string body, int maxRequestBodyBytes)
+    private static McpRequestIdTelemetryData? TryExtractJsonRpcIdTelemetry(string body, int maxRequestBodyBytes)
     {
         try
         {
@@ -2221,11 +2225,19 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
 
             var requestId = id.ValueKind switch
             {
-                JsonValueKind.String => id.GetString(),
+                JsonValueKind.String => id.GetString() ?? string.Empty,
                 JsonValueKind.Number => id.GetRawText(),
-                _ => id.GetRawText(),
+                JsonValueKind.Null => string.Empty,
+                _ => null,
             };
-            return LimitRequestLogField(requestId);
+            if (requestId is null)
+                return null;
+            if (id.ValueKind != JsonValueKind.Null
+                && (requestId.Length > McpServer.MaxRequestIdCharacterCount
+                    || Encoding.UTF8.GetByteCount(requestId) > McpServer.MaxRequestIdByteLength))
+                return null;
+
+            return McpRequestIdTelemetry.Create(id);
         }
         catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
@@ -2253,7 +2265,7 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
 
         internal string CorrelationId { get; }
 
-        internal string? RequestId { get; set; }
+        internal McpRequestIdTelemetryData? RequestId { get; set; }
 
         internal string? Body { get; set; }
 

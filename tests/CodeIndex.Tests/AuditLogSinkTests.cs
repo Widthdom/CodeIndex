@@ -39,6 +39,8 @@ public class AuditLogSinkTests
         Assert.False(root.TryGetProperty("caller", out _));
         Assert.False(root.TryGetProperty("caller_version", out _));
         Assert.False(root.TryGetProperty("request_id", out _));
+        Assert.False(root.TryGetProperty("request_id_type", out _));
+        Assert.False(root.TryGetProperty("request_id_length", out _));
         Assert.False(root.TryGetProperty("arg_values", out _));
         Assert.False(root.TryGetProperty("error", out _));
 
@@ -59,14 +61,16 @@ public class AuditLogSinkTests
             Tool: "definition",
             CallerName: "claude-code",
             CallerVersion: "1.2.3",
-            RequestId: "42",
+            RequestId: "rid:v1:0123456789abcdef0123456789abcdef",
             ArgKeys: new[] { "query" },
             ArgLengths: new[] { new KeyValuePair<string, int>("query", 5) },
             ArgValues: null,
             ResultCount: null,
             ElapsedMs: 1.0,
             ErrorCode: -32602,
-            ErrorType: "jsonrpc_error");
+            ErrorType: "jsonrpc_error",
+            RequestIdLength: 2,
+            RequestIdType: "number");
 
         var json = AuditLogSink.SerializeEvent(evt, includeValues: false);
         using var doc = JsonDocument.Parse(json);
@@ -74,7 +78,9 @@ public class AuditLogSinkTests
 
         Assert.Equal("claude-code", root.GetProperty("caller").GetString());
         Assert.Equal("1.2.3", root.GetProperty("caller_version").GetString());
-        Assert.Equal("42", root.GetProperty("request_id").GetString());
+        Assert.Equal("rid:v1:0123456789abcdef0123456789abcdef", root.GetProperty("request_id").GetString());
+        Assert.Equal("number", root.GetProperty("request_id_type").GetString());
+        Assert.Equal(2, root.GetProperty("request_id_length").GetInt32());
         Assert.Equal(-32602, root.GetProperty("error_code").GetInt32());
         Assert.Equal("jsonrpc_error", root.GetProperty("error").GetString());
         Assert.False(root.TryGetProperty("result_count", out _));

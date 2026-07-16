@@ -642,6 +642,14 @@ internal static class MetricsSink
                 jw.WriteNumber("files_indexed", fi);
             if (evt.Error is { } err)
                 WriteBoundedString(jw, "error", err, maxStringChars);
+            if (evt.RequestId is { } requestId)
+            {
+                jw.WriteString("request_id", requestId);
+                if (evt.RequestIdType is { } requestIdType)
+                    jw.WriteString("request_id_type", requestIdType);
+                if (evt.RequestIdLength is { } requestIdLength)
+                    jw.WriteNumber("request_id_length", requestIdLength);
+            }
             jw.WriteEndObject();
         }
         return buffer.ToArray();
@@ -713,4 +721,7 @@ internal sealed record MetricsEvent(
     long? BytesWritten = null,
     double? WalCheckpointMs = null,
     int? FilesIndexed = null,
-    string? Error = null);
+    string? Error = null,
+    string? RequestId = null,
+    string? RequestIdType = null,
+    int? RequestIdLength = null);
