@@ -521,9 +521,12 @@ public class DbContext : IDisposable
         var sanitizedDetail = string.IsNullOrWhiteSpace(detail)
             ? null
             : DiagnosticSanitizer.ForMessage(detail);
+        var prefix = category == DatabaseOpenMissingCategory
+            ? $"database not found [{category}]"
+            : $"database open failed [{category}]";
         return sanitizedDetail == null
-            ? $"database open failed [{category}]: {pathLabel}"
-            : $"database open failed [{category}]: {pathLabel}; {sanitizedDetail}";
+            ? $"{prefix}: {pathLabel}"
+            : $"{prefix}: {pathLabel}; {sanitizedDetail}";
     }
 
     private enum DatabasePathProbe
