@@ -66,6 +66,11 @@ public partial class QueryCommandRunnerTests
                     CommandExitCodes.InvalidArgument,
                     CommandErrorCodes.LineOutOfRange,
                     ["--path", "docs/Empty.md", "--line", "1", "--db", dbPath, "--json"]),
+                (
+                    "non-positive coordinate",
+                    CommandExitCodes.InvalidArgument,
+                    CommandErrorCodes.LineOutOfRange,
+                    ["--path", "docs/Target.md", "--line", "0", "--db", dbPath, "--json"]),
             };
 
             foreach (var testCase in cases)
