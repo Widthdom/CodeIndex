@@ -456,6 +456,14 @@ internal sealed record JsonStreamDoneResult(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? WalCheckpointSkippedReason = null,
     [property: JsonPropertyName("wal_checkpoint_failure_reason")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? WalCheckpointFailureReason = null,
+    [property: JsonPropertyName("wal_checkpoint_busy")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? WalCheckpointBusy = null,
+    [property: JsonPropertyName("wal_checkpoint_log_page_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? WalCheckpointLogPageCount = null,
+    [property: JsonPropertyName("wal_checkpoint_checkpointed_page_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? WalCheckpointCheckpointedPageCount = null,
+    [property: JsonPropertyName("wal_checkpoint_remaining_page_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? WalCheckpointRemainingPageCount = null,
     [property: JsonPropertyName("wal_stale_snapshot_risk")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? WalStaleSnapshotRisk = null,
     [property: JsonPropertyName("wal_stale_snapshot_reason")]
