@@ -258,8 +258,10 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
-    public void QueryOnlySnapshot_ReportsPersistentCopyFailureWithoutRetrying_Issue4557()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void QueryOnlySnapshot_ReportsPersistentCopyFailureWithoutRetrying_Issue4557(bool permissionDenied)
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_only_snapshot_copy_failure_issue4557");
         var originalCopyHook = DbConnectionFactory.QueryOnlySnapshotFileCopyingForTesting;
@@ -280,10 +282,13 @@ public partial class QueryCommandRunnerTests
             Assert.True(new FileInfo(dbPath + "-wal").Length > 0);
 
             var copyAttempts = 0;
+            Exception injectedFailure = permissionDenied
+                ? new UnauthorizedAccessException("injected destination permission failure")
+                : new IOException("injected destination copy failure");
             DbConnectionFactory.QueryOnlySnapshotFileCopyingForTesting = (_, _) =>
             {
                 Interlocked.Increment(ref copyAttempts);
-                throw new IOException("injected destination copy failure");
+                throw injectedFailure;
             };
 
             var error = Assert.Throws<CodeIndexException>(() =>
@@ -292,8 +297,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(DbConnectionFactory.QueryOnlySnapshotCopyFailedCode, error.Code);
             Assert.Equal(CodeIndexExceptionCategory.Filesystem, error.Category);
             Assert.Contains("temporary-storage capacity", error.Hint, StringComparison.Ordinal);
-            Assert.DoesNotContain("injected destination copy failure", error.Message, StringComparison.Ordinal);
-            Assert.IsType<IOException>(error.InnerException);
+            Assert.DoesNotContain(injectedFailure.Message, error.Message, StringComparison.Ordinal);
+            Assert.Same(injectedFailure, error.InnerException);
             Assert.Equal(1, copyAttempts);
         }
         finally

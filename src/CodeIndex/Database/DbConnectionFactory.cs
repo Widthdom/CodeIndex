@@ -325,7 +325,15 @@ internal static class DbConnectionFactory
         const int maxCopyAttempts = 3;
         var normalizedDbPath = LongPath.EnsureWindowsPrefix(localDbPath);
         var walPath = normalizedDbPath + "-wal";
-        var snapshotDirectory = DataDirectorySecurity.CreateSensitiveTempDirectory("query-wal-snapshot");
+        DirectoryInfo snapshotDirectory;
+        try
+        {
+            snapshotDirectory = DataDirectorySecurity.CreateSensitiveTempDirectory("query-wal-snapshot");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw CreateQueryOnlySnapshotCopyFailed(localDbPath, ex);
+        }
         var snapshotDbPath = Path.Combine(snapshotDirectory.FullName, "snapshot.db");
         var snapshotWalPath = snapshotDbPath + "-wal";
         try
@@ -350,15 +358,9 @@ internal static class DbConnectionFactory
                 {
                     continue;
                 }
-                catch (IOException ex)
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
-                    throw new CodeIndexException(
-                        QueryOnlySnapshotCopyFailedCode,
-                        CodeIndexExceptionCategory.Filesystem,
-                        "Query-only open could not copy the database into a private temporary snapshot.",
-                        path: localDbPath,
-                        hint: "Check temporary-storage capacity and permissions, then retry or query a SQLite backup snapshot.",
-                        innerException: ex);
+                    throw CreateQueryOnlySnapshotCopyFailed(localDbPath, ex);
                 }
 
                 if (TryCaptureQueryOnlySnapshotState(snapshotDbPath, cancellationToken, out var copied)
@@ -393,6 +395,15 @@ internal static class DbConnectionFactory
             path: localDbPath,
             hint: "Let the writer finish and retry, or create a SQLite backup snapshot and query that snapshot.");
     }
+
+    private static CodeIndexException CreateQueryOnlySnapshotCopyFailed(string localDbPath, Exception innerException)
+        => new(
+            QueryOnlySnapshotCopyFailedCode,
+            CodeIndexExceptionCategory.Filesystem,
+            "Query-only open could not copy the database into a private temporary snapshot.",
+            path: localDbPath,
+            hint: "Check temporary-storage capacity and permissions, then retry or query a SQLite backup snapshot.",
+            innerException: innerException);
 
     private static void CopySnapshotFile(string sourcePath, string destinationPath, CancellationToken cancellationToken)
     {

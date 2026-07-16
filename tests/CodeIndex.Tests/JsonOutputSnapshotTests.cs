@@ -102,6 +102,8 @@ public class Probe
             policy["active_mode"] = SqliteConnectionPolicy.ReadOnlyModeName;
             policy["open_mode"] = SqliteConnectionPolicy.ReadOnlyModeName;
             policy["immutable_uri"] = false;
+            if (root["db_pragma_settings"] is JsonObject pragmas)
+                pragmas["journal_mode"] = "wal";
         }
 
         return root.ToJsonString();
