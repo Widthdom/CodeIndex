@@ -786,7 +786,11 @@ public class DbContext : IDisposable
     public WalCheckpointResult CheckpointWalTruncate(CancellationToken cancellationToken)
     {
         if (_isReadOnly)
-            return WalCheckpointResult.NotAttempted(WalCheckpointResult.ReadOnlySkippedReason);
+        {
+            var result = WalCheckpointResult.NotAttempted(WalCheckpointResult.ReadOnlySkippedReason);
+            ApplyWalCheckpointResult(result);
+            return result;
+        }
 
         cancellationToken.ThrowIfCancellationRequested();
         try

@@ -1135,6 +1135,29 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void CheckpointWalTruncate_OnReadOnlyContext_PersistsSkippedResult_Issue4558()
+    {
+        Assert.True(_db.TryCheckpointWalTruncate());
+        using var readOnlyDb = new DbContext(DbContext.ToReadOnlyUri(_dbPath));
+
+        var result = readOnlyDb.CheckpointWalTruncate();
+
+        Assert.False(result.Attempted);
+        Assert.False(result.Succeeded);
+        Assert.Equal(WalCheckpointResult.ReadOnlySkippedReason, result.SkippedReason);
+        Assert.Null(result.FailureReason);
+        Assert.Equal(result, readOnlyDb.LastWalCheckpointResult);
+
+        using var reader = new DbReader(readOnlyDb);
+        Assert.Equal(result, reader.LastWalCheckpointResult);
+        var status = reader.GetStatus();
+        Assert.False(status.WalCheckpointAttempted);
+        Assert.False(status.WalCheckpointSucceeded);
+        Assert.Equal(result.SkippedReason, status.WalCheckpointSkippedReason);
+        Assert.Equal(result.SkippedReason, status.SqliteConnectionPolicy.WalCheckpointSkippedReason);
+    }
+
+    [Fact]
     public void Dispose_AfterWriteWork_AttemptsWalCheckpoint()
     {
         var dbDir = TestProjectHelper.CreateTempProject("cdidx_checkpoint");
