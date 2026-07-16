@@ -1835,7 +1835,7 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
-    public void TryMigrateForRead_InsideExistingTransaction_DoesNotStartNestedTransaction()
+    public void TryMigrateForRead_InsideExistingTransaction_UsesExternalOwnershipAndRollsBack_Issue4560()
     {
         var dbDir = TestProjectHelper.CreateTempProject("codeindex_nested_migration");
         var dbPath = Path.Combine(dbDir, "codeindex.db");
@@ -1883,6 +1883,10 @@ public class DatabaseTests : IDisposable
             Assert.Equal(1L, (long)check.ExecuteScalar()!);
 
             transaction.Rollback();
+
+            using var afterRollback = db.Connection.CreateCommand();
+            afterRollback.CommandText = "SELECT COUNT(*) FROM pragma_table_info('symbols') WHERE name = 'signature'";
+            Assert.Equal(0L, (long)afterRollback.ExecuteScalar()!);
         }
         finally
         {
