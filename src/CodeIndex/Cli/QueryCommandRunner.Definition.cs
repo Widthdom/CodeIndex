@@ -267,7 +267,7 @@ public static partial class QueryCommandRunner
                 return CommandExitCodes.UsageError;
             }
 
-            Console.WriteLine(JsonSerializer.Serialize(ToLspLocation(results[0]), CliJsonSerializerContextFactory.Create(jsonOptions).LspLocation));
+            Console.WriteLine(SerializeQueryJson(ToLspLocation(results[0]), CliJsonSerializerContextFactory.Create(jsonOptions).LspLocation, jsonOptions));
             return CommandExitCodes.Success;
         });
     }

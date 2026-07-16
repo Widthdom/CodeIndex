@@ -100,7 +100,7 @@ public static partial class QueryCommandRunner
         var context = CliJsonSerializerContextFactory.Create(itemOptions);
         WriteJsonArray(
             locations,
-            (writer, location) => writer.Write(JsonSerializer.Serialize(location, context.LspLocation)),
+            (writer, location) => writer.Write(SerializeQueryJson(location, context.LspLocation, itemOptions)),
             jsonOptions);
     }
 
@@ -159,14 +159,22 @@ public static partial class QueryCommandRunner
     }
 
     private static void WriteFormattedCount(int count, JsonSerializerOptions jsonOptions)
-        => CommandOutputWriter.WriteJsonNode(new JsonObject
+    {
+        var payload = new JsonObject
         {
             ["count"] = count,
             ["total_estimated"] = count,
-        }, jsonOptions);
+        };
+        AddActiveSqliteDiagnostics(payload);
+        CommandOutputWriter.WriteJsonNode(payload, jsonOptions);
+    }
 
     private static void WriteCompactLocations(IEnumerable<FormattedLocation> locations, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
-        => CommandOutputWriter.WriteJsonNode(BuildCompactLocationsPayload(locations, options, jsonOptions), jsonOptions);
+    {
+        var payload = BuildCompactLocationsPayload(locations, options, jsonOptions);
+        AddActiveSqliteDiagnostics(payload);
+        CommandOutputWriter.WriteJsonNode(payload, jsonOptions);
+    }
 
     private static JsonObject BuildCompactLocationsPayload(IEnumerable<FormattedLocation> locations, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
     {
