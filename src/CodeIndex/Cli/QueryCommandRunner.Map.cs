@@ -57,6 +57,14 @@ public static partial class QueryCommandRunner
             var compactLimit = GetCompactSectionLimit(options);
             var mapLimit = options.Compact ? GetCompactSourceLimit(compactLimit) : options.Limit;
             var map = reader.GetRepoMap(mapLimit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.MinEntrypointConfidence);
+            var generatedFileCountExcluded = options.IncludeGenerated
+                ? 0
+                : reader.CountListFiles(
+                    lang: options.Lang,
+                    pathPatterns: options.PathPatterns,
+                    excludePathPatterns: options.ExcludePaths,
+                    excludeTests: options.ExcludeTests,
+                    generatedOnly: true).Count;
             WorkspaceMetadataEnricher.Enrich(map, options.DbPath, options.DbPathExplicit);
             if (options.ContextAfterExplicit)
                 ApplyRepoMapDepth(map, options.ContextAfter);
@@ -87,7 +95,7 @@ public static partial class QueryCommandRunner
             {
                 if (options.Json)
                 {
-                    var payload = BuildRepoMapJsonPayload(map, options, jsonOptions, compactTruncation);
+                    var payload = BuildRepoMapJsonPayload(map, options, jsonOptions, generatedFileCountExcluded, compactTruncation);
                     var json = payload.ToJsonString(GetJsonNodeSerializationOptions(jsonOptions));
                     var zeroJsonExitCode = WriteJsonObjectWithOptionalByteLimit(
                         json,
@@ -107,7 +115,7 @@ public static partial class QueryCommandRunner
 
             if (options.Json)
             {
-                var payload = BuildRepoMapJsonPayload(map, options, jsonOptions, compactTruncation);
+                var payload = BuildRepoMapJsonPayload(map, options, jsonOptions, generatedFileCountExcluded, compactTruncation);
                 var json = payload.ToJsonString(GetJsonNodeSerializationOptions(jsonOptions));
                 return WriteJsonObjectWithOptionalByteLimit(
                     json,
@@ -208,9 +216,15 @@ public static partial class QueryCommandRunner
     private static int GetPathDepth(string path)
         => string.IsNullOrEmpty(path) ? 0 : path.Split('/', StringSplitOptions.RemoveEmptyEntries).Length;
 
-    private static JsonObject BuildRepoMapJsonPayload(RepoMapResult map, QueryCommandOptions options, JsonSerializerOptions jsonOptions, JsonObject? compactTruncation = null)
+    private static JsonObject BuildRepoMapJsonPayload(
+        RepoMapResult map,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        int generatedFileCountExcluded,
+        JsonObject? compactTruncation = null)
     {
         var payload = JsonSerializer.SerializeToNode(map, CliJsonSerializerContextFactory.Create(jsonOptions).RepoMapResult)!.AsObject();
+        AddGeneratedFileFilterJsonFields(payload, options, generatedFileCountExcluded);
         if (options.MapSummaryOnly)
         {
             KeepRepoMapJsonProperties(payload, RepoMapSummaryJsonProperties);
@@ -468,6 +482,8 @@ public static partial class QueryCommandRunner
     {
         "api_version",
         "file_count",
+        "generated_code_policy",
+        "generated_file_count_excluded",
         "total_lines",
         "total_symbols",
         "total_references",

@@ -172,9 +172,10 @@ public static partial class QueryCommandRunner
                         exactSignal: hasExactPredicate ? exactSignal : null);
                     return payloadExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : payloadExitCode;
                 }
-                if (options.OutputFormat == OutputFormatJson && options.JsonOutputFormat == JsonOutputFormatArray)
+                if (options.OutputFormat == OutputFormatJson)
                 {
-                    Console.WriteLine(SerializeQueryJson(results, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolResult, jsonOptions));
+                    if (options.JsonOutputFormat == JsonOutputFormatArray)
+                        Console.WriteLine(SerializeQueryJson(results, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolResult, jsonOptions));
                     return ZeroResultExitCode(options);
                 }
                 if (TryWriteEmptyFormattedResult(options, jsonOptions))
@@ -351,6 +352,7 @@ public static partial class QueryCommandRunner
             if (options.CountOnly)
             {
                 var counts = reader.CountListFiles(options.Query, options.Lang, filesScope.PathPatterns, filesScope.ExcludePaths, filesScope.ExcludeTests, options.Since);
+                var generatedFileCountExcluded = CountGeneratedFilesExcluded(reader, options, filesScope);
                 if (options.Json)
                 {
                     var payload = BuildCountJsonPayload(
@@ -360,6 +362,7 @@ public static partial class QueryCommandRunner
                         counts.FileCount,
                         query: options.Query,
                         queryOptions: options);
+                    AddGeneratedFileFilterJsonFields(payload, options, generatedFileCountExcluded);
                     if (options.RawBytes)
                         AddFileCountBytesJsonFields(payload, counts);
                     return WriteJsonPayloadWithOptionalByteLimit(
@@ -391,12 +394,12 @@ public static partial class QueryCommandRunner
                             results,
                             totalCount: 0,
                             fileCount: 0,
-                            rowFactory: result => ToFileDiscoveryJsonNode(result, jsonOptions, options.OutputFormat == OutputFormatCompact));
+                            rowFactory: result => ToFileDiscoveryJsonNode(result, jsonOptions, options.OutputFormat == OutputFormatCompact),
+                            generatedFileCountExcluded: CountGeneratedFilesExcluded(reader, options, filesScope));
                         return payloadExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : payloadExitCode;
                     }
-                    Console.WriteLine(options.JsonOutputFormat == JsonOutputFormatArray
-                        ? "[]"
-                        : BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "files", queryOptions: options).ToJsonString(jsonOptions));
+                    if (options.JsonOutputFormat == JsonOutputFormatArray)
+                        Console.WriteLine("[]");
                 }
                 else if (!options.Json)
                 {
@@ -419,7 +422,8 @@ public static partial class QueryCommandRunner
                     results,
                     counts.Count,
                     counts.FileCount,
-                    result => ToFileDiscoveryJsonNode(result, jsonOptions, options.OutputFormat == OutputFormatCompact));
+                    result => ToFileDiscoveryJsonNode(result, jsonOptions, options.OutputFormat == OutputFormatCompact),
+                    generatedFileCountExcluded: CountGeneratedFilesExcluded(reader, options, filesScope));
             }
 
             if (options.Json)
@@ -492,6 +496,24 @@ public static partial class QueryCommandRunner
         return new(pathPatterns, excludePaths, ExcludeTests: true);
     }
 
+    private static int CountGeneratedFilesExcluded(DbReader reader, QueryCommandOptions options, FileListScopeFilters filesScope)
+        => options.IncludeGenerated
+            ? 0
+            : reader.CountListFiles(
+                options.Query,
+                options.Lang,
+                filesScope.PathPatterns,
+                filesScope.ExcludePaths,
+                filesScope.ExcludeTests,
+                options.Since,
+                generatedOnly: true).Count;
+
+    private static void AddGeneratedFileFilterJsonFields(JsonObject payload, QueryCommandOptions options, int generatedFileCountExcluded)
+    {
+        payload["generated_code_policy"] = options.IncludeGenerated ? "include" : "exclude";
+        payload["generated_file_count_excluded"] = generatedFileCountExcluded;
+    }
+
     private static void AddFileCountBytesJsonFields(JsonObject payload, QueryCountResult counts)
     {
         payload["total_bytes"] = counts.TotalBytes ?? 0;
@@ -543,8 +565,20 @@ public static partial class QueryCommandRunner
         int totalCount,
         int fileCount,
         Func<T, JsonNode?> rowFactory,
-        ExactQuerySignal? exactSignal = null)
+        ExactQuerySignal? exactSignal = null,
+        int? generatedFileCountExcluded = null)
     {
+        if (options.OutputFormat == OutputFormatJson && options.MaxJsonBytes.HasValue)
+        {
+            return WriteBoundedDiscoveryFlatJsonPayload(
+                options,
+                jsonOptions,
+                commandName,
+                results,
+                rowFactory,
+                exactSignal);
+        }
+
         var jsonNodeOptions = EnsureJsonNodeSerializerOptions(jsonOptions);
         var requestedRows = options.SummaryOnly ? 0 : results.Count;
         var json = BuildBoundedDiscoveryJson(requestedRows);
@@ -603,9 +637,86 @@ public static partial class QueryCommandRunner
                 fileCount,
                 Math.Clamp(emittedRows, 0, results.Count),
                 rowFactory,
-                exactSignal);
+                exactSignal,
+                generatedFileCountExcluded);
             return payload.ToJsonString(jsonNodeOptions);
         }
+    }
+
+    private static int WriteBoundedDiscoveryFlatJsonPayload<T>(
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        string commandName,
+        IReadOnlyList<T> results,
+        Func<T, JsonNode?> rowFactory,
+        ExactQuerySignal? exactSignal)
+    {
+        var maxJsonBytes = options.MaxJsonBytes!.Value;
+        var jsonNodeOptions = EnsureJsonNodeSerializerOptions(jsonOptions);
+        if (options.JsonOutputFormat == JsonOutputFormatArray)
+        {
+            var bestJson = "[]";
+            var jsonByteLimit = maxJsonBytes - Encoding.UTF8.GetByteCount(Environment.NewLine);
+            if (!JsonFitsByteLimit(bestJson, jsonByteLimit))
+            {
+                return WriteJsonObjectWithOptionalByteLimit(
+                    bestJson,
+                    options,
+                    $"{commandName} JSON array",
+                    "Increase --max-json-bytes.",
+                    commandName);
+            }
+
+            var low = 0;
+            var high = results.Count;
+            while (low <= high)
+            {
+                var mid = low + ((high - low) / 2);
+                var candidate = BuildDiscoveryRows(results, mid, rowFactory).ToJsonString(jsonNodeOptions);
+                if (JsonFitsByteLimit(candidate, jsonByteLimit))
+                {
+                    bestJson = candidate;
+                    low = mid + 1;
+                }
+                else
+                {
+                    high = mid - 1;
+                }
+            }
+
+            Console.WriteLine(bestJson);
+            return CommandExitCodes.Success;
+        }
+
+        var newlineBytes = Encoding.UTF8.GetByteCount(Environment.NewLine);
+        var emittedRows = 0;
+        foreach (var result in results)
+        {
+            var node = rowFactory(result);
+            if (exactSignal.HasValue && node is JsonObject row)
+                AddExactJsonFields(row, exactSignal.Value);
+            var json = node?.ToJsonString(jsonNodeOptions) ?? "null";
+            var rowBytes = Encoding.UTF8.GetByteCount(json) + newlineBytes;
+            if (rowBytes > maxJsonBytes)
+            {
+                if (emittedRows == 0)
+                {
+                    return WriteJsonObjectWithOptionalByteLimit(
+                        json,
+                        options,
+                        $"{commandName} JSON row",
+                        "Reduce --limit or increase --max-json-bytes.",
+                        commandName);
+                }
+                break;
+            }
+
+            Console.WriteLine(json);
+            emittedRows++;
+            maxJsonBytes -= rowBytes;
+        }
+
+        return CommandExitCodes.Success;
     }
 
     private static JsonObject BuildBoundedDiscoveryPayload<T>(
@@ -618,7 +729,8 @@ public static partial class QueryCommandRunner
         int fileCount,
         int emittedRows,
         Func<T, JsonNode?> rowFactory,
-        ExactQuerySignal? exactSignal)
+        ExactQuerySignal? exactSignal,
+        int? generatedFileCountExcluded)
     {
         var summaryOnlyOmittedCount = options.SummaryOnly ? totalCount : 0;
         var limitOmittedCount = options.SummaryOnly ? 0 : Math.Max(0, totalCount - results.Count);
@@ -671,6 +783,8 @@ public static partial class QueryCommandRunner
             payload[resultsKey] = BuildDiscoveryRows(results, emittedRows, rowFactory);
         if (exactSignal.HasValue)
             AddExactJsonFields(payload, exactSignal.Value);
+        if (generatedFileCountExcluded.HasValue)
+            AddGeneratedFileFilterJsonFields(payload, options, generatedFileCountExcluded.Value);
         payload["query_context"] = BuildQueryContextJson(options, jsonOptions);
         AddFreshnessHint(payload, reader);
         return payload;

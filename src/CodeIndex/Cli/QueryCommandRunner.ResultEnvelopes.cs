@@ -244,8 +244,8 @@ public static partial class QueryCommandRunner
             query["exclude_strings"] = true;
         if (options.ExcludeFixtures)
             query["exclude_fixtures"] = true;
-        if (options.IncludeGenerated)
-            query["include_generated"] = true;
+        query["include_generated"] = options.IncludeGenerated;
+        query["generated_code_policy"] = options.IncludeGenerated ? "include" : "exclude";
         if (options.Since.HasValue)
             query["since"] = options.Since.Value;
         if (options.CountOnly)

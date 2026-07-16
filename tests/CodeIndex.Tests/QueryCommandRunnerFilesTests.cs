@@ -1018,14 +1018,14 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunFiles_ZeroJson_OnEmptyIndex_EmitsNullIndexedAt()
+    public void RunFiles_ZeroCompactJson_OnEmptyIndex_EmitsNullIndexedAt()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_zero_json_empty_index");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
-                ["definitely-missing-path", "--db", dbPath, "--json"],
+                ["definitely-missing-path", "--db", dbPath, "--format", "compact"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -1047,7 +1047,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunFiles_ZeroJson_OnLegacyReadOnlyDb_EmitsFreshnessDegradedSignal()
+    public void RunFiles_ZeroCompactJson_OnLegacyReadOnlyDb_EmitsFreshnessDegradedSignal()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_zero_json_legacy_freshness");
         try
@@ -1055,7 +1055,7 @@ public partial class QueryCommandRunnerTests
             var dbPath = CreateLegacyDbWithoutIndexedAt(projectRoot);
             var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
-                ["definitely-missing-path", "--db", readOnlyUri, "--json"],
+                ["definitely-missing-path", "--db", readOnlyUri, "--format", "compact"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -1077,7 +1077,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunFiles_ZeroResultJson_EmitsStructuredPayloadWithFreshnessHint()
+    public void RunFiles_ZeroResultCompactJson_EmitsStructuredPayloadWithFreshnessHint()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_files_zero_json");
         try
@@ -1086,7 +1086,7 @@ public partial class QueryCommandRunnerTests
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
-                ["missing-file-fragment", "--db", dbPath, "--json"],
+                ["missing-file-fragment", "--db", dbPath, "--format", "compact"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -1106,7 +1106,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunFiles_ZeroResultJson_EmptyIndexEmitsNullIndexedAt()
+    public void RunFiles_ZeroResultCompactJson_EmptyIndexEmitsNullIndexedAt()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_files_zero_json_empty");
         try
@@ -1114,7 +1114,7 @@ public partial class QueryCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
-                ["missing-file-fragment", "--db", dbPath, "--json"],
+                ["missing-file-fragment", "--db", dbPath, "--format", "compact"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -2916,6 +2916,133 @@ public partial class QueryCommandRunnerTests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void RunFilesAndSymbols_RawJsonPreservesSelectedShapeForZeroAndByteCappedResults_Issue4563()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_discovery_json_shape_4563");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var (emptyFilesExitCode, emptyFilesStdout, emptyFilesStderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["missing-file-fragment", "--db", dbPath, "--json"],
+                _jsonOptions));
+            var (emptySymbolsExitCode, emptySymbolsStdout, emptySymbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["MissingSymbol", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, emptyFilesExitCode);
+            Assert.Equal(CommandExitCodes.Success, emptySymbolsExitCode);
+            Assert.Equal(string.Empty, emptyFilesStdout);
+            Assert.Equal(string.Empty, emptySymbolsStdout);
+            Assert.Equal(string.Empty, emptyFilesStderr);
+            Assert.Equal(string.Empty, emptySymbolsStderr);
+
+            var sourceDirectory = Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            for (var i = 0; i < 4; i++)
+            {
+                var suffix = new string((char)('a' + i), 120);
+                File.WriteAllText(
+                    Path.Combine(sourceDirectory.FullName, $"SchemaFixture{suffix}.cs"),
+                    $"public class SchemaFixture{i} {{ public void Execute{i}() {{ }} }}\n");
+            }
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--db", dbPath, "--json", "--quiet"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            AssertByteCappedDiscoveryArray(
+                args => CaptureConsole(() => QueryCommandRunner.RunFiles(args, _jsonOptions)),
+                ["--db", dbPath, "--json=array", "--limit", "100"]);
+            AssertByteCappedDiscoveryArray(
+                args => CaptureConsole(() => QueryCommandRunner.RunSymbols(args, _jsonOptions)),
+                ["--db", dbPath, "--json=array", "--limit", "100"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFilesCountAndMap_ReportGeneratedFileExclusionMetadata_Issue4563()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_generated_filter_metadata_4563");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.g.cs", "csharp", "class GeneratedApp {}\n", isGenerated: true);
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath, "--json", "--count"],
+                _jsonOptions));
+            using var countDocument = ParseJsonOutput(countStdout);
+            var countJson = countDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            Assert.Equal(1, countJson.GetProperty("count").GetInt32());
+            Assert.Equal("exclude", countJson.GetProperty("generated_code_policy").GetString());
+            Assert.Equal(1, countJson.GetProperty("generated_file_count_excluded").GetInt32());
+            Assert.False(countJson.GetProperty("query_context").GetProperty("include_generated").GetBoolean());
+
+            var (mapExitCode, mapStdout, mapStderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--json", "--summary-only"],
+                _jsonOptions));
+            using var mapDocument = ParseJsonOutput(mapStdout);
+            var mapJson = mapDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, mapExitCode);
+            Assert.Equal(string.Empty, mapStderr);
+            Assert.Equal(1, mapJson.GetProperty("file_count").GetInt32());
+            Assert.Equal("exclude", mapJson.GetProperty("generated_code_policy").GetString());
+            Assert.Equal(1, mapJson.GetProperty("generated_file_count_excluded").GetInt32());
+
+            var (includedExitCode, includedStdout, includedStderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--json", "--summary-only", "--include-generated"],
+                _jsonOptions));
+            using var includedDocument = ParseJsonOutput(includedStdout);
+            var includedJson = includedDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, includedExitCode);
+            Assert.Equal(string.Empty, includedStderr);
+            Assert.Equal(2, includedJson.GetProperty("file_count").GetInt32());
+            Assert.Equal("include", includedJson.GetProperty("generated_code_policy").GetString());
+            Assert.Equal(0, includedJson.GetProperty("generated_file_count_excluded").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    private static void AssertByteCappedDiscoveryArray(
+        Func<string[], (int ExitCode, string StdOut, string StdErr)> run,
+        string[] baseArgs)
+    {
+        var (fullExitCode, fullStdout, fullStderr) = run(baseArgs);
+        using var fullDocument = ParseJsonOutput(fullStdout);
+        var fullCount = fullDocument.RootElement.GetArrayLength();
+        var cap = Encoding.UTF8.GetByteCount(fullStdout) / 2;
+
+        Assert.Equal(CommandExitCodes.Success, fullExitCode);
+        Assert.Equal(string.Empty, fullStderr);
+        Assert.True(fullCount >= 4);
+        Assert.True(cap > Encoding.UTF8.GetByteCount("[]" + Environment.NewLine));
+
+        var (cappedExitCode, cappedStdout, cappedStderr) = run([.. baseArgs, "--max-json-bytes", cap.ToString()]);
+        using var cappedDocument = ParseJsonOutput(cappedStdout);
+        var cappedCount = cappedDocument.RootElement.GetArrayLength();
+
+        Assert.Equal(CommandExitCodes.Success, cappedExitCode);
+        Assert.Equal(string.Empty, cappedStderr);
+        Assert.Equal(JsonValueKind.Array, cappedDocument.RootElement.ValueKind);
+        Assert.InRange(cappedCount, 1, fullCount - 1);
+        Assert.True(Encoding.UTF8.GetByteCount(cappedStdout) <= cap);
     }
 
     [Fact]
