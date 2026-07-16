@@ -1,6 +1,15 @@
 namespace CodeIndex.Database;
 
 /// <summary>
+/// Shared contract for top-level machine-readable results that carry the current JSON API version.
+/// 機械可読なトップレベル結果に現在の JSON API version を付与するための共通契約。
+/// </summary>
+public interface IVersionedJsonResult
+{
+    string ApiVersion { get; }
+}
+
+/// <summary>
 /// Versioned identifier stamped onto CodeIndex CLI/MCP JSON output payloads via the
 /// <c>api_version</c> field on top-level DTOs and on the <c>--json-envelope</c> metadata.
 /// Bump on breaking changes (rename, remove, or type-change a field). Additive changes

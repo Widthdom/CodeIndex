@@ -76,6 +76,13 @@ internal static class JsonEnvelopeWrapper
         JsonSerializerOptions jsonOptions,
         Func<string[], int> runInner)
     {
+        if (HasArgument(args, "--max-json-bytes"))
+        {
+            CommandErrorWriter.WriteStderr("Error [E010_USAGE_ERROR]: --json-envelope cannot be combined with --max-json-bytes because envelope serialization changes the final stdout byte count.");
+            CommandErrorWriter.WriteStderr("Hint: use streaming --json=ndjson with --max-json-bytes, or remove the byte cap when a single JSON envelope is required.");
+            return CommandExitCodes.UsageError;
+        }
+
         var innerArgs = PrepareInnerArgs(args);
         var queryNormalized = ExtractQueryArg(args);
         var dbPathExplicit = TryExtractDbPath(args, out var explicitDbPath);
@@ -134,9 +141,11 @@ internal static class JsonEnvelopeWrapper
         var raw = captured.ToString();
         JsonArray results;
         JsonObject? parseError = null;
+        JsonObject? streamTerminal = null;
+        JsonArray? streamControlRecords = null;
         try
         {
-            results = ParseRawJsonItems(raw);
+            results = ParseRawJsonItems(command, raw, out streamTerminal, out streamControlRecords);
         }
         catch (JsonEnvelopeRawJsonItemLimitExceededException ex)
         {
@@ -179,11 +188,17 @@ internal static class JsonEnvelopeWrapper
             stopwatch.Elapsed.TotalMilliseconds,
             results,
             exitCode,
-            parseError);
+            parseError,
+            streamTerminal,
+            streamControlRecords);
 
         Console.WriteLine(envelope.ToJsonString(jsonOptions));
         return exitCode;
     }
+
+    private static bool HasArgument(string[] args, string option)
+        => args.Any(arg => string.Equals(arg, option, StringComparison.Ordinal)
+                           || arg.StartsWith(option + "=", StringComparison.Ordinal));
 
     private static JsonObject BuildEnvelope(
         string command,
@@ -194,7 +209,9 @@ internal static class JsonEnvelopeWrapper
         double elapsedMs,
         JsonArray results,
         int exitCode,
-        JsonObject? error = null)
+        JsonObject? error = null,
+        JsonObject? streamTerminal = null,
+        JsonArray? streamControlRecords = null)
     {
         var metadata = new JsonObject
         {
@@ -211,6 +228,10 @@ internal static class JsonEnvelopeWrapper
             metadata["query_normalized"] = queryNormalized;
         if (error is not null)
             metadata["error"] = error;
+        if (streamTerminal is not null)
+            metadata["stream_terminal"] = streamTerminal.DeepClone();
+        if (streamControlRecords is { Count: > 0 })
+            metadata["stream_control_records"] = streamControlRecords.DeepClone();
 
         var indexedHead = SafeReadIndexedHead(dbPath, dbPathExplicit);
         if (!string.IsNullOrEmpty(indexedHead))
@@ -238,9 +259,15 @@ internal static class JsonEnvelopeWrapper
         }
     }
 
-    private static JsonArray ParseRawJsonItems(string raw)
+    private static JsonArray ParseRawJsonItems(
+        string command,
+        string raw,
+        out JsonObject? streamTerminal,
+        out JsonArray streamControlRecords)
     {
         var array = new JsonArray();
+        streamTerminal = null;
+        streamControlRecords = [];
         var rawJsonNodeCount = 0;
         if (string.IsNullOrEmpty(raw))
             return array;
@@ -267,10 +294,21 @@ internal static class JsonEnvelopeWrapper
 
             if (node is null)
                 continue;
-            if (IsJsonStreamDoneSentinel(node))
+            if (IsJsonStreamTerminal(node))
+            {
+                streamTerminal = (JsonObject)node.DeepClone();
+                if (!IsTerminalResultRecord(command, node))
+                    continue;
+            }
+            else if (IsJsonStreamControlRecord(node))
+            {
+                EnsureRawJsonItemBudget(array.Count + streamControlRecords.Count);
+                rawJsonNodeCount = AddRawJsonNodeCount(rawJsonNodeCount, CountJsonNodes(node));
+                streamControlRecords.Add(node);
                 continue;
+            }
 
-            EnsureRawJsonItemBudget(array.Count);
+            EnsureRawJsonItemBudget(array.Count + streamControlRecords.Count);
             rawJsonNodeCount = AddRawJsonNodeCount(rawJsonNodeCount, CountJsonNodes(node));
             array.Add(node);
         }
@@ -344,10 +382,15 @@ internal static class JsonEnvelopeWrapper
         }
     }
 
-    private static bool IsJsonStreamDoneSentinel(JsonNode node)
+    private static bool IsJsonStreamTerminal(JsonNode node)
     {
         if (node is not JsonObject obj)
             return false;
+        if (obj.TryGetPropertyValue("terminal_record", out var terminalNode)
+            && terminalNode is JsonValue terminalValue
+            && terminalValue.TryGetValue<bool>(out var terminal)
+            && terminal)
+            return true;
         return obj.TryGetPropertyValue("done", out var doneNode)
             && doneNode is JsonValue doneValue
             && doneValue.TryGetValue<bool>(out var done)
@@ -355,6 +398,27 @@ internal static class JsonEnvelopeWrapper
             && obj.TryGetPropertyValue("interrupted", out _)
             && obj.TryGetPropertyValue("count", out _);
     }
+
+    private static bool IsJsonStreamControlRecord(JsonNode node)
+    {
+        if (node is not JsonObject obj
+            || !obj.TryGetPropertyValue("count", out var countNode)
+            || countNode is not JsonValue countValue
+            || !countValue.TryGetValue<int>(out var count)
+            || count != 0)
+            return false;
+
+        return HasEmptyArray(obj, "results") || HasEmptyArray(obj, "files");
+    }
+
+    private static bool HasEmptyArray(JsonObject obj, string propertyName)
+        => obj.TryGetPropertyValue(propertyName, out var node)
+           && node is JsonArray { Count: 0 };
+
+    private static bool IsTerminalResultRecord(string command, JsonNode node)
+        => string.Equals(command, "find", StringComparison.Ordinal)
+           && node is JsonObject obj
+           && obj.TryGetPropertyValue("count", out _);
 
     // Mirrors the value-taking options in QueryCommandRunner.ParseArgs so we can locate the
     // first positional (= query) without being fooled by `--db <path>`-style values.

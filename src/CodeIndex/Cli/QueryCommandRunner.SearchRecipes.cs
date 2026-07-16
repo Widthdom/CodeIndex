@@ -490,19 +490,29 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
+        string? ndjsonTerminalLine = null;
         return WithDb(options, jsonOptions, reader =>
         {
             if (options.ResultsOnly || options.SearchFields != null || (options.Json && options.JsonOutputFormatExplicit && options.JsonOutputFormat == JsonOutputFormatNdjson))
             {
-                var rowQueryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, scope, options, userExact, out _);
-                WriteRecipeSearchResultRows(
+                var rowQueryResults = CollectSearchRecipeQueryResults(
+                    reader,
+                    selection.Queries,
+                    scope,
+                    options,
+                    userExact,
+                    out _,
+                    out var rowMinimumMatchedTotal);
+                var stream = WriteRecipeSearchResultRows(
+                    reader,
                     recipe.Name,
                     rowQueryResults,
+                    rowMinimumMatchedTotal,
+                    rowQueryResults.Any(query => query.Truncated),
                     options,
-                    GetCompactJsonOptions(jsonOptions),
-                    out _,
-                    out _);
-                return CommandExitCodes.Success;
+                    GetCompactJsonOptions(jsonOptions));
+                ndjsonTerminalLine = stream.TerminalLine;
+                return stream.ExitCode;
             }
 
             if (options.OutputFormat == OutputFormatCompact)
@@ -524,7 +534,7 @@ public static partial class QueryCommandRunner
                     "Reduce --limit or --total-limit, select one child query with --recipe <recipe>/<query>, stream rows with --json=ndjson, or increase --max-json-bytes.");
             }
 
-            var queryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, scope, options, userExact, out var total);
+            var queryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, scope, options, userExact, out var total, out _);
 
             if (options.Json)
             {
@@ -591,6 +601,10 @@ public static partial class QueryCommandRunner
 
             CommandErrorWriter.WriteStderr($"({total} recipe results across {selection.Queries.Count} queries)");
             return CommandExitCodes.Success;
+        }, _ =>
+        {
+            if (ndjsonTerminalLine != null && !options.ResultsOnly)
+                Console.WriteLine(ndjsonTerminalLine);
         });
     }
 
@@ -883,17 +897,16 @@ public static partial class QueryCommandRunner
         });
     }
 
-    private static void WriteRecipeSearchResultRows(
+    private static NdjsonStreamWriteResult WriteRecipeSearchResultRows(
+        DbReader reader,
         string recipeName,
         IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults,
+        int totalCount,
+        bool limitTruncated,
         QueryCommandOptions options,
-        JsonSerializerOptions ndjsonOptions,
-        out int emittedCount,
-        out bool interrupted)
+        JsonSerializerOptions ndjsonOptions)
     {
-        emittedCount = 0;
-        interrupted = false;
-        var bytesWritten = 0;
+        var records = new List<NdjsonOutputRecord>();
         foreach (var query in queryResults)
         {
             foreach (var result in query.Results)
@@ -901,14 +914,22 @@ public static partial class QueryCommandRunner
                 JsonObject payload = options.SearchFields != null
                     ? BuildProjectedSearchResult(result, options.SearchFields, query.Name, recipeName)
                     : BuildRecipeSearchResultRow(recipeName, query.Name, result, ndjsonOptions);
-                var line = payload.ToJsonString(ndjsonOptions);
-                if (WouldExceedJsonByteLimit(options, bytesWritten, line, out interrupted))
-                    return;
-                Console.WriteLine(line);
-                bytesWritten += Encoding.UTF8.GetByteCount(line) + Environment.NewLine.Length;
-                emittedCount++;
+                AddActiveSqliteDiagnostics(payload);
+                records.Add(new NdjsonOutputRecord(payload.ToJsonString(ndjsonOptions)));
             }
         }
+
+        return WriteNdjsonStream(
+            records,
+            totalCount,
+            options,
+            ndjsonOptions,
+            reader,
+            "search",
+            limitTruncated,
+            "Increase --limit or --total-limit, select one recipe query, or narrow the recipe scope.",
+            totalCountAuthoritative: false,
+            truncationReason: limitTruncated ? "limit" : null);
     }
 
     private static JsonObject BuildRecipeSearchResultRow(
@@ -958,7 +979,7 @@ public static partial class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
-            var queryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, scope, options, userExact, out var total);
+            var queryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, scope, options, userExact, out var total, out _);
             var drafts = queryResults
                 .Where(queryResult => queryResult.Count > 0)
                 .Select(queryResult => ToSearchIssueDraft(recipe, queryResult, preflight, options))
@@ -1179,10 +1200,12 @@ public static partial class QueryCommandRunner
         SearchRecipeScopeJsonResult scope,
         QueryCommandOptions options,
         bool userExact,
-        out int total)
+        out int total,
+        out int minimumMatchedTotal)
     {
         var queryResults = new List<SearchRecipeQueryResultJsonResult>();
         total = 0;
+        minimumMatchedTotal = 0;
         foreach (var recipeQuery in recipeQueries)
         {
             var exact = userExact || recipeQuery.ExactSubstring;
@@ -1214,6 +1237,7 @@ public static partial class QueryCommandRunner
             ApplySearchRecipeAuditClassifications(recipeQuery, rows);
             var minimumOmitted = truncated ? Math.Max(1, availableCount - rows.Count) : 0;
             total += rows.Count;
+            minimumMatchedTotal += rows.Count + minimumOmitted;
             queryResults.Add(new SearchRecipeQueryResultJsonResult(
                 recipeQuery.Name,
                 recipeQuery.Query,

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using CodeIndex.Database;
 using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 
@@ -394,4 +395,5 @@ public sealed record HookCommandJsonResult(
     string DiagnosticProjectPath,
     string? DiagnosticHookPath,
     string? DiagnosticChainedHookPath,
-    IReadOnlyList<HookCommandWarningJsonResult>? Warnings = null);
+    IReadOnlyList<HookCommandWarningJsonResult>? Warnings = null,
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;

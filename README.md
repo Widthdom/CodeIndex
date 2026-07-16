@@ -88,9 +88,11 @@ cdidx suggestions delete <id> --json
 cdidx validate
 ```
 
-When `search --json=ndjson` stops at `--max-json-bytes`, its terminal record reports `interruption_reason`, `max_json_bytes`, `first_omitted_result_bytes`, `omitted_count`, and `recovery_guidance`. This distinguishes byte-budget truncation from cancellation or an internal failure, including when the first result does not fit.
+The default NDJSON output of `search`, `symbols`, and `files` always ends with a bounded `terminal_record` unless `--results-only` explicitly suppresses it; recipe/audit search row streams use the same contract. The record reports returned and observed total counts, whether that total is authoritative or a lower bound, the truncation reason, applied limits, omitted rows, and recovery guidance. `--max-json-bytes` is a hard cap over all stdout bytes, including row newlines and the terminal record. If that record cannot fit by itself, the command fails with a usage error before writing stdout. Capped output rejects `--profile`, `--verbose`, and `--json-envelope`, whose additional serialization would otherwise escape the cap.
 
-`--max-json-bytes` overflow behavior is command-specific and is stated in command help: `symbols` truncates rows with omission metadata; `search --json=ndjson` truncates at row boundaries; `search --json=array`, `inspect`, and `map` reject the whole response when it cannot fit. Check `cdidx <command> --help` before relying on partial output.
+When the byte cap omits rows, these commands return partial-result exit code `11`; pass `--allow-partial` to opt into exit code `0` while retaining the same terminal metadata. Ordinary `--limit` truncation remains a successful, explicitly described stream. Array and compact outputs keep their documented whole-response behavior; check `cdidx <command> --help` before relying on partial output.
+
+`find --all --json` also makes bounded scans explicit. Default streaming JSON rows end with a terminal record containing `scan_complete`, `authoritative_rows`, scanned file/line counts, active caps, truncation reason, and recovery guidance; count JSON carries the same scan state in its single result object through `authoritative_count`. Row formats that cannot carry this metadata, including JSON array and location-only formats, are rejected with `--all`; use text, NDJSON, or count output. A candidate-file or line-scan cap returns partial-result exit code `11` unless `--allow-partial` is set. Ordinary result-limit early stops remain exit `0` but report `scan_complete=false` and `result_limit_reached=true`.
 
 Use it with AI tools or editors:
 
@@ -375,9 +377,11 @@ cdidx suggestions delete <id> --json
 cdidx validate
 ```
 
-`search --json=ndjson` が `--max-json-bytes` で停止した場合、終端レコードは `interruption_reason`、`max_json_bytes`、`first_omitted_result_bytes`、`omitted_count`、`recovery_guidance` を返します。最初の結果さえ収まらない場合も含め、byte budget による切り詰めをキャンセルや内部エラーと区別できます。
+`search`、`symbols`、`files` の既定 NDJSON 出力は、`--results-only` で明示的に抑止しない限り、常に上限付きの `terminal_record` で終了し、recipe / audit search の row stream も同じ契約を使います。このレコードは返却件数と観測済み総件数、その総件数が authoritative か lower bound か、切り詰め理由、適用上限、省略行数、復旧案内を返します。`--max-json-bytes` は各行の改行と終端レコードを含む stdout 全体の hard cap です。終端レコード自体が収まらない場合は、stdout を書く前に usage error で失敗します。追加 serialization が cap 外へ出ることを防ぐため、上限付き出力では `--profile`、`--verbose`、`--json-envelope` を拒否します。
 
-`--max-json-bytes` の overflow 挙動はコマンドごとに異なり、各コマンドの help に明記されます。`symbols` は省略 metadata 付きで行を切り詰め、`search --json=ndjson` は行境界で切り詰めます。一方、`search --json=array`、`inspect`、`map` は応答全体が収まらない場合にエラーにします。部分出力へ依存する前に `cdidx <command> --help` を確認してください。
+byte cap により行を省略した場合、これらのコマンドは partial-result 終了コード `11` を返します。同じ終端 metadata を維持したまま終了コード `0` を明示的に許容するには `--allow-partial` を指定します。通常の `--limit` による切り詰めは、理由が明示された成功 stream のままです。array / compact 出力は文書化済みの whole-response 挙動を維持します。部分出力へ依存する前に `cdidx <command> --help` を確認してください。
+
+`find --all --json` も上限付き scan を明示します。既定の streaming JSON row は `scan_complete`、`authoritative_rows`、走査 file / line 数、有効な cap、切り詰め理由、復旧案内を含む終端レコードで終了します。count JSON は単一 result object の `authoritative_count` と同じ scan 状態を返します。この metadata を表現できない JSON array や location-only 形式は `--all` との組み合わせを拒否するため、text、NDJSON、count 出力を使ってください。candidate-file cap または line-scan cap に達した場合は、`--allow-partial` を指定しない限り partial-result 終了コード `11` を返します。通常の result limit による早期停止は終了コード `0` のままですが、`scan_complete=false` と `result_limit_reached=true` を報告します。
 
 AI tool や editor から使います。
 

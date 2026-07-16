@@ -2,7 +2,7 @@ using CodeIndex.Database;
 
 namespace CodeIndex.Cli;
 
-internal sealed class IndexWatchStartedJsonResult
+internal sealed class IndexWatchStartedJsonResult : IVersionedJsonResult
 {
     public string ApiVersion { get; init; } = JsonOutputContract.ApiVersion;
     public string Status { get; init; } = string.Empty;

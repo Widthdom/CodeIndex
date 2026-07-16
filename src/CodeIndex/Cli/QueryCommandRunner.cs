@@ -112,6 +112,7 @@ public sealed class QueryCommandOptions
     public bool CountOnly { get; init; }
     public bool All { get; init; }
     public bool StrictNotFound { get; init; }
+    public bool AllowPartial { get; init; }
     public bool Strict { get; init; }
     public DateTime? Since { get; init; }
     public bool NoDedup { get; init; }

@@ -292,7 +292,7 @@ internal static partial class ProgramRunner
         string? language = null;
         string? file = null;
         string? expect = null;
-        var json = false;
+        var json = args.Contains("--json", StringComparer.Ordinal);
         for (var i = 0; i < args.Length; i++)
         {
             var arg = args[i];
@@ -303,32 +303,43 @@ internal static partial class ProgramRunner
             else if (TryConsumeInlineOrNext(args, ref i, arg, "--expect-symbols", out value) || TryConsumeInlineOrNext(args, ref i, arg, "--expect", out value))
                 expect = value;
             else if (arg == "--json")
-                json = true;
+                continue;
             else
-                return CommandErrorWriter.Write($"Unknown test-extractor argument: {arg}", CommandExitCodes.InvalidArgument, "use --language <lang> --file <path> [--expect-symbols <json>] [--json].");
+                return WriteTestExtractorError(json, jsonOptions, $"Unknown test-extractor argument: {arg}", CommandExitCodes.InvalidArgument, "use --language <lang> --file <path> [--expect-symbols <json>] [--json].");
         }
 
         if (string.IsNullOrWhiteSpace(language) || string.IsNullOrWhiteSpace(file))
-            return CommandErrorWriter.Write("test-extractor requires --language and --file.", CommandExitCodes.InvalidArgument, "use --language <lang> --file <path> [--expect-symbols <json>] [--json].");
-        if (!TryReadTestExtractorFile(file, "source", out var source, out var readExitCode))
+            return WriteTestExtractorError(json, jsonOptions, "test-extractor requires --language and --file.", CommandExitCodes.InvalidArgument, "use --language <lang> --file <path> [--expect-symbols <json>] [--json].");
+        if (!TryReadTestExtractorFile(file, "source", json, jsonOptions, out var source, out var readExitCode))
             return readExitCode;
 
         var symbols = Indexer.SymbolExtractor.Extract(1, language, source, file);
         if (expect != null)
         {
-            if (!TryReadTestExtractorFile(expect, "expected symbols", out var expected, out readExitCode))
+            if (!TryReadTestExtractorFile(expect, "expected symbols", json, jsonOptions, out var expected, out readExitCode))
                 return readExitCode;
             var actual = JsonSerializer.Serialize(symbols);
             if (!TryJsonEquivalent(expected, actual, out var jsonError))
             {
                 if (jsonError is not null)
                 {
-                    return CommandErrorWriter.Write(
+                    return WriteTestExtractorError(
+                        json,
+                        jsonOptions,
                         $"test-extractor expected or actual symbols JSON could not be parsed within the {TestExtractorJsonComparisonMaxBytes} byte and {TestExtractorJsonComparisonMaxDepth} depth limits: {jsonError.Message}",
                         CommandExitCodes.InvalidArgument,
                         "Use a smaller or shallower expected-symbols JSON fixture.");
                 }
 
+                if (json)
+                {
+                    return WriteTestExtractorError(
+                        true,
+                        jsonOptions,
+                        "Expected symbols did not match extracted symbols.",
+                        CommandExitCodes.InvalidArgument,
+                        "Update the expected-symbols fixture or inspect the extracted symbols without --expect-symbols.");
+                }
                 CommandErrorWriter.WriteStderr("Expected symbols did not match extracted symbols.");
                 CommandErrorWriter.WriteStderr(actual);
                 return CommandExitCodes.InvalidArgument;
@@ -336,18 +347,29 @@ internal static partial class ProgramRunner
         }
 
         if (json || expect == null)
-            Console.WriteLine(JsonSerializer.Serialize(symbols));
+        {
+            var result = new TestExtractorJsonResult(JsonSerializer.SerializeToElement(symbols));
+            CommandOutputWriter.WriteJson(
+                result,
+                CliJsonSerializerContextFactory.Create(jsonOptions).TestExtractorJsonResult);
+        }
         return CommandExitCodes.Success;
     }
 
-    private static bool TryReadTestExtractorFile(string path, string role, out string content, out int exitCode)
+    private static bool TryReadTestExtractorFile(
+        string path,
+        string role,
+        bool json,
+        JsonSerializerOptions jsonOptions,
+        out string content,
+        out int exitCode)
     {
         content = string.Empty;
         exitCode = CommandExitCodes.Success;
         var displayRole = $"test-extractor {role} file";
         if (!File.Exists(LongPath.EnsureWindowsPrefix(path)))
         {
-            exitCode = CommandErrorWriter.Write($"{displayRole} not found: {path}", CommandExitCodes.NotFound);
+            exitCode = WriteTestExtractorError(json, jsonOptions, $"{displayRole} not found: {path}", CommandExitCodes.NotFound);
             return false;
         }
 
@@ -356,29 +378,35 @@ internal static partial class ProgramRunner
             using var stream = BoundedFile.OpenReadForLengthCheckedText(path);
             if (stream.Length > TestExtractorMaxInputBytes)
             {
-                exitCode = WriteTestExtractorTooLargeError(displayRole, stream.Length);
+                exitCode = WriteTestExtractorTooLargeError(json, jsonOptions, displayRole, stream.Length);
                 return false;
             }
 
             TestExtractorFileLengthCheckedForTesting?.Invoke(path);
-            if (!TryReadTestExtractorStream(stream, displayRole, out content, out exitCode))
+            if (!TryReadTestExtractorStream(stream, displayRole, json, jsonOptions, out content, out exitCode))
                 return false;
 
             return true;
         }
         catch (IOException ex)
         {
-            exitCode = CommandErrorWriter.Write($"{displayRole} could not be read: {FormatSanitizedExceptionSummary(ex)}", CommandExitCodes.InvalidArgument);
+            exitCode = WriteTestExtractorError(json, jsonOptions, $"{displayRole} could not be read: {FormatSanitizedExceptionSummary(ex)}", CommandExitCodes.InvalidArgument);
             return false;
         }
         catch (UnauthorizedAccessException ex)
         {
-            exitCode = CommandErrorWriter.Write($"{displayRole} could not be read: {FormatSanitizedExceptionSummary(ex)}", CommandExitCodes.InvalidArgument);
+            exitCode = WriteTestExtractorError(json, jsonOptions, $"{displayRole} could not be read: {FormatSanitizedExceptionSummary(ex)}", CommandExitCodes.InvalidArgument);
             return false;
         }
     }
 
-    private static bool TryReadTestExtractorStream(Stream stream, string displayRole, out string content, out int exitCode)
+    private static bool TryReadTestExtractorStream(
+        Stream stream,
+        string displayRole,
+        bool json,
+        JsonSerializerOptions jsonOptions,
+        out string content,
+        out int exitCode)
     {
         content = string.Empty;
         exitCode = CommandExitCodes.Success;
@@ -390,7 +418,7 @@ internal static partial class ProgramRunner
             var remainingBudget = TestExtractorMaxInputBytes + 1 - bytesRead;
             if (remainingBudget <= 0)
             {
-                exitCode = WriteTestExtractorTooLargeError(displayRole, bytesRead);
+                exitCode = WriteTestExtractorTooLargeError(json, jsonOptions, displayRole, bytesRead);
                 return false;
             }
 
@@ -401,7 +429,7 @@ internal static partial class ProgramRunner
             bytesRead += read;
             if (bytesRead > TestExtractorMaxInputBytes)
             {
-                exitCode = WriteTestExtractorTooLargeError(displayRole, bytesRead);
+                exitCode = WriteTestExtractorTooLargeError(json, jsonOptions, displayRole, bytesRead);
                 return false;
             }
 
@@ -415,11 +443,25 @@ internal static partial class ProgramRunner
         return true;
     }
 
-    private static int WriteTestExtractorTooLargeError(string displayRole, long bytes)
-        => CommandErrorWriter.Write(
+    private static int WriteTestExtractorTooLargeError(
+        bool json,
+        JsonSerializerOptions jsonOptions,
+        string displayRole,
+        long bytes)
+        => WriteTestExtractorError(
+            json,
+            jsonOptions,
             $"{displayRole} is too large: {bytes} bytes exceeds the {TestExtractorMaxInputBytes} byte limit.",
             CommandExitCodes.InvalidArgument,
             "Use a smaller extractor fixture or expectation file.");
+
+    private static int WriteTestExtractorError(
+        bool json,
+        JsonSerializerOptions jsonOptions,
+        string message,
+        int exitCode,
+        string? hint = null)
+        => CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, message, exitCode, hint);
 
     private static bool TryConsumeInlineOrNext(string[] args, ref int index, string arg, string flag, out string value)
     {
@@ -3421,23 +3463,25 @@ internal static partial class ProgramRunner
         string appVersion,
         CancellationToken cancellationToken = default)
     {
-        var wantsJson = false;
+        var wantsJson = cmdArgs.Contains("--json", StringComparer.Ordinal);
         foreach (var arg in cmdArgs)
         {
             if (arg == "--json")
-            {
-                wantsJson = true;
                 continue;
-            }
-            CommandErrorWriter.WriteStderr($"Error: --check-updates does not accept '{arg}'.");
-            CommandErrorWriter.WriteStderr("Hint: use `cdidx --check-updates` or `cdidx --check-updates --json`.");
-            return CommandExitCodes.UsageError;
+            return CommandErrorWriter.WriteJsonOrHuman(
+                wantsJson,
+                jsonOptions,
+                $"--check-updates does not accept '{arg}'.",
+                CommandExitCodes.UsageError,
+                "use `cdidx --check-updates` or `cdidx --check-updates --json`.");
         }
 
         var result = UpdateChecker.Check(appVersion, cancellationToken);
         if (wantsJson)
         {
-            Console.WriteLine(JsonSerializer.Serialize(result, jsonOptions));
+            CommandOutputWriter.WriteJson(
+                result,
+                CliJsonSerializerContextFactory.Create(jsonOptions).UpdateCheckResult);
             return CommandExitCodes.Success;
         }
 

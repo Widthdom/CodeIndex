@@ -75,6 +75,7 @@ public static partial class QueryCommandRunner
         bool countOnly = false;
         bool all = false;
         bool strictNotFound = false;
+        bool allowPartial = false;
         int? startLine = null;
         int? endLine = null;
         bool endLineExplicit = false;
@@ -973,6 +974,9 @@ public static partial class QueryCommandRunner
                 case "--strict-not-found":
                     strictNotFound = true;
                     break;
+                case "--allow-partial":
+                    allowPartial = true;
+                    break;
                 case "--strict":
                     strict = true;
                     break;
@@ -1628,6 +1632,7 @@ public static partial class QueryCommandRunner
             CountOnly = countOnly,
             All = all,
             StrictNotFound = strictNotFound,
+            AllowPartial = allowPartial,
             Strict = strict,
             Since = since,
             NoDedup = noDedup,

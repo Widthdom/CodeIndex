@@ -599,7 +599,9 @@ public class ProgramRunnerTests
                 Assert.Equal(CommandExitCodes.Success, exitCode);
                 Assert.Empty(stderr);
                 using var document = JsonDocument.Parse(stdout);
-                Assert.Contains(document.RootElement.EnumerateArray(), item =>
+                var root = document.RootElement;
+                Assert.Equal(JsonOutputContract.ApiVersion, root.GetProperty("api_version").GetString());
+                Assert.Contains(root.GetProperty("symbols").EnumerateArray(), item =>
                     item.GetProperty("Kind").GetString() == "function"
                     && item.GetProperty("Name").GetString() == "hello");
             }
@@ -626,9 +628,13 @@ public class ProgramRunnerTests
                     appVersion: "1.10.0"));
 
                 Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
-                Assert.Empty(stdout);
-                Assert.Contains("test-extractor source file is too large", stderr);
-                Assert.Contains($"{ProgramRunner.TestExtractorMaxInputBytes} byte limit", stderr);
+                Assert.Empty(stderr);
+                using var document = JsonDocument.Parse(stdout);
+                var root = document.RootElement;
+                Assert.Equal(JsonOutputContract.ApiVersion, root.GetProperty("api_version").GetString());
+                Assert.Equal("error", root.GetProperty("status").GetString());
+                Assert.Contains("test-extractor source file is too large", root.GetProperty("message").GetString());
+                Assert.Contains($"{ProgramRunner.TestExtractorMaxInputBytes} byte limit", root.GetProperty("message").GetString());
             }
             finally
             {
@@ -661,9 +667,13 @@ public class ProgramRunnerTests
                     appVersion: "1.10.0"));
 
                 Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
-                Assert.Empty(stdout);
-                Assert.Contains("test-extractor source file is too large", stderr);
-                Assert.Contains($"{ProgramRunner.TestExtractorMaxInputBytes} byte limit", stderr);
+                Assert.Empty(stderr);
+                using var document = JsonDocument.Parse(stdout);
+                var root = document.RootElement;
+                Assert.Equal(JsonOutputContract.ApiVersion, root.GetProperty("api_version").GetString());
+                Assert.Equal("error", root.GetProperty("status").GetString());
+                Assert.Contains("test-extractor source file is too large", root.GetProperty("message").GetString());
+                Assert.Contains($"{ProgramRunner.TestExtractorMaxInputBytes} byte limit", root.GetProperty("message").GetString());
             }
             finally
             {
