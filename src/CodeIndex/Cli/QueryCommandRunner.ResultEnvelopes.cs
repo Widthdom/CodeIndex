@@ -244,8 +244,15 @@ public static partial class QueryCommandRunner
             query["exclude_strings"] = true;
         if (options.ExcludeFixtures)
             query["exclude_fixtures"] = true;
+        var generatedFileFilterAvailable = ActiveSqliteDiagnosticsReader.Value?.GeneratedFileFilterAvailable;
         query["include_generated"] = options.IncludeGenerated;
-        query["generated_code_policy"] = options.IncludeGenerated ? "include" : "exclude";
+        query["generated_code_policy"] = options.IncludeGenerated
+            ? "include"
+            : generatedFileFilterAvailable == false
+                ? "unavailable"
+                : "exclude";
+        if (generatedFileFilterAvailable.HasValue)
+            query["generated_file_filter_available"] = generatedFileFilterAvailable.Value;
         if (options.Since.HasValue)
             query["since"] = options.Since.Value;
         if (options.CountOnly)

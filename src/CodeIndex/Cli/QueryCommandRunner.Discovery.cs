@@ -403,7 +403,11 @@ public static partial class QueryCommandRunner
                         return payloadExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : payloadExitCode;
                     }
                     if (options.JsonOutputFormat == JsonOutputFormatArray)
-                        Console.WriteLine("[]");
+                    {
+                        var emptyRows = new JsonArray();
+                        AddActiveSqliteDiagnostics(emptyRows);
+                        Console.WriteLine(emptyRows.ToJsonString(EnsureJsonNodeSerializerOptions(jsonOptions)));
+                    }
                 }
                 else if (!options.Json)
                 {
@@ -678,7 +682,12 @@ public static partial class QueryCommandRunner
         var jsonNodeOptions = EnsureJsonNodeSerializerOptions(jsonOptions);
         if (options.JsonOutputFormat == JsonOutputFormatArray)
         {
-            var bestJson = "[]";
+            var bestJson = BuildDiscoveryRows(
+                results,
+                emittedRows: 0,
+                rowFactory,
+                exactSignal,
+                addActiveSqliteDiagnostics: true).ToJsonString(jsonNodeOptions);
             if (!JsonFitsByteLimit(bestJson, maxJsonBytes))
             {
                 return WriteJsonObjectWithOptionalByteLimit(
@@ -830,7 +839,9 @@ public static partial class QueryCommandRunner
     {
         var rows = new JsonArray();
         for (var i = 0; i < emittedRows && i < results.Count; i++)
-            rows.Add(BuildDiscoveryRow(results[i], rowFactory, exactSignal, addActiveSqliteDiagnostics));
+            rows.Add(BuildDiscoveryRow(results[i], rowFactory, exactSignal, addActiveSqliteDiagnostics: false));
+        if (addActiveSqliteDiagnostics)
+            AddActiveSqliteDiagnostics(rows);
         return rows;
     }
 

@@ -3055,7 +3055,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunFilesCountCompactAndMap_LegacySchemaReportsGeneratedFilterUnavailable_Issue4563()
+    public void RunDiscoveryCountsCompactAndMap_LegacySchemaReportsGeneratedFilterUnavailable_Issue4563()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_generated_filter_legacy_4563");
         try
@@ -3085,6 +3085,12 @@ public partial class QueryCommandRunnerTests
             AssertUnavailableGeneratedFilter(CaptureConsole(() => QueryCommandRunner.RunMap(
                 ["--db", readOnlyUri, "--json", "--summary-only"],
                 _jsonOptions)));
+            AssertUnavailableGeneratedQueryContext(CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["MissingLegacySymbol", "--db", readOnlyUri, "--json", "--count"],
+                _jsonOptions)));
+            AssertUnavailableGeneratedQueryContext(CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["missing-legacy-text", "--db", readOnlyUri, "--json", "--count"],
+                _jsonOptions)));
         }
         finally
         {
@@ -3102,10 +3108,20 @@ public partial class QueryCommandRunnerTests
             Assert.False(json.GetProperty("generated_file_count_excluded_authoritative").GetBoolean());
             Assert.False(json.GetProperty("generated_file_filter_available").GetBoolean());
         }
+
+        void AssertUnavailableGeneratedQueryContext((int ExitCode, string StdOut, string StdErr) result)
+        {
+            using var document = ParseJsonOutput(result.StdOut);
+            var queryContext = document.RootElement.GetProperty("query_context");
+            Assert.Equal(CommandExitCodes.Success, result.ExitCode);
+            Assert.Equal(string.Empty, result.StdErr);
+            Assert.Equal("unavailable", queryContext.GetProperty("generated_code_policy").GetString());
+            Assert.False(queryContext.GetProperty("generated_file_filter_available").GetBoolean());
+        }
     }
 
     [Fact]
-    public void RunFiles_RawByteCapPreservesImmutableSqliteTrustDiagnostics_Issue4563()
+    public void RunFilesAndSymbols_RawOutputPreservesImmutableSqliteTrustDiagnostics_Issue4563()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_discovery_cap_trust_4563");
         try
@@ -3131,10 +3147,34 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.True(document.RootElement.GetProperty("wal_stale_snapshot_risk").GetBoolean());
             Assert.Equal("explicit_immutable_read_only", document.RootElement.GetProperty("wal_stale_snapshot_reason").GetString());
+
+            AssertDiagnosticOnlyArray(CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["missing-file", "--db", readOnlyUri, "--json=array"],
+                _jsonOptions)));
+            AssertDiagnosticOnlyArray(CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["missing-file", "--db", readOnlyUri, "--json=array", "--max-json-bytes", "4096"],
+                _jsonOptions)));
+            AssertDiagnosticOnlyArray(CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["MissingSymbol", "--db", readOnlyUri, "--json=array"],
+                _jsonOptions)));
+            AssertDiagnosticOnlyArray(CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["MissingSymbol", "--db", readOnlyUri, "--json=array", "--max-json-bytes", "4096"],
+                _jsonOptions)));
         }
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+
+        void AssertDiagnosticOnlyArray((int ExitCode, string StdOut, string StdErr) result)
+        {
+            using var diagnosticDocument = ParseJsonOutput(result.StdOut);
+            var diagnostic = Assert.Single(diagnosticDocument.RootElement.EnumerateArray());
+            Assert.Equal(CommandExitCodes.Success, result.ExitCode);
+            Assert.Equal(string.Empty, result.StdErr);
+            Assert.True(diagnostic.GetProperty("diagnostic_only").GetBoolean());
+            Assert.True(diagnostic.GetProperty("wal_stale_snapshot_risk").GetBoolean());
+            Assert.Equal("explicit_immutable_read_only", diagnostic.GetProperty("wal_stale_snapshot_reason").GetString());
         }
     }
 
