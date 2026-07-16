@@ -1,3 +1,5 @@
+using CodeIndex.Database;
+
 namespace CodeIndex.Cli;
 
 public static partial class QueryCommandRunner
@@ -130,6 +132,24 @@ public static partial class QueryCommandRunner
                 "the field reports the current cdidx data directory's Unix permission mode, such as `0700`, when the platform exposes it.",
                 "the field is absent for URI databases, missing directories, platforms without Unix file modes, or readers that cannot inspect the directory.",
                 "Use this field for support-safe permission audits; inspect the data directory locally when the field is absent or broader than expected."),
+            new(
+                "db_file_mode",
+                "Database file mode",
+                "the field reports the active database's Unix permission mode, such as `0600`, when cdidx can inspect it.",
+                "the field is absent for URI databases, missing files, platforms without Unix file modes, or best-effort mode reads that produced a permission diagnostic.",
+                "Inspect `database_permission_diagnostics`; move the database or correct its owner-only permissions when the mode cannot be read or is broader than expected."),
+            new(
+                "database_permission_policy",
+                "Database permission policy",
+                "`best_effort` keeps usable SQLite databases available while reporting Unix-mode hardening failures; `strict` requires every applicable mode operation to succeed.",
+                "an invalid configured policy fails before the database opens, while strict mode fails with `database_permission_hardening_failed` when enforcement is unavailable.",
+                $"Set `{DatabasePermissionPolicy.EnvironmentVariable}` to `{DatabasePermissionPolicy.BestEffortName}` (default) or `{DatabasePermissionPolicy.StrictName}` according to the filesystem and security requirement."),
+            new(
+                "database_permission_diagnostics",
+                "Database permission diagnostics",
+                "an absent field means no applicable Unix-mode operation failed during this database open and status read.",
+                "entries identify the failed `operation`, database `target`, stable `reason`, support-safe message, and `recommended_action` without exposing the database path.",
+                $"Follow each `recommended_action`, or set `{DatabasePermissionPolicy.EnvironmentVariable}={DatabasePermissionPolicy.StrictName}` when permission hardening must be mandatory."),
             new(
                 "unknown_extension_file_count",
                 "Unknown extension inventory",

@@ -7,6 +7,7 @@
   "indexed_at": "\u003CTIMESTAMP\u003E",
   "latest_modified": "\u003CTIMESTAMP\u003E",
   "project_root": "\u003CPROJECT_ROOT\u003E",
+  "database_permission_policy": "best_effort",
   "read_only_fallback": false,
   "wal_checkpoint_attempted": false,
   "wal_checkpoint_succeeded": false,

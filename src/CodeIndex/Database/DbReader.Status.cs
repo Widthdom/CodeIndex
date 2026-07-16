@@ -192,6 +192,10 @@ public partial class DbReader
             WalCheckpointFailureReason = _walCheckpointFailureReason,
             WalStaleSnapshotRisk = WalStaleSnapshotRisk,
             WalStaleSnapshotReason = WalStaleSnapshotReason,
+            DatabasePermissionPolicy = _databasePermissionPolicy,
+            DatabasePermissionDiagnostics = _databasePermissionDiagnostics.Count > 0
+                ? _databasePermissionDiagnostics.ToList()
+                : null,
             SqliteConnectionPolicy = SqliteConnectionPolicy.BuildStatus(
                 _isReadOnly,
                 _readOnlyFallback,
