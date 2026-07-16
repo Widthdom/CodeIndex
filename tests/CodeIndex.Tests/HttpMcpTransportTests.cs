@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -369,6 +370,67 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_DisposeAsync_ReturnsBeforeBlockingCancellationDelivery_Issue4546()
+    {
+        const string requestBody = """{"jsonrpc":"2.0","id":4546,"method":"initialize"}""";
+        using var cancellationHandlerEntered = new ManualResetEventSlim();
+        using var releaseCancellationHandler = new ManualResetEventSlim();
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            requestBodyIdleTimeout: TimeSpan.FromSeconds(1),
+            requestLifetimeTimeout: TimeSpan.FromSeconds(5),
+            allowUnauthenticatedLoopback: true);
+        transport.BeforeRequestCancellationQueueRemovalForTests = () =>
+        {
+            cancellationHandlerEntered.Set();
+            releaseCancellationHandler.Wait(TimeSpan.FromSeconds(5));
+        };
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var post = client.PostAsync(
+            listen.Prefix,
+            new StringContent(requestBody, Encoding.UTF8, "application/json"));
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the request to enter the HTTP queue before disposal");
+
+        Task? disposeTask = null;
+        try
+        {
+            // Isolate the synchronous call boundary. A regression to CancellationTokenSource.Cancel
+            // before DisposeCoreAsync's first await would block this invocation task in the test
+            // hook, before ProgramRunner can start its bounded wait (#4546).
+            // synchronous call boundary を分離し、最初の await 前の Cancel 回帰が
+            // ProgramRunner の bounded wait 開始前に呼び出しを塞ぐことを検出する (#4546)。
+            var disposeInvocation = Task.Run(() =>
+            {
+                disposeTask = transport.DisposeAsync().AsTask();
+            });
+            await disposeInvocation.WaitAsync(TimeSpan.FromSeconds(1));
+            Assert.NotNull(disposeTask);
+            Assert.True(
+                await Task.Run(() => cancellationHandlerEntered.Wait(TimeSpan.FromSeconds(5))),
+                "the asynchronous cancellation delivery should reach the blocking hook");
+            Assert.False(disposeTask!.IsCompleted);
+        }
+        finally
+        {
+            releaseCancellationHandler.Set();
+        }
+
+        await disposeTask!.WaitAsync(TimeSpan.FromSeconds(10));
+        try
+        {
+            using var ignored = await post.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            // Listener disposal aborts the queued request after cancellation is delivered.
+        }
+    }
+
+    [Fact]
     public void HttpTransport_TimeoutDiagnosticsUseStableCategories_Issue3990()
     {
         Assert.Equal(
@@ -434,6 +496,59 @@ public class HttpMcpTransportTests : IDisposable
         Assert.Contains("category=sse_write", ex.Message, StringComparison.Ordinal);
         Assert.Equal(1, abortCount);
         Assert.Equal(1, stream.FlushCalls);
+    }
+
+    [Fact]
+    public async Task HttpTransport_SseCallerCancellation_SettlesSharedWriteBeforeGateReuse_Issue4546()
+    {
+        using var stream = new SequencedNonCancellableWriteStream();
+        using var writeGate = new SemaphoreSlim(1, 1);
+        using var firstWriteCancellation = new CancellationTokenSource();
+        var timeoutCount = 0;
+
+        try
+        {
+            var firstWrite = HttpMcpTransport.WriteSseBytesWithGateAsync(
+                stream,
+                writeGate,
+                [1],
+                TimeSpan.FromSeconds(5),
+                beforeWrite: null,
+                canWrite: null,
+                onTimeout: () => timeoutCount++,
+                cancellationToken: firstWriteCancellation.Token);
+            await stream.FirstWriteEntered.WaitAsync(TimeSpan.FromSeconds(5));
+
+            firstWriteCancellation.Cancel();
+            var secondWrite = HttpMcpTransport.WriteSseBytesWithGateAsync(
+                stream,
+                writeGate,
+                [2],
+                TimeSpan.FromSeconds(5),
+                beforeWrite: null,
+                canWrite: null,
+                onTimeout: () => timeoutCount++,
+                cancellationToken: CancellationToken.None);
+            var earlySecondWrite = await Task.WhenAny(
+                stream.SecondWriteEntered,
+                Task.Delay(TimeSpan.FromMilliseconds(100)));
+            Assert.NotSame(stream.SecondWriteEntered, earlySecondWrite);
+            Assert.False(firstWrite.IsCompleted);
+
+            stream.ReleaseFirstWrite();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => firstWrite);
+            await stream.SecondWriteEntered.WaitAsync(TimeSpan.FromSeconds(5));
+            stream.ReleaseSecondWrite();
+            await secondWrite.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(1, stream.MaxConcurrentWrites);
+            Assert.Equal(0, timeoutCount);
+        }
+        finally
+        {
+            stream.ReleaseFirstWrite();
+            stream.ReleaseSecondWrite();
+        }
     }
 
     [Fact]
@@ -779,6 +894,24 @@ public class HttpMcpTransportTests : IDisposable
         Assert.Equal(0, root.GetProperty("http_event_stream_count").GetInt32());
         Assert.True(root.GetProperty("http_event_stream_limit").GetInt32() >= 1);
         Assert.True(root.GetProperty("http_max_concurrent_handlers").GetInt32() >= 1);
+        Assert.True(root.GetProperty("http_post_handler_capacity").GetInt32() >= 1);
+        Assert.True(root.GetProperty("http_event_stream_handler_capacity").GetInt32() >= 1);
+        Assert.True(root.GetProperty("http_separate_event_stream_handlers").GetBoolean());
+        Assert.True(root.GetProperty("http_max_request_body_bytes").GetInt32() >= 1);
+        Assert.True(root.GetProperty("http_request_body_idle_timeout_ms").GetInt64() >= 1);
+        Assert.True(
+            root.GetProperty("http_request_lifetime_timeout_ms").GetInt64()
+            >= root.GetProperty("http_request_body_idle_timeout_ms").GetInt64());
+        Assert.True(root.GetProperty("http_request_body_budget_limit_bytes").GetInt32() >= root.GetProperty("http_max_request_body_bytes").GetInt32());
+        Assert.Equal(0, root.GetProperty("http_request_body_bytes_in_flight").GetInt64());
+        Assert.True(root.GetProperty("http_request_body_process_bytes_in_flight").GetInt64() >= 0);
+        Assert.True(root.GetProperty("http_request_body_peak_bytes").GetInt64() >= 0);
+        Assert.Equal("process", root.GetProperty("http_request_body_budget_scope").GetString());
+        Assert.Equal(0, root.GetProperty("http_request_body_budget_rejection_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_request_body_idle_timeout_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_request_lifetime_timeout_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_client_disconnect_count").GetInt64());
+        Assert.Equal(0, root.GetProperty("http_queued_request_cancellation_count").GetInt64());
         Assert.Equal(0, root.GetProperty("http_queued_request_count").GetInt32());
         Assert.True(root.GetProperty("http_request_queue_limit").GetInt32() >= 1);
         Assert.Equal(0, root.GetProperty("http_request_log_queue_depth").GetInt32());
@@ -1871,11 +2004,27 @@ public class HttpMcpTransportTests : IDisposable
             allowUnauthenticatedLoopback: true);
 
         Assert.Equal(HttpMcpTransport.DefaultMaxRequestBodyBytes, transport.MaxRequestBodyBytes);
+        Assert.Equal(HttpMcpTransport.DefaultMaxInFlightRequestBodyBytes, transport.MaxInFlightRequestBodyBytes);
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(HttpMcpTransport.DefaultRequestBodyIdleTimeoutMilliseconds),
+            transport.RequestBodyIdleTimeout);
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(HttpMcpTransport.DefaultRequestLifetimeTimeoutMilliseconds),
+            transport.RequestLifetimeTimeout);
         Assert.Equal(HttpMcpTransport.DefaultMaxResponseBodyBytes, transport.MaxResponseBodyBytes);
         Assert.Equal(HttpMcpTransport.DefaultMaxQueuedRequests, transport.MaxQueuedRequests);
         Assert.Equal(HttpMcpTransport.DefaultMaxConcurrentHandlers, transport.MaxConcurrentHandlers);
         Assert.Equal(HttpMcpTransport.DefaultMaxEventStreams, transport.MaxEventStreams);
         Assert.InRange(transport.MaxRequestBodyBytes, 1, HttpMcpTransport.MaxConfiguredRequestBodyBytes);
+        Assert.InRange(transport.MaxInFlightRequestBodyBytes, transport.MaxRequestBodyBytes, HttpMcpTransport.MaxConfiguredInFlightRequestBodyBytes);
+        Assert.InRange(
+            transport.RequestBodyIdleTimeout,
+            TimeSpan.FromMilliseconds(1),
+            TimeSpan.FromMilliseconds(HttpMcpTransport.MaxRequestBodyIdleTimeoutMilliseconds));
+        Assert.InRange(
+            transport.RequestLifetimeTimeout,
+            transport.RequestBodyIdleTimeout,
+            TimeSpan.FromMilliseconds(HttpMcpTransport.MaxRequestLifetimeTimeoutMilliseconds));
         Assert.InRange(transport.MaxResponseBodyBytes, 1, HttpMcpTransport.MaxConfiguredResponseBodyBytes);
         Assert.InRange(transport.MaxQueuedRequests, 1, HttpMcpTransport.MaxConfiguredQueuedRequests);
         Assert.InRange(transport.MaxConcurrentHandlers, 1, HttpMcpTransport.MaxConfiguredConcurrentHandlers);
@@ -1904,11 +2053,17 @@ public class HttpMcpTransportTests : IDisposable
     {
         using var env = EnvironmentVariableScope.Capture(
             HttpMcpTransport.MaxRequestBodyBytesEnvVar,
+            HttpMcpTransport.MaxInFlightRequestBodyBytesEnvVar,
+            HttpMcpTransport.RequestBodyIdleTimeoutMillisecondsEnvVar,
+            HttpMcpTransport.RequestLifetimeTimeoutMillisecondsEnvVar,
             HttpMcpTransport.MaxResponseBodyBytesEnvVar,
             HttpMcpTransport.MaxQueueDepthEnvVar,
             HttpMcpTransport.MaxConcurrentHandlersEnvVar,
             HttpMcpTransport.MaxEventStreamsEnvVar);
         env.Set(HttpMcpTransport.MaxRequestBodyBytesEnvVar, (2 * 1024 * 1024).ToString(CultureInfo.InvariantCulture));
+        env.Set(HttpMcpTransport.MaxInFlightRequestBodyBytesEnvVar, (4 * 1024 * 1024).ToString(CultureInfo.InvariantCulture));
+        env.Set(HttpMcpTransport.RequestBodyIdleTimeoutMillisecondsEnvVar, "1500");
+        env.Set(HttpMcpTransport.RequestLifetimeTimeoutMillisecondsEnvVar, "5000");
         env.Set(HttpMcpTransport.MaxResponseBodyBytesEnvVar, (3 * 1024 * 1024).ToString(CultureInfo.InvariantCulture));
         env.Set(HttpMcpTransport.MaxQueueDepthEnvVar, "128");
         env.Set(HttpMcpTransport.MaxConcurrentHandlersEnvVar, "32");
@@ -1923,10 +2078,144 @@ public class HttpMcpTransportTests : IDisposable
             allowUnauthenticatedLoopback: true);
 
         Assert.Equal(2 * 1024 * 1024, transport.MaxRequestBodyBytes);
+        Assert.Equal(4 * 1024 * 1024, transport.MaxInFlightRequestBodyBytes);
+        Assert.Equal(TimeSpan.FromMilliseconds(1500), transport.RequestBodyIdleTimeout);
+        Assert.Equal(TimeSpan.FromMilliseconds(5000), transport.RequestLifetimeTimeout);
         Assert.Equal(3 * 1024 * 1024, transport.MaxResponseBodyBytes);
         Assert.Equal(128, transport.MaxQueuedRequests);
         Assert.Equal(32, transport.MaxConcurrentHandlers);
         Assert.Equal(8, transport.MaxEventStreams);
+    }
+
+    [Fact]
+    public void HttpTransport_PresentInvalidEnvironmentLimits_ThrowWithExactRange()
+    {
+        var cases = new (string Variable, int Maximum)[]
+        {
+            (HttpMcpTransport.MaxRequestBodyBytesEnvVar, HttpMcpTransport.MaxConfiguredRequestBodyBytes),
+            (HttpMcpTransport.MaxInFlightRequestBodyBytesEnvVar, HttpMcpTransport.MaxConfiguredInFlightRequestBodyBytes),
+            (HttpMcpTransport.RequestBodyIdleTimeoutMillisecondsEnvVar, HttpMcpTransport.MaxRequestBodyIdleTimeoutMilliseconds),
+            (HttpMcpTransport.RequestLifetimeTimeoutMillisecondsEnvVar, HttpMcpTransport.MaxRequestLifetimeTimeoutMilliseconds),
+            (HttpMcpTransport.MaxResponseBodyBytesEnvVar, HttpMcpTransport.MaxConfiguredResponseBodyBytes),
+            (HttpMcpTransport.MaxQueueDepthEnvVar, HttpMcpTransport.MaxConfiguredQueuedRequests),
+            (HttpMcpTransport.MaxConcurrentHandlersEnvVar, HttpMcpTransport.MaxConfiguredConcurrentHandlers),
+            (HttpMcpTransport.MaxEventStreamsEnvVar, HttpMcpTransport.MaxConfiguredEventStreams),
+        };
+
+        foreach (var (variable, maximum) in cases)
+        {
+            foreach (var invalidValue in new[]
+            {
+                "not-an-integer",
+                "0",
+                "-1",
+                ((long)maximum + 1).ToString(CultureInfo.InvariantCulture),
+            })
+            {
+                using var env = EnvironmentVariableScope.Capture(variable);
+                env.Set(variable, invalidValue);
+                var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+
+                var ex = Assert.Throws<FormatException>(() => new HttpMcpTransport(
+                    listen.Prefix,
+                    listen.Host,
+                    listen.Port,
+                    bearerToken: null));
+
+                Assert.Contains(variable, ex.Message, StringComparison.Ordinal);
+                Assert.Contains(
+                    $"integer between 1 and {maximum.ToString(CultureInfo.InvariantCulture)}",
+                    ex.Message,
+                    StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task HttpTransport_EnvironmentLimitBoundaries_AreAccepted()
+    {
+        foreach (var useMaximum in new[] { false, true })
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                HttpMcpTransport.MaxRequestBodyBytesEnvVar,
+                HttpMcpTransport.MaxInFlightRequestBodyBytesEnvVar,
+                HttpMcpTransport.RequestBodyIdleTimeoutMillisecondsEnvVar,
+                HttpMcpTransport.RequestLifetimeTimeoutMillisecondsEnvVar,
+                HttpMcpTransport.MaxResponseBodyBytesEnvVar,
+                HttpMcpTransport.MaxQueueDepthEnvVar,
+                HttpMcpTransport.MaxConcurrentHandlersEnvVar,
+                HttpMcpTransport.MaxEventStreamsEnvVar);
+            var requestBytes = useMaximum ? HttpMcpTransport.MaxConfiguredRequestBodyBytes : 1;
+            var inFlightRequestBytes = useMaximum ? HttpMcpTransport.MaxConfiguredInFlightRequestBodyBytes : 1;
+            var bodyIdleTimeoutMilliseconds = useMaximum ? HttpMcpTransport.MaxRequestBodyIdleTimeoutMilliseconds : 1;
+            var requestLifetimeTimeoutMilliseconds = useMaximum ? HttpMcpTransport.MaxRequestLifetimeTimeoutMilliseconds : 1;
+            var responseBytes = useMaximum ? HttpMcpTransport.MaxConfiguredResponseBodyBytes : 1;
+            var queueDepth = useMaximum ? HttpMcpTransport.MaxConfiguredQueuedRequests : 1;
+            var handlerCount = useMaximum ? HttpMcpTransport.MaxConfiguredConcurrentHandlers : 1;
+            var streamCount = useMaximum ? HttpMcpTransport.MaxConfiguredEventStreams : 1;
+            env.Set(HttpMcpTransport.MaxRequestBodyBytesEnvVar, requestBytes.ToString(CultureInfo.InvariantCulture));
+            env.Set(HttpMcpTransport.MaxInFlightRequestBodyBytesEnvVar, inFlightRequestBytes.ToString(CultureInfo.InvariantCulture));
+            env.Set(HttpMcpTransport.RequestBodyIdleTimeoutMillisecondsEnvVar, bodyIdleTimeoutMilliseconds.ToString(CultureInfo.InvariantCulture));
+            env.Set(HttpMcpTransport.RequestLifetimeTimeoutMillisecondsEnvVar, requestLifetimeTimeoutMilliseconds.ToString(CultureInfo.InvariantCulture));
+            env.Set(HttpMcpTransport.MaxResponseBodyBytesEnvVar, responseBytes.ToString(CultureInfo.InvariantCulture));
+            env.Set(HttpMcpTransport.MaxQueueDepthEnvVar, queueDepth.ToString(CultureInfo.InvariantCulture));
+            env.Set(HttpMcpTransport.MaxConcurrentHandlersEnvVar, handlerCount.ToString(CultureInfo.InvariantCulture));
+            env.Set(HttpMcpTransport.MaxEventStreamsEnvVar, streamCount.ToString(CultureInfo.InvariantCulture));
+
+            var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+            await using var transport = new HttpMcpTransport(
+                listen.Prefix,
+                listen.Host,
+                listen.Port,
+                bearerToken: null,
+                allowUnauthenticatedLoopback: true);
+
+            Assert.Equal(requestBytes, transport.MaxRequestBodyBytes);
+            Assert.Equal(inFlightRequestBytes, transport.MaxInFlightRequestBodyBytes);
+            Assert.Equal(TimeSpan.FromMilliseconds(bodyIdleTimeoutMilliseconds), transport.RequestBodyIdleTimeout);
+            Assert.Equal(TimeSpan.FromMilliseconds(requestLifetimeTimeoutMilliseconds), transport.RequestLifetimeTimeout);
+            Assert.Equal(responseBytes, transport.MaxResponseBodyBytes);
+            Assert.Equal(queueDepth, transport.MaxQueuedRequests);
+            Assert.Equal(handlerCount, transport.PostHandlerCapacity);
+            Assert.Equal(streamCount, transport.EventStreamHandlerCapacity);
+        }
+    }
+
+    [Fact]
+    public void HttpTransport_RequestLifetimeBelowBodyIdleTimeout_ThrowsWithBothVariables()
+    {
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+
+        var ex = Assert.Throws<FormatException>(() => new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            requestBodyIdleTimeout: TimeSpan.FromMilliseconds(200),
+            requestLifetimeTimeout: TimeSpan.FromMilliseconds(199)));
+
+        Assert.Contains(HttpMcpTransport.RequestBodyIdleTimeoutMillisecondsEnvVar, ex.Message, StringComparison.Ordinal);
+        Assert.Contains(HttpMcpTransport.RequestLifetimeTimeoutMillisecondsEnvVar, ex.Message, StringComparison.Ordinal);
+        Assert.Contains("200", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("199", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HttpTransport_InFlightRequestBodyBudgetBelowPerRequestLimit_ThrowsWithBothVariables()
+    {
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        var ex = Assert.Throws<FormatException>(() => new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxRequestBodyBytes: 1024,
+            maxInFlightRequestBodyBytes: 1023));
+
+        Assert.Contains(HttpMcpTransport.MaxRequestBodyBytesEnvVar, ex.Message, StringComparison.Ordinal);
+        Assert.Contains(HttpMcpTransport.MaxInFlightRequestBodyBytesEnvVar, ex.Message, StringComparison.Ordinal);
+        Assert.Contains("1024", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("1023", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2215,7 +2504,1364 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task HttpTransport_ConcurrentHandlerLimit_Returns429()
+    public async Task HttpTransport_SlowRequestBody_IdleTimeoutReturns408AndReleasesResources_Issue4546()
+    {
+        const int declaredBodyBytes = 128;
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            requestLogger: records.Enqueue,
+            maxRequestBodyBytes: 256,
+            maxInFlightRequestBodyBytes: 256,
+            requestBodyIdleTimeout: TimeSpan.FromMilliseconds(150),
+            requestLifetimeTimeout: TimeSpan.FromSeconds(5),
+            maxConcurrentHandlers: 1,
+            allowUnauthenticatedLoopback: true);
+
+        using var client = new TcpClient();
+        var endpoint = new Uri(listen.Prefix);
+        await client.ConnectAsync(endpoint.Host, endpoint.Port).WaitAsync(TimeSpan.FromSeconds(5));
+        await using var stream = client.GetStream();
+        await WritePartialContentLengthRequestAsync(stream, endpoint, declaredBodyBytes, "{");
+
+        using var reader = new StreamReader(stream, Encoding.ASCII, leaveOpen: true);
+        var rawResponse = await reader.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Contains(" 408 ", rawResponse, StringComparison.Ordinal);
+        Assert.Contains("MCP HTTP request deadline expired.", rawResponse, StringComparison.Ordinal);
+        await WaitUntilAsync(
+            () => transport.RequestBodyIdleTimeoutCount == 1
+                && transport.InFlightRequestBodyBytes == 0,
+            "the idle timeout to release its request-body reservation");
+        Assert.Equal(0, transport.QueuedRequestCount);
+        Assert.Equal(declaredBodyBytes, transport.PeakInFlightRequestBodyBytes);
+        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
+        Assert.Equal((int)HttpStatusCode.RequestTimeout, record.StatusCode);
+        Assert.Equal(HttpMcpTransport.RequestBodyIdleTimeoutDiagnostic, record.Diagnostic);
+    }
+
+    [Fact]
+    public async Task HttpTransport_PreQueueErrorResponse_TotalTimeoutWinsCompletionRace_Issue4546()
+    {
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        var responseWriteEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            requestLogger: records.Enqueue,
+            requestBodyIdleTimeout: TimeSpan.FromMilliseconds(200),
+            requestLifetimeTimeout: TimeSpan.FromMilliseconds(300),
+            allowUnauthenticatedLoopback: true);
+        transport.BeforeResponseWriteForTests = async cancellationToken =>
+        {
+            responseWriteEntered.TrySetResult(true);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        };
+
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var post = client.PostAsync(
+            listen.Prefix,
+            new StringContent("not-json", Encoding.UTF8, "text/plain"));
+        await responseWriteEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(
+            () => transport.RequestLifetimeTimeoutCount == 1,
+            "the total lifetime to win while an invalid-content-type response is pending");
+        try
+        {
+            using var ignored = await post.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            // The deadline aborts the pre-queue error response before it can claim completion.
+        }
+
+        Assert.Equal(0, transport.QueuedRequestCount);
+        Assert.Equal(0, transport.InFlightRequestBodyBytes);
+        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
+        Assert.Equal((int)HttpStatusCode.RequestTimeout, record.StatusCode);
+        Assert.Equal(HttpMcpTransport.RequestLifetimeTimeoutDiagnostic, record.Diagnostic);
+    }
+
+    [Fact]
+    public async Task HttpTransport_KnownLengthEarlyDisconnect_ReleasesBodyAndHandlerCapacity_Issue4546()
+    {
+        const int declaredBodyBytes = 128;
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            requestLogger: records.Enqueue,
+            maxRequestBodyBytes: 256,
+            maxInFlightRequestBodyBytes: 256,
+            requestBodyIdleTimeout: TimeSpan.FromSeconds(2),
+            requestLifetimeTimeout: TimeSpan.FromSeconds(5),
+            maxConcurrentHandlers: 1,
+            allowUnauthenticatedLoopback: true);
+
+        var endpoint = new Uri(listen.Prefix);
+        using (var disconnectedClient = new TcpClient())
+        {
+            disconnectedClient.Client.LingerState = new LingerOption(enable: true, seconds: 0);
+            await disconnectedClient.ConnectAsync(endpoint.Host, endpoint.Port).WaitAsync(TimeSpan.FromSeconds(5));
+            await using var disconnectedStream = disconnectedClient.GetStream();
+            await WritePartialContentLengthRequestAsync(disconnectedStream, endpoint, declaredBodyBytes, "{");
+            await WaitUntilAsync(
+                () => transport.InFlightRequestBodyBytes == declaredBodyBytes,
+                "the known Content-Length body to reserve its declared bytes");
+        }
+
+        await WaitUntilAsync(
+            () => transport.ClientDisconnectCount == 1
+                && transport.InFlightRequestBodyBytes == 0,
+            "the early client disconnect to release its request-body reservation");
+        Assert.Equal(0, transport.QueuedRequestCount);
+        var disconnectedRecord = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
+        Assert.Equal(499, disconnectedRecord.StatusCode);
+        Assert.Equal(HttpMcpTransport.ClientDisconnectedDiagnostic, disconnectedRecord.Diagnostic);
+
+        using var followClient = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var followPost = followClient.PostAsync(
+            listen.Prefix,
+            new StringContent("""{"jsonrpc":"2.0","id":2,"method":"initialize"}""", Encoding.UTF8, "application/json"));
+        await WaitUntilAsync(
+            () => transport.QueuedRequestCount == 1,
+            "a follow-up request to reuse the released handler and queue capacity");
+        var frame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Contains("\"id\":2", frame, StringComparison.Ordinal);
+        await transport.WriteFrameAsync(
+            """{"jsonrpc":"2.0","id":2,"result":{"protocolVersion":"2025-03-26"}}""",
+            CancellationToken.None);
+        using var followResponse = await followPost.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, followResponse.StatusCode);
+        Assert.True(followResponse.Headers.Contains(HttpMcpTransport.SessionIdHeaderName));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HttpTransport_ResponseProbe_RstCancelsQueuedAndExecutingRequests_Issue4546(
+        bool dequeueBeforeDisconnect)
+    {
+        const string body = """{"jsonrpc":"2.0","id":4546,"method":"ping"}""";
+        var bodyBytes = Encoding.UTF8.GetByteCount(body);
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            requestLogger: records.Enqueue,
+            maxRequestBodyBytes: 64,
+            maxInFlightRequestBodyBytes: 64,
+            requestBodyIdleTimeout: TimeSpan.FromSeconds(1),
+            requestLifetimeTimeout: TimeSpan.FromSeconds(5),
+            maxQueuedRequests: 1,
+            requestDisconnectProbeInterval: TimeSpan.FromMilliseconds(25),
+            allowUnauthenticatedLoopback: true);
+
+        using var sessionClient = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var sessionId = await EstablishTransportSessionAsync(transport, sessionClient, listen.Prefix);
+        _ = await WaitForRequestLogRecordsAsync(records, 1);
+        records.Clear();
+
+        var endpoint = new Uri(listen.Prefix);
+        using var resetClient = new TcpClient();
+        resetClient.Client.LingerState = new LingerOption(enable: true, seconds: 0);
+        await resetClient.ConnectAsync(endpoint.Host, endpoint.Port).WaitAsync(TimeSpan.FromSeconds(5));
+        await using var resetStream = resetClient.GetStream();
+        await WritePartialContentLengthRequestAsync(resetStream, endpoint, bodyBytes, body, sessionId);
+        await WaitUntilAsync(
+            () => transport.QueuedRequestCount == 1,
+            "the response-bearing request to enter the HTTP queue before disconnect");
+
+        var requestCancellation = CancellationToken.None;
+        if (dequeueBeforeDisconnect)
+        {
+            var frame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(body, frame);
+            requestCancellation = transport.CurrentRequestCancellationToken;
+            Assert.True(requestCancellation.CanBeCanceled);
+            Assert.False(requestCancellation.IsCancellationRequested);
+        }
+
+        var responsePrefix = new byte[256];
+        var responsePrefixBytes = await resetStream.ReadAsync(responsePrefix).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(responsePrefixBytes > 0);
+        Assert.StartsWith(
+            "HTTP/1.1 200",
+            Encoding.ASCII.GetString(responsePrefix, 0, responsePrefixBytes),
+            StringComparison.Ordinal);
+        resetClient.Dispose();
+
+        await WaitUntilAsync(
+            () => transport.ClientDisconnectCount == 1
+                && (!dequeueBeforeDisconnect
+                    ? transport.QueuedRequestCount == 0
+                        && transport.QueuedRequestCancellationCount == 1
+                    : requestCancellation.IsCancellationRequested),
+            "the response probe to propagate the TCP reset to the queued or executing request");
+
+        if (dequeueBeforeDisconnect)
+        {
+            Assert.Equal(0, transport.QueuedRequestCancellationCount);
+            Assert.Equal(bodyBytes, transport.InFlightRequestBodyBytes);
+            await transport.WriteFrameAsync(null, CancellationToken.None);
+        }
+
+        Assert.Equal(0, transport.QueuedRequestCount);
+        Assert.Equal(0, transport.InFlightRequestBodyBytes);
+        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
+        Assert.Equal(499, record.StatusCode);
+        Assert.Equal(HttpMcpTransport.ClientDisconnectedDiagnostic, record.Diagnostic);
+    }
+
+    [Fact]
+    public async Task HttpTransport_QueuedRequest_TotalTimeoutRemovesQueueEntryAndReleasesBudget_Issue4546()
+    {
+        const string body = """{"jsonrpc":"2.0","id":4546,"method":"initialize"}""";
+        var bodyBytes = Encoding.UTF8.GetByteCount(body);
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            requestLogger: records.Enqueue,
+            maxRequestBodyBytes: bodyBytes,
+            maxInFlightRequestBodyBytes: bodyBytes,
+            requestBodyIdleTimeout: TimeSpan.FromMilliseconds(200),
+            requestLifetimeTimeout: TimeSpan.FromMilliseconds(300),
+            maxQueuedRequests: 1,
+            requestDisconnectProbeInterval: TimeSpan.FromSeconds(5),
+            allowUnauthenticatedLoopback: true);
+
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var timedOutPost = client.PostAsync(
+            listen.Prefix,
+            new StringContent(body, Encoding.UTF8, "application/json"));
+        await WaitUntilAsync(
+            () => transport.QueuedRequestCount == 1,
+            "the request to enter the bounded HTTP queue before its total timeout");
+        Assert.Equal(bodyBytes, transport.InFlightRequestBodyBytes);
+
+        await WaitUntilAsync(
+            () => transport.RequestLifetimeTimeoutCount == 1
+                && transport.QueuedRequestCancellationCount == 1
+                && transport.QueuedRequestCount == 0
+                && transport.InFlightRequestBodyBytes == 0,
+            "the total timeout to remove the queued request and return all resources");
+        Assert.False(transport.RequestQueueSignalCompletedForTests);
+        try
+        {
+            using var ignored = await timedOutPost.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            // Aborting a queued request is surfaced as a client-side transport cancellation.
+        }
+
+        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
+        Assert.Equal((int)HttpStatusCode.RequestTimeout, record.StatusCode);
+        Assert.Equal(HttpMcpTransport.RequestLifetimeTimeoutDiagnostic, record.Diagnostic);
+
+        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
+        Assert.False(string.IsNullOrWhiteSpace(sessionId));
+    }
+
+    [Fact]
+    public async Task HttpTransport_ResponseWrite_TotalTimeoutCancelsBlockedWriteAndReleasesResources_Issue4546()
+    {
+        const string requestBody = """{"jsonrpc":"2.0","id":4546,"method":"initialize"}""";
+        const string responseBody = """{"jsonrpc":"2.0","id":4546,"result":{"protocolVersion":"2025-03-26"}}""";
+        var bodyBytes = Encoding.UTF8.GetByteCount(requestBody);
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        var responseWriteEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            requestLogger: records.Enqueue,
+            maxRequestBodyBytes: bodyBytes,
+            maxInFlightRequestBodyBytes: bodyBytes,
+            requestBodyIdleTimeout: TimeSpan.FromMilliseconds(250),
+            requestLifetimeTimeout: TimeSpan.FromMilliseconds(500),
+            requestDisconnectProbeInterval: TimeSpan.FromSeconds(5),
+            allowUnauthenticatedLoopback: true);
+        transport.BeforeResponseWriteForTests = async cancellationToken =>
+        {
+            responseWriteEntered.TrySetResult(true);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        };
+
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var post = client.PostAsync(
+            listen.Prefix,
+            new StringContent(requestBody, Encoding.UTF8, "application/json"));
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the request to enter the HTTP queue");
+        Assert.Equal(requestBody, await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)));
+        var requestCancellation = transport.CurrentRequestCancellationToken;
+
+        var writeTask = transport.WriteFrameAsync(responseBody, CancellationToken.None);
+        await responseWriteEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(
+            () => transport.RequestLifetimeTimeoutCount == 1 && requestCancellation.IsCancellationRequested,
+            "the total request lifetime to cancel a response write already in progress");
+        await writeTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(0, transport.InFlightRequestBodyBytes);
+        Assert.False(transport.CurrentRequestCancellationToken.CanBeCanceled);
+        try
+        {
+            using var ignored = await post.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            // The lifetime cancellation aborts the partially prepared HTTP response.
+        }
+
+        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
+        Assert.Equal((int)HttpStatusCode.RequestTimeout, record.StatusCode);
+        Assert.Equal(HttpMcpTransport.RequestLifetimeTimeoutDiagnostic, record.Diagnostic);
+    }
+
+    [Fact]
+    public async Task HttpTransport_ResponseWriteTimeout_RetainsAbandonedOutputAndBodyBudget_Issue4546()
+    {
+        const int bodyBytes = 256;
+        var body = BuildSizedJsonRpcRequest(bodyBytes, 4546);
+        var outputEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseOutput = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxRequestBodyBytes: bodyBytes,
+            maxInFlightRequestBodyBytes: bodyBytes,
+            responseWriteTimeout: TimeSpan.FromMilliseconds(50),
+            allowUnauthenticatedLoopback: true);
+
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
+        transport.ResponseOutputWriteForTests = _ =>
+        {
+            outputEntered.TrySetResult();
+            return releaseOutput.Task;
+        };
+
+        try
+        {
+            var post = PostWithSessionAsync(
+                client,
+                listen.Prefix,
+                sessionId,
+                new StringContent(body, Encoding.UTF8, "application/json"));
+            await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the response-timeout request to enter the queue");
+            var frame = await transport.ReadConcurrentFrameAsync(CancellationToken.None).WaitAsync(TestDeterminism.DefaultTimeout);
+            Assert.NotNull(frame);
+            frame.CompleteResourceRetentionWhen(Task.CompletedTask);
+
+            var write = frame.WriteResponseAsync(
+                """{"jsonrpc":"2.0","id":4546,"result":{}}""",
+                CancellationToken.None);
+            await outputEntered.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            await Assert.ThrowsAnyAsync<TimeoutException>(() => write);
+
+            Assert.Equal(1, transport.AbandonedResponseOutputOperationCount);
+            Assert.Equal(bodyBytes, transport.InFlightRequestBodyBytes);
+
+            releaseOutput.TrySetResult();
+            await WaitUntilAsync(
+                () => transport.AbandonedResponseOutputOperationCount == 0
+                    && transport.InFlightRequestBodyBytes == 0,
+                "the abandoned response output to settle and release its request lease");
+            try
+            {
+                using var ignored = await post.WaitAsync(TestDeterminism.DefaultTimeout);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+            {
+                // The response timeout aborts the HTTP request while retaining only the output task.
+            }
+        }
+        finally
+        {
+            releaseOutput.TrySetResult();
+        }
+    }
+
+    [Fact]
+    public async Task HttpTransport_SseWriteTimeout_RetainsAbandonedOutputInBoundedRegistry_Issue4546()
+    {
+        var outputEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseOutput = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            eventStreamWriteTimeout: TimeSpan.FromMilliseconds(50),
+            allowUnauthenticatedLoopback: true);
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
+        transport.EventStreamOutputWriteForTests = (_, _) =>
+        {
+            outputEntered.TrySetResult();
+            return releaseOutput.Task;
+        };
+
+        using var eventsRequest = new HttpRequestMessage(HttpMethod.Get, new Uri(new Uri(listen.Prefix), "events"));
+        eventsRequest.Headers.TryAddWithoutValidation(HttpMcpTransport.SessionIdHeaderName, sessionId);
+        using var events = await client.SendAsync(eventsRequest, HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+        await WaitUntilAsync(() => transport.HasEventStreams, "the SSE stream to be published");
+
+        try
+        {
+            var write = transport.WriteOutOfBandFrameAsync(
+                """{"jsonrpc":"2.0","method":"notifications/progress","params":{}}""",
+                CancellationToken.None);
+            await outputEntered.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            await write.WaitAsync(TestDeterminism.DefaultTimeout);
+
+            Assert.Equal(1, transport.AbandonedResponseOutputOperationCount);
+            Assert.Equal(0, transport.EventStreamCount);
+        }
+        finally
+        {
+            releaseOutput.TrySetResult();
+        }
+
+        await WaitUntilAsync(
+            () => transport.AbandonedResponseOutputOperationCount == 0,
+            "the abandoned SSE output to settle and return its bounded registry slot");
+    }
+
+    [Fact]
+    public async Task HttpTransport_ResponseProbe_LocalFailureIsNotReportedAsClientDisconnect_Issue4546()
+    {
+        const string requestBody = """{"jsonrpc":"2.0","id":4546,"method":"ping"}""";
+        const string responseBody = """{"jsonrpc":"2.0","id":4546,"result":{}}""";
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        var probeAttempted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            requestLogger: records.Enqueue,
+            requestBodyIdleTimeout: TimeSpan.FromSeconds(1),
+            requestLifetimeTimeout: TimeSpan.FromSeconds(5),
+            requestDisconnectProbeInterval: TimeSpan.FromMilliseconds(25),
+            allowUnauthenticatedLoopback: true);
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
+        _ = await WaitForRequestLogRecordsAsync(records, 1);
+        records.Clear();
+        transport.BeforeRequestDisconnectProbeWriteForTests = _ =>
+        {
+            probeAttempted.TrySetResult(true);
+            return Task.FromException(new InvalidOperationException("injected local probe failure"));
+        };
+
+        var post = PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new StringContent(requestBody, Encoding.UTF8, "application/json"));
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the response-bearing request to enter the HTTP queue");
+        await probeAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(0, transport.ClientDisconnectCount);
+        Assert.Equal(1, transport.QueuedRequestCount);
+
+        Assert.Equal(requestBody, await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)));
+        await transport.WriteFrameAsync(responseBody, CancellationToken.None);
+        using var response = await post.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(responseBody, await response.Content.ReadAsStringAsync());
+
+        Assert.Equal(0, transport.ClientDisconnectCount);
+        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
+        Assert.Equal("http_disconnect_probe_failure", record.Diagnostic);
+    }
+
+    [Fact]
+    public async Task HttpTransport_ResponseProbe_StopIoRaceIsNotReportedAsClientDisconnect_Issue4546()
+    {
+        const string requestBody = """{"jsonrpc":"2.0","id":4546,"method":"ping"}""";
+        const string responseBody = """{"jsonrpc":"2.0","id":4546,"result":{}}""";
+        var probeWriteEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            requestBodyIdleTimeout: TimeSpan.FromSeconds(1),
+            requestLifetimeTimeout: TimeSpan.FromSeconds(5),
+            requestDisconnectProbeInterval: TimeSpan.FromMilliseconds(25),
+            allowUnauthenticatedLoopback: true);
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
+        transport.BeforeRequestDisconnectProbeWriteForTests = async cancellationToken =>
+        {
+            probeWriteEntered.TrySetResult(true);
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw new IOException("injected HttpListener cancellation shape");
+            }
+        };
+
+        var post = PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new StringContent(requestBody, Encoding.UTF8, "application/json"));
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the response-bearing request to enter the HTTP queue");
+        await probeWriteEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(requestBody, await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)));
+        await transport.WriteFrameAsync(responseBody, CancellationToken.None);
+        using var response = await post.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(responseBody, await response.Content.ReadAsStringAsync());
+        Assert.Equal(0, transport.ClientDisconnectCount);
+    }
+
+    [Fact]
+    public async Task HttpTransport_ResponseProbe_StopWaitsForNonCooperativeOutputBeforeResponseWrite_Issue4546()
+    {
+        const string requestBody = """{"jsonrpc":"2.0","id":4546,"method":"ping"}""";
+        const string responseBody = """{"jsonrpc":"2.0","id":4546,"result":{}}""";
+        var probeOutputEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseProbeOutput = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var responseWriteEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            requestBodyIdleTimeout: TimeSpan.FromSeconds(1),
+            requestLifetimeTimeout: TimeSpan.FromSeconds(5),
+            requestDisconnectProbeInterval: TimeSpan.FromMilliseconds(25),
+            responseWriteTimeout: TimeSpan.FromSeconds(2),
+            allowUnauthenticatedLoopback: true);
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
+        transport.RequestDisconnectProbeOutputWriteForTests = _ =>
+        {
+            probeOutputEntered.TrySetResult();
+            return releaseProbeOutput.Task;
+        };
+        transport.BeforeResponseWriteForTests = _ =>
+        {
+            responseWriteEntered.TrySetResult();
+            return Task.CompletedTask;
+        };
+
+        var post = PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new StringContent(requestBody, Encoding.UTF8, "application/json"));
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the response-bearing request to enter the HTTP queue");
+        await probeOutputEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(requestBody, await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)));
+
+        var write = transport.WriteFrameAsync(responseBody, CancellationToken.None);
+        var earlyResponseWrite = await Task.WhenAny(
+            responseWriteEntered.Task,
+            Task.Delay(TimeSpan.FromMilliseconds(100)));
+        Assert.NotSame(responseWriteEntered.Task, earlyResponseWrite);
+        Assert.False(write.IsCompleted);
+
+        releaseProbeOutput.TrySetResult();
+        await responseWriteEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await write.WaitAsync(TimeSpan.FromSeconds(5));
+        using var response = await post.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(responseBody, await response.Content.ReadAsStringAsync());
+        Assert.Equal(0, transport.ClientDisconnectCount);
+    }
+
+    [Fact]
+    public async Task HttpTransport_ResponseProbe_OutputTimeoutCancelsQueuedRequestWithStableDiagnostic_Issue4546()
+    {
+        const string requestBody = """{"jsonrpc":"2.0","id":4546,"method":"ping"}""";
+        var requestBodyBytes = Encoding.UTF8.GetByteCount(requestBody);
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        var probeOutputEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseProbeOutput = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            requestLogger: records.Enqueue,
+            maxRequestBodyBytes: 256,
+            maxInFlightRequestBodyBytes: 256,
+            requestBodyIdleTimeout: TimeSpan.FromSeconds(1),
+            requestLifetimeTimeout: TimeSpan.FromSeconds(5),
+            requestDisconnectProbeInterval: TimeSpan.FromMilliseconds(25),
+            responseWriteTimeout: TimeSpan.FromMilliseconds(50),
+            allowUnauthenticatedLoopback: true);
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
+        _ = await WaitForRequestLogRecordsAsync(records, 1);
+        records.Clear();
+        transport.RequestDisconnectProbeOutputWriteForTests = _ =>
+        {
+            probeOutputEntered.TrySetResult();
+            return releaseProbeOutput.Task;
+        };
+
+        var post = PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new StringContent(requestBody, Encoding.UTF8, "application/json"));
+        try
+        {
+            await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the response-bearing request to enter the HTTP queue");
+            await probeOutputEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await WaitUntilAsync(
+                () => transport.QueuedRequestCount == 0
+                    && transport.QueuedRequestCancellationCount == 1
+                    && transport.AbandonedResponseOutputOperationCount == 1
+                    && transport.InFlightRequestBodyBytes == requestBodyBytes,
+                "the terminal probe timeout to retain its abandoned output and request body lease");
+        }
+        finally
+        {
+            releaseProbeOutput.TrySetResult();
+        }
+
+        await WaitUntilAsync(
+            () => transport.AbandonedResponseOutputOperationCount == 0
+                && transport.InFlightRequestBodyBytes == 0,
+            "the abandoned probe output to settle and release its request body lease");
+
+        try
+        {
+            using var ignored = await post.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            // The terminal probe timeout aborts the response before any JSON-RPC work starts.
+        }
+
+        Assert.Equal(0, transport.ClientDisconnectCount);
+        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
+        Assert.Equal((int)HttpStatusCode.RequestTimeout, record.StatusCode);
+        Assert.Equal(HttpMcpTransport.RequestDisconnectProbeWriteTimeoutDiagnostic, record.Diagnostic);
+    }
+
+    [Fact]
+    public async Task HttpTransport_ResponseProbe_RequestCancellationBeforeOutputTimeoutRetainsBodyLease_Issue4546()
+    {
+        const string requestBody = """{"jsonrpc":"2.0","id":4546,"method":"ping"}""";
+        var requestBodyBytes = Encoding.UTF8.GetByteCount(requestBody);
+        var probeOutputEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseProbeOutput = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxRequestBodyBytes: 256,
+            maxInFlightRequestBodyBytes: 256,
+            requestBodyIdleTimeout: TimeSpan.FromMilliseconds(100),
+            requestLifetimeTimeout: TimeSpan.FromMilliseconds(250),
+            requestDisconnectProbeInterval: TimeSpan.FromMilliseconds(25),
+            responseWriteTimeout: TimeSpan.FromMilliseconds(500),
+            allowUnauthenticatedLoopback: true);
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
+        transport.RequestDisconnectProbeOutputWriteForTests = _ =>
+        {
+            probeOutputEntered.TrySetResult();
+            return releaseProbeOutput.Task;
+        };
+
+        var post = PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new StringContent(requestBody, Encoding.UTF8, "application/json"));
+        try
+        {
+            await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the response-bearing request to enter the HTTP queue");
+            await probeOutputEntered.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            await WaitUntilAsync(
+                () => transport.QueuedRequestCount == 0
+                    && transport.QueuedRequestCancellationCount == 1
+                    && transport.AbandonedResponseOutputOperationCount == 0
+                    && transport.InFlightRequestBodyBytes == requestBodyBytes,
+                "request cancellation to precede probe output timeout while retaining the body lease");
+            await WaitUntilAsync(
+                () => transport.AbandonedResponseOutputOperationCount == 1
+                    && transport.InFlightRequestBodyBytes == requestBodyBytes,
+                "the later probe output timeout to enter the bounded registry without losing the body lease");
+        }
+        finally
+        {
+            releaseProbeOutput.TrySetResult();
+        }
+
+        await WaitUntilAsync(
+            () => transport.AbandonedResponseOutputOperationCount == 0
+                && transport.InFlightRequestBodyBytes == 0,
+            "the cancellation-preceded probe output to settle and release its request body lease");
+        try
+        {
+            using var ignored = await post.WaitAsync(TestDeterminism.DefaultTimeout);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            // The request lifetime aborts the response while the injected output remains pending.
+        }
+    }
+
+    [Fact]
+    public async Task HttpTransport_CancellationPublishedBeforeDequeue_CleansOutsideQueueLock_Issue4546()
+    {
+        const string requestBody = """{"jsonrpc":"2.0","id":4546,"method":"initialize"}""";
+        var bodyBytes = Encoding.UTF8.GetByteCount(requestBody);
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        using var cancellationHandlerEntered = new ManualResetEventSlim();
+        using var allowCancellationHandler = new ManualResetEventSlim();
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            requestLogger: records.Enqueue,
+            maxRequestBodyBytes: bodyBytes,
+            maxInFlightRequestBodyBytes: bodyBytes,
+            requestBodyIdleTimeout: TimeSpan.FromMilliseconds(100),
+            requestLifetimeTimeout: TimeSpan.FromMilliseconds(150),
+            requestDisconnectProbeInterval: TimeSpan.FromSeconds(5),
+            allowUnauthenticatedLoopback: true);
+        transport.BeforeRequestCancellationQueueRemovalForTests = () =>
+        {
+            cancellationHandlerEntered.Set();
+            allowCancellationHandler.Wait(TimeSpan.FromSeconds(5));
+        };
+
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var post = client.PostAsync(
+            listen.Prefix,
+            new StringContent(requestBody, Encoding.UTF8, "application/json"));
+        try
+        {
+            await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the request to enter the HTTP queue");
+            Assert.True(
+                await Task.Run(() => cancellationHandlerEntered.Wait(TimeSpan.FromSeconds(5))),
+                "the lifetime callback should publish cancellation before queue removal");
+
+            using var readCts = new CancellationTokenSource();
+            var readTask = Task.Run(() => transport.ReadFrameAsync(readCts.Token));
+            await WaitUntilAsync(
+                () => transport.QueuedRequestCount == 0
+                    && transport.QueuedRequestCancellationCount == 1
+                    && transport.InFlightRequestBodyBytes == 0,
+                "the reader to unlink and clean the cancelled request without holding the queue lock");
+            allowCancellationHandler.Set();
+            readCts.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => readTask.WaitAsync(TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            allowCancellationHandler.Set();
+        }
+
+        try
+        {
+            using var ignored = await post.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            // The queued request was aborted after its lifetime expired.
+        }
+
+        Assert.False(transport.RequestQueueSignalCompletedForTests);
+        var record = Assert.Single(await WaitForRequestLogRecordsAsync(records, 1));
+        Assert.Equal(HttpMcpTransport.RequestLifetimeTimeoutDiagnostic, record.Diagnostic);
+    }
+
+    [Fact]
+    public async Task HttpTransport_InitialInitialize_DoesNotCommitHeadersBeforeSessionId_Issue4546()
+    {
+        const string requestBody = """{"jsonrpc":"2.0","id":4546,"method":"initialize"}""";
+        const string responseBody = """{"jsonrpc":"2.0","id":4546,"result":{"protocolVersion":"2025-03-26"}}""";
+        var probeAttempted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            requestBodyIdleTimeout: TimeSpan.FromSeconds(1),
+            requestLifetimeTimeout: TimeSpan.FromSeconds(5),
+            requestDisconnectProbeInterval: TimeSpan.FromMilliseconds(25),
+            allowUnauthenticatedLoopback: true);
+        transport.BeforeRequestDisconnectProbeWriteForTests = _ =>
+        {
+            probeAttempted.TrySetResult(true);
+            return Task.CompletedTask;
+        };
+
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        using var request = new HttpRequestMessage(HttpMethod.Post, listen.Prefix)
+        {
+            Content = new StringContent(requestBody, Encoding.UTF8, "application/json"),
+        };
+        var post = client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the initial initialize request to enter the queue");
+
+        await Task.Delay(100);
+        Assert.False(post.IsCompleted, "initial initialize headers must wait for the session identifier");
+        Assert.False(probeAttempted.Task.IsCompleted, "initial initialize must not start the disconnect probe");
+
+        var frame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(requestBody, frame);
+        await transport.WriteFrameAsync(responseBody, CancellationToken.None);
+
+        using var response = await post.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(response.Headers.TryGetValues(HttpMcpTransport.SessionIdHeaderName, out var sessionValues));
+        Assert.False(string.IsNullOrWhiteSpace(Assert.Single(sessionValues)));
+        Assert.NotEqual(true, response.Headers.TransferEncodingChunked);
+        Assert.Equal(responseBody, await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task HttpTransport_ResponseProbe_StreamsJsonWhitespaceButNotificationsRemain204_Issue4546()
+    {
+        const string requestBody = """{"jsonrpc":"2.0","id":4546,"method":"ping"}""";
+        const string responseBody = """{"jsonrpc":"2.0","id":4546,"result":{}}""";
+        const string notificationBody = """{"jsonrpc":"2.0","method":"notifications/initialized"}""";
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            requestBodyIdleTimeout: TimeSpan.FromSeconds(1),
+            requestLifetimeTimeout: TimeSpan.FromSeconds(5),
+            requestDisconnectProbeInterval: TimeSpan.FromMilliseconds(25),
+            allowUnauthenticatedLoopback: true);
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
+
+        using (var request = new HttpRequestMessage(HttpMethod.Post, listen.Prefix)
+        {
+            Content = new StringContent(requestBody, Encoding.UTF8, "application/json"),
+        })
+        {
+            request.Headers.TryAddWithoutValidation(HttpMcpTransport.SessionIdHeaderName, sessionId);
+            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.True(response.Headers.TransferEncodingChunked);
+            await using var responseStream = await response.Content.ReadAsStreamAsync();
+            var firstByte = new byte[1];
+            var firstRead = await responseStream.ReadAsync(firstByte).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(1, firstRead);
+            Assert.Equal((byte)' ', firstByte[0]);
+
+            var frame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(requestBody, frame);
+            await transport.WriteFrameAsync(responseBody, CancellationToken.None);
+
+            using var remainderReader = new StreamReader(responseStream, Encoding.UTF8, leaveOpen: true);
+            var wireBody = " " + await remainderReader.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.StartsWith(" ", wireBody, StringComparison.Ordinal);
+            using var document = JsonDocument.Parse(wireBody);
+            Assert.Equal(4546, document.RootElement.GetProperty("id").GetInt32());
+        }
+
+        var notificationPost = PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new StringContent(notificationBody, Encoding.UTF8, "application/json"));
+        await WaitUntilAsync(
+            () => transport.QueuedRequestCount == 1,
+            "the notification to enter the normal queue without a response probe");
+        var notificationFrame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(notificationBody, notificationFrame);
+        await transport.WriteFrameAsync(null, CancellationToken.None);
+        using var notificationResponse = await notificationPost.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(HttpStatusCode.NoContent, notificationResponse.StatusCode);
+        Assert.NotEqual(true, notificationResponse.Headers.TransferEncodingChunked);
+        Assert.Equal(string.Empty, await notificationResponse.Content.ReadAsStringAsync());
+        Assert.Equal(0, transport.ClientDisconnectCount);
+    }
+
+    [Fact]
+    public async Task HttpTransport_ProcessWideRequestBodyBudget_BoundsConcurrentMaximumBodies()
+    {
+        const int bodyBytes = 1024;
+        var body = BuildSizedJsonRpcRequest(bodyBytes, 1);
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxRequestBodyBytes: bodyBytes,
+            maxInFlightRequestBodyBytes: bodyBytes,
+            maxQueuedRequests: 32,
+            maxConcurrentHandlers: 32,
+            allowUnauthenticatedLoopback: true);
+
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(10));
+        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
+        var first = PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new StringContent(body, Encoding.UTF8, "application/json"));
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the first maximum-sized body to hold the process budget");
+        Assert.Equal(bodyBytes, transport.InFlightRequestBodyBytes);
+
+        var rejectedTasks = Enumerable.Range(0, 15)
+            .Select(_ => PostWithSessionAsync(
+                client,
+                listen.Prefix,
+                sessionId,
+                new StringContent(body, Encoding.UTF8, "application/json")))
+            .ToArray();
+        var rejectedResponses = await Task.WhenAll(rejectedTasks);
+        try
+        {
+            Assert.All(
+                rejectedResponses,
+                response => AssertTooManyRequests(response, HttpMcpTransport.RequestBodyBudgetLimitRejection));
+        }
+        finally
+        {
+            foreach (var response in rejectedResponses)
+                response.Dispose();
+        }
+
+        Assert.Equal(15, transport.RequestBodyBudgetLimitRejectionCount);
+        Assert.Equal(bodyBytes, transport.InFlightRequestBodyBytes);
+        Assert.InRange(transport.PeakInFlightRequestBodyBytes, bodyBytes, bodyBytes);
+
+        var frame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(body, frame);
+        await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":1,"result":{}}""", CancellationToken.None);
+        using var firstResponse = await first.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+        Assert.Equal(0, transport.InFlightRequestBodyBytes);
+
+        var follow = PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new StringContent(body, Encoding.UTF8, "application/json"));
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "a follow-up body to reuse the released process budget");
+        _ = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":1,"result":{}}""", CancellationToken.None);
+        using var followResponse = await follow.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, followResponse.StatusCode);
+        Assert.Equal(0, transport.InFlightRequestBodyBytes);
+    }
+
+    [Fact]
+    public async Task HttpTransport_DrainingWorkRetainsRequestBodyBudgetUntilCompletion_Issues4546And4548()
+    {
+        const int bodyBytes = 512;
+        var body = BuildSizedJsonRpcRequest(bodyBytes, 4546);
+        var retainedWork = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxRequestBodyBytes: bodyBytes,
+            maxInFlightRequestBodyBytes: bodyBytes,
+            maxQueuedRequests: 2,
+            allowUnauthenticatedLoopback: true);
+
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
+        try
+        {
+            var firstPost = PostWithSessionAsync(
+                client,
+                listen.Prefix,
+                sessionId,
+                new StringContent(body, Encoding.UTF8, "application/json"));
+            await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the retained request body to enter the HTTP queue");
+            var firstFrame = await transport.ReadConcurrentFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.NotNull(firstFrame);
+            firstFrame.CompleteResourceRetentionWhen(retainedWork.Task);
+            Assert.Equal(body, firstFrame.Frame);
+            await firstFrame.WriteResponseAsync(
+                """{"jsonrpc":"2.0","id":4546,"result":{}}""",
+                CancellationToken.None);
+            using var firstResponse = await firstPost.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+            Assert.Equal(bodyBytes, transport.InFlightRequestBodyBytes);
+
+            using var saturatedResponse = await PostWithSessionAsync(
+                client,
+                listen.Prefix,
+                sessionId,
+                new StringContent(body, Encoding.UTF8, "application/json"));
+            AssertTooManyRequests(saturatedResponse, HttpMcpTransport.RequestBodyBudgetLimitRejection);
+            Assert.Equal(bodyBytes, transport.InFlightRequestBodyBytes);
+
+            retainedWork.TrySetResult();
+            await WaitUntilAsync(
+                () => transport.InFlightRequestBodyBytes == 0,
+                "the retained work completion to release aggregate body accounting");
+
+            var followPost = PostWithSessionAsync(
+                client,
+                listen.Prefix,
+                sessionId,
+                new StringContent(body, Encoding.UTF8, "application/json"));
+            await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "a follow-up request to reuse the released budget");
+            _ = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+            await transport.WriteFrameAsync(
+                """{"jsonrpc":"2.0","id":4546,"result":{}}""",
+                CancellationToken.None);
+            using var followResponse = await followPost.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(HttpStatusCode.OK, followResponse.StatusCode);
+            Assert.Equal(0, transport.InFlightRequestBodyBytes);
+        }
+        finally
+        {
+            retainedWork.TrySetResult();
+        }
+    }
+
+    [Fact]
+    public async Task HttpTransport_PreparedRetentionSurvivesDisposeAfterFrameHandoff_Issues4546And4548()
+    {
+        const int bodyBytes = 512;
+        var body = BuildSizedJsonRpcRequest(bodyBytes, 4546);
+        var retainedWork = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxRequestBodyBytes: bodyBytes,
+            maxInFlightRequestBodyBytes: bodyBytes,
+            maxQueuedRequests: 2,
+            allowUnauthenticatedLoopback: true);
+
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
+        var post = PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new StringContent(body, Encoding.UTF8, "application/json"));
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the retained request body to enter the HTTP queue");
+
+        var frame = await transport.ReadConcurrentFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.NotNull(frame);
+        frame.CompleteResourceRetentionWhen(retainedWork.Task);
+        Assert.Equal(body, frame.Frame);
+        var frameCancellation = frame.RequestCancellationToken;
+        Assert.True(frameCancellation.CanBeCanceled);
+        await transport.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True(frameCancellation.IsCancellationRequested);
+        Assert.Equal(bodyBytes, transport.InFlightRequestBodyBytes);
+        retainedWork.TrySetResult();
+        await WaitUntilAsync(
+            () => transport.InFlightRequestBodyBytes == 0,
+            "the prepared retention completion to release accounting after disposal");
+        try
+        {
+            using var ignored = await post.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            // Listener disposal aborts the retained response.
+        }
+    }
+
+    [Fact]
+    public async Task HttpTransport_UnknownLengthBody_EnforcesBudgetDuringStreamingAndRollsBackPartialReservation()
+    {
+        const int maxBodyBytes = 256;
+        const int queuedBodyBytes = 160;
+        var queuedBody = BuildSizedJsonRpcRequest(queuedBodyBytes, 1);
+        var streamingBody = BuildSizedJsonRpcRequest(queuedBodyBytes, 2);
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxRequestBodyBytes: maxBodyBytes,
+            maxInFlightRequestBodyBytes: maxBodyBytes,
+            maxQueuedRequests: 4,
+            maxConcurrentHandlers: 4,
+            allowUnauthenticatedLoopback: true);
+
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
+        var first = PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new StringContent(queuedBody, Encoding.UTF8, "application/json"));
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the known-length body to retain part of the process budget");
+        Assert.Equal(queuedBodyBytes, transport.InFlightRequestBodyBytes);
+
+        using var streamedResponse = await PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new UnknownLengthStringContent(streamingBody));
+        AssertTooManyRequests(streamedResponse, HttpMcpTransport.RequestBodyBudgetLimitRejection);
+        await WaitUntilAsync(
+            () => transport.InFlightRequestBodyBytes == queuedBodyBytes,
+            "the rejected streaming body's partial reservation to be returned");
+        Assert.Equal(1, transport.RequestBodyBudgetLimitRejectionCount);
+        Assert.Equal(queuedBodyBytes, transport.InFlightRequestBodyBytes);
+        Assert.Equal(maxBodyBytes, transport.PeakInFlightRequestBodyBytes);
+
+        _ = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":1,"result":{}}""", CancellationToken.None);
+        using var firstResponse = await first.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+        Assert.Equal(0, transport.InFlightRequestBodyBytes);
+    }
+
+    [Fact]
+    public async Task HttpTransport_UnknownLengthBody_AcceptsExactBudgetFitAndEmptyBodyAtSaturation()
+    {
+        const int maxBodyBytes = 256;
+        const int knownBodyBytes = 160;
+        const int exactFitBodyBytes = maxBodyBytes - knownBodyBytes;
+        var knownBody = BuildSizedJsonRpcRequest(knownBodyBytes, 1);
+        var exactFitBody = BuildSizedJsonRpcRequest(exactFitBodyBytes, 2);
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxRequestBodyBytes: maxBodyBytes,
+            maxInFlightRequestBodyBytes: maxBodyBytes,
+            maxQueuedRequests: 4,
+            maxConcurrentHandlers: 4,
+            allowUnauthenticatedLoopback: true);
+
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
+        var knownPost = PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new StringContent(knownBody, Encoding.UTF8, "application/json"));
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the known body to retain part of the budget");
+
+        var exactFitPost = PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new UnknownLengthStringContent(exactFitBody));
+        await WaitUntilAsync(
+            () => transport.QueuedRequestCount == 2,
+            "the exact-fit unknown-length body to be accepted after its EOF probe");
+        Assert.Equal(maxBodyBytes, transport.InFlightRequestBodyBytes);
+
+        using var emptyResponse = await PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new UnknownLengthStringContent(string.Empty));
+        Assert.Equal(HttpStatusCode.NoContent, emptyResponse.StatusCode);
+        Assert.Equal(0, transport.RequestBodyBudgetLimitRejectionCount);
+        Assert.Equal(maxBodyBytes, transport.InFlightRequestBodyBytes);
+
+        var firstFrame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(knownBody, firstFrame);
+        await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":1,"result":{}}""", CancellationToken.None);
+        using var knownResponse = await knownPost.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, knownResponse.StatusCode);
+
+        var secondFrame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(exactFitBody, secondFrame);
+        await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":2,"result":{}}""", CancellationToken.None);
+        using var exactFitResponse = await exactFitPost.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, exactFitResponse.StatusCode);
+        Assert.Equal(0, transport.InFlightRequestBodyBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HttpTransport_Dispose_ReleasesQueuedAndPendingRequestBodyReservations(bool dequeueBeforeDispose)
+    {
+        const int bodyBytes = 512;
+        var body = BuildSizedJsonRpcRequest(bodyBytes, 1);
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxRequestBodyBytes: bodyBytes,
+            maxInFlightRequestBodyBytes: bodyBytes,
+            maxQueuedRequests: 2,
+            allowUnauthenticatedLoopback: true);
+
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
+        var post = PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new StringContent(body, Encoding.UTF8, "application/json"));
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the request body to be retained before disposal");
+        if (dequeueBeforeDispose)
+            _ = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+
+        await transport.DisposeAsync();
+
+        Assert.Equal(0, transport.InFlightRequestBodyBytes);
+        Assert.Equal(0, transport.QueuedRequestCount);
+        Assert.True(transport.OwnedSemaphoreGatesDisposedForTests);
+        try
+        {
+            using var response = await post.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            // Listener disposal aborts the retained response.
+        }
+    }
+
+    [Fact]
+    public async Task HttpTransport_OutOfBandCompletion_ReleasesRequestBodyBudget()
+    {
+        const string body = """{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":1}}""";
+        var bodyBytes = Encoding.UTF8.GetByteCount(body);
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxRequestBodyBytes: bodyBytes,
+            maxInFlightRequestBodyBytes: bodyBytes,
+            allowUnauthenticatedLoopback: true);
+        transport.OutOfBandFrameHandler = (_, _) => Task.FromResult<string?>(null);
+
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
+        using var response = await PostWithSessionAsync(
+            client,
+            listen.Prefix,
+            sessionId,
+            new StringContent(body, Encoding.UTF8, "application/json"));
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        await WaitUntilAsync(
+            () => transport.InFlightRequestBodyBytes == 0,
+            "the out-of-band request body reservation to be returned");
+        Assert.Equal(0, transport.QueuedRequestCount);
+        Assert.Equal(0, transport.InFlightRequestBodyBytes);
+        Assert.Equal(bodyBytes, transport.PeakInFlightRequestBodyBytes);
+    }
+
+    [Fact]
+    public async Task HttpTransport_EventStreamSaturation_PreservesPostCapacity()
+    {
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        await using var transport = new HttpMcpTransport(
+            listen.Prefix,
+            listen.Host,
+            listen.Port,
+            bearerToken: null,
+            maxConcurrentHandlers: 1,
+            maxEventStreams: 1,
+            allowUnauthenticatedLoopback: true);
+
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
+        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
+        using var eventsRequest = new HttpRequestMessage(HttpMethod.Get, new Uri(new Uri(listen.Prefix), "events"));
+        eventsRequest.Headers.TryAddWithoutValidation(HttpMcpTransport.SessionIdHeaderName, sessionId);
+        using var events = await client.SendAsync(eventsRequest, HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+        await WaitUntilAsync(() => transport.HasEventStreams, "the first event stream to occupy the event-stream gate");
+
+        var rejectionWriteEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRejectionWrite = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        transport.BeforeResponseWriteForTests = _ =>
+        {
+            rejectionWriteEntered.TrySetResult();
+            return releaseRejectionWrite.Task;
+        };
+        using var secondStreamRequest = new HttpRequestMessage(HttpMethod.Get, new Uri(new Uri(listen.Prefix), "events"));
+        secondStreamRequest.Headers.TryAddWithoutValidation(HttpMcpTransport.SessionIdHeaderName, sessionId);
+        var secondStreamTask = client.SendAsync(secondStreamRequest, HttpCompletionOption.ResponseHeadersRead);
+        await rejectionWriteEntered.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+        transport.BeforeResponseWriteForTests = null;
+
+        using var postRequest = new HttpRequestMessage(HttpMethod.Post, listen.Prefix)
+        {
+            Content = new StringContent("""{"jsonrpc":"2.0","id":2,"method":"ping"}""", Encoding.UTF8, "application/json"),
+        };
+        postRequest.Headers.TryAddWithoutValidation(HttpMcpTransport.SessionIdHeaderName, sessionId);
+        var post = client.SendAsync(postRequest);
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the POST request to enter its independent queue");
+        var frame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Contains("\"id\":2", frame, StringComparison.Ordinal);
+        await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":2,"result":{}}""", CancellationToken.None);
+        using var postResponse = await post.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(HttpStatusCode.OK, postResponse.StatusCode);
+        Assert.Equal(0, transport.ConcurrentHandlerLimitRejectionCount);
+        Assert.False(secondStreamTask.IsCompleted);
+        releaseRejectionWrite.TrySetResult();
+        using var secondStream = await secondStreamTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        AssertTooManyRequests(secondStream, HttpMcpTransport.EventStreamLimitRejection);
+        Assert.Equal(1, transport.EventStreamLimitRejectionCount);
+    }
+
+    [Fact]
+    public async Task HttpTransport_ConcurrentPostHandlerLimit_Returns429()
     {
         var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
         await using var transport = new HttpMcpTransport(
@@ -2226,23 +3872,36 @@ public class HttpMcpTransportTests : IDisposable
             maxConcurrentHandlers: 1,
             allowUnauthenticatedLoopback: true);
 
-        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
-        var sessionId = await EstablishTransportSessionAsync(transport, client, listen.Prefix);
-        using var eventsRequest = new HttpRequestMessage(HttpMethod.Get, new Uri(new Uri(listen.Prefix), "events"));
-        eventsRequest.Headers.TryAddWithoutValidation(HttpMcpTransport.SessionIdHeaderName, sessionId);
-        using var events = await client.SendAsync(eventsRequest, HttpCompletionOption.ResponseHeadersRead);
-        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
-        await WaitUntilAsync(() => transport.HasEventStreams, "the first event stream to occupy the only handler slot");
+        const string firstBody = """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""";
+        using var firstClient = CreateHttpClient(TimeSpan.FromSeconds(5));
+        using var secondClient = CreateHttpClient(TimeSpan.FromSeconds(5));
+        using var gatedBody = new GatedHttpContent(firstBody);
+        using var firstRequest = new HttpRequestMessage(HttpMethod.Post, listen.Prefix)
+        {
+            Content = gatedBody,
+        };
+        var first = firstClient.SendAsync(firstRequest);
+        await gatedBody.FirstChunkWritten.WaitAsync(TimeSpan.FromSeconds(5));
 
         using var secondRequest = new HttpRequestMessage(HttpMethod.Post, listen.Prefix)
         {
             Content = new StringContent("""{"jsonrpc":"2.0","id":2,"method":"ping"}""", Encoding.UTF8, "application/json"),
         };
-        secondRequest.Headers.TryAddWithoutValidation(HttpMcpTransport.SessionIdHeaderName, sessionId);
-        using var second = await client.SendAsync(secondRequest);
+        using var second = await secondClient.SendAsync(secondRequest);
 
         AssertTooManyRequests(second, HttpMcpTransport.ConcurrentHandlerLimitRejection);
         Assert.Equal(1, transport.ConcurrentHandlerLimitRejectionCount);
+
+        gatedBody.Release();
+        await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "the first POST to finish its body and enter the queue");
+        var frame = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(firstBody, frame);
+        await transport.WriteFrameAsync(
+            """{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26"}}""",
+            CancellationToken.None);
+        using var firstResponse = await first.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+        Assert.True(firstResponse.Headers.Contains(HttpMcpTransport.SessionIdHeaderName));
     }
 
     [Fact]
@@ -2297,6 +3956,32 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_EventsStream_PublishesOnlyAfterPreludeSettles_Issue4546()
+    {
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+        using (var initialize = await harness.InitializeAsync())
+            Assert.Equal(HttpStatusCode.OK, initialize.StatusCode);
+
+        var publishEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releasePublish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.BeforeEventStreamPublishForTests = async token =>
+        {
+            publishEntered.TrySetResult();
+            await releasePublish.Task.WaitAsync(token);
+        };
+
+        using var client = CreateHttpClient();
+        var eventsTask = harness.GetEventsAsync(client);
+        await publishEntered.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+        Assert.False(harness.HasEventStreams);
+
+        releasePublish.TrySetResult();
+        using var events = await eventsTask.WaitAsync(TestDeterminism.DefaultTimeout);
+        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+        await WaitUntilAsync(() => harness.HasEventStreams, "the event stream to publish after its prelude");
+    }
+
+    [Fact]
     public async Task HttpTransport_EventsStream_AllowsPostsAndRemovesDisconnectedStreams_Issue3815()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
@@ -2343,6 +4028,9 @@ public class HttpMcpTransportTests : IDisposable
             eventStreamWriteTimeout: TimeSpan.FromMilliseconds(10));
         using (var initialize = await harness.InitializeAsync())
             Assert.Equal(HttpStatusCode.OK, initialize.StatusCode);
+        harness.SetKeepAlive(
+            TimeSpan.FromMinutes(5),
+            () => """{"jsonrpc":"2.0","method":"notifications/keep_alive"}""");
         harness.BeforeEventStreamWriteForTests = token => Task.Delay(Timeout.InfiniteTimeSpan, token);
 
         using var client = CreateHttpClient();
@@ -2350,10 +4038,16 @@ public class HttpMcpTransportTests : IDisposable
         Assert.Equal(HttpStatusCode.OK, events.StatusCode);
         await WaitUntilAsync(() => harness.HasEventStreams, "the event stream to be registered");
 
+        await harness.WriteOutOfBandFrameAsync(
+            """{"jsonrpc":"2.0","method":"notifications/test"}""");
+
         using var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":3990,"method":"initialize","params":{}}""");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         await WaitUntilAsync(() => !harness.HasEventStreams, "the timed-out event stream to be removed");
+        await WaitUntilAsync(
+            () => harness.EventStreamHandlerSlotsAvailable == harness.EventStreamHandlerCapacity,
+            "stream removal to cancel the long keep-alive delay and release its admission slot");
         var snapshot = await WaitForRequestLogRecordsAsync(records, 3);
         var eventRecord = Assert.Single(snapshot.Where(record => record.Method == "GET" && record.Path == "/events"));
         Assert.Equal("timeout:sse_write", eventRecord.Diagnostic);
@@ -2829,18 +4523,32 @@ public class HttpMcpTransportTests : IDisposable
         var post = client.PostAsync(
             endpoint,
             new StringContent(
-                """{"jsonrpc":"2.0","id":"transport-session-init","method":"initialize","params":{}}""",
+                """{"jsonrpc":"2.0","id":0,"method":"initialize"}""",
                 Encoding.UTF8,
                 "application/json"));
         await WaitUntilAsync(() => transport.QueuedRequestCount == 1, "transport initialize request to enter the queue");
         _ = await transport.ReadFrameAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
         await transport.WriteFrameAsync(
-            """{"jsonrpc":"2.0","id":"transport-session-init","result":{"protocolVersion":"2025-03-26"}}""",
+            """{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":"2025-03-26"}}""",
             CancellationToken.None);
         using var response = await post.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.True(response.Headers.TryGetValues(HttpMcpTransport.SessionIdHeaderName, out var sessionValues));
         return Assert.Single(sessionValues);
+    }
+
+    private static async Task<HttpResponseMessage> PostWithSessionAsync(
+        HttpClient client,
+        string endpoint,
+        string sessionId,
+        HttpContent content)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
+        {
+            Content = content,
+        };
+        request.Headers.TryAddWithoutValidation(HttpMcpTransport.SessionIdHeaderName, sessionId);
+        return await client.SendAsync(request);
     }
 
     private static void AssertTooManyRequests(HttpResponseMessage response, string rejectionReason)
@@ -2882,12 +4590,42 @@ public class HttpMcpTransportTests : IDisposable
     private static async Task WaitUntilAsync(Func<bool> condition, string description)
         => await TestDeterminism.WaitUntilAsync(condition, description);
 
+    private static async Task WritePartialContentLengthRequestAsync(
+        NetworkStream stream,
+        Uri endpoint,
+        int declaredBodyBytes,
+        string partialBody,
+        string? sessionId = null)
+    {
+        var headers =
+            $"POST / HTTP/1.1\r\nHost: {endpoint.Host}:{endpoint.Port.ToString(CultureInfo.InvariantCulture)}\r\n"
+            + "Content-Type: application/json; charset=utf-8\r\n"
+            + $"Content-Length: {declaredBodyBytes.ToString(CultureInfo.InvariantCulture)}\r\n"
+            + (sessionId is null ? string.Empty : $"{HttpMcpTransport.SessionIdHeaderName}: {sessionId}\r\n")
+            + "Connection: close\r\n\r\n";
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(headers));
+        await stream.WriteAsync(Encoding.UTF8.GetBytes(partialBody));
+        await stream.FlushAsync();
+    }
+
     private static string BuildNestedCancellationNotification(int nestedObjectCount)
     {
         var builder = new StringBuilder("""{"jsonrpc":"2.0","method":"$/cancelRequest","params":""");
         AppendNestedObject(builder, nestedObjectCount);
         builder.Append('}');
         return builder.ToString();
+    }
+
+    private static string BuildSizedJsonRpcRequest(int byteLength, int id)
+    {
+        var prefix = "{\"jsonrpc\":\"2.0\",\"id\":"
+            + id.ToString(CultureInfo.InvariantCulture)
+            + ",\"method\":\"ping\",\"params\":{\"padding\":\"";
+        const string suffix = "\"}}";
+        var paddingBytes = byteLength - Encoding.UTF8.GetByteCount(prefix) - Encoding.UTF8.GetByteCount(suffix);
+        if (paddingBytes < 0)
+            throw new ArgumentOutOfRangeException(nameof(byteLength), byteLength, "Requested JSON-RPC body size is too small.");
+        return prefix + new string('x', paddingBytes) + suffix;
     }
 
     private static string BuildNestedJsonRpcResponse(int nestedObjectCount)
@@ -2972,6 +4710,11 @@ public class HttpMcpTransportTests : IDisposable
 
         public int EventStreamCount => _transport.EventStreamCount;
 
+        public int EventStreamHandlerSlotsAvailable
+            => _transport.EventStreamHandlerSlotsAvailableForTests;
+
+        public int EventStreamHandlerCapacity => _transport.EventStreamHandlerCapacity;
+
         public long EventStreamDropCount => _transport.EventStreamDropCount;
 
         public long RequestLogDroppedCount => _transport.RequestLogDroppedCount;
@@ -3007,6 +4750,12 @@ public class HttpMcpTransportTests : IDisposable
             set => _server.RequestDelayForTestsWithId = value;
         }
 
+        public Func<CancellationToken, Task>? BeforeEventStreamPublishForTests
+        {
+            get => _transport.BeforeEventStreamPublishForTests;
+            set => _transport.BeforeEventStreamPublishForTests = value;
+        }
+
         public void RecordResponseCleanupFailure(string kind, string operation, Exception exception)
             => _transport.RecordResponseCleanupFailure(kind, operation, exception);
 
@@ -3018,6 +4767,9 @@ public class HttpMcpTransportTests : IDisposable
             _transport.KeepAliveInterval = interval;
             _transport.KeepAliveFrameProvider = provider;
         }
+
+        public Task WriteOutOfBandFrameAsync(string frame)
+            => _transport.WriteOutOfBandFrameAsync(frame, CancellationToken.None);
 
         public static async Task<McpHttpHarness> StartAsync(
             string dbPath,
@@ -3190,6 +4942,48 @@ public class HttpMcpTransportTests : IDisposable
         }
     }
 
+    private sealed class GatedHttpContent : HttpContent
+    {
+        private readonly byte[] _bytes;
+        private readonly TaskCompletionSource _firstChunkWritten = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public GatedHttpContent(string body)
+        {
+            _bytes = Encoding.UTF8.GetBytes(body);
+            Headers.ContentType = new MediaTypeHeaderValue("application/json")
+            {
+                CharSet = "utf-8",
+            };
+        }
+
+        public Task FirstChunkWritten => _firstChunkWritten.Task;
+
+        public void Release() => _release.TrySetResult();
+
+        protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+        {
+            await stream.WriteAsync(_bytes.AsMemory(0, 1));
+            await stream.FlushAsync();
+            _firstChunkWritten.TrySetResult();
+            await _release.Task;
+            await stream.WriteAsync(_bytes.AsMemory(1));
+        }
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = _bytes.Length;
+            return true;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                Release();
+            base.Dispose(disposing);
+        }
+    }
+
     private sealed class NonCancellableHangingStream(bool hangWrite, bool hangFlush) : Stream
     {
         private readonly TaskCompletionSource _writeBlocker = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -3245,6 +5039,111 @@ public class HttpMcpTransportTests : IDisposable
         {
             WriteCalls++;
             return hangWrite ? new ValueTask(_writeBlocker.Task) : ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class SequencedNonCancellableWriteStream : Stream
+    {
+        private readonly TaskCompletionSource _firstWriteEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _secondWriteEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseFirstWrite = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseSecondWrite = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _activeWrites;
+        private int _maxConcurrentWrites;
+        private int _writeCalls;
+
+        public Task FirstWriteEntered => _firstWriteEntered.Task;
+
+        public Task SecondWriteEntered => _secondWriteEntered.Task;
+
+        public int MaxConcurrentWrites => Volatile.Read(ref _maxConcurrentWrites);
+
+        public override bool CanRead => false;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => true;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public void ReleaseFirstWrite() => _releaseFirstWrite.TrySetResult();
+
+        public void ReleaseSecondWrite() => _releaseSecondWrite.TrySetResult();
+
+        public override void Flush()
+        {
+        }
+
+        public override Task FlushAsync(CancellationToken cancellationToken)
+            => Task.CompletedTask;
+
+        public override int Read(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin)
+            => throw new NotSupportedException();
+
+        public override void SetLength(long value)
+            => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
+
+        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            var ordinal = Interlocked.Increment(ref _writeCalls);
+            var activeWrites = Interlocked.Increment(ref _activeWrites);
+            UpdateMaximum(ref _maxConcurrentWrites, activeWrites);
+            try
+            {
+                if (ordinal == 1)
+                {
+                    _firstWriteEntered.TrySetResult();
+                    await _releaseFirstWrite.Task.ConfigureAwait(false);
+                    return;
+                }
+
+                if (ordinal == 2)
+                {
+                    _secondWriteEntered.TrySetResult();
+                    await _releaseSecondWrite.Task.ConfigureAwait(false);
+                    return;
+                }
+
+                throw new InvalidOperationException("The sequenced stream expected exactly two writes.");
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _activeWrites);
+            }
+        }
+
+        private static void UpdateMaximum(ref int target, int candidate)
+        {
+            var current = Volatile.Read(ref target);
+            while (candidate > current)
+            {
+                var observed = Interlocked.CompareExchange(ref target, candidate, current);
+                if (observed == current)
+                    return;
+                current = observed;
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                ReleaseFirstWrite();
+                ReleaseSecondWrite();
+            }
+            base.Dispose(disposing);
         }
     }
 }

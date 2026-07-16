@@ -68,6 +68,88 @@ public class ProgramCliTests
         Assert.DoesNotContain("HTTP transport listening", stderr);
     }
 
+    [ProductionRuntimeTheory]
+    [InlineData("not-an-integer")]
+    [InlineData("0")]
+    public void Mcp_HttpPresentInvalidLimitEnvironmentReturnsUsageError(string configuredValue)
+    {
+        var (exitCode, _, stderr) = RunCliInSubprocess(
+            ["mcp", "--transport", "http"],
+            new Dictionary<string, string?>
+            {
+                [HttpMcpTransport.MaxConcurrentHandlersEnvVar] = configuredValue,
+                [ProgramRunner.McpHttpTokenEnvVar] = "test-token",
+            });
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains(HttpMcpTransport.MaxConcurrentHandlersEnvVar, stderr, StringComparison.Ordinal);
+        Assert.Contains(
+            $"integer between 1 and {HttpMcpTransport.MaxConfiguredConcurrentHandlers.ToString(CultureInfo.InvariantCulture)}",
+            stderr,
+            StringComparison.Ordinal);
+        Assert.Contains("HTTP limits:", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("HTTP transport listening", stderr, StringComparison.Ordinal);
+    }
+
+    [ProductionRuntimeFact]
+    public void Mcp_HttpRequestBodyBudgetBelowPerRequestLimitReturnsUsageError()
+    {
+        var (exitCode, _, stderr) = RunCliInSubprocess(
+            ["mcp", "--transport", "http"],
+            new Dictionary<string, string?>
+            {
+                [HttpMcpTransport.MaxRequestBodyBytesEnvVar] = "1024",
+                [HttpMcpTransport.MaxInFlightRequestBodyBytesEnvVar] = "1023",
+                [ProgramRunner.McpHttpTokenEnvVar] = "test-token",
+            });
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains(HttpMcpTransport.MaxRequestBodyBytesEnvVar, stderr, StringComparison.Ordinal);
+        Assert.Contains(HttpMcpTransport.MaxInFlightRequestBodyBytesEnvVar, stderr, StringComparison.Ordinal);
+        Assert.Contains("must be greater than or equal", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("HTTP transport listening", stderr, StringComparison.Ordinal);
+    }
+
+    [ProductionRuntimeTheory]
+    [InlineData(HttpMcpTransport.RequestBodyIdleTimeoutMillisecondsEnvVar, "not-an-integer")]
+    [InlineData(HttpMcpTransport.RequestBodyIdleTimeoutMillisecondsEnvVar, "0")]
+    [InlineData(HttpMcpTransport.RequestLifetimeTimeoutMillisecondsEnvVar, "-1")]
+    [InlineData(HttpMcpTransport.RequestLifetimeTimeoutMillisecondsEnvVar, "typo")]
+    public void Mcp_HttpInvalidRequestDeadlineEnvironmentReturnsUsageError(string variable, string value)
+    {
+        var (exitCode, _, stderr) = RunCliInSubprocess(
+            ["mcp", "--transport", "http"],
+            new Dictionary<string, string?>
+            {
+                [variable] = value,
+                [ProgramRunner.McpHttpTokenEnvVar] = "test-token",
+            });
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains(variable, stderr, StringComparison.Ordinal);
+        Assert.Contains("integer between 1 and", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("HTTP transport listening", stderr, StringComparison.Ordinal);
+    }
+
+    [ProductionRuntimeFact]
+    public void Mcp_HttpRequestDeadlineBelowBodyIdleDeadlineReturnsUsageError()
+    {
+        var (exitCode, _, stderr) = RunCliInSubprocess(
+            ["mcp", "--transport", "http"],
+            new Dictionary<string, string?>
+            {
+                [HttpMcpTransport.RequestBodyIdleTimeoutMillisecondsEnvVar] = "200",
+                [HttpMcpTransport.RequestLifetimeTimeoutMillisecondsEnvVar] = "100",
+                [ProgramRunner.McpHttpTokenEnvVar] = "test-token",
+            });
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains(HttpMcpTransport.RequestBodyIdleTimeoutMillisecondsEnvVar, stderr, StringComparison.Ordinal);
+        Assert.Contains(HttpMcpTransport.RequestLifetimeTimeoutMillisecondsEnvVar, stderr, StringComparison.Ordinal);
+        Assert.Contains("must be greater than or equal", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("HTTP transport listening", stderr, StringComparison.Ordinal);
+    }
+
     [ProductionRuntimeFact]
     public void Mcp_DbAcceptsLeadingDoubleDashPathValueViaInlineLiteral()
     {

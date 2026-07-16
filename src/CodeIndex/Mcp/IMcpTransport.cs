@@ -65,11 +65,36 @@ internal interface IConcurrentMcpTransport
 /// </summary>
 internal sealed class McpTransportFrame(
     string frame,
-    Func<string?, CancellationToken, Task> writeResponseAsync)
+    Func<string?, CancellationToken, Task> writeResponseAsync,
+    CancellationToken requestCancellationToken = default,
+    Action<Task>? completeResourceRetentionWhen = null)
 {
+    private Action<Task>? _completeResourceRetentionWhen = completeResourceRetentionWhen;
+
     internal string Frame { get; } = frame;
 
     internal Func<string?, CancellationToken, Task> WriteResponseAsync { get; } = writeResponseAsync;
+
+    /// <summary>
+    /// Cancellation lifetime owned by this transport frame. The server links it with its loop
+    /// token so an HTTP disconnect or deadline cancels only the matching request (#4546).
+    /// この transport frame が所有する cancellation lifetime。server loop token と連結し、
+    /// HTTP 切断や期限切れで対応 request だけを cancel する (#4546)。
+    /// </summary>
+    internal CancellationToken RequestCancellationToken { get; } = requestCancellationToken;
+
+    /// <summary>
+    /// Complete the transport's pre-attached resource-retention barrier after any work that
+    /// outlives the response has settled. The callback is transferred at most once so every
+    /// control-flow exit can safely attempt completion without releasing a request lease twice.
+    /// response より長く残る work の完了後に、transport が事前接続した resource-retention
+    /// barrier を完了する。callback は一度だけ移譲し、各終了経路から安全に完了を試行できる。
+    /// </summary>
+    internal void CompleteResourceRetentionWhen(Task completion)
+    {
+        ArgumentNullException.ThrowIfNull(completion);
+        Interlocked.Exchange(ref _completeResourceRetentionWhen, null)?.Invoke(completion);
+    }
 }
 
 /// <summary>
