@@ -4,6 +4,65 @@ namespace CodeIndex.Tests;
 
 public partial class QueryCommandRunnerTests
 {
+    [Fact]
+    public void RunFiles_PositionalGlobUsesPathFilterSemantics_Issue4565()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_files_positional_glob_issue4565");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "App.cs", "csharp", "public class App {}\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/A.cs", "csharp", "public class A {}\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/deep/NestedThing.cs", "csharp", "public class NestedThing {}\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/deep/NestedThing.txt", "text", "not C#\n");
+
+            var cases = new[]
+            {
+                (Pattern: "*.cs", ExpectedPaths: new[] { "App.cs", "src/A.cs", "src/deep/NestedThing.cs" }),
+                (Pattern: "src/?.cs", ExpectedPaths: new[] { "src/A.cs" }),
+                (Pattern: "**/Nested*.cs", ExpectedPaths: new[] { "src/deep/NestedThing.cs" }),
+            };
+
+            foreach (var testCase in cases)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                    ["--db", dbPath, "--json", testCase.Pattern, "--limit", "20"],
+                    _jsonOptions));
+
+                var paths = ParseJsonLines(stdout)
+                    .Select(document => document.RootElement.TryGetProperty("path", out var path) ? path.GetString() : null)
+                    .Where(path => path != null)
+                    .OrderBy(path => path, StringComparer.Ordinal)
+                    .ToArray();
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(testCase.ExpectedPaths.OrderBy(path => path, StringComparer.Ordinal), paths);
+            }
+
+            var explicitQueryCases = new[]
+            {
+                (Args: new[] { "--query", "*.cs" }, ExpectedQuery: "*.cs"),
+                (Args: new[] { "--", "*.cs" }, ExpectedQuery: "*.cs"),
+                (Args: new[] { @"literal\*.cs" }, ExpectedQuery: @"literal\*.cs"),
+            };
+            foreach (var testCase in explicitQueryCases)
+            {
+                var options = QueryCommandRunner.ParseArgs(
+                    testCase.Args,
+                    jsonDefault: false,
+                    allowNamedQuery: true,
+                    positionalGlobAsPath: true);
+
+                Assert.Equal(testCase.ExpectedQuery, options.Query);
+                Assert.Empty(options.PathPatterns);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("install.sh")]
     [InlineData("./install.sh")]

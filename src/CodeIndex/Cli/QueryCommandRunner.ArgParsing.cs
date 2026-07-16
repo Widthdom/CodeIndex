@@ -53,7 +53,8 @@ public static partial class QueryCommandRunner
         bool validateDefaultSnippetLines = true,
         bool validateDefaultMaxLineWidth = true,
         bool applySearchSourceDefaults = false,
-        bool allowOutlineSort = false)
+        bool allowOutlineSort = false,
+        bool positionalGlobAsPath = false)
     {
         string? dbPath = null;
         string? dataDir = null;
@@ -1486,6 +1487,11 @@ public static partial class QueryCommandRunner
                     {
                         AddParseError($"Error: unsupported option: {ConsoleUi.FormatBoundedValue(args[i])}. Use `--` before a query literal that starts with `-`.");
                         break;
+                    }
+                    else if (query == null && positionalGlobAsPath && DbReader.PathLikePatternHasWildcard(args[i]))
+                    {
+                        pathPatterns.Add(args[i]);
+                        userPathPatterns.Add(args[i]);
                     }
                     else if (query == null)
                     {

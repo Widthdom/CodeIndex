@@ -1429,11 +1429,17 @@ Use `--path <glob>` for a bounded file set, or pass `--all` to opt in to a repo-
 ```bash
 cdidx files                            # all indexed files
 cdidx files --lang csharp              # only C# files
+cdidx files '*.cs'                     # positional * or ? uses --path glob semantics
 cdidx files --path src/Services --exclude-path Migrations
 cdidx files --format compact --limit 50
 cdidx files --json --summary-only
 cdidx files --format compact --max-json-bytes 8000
 ```
+
+A positional value containing an unescaped `*` or `?` is treated exactly like
+`--path <glob>`. Quote the pattern so the shell passes it to `cdidx` unchanged,
+for example `cdidx files '**/*.cs'`. Positionals without those glob
+metacharacters remain filename-substring queries.
 
 Output:
 
@@ -4333,11 +4339,17 @@ cdidx find "guard" --all --count --json
 ```bash
 cdidx files                            # 全インデックス済みファイル
 cdidx files --lang csharp              # C#ファイルのみ
+cdidx files '*.cs'                     # positional の * / ? は --path glob として扱う
 cdidx files --path src/Services --exclude-path Migrations
 cdidx files --format compact --limit 50
 cdidx files --json --summary-only
 cdidx files --format compact --max-json-bytes 8000
 ```
+
+エスケープされていない `*` または `?` を含む positional 値は、`--path <glob>` と
+まったく同じように扱われます。shell が pattern を変更せず `cdidx` へ渡すよう、
+`cdidx files '**/*.cs'` のように引用してください。これらの glob metacharacter を
+含まない positional 値は、従来どおり filename substring query として扱われます。
 
 出力:
 
