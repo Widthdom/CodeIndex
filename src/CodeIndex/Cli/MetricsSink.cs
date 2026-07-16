@@ -1,7 +1,9 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
+using System.Threading.Channels;
 using CodeIndex.Diagnostics;
 
 namespace CodeIndex.Cli;
@@ -10,11 +12,13 @@ namespace CodeIndex.Cli;
 /// Opt-in JSONL metrics emitter. Resolves the destination from an explicit `--metrics` CLI
 /// path or the `CDIDX_METRICS` environment variable and writes one record per CLI command
 /// (and per MCP tool call) so maintainers can detect latency regressions or throughput
-/// drops without reproducing them by hand. Best-effort: any IO failure is swallowed so
-/// metrics emission cannot break the underlying command (#1549).
+/// drops without reproducing them by hand. Best-effort: runtime failures never break the
+/// command; they emit one bounded warning and remain observable while later batches retry
+/// with bounded backoff (#1549 / #4552).
 /// オプトインのJSONLメトリクス出力。`--metrics` または `CDIDX_METRICS` から出力先を解決し、
-/// CLIコマンドおよびMCPツール呼び出しごとに1レコードを書き出す。IO失敗時はベストエフォートで
-/// 黙って無視し、メトリクス出力がコマンド本体を壊さないようにする (#1549)。
+/// CLIコマンドおよびMCPツール呼び出しごとに1レコードを書き出す。実行時 IO 失敗は本体コマンドを
+/// 壊さず、bounded warning を一度だけ出して可観測性を保ち、後続 batch を bounded backoff で
+/// 再試行する (#1549 / #4552)。
 /// </summary>
 internal static class MetricsSink
 {
@@ -24,16 +28,33 @@ internal static class MetricsSink
     internal const int RotationKeep = 3;
     internal const int MaxStringFieldChars = 1024;
     internal const int MaxSerializedEventBytes = 8 * 1024;
-    internal const int MaxConsecutiveFailures = 3;
+    internal const int DefaultQueueCapacity = 1024;
+    internal const int MaxQueueCapacity = 16 * 1024;
+    internal const int MaxBatchEventCount = 64;
     private const int MaxFailureDiagnosticChars = 192;
+    private static readonly TimeSpan InitialRetryDelay = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan DisposeWriterTimeout = TimeSpan.FromSeconds(5);
 
     internal static IDisposable? TryStart(string? explicitPath) =>
         TryStart(explicitPath, DefaultMaxBytes, CommandErrorWriter.WriteWarning);
 
-    internal static IDisposable? TryStartForTesting(string? explicitPath, long maxBytes) =>
-        TryStart(explicitPath, maxBytes, warningSink: null);
+    internal static Session? TryStartForTesting(
+        string? explicitPath,
+        long maxBytes,
+        int? queueCapacity = null,
+        Action<string>? warningSink = null,
+        Func<TimeSpan, CancellationToken, Task>? retryDelay = null,
+        TimeSpan? disposeWriterTimeout = null) =>
+        TryStart(explicitPath, maxBytes, warningSink, queueCapacity, retryDelay, disposeWriterTimeout) as Session;
 
-    private static IDisposable? TryStart(string? explicitPath, long maxBytes, Action<string>? warningSink)
+    private static IDisposable? TryStart(
+        string? explicitPath,
+        long maxBytes,
+        Action<string>? warningSink,
+        int? queueCapacity = null,
+        Func<TimeSpan, CancellationToken, Task>? retryDelay = null,
+        TimeSpan? disposeWriterTimeout = null)
     {
         var path = ResolvePath(explicitPath);
         if (string.IsNullOrWhiteSpace(path))
@@ -51,7 +72,7 @@ internal static class MetricsSink
             }
             PrivateLogFile.TrySetPrivatePermissions(fullPath);
 
-            var session = new Session(fullPath, maxBytes, bytesWritten);
+            var session = new Session(fullPath, maxBytes, bytesWritten, warningSink, queueCapacity, retryDelay, disposeWriterTimeout);
             CurrentSession.Value = session;
             return session;
         }
@@ -72,6 +93,9 @@ internal static class MetricsSink
     internal static MetricsDiagnostics? SnapshotDiagnosticsForTesting()
         => CurrentSession.Value?.SnapshotDiagnostics();
 
+    internal static MetricsDiagnostics? SnapshotDiagnostics()
+        => CurrentSession.Value?.SnapshotDiagnostics();
+
     internal static void Record(MetricsEvent evt)
     {
         var session = CurrentSession.Value;
@@ -89,7 +113,7 @@ internal static class MetricsSink
 
     private static string FormatFailure(string reason, Exception exception)
     {
-        var formatted = $"{reason}:{exception.GetType().Name}:{CommandErrorWriter.FormatSanitizedException(exception)}";
+        var formatted = $"{reason}:{DiagnosticRedactor.ClassifyException(exception)}:{exception.GetType().Name}";
         return formatted.Length <= MaxFailureDiagnosticChars
             ? formatted
             : formatted[..MaxFailureDiagnosticChars];
@@ -97,89 +121,330 @@ internal static class MetricsSink
 
     internal sealed class Session : IDisposable
     {
-        private readonly object _gate = new();
         private readonly Encoding _utf8NoBom = new UTF8Encoding(false);
         private readonly long _maxBytes;
+        private readonly int _queueCapacity;
+        private readonly Channel<QueuedEvent> _eventQueue;
+        private readonly ConcurrentDictionary<long, QueuedEvent> _pendingEvents = new();
+        private readonly object _producerGate = new();
+        private readonly Task _writerTask;
+        private readonly ManualResetEventSlim _idleEvent = new(initialState: true);
+        private readonly CancellationTokenSource _shutdownSignal = new();
+        private readonly Action<string>? _warningSink;
+        private readonly Func<TimeSpan, CancellationToken, Task> _retryDelay;
+        private readonly TimeSpan _disposeWriterTimeout;
         private long _bytesWritten;
+        private long _pendingEventCount;
+        private long _queueDepth;
+        private long _queuedEventCount;
+        private long _writtenEventCount;
         private long _droppedEventCount;
+        private long _queueFullDropCount;
+        private long _serializationFailureCount;
         private long _writeFailureCount;
         private long _rotationFailureCount;
+        private long _batchFlushCount;
+        private long _recoveryCount;
+        private long _nextRetryAtUtcTicks;
+        private long _lastRecoveryAtUtcTicks;
+        private long _nextEventId;
         private int _consecutiveFailureCount;
-        private bool _disabledForFailures;
+        private int _degraded;
+        private int _warningEmitted;
         private string? _lastFailure;
-        private bool _disposed;
+        private int _activeProducerCount;
+        private int _disposed;
 
-        public Session(string path, long maxBytes, long bytesWritten)
+        public Session(
+            string path,
+            long maxBytes,
+            long bytesWritten,
+            Action<string>? warningSink,
+            int? queueCapacity = null,
+            Func<TimeSpan, CancellationToken, Task>? retryDelay = null,
+            TimeSpan? disposeWriterTimeout = null)
         {
             Path = path;
             _maxBytes = maxBytes;
             _bytesWritten = bytesWritten;
+            _warningSink = warningSink;
+            _retryDelay = retryDelay ?? ((delay, cancellationToken) => Task.Delay(delay, cancellationToken));
+            _disposeWriterTimeout = disposeWriterTimeout ?? DisposeWriterTimeout;
+            if (_disposeWriterTimeout < TimeSpan.Zero)
+                throw new ArgumentOutOfRangeException(nameof(disposeWriterTimeout));
+            _queueCapacity = ResolveQueueCapacity(queueCapacity);
+            _eventQueue = Channel.CreateBounded<QueuedEvent>(new BoundedChannelOptions(_queueCapacity)
+            {
+                SingleReader = true,
+                SingleWriter = false,
+                FullMode = BoundedChannelFullMode.Wait,
+                AllowSynchronousContinuations = false,
+            });
+            _writerTask = BackgroundTaskObserver.Run(DrainQueueAsync, "cdidx-metrics", "metrics writer");
         }
 
         public string Path { get; }
 
+        internal Action? BeforeBatchWriteForTests { get; set; }
+
+        internal Action? BeforePublishForTests { get; set; }
+
         internal MetricsDiagnostics SnapshotDiagnostics()
         {
-            lock (_gate)
-            {
-                return new MetricsDiagnostics(
-                    Path,
-                    _bytesWritten,
-                    _disposed,
-                    _disabledForFailures,
-                    _consecutiveFailureCount,
-                    _droppedEventCount,
-                    _writeFailureCount,
-                    _rotationFailureCount,
-                    _lastFailure);
-            }
+            var nextRetryAtTicks = Interlocked.Read(ref _nextRetryAtUtcTicks);
+            var lastRecoveryAtTicks = Interlocked.Read(ref _lastRecoveryAtUtcTicks);
+            return new MetricsDiagnostics(
+                Path,
+                _maxBytes,
+                Volatile.Read(ref _bytesWritten),
+                Volatile.Read(ref _disposed) != 0,
+                Volatile.Read(ref _degraded) != 0,
+                _queueCapacity,
+                Math.Max(0, Interlocked.Read(ref _queueDepth)),
+                Interlocked.Read(ref _queuedEventCount),
+                Interlocked.Read(ref _writtenEventCount),
+                Interlocked.Read(ref _droppedEventCount),
+                Interlocked.Read(ref _queueFullDropCount),
+                Interlocked.Read(ref _serializationFailureCount),
+                Interlocked.Read(ref _writeFailureCount),
+                Interlocked.Read(ref _rotationFailureCount),
+                Interlocked.Read(ref _batchFlushCount),
+                Volatile.Read(ref _consecutiveFailureCount),
+                Interlocked.Read(ref _recoveryCount),
+                ToTimestamp(nextRetryAtTicks),
+                ToTimestamp(lastRecoveryAtTicks),
+                Volatile.Read(ref _lastFailure));
         }
 
         public void Write(MetricsEvent evt)
         {
-            lock (_gate)
+            QueuedEvent queuedEvent;
+            lock (_producerGate)
             {
-                if (_disposed || _disabledForFailures)
+                if (Volatile.Read(ref _disposed) != 0)
                     return;
 
+                _activeProducerCount++;
+                queuedEvent = new QueuedEvent(Interlocked.Increment(ref _nextEventId));
+                _pendingEvents[queuedEvent.Id] = queuedEvent;
+                if (Interlocked.Increment(ref _pendingEventCount) == 1)
+                    _idleEvent.Reset();
+            }
+
+            var published = false;
+            try
+            {
+                byte[] encoded;
                 try
                 {
-                    var encoded = _utf8NoBom.GetBytes(SerializeEvent(evt) + Environment.NewLine);
-                    if (_bytesWritten > 0 && _bytesWritten + encoded.Length > _maxBytes && !RotateLocked("rotation_failure"))
-                        return;
-
-                    using (var stream = PrivateLogFile.OpenAppend(Path, FileShare.ReadWrite))
-                    {
-                        stream.Write(encoded, 0, encoded.Length);
-                        stream.Flush();
-                    }
-                    _bytesWritten += encoded.Length;
-                    _consecutiveFailureCount = 0;
-
-                    if (_bytesWritten >= _maxBytes)
-                        RotateLocked("rotation_failure");
+                    encoded = _utf8NoBom.GetBytes(SerializeEvent(evt) + Environment.NewLine);
                 }
                 catch (Exception ex)
                 {
-                    // Best-effort only / ベストエフォートのみ
-                    RecordFailureLocked("write_failure", ex);
+                    Interlocked.Increment(ref _serializationFailureCount);
+                    if (queuedEvent.TryMarkDropped())
+                        RecordDrop(1, "serialization_failure", ex, warn: true);
+                    return;
                 }
+
+                queuedEvent.SetEncoded(encoded);
+                BeforePublishForTests?.Invoke();
+                if (!queuedEvent.IsPending)
+                    return;
+
+                if (_eventQueue.Writer.TryWrite(queuedEvent))
+                {
+                    published = true;
+                    Interlocked.Increment(ref _queueDepth);
+                    Interlocked.Increment(ref _queuedEventCount);
+                    return;
+                }
+
+                if (queuedEvent.TryMarkDropped())
+                {
+                    Interlocked.Increment(ref _queueFullDropCount);
+                    RecordDrop(1, "queue_full", new MetricsQueueFullException(), warn: true);
+                }
+            }
+            finally
+            {
+                if (!published)
+                    MarkEventCompleted(queuedEvent);
+                CompleteProducerAdmission();
+            }
+        }
+
+        private void CompleteProducerAdmission()
+        {
+            lock (_producerGate)
+            {
+                _activeProducerCount--;
+                if (Volatile.Read(ref _disposed) != 0 && _activeProducerCount == 0)
+                    _eventQueue.Writer.TryComplete();
             }
         }
 
         public void Dispose()
         {
-            lock (_gate)
+            lock (_producerGate)
             {
-                if (_disposed)
+                if (Volatile.Read(ref _disposed) != 0)
                     return;
 
-                _disposed = true;
+                Volatile.Write(ref _disposed, 1);
+                if (_activeProducerCount == 0)
+                    _eventQueue.Writer.TryComplete();
+            }
+
+            if (ReferenceEquals(CurrentSession.Value, this))
                 CurrentSession.Value = null;
+            _shutdownSignal.Cancel();
+            try
+            {
+                if (!_writerTask.Wait(_disposeWriterTimeout))
+                    AccountShutdownTimeoutDrops();
+            }
+            catch
+            {
+                AccountShutdownTimeoutDrops();
+                // Metrics are best-effort and must not hold process shutdown indefinitely.
+                // メトリクスは best-effort であり、プロセス終了を無期限に止めない。
             }
         }
 
-        private bool RotateLocked(string reason)
+        internal bool WaitForIdle(TimeSpan timeout)
+            => WaitForIdle(timeout, CancellationToken.None);
+
+        internal bool WaitForIdle(TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Interlocked.Read(ref _pendingEventCount) <= 0 || _idleEvent.Wait(timeout, cancellationToken);
+        }
+
+        private async Task DrainQueueAsync()
+        {
+            var batch = new List<QueuedEvent>(MaxBatchEventCount);
+            while (await _eventQueue.Reader.WaitToReadAsync().ConfigureAwait(false))
+            {
+                batch.Clear();
+                while (batch.Count < MaxBatchEventCount && _eventQueue.Reader.TryRead(out var queuedEvent))
+                {
+                    Interlocked.Decrement(ref _queueDepth);
+                    batch.Add(queuedEvent);
+                }
+                if (batch.Count == 0)
+                    continue;
+
+                await WaitForRetryAsync().ConfigureAwait(false);
+                try
+                {
+                    WriteBatch(batch);
+                }
+                catch (Exception ex)
+                {
+                    // Keep the single reader alive even if a test hook or an unexpected
+                    // stream implementation throws outside the normal write guards.
+                    // test hook や予期しない stream 実装が通常の guard 外で失敗しても
+                    // single reader を生存させる。
+                    Interlocked.Increment(ref _writeFailureCount);
+                    RecordRuntimeFailure("write_failure", ex, batch, 0);
+                }
+                finally
+                {
+                    for (var i = 0; i < batch.Count; i++)
+                        MarkEventCompleted(batch[i]);
+                }
+            }
+        }
+
+        private async Task WaitForRetryAsync()
+        {
+            var scheduledTicks = Interlocked.Read(ref _nextRetryAtUtcTicks);
+            if (scheduledTicks <= 0)
+                return;
+
+            var delay = new TimeSpan(Math.Max(0, scheduledTicks - DateTimeOffset.UtcNow.UtcTicks));
+            if (delay > TimeSpan.Zero)
+            {
+                try
+                {
+                    await _retryDelay(delay, _shutdownSignal.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (_shutdownSignal.IsCancellationRequested)
+                {
+                    // Shutdown skips retry sleep so queued events get a bounded drain chance.
+                    // 終了時は retry sleep を飛ばし、queued event の bounded drain を試みる。
+                }
+            }
+            Interlocked.CompareExchange(ref _nextRetryAtUtcTicks, 0, scheduledTicks);
+        }
+
+        private void WriteBatch(IReadOnlyList<QueuedEvent> sourceBatch)
+        {
+            BeforeBatchWriteForTests?.Invoke();
+            var batch = sourceBatch.Where(queuedEvent => queuedEvent.IsPending).ToList();
+            if (batch.Count == 0)
+                return;
+
+            var wroteAny = false;
+            var index = 0;
+            while (index < batch.Count)
+            {
+                var currentBytes = Volatile.Read(ref _bytesWritten);
+                if (currentBytes > 0 && currentBytes + batch[index].Encoded.Length > _maxBytes)
+                {
+                    if (!TryRotate(batch, index))
+                        return;
+                    currentBytes = 0;
+                }
+
+                var start = index;
+                long segmentBytes = 0;
+                while (index < batch.Count)
+                {
+                    var nextLength = batch[index].Encoded.Length;
+                    if (segmentBytes > 0 && currentBytes + segmentBytes + nextLength > _maxBytes)
+                        break;
+                    segmentBytes += nextLength;
+                    index++;
+                    if (currentBytes + segmentBytes >= _maxBytes)
+                        break;
+                }
+
+                try
+                {
+                    using (var stream = PrivateLogFile.OpenAppend(Path, FileShare.ReadWrite))
+                    {
+                        for (var i = start; i < index; i++)
+                            stream.Write(batch[i].Encoded, 0, batch[i].Encoded.Length);
+                        stream.Flush();
+                    }
+                    Volatile.Write(ref _bytesWritten, currentBytes + segmentBytes);
+                    for (var i = start; i < index; i++)
+                    {
+                        if (!batch[i].TryMarkWritten())
+                            continue;
+                        Interlocked.Increment(ref _writtenEventCount);
+                        wroteAny = true;
+                    }
+                    Interlocked.Increment(ref _batchFlushCount);
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.Increment(ref _writeFailureCount);
+                    RecordRuntimeFailure("write_failure", ex, batch, start);
+                    return;
+                }
+
+                if (Volatile.Read(ref _bytesWritten) >= _maxBytes && !TryRotate(batch, index))
+                    return;
+            }
+
+            if (wroteAny)
+                RecordRecoveryIfNeeded();
+        }
+
+        private bool TryRotate(IReadOnlyList<QueuedEvent> batch, int dropStart)
         {
             var capturedFailure = default(Exception);
             if (PrivateLogFile.TryRotateSlots(
@@ -187,32 +452,141 @@ internal static class MetricsSink
                 RotationKeep,
                 onFailure: ex => capturedFailure = ex))
             {
-                _bytesWritten = 0;
-                _consecutiveFailureCount = 0;
+                Volatile.Write(ref _bytesWritten, 0);
                 return true;
             }
 
-            RecordFailureLocked(reason, capturedFailure ?? new IOException("metrics rotation failed"));
+            Interlocked.Increment(ref _rotationFailureCount);
+            RecordRuntimeFailure(
+                "rotation_failure",
+                capturedFailure ?? new IOException("metrics rotation failed"),
+                batch,
+                dropStart);
             return false;
         }
 
-        private void RecordFailureLocked(string reason, Exception exception)
+        private void RecordRuntimeFailure(
+            string reason,
+            Exception exception,
+            IReadOnlyList<QueuedEvent> batch,
+            int dropStart)
         {
-            _droppedEventCount++;
-            _consecutiveFailureCount++;
-            switch (reason)
+            var droppedEventCount = 0;
+            for (var i = dropStart; i < batch.Count; i++)
             {
-                case "write_failure":
-                    _writeFailureCount++;
-                    break;
-                case "rotation_failure":
-                    _rotationFailureCount++;
-                    break;
+                if (batch[i].TryMarkDropped())
+                    droppedEventCount++;
             }
+            if (droppedEventCount != 0)
+                Interlocked.Add(ref _droppedEventCount, droppedEventCount);
+            var consecutiveFailures = Interlocked.Increment(ref _consecutiveFailureCount);
+            Volatile.Write(ref _degraded, 1);
+            Volatile.Write(ref _lastFailure, FormatFailure(reason, exception));
+            var nextRetryAt = DateTimeOffset.UtcNow.Add(CalculateRetryDelay(consecutiveFailures));
+            Interlocked.Exchange(ref _nextRetryAtUtcTicks, nextRetryAt.UtcTicks);
+            WarnOnce();
+        }
 
-            _lastFailure = FormatFailure(reason, exception);
-            if (_consecutiveFailureCount >= MaxConsecutiveFailures)
-                _disabledForFailures = true;
+        internal static TimeSpan CalculateRetryDelay(int consecutiveFailureCount)
+        {
+            if (consecutiveFailureCount <= 0)
+                throw new ArgumentOutOfRangeException(nameof(consecutiveFailureCount));
+
+            var exponent = Math.Min(20, consecutiveFailureCount - 1);
+            var retryMilliseconds = Math.Min(
+                MaxRetryDelay.TotalMilliseconds,
+                InitialRetryDelay.TotalMilliseconds * Math.Pow(2, exponent));
+            return TimeSpan.FromMilliseconds(retryMilliseconds);
+        }
+
+        private void RecordDrop(int count, string reason, Exception exception, bool warn)
+        {
+            Interlocked.Add(ref _droppedEventCount, count);
+            Volatile.Write(ref _degraded, 1);
+            Volatile.Write(ref _lastFailure, FormatFailure(reason, exception));
+            if (warn)
+                WarnOnce();
+        }
+
+        private void RecordRecoveryIfNeeded()
+        {
+            Interlocked.Exchange(ref _consecutiveFailureCount, 0);
+            Interlocked.Exchange(ref _nextRetryAtUtcTicks, 0);
+            if (Interlocked.Exchange(ref _degraded, 0) == 0)
+                return;
+
+            Interlocked.Increment(ref _recoveryCount);
+            Interlocked.Exchange(ref _lastRecoveryAtUtcTicks, DateTimeOffset.UtcNow.UtcTicks);
+        }
+
+        private void WarnOnce()
+        {
+            if (_warningSink is null || Interlocked.Exchange(ref _warningEmitted, 1) != 0)
+                return;
+
+            try
+            {
+                _warningSink("metrics output degraded; events were dropped or delayed; the background sink will keep retrying.");
+            }
+            catch
+            {
+                // Diagnostic output must never break the command or the writer loop.
+            }
+        }
+
+        private void AccountShutdownTimeoutDrops()
+        {
+            var abandoned = 0;
+            foreach (var queuedEvent in _pendingEvents.Values)
+            {
+                if (queuedEvent.TryMarkDropped())
+                    abandoned++;
+            }
+            if (abandoned == 0)
+                return;
+
+            Interlocked.Add(ref _droppedEventCount, abandoned);
+            Volatile.Write(ref _degraded, 1);
+            Volatile.Write(ref _lastFailure, "shutdown_timeout:timeout:TimeoutException");
+            WarnOnce();
+        }
+
+        private void MarkEventCompleted(QueuedEvent queuedEvent)
+        {
+            _pendingEvents.TryRemove(queuedEvent.Id, out _);
+            if (Interlocked.Decrement(ref _pendingEventCount) <= 0)
+                _idleEvent.Set();
+        }
+
+        private static int ResolveQueueCapacity(int? queueCapacity)
+        {
+            var capacity = queueCapacity ?? DefaultQueueCapacity;
+            if (capacity <= 0 || capacity > MaxQueueCapacity)
+                throw new ArgumentOutOfRangeException(
+                    nameof(queueCapacity),
+                    capacity,
+                    $"Metrics queue capacity must be between 1 and {MaxQueueCapacity.ToString(CultureInfo.InvariantCulture)}.");
+            return capacity;
+        }
+
+        private static DateTimeOffset? ToTimestamp(long utcTicks)
+            => utcTicks <= 0 ? null : new DateTimeOffset(utcTicks, TimeSpan.Zero);
+
+        private sealed class MetricsQueueFullException : Exception
+        {
+        }
+
+        private sealed class QueuedEvent(long id)
+        {
+            private byte[]? _encoded;
+            private int _outcome;
+
+            internal long Id { get; } = id;
+            internal byte[] Encoded => _encoded ?? throw new InvalidOperationException("Metrics event was published before serialization completed.");
+            internal bool IsPending => Volatile.Read(ref _outcome) == 0;
+            internal void SetEncoded(byte[] encoded) => _encoded = encoded;
+            internal bool TryMarkWritten() => Interlocked.CompareExchange(ref _outcome, 1, 0) == 0;
+            internal bool TryMarkDropped() => Interlocked.CompareExchange(ref _outcome, 2, 0) == 0;
         }
     }
 
@@ -310,13 +684,24 @@ internal readonly record struct BoundedMetricsString(string Text, int OriginalLe
 
 internal sealed record MetricsDiagnostics(
     string Path,
+    long MaxBytes,
     long BytesWritten,
     bool Disposed,
-    bool DisabledForFailures,
-    int ConsecutiveFailureCount,
+    bool Degraded,
+    int QueueCapacity,
+    long QueueDepth,
+    long QueuedEventCount,
+    long WrittenEventCount,
     long DroppedEventCount,
+    long QueueFullDropCount,
+    long SerializationFailureCount,
     long WriteFailureCount,
     long RotationFailureCount,
+    long BatchFlushCount,
+    int ConsecutiveFailureCount,
+    long RecoveryCount,
+    DateTimeOffset? NextRetryAt,
+    DateTimeOffset? LastRecoveryAt,
     string? LastFailure);
 
 /// <summary>

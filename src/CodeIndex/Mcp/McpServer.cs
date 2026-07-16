@@ -2405,6 +2405,7 @@ public partial class McpServer : IDisposable
         }
         if (auditLogDiagnostics is not null)
             result["audit_log"] = BuildAuditLogStatus(auditLogDiagnostics);
+        result["metrics"] = BuildMetricsStatus(MetricsSink.SnapshotDiagnostics());
         if (!string.IsNullOrWhiteSpace(dbError))
             result["db_error"] = dbError;
         return result;

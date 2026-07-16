@@ -961,6 +961,121 @@ public class AuditLogSinkTests
     }
 
     [Fact]
+    public void Shutdown_BlockedWriterReportsAbandonedRecordsAndBoundedWarning_Issue4553()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var path = Path.Combine(Path.GetTempPath(), $"cdidx_audit_shutdown_secret_{Guid.NewGuid():N}.jsonl");
+            using var writerEntered = new ManualResetEventSlim();
+            using var releaseWriter = new ManualResetEventSlim();
+            using var error = new StringWriter();
+            var previousError = Console.Error;
+            var sink = new AuditLogSink(path, AuditLogSink.DefaultMaxBytes, includeValues: false);
+            try
+            {
+                Console.SetError(error);
+                sink.BeforeWriteForTests = () =>
+                {
+                    writerEntered.Set();
+                    releaseWriter.Wait();
+                };
+
+                sink.Record(CreateAuditEvent("first"));
+                Assert.True(writerEntered.Wait(TimeSpan.FromSeconds(5)), "audit writer should enter the blocking hook");
+                sink.Record(CreateAuditEvent("second"));
+
+                var shutdown = sink.Shutdown(TimeSpan.Zero);
+
+                Assert.False(shutdown.FlushCompleted);
+                Assert.True(shutdown.Diagnostics.Disposed);
+                Assert.True(shutdown.Diagnostics.ShutdownFlushTimedOut);
+                Assert.Equal(2, shutdown.Diagnostics.QueueDepth);
+                Assert.Equal(2, shutdown.Diagnostics.QueuedRecordCount);
+                Assert.Equal(0, shutdown.Diagnostics.WrittenRecordCount);
+                Assert.Equal(0, shutdown.Diagnostics.DroppedRecordCount);
+                Assert.Equal(2, shutdown.Diagnostics.ShutdownAbandonedRecordCount);
+
+                var warning = error.ToString();
+                Assert.Contains("MCP audit log shutdown flush did not complete within 0 ms", warning, StringComparison.Ordinal);
+                Assert.Contains("queued=2 written=0 dropped=0 shutdown_abandoned=2", warning, StringComparison.Ordinal);
+                Assert.DoesNotContain(path, warning, StringComparison.Ordinal);
+                Assert.InRange(warning.TrimEnd().Length, 1, AuditLogSink.MaxShutdownDiagnosticChars);
+
+                releaseWriter.Set();
+                var completed = sink.Shutdown(TimeSpan.FromSeconds(5));
+
+                Assert.True(completed.FlushCompleted);
+                Assert.Equal(0, completed.Diagnostics.QueueDepth);
+                Assert.Equal(2, completed.Diagnostics.QueuedRecordCount);
+                Assert.Equal(2, completed.Diagnostics.WrittenRecordCount);
+                Assert.Equal(0, completed.Diagnostics.DroppedRecordCount);
+                Assert.Equal(2, completed.Diagnostics.ShutdownAbandonedRecordCount);
+                Assert.True(completed.Diagnostics.ShutdownFlushTimedOut);
+                Assert.Equal(warning, error.ToString());
+
+                sink.Dispose();
+                Assert.Equal(warning, error.ToString());
+            }
+            finally
+            {
+                releaseWriter.Set();
+                _ = sink.Shutdown(TimeSpan.FromSeconds(5));
+                sink.Dispose();
+                Console.SetError(previousError);
+                TestProjectHelper.DeleteFile(path);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Shutdown_AccountsProducerAdmittedBeforePublish_Issue4553()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx_audit_shutdown_admission_{Guid.NewGuid():N}.jsonl");
+        using var producerEntered = new ManualResetEventSlim(false);
+        using var releaseProducer = new ManualResetEventSlim(false);
+        var sink = new AuditLogSink(path, AuditLogSink.DefaultMaxBytes, includeValues: false);
+        try
+        {
+            sink.BeforePublishForTests = () =>
+            {
+                producerEntered.Set();
+                releaseProducer.Wait(TimeSpan.FromSeconds(5));
+            };
+
+            var recordTask = Task.Run(() => sink.Record(CreateAuditEvent("admitted")));
+            Assert.True(producerEntered.Wait(TimeSpan.FromSeconds(5)));
+
+            var shutdown = sink.Shutdown(TimeSpan.Zero);
+
+            Assert.False(shutdown.FlushCompleted);
+            Assert.True(shutdown.Diagnostics.ShutdownFlushTimedOut);
+            Assert.Equal(1, shutdown.Diagnostics.QueueDepth);
+            Assert.Equal(0, shutdown.Diagnostics.QueuedRecordCount);
+            Assert.Equal(0, shutdown.Diagnostics.WrittenRecordCount);
+            Assert.Equal(0, shutdown.Diagnostics.DroppedRecordCount);
+            Assert.Equal(1, shutdown.Diagnostics.ShutdownAbandonedRecordCount);
+
+            releaseProducer.Set();
+            await recordTask.WaitAsync(TimeSpan.FromSeconds(5));
+            var completed = sink.Shutdown(TimeSpan.FromSeconds(5));
+
+            Assert.True(completed.FlushCompleted);
+            Assert.Equal(0, completed.Diagnostics.QueueDepth);
+            Assert.Equal(1, completed.Diagnostics.QueuedRecordCount);
+            Assert.Equal(1, completed.Diagnostics.WrittenRecordCount);
+            Assert.Equal(0, completed.Diagnostics.DroppedRecordCount);
+            Assert.Equal(1, completed.Diagnostics.ShutdownAbandonedRecordCount);
+        }
+        finally
+        {
+            releaseProducer.Set();
+            _ = sink.Shutdown(TimeSpan.FromSeconds(5));
+            sink.Dispose();
+            TestProjectHelper.DeleteFile(path);
+        }
+    }
+
+    [Fact]
     public void Dispose_DrainsQueuedRecordsAndIgnoresLaterRecords_Issue4175()
     {
         var path = Path.Combine(Path.GetTempPath(), $"cdidx_audit_dispose_{Guid.NewGuid():N}.jsonl");
@@ -976,7 +1091,14 @@ public class AuditLogSinkTests
             Assert.Single(lines);
             using var doc = JsonDocument.Parse(lines[0]);
             Assert.Equal("search", doc.RootElement.GetProperty("tool").GetString());
-            Assert.True(sink.SnapshotDiagnostics().Disposed);
+            var diagnostics = sink.SnapshotDiagnostics();
+            Assert.True(diagnostics.Disposed);
+            Assert.Equal(0, diagnostics.QueueDepth);
+            Assert.Equal(1, diagnostics.QueuedRecordCount);
+            Assert.Equal(1, diagnostics.WrittenRecordCount);
+            Assert.Equal(0, diagnostics.DroppedRecordCount);
+            Assert.Equal(0, diagnostics.ShutdownAbandonedRecordCount);
+            Assert.False(diagnostics.ShutdownFlushTimedOut);
         }
         finally
         {

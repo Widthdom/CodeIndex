@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Collections.Concurrent;
 using CodeIndex.Cli;
 
 namespace CodeIndex.Tests;
@@ -172,6 +173,7 @@ public class MetricsSinkTests
                 ElapsedMs: 1.0,
                 ExitCode: 0));
 
+            Assert.True(session.WaitForIdle(TimeSpan.FromSeconds(5)));
             Assert.True(File.Exists(metricsPath + ".1"));
             Assert.True(File.Exists(metricsPath));
             Assert.False(File.Exists(metricsPath + ".3"));
@@ -214,9 +216,11 @@ public class MetricsSinkTests
             Assert.NotNull(session);
 
             MetricsSink.Record(first);
+            Assert.True(session.WaitForIdle(TimeSpan.FromSeconds(5)));
             Assert.False(File.Exists(metricsPath + ".1"));
 
             MetricsSink.Record(second);
+            Assert.True(session.WaitForIdle(TimeSpan.FromSeconds(5)));
 
             Assert.Contains("\"tool\":\"search\"", File.ReadAllText(metricsPath + ".1"), StringComparison.Ordinal);
             Assert.Contains("\"tool\":\"status\"", File.ReadAllText(metricsPath), StringComparison.Ordinal);
@@ -229,39 +233,293 @@ public class MetricsSinkTests
     }
 
     [Fact]
-    public void Record_DisablesSessionAfterRepeatedWriteFailures_Issue3824()
+    public void Record_RuntimeFailuresBackOffThenRecoverAndWarnOnce_Issue4552()
     {
         var metricsPath = Path.Combine(Path.GetTempPath(), $"cdidx_metrics_failure_{Guid.NewGuid():N}.jsonl");
+        var warnings = new ConcurrentQueue<string>();
         try
         {
-            using var session = MetricsSink.TryStartForTesting(metricsPath, maxBytes: 1024 * 1024);
+            using var session = MetricsSink.TryStartForTesting(
+                metricsPath,
+                maxBytes: 1024 * 1024,
+                warningSink: warnings.Enqueue,
+                retryDelay: static (_, _) => Task.CompletedTask);
             Assert.NotNull(session);
             File.Delete(metricsPath);
             Directory.CreateDirectory(metricsPath);
 
-            for (var i = 0; i < MetricsSink.MaxConsecutiveFailures + 2; i++)
-            {
-                MetricsSink.Record(new MetricsEvent(
-                    Timestamp: DateTimeOffset.UtcNow,
-                    Tool: "search",
-                    Source: "cli",
-                    ElapsedMs: 1.0,
-                    ExitCode: 0));
-            }
+            MetricsSink.Record(CreateEvent("failed-1"));
+            Assert.True(session.WaitForIdle(TimeSpan.FromSeconds(5)));
+            MetricsSink.Record(CreateEvent("failed-2"));
+            Assert.True(session.WaitForIdle(TimeSpan.FromSeconds(5)));
 
-            var diagnostics = Assert.IsType<MetricsDiagnostics>(MetricsSink.SnapshotDiagnosticsForTesting());
-            Assert.True(diagnostics.DisabledForFailures);
-            Assert.Equal(MetricsSink.MaxConsecutiveFailures, diagnostics.ConsecutiveFailureCount);
-            Assert.Equal(MetricsSink.MaxConsecutiveFailures, diagnostics.DroppedEventCount);
-            Assert.Equal(MetricsSink.MaxConsecutiveFailures, diagnostics.WriteFailureCount);
-            Assert.Equal(0, diagnostics.RotationFailureCount);
-            Assert.StartsWith("write_failure:", diagnostics.LastFailure!, StringComparison.Ordinal);
-            Assert.True(diagnostics.LastFailure!.Length <= 192);
+            var failed = Assert.IsType<MetricsDiagnostics>(MetricsSink.SnapshotDiagnosticsForTesting());
+            Assert.True(failed.Degraded);
+            Assert.Equal(2, failed.ConsecutiveFailureCount);
+            Assert.Equal(2, failed.DroppedEventCount);
+            Assert.Equal(2, failed.WriteFailureCount);
+            Assert.Equal(0, failed.RotationFailureCount);
+            Assert.NotNull(failed.NextRetryAt);
+            Assert.StartsWith("write_failure:", failed.LastFailure!, StringComparison.Ordinal);
+            var warning = Assert.Single(warnings);
+            Assert.DoesNotContain(metricsPath, warning, StringComparison.Ordinal);
+
+            Directory.Delete(metricsPath);
+            MetricsSink.Record(CreateEvent("recovered"));
+            Assert.True(session.WaitForIdle(TimeSpan.FromSeconds(5)));
+
+            var recovered = Assert.IsType<MetricsDiagnostics>(MetricsSink.SnapshotDiagnosticsForTesting());
+            Assert.False(recovered.Degraded);
+            Assert.Equal(0, recovered.ConsecutiveFailureCount);
+            Assert.Equal(1, recovered.WrittenEventCount);
+            Assert.Equal(1, recovered.RecoveryCount);
+            Assert.NotNull(recovered.LastRecoveryAt);
+            Assert.Null(recovered.NextRetryAt);
+            Assert.Single(warnings);
+            Assert.Contains("\"tool\":\"recovered\"", File.ReadAllText(metricsPath), StringComparison.Ordinal);
         }
         finally
         {
             TestProjectHelper.DeleteFile(metricsPath);
             TestProjectHelper.DeleteDirectory(metricsPath);
+        }
+    }
+
+    [Theory]
+    [InlineData(1, 100)]
+    [InlineData(2, 200)]
+    [InlineData(3, 400)]
+    [InlineData(8, 12_800)]
+    [InlineData(9, 25_600)]
+    [InlineData(10, 30_000)]
+    [InlineData(21, 30_000)]
+    public void CalculateRetryDelay_GrowsExponentiallyAndCapsAtThirtySeconds_Issue4552(
+        int consecutiveFailureCount,
+        int expectedMilliseconds)
+    {
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(expectedMilliseconds),
+            MetricsSink.Session.CalculateRetryDelay(consecutiveFailureCount));
+    }
+
+    [Fact]
+    public void Record_FullQueueDropsWithoutBlockingAndBatchesQueuedEvents_Issue4552()
+    {
+        var metricsPath = Path.Combine(Path.GetTempPath(), $"cdidx_metrics_queue_{Guid.NewGuid():N}.jsonl");
+        using var writerEntered = new ManualResetEventSlim(false);
+        using var releaseWriter = new ManualResetEventSlim(false);
+        try
+        {
+            using var session = MetricsSink.TryStartForTesting(metricsPath, maxBytes: 1024 * 1024, queueCapacity: 1);
+            Assert.NotNull(session);
+            var hookCalls = 0;
+            session.BeforeBatchWriteForTests = () =>
+            {
+                if (Interlocked.Increment(ref hookCalls) != 1)
+                    return;
+                writerEntered.Set();
+                releaseWriter.Wait(TimeSpan.FromSeconds(5));
+            };
+
+            MetricsSink.Record(CreateEvent("first"));
+            Assert.True(writerEntered.Wait(TimeSpan.FromSeconds(5)));
+            MetricsSink.Record(CreateEvent("second"));
+            MetricsSink.Record(CreateEvent("dropped"));
+
+            var saturated = session.SnapshotDiagnostics();
+            Assert.Equal(2, saturated.QueuedEventCount);
+            Assert.Equal(1, saturated.DroppedEventCount);
+            Assert.Equal(1, saturated.QueueFullDropCount);
+            Assert.Equal(1, saturated.QueueDepth);
+
+            releaseWriter.Set();
+            Assert.True(session.WaitForIdle(TimeSpan.FromSeconds(5)));
+            var drained = session.SnapshotDiagnostics();
+            Assert.Equal(2, drained.WrittenEventCount);
+            Assert.Equal(0, drained.QueueDepth);
+            Assert.Equal(2, drained.BatchFlushCount);
+        }
+        finally
+        {
+            releaseWriter.Set();
+            TestProjectHelper.DeleteFile(metricsPath);
+        }
+    }
+
+    [Fact]
+    public void Record_DrainsBurstsWithFewerFlushesThanEvents_Issue4552()
+    {
+        var metricsPath = Path.Combine(Path.GetTempPath(), $"cdidx_metrics_batch_{Guid.NewGuid():N}.jsonl");
+        using var writerEntered = new ManualResetEventSlim(false);
+        using var releaseWriter = new ManualResetEventSlim(false);
+        try
+        {
+            using var session = MetricsSink.TryStartForTesting(metricsPath, maxBytes: 1024 * 1024, queueCapacity: 16);
+            Assert.NotNull(session);
+            var hookCalls = 0;
+            session.BeforeBatchWriteForTests = () =>
+            {
+                if (Interlocked.Increment(ref hookCalls) != 1)
+                    return;
+                writerEntered.Set();
+                releaseWriter.Wait(TimeSpan.FromSeconds(5));
+            };
+
+            MetricsSink.Record(CreateEvent("first"));
+            Assert.True(writerEntered.Wait(TimeSpan.FromSeconds(5)));
+            for (var i = 0; i < 5; i++)
+                MetricsSink.Record(CreateEvent($"burst-{i}"));
+            releaseWriter.Set();
+
+            Assert.True(session.WaitForIdle(TimeSpan.FromSeconds(5)));
+            var diagnostics = session.SnapshotDiagnostics();
+            Assert.Equal(6, diagnostics.QueuedEventCount);
+            Assert.Equal(6, diagnostics.WrittenEventCount);
+            Assert.Equal(2, diagnostics.BatchFlushCount);
+        }
+        finally
+        {
+            releaseWriter.Set();
+            TestProjectHelper.DeleteFile(metricsPath);
+        }
+    }
+
+    [Fact]
+    public void Dispose_CancelsBackoffAndDrainsQueuedEvents_Issue4552()
+    {
+        var metricsPath = Path.Combine(Path.GetTempPath(), $"cdidx_metrics_dispose_{Guid.NewGuid():N}.jsonl");
+        using var retryEntered = new ManualResetEventSlim(false);
+        MetricsSink.Session? session = null;
+        try
+        {
+            session = MetricsSink.TryStartForTesting(
+                metricsPath,
+                maxBytes: 1024 * 1024,
+                retryDelay: (_, cancellationToken) =>
+                {
+                    retryEntered.Set();
+                    return Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                });
+            Assert.NotNull(session);
+            File.Delete(metricsPath);
+            Directory.CreateDirectory(metricsPath);
+            MetricsSink.Record(CreateEvent("failed"));
+            Assert.True(session.WaitForIdle(TimeSpan.FromSeconds(5)));
+
+            Directory.Delete(metricsPath);
+            MetricsSink.Record(CreateEvent("drained-at-dispose"));
+            Assert.True(retryEntered.Wait(TimeSpan.FromSeconds(5)));
+            session.Dispose();
+
+            var diagnostics = session.SnapshotDiagnostics();
+            Assert.True(diagnostics.Disposed);
+            Assert.Equal(0, diagnostics.QueueDepth);
+            Assert.Equal(1, diagnostics.WrittenEventCount);
+            Assert.Equal(1, diagnostics.DroppedEventCount);
+            Assert.Contains("\"tool\":\"drained-at-dispose\"", File.ReadAllText(metricsPath), StringComparison.Ordinal);
+        }
+        finally
+        {
+            session?.Dispose();
+            TestProjectHelper.DeleteFile(metricsPath);
+            TestProjectHelper.DeleteDirectory(metricsPath);
+        }
+    }
+
+    [Fact]
+    public void Dispose_TimeoutAccountsPendingEventsOnce_Issue4552()
+    {
+        var metricsPath = Path.Combine(Path.GetTempPath(), $"cdidx_metrics_dispose_timeout_{Guid.NewGuid():N}.jsonl");
+        using var writerEntered = new ManualResetEventSlim(false);
+        using var releaseWriter = new ManualResetEventSlim(false);
+        MetricsSink.Session? session = null;
+        try
+        {
+            session = MetricsSink.TryStartForTesting(
+                metricsPath,
+                maxBytes: 1024 * 1024,
+                queueCapacity: 4,
+                disposeWriterTimeout: TimeSpan.FromMilliseconds(50));
+            Assert.NotNull(session);
+            session.BeforeBatchWriteForTests = () =>
+            {
+                writerEntered.Set();
+                releaseWriter.Wait(TimeSpan.FromSeconds(5));
+            };
+
+            MetricsSink.Record(CreateEvent("in-flight"));
+            Assert.True(writerEntered.Wait(TimeSpan.FromSeconds(5)));
+            MetricsSink.Record(CreateEvent("queued"));
+            session.Dispose();
+
+            var timedOut = session.SnapshotDiagnostics();
+            Assert.True(timedOut.Disposed);
+            Assert.Equal(2, timedOut.DroppedEventCount);
+            Assert.Equal(1, timedOut.QueueDepth);
+            Assert.Equal("shutdown_timeout:timeout:TimeoutException", timedOut.LastFailure);
+
+            releaseWriter.Set();
+            Assert.True(session.WaitForIdle(TimeSpan.FromSeconds(5)));
+            var completed = session.SnapshotDiagnostics();
+            Assert.Equal(2, completed.DroppedEventCount);
+            Assert.Equal(0, completed.WrittenEventCount);
+            Assert.Equal(0, completed.QueueDepth);
+        }
+        finally
+        {
+            releaseWriter.Set();
+            session?.Dispose();
+            TestProjectHelper.DeleteFile(metricsPath);
+        }
+    }
+
+    [Fact]
+    public async Task Dispose_AccountsProducerAdmittedBeforePublishExactlyOnce_Issue4552()
+    {
+        var metricsPath = Path.Combine(Path.GetTempPath(), $"cdidx_metrics_admission_race_{Guid.NewGuid():N}.jsonl");
+        using var producerEntered = new ManualResetEventSlim(false);
+        using var releaseProducer = new ManualResetEventSlim(false);
+        MetricsSink.Session? session = null;
+        try
+        {
+            session = MetricsSink.TryStartForTesting(
+                metricsPath,
+                maxBytes: 1024 * 1024,
+                disposeWriterTimeout: TimeSpan.FromMilliseconds(50));
+            Assert.NotNull(session);
+            session.BeforePublishForTests = () =>
+            {
+                producerEntered.Set();
+                releaseProducer.Wait(TimeSpan.FromSeconds(5));
+            };
+
+            var recordTask = Task.Run(() => MetricsSink.Record(CreateEvent("admitted")));
+            Assert.True(producerEntered.Wait(TimeSpan.FromSeconds(5)));
+
+            session.Dispose();
+
+            var timedOut = session.SnapshotDiagnostics();
+            Assert.True(timedOut.Disposed);
+            Assert.Equal(0, timedOut.QueuedEventCount);
+            Assert.Equal(0, timedOut.WrittenEventCount);
+            Assert.Equal(1, timedOut.DroppedEventCount);
+            Assert.Equal("shutdown_timeout:timeout:TimeoutException", timedOut.LastFailure);
+
+            releaseProducer.Set();
+            await recordTask.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(session.WaitForIdle(TimeSpan.FromSeconds(5)));
+
+            var completed = session.SnapshotDiagnostics();
+            Assert.Equal(0, completed.QueuedEventCount);
+            Assert.Equal(0, completed.WrittenEventCount);
+            Assert.Equal(1, completed.DroppedEventCount);
+            Assert.Equal(0, completed.QueueDepth);
+        }
+        finally
+        {
+            releaseProducer.Set();
+            session?.Dispose();
+            TestProjectHelper.DeleteFile(metricsPath);
         }
     }
 
@@ -470,6 +728,7 @@ public class MetricsSinkTests
                 Language: oversizedEscaped,
                 Error: oversizedEscaped));
 
+            Assert.True(session.WaitForIdle(TimeSpan.FromSeconds(5)));
             var line = Assert.Single(File.ReadAllLines(metricsPath));
             Assert.True(
                 Encoding.UTF8.GetByteCount(line) <= MetricsSink.MaxSerializedEventBytes,
@@ -490,4 +749,11 @@ public class MetricsSinkTests
 
     private static (int ExitCode, string Stdout, string Stderr) CaptureConsole(Func<int> action)
         => ConsoleCapture.Capture(action);
+
+    private static MetricsEvent CreateEvent(string tool) => new(
+        Timestamp: DateTimeOffset.UtcNow,
+        Tool: tool,
+        Source: "cli",
+        ElapsedMs: 1.0,
+        ExitCode: 0);
 }

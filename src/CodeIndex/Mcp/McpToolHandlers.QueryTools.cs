@@ -1819,6 +1819,7 @@ public partial class McpServer
         }
         if (_auditLog is not null)
             session["audit_log"] = BuildAuditLogStatus(_auditLog.SnapshotDiagnostics());
+        session["metrics"] = BuildMetricsStatus(MetricsSink.SnapshotDiagnostics());
         return session;
     }
 
@@ -1856,7 +1857,8 @@ public partial class McpServer
 
     private static bool IsAuditLogDegraded(AuditLogSink.AuditLogDiagnostics? diagnostics)
         => diagnostics is not null
-            && (diagnostics.DroppedRecordCount > 0 || diagnostics.RotationDegraded);
+            && (diagnostics.DroppedRecordCount > 0
+                || diagnostics.RotationDegraded);
 
     private static JsonObject BuildAuditLogStatus(AuditLogSink.AuditLogDiagnostics diagnostics)
     {
@@ -1870,6 +1872,8 @@ public partial class McpServer
             ["disposed"] = diagnostics.Disposed,
             ["queue_capacity"] = diagnostics.QueueCapacity,
             ["queue_depth"] = diagnostics.QueueDepth,
+            ["queued_record_count"] = diagnostics.QueuedRecordCount,
+            ["written_record_count"] = diagnostics.WrittenRecordCount,
             ["dropped_record_count"] = diagnostics.DroppedRecordCount,
             ["queue_full_drop_count"] = diagnostics.QueueFullDropCount,
             ["serialization_failure_count"] = diagnostics.SerializationFailureCount,
@@ -1882,6 +1886,41 @@ public partial class McpServer
             payload["last_drop_reason"] = diagnostics.LastDropReason;
         if (!string.IsNullOrWhiteSpace(diagnostics.LastRotationFailure))
             payload["last_rotation_failure"] = diagnostics.LastRotationFailure;
+        return payload;
+    }
+
+    private static JsonObject BuildMetricsStatus(MetricsDiagnostics? diagnostics)
+    {
+        if (diagnostics is null)
+            return new JsonObject { ["enabled"] = false };
+
+        var payload = new JsonObject
+        {
+            ["enabled"] = true,
+            ["path"] = diagnostics.Path,
+            ["max_bytes"] = diagnostics.MaxBytes,
+            ["bytes_written"] = diagnostics.BytesWritten,
+            ["disposed"] = diagnostics.Disposed,
+            ["degraded"] = diagnostics.Degraded,
+            ["queue_capacity"] = diagnostics.QueueCapacity,
+            ["queue_depth"] = diagnostics.QueueDepth,
+            ["queued_event_count"] = diagnostics.QueuedEventCount,
+            ["written_event_count"] = diagnostics.WrittenEventCount,
+            ["dropped_event_count"] = diagnostics.DroppedEventCount,
+            ["queue_full_drop_count"] = diagnostics.QueueFullDropCount,
+            ["serialization_failure_count"] = diagnostics.SerializationFailureCount,
+            ["write_failure_count"] = diagnostics.WriteFailureCount,
+            ["rotation_failure_count"] = diagnostics.RotationFailureCount,
+            ["batch_flush_count"] = diagnostics.BatchFlushCount,
+            ["consecutive_failure_count"] = diagnostics.ConsecutiveFailureCount,
+            ["recovery_count"] = diagnostics.RecoveryCount,
+        };
+        if (diagnostics.NextRetryAt is { } nextRetryAt)
+            payload["next_retry_at"] = nextRetryAt.ToString("O", CultureInfo.InvariantCulture);
+        if (diagnostics.LastRecoveryAt is { } lastRecoveryAt)
+            payload["last_recovery_at"] = lastRecoveryAt.ToString("O", CultureInfo.InvariantCulture);
+        if (!string.IsNullOrWhiteSpace(diagnostics.LastFailure))
+            payload["last_failure"] = diagnostics.LastFailure;
         return payload;
     }
 

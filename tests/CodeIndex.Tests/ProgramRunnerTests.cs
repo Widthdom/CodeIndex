@@ -4582,6 +4582,7 @@ exit 7
         Assert.Equal(string.Empty, error);
         Assert.Null(options.Path);
         Assert.False(options.IncludeValues);
+        Assert.False(options.Strict);
         Assert.Equal(AuditLogSink.DefaultMaxBytes, options.MaxBytes);
         Assert.Equal(new[] { "--db", "/tmp/x.db", "--", "foo" }, args);
     }
@@ -4617,6 +4618,18 @@ exit 7
         Assert.True(ok);
         Assert.True(options.IncludeValues);
         Assert.Empty(args);
+    }
+
+    [Fact]
+    public void TryConsumeAuditLogFlags_StrictWithPath_StrippedFromArgs()
+    {
+        var args = new[] { "--audit-log-strict", "--audit-log", "/tmp/a.jsonl", "--db", "/tmp/x.db" };
+        var ok = ProgramRunner.TryConsumeAuditLogFlags(ref args, out var options, out var error);
+
+        Assert.True(ok, error);
+        Assert.True(options.Strict);
+        Assert.Equal("/tmp/a.jsonl", options.Path);
+        Assert.Equal(new[] { "--db", "/tmp/x.db" }, args);
     }
 
     [Fact]
@@ -4662,6 +4675,16 @@ exit 7
     }
 
     [Fact]
+    public void TryConsumeAuditLogFlags_StrictWithoutPath_ReturnsError()
+    {
+        var args = new[] { "--audit-log-strict" };
+        var ok = ProgramRunner.TryConsumeAuditLogFlags(ref args, out _, out var error);
+
+        Assert.False(ok);
+        Assert.Contains("--audit-log-strict requires --audit-log", error);
+    }
+
+    [Fact]
     public void TryConsumeAuditLogFlags_MaxBytesBelowMin_ReturnsError()
     {
         var args = new[] { "--audit-log", "/tmp/a.jsonl", "--audit-log-max-bytes", "10" };
@@ -4702,6 +4725,51 @@ exit 7
         Assert.True(ok);
         Assert.False(options.IncludeValues);
         Assert.Equal(new[] { "--", "--audit-log-include-values" }, args);
+    }
+
+    [Fact]
+    public void TryConsumeAuditLogFlags_StrictAfterDoubleDash_IsPreserved()
+    {
+        var args = new[] { "--audit-log", "/tmp/a.jsonl", "--", "--audit-log-strict" };
+        var ok = ProgramRunner.TryConsumeAuditLogFlags(ref args, out var options, out var error);
+
+        Assert.True(ok, error);
+        Assert.False(options.Strict);
+        Assert.Equal(new[] { "--", "--audit-log-strict" }, args);
+    }
+
+    [Fact]
+    public void RunMcp_AuditLogStrictWithoutPathPrintsUpdatedUsage_Issue4553()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["mcp", "--audit-log-strict"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains("--audit-log-strict requires --audit-log", stderr, StringComparison.Ordinal);
+        Assert.Contains("Usage: cdidx mcp", stderr, StringComparison.Ordinal);
+        Assert.Contains("[--audit-log-strict]", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ResolveMcpAuditShutdownExitCode_StrictFailureChangesOnlySuccess_Issue4553()
+    {
+        Assert.Equal(
+            CommandExitCodes.RuntimeError,
+            ProgramRunner.ResolveMcpAuditShutdownExitCode(CommandExitCodes.Success, strict: true, flushCompleted: false));
+        Assert.Equal(
+            CommandExitCodes.Success,
+            ProgramRunner.ResolveMcpAuditShutdownExitCode(CommandExitCodes.Success, strict: false, flushCompleted: false));
+        Assert.Equal(
+            CommandExitCodes.Success,
+            ProgramRunner.ResolveMcpAuditShutdownExitCode(CommandExitCodes.Success, strict: true, flushCompleted: true));
+        Assert.Equal(
+            CommandExitCodes.DatabaseError,
+            ProgramRunner.ResolveMcpAuditShutdownExitCode(CommandExitCodes.DatabaseError, strict: true, flushCompleted: false));
+        Assert.Equal(
+            CommandExitCodes.CancelledBySignal,
+            ProgramRunner.ResolveMcpAuditShutdownExitCode(CommandExitCodes.CancelledBySignal, strict: true, flushCompleted: false));
     }
 
     [Fact]

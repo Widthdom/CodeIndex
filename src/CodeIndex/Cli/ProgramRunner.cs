@@ -2574,11 +2574,12 @@ internal static partial class ProgramRunner
 
         AuditLogSink? auditLog = null;
         using var mcpEnvironment = CdidxEnvironment.Push(runOptions.EnvironmentOverrides);
+        if (!TryOpenMcpAuditLog(runOptions.AuditOptions, out auditLog, out exitCode))
+            return exitCode;
+
+        var auditFlushCompleted = true;
         try
         {
-            if (!TryOpenMcpAuditLog(runOptions.AuditOptions, out auditLog, out exitCode))
-                return exitCode;
-
             // Pick the JSON-RPC authenticator for the selected transport. Stdio keeps the
             // historical `CDIDX_MCP_AUTH_TOKEN` / `params.auth.token` gate (#1559). HTTP uses
             // its bearer header gate instead, with `CDIDX_MCP_HTTP_TOKEN` taking precedence over
@@ -2592,7 +2593,7 @@ internal static partial class ProgramRunner
             // リクエストに header token と body token の両方を要求しない。ツール有効化ゲート
             // (#1561) は McpServer のコンストラクタ内部で `McpToolFilter.FromEnvironment()`
             // から自動取得される。
-            IMcpAuthenticator authenticator;
+            IMcpAuthenticator? authenticator = null;
             try
             {
                 authenticator = CreateMcpAuthenticatorForTransport(runOptions.Transport);
@@ -2601,17 +2602,48 @@ internal static partial class ProgramRunner
             {
                 CommandErrorWriter.WriteStderr($"Error: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
                 PrintMcpUsage();
-                return CommandExitCodes.UsageError;
+                exitCode = CommandExitCodes.UsageError;
             }
 
-            using var server = new McpServer(runOptions.QueryOptions.DbPath, appVersion, runOptions.QueryOptions.DbPathExplicit, authenticator, auditLog);
-            return RunMcpServer(server, runOptions.Transport, runOptions.ListenSpec, runOptions.AllowUnauthenticatedHttp);
+            if (authenticator is not null)
+            {
+                using var server = new McpServer(runOptions.QueryOptions.DbPath, appVersion, runOptions.QueryOptions.DbPathExplicit, authenticator, auditLog);
+                exitCode = RunMcpServer(server, runOptions.Transport, runOptions.ListenSpec, runOptions.AllowUnauthenticatedHttp);
+            }
         }
         finally
         {
-            auditLog?.Dispose();
+            if (auditLog is not null)
+            {
+                var explicitShutdownCompleted = false;
+                try
+                {
+                    auditFlushCompleted = auditLog.Shutdown().FlushCompleted;
+                    explicitShutdownCompleted = true;
+                }
+                finally
+                {
+                    // Avoid a second bounded wait after a completed Shutdown call. Dispose
+                    // remains the fallback only if explicit shutdown exits unexpectedly.
+                    // 完了済み Shutdown の後に bounded wait を重ねない。明示 shutdown が
+                    // 予期せず終了した場合だけ Dispose を fallback として使う。
+                    if (!explicitShutdownCompleted)
+                        auditLog.Dispose();
+                }
+            }
         }
+
+        // RunDispatchedCommand emits the outer MCP command metric from this returned value,
+        // so resolve strict shutdown only after the sink has reached its final state.
+        // 外側 MCP command metric はこの戻り値を記録するため、sink の最終状態確定後に
+        // strict shutdown の終了コードを解決する。
+        return ResolveMcpAuditShutdownExitCode(exitCode, runOptions.AuditOptions.Strict, auditFlushCompleted);
     }
+
+    internal static int ResolveMcpAuditShutdownExitCode(int serverExitCode, bool strict, bool flushCompleted)
+        => strict && !flushCompleted && serverExitCode == CommandExitCodes.Success
+            ? CommandExitCodes.RuntimeError
+            : serverExitCode;
 
     private static bool TryPrepareMcpRun(string[] cmdArgs, out McpRunOptions runOptions, out int exitCode)
     {
@@ -3022,7 +3054,7 @@ internal static partial class ProgramRunner
 
     private static void PrintMcpUsage()
     {
-        CommandErrorWriter.WriteStderr($"Usage: cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [{AllowUnauthenticatedHttpFlag}] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--suggestion-dedup-threshold <0..1>]");
+        CommandErrorWriter.WriteStderr($"Usage: cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [{AllowUnauthenticatedHttpFlag}] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--audit-log-strict] [--suggestion-dedup-threshold <0..1>]");
         CommandErrorWriter.WriteStderr("Note: --json is not supported; MCP requests and responses are JSON-RPC over the selected transport.");
         CommandErrorWriter.WriteStderr("stdio transport: one UTF-8 JSON-RPC object per LF-delimited line, not LSP Content-Length framing; lifecycle diagnostics are written to stderr.");
         CommandErrorWriter.WriteStderr($"HTTP security: bearer auth is required by default; {AllowUnauthenticatedHttpFlag} is an explicit unsafe loopback-only opt-in. Native clients omit Origin; POST requires UTF-8 application/json.");
@@ -3162,7 +3194,7 @@ internal static partial class ProgramRunner
 
     /// <summary>
     /// Strip the MCP audit-log opt-in flags (`--audit-log[=<path>]`,
-    /// `--audit-log-include-values`, `--audit-log-max-bytes[=<n>]`) from `cmdArgs` before
+    /// `--audit-log-include-values`, `--audit-log-max-bytes[=<n>]`, `--audit-log-strict`) from `cmdArgs` before
     /// the strict `cdidx mcp` parser runs. Keeps `--db` and everything after `--`
     /// untouched so existing escape semantics survive (#1562).
     /// `cdidx mcp` の厳格パーサが走る前に audit-log 用フラグを取り除く。`--db` と
@@ -3170,7 +3202,7 @@ internal static partial class ProgramRunner
     /// </summary>
     internal static bool TryConsumeAuditLogFlags(ref string[] args, out AuditLogOptions options, out string error)
     {
-        options = new AuditLogOptions(null, AuditLogSink.DefaultMaxBytes, false);
+        options = new AuditLogOptions(null, AuditLogSink.DefaultMaxBytes, false, false);
         error = string.Empty;
         if (args.Length == 0)
             return true;
@@ -3185,6 +3217,12 @@ internal static partial class ProgramRunner
         if (state.IncludeValues && state.Path == null)
         {
             error = "Error: --audit-log-include-values requires --audit-log <path>.";
+            return false;
+        }
+
+        if (state.Strict && state.Path == null)
+        {
+            error = "Error: --audit-log-strict requires --audit-log <path>.";
             return false;
         }
 
@@ -3204,9 +3242,10 @@ internal static partial class ProgramRunner
         internal string? Path { get; set; }
         internal long MaxBytes { get; set; } = AuditLogSink.DefaultMaxBytes;
         internal bool IncludeValues { get; set; }
+        internal bool Strict { get; set; }
         internal bool Passthrough { get; set; }
 
-        internal AuditLogOptions ToOptions() => new(Path, MaxBytes, IncludeValues);
+        internal AuditLogOptions ToOptions() => new(Path, MaxBytes, IncludeValues, Strict);
     }
 
     private static bool TryConsumeAuditLogArgument(
@@ -3255,6 +3294,12 @@ internal static partial class ProgramRunner
         if (arg == "--audit-log-include-values")
         {
             state.IncludeValues = true;
+            return true;
+        }
+
+        if (arg == "--audit-log-strict")
+        {
+            state.Strict = true;
             return true;
         }
 
@@ -3328,7 +3373,7 @@ internal static partial class ProgramRunner
         return true;
     }
 
-    internal readonly record struct AuditLogOptions(string? Path, long MaxBytes, bool IncludeValues);
+    internal readonly record struct AuditLogOptions(string? Path, long MaxBytes, bool IncludeValues, bool Strict);
 
     internal static int RunCheckUpdates(
         string[] cmdArgs,
