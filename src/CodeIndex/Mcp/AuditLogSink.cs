@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
@@ -57,7 +58,9 @@ internal sealed class AuditLogSink : IDisposable
     private readonly long _maxBytes;
     private readonly bool _includeValues;
     private readonly int _queueCapacity;
-    private readonly Channel<byte[]> _recordQueue;
+    private readonly Channel<QueuedAuditRecord> _recordQueue;
+    private readonly ConcurrentDictionary<long, QueuedAuditRecord> _pendingRecords = new();
+    private readonly object _producerGate = new();
     private readonly Task _writerTask;
     private readonly Encoding _utf8NoBom = new UTF8Encoding(false);
     private readonly ManualResetEventSlim _idleEvent = new(initialState: true);
@@ -72,14 +75,17 @@ internal sealed class AuditLogSink : IDisposable
     private long _writeFailureCount;
     private long _rotationFailureCount;
     private long _rotationCleanupFailureCount;
+    private long _nextRecordId;
     private string? _lastDropReason;
     private string? _lastRotationFailure;
-    private int _activeRecordCount;
+    private int _activeProducerCount;
     private int _shutdownFlushTimedOut;
     private int _idleEventDisposed;
     private int _disposed;
 
     internal Action? BeforeWriteForTests { get; set; }
+
+    internal Action? BeforePublishForTests { get; set; }
 
     internal sealed record AuditLogDiagnostics(
         string Path,
@@ -134,7 +140,7 @@ internal sealed class AuditLogSink : IDisposable
             _bytesWritten = probe.Length;
         }
         PrivateLogFile.TrySetPrivatePermissions(_path);
-        _recordQueue = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(_queueCapacity)
+        _recordQueue = Channel.CreateBounded<QueuedAuditRecord>(new BoundedChannelOptions(_queueCapacity)
         {
             SingleReader = true,
             SingleWriter = false,
@@ -193,68 +199,92 @@ internal sealed class AuditLogSink : IDisposable
 
     internal void Record(AuditEvent evt)
     {
-        if (Volatile.Read(ref _disposed) != 0)
-            return;
-
-        string line;
-        try
+        QueuedAuditRecord queuedRecord;
+        lock (_producerGate)
         {
-            line = SerializeEvent(evt, _includeValues);
-        }
-        catch (Exception ex)
-        {
-            // Serialization failures must not crash the MCP loop.
-            RecordDropped("serialization_failure", ex);
-            return;
-        }
-
-        var encoded = _utf8NoBom.GetBytes(line + "\n");
-        Interlocked.Increment(ref _activeRecordCount);
-        try
-        {
-            // Re-check after serialization so a producer that raced with shutdown never
-            // touches an idle signal that shutdown has already released.
-            // serialization 後に再確認し、shutdown と競合した producer が解放済みの
-            // idle signal に触れないようにする。
             if (Volatile.Read(ref _disposed) != 0)
                 return;
 
+            _activeProducerCount++;
+            queuedRecord = new QueuedAuditRecord(Interlocked.Increment(ref _nextRecordId));
+            _pendingRecords[queuedRecord.Id] = queuedRecord;
             if (Interlocked.Increment(ref _pendingRecordCount) == 1)
                 _idleEvent.Reset();
-            if (_recordQueue.Writer.TryWrite(encoded))
+        }
+
+        var published = false;
+        try
+        {
+            string line;
+            try
             {
+                line = SerializeEvent(evt, _includeValues);
+            }
+            catch (Exception ex)
+            {
+                // Serialization failures must not crash the MCP loop.
+                if (queuedRecord.TryMarkDropped())
+                    RecordDropped("serialization_failure", ex);
+                return;
+            }
+
+            queuedRecord.SetEncoded(_utf8NoBom.GetBytes(line + "\n"));
+            BeforePublishForTests?.Invoke();
+
+            if (_recordQueue.Writer.TryWrite(queuedRecord))
+            {
+                published = true;
                 Interlocked.Increment(ref _queuedRecordCount);
                 return;
             }
 
-            MarkRecordCompleted();
-            if (Volatile.Read(ref _disposed) == 0)
+            if (queuedRecord.TryMarkDropped())
                 RecordDropped("queue_full", new AuditLogQueueFullException());
         }
         finally
         {
-            if (Interlocked.Decrement(ref _activeRecordCount) == 0)
-                TryDisposeIdleEvent();
+            if (!published)
+                MarkRecordCompleted(queuedRecord);
+            CompleteProducerAdmission();
         }
+    }
+
+    private void CompleteProducerAdmission()
+    {
+        lock (_producerGate)
+        {
+            _activeProducerCount--;
+            if (Volatile.Read(ref _disposed) != 0 && _activeProducerCount == 0)
+                _recordQueue.Writer.TryComplete();
+        }
+        TryDisposeIdleEvent();
     }
 
     private async Task DrainQueueAsync()
     {
-        await foreach (var encoded in _recordQueue.Reader.ReadAllAsync().ConfigureAwait(false))
+        try
         {
-            try
+            await foreach (var queuedRecord in _recordQueue.Reader.ReadAllAsync().ConfigureAwait(false))
             {
-                WriteEncodedRecord(encoded);
+                try
+                {
+                    WriteEncodedRecord(queuedRecord);
+                }
+                finally
+                {
+                    MarkRecordCompleted(queuedRecord);
+                }
             }
-            finally
-            {
-                MarkRecordCompleted();
-            }
+        }
+        finally
+        {
+            TryDisposeIdleEvent();
         }
     }
 
-    private void MarkRecordCompleted()
+    private void MarkRecordCompleted(QueuedAuditRecord queuedRecord)
     {
+        _pendingRecords.TryRemove(queuedRecord.Id, out _);
         while (true)
         {
             var current = Interlocked.Read(ref _pendingRecordCount);
@@ -271,7 +301,7 @@ internal sealed class AuditLogSink : IDisposable
         }
     }
 
-    private void WriteEncodedRecord(byte[] encoded)
+    private void WriteEncodedRecord(QueuedAuditRecord queuedRecord)
     {
         try
         {
@@ -283,11 +313,12 @@ internal sealed class AuditLogSink : IDisposable
             // IO を外しつつ、ファイル書き込みの直列性は維持する。
             using (var stream = PrivateLogFile.OpenAppend(_path, FileShare.ReadWrite))
             {
-                stream.Write(encoded, 0, encoded.Length);
+                stream.Write(queuedRecord.Encoded, 0, queuedRecord.Encoded.Length);
                 stream.Flush();
             }
-            Interlocked.Increment(ref _writtenRecordCount);
-            var bytesWritten = Volatile.Read(ref _bytesWritten) + encoded.Length;
+            if (queuedRecord.TryMarkWritten())
+                Interlocked.Increment(ref _writtenRecordCount);
+            var bytesWritten = Volatile.Read(ref _bytesWritten) + queuedRecord.Encoded.Length;
             Volatile.Write(ref _bytesWritten, bytesWritten);
 
             if (bytesWritten >= _maxBytes)
@@ -299,7 +330,8 @@ internal sealed class AuditLogSink : IDisposable
         {
             // Best-effort: a failing audit write must not break the tool call.
             // ベストエフォート: 監査出力失敗で本体呼び出しを壊さない。
-            RecordDropped("write_failure", ex);
+            if (queuedRecord.TryMarkDropped())
+                RecordDropped("write_failure", ex);
         }
     }
 
@@ -369,9 +401,17 @@ internal sealed class AuditLogSink : IDisposable
                 timeout,
                 $"Audit log shutdown timeout must be between {TimeSpan.Zero} and {DisposeWriterTimeout}.");
 
-        var ownsShutdown = Interlocked.CompareExchange(ref _disposed, 1, 0) == 0;
-        if (ownsShutdown)
-            _recordQueue.Writer.TryComplete();
+        var ownsShutdown = false;
+        lock (_producerGate)
+        {
+            if (Volatile.Read(ref _disposed) == 0)
+            {
+                ownsShutdown = true;
+                Volatile.Write(ref _disposed, 1);
+                if (_activeProducerCount == 0)
+                    _recordQueue.Writer.TryComplete();
+            }
+        }
 
         var waitTimedOut = false;
         try
@@ -388,10 +428,16 @@ internal sealed class AuditLogSink : IDisposable
 
         if (ownsShutdown && waitTimedOut)
         {
-            var abandoned = Math.Max(0, Interlocked.Read(ref _pendingRecordCount));
-            Interlocked.Exchange(ref _shutdownAbandonedRecordCount, abandoned);
+            var abandoned = 0L;
+            foreach (var queuedRecord in _pendingRecords.Values)
+            {
+                if (queuedRecord.TryMarkShutdownAbandoned())
+                    abandoned++;
+            }
+            if (abandoned != 0)
+                Interlocked.Add(ref _shutdownAbandonedRecordCount, abandoned);
             Volatile.Write(ref _shutdownFlushTimedOut, 1);
-            WriteShutdownTimeoutWarning(timeout, abandoned);
+            WriteShutdownTimeoutWarning(timeout, Interlocked.Read(ref _shutdownAbandonedRecordCount));
         }
 
         TryDisposeIdleEvent();
@@ -433,7 +479,7 @@ internal sealed class AuditLogSink : IDisposable
         if (Volatile.Read(ref _disposed) == 0
             || !_writerTask.IsCompleted
             || Interlocked.Read(ref _pendingRecordCount) > 0
-            || Volatile.Read(ref _activeRecordCount) > 0
+            || Volatile.Read(ref _activeProducerCount) > 0
             || Interlocked.Exchange(ref _idleEventDisposed, 1) != 0)
         {
             return;
@@ -476,6 +522,46 @@ internal sealed class AuditLogSink : IDisposable
 
     private sealed class AuditLogQueueFullException : Exception
     {
+    }
+
+    private sealed class QueuedAuditRecord(long id)
+    {
+        private const int OutcomeMask = 0b0011;
+        private const int WrittenOutcome = 0b0001;
+        private const int DroppedOutcome = 0b0010;
+        private const int ShutdownAbandonedFlag = 0b0100;
+        private byte[]? _encoded;
+        private int _state;
+
+        internal long Id { get; } = id;
+        internal byte[] Encoded => _encoded ?? throw new InvalidOperationException("Audit record was published before serialization completed.");
+        internal void SetEncoded(byte[] encoded) => _encoded = encoded;
+        internal bool TryMarkWritten() => TryMarkOutcome(WrittenOutcome);
+        internal bool TryMarkDropped() => TryMarkOutcome(DroppedOutcome);
+
+        internal bool TryMarkShutdownAbandoned()
+        {
+            while (true)
+            {
+                var current = Volatile.Read(ref _state);
+                if ((current & OutcomeMask) != 0 || (current & ShutdownAbandonedFlag) != 0)
+                    return false;
+                if (Interlocked.CompareExchange(ref _state, current | ShutdownAbandonedFlag, current) == current)
+                    return true;
+            }
+        }
+
+        private bool TryMarkOutcome(int outcome)
+        {
+            while (true)
+            {
+                var current = Volatile.Read(ref _state);
+                if ((current & OutcomeMask) != 0)
+                    return false;
+                if (Interlocked.CompareExchange(ref _state, current | outcome, current) == current)
+                    return true;
+            }
+        }
     }
 
     internal static string SerializeEvent(AuditEvent evt, bool includeValues)

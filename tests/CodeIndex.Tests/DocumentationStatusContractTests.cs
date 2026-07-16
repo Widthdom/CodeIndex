@@ -75,8 +75,6 @@ public class DocumentationStatusContractTests
         "last_failure",
         "queued_record_count",
         "written_record_count",
-        "shutdown_abandoned_record_count",
-        "shutdown_flush_timed_out",
         "mcp.rate_limit.bucket_limit",
         "mcp.rate_limit.bucket_limit_rejection_count",
     ];

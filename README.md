@@ -195,15 +195,13 @@ When MCP audit logging is enabled, full status exposes `mcp_session.audit_log`
 and ping mirrors it as `audit_log`. The object includes `enabled`, `path`,
 `include_values`, `max_bytes`, `bytes_written`, `disposed`, `queue_capacity`,
 `queue_depth`, `queued_record_count`, `written_record_count`,
-`shutdown_abandoned_record_count`, `shutdown_flush_timed_out`,
 `dropped_record_count`, `queue_full_drop_count`, `serialization_failure_count`,
 `write_failure_count`, `rotation_failure_count`,
 `rotation_cleanup_failure_count`, and `rotation_degraded`, plus optional
-`last_drop_reason` and `last_rotation_failure`. Dropped records, degraded
-rotation, or an incomplete shutdown flush degrade MCP ping/health. The abandoned
-count is a monotonic snapshot of records not confirmed written at the shutdown
-deadline, not another dropped-record count; it remains unchanged even if the
-background writer later finishes.
+`last_drop_reason` and `last_rotation_failure`. Dropped records or degraded
+rotation degrade MCP ping/health. Shutdown-only abandonment and deadline state
+are returned by the sink shutdown result and emitted in the bounded stderr
+diagnostic; they are not advertised as live MCP status after the server stops.
 
 `worktree_head_changed` compares the runtime HEAD with the latest successful
 index stamp from `indexed_head_sha` when available, and falls back to the older
@@ -448,15 +446,13 @@ MCP audit log が有効な場合、full status は `mcp_session.audit_log` を�
 ping は同じ object を `audit_log` として返します。この object は `enabled`、
 `path`、`include_values`、`max_bytes`、`bytes_written`、`disposed`、
 `queue_capacity`、`queue_depth`、`queued_record_count`、`written_record_count`、
-`shutdown_abandoned_record_count`、`shutdown_flush_timed_out`、
 `dropped_record_count`、`queue_full_drop_count`、`serialization_failure_count`、
 `write_failure_count`、`rotation_failure_count`、
 `rotation_cleanup_failure_count`、`rotation_degraded` に加え、任意の
-`last_drop_reason` と `last_rotation_failure` を含みます。record の drop、
-rotation degradation、または未完了の shutdown flush は MCP ping / health を
-degraded にします。abandoned count は shutdown deadline 時点で write 完了を
-確認できなかった record の単調な snapshot であり、drop count とは別物です。
-background writer が後から完了しても、この値は変更されません。
+`last_drop_reason` と `last_rotation_failure` を含みます。record の drop または
+rotation degradation は MCP ping / health を degraded にします。shutdown 専用の
+abandoned count と deadline 状態は sink の shutdown result と上限付き stderr
+diagnostic で報告し、server 停止後に live MCP status として公開しません。
 
 `worktree_head_changed` は、利用可能な場合は最新の成功 index stamp である
 `indexed_head_sha` と runtime HEAD を比較し、legacy DB だけで従来の

@@ -1022,6 +1022,54 @@ public class AuditLogSinkTests
     }
 
     [Fact]
+    public async Task Shutdown_AccountsProducerAdmittedBeforePublish_Issue4553()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx_audit_shutdown_admission_{Guid.NewGuid():N}.jsonl");
+        using var producerEntered = new ManualResetEventSlim(false);
+        using var releaseProducer = new ManualResetEventSlim(false);
+        var sink = new AuditLogSink(path, AuditLogSink.DefaultMaxBytes, includeValues: false);
+        try
+        {
+            sink.BeforePublishForTests = () =>
+            {
+                producerEntered.Set();
+                releaseProducer.Wait(TimeSpan.FromSeconds(5));
+            };
+
+            var recordTask = Task.Run(() => sink.Record(CreateAuditEvent("admitted")));
+            Assert.True(producerEntered.Wait(TimeSpan.FromSeconds(5)));
+
+            var shutdown = sink.Shutdown(TimeSpan.Zero);
+
+            Assert.False(shutdown.FlushCompleted);
+            Assert.True(shutdown.Diagnostics.ShutdownFlushTimedOut);
+            Assert.Equal(1, shutdown.Diagnostics.QueueDepth);
+            Assert.Equal(0, shutdown.Diagnostics.QueuedRecordCount);
+            Assert.Equal(0, shutdown.Diagnostics.WrittenRecordCount);
+            Assert.Equal(0, shutdown.Diagnostics.DroppedRecordCount);
+            Assert.Equal(1, shutdown.Diagnostics.ShutdownAbandonedRecordCount);
+
+            releaseProducer.Set();
+            await recordTask.WaitAsync(TimeSpan.FromSeconds(5));
+            var completed = sink.Shutdown(TimeSpan.FromSeconds(5));
+
+            Assert.True(completed.FlushCompleted);
+            Assert.Equal(0, completed.Diagnostics.QueueDepth);
+            Assert.Equal(1, completed.Diagnostics.QueuedRecordCount);
+            Assert.Equal(1, completed.Diagnostics.WrittenRecordCount);
+            Assert.Equal(0, completed.Diagnostics.DroppedRecordCount);
+            Assert.Equal(1, completed.Diagnostics.ShutdownAbandonedRecordCount);
+        }
+        finally
+        {
+            releaseProducer.Set();
+            _ = sink.Shutdown(TimeSpan.FromSeconds(5));
+            sink.Dispose();
+            TestProjectHelper.DeleteFile(path);
+        }
+    }
+
+    [Fact]
     public void Dispose_DrainsQueuedRecordsAndIgnoresLaterRecords_Issue4175()
     {
         var path = Path.Combine(Path.GetTempPath(), $"cdidx_audit_dispose_{Guid.NewGuid():N}.jsonl");

@@ -1451,8 +1451,8 @@ public sealed class Caller
             Assert.Equal(0, statusAudit["dropped_record_count"]!.GetValue<long>());
             Assert.Equal(0, statusAudit["queued_record_count"]!.GetValue<long>());
             Assert.Equal(0, statusAudit["written_record_count"]!.GetValue<long>());
-            Assert.Equal(0, statusAudit["shutdown_abandoned_record_count"]!.GetValue<long>());
-            Assert.False(statusAudit["shutdown_flush_timed_out"]!.GetValue<bool>());
+            Assert.Null(statusAudit["shutdown_abandoned_record_count"]);
+            Assert.Null(statusAudit["shutdown_flush_timed_out"]);
             Assert.Equal("rotation_failure:io_error:IOException", statusAudit["last_rotation_failure"]!.GetValue<string>());
 
             var ping = JsonNode.Parse("""{"jsonrpc":"2.0","id":3,"method":"ping"}""")!;
@@ -1467,70 +1467,6 @@ public sealed class Caller
         finally
         {
             TestProjectHelper.DeleteFile(auditPath);
-        }
-    }
-
-    [Fact]
-    public void StatusAndPing_ReportIncompleteAuditShutdownAsDegraded_Issue4553()
-    {
-        lock (TestConsoleLock.Gate)
-        {
-            var auditPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_audit_shutdown_diag_{Guid.NewGuid():N}.jsonl");
-            using var writerEntered = new ManualResetEventSlim(false);
-            using var releaseWriter = new ManualResetEventSlim(false);
-            using var error = new StringWriter();
-            var previousError = Console.Error;
-            var sink = new AuditLogSink(auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false);
-            try
-            {
-                Console.SetError(error);
-                sink.BeforeWriteForTests = () =>
-                {
-                    writerEntered.Set();
-                    releaseWriter.Wait();
-                };
-                sink.Record(new AuditLogSink.AuditEvent(
-                    Timestamp: ManualTimeProvider.FixtureUtcNow,
-                    Tool: "status",
-                    CallerName: null,
-                    CallerVersion: null,
-                    RequestId: null,
-                    ArgKeys: Array.Empty<string>(),
-                    ArgLengths: Array.Empty<KeyValuePair<string, int>>(),
-                    ArgValues: null,
-                    ResultCount: 1,
-                    ElapsedMs: 1.0,
-                    ErrorCode: 0,
-                    ErrorType: null));
-                Assert.True(writerEntered.Wait(TimeSpan.FromSeconds(5)), "audit writer should enter the blocking hook");
-                var shutdown = sink.Shutdown(TimeSpan.Zero);
-                Assert.False(shutdown.FlushCompleted);
-                using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, sink);
-
-                var status = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
-                var statusResponse = server.HandleMessage(status)!;
-                var statusAudit = statusResponse["result"]!["structuredContent"]!["mcp_session"]!["audit_log"]!;
-
-                Assert.Equal(1, statusAudit["queued_record_count"]!.GetValue<long>());
-                Assert.Equal(0, statusAudit["written_record_count"]!.GetValue<long>());
-                Assert.Equal(0, statusAudit["dropped_record_count"]!.GetValue<long>());
-                Assert.Equal(1, statusAudit["shutdown_abandoned_record_count"]!.GetValue<long>());
-                Assert.True(statusAudit["shutdown_flush_timed_out"]!.GetValue<bool>());
-
-                var ping = JsonNode.Parse("""{"jsonrpc":"2.0","id":3,"method":"ping"}""")!;
-                var health = server.HandleMessage(ping)!["result"]!;
-                Assert.Equal("degraded", health["status"]!.GetValue<string>());
-                Assert.Equal(1, health["audit_log"]!["shutdown_abandoned_record_count"]!.GetValue<long>());
-                Assert.True(health["audit_log"]!["shutdown_flush_timed_out"]!.GetValue<bool>());
-            }
-            finally
-            {
-                releaseWriter.Set();
-                _ = sink.Shutdown(TimeSpan.FromSeconds(5));
-                sink.Dispose();
-                Console.SetError(previousError);
-                TestProjectHelper.DeleteFile(auditPath);
-            }
         }
     }
 
