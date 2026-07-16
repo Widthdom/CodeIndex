@@ -2620,18 +2620,29 @@ GitHub Copilot (VS Code — `.vscode/mcp.json`):
 }
 ```
 
-OpenAI Codex CLI (`codex.json` or `~/.codex/config.json`):
+OpenAI Codex CLI, desktop app, and IDE extension share TOML MCP configuration.
+For a trusted repository, add this to `.codex/config.toml` (or use
+`~/.codex/config.toml` for a global default):
 
-```json
-{
-  "mcpServers": {
-    "cdidx": {
-      "command": "cdidx",
-      "args": ["mcp", "--db", ".cdidx/codeindex.db"]
-    }
-  }
-}
+```toml
+[mcp_servers.cdidx]
+command = "cdidx"
+args = ["mcp", "--db", ".cdidx/codeindex.db"]
+required = true # fail startup instead of silently running without cdidx
 ```
+
+Alternatively, register the stdio server from the command line:
+
+```bash
+codex mcp add cdidx -- cdidx mcp --db .cdidx/codeindex.db
+codex mcp list
+```
+
+Codex does not auto-discover cdidx merely because the binary is installed or an
+agent guide mentions it. Restart Codex (or start a new session) after changing
+MCP configuration, then use `/mcp` to confirm that the server and tools are
+active. cdidx negotiates MCP `2025-06-18` for current Codex clients while
+retaining `2025-03-26` and `2024-11-05` compatibility.
 
 Once configured, the AI can directly call these tools:
 
@@ -5496,18 +5507,29 @@ GitHub Copilot (VS Code — `.vscode/mcp.json`):
 }
 ```
 
-OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
+OpenAI Codex CLI、desktop app、IDE extension は TOML の MCP 設定を共有します。
+trusted repository では `.codex/config.toml`（global の既定にする場合は
+`~/.codex/config.toml`）に次を追加します:
 
-```json
-{
-  "mcpServers": {
-    "cdidx": {
-      "command": "cdidx",
-      "args": ["mcp", "--db", ".cdidx/codeindex.db"]
-    }
-  }
-}
+```toml
+[mcp_servers.cdidx]
+command = "cdidx"
+args = ["mcp", "--db", ".cdidx/codeindex.db"]
+required = true # cdidx なしで黙って開始せず startup を失敗させる
 ```
+
+または command line から stdio server を登録します:
+
+```bash
+codex mcp add cdidx -- cdidx mcp --db .cdidx/codeindex.db
+codex mcp list
+```
+
+Codex は cdidx binary がインストール済みである、または agent guide に記載があるという
+理由だけでは cdidx MCP を自動検出しません。MCP 設定変更後は Codex を再起動するか
+新しい session を開き、`/mcp` で server と tool が active であることを確認してください。
+cdidx は現行 Codex client 向けに MCP `2025-06-18` を交渉し、`2025-03-26` と
+`2024-11-05` の互換性も維持します。
 
 設定するだけで、AIが以下のツールを直接呼び出せます:
 
