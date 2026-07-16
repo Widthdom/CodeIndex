@@ -52,6 +52,95 @@ public class JsonOutputApiVersionTests
         Assert.Equal(JsonOutputContract.ApiVersion, actual);
     }
 
+    [Theory]
+    [InlineData(typeof(CommandErrorJsonResult))]
+    [InlineData(typeof(UpgradeJsonResult))]
+    [InlineData(typeof(DbRestoreJsonResult))]
+    [InlineData(typeof(DbRestoreBackupListJsonResult))]
+    [InlineData(typeof(DbRestoreBackupPruneJsonResult))]
+    [InlineData(typeof(DiffJsonResult))]
+    [InlineData(typeof(DiffSummaryOnlyJsonResult))]
+    [InlineData(typeof(HookCommandJsonResult))]
+    [InlineData(typeof(WorkspaceListJsonResult))]
+    [InlineData(typeof(ActiveWorkspaceJsonResult))]
+    [InlineData(typeof(ConfigShowJsonResult))]
+    [InlineData(typeof(LanguagesJsonResult))]
+    [InlineData(typeof(VersionInfoJsonResult))]
+    [InlineData(typeof(IndexDryRunJsonResult))]
+    [InlineData(typeof(IndexUpdateJsonResult))]
+    [InlineData(typeof(IndexFullScanJsonResult))]
+    [InlineData(typeof(IndexWatchStartedJsonResult))]
+    [InlineData(typeof(IndexWatchEventJsonResult))]
+    public void UtilityTopLevelDto_ImplementsSharedApiVersionContract(Type dtoType)
+    {
+        Assert.True(
+            typeof(IVersionedJsonResult).IsAssignableFrom(dtoType),
+            $"{dtoType.FullName} must implement {nameof(IVersionedJsonResult)}");
+        var property = dtoType.GetProperty(nameof(IVersionedJsonResult.ApiVersion))
+            ?? throw new InvalidOperationException($"{dtoType.FullName} is missing ApiVersion property");
+        Assert.Equal(typeof(string), property.PropertyType);
+
+        var parameterlessConstructor = dtoType.GetConstructor(Type.EmptyTypes);
+        if (parameterlessConstructor is not null)
+        {
+            var instance = parameterlessConstructor.Invoke(null);
+            Assert.Equal(JsonOutputContract.ApiVersion, property.GetValue(instance));
+            return;
+        }
+
+        var apiVersionParameter = dtoType.GetConstructors()
+            .SelectMany(constructor => constructor.GetParameters())
+            .FirstOrDefault(parameter => string.Equals(parameter.Name, "ApiVersion", StringComparison.OrdinalIgnoreCase));
+        Assert.NotNull(apiVersionParameter);
+        Assert.True(apiVersionParameter.HasDefaultValue);
+        Assert.Equal(JsonOutputContract.ApiVersion, apiVersionParameter.DefaultValue);
+    }
+
+    [Fact]
+    public void UtilityCommands_JsonSuccessAndFailureResponsesIncludeApiVersion_Issue4579()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_api_version_utilities_4579");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Lib.cs", "csharp", "namespace Demo;\nclass Lib { }\n");
+            Directory.CreateDirectory(Path.Combine(projectRoot, ".git", "hooks"));
+
+            AssertCommandApiVersion(() => DbCommandRunner.Run(
+                ["restore-backups", "--list", "--db", dbPath, "--json"],
+                _jsonOptions));
+            AssertCommandApiVersion(() => DiffCommandRunner.Run(
+                [dbPath, dbPath, "--json"],
+                _jsonOptions));
+            AssertCommandApiVersion(() => HookCommandRunner.Run(
+                ["status", "--project", projectRoot, "--json"],
+                _jsonOptions));
+            AssertCommandApiVersion(() => WorkspaceCommandRunner.Run(
+                ["current", "--json"],
+                _jsonOptions));
+            AssertCommandApiVersion(() => QueryCommandRunner.RunLanguages(
+                ["--json"],
+                _jsonOptions));
+            AssertCommandApiVersion(() => ProgramRunner.Run(
+                ["--version", "--json"],
+                _jsonOptions,
+                "9.9.9-test"));
+            AssertCommandApiVersion(() => IndexCommandRunner.Run(
+                [projectRoot, "--db", dbPath, "--json", "--quiet"],
+                _jsonOptions));
+
+            var (errorExitCode, errorStdout, _) = CaptureConsole(() => WorkspaceCommandRunner.Run(
+                ["unknown", "--json"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.UsageError, errorExitCode);
+            AssertApiVersion(errorStdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void StatusResult_JsonOutput_IncludesApiVersion()
     {
@@ -116,6 +205,21 @@ public class JsonOutputApiVersionTests
                 ?? throw new InvalidOperationException("Failed to parse JSON line as object.");
         }
         throw new InvalidOperationException("No JSON object found in stdout.");
+    }
+
+    private static void AssertCommandApiVersion(Func<int> command)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(command);
+        Assert.True(
+            exitCode == CommandExitCodes.Success,
+            $"Expected success but got exit {exitCode}. stdout: {stdout} stderr: {stderr}");
+        AssertApiVersion(stdout);
+    }
+
+    private static void AssertApiVersion(string stdout)
+    {
+        var json = ParseFirstObject(stdout);
+        Assert.Equal(JsonOutputContract.ApiVersion, json["api_version"]?.GetValue<string>());
     }
 
     private static (int ExitCode, string Stdout, string Stderr) CaptureConsole(Func<int> action)
