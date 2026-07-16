@@ -531,8 +531,11 @@ public class ProgramRunnerTests
         }
     }
 
-    [Fact]
-    public void RunInspect_PathLineModeConsumesTrailingPrettyFlag_Issue4574()
+    [Theory]
+    [InlineData("before_path")]
+    [InlineData("between_path_and_line")]
+    [InlineData("after_line")]
+    public void RunInspect_PathLineModeConsumesPrettyFlagInAnyPosition_Issue4574(string prettyPosition)
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_line_pretty_4574");
         try
@@ -542,9 +545,13 @@ public class ProgramRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App { }\n");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
-                ["inspect", "--path", "src/app.cs", "--line", "1", "--body", "--json", "--pretty", "--db", dbPath],
-                appVersion: "1.10.0"));
+            var args = prettyPosition switch
+            {
+                "before_path" => new[] { "inspect", "--pretty", "--path", "src/app.cs", "--line", "1", "--body", "--json", "--db", dbPath },
+                "between_path_and_line" => new[] { "inspect", "--path", "src/app.cs", "--pretty", "--line", "1", "--body", "--json", "--db", dbPath },
+                _ => new[] { "inspect", "--path", "src/app.cs", "--line", "1", "--body", "--json", "--pretty", "--db", dbPath },
+            };
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(args, appVersion: "1.10.0"));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Empty(stderr);

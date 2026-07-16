@@ -1017,7 +1017,7 @@ internal static partial class ProgramRunner
         if (!CommandAcceptsQueryLiteral(commandName))
             return QueryCommandTokenRole.None;
 
-        if (IsInspectPathLineModeBefore(commandName, subArgs, targetIndex))
+        if (IsInspectPathLineMode(commandName, subArgs))
         {
             var targetArg = NormalizeCommandOptionToken(subArgs[targetIndex], withValues, flagOnly, out _);
             if (withValues.Contains(targetArg) || flagOnly.Contains(targetArg))
@@ -1061,18 +1061,28 @@ internal static partial class ProgramRunner
         return QueryCommandTokenRole.FirstQueryLiteral;
     }
 
-    private static bool IsInspectPathLineModeBefore(string commandName, string[] subArgs, int targetIndex)
+    private static bool IsInspectPathLineMode(string commandName, string[] subArgs)
     {
         if (!string.Equals(commandName, "inspect", StringComparison.Ordinal))
             return false;
 
+        var (withValues, flagOnly) = CliFlagSchema.GetParserFlagsPartitionedByValueBearing(commandName);
         var pathSeen = false;
         var lineSeen = false;
-        for (var i = 0; i < targetIndex; i++)
+        for (var i = 0; i < subArgs.Length; i++)
         {
             var arg = subArgs[i];
-            pathSeen |= arg == "--path" || arg.StartsWith("--path=", StringComparison.Ordinal);
-            lineSeen |= arg == "--line" || arg.StartsWith("--line=", StringComparison.Ordinal);
+            if (arg == "--")
+                break;
+
+            var normalizedArg = NormalizeCommandOptionToken(arg, withValues, flagOnly, out var hasInlineValue);
+            if (!withValues.Contains(normalizedArg))
+                continue;
+
+            pathSeen |= normalizedArg == "--path";
+            lineSeen |= normalizedArg == "--line";
+            if (!hasInlineValue && i + 1 < subArgs.Length)
+                i++;
         }
 
         return pathSeen && lineSeen;
