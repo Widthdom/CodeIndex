@@ -1204,7 +1204,6 @@ public static partial class QueryCommandRunner
                             {
                                 staleAfter = parsedStaleAfter;
                                 checkWorkspace = true;
-                                statusCheckScopes?.Add("workspace");
                             }
                             else
                                 AddParseError(parseStaleAfterError!);
@@ -1565,6 +1564,9 @@ public static partial class QueryCommandRunner
             AddParseError(defaultSnippetLinesError);
         if (validateDefaultMaxLineWidth && !maxLineWidthExplicit && defaultMaxLineWidthError != null)
             AddParseError(defaultMaxLineWidthError);
+
+        if (staleAfter.HasValue)
+            statusCheckScopes?.Add("workspace");
 
         if (readOnly)
         {

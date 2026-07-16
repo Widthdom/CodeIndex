@@ -1773,10 +1773,12 @@ public partial class QueryCommandRunnerTests
     }
 
     [Theory]
-    [InlineData(false, QueryCommandRunner.StatusCheckModeImpliedByStaleAfter)]
-    [InlineData(true, QueryCommandRunner.StatusCheckModeExplicit)]
+    [InlineData(false, false, QueryCommandRunner.StatusCheckModeImpliedByStaleAfter)]
+    [InlineData(true, false, QueryCommandRunner.StatusCheckModeExplicit)]
+    [InlineData(true, true, QueryCommandRunner.StatusCheckModeExplicit)]
     public void RunStatus_StaleAfterJson_ReturnsStaleExitWhenWorkspaceDiffers_Issue4576(
         bool useScopedCheck,
+        bool staleAfterBeforeCheck,
         string expectedCheckMode)
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_stale_after_changed_4576");
@@ -1791,9 +1793,13 @@ public partial class QueryCommandRunnerTests
             File.WriteAllText(sourcePath, "class App { void Run() {} }\n");
 
             var args = new List<string> { "--db", dbPath };
-            if (useScopedCheck)
+            if (useScopedCheck && staleAfterBeforeCheck)
+                args.AddRange(["--stale-after", "1m", "--check=fold"]);
+            else if (useScopedCheck)
                 args.Add("--check=fold");
-            args.AddRange(["--stale-after", "1m", "--json"]);
+            if (!staleAfterBeforeCheck)
+                args.AddRange(["--stale-after", "1m"]);
+            args.Add("--json");
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(args.ToArray(), _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
