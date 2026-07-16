@@ -382,7 +382,7 @@ public class ExportImportCommandRunnerTests
             try
             {
                 var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-                using (var db = new DbContext(dbPath))
+                using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 {
                     var writer = new DbWriter(db.Connection);
                     writer.SetMeta(DbContext.WorkspacePathCaseSensitiveMetaKey, bool.TrueString);
@@ -412,7 +412,7 @@ public class ExportImportCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.WorkspacePathCaseSensitiveMetaKey, stamp);
@@ -1367,7 +1367,7 @@ public class ExportImportCommandRunnerTests
 
     private static void SetUnknownExtensionPathSamples(string dbPath, string[] paths)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
         writer.SetMeta(DbContext.UnknownExtensionFileCountMetaKey, paths.Length.ToString(CultureInfo.InvariantCulture));
         writer.SetMeta(DbContext.UnknownExtensionFilePathsMetaKey, JsonSerializer.Serialize(paths));

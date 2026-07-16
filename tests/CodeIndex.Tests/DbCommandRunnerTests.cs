@@ -27,14 +27,14 @@ public class DbCommandRunnerTests
 
     private static void InitializeEmptyDb(string dbPath)
     {
-        using (var db = new DbContext(dbPath))
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             db.InitializeSchema();
         ReleaseSqlitePools();
     }
 
     private static void InitializeDbWithOrphans(string dbPath)
     {
-        using (var db = new DbContext(dbPath))
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             db.InitializeSchema();
         SeedOrphans(dbPath);
         ReleaseSqlitePools();

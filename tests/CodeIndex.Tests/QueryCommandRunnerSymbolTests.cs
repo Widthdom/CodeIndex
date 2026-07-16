@@ -749,7 +749,7 @@ public partial class QueryCommandRunnerTests
                 }
             }
             """);
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         db.InitializeSchema();
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
@@ -837,7 +837,7 @@ public partial class QueryCommandRunnerTests
             }
             """);
 
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         db.InitializeSchema();
         var refsFileId = GetIndexedFileId(db.Connection, "src/Refs.cs");
         var references = new List<ReferenceRecord>();
@@ -1673,7 +1673,7 @@ public partial class QueryCommandRunnerTests
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 var fileId = GetIndexedFileId(db.Connection, "src/config/unused_fixture.cs");
@@ -1839,7 +1839,7 @@ public partial class QueryCommandRunnerTests
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -2144,7 +2144,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = """
@@ -2211,7 +2211,7 @@ public partial class QueryCommandRunnerTests
                     private static int ExpressionBodiedMember(int value) => value + 1;
                 }
                 """);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();
@@ -2631,7 +2631,7 @@ public partial class QueryCommandRunnerTests
         var (projectRoot, dbPath) = CreateReflectionUnusedFixtureDb();
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             using (var cmd = db.Connection.CreateCommand())
             {
                 cmd.CommandText = "DROP TABLE chunks;";
@@ -2687,7 +2687,7 @@ public partial class QueryCommandRunnerTests
                     [JsonPropertyName("full_name")] public string FullName { get; set; } = string.Empty;
                 }
                 """);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();
@@ -4538,7 +4538,7 @@ public partial class QueryCommandRunnerTests
                 }
                 """);
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = """
@@ -4598,7 +4598,7 @@ public partial class QueryCommandRunnerTests
                     [property : JsonPropertyName("full_name")] public string FullName { get; set; } = string.Empty;
                 }
                 """);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();
@@ -4643,7 +4643,7 @@ public partial class QueryCommandRunnerTests
                     public string FullName { get; set; } = string.Empty;
                 }
                 """);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();
@@ -4877,7 +4877,7 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = CreateHotspotFamilyFixtureDb(projectRoot, markHotspotFamilyReady: true);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = """
@@ -5035,7 +5035,7 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = CreateHotspotFamilyFixtureDb(projectRoot, markHotspotFamilyReady: true);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"), null);
@@ -5068,7 +5068,7 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = CreateHotspotFamilyFixtureDb(projectRoot, markHotspotFamilyReady: true);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), "1");
@@ -6794,7 +6794,7 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 var fileId = writer.UpsertFile(new FileRecord

@@ -506,7 +506,7 @@ public partial class McpServerTests
             Assert.True(miss["result"]?["isError"]?.GetValue<bool>() ?? false);
             Assert.Null(GetSharedDbContextField(server));
 
-            using (var seed = new DbContext(missingPath))
+            using (var seed = new DbContext(DbOpenIntent.WriteIndex, missingPath))
             {
                 seed.InitializeSchema();
             }
@@ -1068,7 +1068,7 @@ public partial class McpServerTests
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_empty");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
@@ -3904,7 +3904,7 @@ public partial class McpServerTests
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_empty");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
@@ -4571,14 +4571,14 @@ public partial class McpServerTests
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_status_hotspots_family");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
             }
             TestProjectHelper.InsertIndexedFile(dbPath, "src/Api.Part1.cs", "csharp", "public partial class Api { public void Run() { } }");
             TestProjectHelper.InsertIndexedFile(dbPath, "src/Api.Part2.cs", "csharp", "public partial class Api { public void Run(int value) { } }");
             TestProjectHelper.InsertIndexedFile(dbPath, "src/Caller.cs", "csharp", "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();
@@ -4607,7 +4607,7 @@ public partial class McpServerTests
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_status_sql_graph");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
             }
@@ -4636,7 +4636,7 @@ public partial class McpServerTests
                 END;
                 GO
                 """);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();
@@ -4683,14 +4683,14 @@ public partial class McpServerTests
             TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
             var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
             }
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
@@ -4732,7 +4732,7 @@ public partial class McpServerTests
             var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
 
             Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -4769,7 +4769,7 @@ public partial class McpServerTests
             TestProjectHelper.RunGit(projectRoot, "add", "src/app.cs");
             TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
@@ -4806,14 +4806,14 @@ public partial class McpServerTests
             TestProjectHelper.RunGit(projectRoot, "add", "src/app.cs");
             TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
                 cmd.Parameters.AddWithValue("@key", DbContext.IndexedProjectRootMetaKey);
                 cmd.ExecuteNonQuery();
             }
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
@@ -4855,7 +4855,7 @@ public partial class McpServerTests
             var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
 
             Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -5962,7 +5962,7 @@ public partial class McpServerTests
         try
         {
             File.WriteAllText(Path.Combine(fixtureDir, "empty.py"), "# intentionally no declarations\n");
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -5975,7 +5975,7 @@ public partial class McpServerTests
 
             Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
             Assert.Equal(0, response["result"]!["structuredContent"]!["summary"]!["symbols"]!.GetValue<long>());
-            using var verify = new DbContext(dbPath);
+            using var verify = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             verify.TryMigrateForRead();
             Assert.Equal(
                 SymbolExtractor.GetContractVersion("python").ToString(CultureInfo.InvariantCulture),
@@ -6115,7 +6115,7 @@ public partial class McpServerTests
             Assert.Equal(0, reusableLookups);
             Assert.Equal(0, countReads);
             Assert.Equal(2, response["result"]!["structuredContent"]!["summary"]!["files"]!.GetValue<long>());
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.TryMigrateForRead();
             Assert.Equal(
                 DbContext.TypeScriptAugmentationVersion.ToString(CultureInfo.InvariantCulture),
@@ -6960,7 +6960,7 @@ public partial class McpServerTests
             var firstResponse = server.HandleMessage(request)!;
             Assert.False(firstResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
 
-            using (var readyDb = new DbContext(dbPath))
+            using (var readyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var userVersion = readyDb.GetUserVersion();
                 Assert.NotEqual(0, userVersion & DbContext.GraphReadyFlag);
@@ -6995,7 +6995,7 @@ public partial class McpServerTests
             Assert.Equal(nameof(FileIndexer.ScanError), diagnostic["exception_type"]!.GetValue<string>());
             Assert.DoesNotContain(fixtureDir, diagnostic["message"]!.GetValue<string>());
 
-            using var failedDb = new DbContext(dbPath);
+            using var failedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             var failedUserVersion = failedDb.GetUserVersion();
             Assert.Equal(0, failedUserVersion & DbContext.GraphReadyFlag);
             Assert.Equal(0, failedUserVersion & DbContext.IssuesReadyFlag);
@@ -7116,7 +7116,7 @@ public partial class McpServerTests
             var firstResponse = server.HandleMessage(indexRequest)!;
             Assert.False(firstResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
@@ -7128,7 +7128,7 @@ public partial class McpServerTests
             Assert.False(secondResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
             Assert.Equal(1, secondResponse["result"]!["structuredContent"]!["summary"]!["skipped"]!.GetValue<int>());
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 Assert.Equal(Path.GetFullPath(fixtureDir), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
             }
@@ -7178,7 +7178,7 @@ public partial class McpServerTests
             var response = server.HandleMessage(request)!;
 
             Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.TryMigrateForRead();
             var reader = new DbReader(db.Connection, db.IsReadOnly);
             var issue = Assert.Single(reader.GetIssues("null_byte"));
@@ -7207,7 +7207,7 @@ public partial class McpServerTests
             var response = CallIndex(server, fixtureDir, args => args["maxReferencesPerFile"] = 2);
 
             Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.TryMigrateForRead();
             var reader = new DbReader(db.Connection, db.IsReadOnly);
             var issue = Assert.Single(reader.GetIssues("reference_count_exceeded"));
@@ -7274,7 +7274,7 @@ public partial class McpServerTests
             Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
             Assert.Equal(1, refreshCount);
 
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.TryMigrateForRead();
             using var command = db.Connection.CreateCommand();
             command.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE is_mutual_recursion = 1";
@@ -7311,7 +7311,7 @@ public partial class McpServerTests
         Assert.Equal(2, structured["progress"]!["rows_total"]!.GetValue<int>());
         Assert.Equal(1.0, structured["progress"]!["fraction"]!.GetValue<double>());
 
-        using var verifyDb = new DbContext(_dbPath);
+        using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         verifyDb.TryMigrateForRead();
         var reader = new DbReader(verifyDb.Connection);
         Assert.True(reader._foldReady);
@@ -7430,7 +7430,7 @@ public partial class McpServerTests
         Assert.True(structured["verified"]!.GetValue<bool>());
         Assert.True(structured["fold_ready"]!.GetValue<bool>());
 
-        using var verifyDb = new DbContext(_dbPath);
+        using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         verifyDb.TryMigrateForRead();
         Assert.Equal(NameFold.Fingerprint(), verifyDb.GetMetaString("fold_key_fingerprint"));
         var reader = new DbReader(verifyDb.Connection);
@@ -7548,7 +7548,7 @@ public partial class McpServerTests
             var firstResponse = server.HandleMessage(firstIndex)!;
             Assert.False(firstResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
 
-            using (var seededDb = new DbContext(dbPath))
+            using (var seededDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
 
             WriteOversizedAsciiFile(Path.Combine(fixtureDir, "app.cs"));
@@ -7571,7 +7571,7 @@ public partial class McpServerTests
             Assert.False(secondResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
             Assert.Equal(1, secondResponse["result"]!["structuredContent"]!["summary"]!["errors"]!.GetValue<int>());
 
-            using var verifyDb = new DbContext(dbPath);
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
         }
         finally
@@ -7777,7 +7777,7 @@ public partial class McpServerTests
             var firstResponse = server.HandleMessage(firstIndex)!;
             Assert.False(firstResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
 
-            using (var seededDb = new DbContext(dbPath))
+            using (var seededDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
 
             File.WriteAllText(Path.Combine(fixtureDir, "Extra.csproj"), "<Project />");
@@ -7799,7 +7799,7 @@ public partial class McpServerTests
             var secondResponse = server.HandleMessage(secondIndex)!;
             Assert.False(secondResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
 
-            using var verifyDb = new DbContext(dbPath);
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal(
                 DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
@@ -7864,7 +7864,7 @@ public partial class McpServerTests
             var secondResponse = server.HandleMessage(secondIndex)!;
             Assert.False(secondResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
 
-            using var verifyDb = new DbContext(dbPath);
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
 
             var hotspotsRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"lang":"csharp","kind":"function"}}}""")!;
@@ -7915,7 +7915,7 @@ public partial class McpServerTests
             var firstResponse = server.HandleMessage(firstIndex)!;
             Assert.False(firstResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), null);
@@ -7940,7 +7940,7 @@ public partial class McpServerTests
             Assert.False(secondResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
             Assert.True(secondResponse["result"]!["structuredContent"]!["summary"]!["skipped"]!.GetValue<int>() > 0);
 
-            using (var verifyDb = new DbContext(dbPath))
+            using (var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 Assert.Equal(
                     DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -7970,14 +7970,14 @@ public partial class McpServerTests
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_hotspots_family_signal");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
             }
             TestProjectHelper.InsertIndexedFile(dbPath, "src/Api.Part1.cs", "csharp", "public partial class Api { public void Run() { } }");
             TestProjectHelper.InsertIndexedFile(dbPath, "src/Api.Part2.cs", "csharp", "public partial class Api { public void Run(int value) { } }");
             TestProjectHelper.InsertIndexedFile(dbPath, "src/Caller.cs", "csharp", "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();
@@ -8008,14 +8008,14 @@ public partial class McpServerTests
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_hotspots_family_legacy");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
             }
             TestProjectHelper.InsertIndexedFile(dbPath, "src/Api.Part1.cs", "csharp", "public partial class Api { public void Run() { } }");
             TestProjectHelper.InsertIndexedFile(dbPath, "src/Api.Part2.cs", "csharp", "public partial class Api { public void Run(int value) { } }");
             TestProjectHelper.InsertIndexedFile(dbPath, "src/Caller.cs", "csharp", "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();
@@ -8057,14 +8057,14 @@ public partial class McpServerTests
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_hotspots_family_missing_fingerprint");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
             }
             TestProjectHelper.InsertIndexedFile(dbPath, "src/Api.Part1.cs", "csharp", "public partial class Api { public void Run() { } }");
             TestProjectHelper.InsertIndexedFile(dbPath, "src/Api.Part2.cs", "csharp", "public partial class Api { public void Run(int value) { } }");
             TestProjectHelper.InsertIndexedFile(dbPath, "src/Caller.cs", "csharp", "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();
@@ -8112,7 +8112,7 @@ public partial class McpServerTests
                     private void C() { C(); }
                 }
                 """);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();
@@ -8228,7 +8228,7 @@ public partial class McpServerTests
                     }
                 }
                 """);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();
@@ -8535,7 +8535,7 @@ public partial class McpServerTests
         Assert.Equal(0, structured["symbol_references"]!.GetValue<int>());
         Assert.True(structured["fold_ready"]!.GetValue<bool>());
 
-        using var verifyDb = new DbContext(_dbPath);
+        using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         verifyDb.TryMigrateForRead();
         Assert.Equal(NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture), verifyDb.GetMetaString("fold_key_version"));
         Assert.Equal(NameFold.Fingerprint(), verifyDb.GetMetaString("fold_key_fingerprint"));
@@ -8781,7 +8781,7 @@ public partial class McpServerTests
                     public Color Shade => Color.Red;
                 }
                 """);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();
@@ -9365,7 +9365,7 @@ public partial class McpServerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 var fileId = writer.UpsertFile(new FileRecord
@@ -9480,7 +9480,7 @@ public partial class McpServerTests
             Assert.True(secondResponse["result"]!["structuredContent"]!["fold_ready"]!.GetValue<bool>());
             Assert.Null(secondResponse["result"]!["structuredContent"]!["fold_ready_reason"]);
 
-            using var verify = new DbContext(dbPath);
+            using var verify = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var userVerCmd = verify.Connection.CreateCommand();
             userVerCmd.CommandText = "PRAGMA user_version";
             var userVersion = (long)userVerCmd.ExecuteScalar()!;

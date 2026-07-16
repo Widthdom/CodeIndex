@@ -174,6 +174,11 @@ public class DbContext : IDisposable
     private bool _walCheckpointSucceeded;
     private bool _readOnlyImmutableFallback;
     private bool _immutableReadOnly;
+    private bool _immutableReadOnlyWalRisk;
+    private bool _connectionPooling = true;
+    private bool _queryOnlySnapshotRequiresRefresh;
+    private string? _queryOnlySnapshotSourcePath;
+    private DbConnectionFactory.QueryOnlySnapshotSourceState? _queryOnlySnapshotSourceState;
     private string? _walCheckpointSkippedReason;
     private string? _walCheckpointFailureReason;
     private long? _walCheckpointBusy;
@@ -191,6 +196,7 @@ public class DbContext : IDisposable
     private bool _hasWriteWork;
     private bool _hasWalCheckpointableWriteWork;
     private bool _rebuildFtsAfterSchemaMigration;
+    private readonly DbOpenIntent _openIntent;
     private readonly DatabasePermissionPolicyMode _databasePermissionPolicy;
     private readonly IDatabaseFileModeProvider _databaseFileModeProvider;
     private readonly List<StatusDatabasePermissionDiagnostic> _databasePermissionDiagnostics = [];
@@ -267,12 +273,24 @@ public class DbContext : IDisposable
     }
 
     public SqliteConnection Connection => _connection;
+    public DbOpenIntent OpenIntent => _openIntent;
     public bool IsReadOnly => _isReadOnly;
     public bool ReadOnlyFallback => _readOnlyFallback;
     public bool WalCheckpointAttempted => _walCheckpointAttempted;
     public bool WalCheckpointSucceeded => _walCheckpointSucceeded;
     public bool ReadOnlyImmutableFallback => _readOnlyImmutableFallback;
     internal bool ImmutableReadOnly => _immutableReadOnly;
+    internal bool ImmutableReadOnlyWalRisk => _immutableReadOnlyWalRisk;
+    internal bool ConnectionPooling => _connectionPooling;
+    internal bool QueryOnlySnapshotRequiresRefresh => _queryOnlySnapshotRequiresRefresh;
+    internal bool IsQueryOnlySnapshotCurrent(CancellationToken cancellationToken = default)
+        => !_queryOnlySnapshotRequiresRefresh
+           || (_queryOnlySnapshotSourcePath != null
+               && _queryOnlySnapshotSourceState is { } state
+               && DbConnectionFactory.IsQueryOnlySnapshotCurrent(
+                   _queryOnlySnapshotSourcePath,
+                   state,
+                   cancellationToken));
     public string? WalCheckpointSkippedReason => _walCheckpointSkippedReason;
     public string? WalCheckpointFailureReason => _walCheckpointFailureReason;
     public long? WalCheckpointBusy => _walCheckpointBusy;
@@ -466,7 +484,7 @@ public class DbContext : IDisposable
                     sleep,
                     dbPath: dbPath,
                     cancellationToken: cancellationToken)
-                : OpenReadOnly(openTarget);
+                : OpenArtifactPreservingQueryOnly(dbPath);
 
             using var cmd = connection.CreateCommand();
             cmd.CommandText = SqliteCommandPolicy.PragmaSql("application_id");
@@ -511,6 +529,11 @@ public class DbContext : IDisposable
         catch (SqliteException)
         {
             message = $"database is not an existing CodeIndex DB: {dbPath}";
+            return false;
+        }
+        catch (CodeIndexException ex)
+        {
+            message = ex.Message;
             return false;
         }
     }
@@ -594,8 +617,9 @@ public class DbContext : IDisposable
         Unknown,
     }
 
-    public DbContext(string dbPath, CancellationToken cancellationToken = default)
+    public DbContext(DbOpenIntent openIntent, string dbPath, CancellationToken cancellationToken = default)
         : this(
+            openIntent,
             dbPath,
             DatabasePermissionPolicy.Resolve(),
             SystemDatabaseFileModeProvider.Instance,
@@ -604,54 +628,41 @@ public class DbContext : IDisposable
     }
 
     internal DbContext(
+        DbOpenIntent openIntent,
         string dbPath,
         DatabasePermissionPolicyMode databasePermissionPolicy,
         IDatabaseFileModeProvider databaseFileModeProvider,
         CancellationToken cancellationToken = default)
     {
+        if (!Enum.IsDefined(openIntent))
+            throw new ArgumentOutOfRangeException(nameof(openIntent), openIntent, "Unknown database open intent.");
+
         _databasePermissionPolicy = databasePermissionPolicy;
         _databaseFileModeProvider = databaseFileModeProvider ?? throw new ArgumentNullException(nameof(databaseFileModeProvider));
         cancellationToken.ThrowIfCancellationRequested();
+        _openIntent = openIntent;
         _schemaCacheKey = TryCreateSchemaCacheKey(dbPath);
 
-        // Explicit URI form (file:///abs/path?immutable=1 etc.) — the user has opted into
-        // a read-only open with SQLite-specific URI flags. Skip the writable-open attempt
-        // and all write-oriented pragmas. This is the CLI escape hatch for sandboxes where
-        // even SqliteOpenMode.ReadOnly cannot touch -shm/-wal side files.
-        // URI 形式が渡された場合は writable open を省き、直接 read-only として扱う。
+        if (openIntent == DbOpenIntent.QueryOnly)
+        {
+            OpenQueryOnly(dbPath, cancellationToken);
+            _suppressWriteWorkTracking = false;
+            return;
+        }
+
+        // Write-capable intents reject explicitly read-only URIs. Bare file URIs are
+        // normalized to filesystem paths before entering the writable-open path.
+        // write-capable intent では明示 read-only URI を拒否し、bare file URI は
+        // filesystem path に正規化してから writable open へ進む。
         if (SqliteFileUri.StartsWithFileScheme(dbPath))
         {
             if (!SqliteFileUri.TryValidateBounds(dbPath, out var boundsError))
                 throw boundsError ?? new FormatException("Invalid SQLite file URI.");
 
-            // URI escape hatch — but ONLY when the caller explicitly requested read-only
-            // semantics. A bare `file:///path.db` without `immutable=1` / `mode=ro` falls
-            // through to the normal filesystem path, otherwise SQLite's default open mode
-            // is read-write-CREATE and a read command like `status` would silently create
-            // or mutate a database. For read-only URIs we open the connection directly
-            // and skip TryMigrateForRead / writable pragmas.
-            // 明示的に read-only を要求した URI のみエスケープハッチ扱い。裸の file: URI は
-            // 通常経路にフォールバックさせて read-write-CREATE の副作用を防ぐ。
             if (SqliteFileUri.RequestsReadOnly(dbPath))
             {
-                try
-                {
-                    _connection = new SqliteConnection(SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.ReadOnly));
-                    cancellationToken.ThrowIfCancellationRequested();
-                    _connection.Open();
-                    ApplyBusyTimeoutPragma();
-                    ApplyConnectionPerformancePragmas();
-                    RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
-                    _isReadOnly = true;
-                    _immutableReadOnly = SqliteFileUri.RequestsImmutableSnapshot(dbPath);
-                    WarnIfBatchInProgress();
-                    return;
-                }
-                catch
-                {
-                    _connection?.Dispose();
-                    throw;
-                }
+                throw new InvalidOperationException(
+                    $"Database open intent '{openIntent}' requires a writable SQLite path; use {nameof(DbOpenIntent)}.{nameof(DbOpenIntent.QueryOnly)} for a read-only URI.");
             }
 
             // Bare file: URI — normalize to a filesystem path and fall through.
@@ -773,6 +784,52 @@ public class DbContext : IDisposable
         }
 
         _suppressWriteWorkTracking = false;
+    }
+
+    private void OpenQueryOnly(string dbPath, CancellationToken cancellationToken)
+    {
+        if (SqliteFileUri.StartsWithFileScheme(dbPath)
+            && !SqliteFileUri.TryValidateBounds(dbPath, out var boundsError))
+        {
+            throw boundsError ?? new FormatException("Invalid SQLite file URI.");
+        }
+
+        try
+        {
+            var immutableSnapshot = false;
+            var immutableWalRisk = false;
+            var detachedSnapshot = false;
+            DbConnectionFactory.QueryOnlySnapshotSourceState? snapshotSourceState = null;
+            _connection = OpenSqliteConnectionWithRetry(
+                () => DbConnectionFactory.CreateArtifactPreservingQueryOnlyConnection(
+                    dbPath,
+                    pooling: false,
+                    out immutableSnapshot,
+                    out immutableWalRisk,
+                    out detachedSnapshot,
+                    out snapshotSourceState,
+                    cancellationToken),
+                static connection => connection.Open(),
+                dbPath: dbPath,
+                cancellationToken: cancellationToken);
+            Execute("PRAGMA query_only=ON");
+            ApplyBusyTimeoutPragma();
+            ApplyConnectionPerformancePragmas();
+            RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
+            _isReadOnly = true;
+            _immutableReadOnly = immutableSnapshot;
+            _immutableReadOnlyWalRisk = immutableWalRisk;
+            _connectionPooling = false;
+            _queryOnlySnapshotRequiresRefresh = detachedSnapshot;
+            _queryOnlySnapshotSourcePath = detachedSnapshot ? dbPath : null;
+            _queryOnlySnapshotSourceState = snapshotSourceState;
+            WarnIfBatchInProgress();
+        }
+        catch
+        {
+            _connection?.Dispose();
+            throw;
+        }
     }
 
     private void OpenReadOnlyFallback(string dbPath, CancellationToken cancellationToken)
@@ -1093,11 +1150,24 @@ public class DbContext : IDisposable
     {
         var raw = GetMetaString(BatchInProgressMetaKey);
         if (string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase))
-        {
             CommandErrorWriter.WriteStderr("Warning: Last batch did not complete; run `cdidx index --rebuild` to re-index from a known clean state.");
-            if (!_isReadOnly)
-                Execute("PRAGMA user_version = 0");
-        }
+    }
+
+    /// <summary>
+    /// Demote readiness after an interrupted batch only from an explicitly selected repair path.
+    /// interrupted batch 後の readiness demotion は、明示的な repair path からのみ実行する。
+    /// </summary>
+    public bool RepairIncompleteBatchReadiness()
+    {
+        if (_openIntent != DbOpenIntent.Repair)
+            throw new InvalidOperationException("Incomplete-batch readiness repair requires DbOpenIntent.Repair.");
+
+        var raw = GetMetaString(BatchInProgressMetaKey);
+        if (!string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        Execute("PRAGMA user_version = 0");
+        return true;
     }
 
     private void ApplyConnectionPerformancePragmas()
@@ -1321,6 +1391,31 @@ public class DbContext : IDisposable
 
     private static SqliteConnection OpenReadOnly(string dbPath, out bool usedImmutableFallback)
         => DbConnectionFactory.OpenReadOnly(dbPath, out usedImmutableFallback);
+
+    private static SqliteConnection CreateArtifactPreservingQueryOnlyConnection(
+        string dbPath,
+        bool pooling,
+        out bool immutableSnapshot,
+        out bool immutableWalRisk,
+        out bool detachedSnapshot)
+        => DbConnectionFactory.CreateArtifactPreservingQueryOnlyConnection(
+            dbPath,
+            pooling,
+            out immutableSnapshot,
+            out immutableWalRisk,
+            out detachedSnapshot);
+
+    private static SqliteConnection OpenArtifactPreservingQueryOnly(string dbPath)
+    {
+        var connection = CreateArtifactPreservingQueryOnlyConnection(
+            dbPath,
+            pooling: false,
+            out _,
+            out _,
+            out _);
+        connection.Open();
+        return connection;
+    }
 
     internal static void RegisterConnectionFunctions(SqliteConnection connection)
     {

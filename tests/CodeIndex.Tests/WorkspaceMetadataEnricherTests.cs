@@ -75,7 +75,7 @@ public class WorkspaceMetadataEnricherTests
             TestProjectHelper.RunGit(queryCwd, "commit", "-m", "initial");
             File.WriteAllText(Path.Combine(queryCwd, "tracked.txt"), "dirty\n");
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
             }
@@ -119,7 +119,7 @@ public class WorkspaceMetadataEnricherTests
             TestProjectHelper.RunGit(queryCwd, "add", "tracked.txt");
             TestProjectHelper.RunGit(queryCwd, "commit", "-m", "initial");
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -168,7 +168,7 @@ public class WorkspaceMetadataEnricherTests
             TestProjectHelper.RunGit(queryCwd, "commit", "-m", "initial");
 
             Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -203,7 +203,7 @@ public class WorkspaceMetadataEnricherTests
             // switch after the index was built.
             // index 構築後のブランチ切替を模擬するため、現在の HEAD と異なる値を persisted HEAD として保存。
             var staleHead = new string('a', 40);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, staleHead);
@@ -218,7 +218,7 @@ public class WorkspaceMetadataEnricherTests
             Assert.Equal(staleHead, status.IndexedHeadCommit);
             Assert.True(status.WorktreeHeadChanged);
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, originalHead);
@@ -244,7 +244,7 @@ public class WorkspaceMetadataEnricherTests
         try
         {
             var staleFullScanHead = new string('b', 40);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, staleFullScanHead);
@@ -298,7 +298,7 @@ public class WorkspaceMetadataEnricherTests
         try
         {
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";

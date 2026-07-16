@@ -348,7 +348,7 @@ public class DbPathResolverTests
     {
         var oversizedQueryUri = "file:///tmp/codeindex.db?" + new string('a', SqliteFileUri.MaxQueryLength + 1);
 
-        var ex = Assert.Throws<FormatException>(() => new DbContext(oversizedQueryUri));
+        var ex = Assert.Throws<FormatException>(() => new DbContext(DbOpenIntent.WriteIndex, oversizedQueryUri));
 
         Assert.Contains(SqliteFileUri.MaxQueryLength.ToString(CultureInfo.InvariantCulture), ex.Message);
         Assert.DoesNotContain(new string('a', 32), ex.Message);
@@ -387,7 +387,7 @@ public class DbPathResolverTests
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_path_resolver_{Guid.NewGuid():N}.db");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -449,7 +449,7 @@ public class DbPathResolverTests
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_path_resolver_{Guid.NewGuid():N}.db");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -474,7 +474,7 @@ public class DbPathResolverTests
         var projectRoot = project.Root;
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-        using (var db = new DbContext(dbPath))
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
         {
             db.InitializeSchema();
             var writer = new DbWriter(db.Connection);
@@ -512,7 +512,7 @@ public class DbPathResolverTests
         var staleRoot = stale.Root;
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-        using (var db = new DbContext(dbPath))
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
         {
             db.InitializeSchema();
             var writer = new DbWriter(db.Connection);
@@ -533,7 +533,7 @@ public class DbPathResolverTests
         var staleRoot = stale.Root;
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-        using (var db = new DbContext(dbPath))
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
         {
             db.InitializeSchema();
             var writer = new DbWriter(db.Connection);
@@ -565,14 +565,14 @@ public class DbPathResolverTests
         File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), indexedContent);
         File.WriteAllText(Path.Combine(staleRoot, "src", "app.cs"), staleContent);
 
-        using (var db = new DbContext(dbPath))
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
         {
             db.InitializeSchema();
             var writer = new DbWriter(db.Connection);
             writer.SetMeta(DbContext.IndexedProjectRootMetaKey, staleRoot);
         }
         TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", indexedContent);
-        using (var db = new DbContext(dbPath))
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
         {
             using var cmd = db.Connection.CreateCommand();
             cmd.CommandText = "UPDATE files SET checksum = upper(checksum) WHERE path = @path";
@@ -603,7 +603,7 @@ public class DbPathResolverTests
         const string outsideContent = "class Outside {}\n";
         File.WriteAllText(Path.Combine(projectParent, "outside", "outside.cs"), outsideContent);
 
-        using (var db = new DbContext(dbPath))
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
         {
             db.InitializeSchema();
             var writer = new DbWriter(db.Connection);
@@ -682,11 +682,11 @@ public class DbPathResolverTests
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
             }
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var deleteCmd = db.Connection.CreateCommand();
                 deleteCmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
@@ -719,7 +719,7 @@ public class DbPathResolverTests
         var dbContainerRoot = container.Root;
         var dbPath = Path.Combine(dbContainerRoot, ".cdidx", "shared.db");
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-        using (var db = new DbContext(dbPath))
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
         {
             db.InitializeSchema();
             var writer = new DbWriter(db.Connection);
@@ -740,7 +740,7 @@ public class DbPathResolverTests
         var dbContainerRoot = container.Root;
         var dbPath = Path.Combine(dbContainerRoot, ".cdidx", "codeindex.db");
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-        using (var db = new DbContext(dbPath))
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
         {
             db.InitializeSchema();
             var writer = new DbWriter(db.Connection);
@@ -768,7 +768,7 @@ public class DbPathResolverTests
         File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), content);
         File.WriteAllText(Path.Combine(dbContainerRoot, "src", "app.cs"), content);
 
-        using (var db = new DbContext(dbPath))
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
         {
             db.InitializeSchema();
             var writer = new DbWriter(db.Connection);
@@ -798,12 +798,12 @@ public class DbPathResolverTests
         File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), indexedContent);
         File.WriteAllText(Path.Combine(dbContainerRoot, "src", "app.cs"), siblingContent);
 
-        using (var db = new DbContext(dbPath))
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
         {
             db.InitializeSchema();
         }
         TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", indexedContent);
-        using (var db = new DbContext(dbPath))
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
         {
             using var cmd = db.Connection.CreateCommand();
             cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
@@ -833,7 +833,7 @@ public class DbPathResolverTests
         using (var stream = File.Create(Path.Combine(dbContainerRoot, "src", "app.cs")))
             stream.SetLength(FileIndexer.DefaultMaxFileSizeBytes + 1);
 
-        using (var db = new DbContext(dbPath))
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
         {
             db.InitializeSchema();
             var writer = new DbWriter(db.Connection);
@@ -852,7 +852,7 @@ public class DbPathResolverTests
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_path_resolver_{Guid.NewGuid():N}.db");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
             }

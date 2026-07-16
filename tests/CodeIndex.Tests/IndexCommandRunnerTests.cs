@@ -1386,7 +1386,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(0, CountRows(dbPath, "symbols"));
             Assert.Equal(0, CountRows(dbPath, "symbol_references"));
 
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.TryMigrateForRead();
             var reader = new DbReader(db.Connection, db.IsReadOnly);
             var issue = Assert.Single(reader.GetIssues("file_too_large"));
@@ -1427,7 +1427,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(0, CountRows(dbPath, "symbols"));
             Assert.Equal(0, CountRows(dbPath, "symbol_references"));
 
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.TryMigrateForRead();
             var reader = new DbReader(db.Connection, db.IsReadOnly);
             var issue = Assert.Single(reader.GetIssues("symbol_count_exceeded"));
@@ -1471,7 +1471,7 @@ public partial class IndexCommandRunnerTests
             Assert.True(CountRows(dbPath, "symbols") > 0);
             Assert.Equal(0, CountRows(dbPath, "symbol_references"));
 
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.TryMigrateForRead();
             var reader = new DbReader(db.Connection, db.IsReadOnly);
             var issue = Assert.Single(reader.GetIssues("reference_count_exceeded"));
@@ -1691,7 +1691,7 @@ public sealed class Caller
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             var status = new DbReader(db.Connection).GetStatus();
             Assert.NotNull(status.LastIndexRun);
             var lastIndexRun = status.LastIndexRun!;
@@ -2115,7 +2115,7 @@ public sealed class Caller
             Assert.Equal(0, reusableLookups);
             Assert.Equal(0, countReads);
             Assert.Equal(2, json.GetProperty("summary").GetProperty("files_total").GetInt64());
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal(
                 DbContext.TypeScriptAugmentationVersion.ToString(CultureInfo.InvariantCulture),
                 db.GetMetaString(DbContext.TypeScriptAugmentationVersionMetaKey));
@@ -3843,7 +3843,7 @@ public sealed class Caller
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
 
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal(Path.GetFullPath(projectRoot), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
         }
         finally
@@ -4096,7 +4096,7 @@ public sealed class Caller
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
 
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal(expectedSha, db.GetMetaString(DbContext.IndexedHeadShaMetaKey));
             Assert.Equal("main", db.GetMetaString(DbContext.IndexedHeadBranchMetaKey));
             var stamp = db.GetMetaString(DbContext.IndexedHeadTimestampMetaKey);
@@ -4129,7 +4129,7 @@ public sealed class Caller
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
 
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Null(db.GetMetaString(DbContext.IndexedHeadShaMetaKey));
             Assert.Null(db.GetMetaString(DbContext.IndexedHeadBranchMetaKey));
             Assert.Null(db.GetMetaString(DbContext.IndexedHeadTimestampMetaKey));
@@ -4158,7 +4158,7 @@ public sealed class Caller
             var (exitCode, _) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
             Assert.Equal(CommandExitCodes.Success, exitCode);
 
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             var stamp = db.GetMetaString(DbContext.WorkspacePathCaseSensitiveMetaKey);
             Assert.False(string.IsNullOrWhiteSpace(stamp));
             Assert.True(
@@ -4194,7 +4194,7 @@ public sealed class Caller
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
 
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal(expectedSha, db.GetMetaString(DbContext.IndexedHeadShaMetaKey));
             Assert.Null(db.GetMetaString(DbContext.IndexedHeadBranchMetaKey));
             Assert.False(string.IsNullOrWhiteSpace(db.GetMetaString(DbContext.IndexedHeadTimestampMetaKey)));
@@ -4334,7 +4334,7 @@ public sealed class Caller
         var missingDbPath = CreateTempDbPath("cdidx_trimmed_missing");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -4598,7 +4598,7 @@ public sealed class Caller
         var dbPath = CreateTempDbPath("cdidx_optimize_fts");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db);
@@ -4630,7 +4630,7 @@ public sealed class Caller
             Assert.Equal(2, json.GetProperty("writes_since_optimize_before").GetInt32());
             Assert.Equal(0, json.GetProperty("writes_since_optimize_after").GetInt32());
 
-            using var verifyDb = new DbContext(dbPath);
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal("0", verifyDb.GetMetaString(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey));
             Assert.False(string.IsNullOrWhiteSpace(verifyDb.GetMetaString(DbWriter.FtsLastOptimizedAtMetaKey)));
         }
@@ -4648,7 +4648,7 @@ public sealed class Caller
         var lockPath = dbPath + ".lock";
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 db.InitializeSchema();
 
             Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
@@ -4695,7 +4695,7 @@ public sealed class Caller
         var dbPath = CreateTempDbPath("cdidx_optimize_readonly");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db);
@@ -4727,7 +4727,7 @@ public sealed class Caller
             Assert.Equal(CommandErrorCodes.DbNotWritable, json.GetProperty("error_code").GetString());
             Assert.Contains("database must be writable for optimize", json.GetProperty("message").GetString());
 
-            using var verifyDb = new DbContext(dbPath);
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal("1", verifyDb.GetMetaString(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey));
         }
         finally
@@ -4787,7 +4787,7 @@ public sealed class Caller
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db);
@@ -4802,7 +4802,7 @@ public sealed class Caller
             Assert.Equal(CommandErrorCodes.UsageError, json.GetProperty("error_code").GetString());
             Assert.Contains("--optimize cannot be combined", json.GetProperty("message").GetString());
 
-            using var verifyDb = new DbContext(dbPath);
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal("1", verifyDb.GetMetaString(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey));
             Assert.Equal("sentinel", verifyDb.GetMetaString(DbWriter.FtsLastOptimizedAtMetaKey));
         }
@@ -4819,7 +4819,7 @@ public sealed class Caller
         var dbPath = CreateTempDbPath("cdidx_backfill_fold");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -4890,7 +4890,7 @@ public sealed class Caller
             Assert.Equal(7, json.GetProperty("user_version_after").GetInt32());
             Assert.True(json.GetProperty("fold_ready").GetBoolean());
 
-            using var verifyDb = new DbContext(dbPath);
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             verifyDb.TryMigrateForRead();
             var reader = new DbReader(verifyDb.Connection);
             Assert.True(reader._foldReady);
@@ -4910,7 +4910,7 @@ public sealed class Caller
         var dbPath = CreateTempDbPath("cdidx_backfill_fold_dry");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -4962,7 +4962,7 @@ public sealed class Caller
             Assert.False(json.GetProperty("verified").GetBoolean());
             Assert.False(json.GetProperty("fold_ready_after").GetBoolean());
 
-            using var verifyDb = new DbContext(dbPath);
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var count = verifyDb.Connection.CreateCommand();
             count.CommandText = "SELECT COUNT(*) FROM symbols WHERE name_folded IS NULL";
             Assert.Equal(1L, (long)count.ExecuteScalar()!);
@@ -4981,7 +4981,7 @@ public sealed class Caller
         var dbPath = CreateTempDbPath("cdidx_backfill_fold_stale_dry");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -5027,7 +5027,7 @@ public sealed class Caller
             Assert.False(json.GetProperty("fold_ready_after").GetBoolean());
             Assert.False(json.GetProperty("fold_ready").GetBoolean());
 
-            using var verifyDb = new DbContext(dbPath);
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal("DEADBEEFDEADBEEF", verifyDb.GetMetaString("fold_key_fingerprint"));
             Assert.Equal(DbContext.FoldReadyFlag, verifyDb.GetUserVersion());
         }
@@ -5044,7 +5044,7 @@ public sealed class Caller
         var dbPath = CreateTempDbPath("cdidx_backfill_fold_fp");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -5105,7 +5105,7 @@ public sealed class Caller
             Assert.True(json.GetProperty("verified").GetBoolean());
             Assert.True(json.GetProperty("fold_ready").GetBoolean());
 
-            using var verifyDb = new DbContext(dbPath);
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             verifyDb.TryMigrateForRead();
             Assert.Equal(NameFold.Fingerprint(), verifyDb.GetMetaString("fold_key_fingerprint"));
             var reader = new DbReader(verifyDb.Connection);
@@ -5127,7 +5127,7 @@ public sealed class Caller
         var cts = new CancellationTokenSource();
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -5175,7 +5175,7 @@ public sealed class Caller
         var cts = new CancellationTokenSource();
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -5223,7 +5223,7 @@ public sealed class Caller
         var cts = new CancellationTokenSource();
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -5268,7 +5268,7 @@ public sealed class Caller
         var cts = new CancellationTokenSource();
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -5314,7 +5314,7 @@ public sealed class Caller
         using var cts = new CancellationTokenSource();
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -5441,7 +5441,7 @@ public sealed class Caller
         var dbPath = CreateTempDbPath("cdidx_backfill_legacy_no_meta");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -5500,7 +5500,7 @@ public sealed class Caller
             Assert.Equal(1, json.GetProperty("symbol_references").GetInt32());
             Assert.True(json.GetProperty("fold_ready").GetBoolean());
 
-            using var verifyDb = new DbContext(dbPath);
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             verifyDb.TryMigrateForRead();
             Assert.Equal(NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture), verifyDb.GetMetaString("fold_key_version"));
             Assert.Equal(NameFold.Fingerprint(), verifyDb.GetMetaString("fold_key_fingerprint"));
@@ -5540,7 +5540,7 @@ public sealed class Caller
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             int initialReadiness;
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 initialReadiness = db.GetUserVersion();
             Assert.Equal(DbContext.CurrentSchemaVersion, initialReadiness);
             Assert.Contains("app.cs", ReadIndexedPaths(dbPath));
@@ -5575,7 +5575,7 @@ public sealed class Caller
             Assert.Equal(CommandExitCodes.Interrupted, interruptedExitCode);
             var reopenWarning = ConsoleCapture.CaptureError(() =>
             {
-                using var db = new DbContext(dbPath);
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
                 Assert.Equal(initialReadiness, db.GetUserVersion());
             });
             Assert.DoesNotContain("Last batch did not complete", reopenWarning);
@@ -6278,7 +6278,7 @@ public sealed class Caller
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 Assert.Equal("all", db.GetMetaString(DbContext.IndexedFollowSymlinksPolicyMetaKey));
             }
@@ -6389,7 +6389,7 @@ public sealed class Caller
             Assert.Equal(CommandExitCodes.Success, refreshExitCode);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 // `--changed-between` proves the current HEAD is covered for status freshness,
                 // but it must not overwrite the full-scan-only HEAD stamp.
@@ -6414,7 +6414,7 @@ public sealed class Caller
             Assert.Equal(initialHead, dotJson.GetProperty("prior_indexed_head_commit").GetString());
             Assert.Equal(currentHead, dotJson.GetProperty("current_head_commit").GetString());
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 Assert.Equal(currentHead, db.GetMetaString(DbContext.IndexedHeadCommitMetaKey));
 
             var (postDotStatusExitCode, postDotStatusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
@@ -6751,7 +6751,7 @@ public sealed class Caller
 
     private static HashSet<string> ReadIndexedPaths(string dbPath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         db.TryMigrateForRead();
         var reader = new DbReader(db.Connection, db.IsReadOnly);
         return reader.ListFiles(limit: 1000)
@@ -6813,7 +6813,7 @@ public sealed class Caller
 
     private static string? ReadIndexedChecksum(string dbPath, string relativePath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         db.TryMigrateForRead();
         var reader = new DbReader(db.Connection, db.IsReadOnly);
         return reader.GetFileByPath(relativePath)?.Checksum;

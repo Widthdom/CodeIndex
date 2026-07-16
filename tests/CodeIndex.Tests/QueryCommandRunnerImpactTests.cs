@@ -41,7 +41,7 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             var writer = new DbWriter(db.Connection);
             var fileId = writer.UpsertFile(new FileRecord
             {

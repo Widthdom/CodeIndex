@@ -1457,7 +1457,7 @@ public partial class QueryCommandRunnerTests
             }
             """);
 
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         db.InitializeSchema();
         var refsFileId = GetIndexedFileId(db.Connection, "src/Giant.cs");
         var references = new List<ReferenceRecord>();
@@ -1501,7 +1501,7 @@ public partial class QueryCommandRunnerTests
             }
             """);
 
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         db.InitializeSchema();
         var refsFileId = GetIndexedFileId(db.Connection, "src/Other.cs");
         var references = new List<ReferenceRecord>();
@@ -5097,7 +5097,7 @@ public partial class QueryCommandRunnerTests
 
             var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
             Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -5140,7 +5140,7 @@ public partial class QueryCommandRunnerTests
             var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.IndexedProjectRootMetaKey, staleRoot);
@@ -5183,7 +5183,7 @@ public partial class QueryCommandRunnerTests
 
             var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
             Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -5410,7 +5410,7 @@ public partial class QueryCommandRunnerTests
                     public void HandleRequestAsync() { HandleRequest(); }
                 }
                 """);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();

@@ -13,7 +13,7 @@ public class LspServerRequestIdTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(
                 new DbReader(db),
                 "1.2.3",

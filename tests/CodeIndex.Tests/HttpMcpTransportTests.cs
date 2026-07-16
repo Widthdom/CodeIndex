@@ -38,7 +38,7 @@ public class HttpMcpTransportTests : IDisposable
     {
         _dbDir = TestProjectHelper.CreateTempProject("cdidx_mcp_http");
         _dbPath = Path.Combine(_dbDir, "codeindex.db");
-        _db = new DbContext(_dbPath);
+        _db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         _db.InitializeSchema();
     }
 

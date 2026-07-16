@@ -150,12 +150,12 @@ public partial class DbReader
             """;
         using var schemaReader = schemaCommand.ExecuteTrackedReader();
         if (!schemaReader.TrackedRead())
-            return _immutableReadOnly ? 0 : null;
+            return TreatResourceListAsImmutableSnapshot ? 0 : null;
 
         var hasMetaTable = schemaReader.GetInt64(0) != 0;
         var hasAllGenerationTriggers = schemaReader.GetInt64(1) == DbContext.ResourceListGenerationTriggerNames.Length;
         if (!hasMetaTable)
-            return _immutableReadOnly ? 0 : null;
+            return TreatResourceListAsImmutableSnapshot ? 0 : null;
 
         using var command = _conn.CreateCommand();
         command.Transaction = transaction;
@@ -164,7 +164,7 @@ public partial class DbReader
         var raw = command.ExecuteScalar() as string;
         if (long.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out var generation)
             && generation >= 0
-            && (hasAllGenerationTriggers || _immutableReadOnly))
+            && (hasAllGenerationTriggers || TreatResourceListAsImmutableSnapshot))
         {
             return generation;
         }
@@ -173,6 +173,6 @@ public partial class DbReader
         // connection-local generation zero even when the persisted tracking schema is absent.
         // immutable snapshot はページ間で変化しないため、永続世代 schema がない legacy DB でも
         // connection-local な世代 0 を安全に利用できる。
-        return _immutableReadOnly ? 0 : null;
+        return TreatResourceListAsImmutableSnapshot ? 0 : null;
     }
 }

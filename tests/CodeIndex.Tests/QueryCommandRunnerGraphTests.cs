@@ -138,7 +138,7 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 for (var i = 0; i <= 250; i++)
@@ -454,7 +454,7 @@ public partial class QueryCommandRunnerTests
                 }
             }
             """);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var select = db.Connection.CreateCommand();
                 select.CommandText = "SELECT id FROM files WHERE path = 'src/Session.cs'";

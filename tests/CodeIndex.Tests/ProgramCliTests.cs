@@ -504,7 +504,7 @@ public class ProgramCliTests
         {
             var sourceDbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(sourceDbPath, "src/app.cs", "csharp", "class App { void Run() {} }\n");
-            using (var db = new DbContext(sourceDbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, sourceDbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = $"PRAGMA user_version = {DbContext.CurrentSchemaVersion.ToString(CultureInfo.InvariantCulture)}";

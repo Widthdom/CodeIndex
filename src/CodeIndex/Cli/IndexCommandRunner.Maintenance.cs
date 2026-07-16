@@ -68,7 +68,7 @@ public static partial class IndexCommandRunner
         {
             var lockPath = IndexLock.GetLockPath(dbPath);
             using var indexLock = IndexLock.Acquire(lockPath, projectPath ?? Path.GetDirectoryName(dbPath) ?? Environment.CurrentDirectory);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.Repair, dbPath);
             db.InitializeSchema();
             var writer = new DbWriter(db);
             var before = writer.GetFtsIncrementalWritesSinceOptimize();
@@ -154,7 +154,13 @@ public static partial class IndexCommandRunner
                 "Run `cdidx backfill-fold --help` to see the supported command shape.",
                 CommandErrorCodes.UsageError);
 
-        if (!DbContext.TryValidateExistingCodeIndexDb(options.DbPath, out var validationMessage, out var isNotFound))
+        if (!DbContext.TryValidateExistingCodeIndexDb(
+                options.DbPath,
+                requireWritable: !options.DryRun,
+                requireSupportedUserVersion: false,
+                out var validationMessage,
+                out var isNotFound,
+                out _))
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
@@ -167,8 +173,11 @@ public static partial class IndexCommandRunner
 
         try
         {
-            using var db = new DbContext(options.DbPath);
-            db.InitializeSchema();
+            using var db = new DbContext(
+                options.DryRun ? DbOpenIntent.QueryOnly : DbOpenIntent.Migration,
+                options.DbPath);
+            if (!options.DryRun)
+                db.InitializeSchema();
             var writer = new DbWriter(db);
 
             var userVersionBefore = db.GetUserVersion();

@@ -165,7 +165,7 @@ public partial class QueryCommandRunnerTests
             "solution",
             "Microsoft Visual Studio Solution File\n");
 
-        using (var db = new DbContext(dbPath))
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
         {
             db.InitializeSchema();
             var writer = new DbWriter(db.Connection);

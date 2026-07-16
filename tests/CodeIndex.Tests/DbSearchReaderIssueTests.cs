@@ -13,7 +13,7 @@ public sealed class DbSearchReaderIssueTests : IDisposable
     public DbSearchReaderIssueTests()
     {
         _dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_search_issue_test_{Guid.NewGuid():N}.db");
-        _db = new DbContext(_dbPath);
+        _db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         _db.InitializeSchema();
         _writer = new DbWriter(_db.Connection);
         _writer.MarkGraphReady();

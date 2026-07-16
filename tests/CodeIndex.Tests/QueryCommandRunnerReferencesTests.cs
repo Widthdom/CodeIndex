@@ -97,7 +97,7 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 var fileId = writer.UpsertFile(new FileRecord
@@ -160,7 +160,7 @@ public partial class QueryCommandRunnerTests
                 class Red {}
                 """);
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var countCmd = db.Connection.CreateCommand();
                 countCmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE symbol_name = 'Red'";
@@ -326,7 +326,7 @@ public partial class QueryCommandRunnerTests
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             var longLine = "const x = 0; " + new string('a', 320) + " target(); " + new string('b', 320);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 var fileId = writer.UpsertFile(new FileRecord
@@ -1437,7 +1437,7 @@ public partial class QueryCommandRunnerTests
                 END
                 GO
                 """);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();
@@ -11568,7 +11568,7 @@ public partial class QueryCommandRunnerTests
                     public void HandleRequestAsync() { HandleRequest(); }
                 }
                 """);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();

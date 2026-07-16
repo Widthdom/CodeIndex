@@ -113,12 +113,13 @@ public partial class McpServer
             return CreateToolErrorResponse(id, lockError!);
         using var acquiredIndexLock = indexLock;
 
-        // Reuse the per-session DbContext (issue #1494) instead of opening a fresh
-        // connection on every index call. InitializeSchema below is idempotent so the
-        // shared connection still picks up legacy-DB migrations on demand.
-        // index 呼び出しごとに新しい接続を開かず、セッション共有 DbContext を再利用する（#1494）。
-        // 後段の InitializeSchema は冪等なので共有接続でもレガシー DB の移行は正しく走る。
-        var db = GetOrOpenSharedDb();
+        // Reuse the per-session DbContext (issue #1494) while making rebuild repair intent
+        // explicit. InitializeSchema below remains the write-path migration boundary.
+        // セッション共有 DbContext を再利用しつつ（#1494）、rebuild の repair intent を明示する。
+        // 後段の InitializeSchema が write path の migration 境界になる。
+        var db = GetOrOpenSharedDb(rebuild ? DbOpenIntent.Repair : DbOpenIntent.WriteIndex);
+        if (rebuild)
+            db.RepairIncompleteBatchReadiness();
         var csharpMetadataTargetVersionMetaKey = DbContext.GetMetadataTargetVersionMetaKey("csharp");
         var priorMeta = db.GetMetaStrings(
         [
@@ -166,7 +167,6 @@ public partial class McpServer
         }
 
         db.InitializeSchema();
-        MarkSharedDbMigrated();
 
         var writer = new DbWriter(db);
         writer.RecoverInterruptedFtsBulkLoadIfNeeded();

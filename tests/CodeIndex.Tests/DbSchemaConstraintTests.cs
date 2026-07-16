@@ -21,7 +21,7 @@ public class DbSchemaConstraintTests
         var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.InitializeSchema();
 
             using var cmd = db.Connection.CreateCommand();
@@ -45,7 +45,7 @@ public class DbSchemaConstraintTests
         {
             SeedLegacyNullableFileIdSchema(dbPath);
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 db.InitializeSchema();
 
             using var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString);
@@ -73,7 +73,7 @@ public class DbSchemaConstraintTests
         var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 db.InitializeSchema();
 
             using var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString);

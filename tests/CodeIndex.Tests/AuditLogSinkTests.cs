@@ -979,6 +979,7 @@ public class AuditLogSinkTests
                     writerEntered.Set();
                     releaseWriter.Wait();
                 };
+                error.WriteLine("Unrelated stderr diagnostic.");
 
                 sink.Record(CreateAuditEvent("first"));
                 Assert.True(writerEntered.Wait(TimeSpan.FromSeconds(5)), "audit writer should enter the blocking hook");
@@ -995,11 +996,11 @@ public class AuditLogSinkTests
                 Assert.Equal(0, shutdown.Diagnostics.DroppedRecordCount);
                 Assert.Equal(2, shutdown.Diagnostics.ShutdownAbandonedRecordCount);
 
-                var warning = error.ToString();
+                var warning = GetSingleShutdownWarning(error);
                 Assert.Contains("MCP audit log shutdown flush did not complete within 0 ms", warning, StringComparison.Ordinal);
                 Assert.Contains("queued=2 written=0 dropped=0 shutdown_abandoned=2", warning, StringComparison.Ordinal);
                 Assert.DoesNotContain(path, warning, StringComparison.Ordinal);
-                Assert.InRange(warning.TrimEnd().Length, 1, AuditLogSink.MaxShutdownDiagnosticChars);
+                Assert.InRange(warning.Length, 1, AuditLogSink.MaxShutdownDiagnosticChars);
 
                 releaseWriter.Set();
                 var completed = sink.Shutdown(TimeSpan.FromSeconds(5));
@@ -1011,10 +1012,10 @@ public class AuditLogSinkTests
                 Assert.Equal(0, completed.Diagnostics.DroppedRecordCount);
                 Assert.Equal(2, completed.Diagnostics.ShutdownAbandonedRecordCount);
                 Assert.True(completed.Diagnostics.ShutdownFlushTimedOut);
-                Assert.Equal(warning, error.ToString());
+                Assert.Equal(warning, GetSingleShutdownWarning(error));
 
                 sink.Dispose();
-                Assert.Equal(warning, error.ToString());
+                Assert.Equal(warning, GetSingleShutdownWarning(error));
             }
             finally
             {
@@ -1024,6 +1025,15 @@ public class AuditLogSinkTests
                 Console.SetError(previousError);
                 TestProjectHelper.DeleteFile(path);
             }
+        }
+
+        static string GetSingleShutdownWarning(StringWriter writer)
+        {
+            return Assert.Single(
+                writer.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries),
+                line => line.Contains(
+                    "MCP audit log shutdown flush did not complete",
+                    StringComparison.Ordinal));
         }
     }
 
