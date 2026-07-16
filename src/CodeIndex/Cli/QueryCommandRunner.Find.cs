@@ -97,6 +97,16 @@ public static partial class QueryCommandRunner
             CommandErrorWriter.WriteStderr(FindUsage);
             return CommandExitCodes.UsageError;
         }
+        if (options.All
+            && !options.CountOnly
+            && options.OutputFormat != OutputFormatText
+            && !IsFindAllNdjson(options))
+        {
+            CommandErrorWriter.WriteStderr("Error: find --all row output requires default text or streaming NDJSON so scan authority and recovery metadata can be represented");
+            CommandErrorWriter.WriteStderr("Hint: use `find <query> --all --json=ndjson`, use default text output, or add --count for a single JSON object with scan metadata.");
+            CommandErrorWriter.WriteStderr(FindUsage);
+            return CommandExitCodes.UsageError;
+        }
 
         string? findTerminalLine = null;
         return WithDb(options, jsonOptions, reader =>

@@ -606,7 +606,7 @@ For background log or metrics sinks, use explicit writer-entry/release signals a
 - Assert exit codes with `CommandExitCodes`.
 - For JSON output, parse it with `JsonDocument` instead of asserting raw strings.
 - For bounded NDJSON streams, include plain and recipe/audit search paths, parse the final `terminal_record`, verify authoritative-versus-lower-bound totals and selection reasons, count UTF-8 bytes including newlines, and assert partial exit `11` plus the explicit `--allow-partial` exit-`0` opt-in. Also assert that capped profile/verbose/envelope combinations fail before stdout.
-- For `find --all`, cover row-terminal and count-object scan metadata together: assert active file/line caps, `scan_complete` / authority fields, stable continuation guidance, and the same partial-exit opt-in.
+- For `find --all`, cover row-terminal and count-object scan metadata together: assert active file/line caps, `scan_complete` / authority fields, stable continuation guidance, the same partial-exit opt-in, and rejection of every row format that cannot carry terminal metadata. Envelope tests must keep the terminal in `metadata.stream_terminal` rather than `results`.
 - For rejected checkpoint names, assert the usage exit/error code and syntax hint together, and verify that no checkpoint directory was created.
 
 ### JSON `--json` output snapshots
@@ -1254,7 +1254,7 @@ background の log / metrics sink は、sleep や狭い stopwatch 閾値では�
 - 終了コードは `CommandExitCodes` で検証する。
 - JSON 出力は生文字列比較ではなく `JsonDocument` で解析して検証する。
 - 上限付き NDJSON stream は plain search と recipe / audit search の両経路を含め、最後の `terminal_record` を解析し、authoritative / lower-bound の総件数と selection 理由、改行を含む UTF-8 byte 数、partial 終了コード `11`、明示的な `--allow-partial` による終了コード `0` の opt-in を検証する。上限付き profile / verbose / envelope の組み合わせが stdout 前に失敗することも確認する。
-- `find --all` は row 終端と count object の scan metadata を併せて検証し、有効な file / line cap、`scan_complete` / authority field、安定した continuation 案内、同じ partial-exit opt-in を確認する。
+- `find --all` は row 終端と count object の scan metadata を併せて検証し、有効な file / line cap、`scan_complete` / authority field、安定した continuation 案内、同じ partial-exit opt-in、終端 metadata を持てない全 row format の拒否を確認する。envelope test では終端が `results` ではなく `metadata.stream_terminal` に入ることを検証する。
 - 拒否される checkpoint 名では usage の終了コード / error code と構文 hint を併せて検証し、checkpoint directory が作成されていないことも確認する。
 
 ### JSON `--json` 出力 snapshot

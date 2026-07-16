@@ -13,6 +13,10 @@ effective file/line caps, truncation reason, continuation action, and recovery
 guidance. Count JSON carries the same terminal scan state in its single object
 and uses `authoritative_count` for count authority.
 
+With `--all`, row formats that cannot carry this terminal state are rejected:
+JSON array, compact, CSV/TSV, LSP, quickfix, and SARIF. Use default text,
+streaming NDJSON, or count output instead.
+
 Candidate-file or line-scan truncation returns partial-result exit code `11`.
 Pass `--allow-partial` only when an incomplete scan may return exit code `0`.
 An ordinary result-limit early stop remains successful, but the row terminal
@@ -20,8 +24,9 @@ sets `scan_complete=false`, `result_limit_reached=true`, and explains how to
 increase `--limit` or narrow the query. Human output writes its scan summary to
 stderr and uses the same partial exit semantics.
 
-`--format compact` returns locations only. Use text or JSON output when context
-from `--before`, `--after`, or `--snippet-lines` is needed.
+For scoped `--path` searches, `--format compact` returns locations only. Use
+text or JSON output when context from `--before`, `--after`, or
+`--snippet-lines` is needed.
 
 ## 日本語
 
@@ -35,6 +40,10 @@ from `--before`, `--after`, or `--snippet-lines` is needed.
 終了します。count JSON は単一 object に同じ終端 scan 状態を持ち、count の
 authority には `authoritative_count` を使います。
 
+`--all` では、この終端状態を表現できない JSON array、compact、CSV/TSV、
+LSP、quickfix、SARIF の row 形式を拒否します。代わりに既定 text、streaming
+NDJSON、count 出力を使ってください。
+
 candidate-file または line-scan による切り詰めは partial-result 終了コード `11` を
 返します。不完全な scan でも終了コード `0` を許容する場合だけ `--allow-partial` を
 指定してください。通常の result limit による早期停止は成功のままですが、row 終端は
@@ -42,5 +51,6 @@ candidate-file または line-scan による切り詰めは partial-result 終�
 query を絞る方法を示します。human output は scan summary を stderr に出し、同じ
 partial exit semantics を使います。
 
-`--format compact` は location のみを返します。`--before`、`--after`、
-`--snippet-lines` の context が必要な場合は text または JSON output を使ってください。
+`--path` で scope を限定した検索では、`--format compact` は location のみを返します。
+`--before`、`--after`、`--snippet-lines` の context が必要な場合は text または
+JSON output を使ってください。

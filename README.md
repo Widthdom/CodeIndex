@@ -92,7 +92,7 @@ The default NDJSON output of `search`, `symbols`, and `files` always ends with a
 
 When the byte cap omits rows, these commands return partial-result exit code `11`; pass `--allow-partial` to opt into exit code `0` while retaining the same terminal metadata. Ordinary `--limit` truncation remains a successful, explicitly described stream. Array and compact outputs keep their documented whole-response behavior; check `cdidx <command> --help` before relying on partial output.
 
-`find --all --json` also makes bounded scans explicit. Default JSON rows end with a terminal record containing `scan_complete`, `authoritative_rows`, scanned file/line counts, active caps, truncation reason, and recovery guidance; count JSON carries the same scan state in its single result object through `authoritative_count`. A candidate-file or line-scan cap returns partial-result exit code `11` unless `--allow-partial` is set. Ordinary result-limit early stops remain exit `0` but report `scan_complete=false` and `result_limit_reached=true`.
+`find --all --json` also makes bounded scans explicit. Default streaming JSON rows end with a terminal record containing `scan_complete`, `authoritative_rows`, scanned file/line counts, active caps, truncation reason, and recovery guidance; count JSON carries the same scan state in its single result object through `authoritative_count`. Row formats that cannot carry this metadata, including JSON array and location-only formats, are rejected with `--all`; use text, NDJSON, or count output. A candidate-file or line-scan cap returns partial-result exit code `11` unless `--allow-partial` is set. Ordinary result-limit early stops remain exit `0` but report `scan_complete=false` and `result_limit_reached=true`.
 
 Use it with AI tools or editors:
 
@@ -376,7 +376,7 @@ cdidx validate
 
 byte cap により行を省略した場合、これらのコマンドは partial-result 終了コード `11` を返します。同じ終端 metadata を維持したまま終了コード `0` を明示的に許容するには `--allow-partial` を指定します。通常の `--limit` による切り詰めは、理由が明示された成功 stream のままです。array / compact 出力は文書化済みの whole-response 挙動を維持します。部分出力へ依存する前に `cdidx <command> --help` を確認してください。
 
-`find --all --json` も上限付き scan を明示します。既定 JSON row は `scan_complete`、`authoritative_rows`、走査 file / line 数、有効な cap、切り詰め理由、復旧案内を含む終端レコードで終了します。count JSON は単一 result object の `authoritative_count` と同じ scan 状態を返します。candidate-file cap または line-scan cap に達した場合は、`--allow-partial` を指定しない限り partial-result 終了コード `11` を返します。通常の result limit による早期停止は終了コード `0` のままですが、`scan_complete=false` と `result_limit_reached=true` を報告します。
+`find --all --json` も上限付き scan を明示します。既定の streaming JSON row は `scan_complete`、`authoritative_rows`、走査 file / line 数、有効な cap、切り詰め理由、復旧案内を含む終端レコードで終了します。count JSON は単一 result object の `authoritative_count` と同じ scan 状態を返します。この metadata を表現できない JSON array や location-only 形式は `--all` との組み合わせを拒否するため、text、NDJSON、count 出力を使ってください。candidate-file cap または line-scan cap に達した場合は、`--allow-partial` を指定しない限り partial-result 終了コード `11` を返します。通常の result limit による早期停止は終了コード `0` のままですが、`scan_complete=false` と `result_limit_reached=true` を報告します。
 
 AI tool や editor から使います。
 
