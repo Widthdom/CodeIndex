@@ -98,8 +98,17 @@ public static partial class QueryCommandRunner
     {
         var itemOptions = GetCompactJsonOptions(jsonOptions);
         var context = CliJsonSerializerContextFactory.Create(itemOptions);
+        var locationList = locations.ToList();
+        if (locationList.Count == 0)
+        {
+            var payload = new JsonArray();
+            AddActiveSqliteDiagnostics(payload);
+            CommandOutputWriter.WriteJsonNode(payload, jsonOptions);
+            return;
+        }
+
         WriteJsonArray(
-            locations,
+            locationList,
             (writer, location) => writer.Write(SerializeQueryJson(location, context.LspLocation, itemOptions)),
             jsonOptions);
     }

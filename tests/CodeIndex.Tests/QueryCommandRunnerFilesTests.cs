@@ -3103,6 +3103,17 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, ndjsonStderr);
             Assert.True(ndjsonResult.RootElement.GetProperty("wal_stale_snapshot_risk").GetBoolean());
             Assert.True(ndjsonDone.RootElement.GetProperty("wal_stale_snapshot_risk").GetBoolean());
+
+            var (emptyArrayExit, emptyArrayStdout, emptyArrayStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["__missing_issue4555__", "--db", options.DbPath, "--json=array"],
+                _jsonOptions));
+            using var emptyArrayDocument = ParseJsonOutput(emptyArrayStdout);
+            var diagnosticsOnly = Assert.Single(emptyArrayDocument.RootElement.EnumerateArray());
+            Assert.Equal(CommandExitCodes.Success, emptyArrayExit);
+            Assert.Equal(string.Empty, emptyArrayStderr);
+            Assert.True(diagnosticsOnly.GetProperty("diagnostic_only").GetBoolean());
+            Assert.Equal("sqlite_stale_snapshot_risk", diagnosticsOnly.GetProperty("diagnostic_type").GetString());
+            Assert.True(diagnosticsOnly.GetProperty("wal_stale_snapshot_risk").GetBoolean());
         }
         finally
         {

@@ -16,6 +16,13 @@ public static partial class QueryCommandRunner
             AddReadOnlyFallbackDiagnostics(payload, reader);
     }
 
+    private static void AddActiveSqliteDiagnostics(JsonArray payload)
+    {
+        var reader = ActiveSqliteDiagnosticsReader.Value;
+        if (reader?.WalStaleSnapshotRisk == true)
+            AddSqliteDiagnostics(payload, reader);
+    }
+
     private static void WriteActiveSqliteDiagnosticsProperties(TextWriter writer, JsonSerializerOptions jsonOptions)
     {
         var payload = new JsonObject();
@@ -60,6 +67,18 @@ public static partial class QueryCommandRunner
 
         if (node is JsonArray array)
         {
+            if (array.Count == 0)
+            {
+                var diagnostics = new JsonObject
+                {
+                    ["diagnostic_only"] = true,
+                    ["diagnostic_type"] = "sqlite_stale_snapshot_risk",
+                };
+                AddReadOnlyFallbackDiagnostics(diagnostics, reader);
+                array.Add(diagnostics);
+                return;
+            }
+
             foreach (var item in array)
             {
                 if (item is JsonObject row)

@@ -6225,6 +6225,22 @@ public partial class McpServer : IDisposable
         }
     }
 
+    private void AddConfiguredSqliteDiagnostics(JsonObject payload)
+    {
+        var diagnosticsReader = _activeSqliteDiagnosticsReader.Value;
+        if (diagnosticsReader != null)
+        {
+            QueryCommandRunner.AddReadOnlyFallbackDiagnostics(payload, diagnosticsReader);
+            return;
+        }
+
+        if (!SqliteFileUri.RequestsImmutableSnapshot(_dbPath))
+            return;
+
+        payload["wal_stale_snapshot_risk"] = true;
+        payload["wal_stale_snapshot_reason"] = "explicit_immutable_read_only";
+    }
+
     /// <summary>
     /// Open the per-session DbContext on first use and reuse it on every subsequent direct call.
     /// Centralising the open lets us pay the connection setup, pragma application, and SQL
@@ -6576,9 +6592,7 @@ public partial class McpServer : IDisposable
         {
             structuredObject.TryAdd("api_version", JsonOutputContract.ApiVersion);
             AddProjectFilterRootDiagnostics(structuredObject);
-            var diagnosticsReader = _activeSqliteDiagnosticsReader.Value;
-            if (diagnosticsReader != null)
-                QueryCommandRunner.AddReadOnlyFallbackDiagnostics(structuredObject, diagnosticsReader);
+            AddConfiguredSqliteDiagnostics(structuredObject);
             result["structuredContent"] = structuredContent;
         }
         else if (structuredContent != null)
@@ -6641,9 +6655,9 @@ public partial class McpServer : IDisposable
         public int BytesWritten { get; } = bytesWritten;
     }
 
-    private static JsonObject CreateResponseTooLargeError(bool hasId, JsonNode? id, int responseBytes, int responseLimit, bool actualBytesExact = true)
+    private JsonObject CreateResponseTooLargeError(bool hasId, JsonNode? id, int responseBytes, int responseLimit, bool actualBytesExact = true)
     {
-        return CreateErrorResponse(
+        var response = CreateErrorResponse(
             hasId: hasId,
             id: id,
             code: -32603,
@@ -6658,6 +6672,8 @@ public partial class McpServer : IDisposable
                 ["actual_bytes"] = responseBytes,
                 ["actual_bytes_exact"] = actualBytesExact,
             });
+        AddConfiguredSqliteDiagnostics((JsonObject)response["error"]!["data"]!);
+        return response;
     }
 
     private static int GetMaxResponseBytes()
@@ -6737,6 +6753,8 @@ public partial class McpServer : IDisposable
         IReadOnlyList<string>? similarValues = null)
     {
         ClearProjectFilterRootDiagnostics();
+        var structuredContent = McpErrorEnvelope.BuildData(category, suggestion, retrySafe, AddCorrelationData(extraData));
+        AddConfiguredSqliteDiagnostics(structuredContent);
         var result = new JsonObject
         {
             ["content"] = new JsonArray
@@ -6748,7 +6766,7 @@ public partial class McpServer : IDisposable
                 }
             },
             ["isError"] = true,
-            ["structuredContent"] = McpErrorEnvelope.BuildData(category, suggestion, retrySafe, AddCorrelationData(extraData)),
+            ["structuredContent"] = structuredContent,
         };
         if (similarValues != null && similarValues.Count > 0)
         {

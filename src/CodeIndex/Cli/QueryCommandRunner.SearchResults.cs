@@ -490,6 +490,7 @@ public static partial class QueryCommandRunner
         var bytesWritten = 0;
         foreach (var result in projected)
         {
+            AddActiveSqliteDiagnostics(result);
             var line = result.ToJsonString(ndjsonOptions);
             if (WouldExceedJsonByteLimit(options, bytesWritten, line, out interrupted, out firstOmittedResultBytes))
                 break;
