@@ -92,9 +92,9 @@ public static partial class QueryCommandRunner
 
             if (json && (options.SummaryOnly || options.CountOnly || options.OutputFormat == OutputFormatCount))
             {
-                CommandOutputWriter.WriteJsonNode(
-                    BuildLanguageSummaryPayload(filtered, sorted.Count, indexedLanguageCounts, options),
-                    jsonOptions);
+                var payload = BuildLanguageSummaryPayload(filtered, sorted.Count, indexedLanguageCounts, options);
+                AddActiveSqliteDiagnostics(payload);
+                CommandOutputWriter.WriteJsonNode(payload, jsonOptions);
                 return CommandExitCodes.Success;
             }
 
@@ -110,7 +110,7 @@ public static partial class QueryCommandRunner
                     kv.Value.CapabilityGaps,
                     kv.Value.UnsupportedGuidance,
                     GetIndexedLanguageCount(indexedLanguageCounts, kv.Key))).ToList();
-                Console.WriteLine(JsonSerializer.Serialize(new LanguagesJsonResult(entries), CliJsonSerializerContextFactory.Create(jsonOptions).LanguagesJsonResult));
+                Console.WriteLine(SerializeQueryJson(new LanguagesJsonResult(entries), CliJsonSerializerContextFactory.Create(jsonOptions).LanguagesJsonResult, jsonOptions));
             }
             else
             {
