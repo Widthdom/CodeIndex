@@ -73,16 +73,19 @@ public static partial class QueryCommandRunner
                 if (options.Compact)
                 {
                     var payload = BuildOutlineJsonPayload(outline, displaySourceSymbols, kindFilters, outlineSortMode, options, jsonOptions, compact: true);
+                    AddActiveSqliteDiagnostics(payload);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else if (HasOutlineJsonControls(options, kindFilters))
                 {
                     var payload = BuildOutlineJsonPayload(outline, displaySourceSymbols, kindFilters, outlineSortMode, options, jsonOptions, compact: false);
+                    AddActiveSqliteDiagnostics(payload);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
                 {
                     var payload = JsonSerializer.SerializeToNode(outline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult)!.AsObject();
+                    AddActiveSqliteDiagnostics(payload);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
             }

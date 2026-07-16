@@ -93,6 +93,7 @@ public partial class McpServer : IDisposable
     // を渡せるようにするため (#1567)。
     private readonly AsyncLocal<CancellationToken> _currentRequestToken = new();
     private readonly AsyncLocal<bool> _isolateDbForCurrentRequest = new();
+    private readonly AsyncLocal<DbReader?> _activeSqliteDiagnosticsReader = new();
     // JSON-RPC batches divide the complete array-envelope budget among response-bearing
     // items. resources/list and resources/read observe their current share here so large
     // pages cannot each claim the full response cap and overflow the aggregate frame.
@@ -6186,7 +6187,7 @@ public partial class McpServer : IDisposable
             isolatedDb.TryMigrateForRead();
             using var isolatedReader = new DbReader(isolatedDb, requestToken);
             isolatedReader.IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
-            return isolatedReader.RunWithGeneratedScope(() => action(isolatedReader));
+            return RunWithSqliteDiagnostics(isolatedReader, action);
         }
 
         var db = GetOrOpenSharedDb();
@@ -6207,7 +6208,21 @@ public partial class McpServer : IDisposable
         // shutdown / 切断を観測できるようにする (#1567)。
         using var reader = new DbReader(db, requestToken);
         reader.IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
-        return reader.RunWithGeneratedScope(() => action(reader));
+        return RunWithSqliteDiagnostics(reader, action);
+    }
+
+    private JsonNode RunWithSqliteDiagnostics(DbReader reader, Func<DbReader, JsonNode> action)
+    {
+        var previousReader = _activeSqliteDiagnosticsReader.Value;
+        _activeSqliteDiagnosticsReader.Value = reader;
+        try
+        {
+            return reader.RunWithGeneratedScope(() => action(reader));
+        }
+        finally
+        {
+            _activeSqliteDiagnosticsReader.Value = previousReader;
+        }
     }
 
     /// <summary>
@@ -6561,6 +6576,9 @@ public partial class McpServer : IDisposable
         {
             structuredObject.TryAdd("api_version", JsonOutputContract.ApiVersion);
             AddProjectFilterRootDiagnostics(structuredObject);
+            var diagnosticsReader = _activeSqliteDiagnosticsReader.Value;
+            if (diagnosticsReader != null)
+                QueryCommandRunner.AddReadOnlyFallbackDiagnostics(structuredObject, diagnosticsReader);
             result["structuredContent"] = structuredContent;
         }
         else if (structuredContent != null)

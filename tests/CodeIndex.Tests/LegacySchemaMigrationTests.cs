@@ -693,7 +693,7 @@ public class LegacySchemaMigrationTests : IDisposable
         Assert.True(File.Exists(walPath));
         Assert.True(new FileInfo(walPath).Length > 0);
 
-        using var immutableDb = new DbContext(DbConnectionFactory.ToReadOnlyUri(_dbPath));
+        using var immutableDb = new DbContext(DbConnectionFactory.ToReadOnlyUri(_dbPath) + "&cache=shared");
         var reader = new DbReader(immutableDb);
         var payload = new JsonObject();
         QueryCommandRunner.AddReadOnlyFallbackDiagnostics(payload, reader);

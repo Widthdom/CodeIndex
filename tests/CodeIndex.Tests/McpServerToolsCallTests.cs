@@ -21,6 +21,23 @@ namespace CodeIndex.Tests;
 
 public partial class McpServerTests
 {
+    [Fact]
+    public void ToolsCall_Search_ImmutableUriReportsStaleSnapshotRisk_Issue4555()
+    {
+        using var server = new McpServer(
+            DbConnectionFactory.ToReadOnlyUri(_dbPath) + "&cache=shared",
+            ConsoleUi.LoadVersion(),
+            dbPathExplicit: true);
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"__no_match_issue4555__","limit":1}}}""")!;
+
+        var response = server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.True(structured["wal_stale_snapshot_risk"]!.GetValue<bool>());
+        Assert.Equal("explicit_immutable_read_only", structured["wal_stale_snapshot_reason"]!.GetValue<string>());
+    }
+
     [Theory]
     [InlineData("search", "{\"query\":\"App\"}")]
     [InlineData("definition", "{\"query\":\"Run\"}")]

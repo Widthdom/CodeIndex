@@ -273,6 +273,7 @@ public static partial class QueryCommandRunner
                     AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
                     AddImpactOptionWarnings(payload, options);
                     AddCountEnvelopeJsonFields(payload, reader, jsonOptions, options);
+                    AddActiveSqliteDiagnostics(payload);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else

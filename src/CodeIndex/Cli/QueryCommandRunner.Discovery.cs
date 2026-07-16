@@ -174,7 +174,7 @@ public static partial class QueryCommandRunner
                 }
                 if (options.OutputFormat == OutputFormatJson && options.JsonOutputFormat == JsonOutputFormatArray)
                 {
-                    Console.WriteLine(JsonSerializer.Serialize(results, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolResult));
+                    Console.WriteLine(SerializeQueryJson(results, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolResult, jsonOptions));
                     return ZeroResultExitCode(options);
                 }
                 if (TryWriteEmptyFormattedResult(options, jsonOptions))
@@ -226,7 +226,7 @@ public static partial class QueryCommandRunner
             {
                 if (options.JsonOutputFormat == JsonOutputFormatArray)
                 {
-                    Console.WriteLine(JsonSerializer.Serialize(results, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolResult));
+                    Console.WriteLine(SerializeQueryJson(results, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolResult, jsonOptions));
                 }
                 else
                 {
@@ -235,7 +235,7 @@ public static partial class QueryCommandRunner
                         if (hasExactPredicate)
                             WriteJsonResultWithExactSignal(r, CliJsonSerializerContextFactory.Create(jsonOptions).SymbolResult, exactSignal, jsonOptions);
                         else
-                            Console.WriteLine(JsonSerializer.Serialize(r, CliJsonSerializerContextFactory.Create(jsonOptions).SymbolResult));
+                            Console.WriteLine(SerializeQueryJson(r, CliJsonSerializerContextFactory.Create(jsonOptions).SymbolResult, jsonOptions));
                     }
                 }
             }
@@ -427,12 +427,12 @@ public static partial class QueryCommandRunner
                 var context = CliJsonSerializerContextFactory.Create(jsonOptions);
                 if (options.JsonOutputFormat == JsonOutputFormatArray)
                 {
-                    Console.WriteLine(JsonSerializer.Serialize(results, context.ListFileResult));
+                    Console.WriteLine(SerializeQueryJson(results, context.ListFileResult, jsonOptions));
                 }
                 else
                 {
                     foreach (var r in results)
-                        Console.WriteLine(JsonSerializer.Serialize(r, context.FileResult));
+                        Console.WriteLine(SerializeQueryJson(r, context.FileResult, jsonOptions));
                 }
             }
             else

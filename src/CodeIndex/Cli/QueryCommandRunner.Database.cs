@@ -92,12 +92,15 @@ public static partial class QueryCommandRunner
                 : ResolveProjectFilterRoot(dbPath, options.DbPathExplicit);
             s_activeQueryProjectRoot = projectRootResolution.Root;
             int exitCode;
+            var previousDiagnosticsReader = ActiveSqliteDiagnosticsReader.Value;
+            ActiveSqliteDiagnosticsReader.Value = reader;
             try
             {
                 exitCode = reader.RunWithGeneratedScope(() => action(reader));
             }
             finally
             {
+                ActiveSqliteDiagnosticsReader.Value = previousDiagnosticsReader;
                 s_activeQueryProjectRoot = previousProjectRoot;
             }
             var profileEntries = profiling ? Database.DbDebug.EndProfile() : [];
