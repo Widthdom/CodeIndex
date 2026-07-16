@@ -968,13 +968,13 @@ internal static partial class ProgramRunner
 
     private static QueryCommandTokenRole GetQueryCommandTokenRole(string[] args, int index)
     {
-        if (!TryFindQueryCommandBefore(args, index, out var commandIndex, out var commandName))
+        if (!TryFindCommandBefore(args, index, out var commandIndex, out var commandName))
             return QueryCommandTokenRole.None;
 
         return GetQueryCommandTokenRole(commandName, args[(commandIndex + 1)..], index - commandIndex - 1);
     }
 
-    private static bool TryFindQueryCommandBefore(string[] args, int index, out int commandIndex, out string commandName)
+    private static bool TryFindCommandBefore(string[] args, int index, out int commandIndex, out string commandName)
     {
         commandIndex = -1;
         commandName = string.Empty;
@@ -995,8 +995,6 @@ internal static partial class ProgramRunner
                 continue;
             if (!CliFlagSchema.AllCommands.Contains(arg))
                 return false;
-            if (!CommandAcceptsQueryLiteral(arg))
-                return false;
 
             commandIndex = i;
             commandName = arg;
@@ -1008,9 +1006,6 @@ internal static partial class ProgramRunner
 
     private static QueryCommandTokenRole GetQueryCommandTokenRole(string commandName, string[] subArgs, int targetIndex)
     {
-        if (!CommandAcceptsQueryLiteral(commandName))
-            return QueryCommandTokenRole.None;
-
         var (withValues, flagOnly) = CliFlagSchema.GetParserFlagsPartitionedByValueBearing(commandName);
         if (targetIndex > 0)
         {
@@ -1018,6 +1013,9 @@ internal static partial class ProgramRunner
             if (!previousHasInlineValue && withValues.Contains(previousArg))
                 return QueryCommandTokenRole.CommandOptionValue;
         }
+
+        if (!CommandAcceptsQueryLiteral(commandName))
+            return QueryCommandTokenRole.None;
 
         if (IsInspectPathLineModeBefore(commandName, subArgs, targetIndex))
         {

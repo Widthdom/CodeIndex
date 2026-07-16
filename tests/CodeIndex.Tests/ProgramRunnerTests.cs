@@ -494,6 +494,19 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void RunMap_DashPrefixedPathValueIsNotTreatedAsOutputFlag_Issue4562()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["map", "--path", "--json", "--format", "markdown"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains("--path requires a value", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("--json cannot be combined", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RunSearch_CountJsonPrettyRemainsSingleDocument_Issue4562()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_output_count_pretty_4562");
