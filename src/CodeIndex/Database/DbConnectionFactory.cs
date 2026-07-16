@@ -1,17 +1,26 @@
 using CodeIndex.Cli;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
+using System.Buffers.Binary;
+using System.Security.Cryptography;
 
 namespace CodeIndex.Database;
 
 internal static class DbConnectionFactory
 {
     private static readonly AsyncLocal<Func<string, SqliteConnection>?> ScopedOpenReadOnlyForTesting = new();
+    private static readonly AsyncLocal<Action?> ScopedQueryOnlySnapshotCapturedForTesting = new();
 
     internal static Func<string, SqliteConnection>? OpenReadOnlyForTesting
     {
         get => ScopedOpenReadOnlyForTesting.Value;
         set => ScopedOpenReadOnlyForTesting.Value = value;
+    }
+
+    internal static Action? QueryOnlySnapshotCapturedForTesting
+    {
+        get => ScopedQueryOnlySnapshotCapturedForTesting.Value;
+        set => ScopedQueryOnlySnapshotCapturedForTesting.Value = value;
     }
 
     private const int SqliteCantOpen = 14;
@@ -202,6 +211,7 @@ internal static class DbConnectionFactory
             pooling,
             out immutableSnapshot,
             out immutableWalRisk,
+            out _,
             out _);
 
     internal static SqliteConnection CreateArtifactPreservingQueryOnlyConnection(
@@ -210,9 +220,27 @@ internal static class DbConnectionFactory
         out bool immutableSnapshot,
         out bool immutableWalRisk,
         out bool detachedSnapshot)
+        => CreateArtifactPreservingQueryOnlyConnection(
+            dbPath,
+            pooling,
+            out immutableSnapshot,
+            out immutableWalRisk,
+            out detachedSnapshot,
+            out _);
+
+    internal static SqliteConnection CreateArtifactPreservingQueryOnlyConnection(
+        string dbPath,
+        bool pooling,
+        out bool immutableSnapshot,
+        out bool immutableWalRisk,
+        out bool detachedSnapshot,
+        out QueryOnlySnapshotSourceState? snapshotSourceState,
+        CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        cancellationToken.ThrowIfCancellationRequested();
         detachedSnapshot = false;
+        snapshotSourceState = null;
 
         if (OpenReadOnlyForTesting is { } openReadOnlyForTesting)
         {
@@ -233,56 +261,92 @@ internal static class DbConnectionFactory
         }
 
         var walState = InspectQueryOnlyWalState(dbPath, out var localDbPath);
-        if (walState == QueryOnlyWalState.HotWal)
+        if (walState != QueryOnlyWalState.NotWal)
         {
-            immutableSnapshot = false;
             immutableWalRisk = false;
             detachedSnapshot = true;
-            return CreateStableHotWalSnapshotConnection(localDbPath);
+            var connection = CreateStableWalSnapshotConnection(
+                localDbPath,
+                out var copiedHotWal,
+                out var capturedState,
+                cancellationToken);
+            immutableSnapshot = !copiedHotWal;
+            snapshotSourceState = capturedState;
+            return connection;
         }
 
-        immutableSnapshot = walState == QueryOnlyWalState.CheckpointedWal;
-        var mode = immutableSnapshot
-            ? pooling
-                ? SqliteConnectionPolicyMode.ImmutableReadOnlyUri
-                : SqliteConnectionPolicyMode.ImmutableReadOnlyUriUnpooled
-            : pooling
-                ? SqliteConnectionPolicyMode.ReadOnly
-                : SqliteConnectionPolicyMode.ReadOnlyUnpooled;
+        immutableSnapshot = false;
+        var mode = pooling
+            ? SqliteConnectionPolicyMode.ReadOnly
+            : SqliteConnectionPolicyMode.ReadOnlyUnpooled;
         return new SqliteConnection(SqliteConnectionPolicy.BuildConnectionString(dbPath, mode));
     }
 
-    private static SqliteConnection CreateStableHotWalSnapshotConnection(string localDbPath)
+    internal static bool IsQueryOnlySnapshotCurrent(
+        string dbPath,
+        QueryOnlySnapshotSourceState snapshotSourceState,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var localDbPath = dbPath;
+        if (SqliteFileUri.StartsWithFileScheme(dbPath))
+        {
+            if (!TryGetLocalPath(dbPath, out var parsedPath, out _) || parsedPath == null)
+                return false;
+            localDbPath = parsedPath;
+        }
+
+        return TryCaptureQueryOnlySnapshotState(localDbPath, cancellationToken, out var currentState)
+            && currentState == snapshotSourceState;
+    }
+
+    private static SqliteConnection CreateStableWalSnapshotConnection(
+        string localDbPath,
+        out bool copiedHotWal,
+        out QueryOnlySnapshotSourceState snapshotSourceState,
+        CancellationToken cancellationToken)
     {
         const int maxCopyAttempts = 3;
         var normalizedDbPath = LongPath.EnsureWindowsPrefix(localDbPath);
         var walPath = normalizedDbPath + "-wal";
         var snapshotDirectory = DataDirectorySecurity.CreateSensitiveTempDirectory("query-wal-snapshot");
         var snapshotDbPath = Path.Combine(snapshotDirectory.FullName, "snapshot.db");
+        var snapshotWalPath = snapshotDbPath + "-wal";
         try
         {
             for (var attempt = 1; attempt <= maxCopyAttempts; attempt++)
             {
-                if (!TryGetFileStamp(normalizedDbPath, out var dbBefore)
-                    || !TryGetFileStamp(walPath, out var walBefore)
-                    || walBefore.Length == 0)
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!TryCaptureQueryOnlySnapshotState(normalizedDbPath, cancellationToken, out var before))
+                    continue;
+                QueryOnlySnapshotCapturedForTesting?.Invoke();
+                cancellationToken.ThrowIfCancellationRequested();
+
+                try
                 {
-                    break;
+                    CopySnapshotFile(normalizedDbPath, snapshotDbPath, cancellationToken);
+                    if (before.WalLength > 0)
+                        CopySnapshotFile(walPath, snapshotWalPath, cancellationToken);
+                    else if (File.Exists(snapshotWalPath))
+                        File.Delete(snapshotWalPath);
+                }
+                catch (IOException)
+                {
+                    continue;
                 }
 
-                File.Copy(normalizedDbPath, snapshotDbPath, overwrite: true);
-                File.Copy(walPath, snapshotDbPath + "-wal", overwrite: true);
-                DataDirectorySecurity.ApplyPrivateFileMode(snapshotDbPath);
-                DataDirectorySecurity.ApplyPrivateFileMode(snapshotDbPath + "-wal");
-
-                if (TryGetFileStamp(normalizedDbPath, out var dbAfter)
-                    && TryGetFileStamp(walPath, out var walAfter)
-                    && dbBefore == dbAfter
-                    && walBefore == walAfter)
+                if (TryCaptureQueryOnlySnapshotState(snapshotDbPath, cancellationToken, out var copied)
+                    && TryCaptureQueryOnlySnapshotState(normalizedDbPath, cancellationToken, out var after)
+                    && before == copied
+                    && before == after)
                 {
+                    copiedHotWal = before.WalLength > 0;
+                    snapshotSourceState = before;
                     var connection = new SqliteConnection(SqliteConnectionPolicy.BuildConnectionString(
                         snapshotDbPath,
-                        SqliteConnectionPolicyMode.ReadOnlyUnpooled));
+                        copiedHotWal
+                            ? SqliteConnectionPolicyMode.ReadOnlyUnpooled
+                            : SqliteConnectionPolicyMode.ImmutableReadOnlyUriUnpooled));
                     AttachSnapshotCleanup(connection, snapshotDirectory.FullName);
                     return connection;
                 }
@@ -296,33 +360,142 @@ internal static class DbConnectionFactory
 
         TryDeleteSnapshotDirectory(snapshotDirectory.FullName);
         throw new CodeIndexException(
-            "query_only_hot_wal_changed",
+            "query_only_wal_changed",
             CodeIndexExceptionCategory.Database,
-            "Query-only open was refused because the WAL changed while an artifact-preserving snapshot was being created.",
+            "Query-only open was refused because the database or WAL generation changed while an artifact-preserving snapshot was being created.",
             path: localDbPath,
             hint: "Let the writer finish and retry, or create a SQLite backup snapshot and query that snapshot.");
     }
 
-    private static bool TryGetFileStamp(string path, out QueryOnlyFileStamp stamp)
+    private static void CopySnapshotFile(string sourcePath, string destinationPath, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using (var source = new FileStream(
+                   sourcePath,
+                   FileMode.Open,
+                   FileAccess.Read,
+                   FileShare.ReadWrite | FileShare.Delete,
+                   bufferSize: 1024 * 1024,
+                   FileOptions.Asynchronous | FileOptions.SequentialScan))
+        using (var destination = new FileStream(
+                   destinationPath,
+                   FileMode.Create,
+                   FileAccess.Write,
+                   FileShare.None,
+                   bufferSize: 1024 * 1024,
+                   FileOptions.Asynchronous | FileOptions.SequentialScan))
+        {
+            source.CopyToAsync(destination, 1024 * 1024, cancellationToken).GetAwaiter().GetResult();
+            destination.Flush();
+        }
+
+        DataDirectorySecurity.ApplyPrivateFileMode(destinationPath);
+    }
+
+    private static bool TryCaptureQueryOnlySnapshotState(
+        string localDbPath,
+        CancellationToken cancellationToken,
+        out QueryOnlySnapshotSourceState state)
     {
         try
         {
-            var info = new FileInfo(path);
-            if (!info.Exists)
+            cancellationToken.ThrowIfCancellationRequested();
+            var normalizedDbPath = LongPath.EnsureWindowsPrefix(localDbPath);
+            Span<byte> dbHeader = stackalloc byte[100];
+            long dbLength;
+            int dbHeaderLength;
+            using (var db = new FileStream(
+                       normalizedDbPath,
+                       FileMode.Open,
+                       FileAccess.Read,
+                       FileShare.ReadWrite | FileShare.Delete))
             {
-                stamp = default;
+                dbLength = db.Length;
+                dbHeaderLength = ReadAtMost(db, dbHeader, cancellationToken);
+            }
+
+            if (dbHeaderLength < 20
+                || !dbHeader[..16].SequenceEqual("SQLite format 3\0"u8)
+                || dbHeader[18] != 2
+                || dbHeader[19] != 2)
+            {
+                state = default;
                 return false;
             }
 
-            stamp = new QueryOnlyFileStamp(info.Length, info.LastWriteTimeUtc);
+            var walPath = normalizedDbPath + "-wal";
+            long walLength = 0;
+            string? walHeaderFingerprint = null;
+            string? walLastFrameFingerprint = null;
+            try
+            {
+                using var wal = new FileStream(
+                    walPath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+                walLength = wal.Length;
+                if (walLength > 0)
+                {
+                    Span<byte> walHeader = stackalloc byte[32];
+                    var walHeaderLength = ReadAtMost(wal, walHeader, cancellationToken);
+                    walHeaderFingerprint = Fingerprint(walHeader[..walHeaderLength]);
+
+                    if (walHeaderLength == walHeader.Length)
+                    {
+                        var rawPageSize = BinaryPrimitives.ReadUInt32BigEndian(walHeader[8..12]);
+                        var pageSize = rawPageSize == 1 ? 65536L : rawPageSize;
+                        var frameSize = 24L + pageSize;
+                        var frameCount = frameSize > 24 && walLength > walHeader.Length
+                            ? (walLength - walHeader.Length) / frameSize
+                            : 0;
+                        if (frameCount > 0)
+                        {
+                            Span<byte> lastFrameHeader = stackalloc byte[24];
+                            wal.Position = walHeader.Length + ((frameCount - 1) * frameSize);
+                            var lastFrameHeaderLength = ReadAtMost(wal, lastFrameHeader, cancellationToken);
+                            walLastFrameFingerprint = Fingerprint(lastFrameHeader[..lastFrameHeaderLength]);
+                        }
+                    }
+                }
+            }
+            catch (FileNotFoundException)
+            {
+                walLength = 0;
+            }
+
+            state = new QueryOnlySnapshotSourceState(
+                dbLength,
+                Fingerprint(dbHeader[..dbHeaderLength]),
+                walLength,
+                walHeaderFingerprint,
+                walLastFrameFingerprint);
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
-            stamp = default;
+            state = default;
             return false;
         }
     }
+
+    private static int ReadAtMost(Stream stream, Span<byte> destination, CancellationToken cancellationToken)
+    {
+        var total = 0;
+        while (total < destination.Length)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var read = stream.Read(destination[total..]);
+            if (read == 0)
+                break;
+            total += read;
+        }
+
+        return total;
+    }
+
+    private static string Fingerprint(ReadOnlySpan<byte> bytes)
+        => Convert.ToHexString(SHA256.HashData(bytes));
 
     private static void AttachSnapshotCleanup(SqliteConnection connection, string snapshotDirectory)
     {
@@ -394,7 +567,12 @@ internal static class DbConnectionFactory
         HotWal,
     }
 
-    private readonly record struct QueryOnlyFileStamp(long Length, DateTime LastWriteTimeUtc);
+    internal readonly record struct QueryOnlySnapshotSourceState(
+        long DbLength,
+        string DbHeaderFingerprint,
+        long WalLength,
+        string? WalHeaderFingerprint,
+        string? WalLastFrameFingerprint);
 
     internal static bool IsTransientBusyError(SqliteException ex) =>
         ex.SqliteErrorCode is 5 or 6;

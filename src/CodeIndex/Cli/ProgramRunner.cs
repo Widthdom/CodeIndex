@@ -2531,7 +2531,7 @@ internal static partial class ProgramRunner
                 PathCasing.SeedFromWorkspace(indexedProjectRoot, ignoreCase: !pathCaseSensitive);
             }
 
-            using var server = new LspServer(new DbReader(db), appVersion, jsonOptions, indexedProjectRoot);
+            using var server = new LspServer(db, options.DbPath, appVersion, jsonOptions, indexedProjectRoot);
             return server.Run(Console.OpenStandardInput(), Console.OpenStandardOutput(), cancellationToken);
         }
         catch (OperationCanceledException)

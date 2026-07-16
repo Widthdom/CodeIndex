@@ -131,6 +131,133 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void QueryOnlySnapshot_RetriesEmptyWalToCommittedWalTransition_Issue4557()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_only_wal_transition_issue4557");
+        var originalHook = DbConnectionFactory.QueryOnlySnapshotCapturedForTesting;
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            SqliteConnection.ClearAllPools();
+            using var writer = new SqliteConnection(
+                new SqliteConnectionStringBuilder { DataSource = dbPath, Pooling = false }.ConnectionString);
+            writer.Open();
+            using (var setup = writer.CreateCommand())
+            {
+                setup.CommandText = "PRAGMA journal_mode=WAL; PRAGMA wal_checkpoint(TRUNCATE)";
+                _ = setup.ExecuteScalar();
+            }
+
+            var transitionExecuted = 0;
+            DbConnectionFactory.QueryOnlySnapshotCapturedForTesting = () =>
+            {
+                if (Interlocked.Exchange(ref transitionExecuted, 1) != 0)
+                    return;
+                using var commit = writer.CreateCommand();
+                commit.CommandText = "INSERT OR REPLACE INTO codeindex_meta(key, value) VALUES ('issue4557_transition', 'visible')";
+                Assert.Equal(1, commit.ExecuteNonQuery());
+            };
+
+            using var queryDb = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+            var expectedArtifacts = CaptureDatabaseArtifacts(dbPath);
+            using var value = queryDb.Connection.CreateCommand();
+            value.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'issue4557_transition'";
+            Assert.Equal("visible", (string?)value.ExecuteScalar());
+            Assert.Equal(1, transitionExecuted);
+            Assert.Equal(expectedArtifacts, CaptureDatabaseArtifacts(dbPath));
+        }
+        finally
+        {
+            DbConnectionFactory.QueryOnlySnapshotCapturedForTesting = originalHook;
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void QueryOnlySnapshot_RetriesHotWalCheckpointReset_Issue4557()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_only_wal_reset_issue4557");
+        var originalHook = DbConnectionFactory.QueryOnlySnapshotCapturedForTesting;
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            SqliteConnection.ClearAllPools();
+            using var writer = new SqliteConnection(
+                new SqliteConnectionStringBuilder { DataSource = dbPath, Pooling = false }.ConnectionString);
+            writer.Open();
+            using (var setup = writer.CreateCommand())
+            {
+                setup.CommandText = "PRAGMA journal_mode=WAL; PRAGMA wal_checkpoint(TRUNCATE)";
+                _ = setup.ExecuteScalar();
+                setup.CommandText = "INSERT OR REPLACE INTO codeindex_meta(key, value) VALUES ('issue4557_reset', 'visible')";
+                Assert.Equal(1, setup.ExecuteNonQuery());
+            }
+            Assert.True(new FileInfo(dbPath + "-wal").Length > 0);
+
+            var resetExecuted = 0;
+            DbConnectionFactory.QueryOnlySnapshotCapturedForTesting = () =>
+            {
+                if (Interlocked.Exchange(ref resetExecuted, 1) != 0)
+                    return;
+                using var checkpoint = writer.CreateCommand();
+                checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
+                using var result = checkpoint.ExecuteReader();
+                Assert.True(result.Read());
+                Assert.Equal(0L, result.GetInt64(0));
+            };
+
+            using var queryDb = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+            var expectedArtifacts = CaptureDatabaseArtifacts(dbPath);
+            using var value = queryDb.Connection.CreateCommand();
+            value.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'issue4557_reset'";
+            Assert.Equal("visible", (string?)value.ExecuteScalar());
+            Assert.Equal(1, resetExecuted);
+            Assert.Equal(expectedArtifacts, CaptureDatabaseArtifacts(dbPath));
+        }
+        finally
+        {
+            DbConnectionFactory.QueryOnlySnapshotCapturedForTesting = originalHook;
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void QueryOnlySnapshot_HonorsCancellationAfterGenerationCapture_Issue4557()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_only_snapshot_cancel_issue4557");
+        var originalHook = DbConnectionFactory.QueryOnlySnapshotCapturedForTesting;
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            SqliteConnection.ClearAllPools();
+            using (var writer = new SqliteConnection(
+                       new SqliteConnectionStringBuilder { DataSource = dbPath, Pooling = false }.ConnectionString))
+            {
+                writer.Open();
+                using var checkpoint = writer.CreateCommand();
+                checkpoint.CommandText = "PRAGMA journal_mode=WAL; PRAGMA wal_checkpoint(TRUNCATE)";
+                _ = checkpoint.ExecuteScalar();
+            }
+
+            var expectedArtifacts = CaptureDatabaseArtifacts(dbPath);
+            using var cancellation = new CancellationTokenSource();
+            DbConnectionFactory.QueryOnlySnapshotCapturedForTesting = cancellation.Cancel;
+
+            Assert.Throws<OperationCanceledException>(() =>
+                new DbContext(DbOpenIntent.QueryOnly, dbPath, cancellation.Token));
+            Assert.Equal(expectedArtifacts, CaptureDatabaseArtifacts(dbPath));
+        }
+        finally
+        {
+            DbConnectionFactory.QueryOnlySnapshotCapturedForTesting = originalHook;
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     private static Dictionary<string, (long Length, DateTime LastWriteTimeUtc, string Sha256)> CaptureDatabaseArtifacts(string dbPath)
     {
         var result = new Dictionary<string, (long, DateTime, string)>(StringComparer.Ordinal);

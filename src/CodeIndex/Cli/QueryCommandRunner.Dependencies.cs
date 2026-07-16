@@ -1585,8 +1585,15 @@ public static partial class QueryCommandRunner
     private static List<FileDependencyResult> GetCrossDatabaseFileDependencies(string sourceDbPath, string targetDbPath, QueryCommandOptions options, bool reverse, int limit)
     {
         using var sourceDb = new DbContext(DbOpenIntent.QueryOnly, sourceDbPath);
+        using var targetDb = new DbContext(DbOpenIntent.QueryOnly, targetDbPath);
         var connection = sourceDb.Connection;
-        AttachCrossDatabaseTarget(connection, targetDbPath);
+        // Keep the target context alive for the whole attached query. WAL-backed targets may
+        // resolve to a private artifact-preserving snapshot whose cleanup is owned by that
+        // context; attaching the original path would let SQLite create/touch source sidecars.
+        // attached query 全体で target context を保持する。WAL-backed target は context が
+        // cleanup を所有する private snapshot になり得るため、original path を ATTACH して
+        // source sidecar を作成・更新させない。
+        AttachCrossDatabaseTarget(connection, targetDb.Connection.DataSource);
 
         using var cmd = connection.CreateCommand();
         var sourcePathExpr = reverse ? "dst.path" : "src.path";

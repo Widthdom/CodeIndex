@@ -4633,6 +4633,54 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunDeps_WorkspaceDbHotWalUsesArtifactPreservingTargetSnapshot_Issue4557()
+    {
+        using var primaryProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_hot_wal_primary");
+        using var memberProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_hot_wal_member");
+        var primaryDb = TestProjectHelper.CreateProjectDb(primaryProject.Root);
+        var memberDb = TestProjectHelper.CreateProjectDb(memberProject.Root);
+        InsertFileWithReference(primaryDb, "src/PrimaryCaller.cs", "HotWalTarget");
+        SqliteConnection.ClearAllPools();
+
+        using var memberWriterDb = new DbContext(DbOpenIntent.WriteIndex, memberDb);
+        var memberWriter = new DbWriter(memberWriterDb.Connection);
+        var fileId = memberWriter.UpsertFile(new FileRecord
+        {
+            Path = "src/HotWalTarget.cs",
+            Lang = "csharp",
+            Size = 1,
+            Lines = 1,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = "issue4557-hot-wal-target",
+        });
+        memberWriter.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "HotWalTarget",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+        ]);
+
+        Assert.True(new FileInfo(memberDb + "-wal").Length > 0);
+        var expectedArtifacts = CaptureDatabaseArtifacts(memberDb);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10", "--lang", "csharp"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var edge = Assert.Single(document.RootElement.GetProperty("edges").EnumerateArray());
+        Assert.Equal("src/HotWalTarget.cs", edge.GetProperty("target_path").GetString());
+        Assert.Equal(expectedArtifacts, CaptureDatabaseArtifacts(memberDb));
+    }
+
+    [Fact]
     public void RunDeps_WorkspaceDbRejectsNonCodeIndexDatabase_Issue3737()
     {
         using var primaryProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_non_codeindex_primary");

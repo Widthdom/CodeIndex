@@ -3,10 +3,12 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Security.Cryptography;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Lsp;
 using CodeIndex.Models;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -890,6 +892,85 @@ public class LspServerTests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void HandleMessage_OwnedQuerySnapshotRefreshesAfterExternalWalCommit_Issue4557()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_query_snapshot_refresh");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            SqliteConnection.ClearAllPools();
+            var queryDb = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+            using var server = new LspServer(queryDb, dbPath, "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 4557,
+                method = "workspace/symbol",
+                @params = new { query = "AddedAfterLspStart" },
+            });
+
+            var before = server.HandleMessage(request);
+            Assert.NotNull(before);
+            Assert.Empty(before!["result"]!.AsArray());
+
+            using (var writerDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(writerDb.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/AddedAfterLspStart.cs",
+                    Lang = "csharp",
+                    Size = 1,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "issue4557-lsp-refresh",
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "class",
+                        Name = "AddedAfterLspStart",
+                        Line = 1,
+                        StartLine = 1,
+                        EndLine = 1,
+                    },
+                ]);
+            }
+
+            var expectedArtifacts = CaptureDatabaseArtifactsForLsp(dbPath);
+            var after = server.HandleMessage(request);
+
+            Assert.NotNull(after);
+            var symbol = Assert.Single(after!["result"]!.AsArray());
+            Assert.Equal("AddedAfterLspStart", symbol!["name"]!.GetValue<string>());
+            Assert.Equal(expectedArtifacts, CaptureDatabaseArtifactsForLsp(dbPath));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    private static Dictionary<string, (long Length, DateTime LastWriteTimeUtc, string Sha256)> CaptureDatabaseArtifactsForLsp(string dbPath)
+    {
+        var result = new Dictionary<string, (long, DateTime, string)>(StringComparer.Ordinal);
+        foreach (var path in new[] { dbPath, dbPath + "-wal", dbPath + "-shm" })
+        {
+            if (!File.Exists(path))
+                continue;
+            var info = new FileInfo(path);
+            result[Path.GetFileName(path)] = (
+                info.Length,
+                info.LastWriteTimeUtc,
+                Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))));
+        }
+
+        return result;
     }
 
     [Fact]

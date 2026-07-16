@@ -1027,7 +1027,8 @@ public partial class DbReader : IDisposable
     public bool WalCheckpointAttempted => _walCheckpointAttempted;
     public bool WalCheckpointSucceeded => _walCheckpointSucceeded;
     public bool ReadOnlyImmutableFallback => _readOnlyImmutableFallback;
-    public bool WalStaleSnapshotRisk => _immutableReadOnlyWalRisk && !_walCheckpointSucceeded;
+    public bool WalStaleSnapshotRisk =>
+        (_immutableReadOnlyWalRisk || _readOnlyImmutableFallback) && !_walCheckpointSucceeded;
     public string? WalCheckpointSkippedReason => _walCheckpointSkippedReason;
     public string? WalCheckpointFailureReason => _walCheckpointFailureReason;
     public string? WalStaleSnapshotReason => WalStaleSnapshotRisk

@@ -177,6 +177,8 @@ public class DbContext : IDisposable
     private bool _immutableReadOnlyWalRisk;
     private bool _connectionPooling = true;
     private bool _queryOnlySnapshotRequiresRefresh;
+    private string? _queryOnlySnapshotSourcePath;
+    private DbConnectionFactory.QueryOnlySnapshotSourceState? _queryOnlySnapshotSourceState;
     private string? _walCheckpointSkippedReason;
     private string? _walCheckpointFailureReason;
     private readonly string? _schemaCacheKey;
@@ -258,6 +260,14 @@ public class DbContext : IDisposable
     internal bool ImmutableReadOnlyWalRisk => _immutableReadOnlyWalRisk;
     internal bool ConnectionPooling => _connectionPooling;
     internal bool QueryOnlySnapshotRequiresRefresh => _queryOnlySnapshotRequiresRefresh;
+    internal bool IsQueryOnlySnapshotCurrent(CancellationToken cancellationToken = default)
+        => !_queryOnlySnapshotRequiresRefresh
+           || (_queryOnlySnapshotSourcePath != null
+               && _queryOnlySnapshotSourceState is { } state
+               && DbConnectionFactory.IsQueryOnlySnapshotCurrent(
+                   _queryOnlySnapshotSourcePath,
+                   state,
+                   cancellationToken));
     public string? WalCheckpointSkippedReason => _walCheckpointSkippedReason;
     public string? WalCheckpointFailureReason => _walCheckpointFailureReason;
 
@@ -715,13 +725,16 @@ public class DbContext : IDisposable
             var immutableSnapshot = false;
             var immutableWalRisk = false;
             var detachedSnapshot = false;
+            DbConnectionFactory.QueryOnlySnapshotSourceState? snapshotSourceState = null;
             _connection = OpenSqliteConnectionWithRetry(
-                () => CreateArtifactPreservingQueryOnlyConnection(
+                () => DbConnectionFactory.CreateArtifactPreservingQueryOnlyConnection(
                     dbPath,
                     pooling: false,
                     out immutableSnapshot,
                     out immutableWalRisk,
-                    out detachedSnapshot),
+                    out detachedSnapshot,
+                    out snapshotSourceState,
+                    cancellationToken),
                 static connection => connection.Open(),
                 dbPath: dbPath,
                 cancellationToken: cancellationToken);
@@ -733,7 +746,9 @@ public class DbContext : IDisposable
             _immutableReadOnly = immutableSnapshot;
             _immutableReadOnlyWalRisk = immutableWalRisk;
             _connectionPooling = false;
-            _queryOnlySnapshotRequiresRefresh = immutableSnapshot || detachedSnapshot;
+            _queryOnlySnapshotRequiresRefresh = detachedSnapshot;
+            _queryOnlySnapshotSourcePath = detachedSnapshot ? dbPath : null;
+            _queryOnlySnapshotSourceState = snapshotSourceState;
             WarnIfBatchInProgress();
         }
         catch

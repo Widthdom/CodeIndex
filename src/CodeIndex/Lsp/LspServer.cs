@@ -110,7 +110,9 @@ internal sealed class LspServer : IDisposable
         "documentation",
         "defaultLibrary",
     ];
-    private readonly DbReader _reader;
+    private DbReader _reader;
+    private DbContext? _ownedQueryDb;
+    private readonly string? _ownedQueryDbPath;
     private readonly string _version;
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly string? _projectRoot;
@@ -150,6 +152,23 @@ internal sealed class LspServer : IDisposable
             MaxLiveDocumentBytes);
         if (_projectRoot != null)
             _workspaceFolders.Add(Path.GetFullPath(_projectRoot));
+    }
+
+    internal LspServer(
+        DbContext queryDb,
+        string queryDbPath,
+        string version,
+        JsonSerializerOptions jsonOptions,
+        string? projectRoot = null)
+        : this(new DbReader(queryDb), version, jsonOptions, projectRoot)
+    {
+        ArgumentNullException.ThrowIfNull(queryDb);
+        ArgumentException.ThrowIfNullOrWhiteSpace(queryDbPath);
+        if (queryDb.OpenIntent != DbOpenIntent.QueryOnly)
+            throw new ArgumentException("LSP-owned database context must use QueryOnly intent.", nameof(queryDb));
+
+        _ownedQueryDb = queryDb;
+        _ownedQueryDbPath = queryDbPath;
     }
 
     internal long LiveDocumentBytesForTests => _liveDocumentStore.Bytes;
@@ -227,6 +246,7 @@ internal sealed class LspServer : IDisposable
                 if (method == null)
                     return hasId ? Error(id, -32600, "Invalid Request") : null;
 
+                RefreshOwnedQuerySnapshot();
                 using var activity = StartLspRequestActivity(method);
                 return method switch
                 {
@@ -260,6 +280,33 @@ internal sealed class LspServer : IDisposable
                 return hasId ? Error(id, JsonRpcInternalErrorCode, JsonRpcInternalErrorMessage) : null;
             }
         }
+    }
+
+    private void RefreshOwnedQuerySnapshot()
+    {
+        if (_ownedQueryDb == null
+            || !_ownedQueryDb.QueryOnlySnapshotRequiresRefresh
+            || _ownedQueryDb.IsQueryOnlySnapshotCurrent())
+        {
+            return;
+        }
+
+        var replacementDb = new DbContext(DbOpenIntent.QueryOnly, _ownedQueryDbPath!);
+        DbReader? replacementReader = null;
+        try
+        {
+            replacementReader = new DbReader(replacementDb);
+        }
+        catch
+        {
+            replacementDb.Dispose();
+            throw;
+        }
+
+        _reader.Dispose();
+        _ownedQueryDb.Dispose();
+        _reader = replacementReader;
+        _ownedQueryDb = replacementDb;
     }
 
     internal static bool ShouldRentPayloadBuffer(int byteCount)
@@ -2101,5 +2148,11 @@ internal sealed class LspServer : IDisposable
     public void Dispose()
     {
         _ = _shutdownRequested;
+        if (_ownedQueryDb != null)
+        {
+            _reader.Dispose();
+            _ownedQueryDb.Dispose();
+            _ownedQueryDb = null;
+        }
     }
 }
