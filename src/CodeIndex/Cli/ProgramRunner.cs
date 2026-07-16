@@ -187,6 +187,11 @@ internal static partial class ProgramRunner
             CommandErrorWriter.Write(StripErrorPrefix(strictVersionError), "use `--strict-version` without a value.");
             return CommandExitCodes.InvalidArgument;
         }
+        if (!TryValidateOutputFormatOptions(args, out var outputFormatError, out var outputFormatHint, out var outputFormatUsage))
+        {
+            CommandErrorWriter.Write(outputFormatError, outputFormatHint, outputFormatUsage);
+            return CommandExitCodes.UsageError;
+        }
         if (TryConsumePrettyJsonFlag(ref args))
             jsonOptions = new JsonSerializerOptions(jsonOptions) { WriteIndented = true };
         using var jsonAnsiScope = ConsoleUi.SuppressAnsiForJsonOutput(ContainsJsonOutputFlag(args));

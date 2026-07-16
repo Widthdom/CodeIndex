@@ -391,7 +391,7 @@ public class ProgramRunnerTests
     }
 
     [Fact]
-    public void RunSearch_NdjsonWithPretty_KeepsOneJsonValuePerLine_Issue2996()
+    public void RunSearch_NdjsonWithPretty_ReturnsUsageError_Issues2996And4562()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_pretty_ndjson");
         try
@@ -404,23 +404,34 @@ public class ProgramRunnerTests
                 "class App { void Needle() {} }\n");
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
-                ["search", "Needle", "--db", dbPath, "--json", "--pretty"],
+                ["search", "Needle", "--db", dbPath, "--json=ndjson", "--pretty"],
                 appVersion: "1.10.0"));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Empty(stderr);
-            var lines = stdout.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
-            Assert.Equal(2, lines.Length);
-            foreach (var line in lines)
-            {
-                Assert.False(line.StartsWith(" ", StringComparison.Ordinal));
-                using var _ = JsonDocument.Parse(line);
-            }
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Empty(stdout);
+            Assert.Contains("--pretty cannot be combined with --json=ndjson", stderr, StringComparison.Ordinal);
+            Assert.Contains("Usage: cdidx search", stderr, StringComparison.Ordinal);
         }
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Theory]
+    [InlineData("csv")]
+    [InlineData("tsv")]
+    [InlineData("qf")]
+    public void RunSearch_JsonWithNonJsonFormat_ReturnsUsageError_Issue4562(string format)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["search", "Needle", "--format", format, "--json"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains($"--json cannot be combined with non-JSON --format {format}", stderr, StringComparison.Ordinal);
+        Assert.Contains("Usage: cdidx search", stderr, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -306,6 +306,10 @@ can use `jq -s '.'` or pass `--json=array` to `search` to emit the result set as
 one JSON array. Add `--pretty` with `--json` to indent single-document JSON
 responses; for `search`, use `--json=array --pretty` when the result set itself
 should be indented because default `search --json` stays newline-delimited.
+Output modifiers are validated as one contract: `--json` is rejected with
+non-JSON formats such as `csv`, `tsv`, and `qf`, and `--pretty` is rejected with
+`--json=ndjson` instead of being silently ignored. Use `--json=array --pretty`
+when an indented search result is required.
 `search --named-query <name>=<query>` can be repeated to run an ad hoc grouped
 batch with the same filters and snippet bounds. Named batches emit one grouped
 JSON document, and `--format compact` keeps the per-result
@@ -3220,6 +3224,10 @@ newline-delimited JSON (ndjson) として出力し、最後に `{"done":true,...
 単一 document の JSON 応答をインデント付きで出力します。`search` の result set を
 整形したい場合は、既定の `search --json` が newline-delimited のまま保たれるため
 `--json=array --pretty` を使います。
+output modifier は 1 つの contract として検証されます。`--json` と `csv` / `tsv` / `qf`
+などの非 JSON format の組み合わせ、および `--pretty` と `--json=ndjson` の組み合わせは、
+黙って無視せず usage error として拒否します。indent 済みの search result が必要な場合は
+`--json=array --pretty` を使ってください。
 `search --named-query <name>=<query>` は繰り返し指定でき、同じ filter と snippet 上限で
 ad hoc な grouped batch を実行します。名前付き batch は 1 つの grouped JSON document を
 出力し、`--format compact` でも各 result の `CompactSearchResult` snippet / highlight
