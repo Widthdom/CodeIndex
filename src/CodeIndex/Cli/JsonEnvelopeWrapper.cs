@@ -145,7 +145,7 @@ internal static class JsonEnvelopeWrapper
         JsonArray? streamControlRecords = null;
         try
         {
-            results = ParseRawJsonItems(raw, out streamTerminal, out streamControlRecords);
+            results = ParseRawJsonItems(command, raw, out streamTerminal, out streamControlRecords);
         }
         catch (JsonEnvelopeRawJsonItemLimitExceededException ex)
         {
@@ -260,6 +260,7 @@ internal static class JsonEnvelopeWrapper
     }
 
     private static JsonArray ParseRawJsonItems(
+        string command,
         string raw,
         out JsonObject? streamTerminal,
         out JsonArray streamControlRecords)
@@ -296,7 +297,8 @@ internal static class JsonEnvelopeWrapper
             if (IsJsonStreamTerminal(node))
             {
                 streamTerminal = (JsonObject)node.DeepClone();
-                continue;
+                if (!IsTerminalResultRecord(command, node))
+                    continue;
             }
             else if (IsJsonStreamControlRecord(node))
             {
@@ -412,6 +414,11 @@ internal static class JsonEnvelopeWrapper
     private static bool HasEmptyArray(JsonObject obj, string propertyName)
         => obj.TryGetPropertyValue(propertyName, out var node)
            && node is JsonArray { Count: 0 };
+
+    private static bool IsTerminalResultRecord(string command, JsonNode node)
+        => string.Equals(command, "find", StringComparison.Ordinal)
+           && node is JsonObject obj
+           && obj.TryGetPropertyValue("count", out _);
 
     // Mirrors the value-taking options in QueryCommandRunner.ParseArgs so we can locate the
     // first positional (= query) without being fooled by `--db <path>`-style values.

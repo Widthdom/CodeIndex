@@ -99,7 +99,7 @@ public static partial class QueryCommandRunner
         }
         if (options.All
             && !options.CountOnly
-            && options.OutputFormat != OutputFormatText
+            && (options.OutputFormat != OutputFormatText || options.Json)
             && !IsFindAllNdjson(options))
         {
             CommandErrorWriter.WriteStderr("Error: find --all row output requires default text or streaming NDJSON so scan authority and recovery metadata can be represented");
@@ -147,7 +147,7 @@ public static partial class QueryCommandRunner
                 else
                 {
                     Console.WriteLine($"{counts.Count}");
-                    WriteFindScanSummary(counts.Scan);
+                    WriteFindScanSummary(counts.Scan, countMode: true);
                 }
                 return FindScanExitCode(options, counts.Scan);
             }
@@ -277,7 +277,7 @@ public static partial class QueryCommandRunner
                 }
                 var fileCount = results.Select(r => r.Path).Distinct().Count();
                 CommandErrorWriter.WriteStderr($"({results.Count} matches in {fileCount} files)");
-                WriteFindScanSummary(findResults.Scan);
+                WriteFindScanSummary(findResults.Scan, resultLimitReached: results.Count >= options.Limit);
             }
             return FindScanExitCode(options, findResults.Scan);
         }, _ =>
@@ -632,11 +632,29 @@ public static partial class QueryCommandRunner
             _ => null,
         };
 
-    private static void WriteFindScanSummary(FindScanSummary scan)
+    private static void WriteFindScanSummary(
+        FindScanSummary scan,
+        bool resultLimitReached = false,
+        bool countMode = false)
     {
         var summary = $"scanned {scan.FilesScanned}/{scan.CandidateFiles} candidate files, {ConsoleUi.Counted(scan.LinesScanned, "line")}";
+        if (scan.CandidateFileLimit.HasValue)
+            summary += $"; candidate_file_limit={scan.CandidateFileLimit.Value}";
+        if (scan.LineLimit.HasValue)
+            summary += $"; line_scan_limit={scan.LineLimit.Value}";
         if (scan.Truncated)
             summary += scan.TruncationReason == null ? "; truncated" : $"; truncated by {scan.TruncationReason}";
+        var scanComplete = !scan.Truncated && !resultLimitReached;
+        summary += $"; scan_complete={scanComplete.ToString().ToLowerInvariant()}";
+        summary += countMode
+            ? $"; authoritative_count={(!scan.Truncated).ToString().ToLowerInvariant()}"
+            : $"; authoritative_rows={scanComplete.ToString().ToLowerInvariant()}";
+        var continuationAction = FindScanContinuationAction(scan, resultLimitReached);
+        if (continuationAction != null)
+            summary += $"; continuation_action={continuationAction}";
         CommandErrorWriter.WriteStderr($"({summary})");
+        var recoveryGuidance = FindScanRecoveryGuidance(scan, resultLimitReached);
+        if (recoveryGuidance != null)
+            CommandErrorWriter.WriteStderr($"Recovery: {recoveryGuidance}");
     }
 }
