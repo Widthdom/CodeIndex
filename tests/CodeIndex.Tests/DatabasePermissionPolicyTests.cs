@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CodeIndex.Cli;
 using CodeIndex.Database;
 
 namespace CodeIndex.Tests;
@@ -11,7 +12,7 @@ public sealed class DatabasePermissionPolicyTests
     {
         var directory = TestProjectHelper.CreateTempProject("db_permission_best_effort");
         var dbPath = Path.Combine(directory, "codeindex.db");
-        var provider = new ThrowingFileModeProvider(
+        var provider = new TestFileModeProvider(
             setException: static () => new NotSupportedException("mode changes are unsupported"));
 
         try
@@ -22,7 +23,7 @@ public sealed class DatabasePermissionPolicyTests
                 provider);
             db.InitializeSchema();
 
-            var status = new DbReader(db).GetStatus();
+            var status = new DbReader(db, CancellationToken.None).GetStatus();
             Assert.Equal(DatabasePermissionPolicy.BestEffortName, status.DatabasePermissionPolicy);
             var diagnostic = status.DatabasePermissionDiagnostics!.Single(
                 item => item is
@@ -49,11 +50,36 @@ public sealed class DatabasePermissionPolicyTests
     }
 
     [Fact]
+    public void DbContext_StrictPolicy_CancellableReaderPreservesEffectivePolicy_Issue4559()
+    {
+        var directory = TestProjectHelper.CreateTempProject("db_permission_strict_status");
+        var dbPath = Path.Combine(directory, "codeindex.db");
+
+        try
+        {
+            using var db = new DbContext(
+                dbPath,
+                DatabasePermissionPolicyMode.Strict,
+                new TestFileModeProvider());
+            db.InitializeSchema();
+
+            var status = new DbReader(db, CancellationToken.None).GetStatus();
+
+            Assert.Equal(DatabasePermissionPolicy.StrictName, status.DatabasePermissionPolicy);
+            Assert.Null(status.DatabasePermissionDiagnostics);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
     public void DbContext_StrictAccessDeniedModeProvider_FailsWithRemediation_Issue4559()
     {
         var directory = TestProjectHelper.CreateTempProject("db_permission_strict");
         var dbPath = Path.Combine(directory, "codeindex.db");
-        var provider = new ThrowingFileModeProvider(
+        var provider = new TestFileModeProvider(
             setException: static () => new UnauthorizedAccessException("chmod denied"));
 
         try
@@ -77,9 +103,49 @@ public sealed class DatabasePermissionPolicyTests
     }
 
     [Fact]
+    public void RunStatus_InvalidPermissionPolicy_PreservesStructuredErrorAndHint_Issue4559()
+    {
+        var directory = TestProjectHelper.CreateTempProject("db_permission_invalid_policy");
+        var dbPath = Path.Combine(directory, "codeindex.db");
+
+        try
+        {
+            using (var db = new DbContext(
+                dbPath,
+                DatabasePermissionPolicyMode.BestEffort,
+                new TestFileModeProvider()))
+            {
+                db.InitializeSchema();
+            }
+
+            using var environment = EnvironmentVariableScope.Capture(DatabasePermissionPolicy.EnvironmentVariable);
+            environment.Set(DatabasePermissionPolicy.EnvironmentVariable, "invalid");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                ProgramRunner.CreateDefaultJsonOptions()));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
+            using var json = JsonDocument.Parse(stdout);
+            Assert.Equal(
+                DatabasePermissionPolicy.InvalidPolicyCode,
+                json.RootElement.GetProperty("error_code").GetString());
+            Assert.Contains(
+                DatabasePermissionPolicy.EnvironmentVariable,
+                json.RootElement.GetProperty("hint").GetString(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
     public void GetUnixFileModeString_InjectedFailures_FollowEffectivePolicy_Issue4559()
     {
-        var unsupportedProvider = new ThrowingFileModeProvider(
+        var unsupportedProvider = new TestFileModeProvider(
             getException: static () => new NotSupportedException("mode reads are unsupported"),
             alwaysExists: true);
 
@@ -94,7 +160,7 @@ public sealed class DatabasePermissionPolicyTests
         Assert.Equal("read", bestEffortDiagnostic.Operation);
         Assert.Equal("not_supported", bestEffortDiagnostic.Reason);
 
-        var deniedProvider = new ThrowingFileModeProvider(
+        var deniedProvider = new TestFileModeProvider(
             getException: static () => new UnauthorizedAccessException("mode read denied"),
             alwaysExists: true);
         StatusDatabasePermissionDiagnostic? strictDiagnostic = null;
@@ -111,7 +177,29 @@ public sealed class DatabasePermissionPolicyTests
         Assert.Contains("move the database", exception.Hint, StringComparison.OrdinalIgnoreCase);
     }
 
-    private sealed class ThrowingFileModeProvider(
+    private static (int ExitCode, string Stdout, string Stderr) CaptureConsole(Func<int> action)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            var originalError = Console.Error;
+            using var stdout = new StringWriter();
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+                return (action(), stdout.ToString(), stderr.ToString());
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    private sealed class TestFileModeProvider(
         Func<Exception>? setException = null,
         Func<Exception>? getException = null,
         bool alwaysExists = false) : IDatabaseFileModeProvider
@@ -122,11 +210,17 @@ public sealed class DatabasePermissionPolicyTests
             => alwaysExists || File.Exists(path);
 
         public void SetUnixFileMode(string path, UnixFileMode mode)
-            => throw setException?.Invoke()
-                ?? new InvalidOperationException("A set exception was not configured.");
+        {
+            if (setException != null)
+                throw setException();
+        }
 
         public UnixFileMode GetUnixFileMode(string path)
-            => throw getException?.Invoke()
-                ?? new InvalidOperationException("A get exception was not configured.");
+        {
+            if (getException != null)
+                throw getException();
+
+            return UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        }
     }
 }

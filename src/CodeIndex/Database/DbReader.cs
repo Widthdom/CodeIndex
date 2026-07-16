@@ -434,7 +434,9 @@ public partial class DbReader : IDisposable
                context.ReadOnlyImmutableFallback,
                context.ImmutableReadOnly,
                context.WalCheckpointSkippedReason,
-               context.WalCheckpointFailureReason)
+               context.WalCheckpointFailureReason,
+               context.DatabasePermissionPolicyName,
+               context.DatabasePermissionDiagnostics)
     {
     }
 
