@@ -175,10 +175,27 @@ fields, including readiness fields and runtime diagnostics such as
 | Readiness and graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`. |
 | Workspace and HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`, `head_freshness`. |
 | Version and forward compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`. |
-| Unknown-extension and runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `process`, `last_index_run`, `last_workspace_freshened_at`, `last_index_run.bytes_read_skipped_file_count`, `last_index_run.bytes_read_incomplete`, `last_index_run.diagnostics`, `last_index_run.diagnostic_count`, `last_index_run.diagnostics_truncated`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`. |
-| Database maintenance | `read_only_fallback`, `sqlite_connection_policy` (`active_mode`, `open_mode`, `immutable_uri`, WAL checkpoint/fallback fields), `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `busy_timeout_ms`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `prepared_command_cache` (`count`, `capacity`, `hit_count`, `miss_count`, `eviction_count`), `maintenance_guidance`. Query-only status reports `pooling=false` and either `read_only` or `immutable_read_only_uri`; checkpointed WAL databases use an immutable private snapshot, while non-empty WAL databases use a stable private main/WAL snapshot so source sidecars remain unchanged. |
+| Unknown-extension and runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `db_file_mode`, `database_permission_policy`, `database_permission_diagnostics`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `process`, `last_index_run`, `last_workspace_freshened_at`, `last_index_run.bytes_read_skipped_file_count`, `last_index_run.bytes_read_incomplete`, `last_index_run.diagnostics`, `last_index_run.diagnostic_count`, `last_index_run.diagnostics_truncated`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`. |
+| Database maintenance | `sqlite_connection_policy` (`active_mode`, `open_mode`, `immutable_uri`, WAL checkpoint/fallback fields), `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `busy_timeout_ms`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `prepared_command_cache` (`count`, `capacity`, `hit_count`, `miss_count`, `eviction_count`), `maintenance_guidance`. Query-only status reports `pooling=false` and either `read_only` or `immutable_read_only_uri`; checkpointed WAL databases use an immutable private snapshot, while non-empty WAL databases use a stable private main/WAL snapshot so source sidecars remain unchanged. |
+| WAL checkpoint diagnostics | `read_only_fallback`, `wal_checkpoint_attempted`, `wal_checkpoint_succeeded`, `wal_checkpoint_skipped_reason`, `wal_checkpoint_failure_reason`, `wal_checkpoint_busy`, `wal_checkpoint_log_page_count`, `wal_checkpoint_checkpointed_page_count`, `wal_checkpoint_remaining_page_count`, `read_only_immutable_fallback`, `wal_stale_snapshot_risk`, `wal_stale_snapshot_reason`. |
 | Remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`. |
 | MCP-only session diagnostics | `mcp_session`, `mcp_session.metrics`, `mcp_session.audit_log`, `mcp.rate_limit.bucket_limit`, `mcp.rate_limit.bucket_limit_rejection_count`. |
+
+Database Unix-mode hardening defaults to `database_permission_policy=best_effort`.
+If a filesystem permits SQLite I/O but rejects mode reads or changes, cdidx continues,
+emits a stable `database_permission_hardening_failed` warning, and adds support-safe
+entries to `database_permission_diagnostics`. Set
+`CDIDX_DB_PERMISSION_POLICY=strict` when every applicable database/WAL/SHM mode
+operation must succeed; strict failures return the same stable error code with remediation.
+
+Explicit `PRAGMA wal_checkpoint(TRUNCATE)` calls read SQLite's `(busy, log,
+checkpointed)` result row. A non-zero `busy` value or positive remaining page
+count makes `wal_checkpoint_succeeded=false`, with the bounded reasons
+`checkpoint_busy` or `checkpoint_pages_remaining`; the count fields preserve
+the relevant evidence. SQLite's `(0, -1, -1)` response for a non-WAL database
+is a successful no-op with zero remaining pages. SQLite errors are reduced to
+stable machine reasons such as `sqlite_read_only` and never expose raw
+exception text or paths.
 
 Full MCP status always includes `mcp_session.metrics`; an unconfigured sink is
 `{"enabled":false}`. An enabled object reports `enabled`, `path`, `max_bytes`,
@@ -437,10 +454,28 @@ readiness field に加えて、`path_case_sensitive` などの runtime diagnosti
 | readiness / graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`。 |
 | workspace / HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`, `head_freshness`。 |
 | version / forward compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`。 |
-| unknown-extension / runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `process`, `last_index_run`, `last_workspace_freshened_at`, `last_index_run.bytes_read_skipped_file_count`, `last_index_run.bytes_read_incomplete`, `last_index_run.diagnostics`, `last_index_run.diagnostic_count`, `last_index_run.diagnostics_truncated`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`。 |
-| database maintenance | `read_only_fallback`、`sqlite_connection_policy` (`active_mode`、`open_mode`、`immutable_uri`、WAL checkpoint / fallback field)、`db_size_bytes`、`wal_size_bytes`、`db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `busy_timeout_ms`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`)、`prepared_command_cache` (`count`, `capacity`, `hit_count`, `miss_count`, `eviction_count`)、`maintenance_guidance`。query-only status は `pooling=false` と、`read_only` または `immutable_read_only_uri` の mode を返します。checkpoint 済み WAL database は immutable な private snapshot、non-empty WAL database は安定した private main/WAL snapshot から読むため source sidecar は変化しません。 |
+| unknown-extension / runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `db_file_mode`, `database_permission_policy`, `database_permission_diagnostics`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `process`, `last_index_run`, `last_workspace_freshened_at`, `last_index_run.bytes_read_skipped_file_count`, `last_index_run.bytes_read_incomplete`, `last_index_run.diagnostics`, `last_index_run.diagnostic_count`, `last_index_run.diagnostics_truncated`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`。 |
+| database maintenance | `sqlite_connection_policy` (`active_mode`、`open_mode`、`immutable_uri`、WAL checkpoint / fallback field)、`db_size_bytes`、`wal_size_bytes`、`db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `busy_timeout_ms`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`)、`prepared_command_cache` (`count`, `capacity`, `hit_count`, `miss_count`, `eviction_count`)、`maintenance_guidance`。query-only status は `pooling=false` と、`read_only` または `immutable_read_only_uri` の mode を返します。checkpoint 済み WAL database は immutable な private snapshot、non-empty WAL database は安定した private main/WAL snapshot から読むため source sidecar は変化しません。 |
+| WAL checkpoint diagnostics | `read_only_fallback`、`wal_checkpoint_attempted`、`wal_checkpoint_succeeded`、`wal_checkpoint_skipped_reason`、`wal_checkpoint_failure_reason`、`wal_checkpoint_busy`、`wal_checkpoint_log_page_count`、`wal_checkpoint_checkpointed_page_count`、`wal_checkpoint_remaining_page_count`、`read_only_immutable_fallback`、`wal_stale_snapshot_risk`、`wal_stale_snapshot_reason`。 |
 | remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`。 |
 | MCP-only session diagnostics | `mcp_session`, `mcp_session.metrics`, `mcp_session.audit_log`, `mcp.rate_limit.bucket_limit`, `mcp.rate_limit.bucket_limit_rejection_count`。 |
+
+database の Unix mode hardening は既定で
+`database_permission_policy=best_effort` です。SQLite I/O は可能でも mode の
+読み取りまたは変更を拒否する filesystem では、cdidx は処理を継続し、安定した
+`database_permission_hardening_failed` warning と support-safe な
+`database_permission_diagnostics` を返します。database / WAL / SHM の該当 mode
+操作をすべて必須にする場合は `CDIDX_DB_PERMISSION_POLICY=strict` を設定します。
+strict failure は同じ安定 error code と remediation を返します。
+
+明示的な `PRAGMA wal_checkpoint(TRUNCATE)` は SQLite の `(busy, log,
+checkpointed)` 結果行を読み取ります。`busy` が 0 以外、または未 checkpoint
+page 数が正の場合は `wal_checkpoint_succeeded=false` とし、上限付きの
+`checkpoint_busy` または `checkpoint_pages_remaining` を理由として返します。
+関連する件数は count field に保持されます。非 WAL database に対する SQLite の
+`(0, -1, -1)` は remaining page が 0 の成功した no-op として扱います。SQLite
+error は `sqlite_read_only` など安定した machine reason に変換し、raw exception
+text や path は公開しません。
 
 MCP の full status は常に `mcp_session.metrics` を含み、sink が未設定なら
 `{"enabled":false}` になります。有効な object は `enabled`、`path`、`max_bytes`、

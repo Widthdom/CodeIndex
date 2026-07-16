@@ -897,6 +897,20 @@ public class ImpactCycleResult
     public List<string> Members { get; set; } = [];
 }
 
+public sealed class StatusDatabasePermissionDiagnostic
+{
+    [JsonPropertyName("operation")]
+    public string Operation { get; set; } = "";
+    [JsonPropertyName("target")]
+    public string Target { get; set; } = "";
+    [JsonPropertyName("reason")]
+    public string Reason { get; set; } = "";
+    [JsonPropertyName("message")]
+    public string Message { get; set; } = "";
+    [JsonPropertyName("recommended_action")]
+    public string RecommendedAction { get; set; } = "";
+}
+
 public class StatusResult
 {
     [JsonPropertyName("api_version")]
@@ -965,6 +979,11 @@ public class StatusResult
     [JsonPropertyName("db_file_mode")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? DbFileMode { get; set; }
+    [JsonPropertyName("database_permission_policy")]
+    public string DatabasePermissionPolicy { get; set; } = "best_effort";
+    [JsonPropertyName("database_permission_diagnostics")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<StatusDatabasePermissionDiagnostic>? DatabasePermissionDiagnostics { get; set; }
     [JsonPropertyName("read_only_fallback")]
     public bool ReadOnlyFallback { get; set; }
     [JsonPropertyName("wal_checkpoint_attempted")]
@@ -979,6 +998,18 @@ public class StatusResult
     [JsonPropertyName("wal_checkpoint_failure_reason")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? WalCheckpointFailureReason { get; set; }
+    [JsonPropertyName("wal_checkpoint_busy")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? WalCheckpointBusy { get; set; }
+    [JsonPropertyName("wal_checkpoint_log_page_count")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? WalCheckpointLogPageCount { get; set; }
+    [JsonPropertyName("wal_checkpoint_checkpointed_page_count")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? WalCheckpointCheckpointedPageCount { get; set; }
+    [JsonPropertyName("wal_checkpoint_remaining_page_count")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? WalCheckpointRemainingPageCount { get; set; }
     [JsonPropertyName("wal_stale_snapshot_risk")]
     public bool WalStaleSnapshotRisk { get; set; }
     [JsonPropertyName("wal_stale_snapshot_reason")]
@@ -1454,6 +1485,18 @@ public sealed class StatusSqliteConnectionPolicy
     [JsonPropertyName("wal_checkpoint_failure_reason")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? WalCheckpointFailureReason { get; set; }
+    [JsonPropertyName("wal_checkpoint_busy")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? WalCheckpointBusy { get; set; }
+    [JsonPropertyName("wal_checkpoint_log_page_count")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? WalCheckpointLogPageCount { get; set; }
+    [JsonPropertyName("wal_checkpoint_checkpointed_page_count")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? WalCheckpointCheckpointedPageCount { get; set; }
+    [JsonPropertyName("wal_checkpoint_remaining_page_count")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? WalCheckpointRemainingPageCount { get; set; }
     [JsonPropertyName("wal_stale_snapshot_risk")]
     public bool WalStaleSnapshotRisk { get; set; }
     [JsonPropertyName("wal_stale_snapshot_reason")]

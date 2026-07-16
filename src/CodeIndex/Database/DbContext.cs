@@ -181,16 +181,25 @@ public class DbContext : IDisposable
     private DbConnectionFactory.QueryOnlySnapshotSourceState? _queryOnlySnapshotSourceState;
     private string? _walCheckpointSkippedReason;
     private string? _walCheckpointFailureReason;
+    private long? _walCheckpointBusy;
+    private long? _walCheckpointLogPageCount;
+    private long? _walCheckpointCheckpointedPageCount;
+    private long? _walCheckpointRemainingPageCount;
     private readonly string? _schemaCacheKey;
     private SqliteTransaction? _activeMigrationTransaction;
     private bool _readMigrationInsideExternalTransaction;
+    private readonly object _schemaCacheLock = new();
     private DbSchemaCache? _schemaCache;
+    private bool _disposed;
     private PreparedCommandCache? _preparedCommands;
     private bool _suppressWriteWorkTracking = true;
     private bool _hasWriteWork;
     private bool _hasWalCheckpointableWriteWork;
     private bool _rebuildFtsAfterSchemaMigration;
     private readonly DbOpenIntent _openIntent;
+    private readonly DatabasePermissionPolicyMode _databasePermissionPolicy;
+    private readonly IDatabaseFileModeProvider _databaseFileModeProvider;
+    private readonly List<StatusDatabasePermissionDiagnostic> _databasePermissionDiagnostics = [];
 
     private static readonly AsyncLocal<Action<string>?> ScopedOptimizePragmaExecutedForTesting = new();
     private static readonly AsyncLocal<Action<SqliteCommand>?> ScopedPlannerStatisticsCommandCreatedForTesting = new();
@@ -270,6 +279,21 @@ public class DbContext : IDisposable
                    cancellationToken));
     public string? WalCheckpointSkippedReason => _walCheckpointSkippedReason;
     public string? WalCheckpointFailureReason => _walCheckpointFailureReason;
+    public long? WalCheckpointBusy => _walCheckpointBusy;
+    public long? WalCheckpointLogPageCount => _walCheckpointLogPageCount;
+    public long? WalCheckpointCheckpointedPageCount => _walCheckpointCheckpointedPageCount;
+    public long? WalCheckpointRemainingPageCount => _walCheckpointRemainingPageCount;
+    public WalCheckpointResult LastWalCheckpointResult => new(
+        _walCheckpointAttempted,
+        _walCheckpointSucceeded,
+        _walCheckpointBusy,
+        _walCheckpointLogPageCount,
+        _walCheckpointCheckpointedPageCount,
+        _walCheckpointRemainingPageCount,
+        _walCheckpointSkippedReason,
+        _walCheckpointFailureReason);
+    public string DatabasePermissionPolicyName => DatabasePermissionPolicy.ToName(_databasePermissionPolicy);
+    public IReadOnlyList<StatusDatabasePermissionDiagnostic> DatabasePermissionDiagnostics => _databasePermissionDiagnostics;
 
     public static string GetSymbolExtractorVersionMetaKey(string lang)
         => SymbolExtractorVersionMetaPrefix + lang;
@@ -281,7 +305,18 @@ public class DbContext : IDisposable
     /// / `sqlite_master` results instead of re-running the scan on every
     /// construction (issues #1565 / #1701).
     /// </summary>
-    public DbSchemaCache SchemaCache => _schemaCache ??= new DbSchemaCache(_connection, _schemaCacheKey);
+    public DbSchemaCache SchemaCache
+    {
+        get
+        {
+            lock (_schemaCacheLock)
+            {
+                if (_disposed)
+                    throw new ObjectDisposedException(nameof(DbContext));
+                return _schemaCache ??= new DbSchemaCache(_connection, _schemaCacheKey);
+            }
+        }
+    }
 
     /// <summary>
     /// Drop cached schema state so subsequent reads observe DDL that ran
@@ -289,7 +324,14 @@ public class DbContext : IDisposable
     /// (`InitializeSchema`, `TryMigrateForRead`, `DropAll`) already invalidate
     /// the cache automatically.
     /// </summary>
-    public void RefreshSchemaCache() => _schemaCache?.Refresh();
+    public void RefreshSchemaCache()
+    {
+        lock (_schemaCacheLock)
+        {
+            if (!_disposed)
+                _schemaCache?.Refresh();
+        }
+    }
 
     /// <summary>
     /// Lazily-initialized LRU cache of prepared <see cref="SqliteCommand"/> instances shared
@@ -562,10 +604,27 @@ public class DbContext : IDisposable
     }
 
     public DbContext(DbOpenIntent openIntent, string dbPath, CancellationToken cancellationToken = default)
+        : this(
+            openIntent,
+            dbPath,
+            DatabasePermissionPolicy.Resolve(),
+            SystemDatabaseFileModeProvider.Instance,
+            cancellationToken)
+    {
+    }
+
+    internal DbContext(
+        DbOpenIntent openIntent,
+        string dbPath,
+        DatabasePermissionPolicyMode databasePermissionPolicy,
+        IDatabaseFileModeProvider databaseFileModeProvider,
+        CancellationToken cancellationToken = default)
     {
         if (!Enum.IsDefined(openIntent))
             throw new ArgumentOutOfRangeException(nameof(openIntent), openIntent, "Unknown database open intent.");
 
+        _databasePermissionPolicy = databasePermissionPolicy;
+        _databaseFileModeProvider = databaseFileModeProvider ?? throw new ArgumentNullException(nameof(databaseFileModeProvider));
         cancellationToken.ThrowIfCancellationRequested();
         _openIntent = openIntent;
         _schemaCacheKey = TryCreateSchemaCacheKey(dbPath);
@@ -646,9 +705,10 @@ public class DbContext : IDisposable
             // read-only FS / サンドボックスでも縮退 read path を動かせるようフォールバック。
             // 自動経路は Mode=ReadOnly のみとし、immutable=1 は stale risk を受け入れる明示指定に限る。
             _connection?.Dispose();
-            _walCheckpointAttempted = true;
-            _walCheckpointSucceeded = _walCheckpointSkippedReason == null
-                && TryCheckpointWalBeforeReadOnlyFallback(dbPath, cancellationToken, out _walCheckpointFailureReason);
+            var checkpointResult = _walCheckpointSkippedReason == null
+                ? CheckpointWalBeforeReadOnlyFallback(dbPath, cancellationToken)
+                : WalCheckpointResult.SkippedAfterAttempt(_walCheckpointSkippedReason);
+            ApplyWalCheckpointResult(checkpointResult);
             if (_walCheckpointSucceeded)
             {
                 try
@@ -770,12 +830,10 @@ public class DbContext : IDisposable
         WarnIfBatchInProgress();
     }
 
-    private static bool TryCheckpointWalBeforeReadOnlyFallback(
+    internal static WalCheckpointResult CheckpointWalBeforeReadOnlyFallback(
         string dbPath,
-        CancellationToken cancellationToken,
-        out string? failureReason)
+        CancellationToken cancellationToken)
     {
-        failureReason = null;
         try
         {
             var connectionString = SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.ReadWrite);
@@ -785,101 +843,271 @@ public class DbContext : IDisposable
                 maxOpenAttempts: 1,
                 dbPath: dbPath,
                 cancellationToken: cancellationToken);
-            using var cmd = SqliteConnectionPolicy.CreateCommand(connection, "PRAGMA wal_checkpoint(TRUNCATE)");
-            cancellationToken.ThrowIfCancellationRequested();
-            ReportMaintenanceProgress("wal_checkpoint", "truncate_start", dbPath);
-            cmd.ExecuteNonQuery();
-            ReportMaintenanceProgress("wal_checkpoint", "truncate_complete", dbPath);
-            cancellationToken.ThrowIfCancellationRequested();
-            return true;
+            return ExecuteWalCheckpointTruncate(connection, cancellationToken, invokeTestingHook: true);
         }
-        catch (Exception ex) when (ex is SqliteException or CodeIndexException)
+        catch (OperationCanceledException)
         {
-            failureReason = FormatWalCheckpointFailureReason(ex);
-            return false;
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return WalCheckpointResult.Failed(FormatWalCheckpointFailureReason(ex));
         }
     }
 
     private static string FormatWalCheckpointFailureReason(Exception ex) => ex switch
     {
+        SqliteException { SqliteErrorCode: 3 } => "sqlite_permission_denied",
+        SqliteException { SqliteErrorCode: 5 } => "sqlite_busy",
+        SqliteException { SqliteErrorCode: 6 } => "sqlite_locked",
+        SqliteException { SqliteErrorCode: 8 } => "sqlite_read_only",
+        SqliteException { SqliteErrorCode: 10 } => "sqlite_io_error",
+        SqliteException { SqliteErrorCode: 11 } => "sqlite_corrupt",
+        SqliteException { SqliteErrorCode: 13 } => "sqlite_full",
+        SqliteException { SqliteErrorCode: 14 } => "sqlite_cannot_open",
+        SqliteException { SqliteErrorCode: 26 } => "sqlite_not_a_database",
         SqliteException sqlite => $"sqlite_error_{sqlite.SqliteErrorCode.ToString(CultureInfo.InvariantCulture)}",
         CodeIndexException codeIndexException => codeIndexException.Code,
-        _ => "wal_checkpoint_failed",
+        _ => WalCheckpointResult.GenericFailureReason,
     };
 
     public bool TryCheckpointWalTruncate()
         => TryCheckpointWalTruncate(CancellationToken.None);
 
     public bool TryCheckpointWalTruncate(CancellationToken cancellationToken)
+        => CheckpointWalTruncate(cancellationToken).Succeeded;
+
+    public WalCheckpointResult CheckpointWalTruncate()
+        => CheckpointWalTruncate(CancellationToken.None);
+
+    public WalCheckpointResult CheckpointWalTruncate(CancellationToken cancellationToken)
     {
         if (_isReadOnly)
-            return false;
+        {
+            var result = WalCheckpointResult.NotAttempted(WalCheckpointResult.ReadOnlySkippedReason);
+            ApplyWalCheckpointResult(result);
+            return result;
+        }
 
         cancellationToken.ThrowIfCancellationRequested();
-        _walCheckpointAttempted = true;
         try
         {
-            using var cmd = SqliteConnectionPolicy.CreateCommand(_connection, "PRAGMA wal_checkpoint(TRUNCATE)");
-            WalCheckpointTruncateExecutedForTesting?.Invoke(_connection.DataSource);
-            ReportMaintenanceProgress("wal_checkpoint", "truncate_start", _connection.DataSource);
-            cmd.ExecuteNonQuery();
-            ReportMaintenanceProgress("wal_checkpoint", "truncate_complete", _connection.DataSource);
-            cancellationToken.ThrowIfCancellationRequested();
-            _walCheckpointSucceeded = true;
-            return true;
+            var result = ExecuteWalCheckpointTruncate(_connection, cancellationToken, invokeTestingHook: true);
+            ApplyWalCheckpointResult(result);
+            return result;
         }
         catch (OperationCanceledException)
         {
-            _walCheckpointSucceeded = false;
+            ApplyWalCheckpointResult(WalCheckpointResult.Failed(WalCheckpointResult.CancelledFailureReason));
             throw;
         }
-        catch (Exception)
+    }
+
+    private static WalCheckpointResult ExecuteWalCheckpointTruncate(
+        SqliteConnection connection,
+        CancellationToken cancellationToken,
+        bool invokeTestingHook)
+    {
+        try
         {
-            _walCheckpointSucceeded = false;
-            return false;
+            using var cmd = SqliteConnectionPolicy.CreateCommand(connection, "PRAGMA wal_checkpoint(TRUNCATE)");
+            if (invokeTestingHook)
+                WalCheckpointTruncateExecutedForTesting?.Invoke(connection.DataSource);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            ReportMaintenanceProgress("wal_checkpoint", "truncate_start", connection.DataSource);
+            using var reader = cmd.ExecuteReader();
+            if (!reader.Read())
+                return WalCheckpointResult.Failed(WalCheckpointResult.MissingResultFailureReason);
+
+            long busy;
+            long logPageCount;
+            long checkpointedPageCount;
+            try
+            {
+                busy = reader.GetInt64(0);
+                logPageCount = reader.GetInt64(1);
+                checkpointedPageCount = reader.GetInt64(2);
+            }
+            catch (Exception ex) when (ex is ArgumentOutOfRangeException
+                or InvalidCastException
+                or InvalidOperationException
+                or IndexOutOfRangeException)
+            {
+                return WalCheckpointResult.Failed(WalCheckpointResult.InvalidResultFailureReason);
+            }
+
+            ReportMaintenanceProgress("wal_checkpoint", "truncate_complete", connection.DataSource);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var notWalMode = busy == 0 && logPageCount == -1 && checkpointedPageCount == -1;
+            if (!notWalMode &&
+                (busy < 0 || logPageCount < 0 || checkpointedPageCount < 0 || checkpointedPageCount > logPageCount))
+            {
+                return new WalCheckpointResult(
+                    true,
+                    false,
+                    busy,
+                    logPageCount,
+                    checkpointedPageCount,
+                    null,
+                    null,
+                    WalCheckpointResult.InvalidResultFailureReason);
+            }
+
+            var remainingPageCount = notWalMode ? 0 : logPageCount - checkpointedPageCount;
+            var failureReason = busy != 0
+                ? WalCheckpointResult.BusyFailureReason
+                : remainingPageCount != 0
+                    ? WalCheckpointResult.PagesRemainingFailureReason
+                    : null;
+
+            return new WalCheckpointResult(
+                true,
+                failureReason == null,
+                busy,
+                logPageCount,
+                checkpointedPageCount,
+                remainingPageCount,
+                null,
+                failureReason);
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return WalCheckpointResult.Failed(FormatWalCheckpointFailureReason(ex));
+        }
+    }
+
+    private void ApplyWalCheckpointResult(WalCheckpointResult result)
+    {
+        _walCheckpointAttempted = result.Attempted;
+        _walCheckpointSucceeded = result.Succeeded;
+        _walCheckpointBusy = result.Busy;
+        _walCheckpointLogPageCount = result.LogPageCount;
+        _walCheckpointCheckpointedPageCount = result.CheckpointedPageCount;
+        _walCheckpointRemainingPageCount = result.RemainingPageCount;
+        _walCheckpointSkippedReason = result.SkippedReason;
+        _walCheckpointFailureReason = result.FailureReason;
     }
 
     public static string ToReadOnlyUri(string dbPath)
         => SqliteConnectionPolicy.ToReadOnlyUri(dbPath);
 
-    private static void ApplyPrivateDatabaseFileModes(string dbPath)
+    private void ApplyPrivateDatabaseFileModes(string dbPath)
     {
-        if (OperatingSystem.IsWindows() || dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        if (!_databaseFileModeProvider.SupportsUnixFileModes ||
+            dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        {
             return;
+        }
 
-        ApplyPrivateFileModeIfExists(dbPath);
-        ApplyPrivateFileModeIfExists(dbPath + "-wal");
-        ApplyPrivateFileModeIfExists(dbPath + "-shm");
+        ApplyPrivateFileModeIfExists(dbPath, "database");
+        ApplyPrivateFileModeIfExists(dbPath + "-wal", "wal");
+        ApplyPrivateFileModeIfExists(dbPath + "-shm", "shm");
     }
 
-    private static void ApplyPrivateFileModeIfExists(string path)
+    private void ApplyPrivateFileModeIfExists(string path, string target)
     {
         var normalizedPath = LongPath.EnsureWindowsPrefix(path);
-        if (!File.Exists(normalizedPath))
-            return;
+        try
+        {
+            if (!_databaseFileModeProvider.FileExists(normalizedPath))
+                return;
 
 #pragma warning disable CA1416
-        File.SetUnixFileMode(normalizedPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            _databaseFileModeProvider.SetUnixFileMode(
+                normalizedPath,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite);
 #pragma warning restore CA1416
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            HandleDatabasePermissionFailure("set", target, ex);
+        }
     }
 
     public static string? GetUnixFileModeString(string? path)
+        => GetUnixFileModeString(
+            path,
+            DatabasePermissionPolicyMode.BestEffort,
+            SystemDatabaseFileModeProvider.Instance,
+            out _);
+
+    internal static string? GetUnixFileModeString(
+        string? path,
+        string policyName,
+        out StatusDatabasePermissionDiagnostic? diagnostic)
+        => GetUnixFileModeString(
+            path,
+            string.Equals(policyName, DatabasePermissionPolicy.StrictName, StringComparison.Ordinal)
+                ? DatabasePermissionPolicyMode.Strict
+                : DatabasePermissionPolicyMode.BestEffort,
+            SystemDatabaseFileModeProvider.Instance,
+            out diagnostic);
+
+    internal static string? GetUnixFileModeString(
+        string? path,
+        DatabasePermissionPolicyMode policy,
+        IDatabaseFileModeProvider fileModeProvider,
+        out StatusDatabasePermissionDiagnostic? diagnostic)
     {
+        diagnostic = null;
         if (string.IsNullOrWhiteSpace(path) ||
-            OperatingSystem.IsWindows() ||
-            path.StartsWith("file:", StringComparison.OrdinalIgnoreCase) ||
-            !File.Exists(path))
+            !fileModeProvider.SupportsUnixFileModes ||
+            path.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }
 
-        var mode = File.GetUnixFileMode(path) &
-            (UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
-             UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
-             UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
-        return Convert.ToString((int)mode, 8).PadLeft(4, '0');
+        try
+        {
+            if (!fileModeProvider.FileExists(path))
+                return null;
+
+            var mode = fileModeProvider.GetUnixFileMode(path) &
+                (UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                 UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
+                 UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
+            return Convert.ToString((int)mode, 8).PadLeft(4, '0');
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            diagnostic = DatabasePermissionPolicy.CreateDiagnostic("read", "database", ex);
+            if (policy == DatabasePermissionPolicyMode.Strict)
+                throw DatabasePermissionPolicy.CreateStrictFailure(diagnostic, ex);
+
+            WriteBestEffortDatabasePermissionWarning(diagnostic);
+            return null;
+        }
     }
+
+    private void HandleDatabasePermissionFailure(string operation, string target, Exception exception)
+    {
+        var diagnostic = DatabasePermissionPolicy.CreateDiagnostic(operation, target, exception);
+        if (_databasePermissionPolicy == DatabasePermissionPolicyMode.Strict)
+            throw DatabasePermissionPolicy.CreateStrictFailure(diagnostic, exception);
+
+        if (_databasePermissionDiagnostics.Any(existing =>
+                existing.Operation == diagnostic.Operation &&
+                existing.Target == diagnostic.Target &&
+                existing.Reason == diagnostic.Reason))
+        {
+            return;
+        }
+
+        _databasePermissionDiagnostics.Add(diagnostic);
+        WriteBestEffortDatabasePermissionWarning(diagnostic);
+    }
+
+    private static void WriteBestEffortDatabasePermissionWarning(StatusDatabasePermissionDiagnostic diagnostic)
+        => CommandErrorWriter.WriteStderr(
+            $"Warning [{DatabasePermissionPolicy.FailureCode}]: policy={DatabasePermissionPolicy.BestEffortName} "
+            + $"operation={diagnostic.Operation} target={diagnostic.Target} reason={diagnostic.Reason}; "
+            + diagnostic.RecommendedAction);
 
     private static string? TryCreateSchemaCacheKey(string dbPath)
     {
@@ -3345,6 +3573,17 @@ public class DbContext : IDisposable
 
     public void Dispose()
     {
+        DbSchemaCache? schemaCache;
+        lock (_schemaCacheLock)
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            schemaCache = _schemaCache;
+            _schemaCache = null;
+        }
+        schemaCache?.Dispose();
+
         // Dispose cached prepared statements before closing the connection so each
         // SqliteCommand's finalizer does not race the connection teardown.
         // connection を閉じる前にキャッシュ済み command を dispose し、finalizer と

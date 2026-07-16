@@ -5,7 +5,7 @@ namespace CodeIndex.Tests;
 
 /// <summary>
 /// Tests for the DB-path-scoped schema cache that backs DbReader's
-/// PRAGMA table_info / PRAGMA index_list / sqlite_master lookups (issues #1565 / #1701).
+/// PRAGMA table_info / PRAGMA index_list / sqlite_master lookups (issues #1565 / #1701 / #4554).
 /// </summary>
 [Collection("SQLite pool sensitive")]
 public sealed class DbSchemaCacheTests : IDisposable
@@ -38,6 +38,35 @@ public sealed class DbSchemaCacheTests : IDisposable
         Assert.Same(first, second);
         Assert.Contains("path", first);
         Assert.Contains("checksum", first);
+    }
+
+    [Fact]
+    public async Task GetSchemaSets_FrozenSnapshotsRejectConcurrentMutation()
+    {
+        var columnSnapshot = _db.SchemaCache.GetColumns("files");
+        var indexSnapshot = _db.SchemaCache.GetIndexes("symbols");
+        var mutableColumns = Assert.IsAssignableFrom<ISet<string>>(columnSnapshot);
+        var mutableIndexes = Assert.IsAssignableFrom<ISet<string>>(indexSnapshot);
+
+        var attempts = Enumerable.Range(0, 16).Select(_ => Task.Run(() =>
+        {
+            Assert.Throws<NotSupportedException>(() =>
+            {
+                mutableColumns.Add("injected_column_by_caller");
+            });
+            Assert.Throws<NotSupportedException>(() =>
+            {
+                mutableIndexes.Add("injected_index_by_caller");
+            });
+            Assert.Same(columnSnapshot, _db.SchemaCache.GetColumns("files"));
+            Assert.Same(indexSnapshot, _db.SchemaCache.GetIndexes("symbols"));
+            Assert.Contains("path", columnSnapshot);
+            Assert.Contains("idx_symbols_name_nocase", indexSnapshot);
+        }));
+
+        await Task.WhenAll(attempts);
+        Assert.DoesNotContain("injected_column_by_caller", columnSnapshot);
+        Assert.DoesNotContain("injected_index_by_caller", indexSnapshot);
     }
 
     [Fact]
@@ -144,6 +173,54 @@ public sealed class DbSchemaCacheTests : IDisposable
         var thirdContextColumns = thirdDb.SchemaCache.GetColumns("files");
 
         Assert.Same(secondContextColumns, thirdContextColumns);
+    }
+
+    [Fact]
+    public void DbContext_DisposeRetainsActiveSharedStateAndReleasesLastOwner()
+    {
+        using var secondDb = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
+        var secondSnapshot = secondDb.SchemaCache.GetColumns("files");
+        var firstSnapshot = _db.SchemaCache.GetColumns("files");
+        var activeStateCount = DbSchemaCache.SharedStateCountForTest;
+        Assert.Same(firstSnapshot, secondSnapshot);
+        Assert.Equal(activeStateCount, DbSchemaCache.SharedStateCountForTest);
+
+        secondDb.Dispose();
+        Assert.Equal(activeStateCount, DbSchemaCache.SharedStateCountForTest);
+        Assert.Same(firstSnapshot, _db.SchemaCache.GetColumns("files"));
+
+        _db.Dispose();
+        Assert.Equal(activeStateCount - 1, DbSchemaCache.SharedStateCountForTest);
+        Assert.Throws<ObjectDisposedException>(() => _ = _db.SchemaCache);
+    }
+
+    [Fact]
+    public void DbContext_ManyDatabasePathsDoNotAccumulateSharedStates()
+    {
+        const int databaseCount = 32;
+        var baseline = DbSchemaCache.SharedStateCountForTest;
+        var paths = Enumerable.Range(0, databaseCount)
+            .Select(_ => Path.Combine(Path.GetTempPath(), $"codeindex_schema_cache_lifecycle_{Guid.NewGuid():N}.db"))
+            .ToArray();
+
+        try
+        {
+            foreach (var path in paths)
+            {
+                using (var db = new DbContext(DbOpenIntent.WriteIndex, path))
+                {
+                    _ = db.SchemaCache.GetColumns("files");
+                    Assert.Equal(baseline + 1, DbSchemaCache.SharedStateCountForTest);
+                }
+
+                Assert.Equal(baseline, DbSchemaCache.SharedStateCountForTest);
+            }
+        }
+        finally
+        {
+            foreach (var path in paths)
+                TestProjectHelper.DeleteFile(path);
+        }
     }
 
     [Fact]
@@ -254,18 +331,6 @@ public sealed class DbSchemaCacheTests : IDisposable
     public void Dispose()
     {
         _db.Dispose();
-        if (File.Exists(_dbPath))
-        {
-            try
-            {
-                File.Delete(_dbPath);
-            }
-            catch (IOException)
-            {
-                SqliteConnection.ClearAllPools();
-                if (File.Exists(_dbPath))
-                    File.Delete(_dbPath);
-            }
-        }
+        TestProjectHelper.DeleteFile(_dbPath);
     }
 }

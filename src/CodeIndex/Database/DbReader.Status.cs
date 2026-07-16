@@ -190,8 +190,16 @@ public partial class DbReader
             ReadOnlyImmutableFallback = _readOnlyImmutableFallback,
             WalCheckpointSkippedReason = _walCheckpointSkippedReason,
             WalCheckpointFailureReason = _walCheckpointFailureReason,
+            WalCheckpointBusy = _walCheckpointBusy,
+            WalCheckpointLogPageCount = _walCheckpointLogPageCount,
+            WalCheckpointCheckpointedPageCount = _walCheckpointCheckpointedPageCount,
+            WalCheckpointRemainingPageCount = _walCheckpointRemainingPageCount,
             WalStaleSnapshotRisk = WalStaleSnapshotRisk,
             WalStaleSnapshotReason = WalStaleSnapshotReason,
+            DatabasePermissionPolicy = _databasePermissionPolicy,
+            DatabasePermissionDiagnostics = _databasePermissionDiagnostics.Count > 0
+                ? _databasePermissionDiagnostics.ToList()
+                : null,
             SqliteConnectionPolicy = SqliteConnectionPolicy.BuildStatus(
                 _isReadOnly,
                 _readOnlyFallback,
@@ -203,7 +211,11 @@ public partial class DbReader
                 _walCheckpointSkippedReason,
                 _walCheckpointFailureReason,
                 WalStaleSnapshotRisk,
-                WalStaleSnapshotReason),
+                WalStaleSnapshotReason,
+                _walCheckpointBusy,
+                _walCheckpointLogPageCount,
+                _walCheckpointCheckpointedPageCount,
+                _walCheckpointRemainingPageCount),
         };
         // Commit the read-only snapshot explicitly so the SHARED lock is released promptly.
         // read-only なので rollback でも同じだが、明示 commit して SHARED lock を早期解放する。

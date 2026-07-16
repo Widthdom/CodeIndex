@@ -1035,13 +1035,126 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
-    public void TryCheckpointWalTruncate_OnWritableDb_ReportsAttemptAndSuccess()
+    public void TryCheckpointWalTruncate_OnWritableDb_ReportsStructuredSuccess()
     {
         var result = _db.TryCheckpointWalTruncate();
+        var checkpoint = _db.LastWalCheckpointResult;
 
         Assert.True(result);
         Assert.True(_db.WalCheckpointAttempted);
         Assert.True(_db.WalCheckpointSucceeded);
+        Assert.True(checkpoint.Attempted);
+        Assert.True(checkpoint.Succeeded);
+        Assert.Equal(0L, checkpoint.Busy);
+        Assert.NotNull(checkpoint.LogPageCount);
+        Assert.NotNull(checkpoint.CheckpointedPageCount);
+        Assert.Equal(0L, checkpoint.RemainingPageCount);
+        Assert.Null(checkpoint.SkippedReason);
+        Assert.Null(checkpoint.FailureReason);
+    }
+
+    [Fact]
+    public void CheckpointWalTruncate_WithBlockingReader_ReturnsBusyCounts_Issue4558()
+    {
+        using var blockingReader = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+        }.ConnectionString);
+        blockingReader.Open();
+        using var readTransaction = blockingReader.BeginTransaction();
+        using (var read = blockingReader.CreateCommand())
+        {
+            read.Transaction = readTransaction;
+            read.CommandText = "SELECT COUNT(*) FROM codeindex_meta";
+            _ = read.ExecuteScalar();
+        }
+
+        using (var write = _db.Connection.CreateCommand())
+        {
+            write.CommandText = "INSERT OR REPLACE INTO codeindex_meta(key, value) VALUES ('issue4558_busy_reader', '1')";
+            write.ExecuteNonQuery();
+        }
+        using (var timeout = _db.Connection.CreateCommand())
+        {
+            timeout.CommandText = "PRAGMA busy_timeout=50";
+            timeout.ExecuteNonQuery();
+        }
+
+        var result = _db.CheckpointWalTruncate();
+
+        Assert.True(result.Attempted);
+        Assert.False(result.Succeeded);
+        Assert.Equal(1L, result.Busy);
+        Assert.NotNull(result.LogPageCount);
+        Assert.NotNull(result.CheckpointedPageCount);
+        Assert.NotNull(result.RemainingPageCount);
+        Assert.True(result.LogPageCount > result.CheckpointedPageCount);
+        Assert.Equal(result.LogPageCount - result.CheckpointedPageCount, result.RemainingPageCount);
+        Assert.Equal(WalCheckpointResult.BusyFailureReason, result.FailureReason);
+        Assert.Equal(result, _db.LastWalCheckpointResult);
+
+        var status = new DbReader(_db).GetStatus();
+        Assert.Equal(result.Busy, status.WalCheckpointBusy);
+        Assert.Equal(result.LogPageCount, status.WalCheckpointLogPageCount);
+        Assert.Equal(result.CheckpointedPageCount, status.WalCheckpointCheckpointedPageCount);
+        Assert.Equal(result.RemainingPageCount, status.WalCheckpointRemainingPageCount);
+        Assert.Equal(result.FailureReason, status.WalCheckpointFailureReason);
+        Assert.Equal(result.Busy, status.SqliteConnectionPolicy.WalCheckpointBusy);
+        Assert.Equal(result.LogPageCount, status.SqliteConnectionPolicy.WalCheckpointLogPageCount);
+        Assert.Equal(result.CheckpointedPageCount, status.SqliteConnectionPolicy.WalCheckpointCheckpointedPageCount);
+        Assert.Equal(result.RemainingPageCount, status.SqliteConnectionPolicy.WalCheckpointRemainingPageCount);
+    }
+
+    [Fact]
+    public void CheckpointWalTruncate_WhenSqliteReportsReadOnly_PreservesTypedReason_Issue4558()
+    {
+        var previousHook = DbContext.WalCheckpointTruncateExecutedForTesting;
+        DbContext.WalCheckpointTruncateExecutedForTesting = _ => throw new SqliteException("sensitive path omitted", 8);
+        try
+        {
+            var instanceResult = _db.CheckpointWalTruncate();
+            var staticResult = DbContext.CheckpointWalBeforeReadOnlyFallback(_dbPath, CancellationToken.None);
+
+            foreach (var result in new[] { instanceResult, staticResult })
+            {
+                Assert.True(result.Attempted);
+                Assert.False(result.Succeeded);
+                Assert.Equal("sqlite_read_only", result.FailureReason);
+                Assert.Null(result.Busy);
+                Assert.Null(result.LogPageCount);
+                Assert.Null(result.CheckpointedPageCount);
+                Assert.Null(result.RemainingPageCount);
+                Assert.DoesNotContain("sensitive", result.FailureReason, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            DbContext.WalCheckpointTruncateExecutedForTesting = previousHook;
+        }
+    }
+
+    [Fact]
+    public void CheckpointWalTruncate_OnReadOnlyContext_PersistsSkippedResult_Issue4558()
+    {
+        Assert.True(_db.TryCheckpointWalTruncate());
+        using var readOnlyDb = new DbContext(DbOpenIntent.QueryOnly, DbContext.ToReadOnlyUri(_dbPath));
+
+        var result = readOnlyDb.CheckpointWalTruncate();
+
+        Assert.False(result.Attempted);
+        Assert.False(result.Succeeded);
+        Assert.Equal(WalCheckpointResult.ReadOnlySkippedReason, result.SkippedReason);
+        Assert.Null(result.FailureReason);
+        Assert.Equal(result, readOnlyDb.LastWalCheckpointResult);
+
+        using var reader = new DbReader(readOnlyDb);
+        Assert.Equal(result, reader.LastWalCheckpointResult);
+        var status = reader.GetStatus();
+        Assert.False(status.WalCheckpointAttempted);
+        Assert.False(status.WalCheckpointSucceeded);
+        Assert.Equal(result.SkippedReason, status.WalCheckpointSkippedReason);
+        Assert.Equal(result.SkippedReason, status.SqliteConnectionPolicy.WalCheckpointSkippedReason);
     }
 
     [Fact]

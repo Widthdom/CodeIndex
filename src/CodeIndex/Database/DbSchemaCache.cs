@@ -1,5 +1,5 @@
 using Microsoft.Data.Sqlite;
-using System.Collections.Concurrent;
+using System.Collections.Frozen;
 
 namespace CodeIndex.Database;
 
@@ -10,8 +10,9 @@ namespace CodeIndex.Database;
 /// `DbReader` discovered these on every construction, so MCP sessions that
 /// create or reuse `DbContext` instances for the same DB path were re-running
 /// the same PRAGMAs per invocation (issues #1565 / #1701). Caching them at a
-/// DB-path level pays the scan once per process and serves subsequent
-/// `DbReader` instances from memory.
+/// DB-path level pays the scan once for the live cache owners and serves
+/// subsequent `DbReader` instances from immutable in-memory snapshots. Shared
+/// state is removed after its final owning `DbContext` is disposed.
 ///
 /// In-process migrations (`InitializeSchema`, `TryMigrateForRead`, `DropAll`)
 /// call <see cref="Refresh"/> directly. To also catch DDL run through a
@@ -22,27 +23,31 @@ namespace CodeIndex.Database;
 /// auto-clears the cache before the lookup is served, so the next reader
 /// observes the new shape without restart.
 /// </summary>
-public sealed class DbSchemaCache
+public sealed class DbSchemaCache : IDisposable
 {
     private sealed class SharedState
     {
         public readonly object Lock = new();
-        public readonly Dictionary<string, HashSet<string>> Columns = new(StringComparer.OrdinalIgnoreCase);
-        public readonly Dictionary<string, HashSet<string>> Indexes = new(StringComparer.OrdinalIgnoreCase);
+        public readonly Dictionary<string, FrozenSet<string>> Columns = new(StringComparer.OrdinalIgnoreCase);
+        public readonly Dictionary<string, FrozenSet<string>> Indexes = new(StringComparer.OrdinalIgnoreCase);
         public readonly Dictionary<string, bool> TableExists = new(StringComparer.OrdinalIgnoreCase);
         public long? LastSchemaVersion;
         public bool VersionStale;
+        public int ReferenceCount;
     }
 
-    private static readonly ConcurrentDictionary<string, SharedState> SharedStates = new(StringComparer.Ordinal);
+    private static readonly object SharedStatesLock = new();
+    private static readonly Dictionary<string, SharedState> SharedStates = new(StringComparer.Ordinal);
 
     private readonly SqliteConnection _connection;
+    private readonly string? _sharedCacheKey;
     private readonly SharedState? _sharedState;
     private readonly object _lock = new();
-    private readonly Dictionary<string, HashSet<string>> _columns = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, HashSet<string>> _indexes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, FrozenSet<string>> _columns = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, FrozenSet<string>> _indexes = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, bool> _tableExists = new(StringComparer.OrdinalIgnoreCase);
     private long? _lastSchemaVersion;
+    private bool _disposed;
     // Set when `EnsureFreshUnlocked` could not read `PRAGMA schema_version`
     // and we therefore cannot trust that entries loaded during this window are
     // current. The next successful version read must drop cached entries
@@ -58,13 +63,17 @@ public sealed class DbSchemaCache
     {
         _connection = connection ?? throw new ArgumentNullException(nameof(connection));
         if (!string.IsNullOrWhiteSpace(sharedCacheKey))
-            _sharedState = SharedStates.GetOrAdd(sharedCacheKey, static _ => new SharedState());
+        {
+            _sharedCacheKey = sharedCacheKey;
+            _sharedState = AcquireSharedState(sharedCacheKey);
+        }
     }
 
-    public HashSet<string> GetColumns(string tableName)
+    public FrozenSet<string> GetColumns(string tableName)
     {
         lock (_lock)
         {
+            ThrowIfDisposed();
             EnsureFreshUnlocked();
             if (_sharedState != null)
             {
@@ -85,10 +94,11 @@ public sealed class DbSchemaCache
         }
     }
 
-    public HashSet<string> GetIndexes(string tableName)
+    public FrozenSet<string> GetIndexes(string tableName)
     {
         lock (_lock)
         {
+            ThrowIfDisposed();
             EnsureFreshUnlocked();
             if (_sharedState != null)
             {
@@ -113,6 +123,7 @@ public sealed class DbSchemaCache
     {
         lock (_lock)
         {
+            ThrowIfDisposed();
             EnsureFreshUnlocked();
             return HasTableUnlocked(tableName);
         }
@@ -126,7 +137,21 @@ public sealed class DbSchemaCache
     {
         lock (_lock)
         {
+            ThrowIfDisposed();
             ClearUnlocked();
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (_lock)
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+            if (_sharedState != null && _sharedCacheKey != null)
+                ReleaseSharedState(_sharedCacheKey, _sharedState);
         }
     }
 
@@ -243,6 +268,7 @@ public sealed class DbSchemaCache
     {
         lock (_lock)
         {
+            ThrowIfDisposed();
             if (_sharedState != null)
             {
                 lock (_sharedState.Lock)
@@ -275,7 +301,7 @@ public sealed class DbSchemaCache
         return exists;
     }
 
-    internal static HashSet<string> LoadColumns(SqliteConnection conn, string tableName)
+    internal static FrozenSet<string> LoadColumns(SqliteConnection conn, string tableName)
     {
         var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         using var cmd = conn.CreateCommand();
@@ -283,14 +309,14 @@ public sealed class DbSchemaCache
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
             columns.Add(reader.GetString(1));
-        return columns;
+        return columns.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
     }
 
-    internal static HashSet<string> LoadIndexes(SqliteConnection conn, string tableName, bool tableExists)
+    internal static FrozenSet<string> LoadIndexes(SqliteConnection conn, string tableName, bool tableExists)
     {
         var indexes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (!tableExists)
-            return indexes;
+            return indexes.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
         using var cmd = conn.CreateCommand();
         cmd.CommandText = SqliteCommandPolicy.IndexListPragmaSql(tableName);
@@ -300,7 +326,7 @@ public sealed class DbSchemaCache
             if (!reader.IsDBNull(1))
                 indexes.Add(reader.GetString(1));
         }
-        return indexes;
+        return indexes.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
     }
 
     internal static bool QueryHasTable(SqliteConnection conn, string tableName)
@@ -345,5 +371,58 @@ public sealed class DbSchemaCache
         state.TableExists.Clear();
         state.LastSchemaVersion = null;
         state.VersionStale = false;
+    }
+
+    private static SharedState AcquireSharedState(string key)
+    {
+        lock (SharedStatesLock)
+        {
+            if (!SharedStates.TryGetValue(key, out var state))
+            {
+                state = new SharedState();
+                SharedStates.Add(key, state);
+            }
+
+            checked
+            {
+                state.ReferenceCount++;
+            }
+            return state;
+        }
+    }
+
+    private static void ReleaseSharedState(string key, SharedState state)
+    {
+        lock (SharedStatesLock)
+        {
+            state.ReferenceCount--;
+            if (state.ReferenceCount != 0)
+                return;
+
+            if (SharedStates.TryGetValue(key, out var current) && ReferenceEquals(current, state))
+                SharedStates.Remove(key);
+
+            lock (state.Lock)
+            {
+                ClearSharedUnlocked(state);
+            }
+        }
+    }
+
+    private void ThrowIfDisposed()
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(DbSchemaCache));
+    }
+
+    internal static int SharedStateCountForTest
+    {
+        get
+        {
+            lock (SharedStatesLock)
+            {
+                return SharedStates.Count;
+            }
+        }
     }
 }

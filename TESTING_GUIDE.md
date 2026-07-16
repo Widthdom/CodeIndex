@@ -115,12 +115,14 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
 - `PathCompatibilityMatrixTests.cs`
   Cross-platform path compatibility matrix coverage for path casing, boundary-prefix comparisons, Windows long-path prefixing, POSIX sensitive-file permissions, symlink/dangling-entry scan behavior, submodule passthrough under default skip directories, and git skip-worktree path normalization. Keep new platform/path fixture scenarios here when the same assumption needs to be visible across indexing, Git helper, DB/query, installer, or status surfaces.
-- `DatabaseTests.cs`, `DbReader*Tests.cs`
+- `DatabaseTests.cs`, `DatabasePermissionPolicyTests.cs`, `DbReader*Tests.cs`
   SQLite schema, write paths, migrations, and query behavior. DbReader coverage is split by query family, including search, SQL qualified-name handling, file dependencies, impact, and symbol-query suites, while shared seeded fixture state remains on the root `DbReaderTests` part.
   Query-only regression fixtures run representative `status`, `search`, and `files` commands against a checkpointed WAL database copied without sidecars and assert that the database, `-wal`, and `-shm` artifact set plus persistent pragmas remain unchanged. Separate fixtures prove that committed hot-WAL content, empty-to-hot transitions, checkpoint resets, cross-database dependency targets, and long-lived LSP refreshes use cleaned-up generation-validated private snapshots without touching source sidecars; interrupted-batch readiness demotion is covered separately through explicit `Repair` intent.
+  `DatabasePermissionPolicyTests.cs` injects a file-mode provider so unsupported and access-denied Unix mode operations remain deterministic and cross-platform while proving both best-effort diagnostics and strict remediation failures.
   `DbSchemaConstraintTests.cs` also locks schema constraints to `SymbolKindCatalog` and required file foreign keys so DB readiness checks fail when code enums and SQLite CHECK clauses drift.
   Hotspot ranking fixtures should use the smallest counts that cross each ranking threshold; for structural-rank tests, keep one side just above the raw-reference comparison and the other just above the symbol-count threshold instead of scaling both far beyond the boundary.
   Checkpoint listing cap fixtures should exceed the checkpoint count cap once and exceed the inspected-file cap on only one checkpoint; multiplying both caps together adds filesystem work without increasing boundary coverage.
+  WAL checkpoint contention fixtures must establish a real read transaction before a later writer commit, then lower `busy_timeout` to keep the assertion bounded without fixed sleeps. Permission/error-path coverage may throw from `DbContext.WalCheckpointTruncateExecutedForTesting`; restore the previous `AsyncLocal` value in `finally` so parallel test state cannot leak.
 - `ConcurrencyTests.cs`
   WAL snapshot and shared-writer stress tests. The concurrent reader/writer
   snapshot tests stop after enough reader and writer iterations are observed,
@@ -771,12 +773,14 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   ファイル走査、言語判定、scan result 言語の再利用、content loading / canonicalization、checksum、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。共有 `FileIndexerTests` helper は `FileIndexerTestSupport.cs` に置きます。
 - `PathCompatibilityMatrixTests.cs`
   path casing、boundary-prefix 比較、Windows long-path prefix、POSIX の sensitive file 権限、symlink / dangling entry の scan 挙動、既定 skip directory 配下の submodule passthrough、git skip-worktree path 正規化を横断する compatibility matrix カバレッジです。同じ platform/path 前提を indexing、Git helper、DB/query、installer、status の各 surface で見える形にしたい場合は、新しい fixture シナリオをここに追加してください。
-- `DatabaseTests.cs`、`DbReader*Tests.cs`
+- `DatabaseTests.cs`、`DatabasePermissionPolicyTests.cs`、`DbReader*Tests.cs`
   SQLite スキーマ、書き込み経路、マイグレーション、クエリ挙動のテスト。DbReader のカバレッジは search、SQL qualified name、file dependency、impact、symbol query などの query family ごとの partial suite に分割し、共有の seed 済み fixture 状態は root 側の `DbReaderTests` に残します。
   query-only の回帰 fixture では sidecar なしで copy した checkpoint 済み WAL database に対して代表的な `status`、`search`、`files` command を実行し、database、`-wal`、`-shm` の artifact set と永続 pragma が変化しないことを検証します。別の fixture では committed hot-WAL content、empty-to-hot transition、checkpoint reset、cross-database dependency target、長時間 LSP refresh が、source sidecar に触れず cleanup される generation 検証済み private snapshot を使うことを固定します。interrupted batch の readiness demotion は明示的な `Repair` intent の別テストで固定します。
+  `DatabasePermissionPolicyTests.cs` は file-mode provider を注入し、unsupported / access-denied な Unix mode 操作を deterministic かつ cross-platform に保ちながら、best-effort diagnostic と strict remediation failure の両方を検証します。
   `DbSchemaConstraintTests.cs` は DB readiness check が code enum と SQLite CHECK 句の drift を検出できるよう、schema constraint と `SymbolKindCatalog`、必須 file foreign key の同期も固定します。
   hotspot ranking fixture は各 ranking threshold を跨ぐ最小 count を使ってください。structural-rank test では、raw reference 比較をわずかに超える側と symbol-count threshold をわずかに超える側を用意し、境界から大きく離れた件数まで膨らませないでください。
   checkpoint listing cap fixture は checkpoint count cap を 1 件だけ超え、inspected-file cap は 1 checkpoint だけで超えてください。両方の cap を掛け合わせても boundary coverage は増えず、filesystem work だけが増えます。
+  WAL checkpoint contention fixture は後続 writer commit より先に実際の read transaction を確立し、固定 sleep を使わず assertion を bounded にするため `busy_timeout` を短くします。permission / error path の coverage では `DbContext.WalCheckpointTruncateExecutedForTesting` から exception を throw できますが、parallel test state を漏らさないよう、以前の `AsyncLocal` 値を `finally` で復元してください。
 - `ConcurrencyTests.cs`
   WAL snapshot と shared-writer の stress test。concurrent reader/writer snapshot
   テストは reader / writer の十分な反復を観測した時点で停止し、遅い host 用に
