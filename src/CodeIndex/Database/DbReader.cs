@@ -1,5 +1,6 @@
 using CodeIndex.Indexer;
 using CodeIndex.Cli;
+using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
 using System.Text;
@@ -60,14 +61,16 @@ public partial class DbReader : IDisposable
     private readonly long? _walCheckpointLogPageCount;
     private readonly long? _walCheckpointCheckpointedPageCount;
     private readonly long? _walCheckpointRemainingPageCount;
+    private readonly string _databasePermissionPolicy;
+    private readonly IReadOnlyList<StatusDatabasePermissionDiagnostic> _databasePermissionDiagnostics;
     private readonly DbSchemaCache? _schemaCache;
     private readonly CancellationToken _cancellation;
-    private readonly HashSet<string> _fileColumns;
-    private readonly HashSet<string> _symbolColumns;
-    private readonly HashSet<string> _referenceColumns;
-    private readonly HashSet<string> _chunkIndexes;
-    private readonly HashSet<string> _symbolIndexes;
-    private readonly HashSet<string> _referenceIndexes;
+    private readonly IReadOnlySet<string> _fileColumns;
+    private readonly IReadOnlySet<string> _symbolColumns;
+    private readonly IReadOnlySet<string> _referenceColumns;
+    private readonly IReadOnlySet<string> _chunkIndexes;
+    private readonly IReadOnlySet<string> _symbolIndexes;
+    private readonly IReadOnlySet<string> _referenceIndexes;
     private readonly HashSet<string> _indexedHotspotFamilyLanguages;
     private readonly Dictionary<string, List<CSharpUsingStaticScope>> _csharpUsingStaticScopesByPath = new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<CSharpNamespaceScope>> _csharpNamespaceScopesByPath = new(StringComparer.Ordinal);
@@ -92,7 +95,7 @@ public partial class DbReader : IDisposable
     internal readonly bool _hasChunksTable;
     internal readonly bool _hasReferenceLinesTable;
     internal readonly bool _canUseReferenceLines;
-    private readonly HashSet<string> _issueColumns;
+    private readonly IReadOnlySet<string> _issueColumns;
     public bool IncludeGenerated { get; set; }
     private static readonly AsyncLocal<bool> IncludeGeneratedScope = new();
     private static readonly AsyncLocal<bool> GeneratedColumnAvailableScope = new();
@@ -415,7 +418,9 @@ public partial class DbReader : IDisposable
                context.WalCheckpointBusy,
                context.WalCheckpointLogPageCount,
                context.WalCheckpointCheckpointedPageCount,
-               context.WalCheckpointRemainingPageCount)
+               context.WalCheckpointRemainingPageCount,
+               context.DatabasePermissionPolicyName,
+               context.DatabasePermissionDiagnostics)
     {
     }
 
@@ -441,7 +446,9 @@ public partial class DbReader : IDisposable
                context.WalCheckpointBusy,
                context.WalCheckpointLogPageCount,
                context.WalCheckpointCheckpointedPageCount,
-               context.WalCheckpointRemainingPageCount)
+               context.WalCheckpointRemainingPageCount,
+               context.DatabasePermissionPolicyName,
+               context.DatabasePermissionDiagnostics)
     {
     }
 
@@ -483,7 +490,9 @@ public partial class DbReader : IDisposable
         long? walCheckpointBusy = null,
         long? walCheckpointLogPageCount = null,
         long? walCheckpointCheckpointedPageCount = null,
-        long? walCheckpointRemainingPageCount = null)
+        long? walCheckpointRemainingPageCount = null,
+        string databasePermissionPolicy = DatabasePermissionPolicy.BestEffortName,
+        IReadOnlyList<StatusDatabasePermissionDiagnostic>? databasePermissionDiagnostics = null)
     {
         _conn = connection;
         _commandCache = commandCache;
@@ -505,6 +514,8 @@ public partial class DbReader : IDisposable
         _walCheckpointLogPageCount = walCheckpointLogPageCount;
         _walCheckpointCheckpointedPageCount = walCheckpointCheckpointedPageCount;
         _walCheckpointRemainingPageCount = walCheckpointRemainingPageCount;
+        _databasePermissionPolicy = databasePermissionPolicy;
+        _databasePermissionDiagnostics = databasePermissionDiagnostics?.ToArray() ?? [];
         _schemaCache = schemaCache;
         _cancellation = cancellation;
         _fileColumns = LoadColumns("files");
@@ -854,7 +865,7 @@ public partial class DbReader : IDisposable
         return DegradationReasonCodes.GetMetadata(DegradationReasonCodes.HotspotFamilySupportNotIndexed).RecommendedAction;
     }
 
-    private HashSet<string> LoadIndexes(string tableName)
+    private IReadOnlySet<string> LoadIndexes(string tableName)
     {
         if (_schemaCache != null)
             return _schemaCache.GetIndexes(tableName);
@@ -1781,7 +1792,7 @@ public partial class DbReader : IDisposable
 
 
 
-    private HashSet<string> LoadColumns(string tableName)
+    private IReadOnlySet<string> LoadColumns(string tableName)
     {
         if (_schemaCache != null)
             return _schemaCache.GetColumns(tableName);

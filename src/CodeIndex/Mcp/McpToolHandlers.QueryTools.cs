@@ -1443,6 +1443,15 @@ public partial class McpServer
             var status = reader.GetStatus();
             QueryCommandRunner.ApplyStatusSymbolKindLimits(status, reader.GetSymbolKindCounts());
             WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit, requestToken);
+            status.DbFileMode = DbContext.GetUnixFileModeString(
+                _dbPath,
+                status.DatabasePermissionPolicy,
+                out var databasePermissionDiagnostic);
+            if (databasePermissionDiagnostic != null)
+            {
+                status.DatabasePermissionDiagnostics ??= [];
+                status.DatabasePermissionDiagnostics.Add(databasePermissionDiagnostic);
+            }
             var macProfile = MacProfileDetector.DetectCurrentWithDiagnostics();
             status.MacProfile = macProfile.Profile;
             if (macProfile.Diagnostics.Count > 0)

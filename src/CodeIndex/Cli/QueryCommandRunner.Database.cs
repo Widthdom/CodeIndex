@@ -154,6 +154,16 @@ public static partial class QueryCommandRunner
             if (JsonOutputFailure.TryHandle(ex, out var exitCode))
                 return exitCode;
 
+            if (ex is CodeIndexException codeIndexException)
+            {
+                CodeIndexExceptionFormatter.Write(
+                    codeIndexException,
+                    options.Json ? ["--json"] : [],
+                    jsonOptions);
+                Database.DbDebug.DumpToStderr(ex);
+                return ProgramRunner.MapCodeIndexExceptionExitCode(codeIndexException.Code);
+            }
+
             if (ex is SqliteException sqliteEx)
             {
                 if (sqliteEx.SqliteErrorCode == 13)

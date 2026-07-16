@@ -90,7 +90,15 @@ public static partial class QueryCommandRunner
             status.DataDir = options.DataDir;
             status.DataDirSource = options.DataDirSource;
             status.DataDirMode = DataDirectorySecurity.GetUnixModeString(GetDataDirectoryPath(options.DbPath));
-            status.DbFileMode = DbContext.GetUnixFileModeString(options.DbPath);
+            status.DbFileMode = DbContext.GetUnixFileModeString(
+                options.DbPath,
+                status.DatabasePermissionPolicy,
+                out var databasePermissionDiagnostic);
+            if (databasePermissionDiagnostic != null)
+            {
+                status.DatabasePermissionDiagnostics ??= [];
+                status.DatabasePermissionDiagnostics.Add(databasePermissionDiagnostic);
+            }
             var macProfile = MacProfileDetector.DetectCurrentWithDiagnostics();
             status.MacProfile = macProfile.Profile;
             if (macProfile.Diagnostics.Count > 0)

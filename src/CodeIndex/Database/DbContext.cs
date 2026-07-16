@@ -183,12 +183,17 @@ public class DbContext : IDisposable
     private readonly string? _schemaCacheKey;
     private SqliteTransaction? _activeMigrationTransaction;
     private bool _readMigrationInsideExternalTransaction;
+    private readonly object _schemaCacheLock = new();
     private DbSchemaCache? _schemaCache;
+    private bool _disposed;
     private PreparedCommandCache? _preparedCommands;
     private bool _suppressWriteWorkTracking = true;
     private bool _hasWriteWork;
     private bool _hasWalCheckpointableWriteWork;
     private bool _rebuildFtsAfterSchemaMigration;
+    private readonly DatabasePermissionPolicyMode _databasePermissionPolicy;
+    private readonly IDatabaseFileModeProvider _databaseFileModeProvider;
+    private readonly List<StatusDatabasePermissionDiagnostic> _databasePermissionDiagnostics = [];
 
     private static readonly AsyncLocal<Action<string>?> ScopedOptimizePragmaExecutedForTesting = new();
     private static readonly AsyncLocal<Action<SqliteCommand>?> ScopedPlannerStatisticsCommandCreatedForTesting = new();
@@ -269,6 +274,8 @@ public class DbContext : IDisposable
         _walCheckpointRemainingPageCount,
         _walCheckpointSkippedReason,
         _walCheckpointFailureReason);
+    public string DatabasePermissionPolicyName => DatabasePermissionPolicy.ToName(_databasePermissionPolicy);
+    public IReadOnlyList<StatusDatabasePermissionDiagnostic> DatabasePermissionDiagnostics => _databasePermissionDiagnostics;
 
     public static string GetSymbolExtractorVersionMetaKey(string lang)
         => SymbolExtractorVersionMetaPrefix + lang;
@@ -280,7 +287,18 @@ public class DbContext : IDisposable
     /// / `sqlite_master` results instead of re-running the scan on every
     /// construction (issues #1565 / #1701).
     /// </summary>
-    public DbSchemaCache SchemaCache => _schemaCache ??= new DbSchemaCache(_connection, _schemaCacheKey);
+    public DbSchemaCache SchemaCache
+    {
+        get
+        {
+            lock (_schemaCacheLock)
+            {
+                if (_disposed)
+                    throw new ObjectDisposedException(nameof(DbContext));
+                return _schemaCache ??= new DbSchemaCache(_connection, _schemaCacheKey);
+            }
+        }
+    }
 
     /// <summary>
     /// Drop cached schema state so subsequent reads observe DDL that ran
@@ -288,7 +306,14 @@ public class DbContext : IDisposable
     /// (`InitializeSchema`, `TryMigrateForRead`, `DropAll`) already invalidate
     /// the cache automatically.
     /// </summary>
-    public void RefreshSchemaCache() => _schemaCache?.Refresh();
+    public void RefreshSchemaCache()
+    {
+        lock (_schemaCacheLock)
+        {
+            if (!_disposed)
+                _schemaCache?.Refresh();
+        }
+    }
 
     /// <summary>
     /// Lazily-initialized LRU cache of prepared <see cref="SqliteCommand"/> instances shared
@@ -556,7 +581,22 @@ public class DbContext : IDisposable
     }
 
     public DbContext(string dbPath, CancellationToken cancellationToken = default)
+        : this(
+            dbPath,
+            DatabasePermissionPolicy.Resolve(),
+            SystemDatabaseFileModeProvider.Instance,
+            cancellationToken)
     {
+    }
+
+    internal DbContext(
+        string dbPath,
+        DatabasePermissionPolicyMode databasePermissionPolicy,
+        IDatabaseFileModeProvider databaseFileModeProvider,
+        CancellationToken cancellationToken = default)
+    {
+        _databasePermissionPolicy = databasePermissionPolicy;
+        _databaseFileModeProvider = databaseFileModeProvider ?? throw new ArgumentNullException(nameof(databaseFileModeProvider));
         cancellationToken.ThrowIfCancellationRequested();
         _schemaCacheKey = TryCreateSchemaCacheKey(dbPath);
 
@@ -900,43 +940,117 @@ public class DbContext : IDisposable
     public static string ToReadOnlyUri(string dbPath)
         => SqliteConnectionPolicy.ToReadOnlyUri(dbPath);
 
-    private static void ApplyPrivateDatabaseFileModes(string dbPath)
+    private void ApplyPrivateDatabaseFileModes(string dbPath)
     {
-        if (OperatingSystem.IsWindows() || dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        if (!_databaseFileModeProvider.SupportsUnixFileModes ||
+            dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        {
             return;
+        }
 
-        ApplyPrivateFileModeIfExists(dbPath);
-        ApplyPrivateFileModeIfExists(dbPath + "-wal");
-        ApplyPrivateFileModeIfExists(dbPath + "-shm");
+        ApplyPrivateFileModeIfExists(dbPath, "database");
+        ApplyPrivateFileModeIfExists(dbPath + "-wal", "wal");
+        ApplyPrivateFileModeIfExists(dbPath + "-shm", "shm");
     }
 
-    private static void ApplyPrivateFileModeIfExists(string path)
+    private void ApplyPrivateFileModeIfExists(string path, string target)
     {
         var normalizedPath = LongPath.EnsureWindowsPrefix(path);
-        if (!File.Exists(normalizedPath))
-            return;
+        try
+        {
+            if (!_databaseFileModeProvider.FileExists(normalizedPath))
+                return;
 
 #pragma warning disable CA1416
-        File.SetUnixFileMode(normalizedPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            _databaseFileModeProvider.SetUnixFileMode(
+                normalizedPath,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite);
 #pragma warning restore CA1416
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            HandleDatabasePermissionFailure("set", target, ex);
+        }
     }
 
     public static string? GetUnixFileModeString(string? path)
+        => GetUnixFileModeString(
+            path,
+            DatabasePermissionPolicyMode.BestEffort,
+            SystemDatabaseFileModeProvider.Instance,
+            out _);
+
+    internal static string? GetUnixFileModeString(
+        string? path,
+        string policyName,
+        out StatusDatabasePermissionDiagnostic? diagnostic)
+        => GetUnixFileModeString(
+            path,
+            string.Equals(policyName, DatabasePermissionPolicy.StrictName, StringComparison.Ordinal)
+                ? DatabasePermissionPolicyMode.Strict
+                : DatabasePermissionPolicyMode.BestEffort,
+            SystemDatabaseFileModeProvider.Instance,
+            out diagnostic);
+
+    internal static string? GetUnixFileModeString(
+        string? path,
+        DatabasePermissionPolicyMode policy,
+        IDatabaseFileModeProvider fileModeProvider,
+        out StatusDatabasePermissionDiagnostic? diagnostic)
     {
+        diagnostic = null;
         if (string.IsNullOrWhiteSpace(path) ||
-            OperatingSystem.IsWindows() ||
-            path.StartsWith("file:", StringComparison.OrdinalIgnoreCase) ||
-            !File.Exists(path))
+            !fileModeProvider.SupportsUnixFileModes ||
+            path.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }
 
-        var mode = File.GetUnixFileMode(path) &
-            (UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
-             UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
-             UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
-        return Convert.ToString((int)mode, 8).PadLeft(4, '0');
+        try
+        {
+            if (!fileModeProvider.FileExists(path))
+                return null;
+
+            var mode = fileModeProvider.GetUnixFileMode(path) &
+                (UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                 UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
+                 UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
+            return Convert.ToString((int)mode, 8).PadLeft(4, '0');
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            diagnostic = DatabasePermissionPolicy.CreateDiagnostic("read", "database", ex);
+            if (policy == DatabasePermissionPolicyMode.Strict)
+                throw DatabasePermissionPolicy.CreateStrictFailure(diagnostic, ex);
+
+            WriteBestEffortDatabasePermissionWarning(diagnostic);
+            return null;
+        }
     }
+
+    private void HandleDatabasePermissionFailure(string operation, string target, Exception exception)
+    {
+        var diagnostic = DatabasePermissionPolicy.CreateDiagnostic(operation, target, exception);
+        if (_databasePermissionPolicy == DatabasePermissionPolicyMode.Strict)
+            throw DatabasePermissionPolicy.CreateStrictFailure(diagnostic, exception);
+
+        if (_databasePermissionDiagnostics.Any(existing =>
+                existing.Operation == diagnostic.Operation &&
+                existing.Target == diagnostic.Target &&
+                existing.Reason == diagnostic.Reason))
+        {
+            return;
+        }
+
+        _databasePermissionDiagnostics.Add(diagnostic);
+        WriteBestEffortDatabasePermissionWarning(diagnostic);
+    }
+
+    private static void WriteBestEffortDatabasePermissionWarning(StatusDatabasePermissionDiagnostic diagnostic)
+        => CommandErrorWriter.WriteStderr(
+            $"Warning [{DatabasePermissionPolicy.FailureCode}]: policy={DatabasePermissionPolicy.BestEffortName} "
+            + $"operation={diagnostic.Operation} target={diagnostic.Target} reason={diagnostic.Reason}; "
+            + diagnostic.RecommendedAction);
 
     private static string? TryCreateSchemaCacheKey(string dbPath)
     {
@@ -3364,6 +3478,17 @@ public class DbContext : IDisposable
 
     public void Dispose()
     {
+        DbSchemaCache? schemaCache;
+        lock (_schemaCacheLock)
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            schemaCache = _schemaCache;
+            _schemaCache = null;
+        }
+        schemaCache?.Dispose();
+
         // Dispose cached prepared statements before closing the connection so each
         // SqliteCommand's finalizer does not race the connection teardown.
         // connection を閉じる前にキャッシュ済み command を dispose し、finalizer と
