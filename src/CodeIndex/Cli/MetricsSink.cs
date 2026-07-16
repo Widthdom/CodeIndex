@@ -126,6 +126,7 @@ internal static class MetricsSink
         private readonly int _queueCapacity;
         private readonly Channel<QueuedEvent> _eventQueue;
         private readonly ConcurrentDictionary<long, QueuedEvent> _pendingEvents = new();
+        private readonly object _producerGate = new();
         private readonly Task _writerTask;
         private readonly ManualResetEventSlim _idleEvent = new(initialState: true);
         private readonly CancellationTokenSource _shutdownSignal = new();
@@ -151,6 +152,7 @@ internal static class MetricsSink
         private int _degraded;
         private int _warningEmitted;
         private string? _lastFailure;
+        private int _activeProducerCount;
         private int _disposed;
 
         public Session(
@@ -185,6 +187,8 @@ internal static class MetricsSink
 
         internal Action? BeforeBatchWriteForTests { get; set; }
 
+        internal Action? BeforePublishForTests { get; set; }
+
         internal MetricsDiagnostics SnapshotDiagnostics()
         {
             var nextRetryAtTicks = Interlocked.Read(ref _nextRetryAtUtcTicks);
@@ -214,52 +218,86 @@ internal static class MetricsSink
 
         public void Write(MetricsEvent evt)
         {
-            if (Volatile.Read(ref _disposed) != 0)
-                return;
+            QueuedEvent queuedEvent;
+            lock (_producerGate)
+            {
+                if (Volatile.Read(ref _disposed) != 0)
+                    return;
 
-            byte[] encoded;
+                _activeProducerCount++;
+                queuedEvent = new QueuedEvent(Interlocked.Increment(ref _nextEventId));
+                _pendingEvents[queuedEvent.Id] = queuedEvent;
+                if (Interlocked.Increment(ref _pendingEventCount) == 1)
+                    _idleEvent.Reset();
+            }
+
+            var published = false;
             try
             {
-                encoded = _utf8NoBom.GetBytes(SerializeEvent(evt) + Environment.NewLine);
-            }
-            catch (Exception ex)
-            {
-                Interlocked.Increment(ref _serializationFailureCount);
-                RecordDrop(1, "serialization_failure", ex, warn: true);
-                return;
-            }
+                byte[] encoded;
+                try
+                {
+                    encoded = _utf8NoBom.GetBytes(SerializeEvent(evt) + Environment.NewLine);
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.Increment(ref _serializationFailureCount);
+                    if (queuedEvent.TryMarkDropped())
+                        RecordDrop(1, "serialization_failure", ex, warn: true);
+                    return;
+                }
 
-            var queuedEvent = new QueuedEvent(Interlocked.Increment(ref _nextEventId), encoded);
-            _pendingEvents[queuedEvent.Id] = queuedEvent;
-            if (Interlocked.Increment(ref _pendingEventCount) == 1)
-                _idleEvent.Reset();
-            if (_eventQueue.Writer.TryWrite(queuedEvent))
-            {
-                Interlocked.Increment(ref _queueDepth);
-                Interlocked.Increment(ref _queuedEventCount);
-                return;
-            }
+                queuedEvent.SetEncoded(encoded);
+                BeforePublishForTests?.Invoke();
+                if (!queuedEvent.IsPending)
+                    return;
 
-            MarkEventCompleted(queuedEvent);
-            if (Volatile.Read(ref _disposed) == 0)
-            {
-                Interlocked.Increment(ref _queueFullDropCount);
-                RecordDrop(1, "queue_full", new MetricsQueueFullException(), warn: true);
+                if (_eventQueue.Writer.TryWrite(queuedEvent))
+                {
+                    published = true;
+                    Interlocked.Increment(ref _queueDepth);
+                    Interlocked.Increment(ref _queuedEventCount);
+                    return;
+                }
+
+                if (queuedEvent.TryMarkDropped())
+                {
+                    Interlocked.Increment(ref _queueFullDropCount);
+                    RecordDrop(1, "queue_full", new MetricsQueueFullException(), warn: true);
+                }
             }
-            else
+            finally
             {
-                Interlocked.Increment(ref _droppedEventCount);
+                if (!published)
+                    MarkEventCompleted(queuedEvent);
+                CompleteProducerAdmission();
+            }
+        }
+
+        private void CompleteProducerAdmission()
+        {
+            lock (_producerGate)
+            {
+                _activeProducerCount--;
+                if (Volatile.Read(ref _disposed) != 0 && _activeProducerCount == 0)
+                    _eventQueue.Writer.TryComplete();
             }
         }
 
         public void Dispose()
         {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0)
-                return;
+            lock (_producerGate)
+            {
+                if (Volatile.Read(ref _disposed) != 0)
+                    return;
+
+                Volatile.Write(ref _disposed, 1);
+                if (_activeProducerCount == 0)
+                    _eventQueue.Writer.TryComplete();
+            }
 
             if (ReferenceEquals(CurrentSession.Value, this))
                 CurrentSession.Value = null;
-            _eventQueue.Writer.TryComplete();
             _shutdownSignal.Cancel();
             try
             {
@@ -444,13 +482,21 @@ internal static class MetricsSink
             var consecutiveFailures = Interlocked.Increment(ref _consecutiveFailureCount);
             Volatile.Write(ref _degraded, 1);
             Volatile.Write(ref _lastFailure, FormatFailure(reason, exception));
-            var exponent = Math.Min(20, Math.Max(0, consecutiveFailures - 1));
+            var nextRetryAt = DateTimeOffset.UtcNow.Add(CalculateRetryDelay(consecutiveFailures));
+            Interlocked.Exchange(ref _nextRetryAtUtcTicks, nextRetryAt.UtcTicks);
+            WarnOnce();
+        }
+
+        internal static TimeSpan CalculateRetryDelay(int consecutiveFailureCount)
+        {
+            if (consecutiveFailureCount <= 0)
+                throw new ArgumentOutOfRangeException(nameof(consecutiveFailureCount));
+
+            var exponent = Math.Min(20, consecutiveFailureCount - 1);
             var retryMilliseconds = Math.Min(
                 MaxRetryDelay.TotalMilliseconds,
                 InitialRetryDelay.TotalMilliseconds * Math.Pow(2, exponent));
-            var nextRetryAt = DateTimeOffset.UtcNow.AddMilliseconds(retryMilliseconds);
-            Interlocked.Exchange(ref _nextRetryAtUtcTicks, nextRetryAt.UtcTicks);
-            WarnOnce();
+            return TimeSpan.FromMilliseconds(retryMilliseconds);
         }
 
         private void RecordDrop(int count, string reason, Exception exception, bool warn)
@@ -530,13 +576,15 @@ internal static class MetricsSink
         {
         }
 
-        private sealed class QueuedEvent(long id, byte[] encoded)
+        private sealed class QueuedEvent(long id)
         {
+            private byte[]? _encoded;
             private int _outcome;
 
             internal long Id { get; } = id;
-            internal byte[] Encoded { get; } = encoded;
+            internal byte[] Encoded => _encoded ?? throw new InvalidOperationException("Metrics event was published before serialization completed.");
             internal bool IsPending => Volatile.Read(ref _outcome) == 0;
+            internal void SetEncoded(byte[] encoded) => _encoded = encoded;
             internal bool TryMarkWritten() => Interlocked.CompareExchange(ref _outcome, 1, 0) == 0;
             internal bool TryMarkDropped() => Interlocked.CompareExchange(ref _outcome, 2, 0) == 0;
         }

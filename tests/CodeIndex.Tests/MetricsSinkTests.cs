@@ -285,6 +285,23 @@ public class MetricsSinkTests
         }
     }
 
+    [Theory]
+    [InlineData(1, 100)]
+    [InlineData(2, 200)]
+    [InlineData(3, 400)]
+    [InlineData(8, 12_800)]
+    [InlineData(9, 25_600)]
+    [InlineData(10, 30_000)]
+    [InlineData(21, 30_000)]
+    public void CalculateRetryDelay_GrowsExponentiallyAndCapsAtThirtySeconds_Issue4552(
+        int consecutiveFailureCount,
+        int expectedMilliseconds)
+    {
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(expectedMilliseconds),
+            MetricsSink.Session.CalculateRetryDelay(consecutiveFailureCount));
+    }
+
     [Fact]
     public void Record_FullQueueDropsWithoutBlockingAndBatchesQueuedEvents_Issue4552()
     {
@@ -451,6 +468,56 @@ public class MetricsSinkTests
         finally
         {
             releaseWriter.Set();
+            session?.Dispose();
+            TestProjectHelper.DeleteFile(metricsPath);
+        }
+    }
+
+    [Fact]
+    public async Task Dispose_AccountsProducerAdmittedBeforePublishExactlyOnce_Issue4552()
+    {
+        var metricsPath = Path.Combine(Path.GetTempPath(), $"cdidx_metrics_admission_race_{Guid.NewGuid():N}.jsonl");
+        using var producerEntered = new ManualResetEventSlim(false);
+        using var releaseProducer = new ManualResetEventSlim(false);
+        MetricsSink.Session? session = null;
+        try
+        {
+            session = MetricsSink.TryStartForTesting(
+                metricsPath,
+                maxBytes: 1024 * 1024,
+                disposeWriterTimeout: TimeSpan.FromMilliseconds(50));
+            Assert.NotNull(session);
+            session.BeforePublishForTests = () =>
+            {
+                producerEntered.Set();
+                releaseProducer.Wait(TimeSpan.FromSeconds(5));
+            };
+
+            var recordTask = Task.Run(() => MetricsSink.Record(CreateEvent("admitted")));
+            Assert.True(producerEntered.Wait(TimeSpan.FromSeconds(5)));
+
+            session.Dispose();
+
+            var timedOut = session.SnapshotDiagnostics();
+            Assert.True(timedOut.Disposed);
+            Assert.Equal(0, timedOut.QueuedEventCount);
+            Assert.Equal(0, timedOut.WrittenEventCount);
+            Assert.Equal(1, timedOut.DroppedEventCount);
+            Assert.Equal("shutdown_timeout:timeout:TimeoutException", timedOut.LastFailure);
+
+            releaseProducer.Set();
+            await recordTask.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(session.WaitForIdle(TimeSpan.FromSeconds(5)));
+
+            var completed = session.SnapshotDiagnostics();
+            Assert.Equal(0, completed.QueuedEventCount);
+            Assert.Equal(0, completed.WrittenEventCount);
+            Assert.Equal(1, completed.DroppedEventCount);
+            Assert.Equal(0, completed.QueueDepth);
+        }
+        finally
+        {
+            releaseProducer.Set();
             session?.Dispose();
             TestProjectHelper.DeleteFile(metricsPath);
         }
