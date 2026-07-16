@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using CodeIndex.Indexer;
 
@@ -45,6 +46,47 @@ public static partial class QueryCommandRunner
                 options,
                 jsonOptions);
         return true;
+    }
+
+    private static bool TryWriteNonPositiveCoordinateJsonError(
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        params string[] coordinateOptionNames)
+    {
+        if (!options.Json || options.ParseError == null)
+            return false;
+
+        foreach (var optionName in coordinateOptionNames)
+        {
+            var errorPrefix = $"Error: {optionName} requires ";
+            if (!options.ParseError.StartsWith(errorPrefix, StringComparison.Ordinal))
+                continue;
+
+            const string valueMarker = ", got '";
+            var valueStart = options.ParseError.IndexOf(valueMarker, errorPrefix.Length, StringComparison.Ordinal);
+            if (valueStart < 0)
+                continue;
+            valueStart += valueMarker.Length;
+            var valueEnd = options.ParseError.IndexOf("'. Hint:", valueStart, StringComparison.Ordinal);
+            if (valueEnd < 0)
+                continue;
+
+            var rawValue = options.ParseError[valueStart..valueEnd];
+            if (!long.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) || value > 0)
+                continue;
+
+            CommandErrorWriter.WriteJsonOrHuman(
+                true,
+                jsonOptions,
+                $"requested line {rawValue} is outside the valid range beginning at 1.",
+                CommandExitCodes.InvalidArgument,
+                "Use a line number of 1 or greater.",
+                errorCode: CommandErrorCodes.LineOutOfRange,
+                category: "range");
+            return true;
+        }
+
+        return false;
     }
 
     private static void WriteParseError(

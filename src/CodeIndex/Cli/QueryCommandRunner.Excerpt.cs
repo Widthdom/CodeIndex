@@ -22,6 +22,8 @@ public static partial class QueryCommandRunner
             validateDefaultSnippetLines: false);
         if (TryWriteUnsupportedOptionError("excerpt", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("excerpt")))
             return CommandExitCodes.UsageError;
+        if (TryWriteNonPositiveCoordinateJsonError(options, jsonOptions, "--line", "--start", "--start-line", "--end", "--end-line"))
+            return CommandExitCodes.InvalidArgument;
         if (TryWriteParseError(options, "excerpt"))
             return CommandExitCodes.UsageError;
         if (options.Query == null)

@@ -50,6 +50,11 @@ public partial class QueryCommandRunnerTests
                     CommandExitCodes.InvalidArgument,
                     CommandErrorCodes.LineOutOfRange,
                     () => QueryCommandRunner.RunExcerpt(["src/Sample.cs", "--start", "99", "--db", dbPath, "--json"], _jsonOptions)),
+                (
+                    "excerpt non-positive line",
+                    CommandExitCodes.InvalidArgument,
+                    CommandErrorCodes.LineOutOfRange,
+                    () => QueryCommandRunner.RunExcerpt(["src/Sample.cs", "--start", "0", "--db", dbPath, "--json"], _jsonOptions)),
             };
 
             foreach (var testCase in cases)
