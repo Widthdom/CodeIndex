@@ -663,6 +663,7 @@ public class LegacySchemaMigrationTests : IDisposable
         SetDbContextField(db, "_walCheckpointAttempted", true);
         SetDbContextField(db, "_walCheckpointSucceeded", false);
         SetDbContextField(db, "_readOnlyImmutableFallback", true);
+        SetDbContextField(db, "_immutableReadOnly", true);
         SetDbContextField(db, "_walCheckpointSkippedReason", DbConnectionFactory.FileUriPathParseFailedReason);
 
         var reader = new DbReader(db);
@@ -679,11 +680,44 @@ public class LegacySchemaMigrationTests : IDisposable
     }
 
     [Fact]
+    public void ExplicitImmutableReadOnly_WithHotWal_ReportsStaleSnapshotRisk_Issue4555()
+    {
+        var builder = new SqliteConnectionStringBuilder { DataSource = _dbPath };
+        using var writer = new SqliteConnection(builder.ConnectionString);
+        writer.Open();
+        Exec(writer, "PRAGMA journal_mode=WAL");
+        Exec(writer, "PRAGMA wal_autocheckpoint=0");
+        Exec(writer, "INSERT INTO files(path, lang, size, lines, modified) VALUES ('src/HotWal.cs', 'csharp', 1, 1, CURRENT_TIMESTAMP)");
+
+        var walPath = _dbPath + "-wal";
+        Assert.True(File.Exists(walPath));
+        Assert.True(new FileInfo(walPath).Length > 0);
+
+        using var immutableDb = new DbContext(DbConnectionFactory.ToReadOnlyUri(_dbPath));
+        var reader = new DbReader(immutableDb);
+        var payload = new JsonObject();
+        QueryCommandRunner.AddReadOnlyFallbackDiagnostics(payload, reader);
+        var status = reader.GetStatus();
+
+        Assert.False(reader.ReadOnlyFallback);
+        Assert.False(reader.ReadOnlyImmutableFallback);
+        Assert.True(reader.WalStaleSnapshotRisk);
+        Assert.Equal("explicit_immutable_read_only", reader.WalStaleSnapshotReason);
+        Assert.True(payload["wal_stale_snapshot_risk"]!.GetValue<bool>());
+        Assert.Equal("explicit_immutable_read_only", payload["wal_stale_snapshot_reason"]!.GetValue<string>());
+        Assert.True(status.WalStaleSnapshotRisk);
+        Assert.True(status.SqliteConnectionPolicy.ImmutableUri);
+        Assert.Equal(SqliteConnectionPolicy.ImmutableReadOnlyUriModeName, status.SqliteConnectionPolicy.ActiveMode);
+    }
+
+    [Fact]
     public void DbConnectionFactory_ReadOnlyFallbackClassification_RejectsOrdinarySqliteErrors()
     {
         Assert.True(DbConnectionFactory.IsReadOnlyOpenError(CreateSqliteException("readonly", 8)));
-        Assert.True(DbConnectionFactory.IsReadOnlyOpenError(CreateSqliteException("io error", 10)));
-        Assert.True(DbConnectionFactory.IsReadOnlyOpenError(CreateSqliteException("cantopen", 14)));
+        Assert.False(DbConnectionFactory.IsReadOnlyOpenError(CreateSqliteException("io error", 10), _dbPath));
+        Assert.True(DbConnectionFactory.IsReadOnlyOpenError(CreateSqliteException("cantopen", 14), _dbPath));
+        Assert.False(DbConnectionFactory.IsReadOnlyOpenError(CreateSqliteException("cantopen", 14)));
+        Assert.False(DbConnectionFactory.IsReadOnlyOpenError(CreateSqliteException("cantopen", 14), _dbPath + ".missing"));
         Assert.False(DbConnectionFactory.IsReadOnlyOpenError(CreateSqliteException("not a database", 26)));
     }
 

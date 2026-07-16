@@ -198,6 +198,7 @@ public partial class DbReader
                 _walCheckpointAttempted,
                 _walCheckpointSucceeded,
                 _readOnlyImmutableFallback,
+                _immutableReadOnly,
                 _walCheckpointSkippedReason,
                 _walCheckpointFailureReason,
                 WalStaleSnapshotRisk,
