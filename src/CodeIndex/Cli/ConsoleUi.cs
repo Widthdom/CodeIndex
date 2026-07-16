@@ -1148,7 +1148,7 @@ public static class ConsoleUi
         Console.WriteLine("                              Uses NFKC + Unicode CaseFold when ready.");
         Console.WriteLine("                              Legacy/stale-fold DBs fall back to ASCII NOCASE;");
         Console.WriteLine("                              run `cdidx backfill-fold` or check fold_ready.");
-        WriteHelpLine("  --kind <kind>              definition/symbols/outline/hotspots/unused: symbol kind; references: reference kind (call/instantiate/subscribe/attribute/annotation/bcl_regex_without_timeout); callers/callees: call-graph kinds only (call/instantiate/subscribe — metadata kinds rejected, use references instead); validate: issue kind");
+        WriteHelpLine("  --kind <kind>              definition/symbols/outline/hotspots/unused: symbol kind; references: reference kind (call/instantiate/subscribe/attribute/annotation/type_tag/bcl_regex_without_timeout); callers/callees: call-graph kinds only (call/instantiate/subscribe — metadata kinds rejected, use references instead); validate: issue kind");
         WriteHelpLine("  --sort <mode>              Symbols/outline: order audit output by a ranking signal; outline also accepts source, kind, references, size, complexity, path, and name");
         Console.WriteLine("  --severity <s>             validate only: filter issues by severity: info, warning, error");
         Console.WriteLine("  --visibility <v[,v]>       Filter symbols/definitions/unused/hotspots by visibility: public, protected, internal, private");
