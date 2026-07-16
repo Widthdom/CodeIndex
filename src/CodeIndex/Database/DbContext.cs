@@ -176,6 +176,10 @@ public class DbContext : IDisposable
     private bool _immutableReadOnly;
     private string? _walCheckpointSkippedReason;
     private string? _walCheckpointFailureReason;
+    private long? _walCheckpointBusy;
+    private long? _walCheckpointLogPageCount;
+    private long? _walCheckpointCheckpointedPageCount;
+    private long? _walCheckpointRemainingPageCount;
     private readonly string? _schemaCacheKey;
     private SqliteTransaction? _activeMigrationTransaction;
     private MigrationTransactionOwnership _migrationTransactionOwnership;
@@ -271,6 +275,19 @@ public class DbContext : IDisposable
     internal bool ImmutableReadOnly => _immutableReadOnly;
     public string? WalCheckpointSkippedReason => _walCheckpointSkippedReason;
     public string? WalCheckpointFailureReason => _walCheckpointFailureReason;
+    public long? WalCheckpointBusy => _walCheckpointBusy;
+    public long? WalCheckpointLogPageCount => _walCheckpointLogPageCount;
+    public long? WalCheckpointCheckpointedPageCount => _walCheckpointCheckpointedPageCount;
+    public long? WalCheckpointRemainingPageCount => _walCheckpointRemainingPageCount;
+    public WalCheckpointResult LastWalCheckpointResult => new(
+        _walCheckpointAttempted,
+        _walCheckpointSucceeded,
+        _walCheckpointBusy,
+        _walCheckpointLogPageCount,
+        _walCheckpointCheckpointedPageCount,
+        _walCheckpointRemainingPageCount,
+        _walCheckpointSkippedReason,
+        _walCheckpointFailureReason);
     public string DatabasePermissionPolicyName => DatabasePermissionPolicy.ToName(_databasePermissionPolicy);
     public IReadOnlyList<StatusDatabasePermissionDiagnostic> DatabasePermissionDiagnostics => _databasePermissionDiagnostics;
 
@@ -691,9 +708,10 @@ public class DbContext : IDisposable
             // read-only FS / サンドボックスでも縮退 read path を動かせるようフォールバック。
             // 自動経路は Mode=ReadOnly のみとし、immutable=1 は stale risk を受け入れる明示指定に限る。
             _connection?.Dispose();
-            _walCheckpointAttempted = true;
-            _walCheckpointSucceeded = _walCheckpointSkippedReason == null
-                && TryCheckpointWalBeforeReadOnlyFallback(dbPath, cancellationToken, out _walCheckpointFailureReason);
+            var checkpointResult = _walCheckpointSkippedReason == null
+                ? CheckpointWalBeforeReadOnlyFallback(dbPath, cancellationToken)
+                : WalCheckpointResult.SkippedAfterAttempt(_walCheckpointSkippedReason);
+            ApplyWalCheckpointResult(checkpointResult);
             if (_walCheckpointSucceeded)
             {
                 try
@@ -769,12 +787,10 @@ public class DbContext : IDisposable
         WarnIfBatchInProgress();
     }
 
-    private static bool TryCheckpointWalBeforeReadOnlyFallback(
+    internal static WalCheckpointResult CheckpointWalBeforeReadOnlyFallback(
         string dbPath,
-        CancellationToken cancellationToken,
-        out string? failureReason)
+        CancellationToken cancellationToken)
     {
-        failureReason = null;
         try
         {
             var connectionString = SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.ReadWrite);
@@ -784,59 +800,155 @@ public class DbContext : IDisposable
                 maxOpenAttempts: 1,
                 dbPath: dbPath,
                 cancellationToken: cancellationToken);
-            using var cmd = SqliteConnectionPolicy.CreateCommand(connection, "PRAGMA wal_checkpoint(TRUNCATE)");
-            cancellationToken.ThrowIfCancellationRequested();
-            ReportMaintenanceProgress("wal_checkpoint", "truncate_start", dbPath);
-            cmd.ExecuteNonQuery();
-            ReportMaintenanceProgress("wal_checkpoint", "truncate_complete", dbPath);
-            cancellationToken.ThrowIfCancellationRequested();
-            return true;
+            return ExecuteWalCheckpointTruncate(connection, cancellationToken, invokeTestingHook: true);
         }
-        catch (Exception ex) when (ex is SqliteException or CodeIndexException)
+        catch (OperationCanceledException)
         {
-            failureReason = FormatWalCheckpointFailureReason(ex);
-            return false;
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return WalCheckpointResult.Failed(FormatWalCheckpointFailureReason(ex));
         }
     }
 
     private static string FormatWalCheckpointFailureReason(Exception ex) => ex switch
     {
+        SqliteException { SqliteErrorCode: 3 } => "sqlite_permission_denied",
+        SqliteException { SqliteErrorCode: 5 } => "sqlite_busy",
+        SqliteException { SqliteErrorCode: 6 } => "sqlite_locked",
+        SqliteException { SqliteErrorCode: 8 } => "sqlite_read_only",
+        SqliteException { SqliteErrorCode: 10 } => "sqlite_io_error",
+        SqliteException { SqliteErrorCode: 11 } => "sqlite_corrupt",
+        SqliteException { SqliteErrorCode: 13 } => "sqlite_full",
+        SqliteException { SqliteErrorCode: 14 } => "sqlite_cannot_open",
+        SqliteException { SqliteErrorCode: 26 } => "sqlite_not_a_database",
         SqliteException sqlite => $"sqlite_error_{sqlite.SqliteErrorCode.ToString(CultureInfo.InvariantCulture)}",
         CodeIndexException codeIndexException => codeIndexException.Code,
-        _ => "wal_checkpoint_failed",
+        _ => WalCheckpointResult.GenericFailureReason,
     };
 
     public bool TryCheckpointWalTruncate()
         => TryCheckpointWalTruncate(CancellationToken.None);
 
     public bool TryCheckpointWalTruncate(CancellationToken cancellationToken)
+        => CheckpointWalTruncate(cancellationToken).Succeeded;
+
+    public WalCheckpointResult CheckpointWalTruncate()
+        => CheckpointWalTruncate(CancellationToken.None);
+
+    public WalCheckpointResult CheckpointWalTruncate(CancellationToken cancellationToken)
     {
         if (_isReadOnly)
-            return false;
+        {
+            var result = WalCheckpointResult.NotAttempted(WalCheckpointResult.ReadOnlySkippedReason);
+            ApplyWalCheckpointResult(result);
+            return result;
+        }
 
         cancellationToken.ThrowIfCancellationRequested();
-        _walCheckpointAttempted = true;
         try
         {
-            using var cmd = SqliteConnectionPolicy.CreateCommand(_connection, "PRAGMA wal_checkpoint(TRUNCATE)");
-            WalCheckpointTruncateExecutedForTesting?.Invoke(_connection.DataSource);
-            ReportMaintenanceProgress("wal_checkpoint", "truncate_start", _connection.DataSource);
-            cmd.ExecuteNonQuery();
-            ReportMaintenanceProgress("wal_checkpoint", "truncate_complete", _connection.DataSource);
-            cancellationToken.ThrowIfCancellationRequested();
-            _walCheckpointSucceeded = true;
-            return true;
+            var result = ExecuteWalCheckpointTruncate(_connection, cancellationToken, invokeTestingHook: true);
+            ApplyWalCheckpointResult(result);
+            return result;
         }
         catch (OperationCanceledException)
         {
-            _walCheckpointSucceeded = false;
+            ApplyWalCheckpointResult(WalCheckpointResult.Failed(WalCheckpointResult.CancelledFailureReason));
             throw;
         }
-        catch (Exception)
+    }
+
+    private static WalCheckpointResult ExecuteWalCheckpointTruncate(
+        SqliteConnection connection,
+        CancellationToken cancellationToken,
+        bool invokeTestingHook)
+    {
+        try
         {
-            _walCheckpointSucceeded = false;
-            return false;
+            using var cmd = SqliteConnectionPolicy.CreateCommand(connection, "PRAGMA wal_checkpoint(TRUNCATE)");
+            if (invokeTestingHook)
+                WalCheckpointTruncateExecutedForTesting?.Invoke(connection.DataSource);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            ReportMaintenanceProgress("wal_checkpoint", "truncate_start", connection.DataSource);
+            using var reader = cmd.ExecuteReader();
+            if (!reader.Read())
+                return WalCheckpointResult.Failed(WalCheckpointResult.MissingResultFailureReason);
+
+            long busy;
+            long logPageCount;
+            long checkpointedPageCount;
+            try
+            {
+                busy = reader.GetInt64(0);
+                logPageCount = reader.GetInt64(1);
+                checkpointedPageCount = reader.GetInt64(2);
+            }
+            catch (Exception ex) when (ex is ArgumentOutOfRangeException
+                or InvalidCastException
+                or InvalidOperationException
+                or IndexOutOfRangeException)
+            {
+                return WalCheckpointResult.Failed(WalCheckpointResult.InvalidResultFailureReason);
+            }
+
+            ReportMaintenanceProgress("wal_checkpoint", "truncate_complete", connection.DataSource);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var notWalMode = busy == 0 && logPageCount == -1 && checkpointedPageCount == -1;
+            if (!notWalMode &&
+                (busy < 0 || logPageCount < 0 || checkpointedPageCount < 0 || checkpointedPageCount > logPageCount))
+            {
+                return new WalCheckpointResult(
+                    true,
+                    false,
+                    busy,
+                    logPageCount,
+                    checkpointedPageCount,
+                    null,
+                    null,
+                    WalCheckpointResult.InvalidResultFailureReason);
+            }
+
+            var remainingPageCount = notWalMode ? 0 : logPageCount - checkpointedPageCount;
+            var failureReason = busy != 0
+                ? WalCheckpointResult.BusyFailureReason
+                : remainingPageCount != 0
+                    ? WalCheckpointResult.PagesRemainingFailureReason
+                    : null;
+
+            return new WalCheckpointResult(
+                true,
+                failureReason == null,
+                busy,
+                logPageCount,
+                checkpointedPageCount,
+                remainingPageCount,
+                null,
+                failureReason);
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return WalCheckpointResult.Failed(FormatWalCheckpointFailureReason(ex));
+        }
+    }
+
+    private void ApplyWalCheckpointResult(WalCheckpointResult result)
+    {
+        _walCheckpointAttempted = result.Attempted;
+        _walCheckpointSucceeded = result.Succeeded;
+        _walCheckpointBusy = result.Busy;
+        _walCheckpointLogPageCount = result.LogPageCount;
+        _walCheckpointCheckpointedPageCount = result.CheckpointedPageCount;
+        _walCheckpointRemainingPageCount = result.RemainingPageCount;
+        _walCheckpointSkippedReason = result.SkippedReason;
+        _walCheckpointFailureReason = result.FailureReason;
     }
 
     public static string ToReadOnlyUri(string dbPath)

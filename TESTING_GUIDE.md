@@ -121,6 +121,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   `DbSchemaConstraintTests.cs` also locks schema constraints to `SymbolKindCatalog` and required file foreign keys so DB readiness checks fail when code enums and SQLite CHECK clauses drift.
   Hotspot ranking fixtures should use the smallest counts that cross each ranking threshold; for structural-rank tests, keep one side just above the raw-reference comparison and the other just above the symbol-count threshold instead of scaling both far beyond the boundary.
   Checkpoint listing cap fixtures should exceed the checkpoint count cap once and exceed the inspected-file cap on only one checkpoint; multiplying both caps together adds filesystem work without increasing boundary coverage.
+  WAL checkpoint contention fixtures must establish a real read transaction before a later writer commit, then lower `busy_timeout` to keep the assertion bounded without fixed sleeps. Permission/error-path coverage may throw from `DbContext.WalCheckpointTruncateExecutedForTesting`; restore the previous `AsyncLocal` value in `finally` so parallel test state cannot leak.
 - `ConcurrencyTests.cs`
   WAL snapshot and shared-writer stress tests. The concurrent reader/writer
   snapshot tests stop after enough reader and writer iterations are observed,
@@ -777,6 +778,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   `DbSchemaConstraintTests.cs` は DB readiness check が code enum と SQLite CHECK 句の drift を検出できるよう、schema constraint と `SymbolKindCatalog`、必須 file foreign key の同期も固定します。
   hotspot ranking fixture は各 ranking threshold を跨ぐ最小 count を使ってください。structural-rank test では、raw reference 比較をわずかに超える側と symbol-count threshold をわずかに超える側を用意し、境界から大きく離れた件数まで膨らませないでください。
   checkpoint listing cap fixture は checkpoint count cap を 1 件だけ超え、inspected-file cap は 1 checkpoint だけで超えてください。両方の cap を掛け合わせても boundary coverage は増えず、filesystem work だけが増えます。
+  WAL checkpoint contention fixture は後続 writer commit より先に実際の read transaction を確立し、固定 sleep を使わず assertion を bounded にするため `busy_timeout` を短くします。permission / error path の coverage では `DbContext.WalCheckpointTruncateExecutedForTesting` から exception を throw できますが、parallel test state を漏らさないよう、以前の `AsyncLocal` 値を `finally` で復元してください。
 - `ConcurrencyTests.cs`
   WAL snapshot と shared-writer の stress test。concurrent reader/writer snapshot
   テストは reader / writer の十分な反復を観測した時点で停止し、遅い host 用に

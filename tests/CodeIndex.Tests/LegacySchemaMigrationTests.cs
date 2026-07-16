@@ -712,6 +712,12 @@ public class LegacySchemaMigrationTests : IDisposable
             Assert.True(db.IsReadOnly, "DbContext should have fallen back to read-only open.");
             Assert.True(db.ReadOnlyFallback);
             Assert.True(db.WalCheckpointAttempted);
+            Assert.True(db.WalCheckpointSucceeded);
+            Assert.Null(db.WalCheckpointFailureReason);
+            Assert.Equal(0L, db.WalCheckpointBusy);
+            Assert.Equal(-1L, db.WalCheckpointLogPageCount);
+            Assert.Equal(-1L, db.WalCheckpointCheckpointedPageCount);
+            Assert.Equal(0L, db.WalCheckpointRemainingPageCount);
 
             // Migration is skipped (catches SQLITE_READONLY). Reader still builds and query
             // paths — including the previously unguarded deps / issues — degrade to empty.
@@ -721,6 +727,11 @@ public class LegacySchemaMigrationTests : IDisposable
             Assert.True(reader.ReadOnlyFallback);
             Assert.Equal(db.WalCheckpointAttempted, reader.WalCheckpointAttempted);
             Assert.Equal(db.WalCheckpointSucceeded, reader.WalCheckpointSucceeded);
+            Assert.Equal(db.WalCheckpointFailureReason, reader.WalCheckpointFailureReason);
+            Assert.Equal(db.WalCheckpointBusy, reader.WalCheckpointBusy);
+            Assert.Equal(db.WalCheckpointLogPageCount, reader.WalCheckpointLogPageCount);
+            Assert.Equal(db.WalCheckpointCheckpointedPageCount, reader.WalCheckpointCheckpointedPageCount);
+            Assert.Equal(db.WalCheckpointRemainingPageCount, reader.WalCheckpointRemainingPageCount);
             Assert.Equal(db.ReadOnlyImmutableFallback, reader.ReadOnlyImmutableFallback);
             Assert.Equal(reader.ReadOnlyImmutableFallback && !reader.WalCheckpointSucceeded, reader.WalStaleSnapshotRisk);
 
@@ -728,6 +739,11 @@ public class LegacySchemaMigrationTests : IDisposable
             Assert.True(status.ReadOnlyFallback);
             Assert.Equal(reader.WalCheckpointAttempted, status.WalCheckpointAttempted);
             Assert.Equal(reader.WalCheckpointSucceeded, status.WalCheckpointSucceeded);
+            Assert.Equal(reader.WalCheckpointFailureReason, status.WalCheckpointFailureReason);
+            Assert.Equal(reader.WalCheckpointBusy, status.WalCheckpointBusy);
+            Assert.Equal(reader.WalCheckpointLogPageCount, status.WalCheckpointLogPageCount);
+            Assert.Equal(reader.WalCheckpointCheckpointedPageCount, status.WalCheckpointCheckpointedPageCount);
+            Assert.Equal(reader.WalCheckpointRemainingPageCount, status.WalCheckpointRemainingPageCount);
             Assert.Equal(reader.ReadOnlyImmutableFallback, status.ReadOnlyImmutableFallback);
             Assert.Equal(reader.WalStaleSnapshotRisk, status.WalStaleSnapshotRisk);
             Assert.Equal(reader.WalStaleSnapshotReason, status.WalStaleSnapshotReason);
@@ -756,6 +772,10 @@ public class LegacySchemaMigrationTests : IDisposable
         SetDbContextField(db, "_readOnlyImmutableFallback", true);
         SetDbContextField(db, "_immutableReadOnly", true);
         SetDbContextField(db, "_walCheckpointSkippedReason", DbConnectionFactory.FileUriPathParseFailedReason);
+        SetDbContextField(db, "_walCheckpointBusy", 1L);
+        SetDbContextField(db, "_walCheckpointLogPageCount", 4L);
+        SetDbContextField(db, "_walCheckpointCheckpointedPageCount", 2L);
+        SetDbContextField(db, "_walCheckpointRemainingPageCount", 2L);
 
         var reader = new DbReader(db);
         var payload = new JsonObject();
@@ -766,6 +786,10 @@ public class LegacySchemaMigrationTests : IDisposable
         Assert.False(payload["wal_checkpoint_succeeded"]!.GetValue<bool>());
         Assert.True(payload["read_only_immutable_fallback"]!.GetValue<bool>());
         Assert.Equal(DbConnectionFactory.FileUriPathParseFailedReason, payload["wal_checkpoint_skipped_reason"]!.GetValue<string>());
+        Assert.Equal(1L, payload["wal_checkpoint_busy"]!.GetValue<long>());
+        Assert.Equal(4L, payload["wal_checkpoint_log_page_count"]!.GetValue<long>());
+        Assert.Equal(2L, payload["wal_checkpoint_checkpointed_page_count"]!.GetValue<long>());
+        Assert.Equal(2L, payload["wal_checkpoint_remaining_page_count"]!.GetValue<long>());
         Assert.True(payload["wal_stale_snapshot_risk"]!.GetValue<bool>());
         Assert.Equal(DbConnectionFactory.FileUriPathParseFailedReason, payload["wal_stale_snapshot_reason"]!.GetValue<string>());
     }

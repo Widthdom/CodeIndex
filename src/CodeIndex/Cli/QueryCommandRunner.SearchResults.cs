@@ -1356,6 +1356,10 @@ public static partial class QueryCommandRunner
                 ReadOnlyImmutableFallback: includeDiagnostics ? reader!.ReadOnlyImmutableFallback : null,
                 WalCheckpointSkippedReason: includeDiagnostics ? reader!.WalCheckpointSkippedReason : null,
                 WalCheckpointFailureReason: includeDiagnostics ? reader!.WalCheckpointFailureReason : null,
+                WalCheckpointBusy: includeDiagnostics ? reader!.WalCheckpointBusy : null,
+                WalCheckpointLogPageCount: includeDiagnostics ? reader!.WalCheckpointLogPageCount : null,
+                WalCheckpointCheckpointedPageCount: includeDiagnostics ? reader!.WalCheckpointCheckpointedPageCount : null,
+                WalCheckpointRemainingPageCount: includeDiagnostics ? reader!.WalCheckpointRemainingPageCount : null,
                 WalStaleSnapshotRisk: includeDiagnostics ? reader!.WalStaleSnapshotRisk : null,
                 WalStaleSnapshotReason: includeDiagnostics ? reader!.WalStaleSnapshotReason : null),
             CliJsonSerializerContextFactory.Create(jsonOptions).JsonStreamDoneResult));
