@@ -1370,7 +1370,7 @@ public sealed class Caller
     }
 
     [Fact]
-    public async Task ProcessLineAsync_FallbackErrorIncludesCorrelationData()
+    public async Task ProcessLineAsync_NonStringToolNameUsesControlledValidationAndCorrelationData_Issue4547()
     {
         using var writer = new StringWriter();
         using var error = new StringWriter();
@@ -1396,14 +1396,17 @@ public sealed class Caller
 
         var response = JsonNode.Parse(writer.ToString())!;
         var data = response["error"]!["data"]!;
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal(McpErrorEnvelope.CategoryMissingParameter, data["category"]!.GetValue<string>());
         Assert.Equal("321", data["request_id"]!.GetValue<string>());
         Assert.False(string.IsNullOrWhiteSpace(data["correlation_id"]!.GetValue<string>()));
         var telemetryRequestId = McpRequestIdTelemetry.Create(JsonValue.Create(321));
         Assert.Contains(
-            $"[cdidx-mcp] [rid={telemetryRequestId.Token} rid_type=number rid_length=3 cid=",
+            $"[rid={telemetryRequestId.Token} rid_type=number rid_length=3 cid=",
             error.ToString(),
             StringComparison.Ordinal);
         Assert.DoesNotContain("[rid=321 ", error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("[cdidx-mcp] Error:", error.ToString());
     }
 
 
