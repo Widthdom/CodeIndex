@@ -718,8 +718,12 @@ public static partial class QueryCommandRunner
                     var projectedExitCode = WriteProjectedSearchResults(
                         compactResults,
                         selection.OriginalCount,
-                        selection.Truncated,
-                        selection.TruncationReason,
+                        selection.LimitTruncated,
+                        selection.LimitTruncated ? "limit" : null,
+                        selection.TruncationReason is "sample" or "first_per_file" ? selection.TruncationReason : null,
+                        selection.TruncationReason is "sample" or "first_per_file"
+                            ? Math.Max(0, selection.OriginalCount - selection.Rows.Count)
+                            : null,
                         options,
                         jsonOptions,
                         ndjsonOptions,
@@ -775,8 +779,12 @@ public static partial class QueryCommandRunner
                     return WriteSearchNdjsonResults(
                         compactResults,
                         selection.OriginalCount,
-                        selection.Truncated,
-                        selection.TruncationReason,
+                        selection.LimitTruncated,
+                        selection.LimitTruncated ? "limit" : null,
+                        selection.TruncationReason is "sample" or "first_per_file" ? selection.TruncationReason : null,
+                        selection.TruncationReason is "sample" or "first_per_file"
+                            ? Math.Max(0, selection.OriginalCount - selection.Rows.Count)
+                            : null,
                         options,
                         ndjsonOptions,
                         reader,

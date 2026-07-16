@@ -246,12 +246,12 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             using var terminal = ParseLastNdjsonRecord(stdout);
             var json = terminal.RootElement;
-            Assert.True(json.GetProperty("truncated").GetBoolean());
-            Assert.True(json.GetProperty("has_more").GetBoolean());
-            Assert.Equal("sample", json.GetProperty("truncation_reason").GetString());
+            Assert.False(json.GetProperty("truncated").GetBoolean());
+            Assert.False(json.GetProperty("has_more").GetBoolean());
+            Assert.Equal("sample", json.GetProperty("selection_reason").GetString());
+            Assert.Equal(2, json.GetProperty("selection_omitted_count").GetInt32());
             Assert.False(json.GetProperty("total_count_authoritative").GetBoolean());
             Assert.Equal(3, json.GetProperty("total_count_lower_bound").GetInt32());
-            Assert.Equal(2, json.GetProperty("omitted_count").GetInt32());
         }
         finally
         {

@@ -439,6 +439,10 @@ internal sealed record JsonStreamDoneResult(
     [property: JsonPropertyName("total_count_authoritative")] bool TotalCountAuthoritative,
     [property: JsonPropertyName("total_count_lower_bound")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? TotalCountLowerBound = null,
+    [property: JsonPropertyName("selection_reason")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SelectionReason = null,
+    [property: JsonPropertyName("selection_omitted_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? SelectionOmittedCount = null,
     [property: JsonPropertyName("interruption_reason")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? InterruptionReason = null,
     [property: JsonPropertyName("truncation_reason")]

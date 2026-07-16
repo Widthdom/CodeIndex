@@ -5013,6 +5013,8 @@ public partial class QueryCommandRunnerTests
             using var doneDocument = JsonDocument.Parse(lines[^1]);
             Assert.False(doneDocument.RootElement.GetProperty("truncated").GetBoolean());
             Assert.False(doneDocument.RootElement.GetProperty("has_more").GetBoolean());
+            Assert.Equal("sample", doneDocument.RootElement.GetProperty("selection_reason").GetString());
+            Assert.Equal(1, doneDocument.RootElement.GetProperty("selection_omitted_count").GetInt32());
         }
         finally
         {

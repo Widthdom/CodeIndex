@@ -482,6 +482,8 @@ public static partial class QueryCommandRunner
         int totalCount,
         bool truncated,
         string? truncationReason,
+        string? selectionReason,
+        int? selectionOmittedCount,
         QueryCommandOptions options,
         JsonSerializerOptions jsonOptions,
         JsonSerializerOptions ndjsonOptions,
@@ -521,7 +523,9 @@ public static partial class QueryCommandRunner
             truncated,
             "Increase --limit, remove selection options, or narrow the query to retrieve the remaining search results.",
             totalCountAuthoritative: false,
-            truncationReason: truncationReason);
+            truncationReason: truncationReason,
+            selectionReason: selectionReason,
+            selectionOmittedCount: selectionOmittedCount);
         terminalLine = stream.TerminalLine;
         return stream.ExitCode;
     }
@@ -586,6 +590,8 @@ public static partial class QueryCommandRunner
         int totalCount,
         bool truncated,
         string? truncationReason,
+        string? selectionReason,
+        int? selectionOmittedCount,
         QueryCommandOptions options,
         JsonSerializerOptions ndjsonOptions,
         DbReader reader,
@@ -605,7 +611,9 @@ public static partial class QueryCommandRunner
             truncated,
             "Increase --limit, remove selection options, or narrow the query to retrieve the remaining search results.",
             totalCountAuthoritative: false,
-            truncationReason: truncationReason);
+            truncationReason: truncationReason,
+            selectionReason: selectionReason,
+            selectionOmittedCount: selectionOmittedCount);
         terminalLine = stream.TerminalLine;
         return stream.ExitCode;
     }
@@ -1390,7 +1398,9 @@ public static partial class QueryCommandRunner
         int? appliedLimit = null,
         string? recoveryGuidance = null,
         bool totalCountAuthoritative = true,
-        string? truncationReason = null)
+        string? truncationReason = null,
+        string? selectionReason = null,
+        int? selectionOmittedCount = null)
     {
         var includeDiagnostics = HasReadOnlyFallbackDiagnostics(reader);
         return JsonSerializer.Serialize(
@@ -1404,6 +1414,8 @@ public static partial class QueryCommandRunner
                 HasMore: truncated || interrupted,
                 TotalCountAuthoritative: totalCountAuthoritative,
                 TotalCountLowerBound: totalCountAuthoritative ? null : totalCount,
+                SelectionReason: selectionReason,
+                SelectionOmittedCount: selectionOmittedCount,
                 InterruptionReason: interrupted ? "max_json_bytes_exceeded" : null,
                 TruncationReason: interrupted ? "max_json_bytes_exceeded" : truncated ? truncationReason ?? "limit" : null,
                 AppliedLimit: truncated ? appliedLimit : null,

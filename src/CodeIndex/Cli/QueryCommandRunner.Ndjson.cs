@@ -39,7 +39,9 @@ public static partial class QueryCommandRunner
         bool limitTruncated,
         string limitRecoveryGuidance,
         bool totalCountAuthoritative = true,
-        string? truncationReason = null)
+        string? truncationReason = null,
+        string? selectionReason = null,
+        int? selectionOmittedCount = null)
     {
         if (options.ResultsOnly)
             return WriteResultOnlyNdjson(records, options);
@@ -69,7 +71,9 @@ public static partial class QueryCommandRunner
                         ? "Increase --max-json-bytes or reduce --limit. Pass --allow-partial only when exit code 0 is acceptable for incomplete output."
                         : limitTruncated ? limitRecoveryGuidance : null,
                     totalCountAuthoritative: totalCountAuthoritative,
-                    truncationReason: truncationReason);
+                    truncationReason: truncationReason,
+                    selectionReason: selectionReason,
+                    selectionOmittedCount: selectionOmittedCount);
                 if (PrefixBytes(records, candidate) + JsonLineBytes(candidateTerminal) > options.MaxJsonBytes.Value)
                     continue;
 
@@ -94,7 +98,9 @@ public static partial class QueryCommandRunner
                     appliedLimit: options.Limit,
                     recoveryGuidance: "Increase --max-json-bytes so the bounded NDJSON terminal record fits before streaming begins.",
                     totalCountAuthoritative: totalCountAuthoritative,
-                    truncationReason: truncationReason);
+                    truncationReason: truncationReason,
+                    selectionReason: selectionReason,
+                    selectionOmittedCount: selectionOmittedCount);
                 WriteUsageError(
                     $"{commandName} NDJSON terminal record is {JsonLineBytes(requiredTerminal)} bytes and exceeds --max-json-bytes {options.MaxJsonBytes.Value}.",
                     GetUsageLineOrThrow(commandName),
@@ -117,7 +123,9 @@ public static partial class QueryCommandRunner
                 appliedLimit: options.Limit,
                 recoveryGuidance: limitTruncated ? limitRecoveryGuidance : null,
                 totalCountAuthoritative: totalCountAuthoritative,
-                truncationReason: truncationReason);
+                truncationReason: truncationReason,
+                selectionReason: selectionReason,
+                selectionOmittedCount: selectionOmittedCount);
         }
 
         for (var i = 0; i < emittedRecords; i++)
