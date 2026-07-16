@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 
@@ -75,13 +76,35 @@ public class Probe
 
             JsonOutputSnapshotHelper.AssertMatches(
                 "status.json",
-                stdout,
+                NormalizeStatusSnapshotConnectionMode(stdout),
                 BuildPathReplacements(projectRoot));
         }
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    private static string NormalizeStatusSnapshotConnectionMode(string stdout)
+    {
+        var root = JsonNode.Parse(stdout)?.AsObject()
+            ?? throw new InvalidOperationException("Status snapshot output was not a JSON object.");
+        if (root["sqlite_connection_policy"] is JsonObject policy
+            && string.Equals(
+                policy["active_mode"]?.GetValue<string>(),
+                SqliteConnectionPolicy.ImmutableReadOnlyUriModeName,
+                StringComparison.Ordinal))
+        {
+            // A closed WAL fixture may retain WAL header bytes on Windows after its sidecars are
+            // removed, so query-only status legitimately uses an immutable private snapshot there.
+            // Keep this golden focused on the JSON contract; dedicated Issue4557 tests pin both
+            // read-only policy variants and their artifact-preservation behavior.
+            policy["active_mode"] = SqliteConnectionPolicy.ReadOnlyModeName;
+            policy["open_mode"] = SqliteConnectionPolicy.ReadOnlyModeName;
+            policy["immutable_uri"] = false;
+        }
+
+        return root.ToJsonString();
     }
 
     [Fact]

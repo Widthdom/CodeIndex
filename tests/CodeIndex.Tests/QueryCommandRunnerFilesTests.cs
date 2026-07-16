@@ -267,10 +267,15 @@ public partial class QueryCommandRunnerTests
                 continue;
 
             var info = new FileInfo(path);
+            using var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
             result[Path.GetFileName(path)] = (
                 info.Length,
                 info.LastWriteTimeUtc,
-                Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))));
+                Convert.ToHexString(SHA256.HashData(stream)));
         }
 
         return result;

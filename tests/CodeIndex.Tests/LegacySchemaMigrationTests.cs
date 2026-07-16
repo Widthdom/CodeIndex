@@ -458,7 +458,7 @@ public class LegacySchemaMigrationTests : IDisposable
     [Fact]
     public void TryMigrateForRead_UnrelatedSqliteErrorFromBegin_PropagatesWithoutPartialMigration_Issue4560()
     {
-        using var db = new DbContext(_dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         var previousFactory = DbContext.ReadMigrationTransactionFactoryForTesting;
         DbContext.ReadMigrationTransactionFactoryForTesting = _ =>
             throw CreateSyntheticSqliteError(1, "injected unrelated SQLITE_ERROR from BEGIN");
@@ -570,7 +570,7 @@ public class LegacySchemaMigrationTests : IDisposable
     [Fact]
     public void InitializeSchema_ForeignKeyPopulatedKindRebuildPreservesRowsAndEffectiveMode_Issue4560()
     {
-        using var db = new DbContext(_dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         using (var rebuildLegacySymbols = db.Connection.CreateCommand())
         {
             rebuildLegacySymbols.CommandText = """
@@ -639,7 +639,7 @@ public class LegacySchemaMigrationTests : IDisposable
     [Fact]
     public void MigrationWindow_ExternalTransactionRejectsIneffectiveForeignKeyDisable_Issue4560()
     {
-        using var db = new DbContext(_dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         db.InitializeSchema();
         Assert.Equal(1, ReadForeignKeys(db));
 
