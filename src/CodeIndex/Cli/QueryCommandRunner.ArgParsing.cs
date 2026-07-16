@@ -1204,6 +1204,7 @@ public static partial class QueryCommandRunner
                             {
                                 staleAfter = parsedStaleAfter;
                                 checkWorkspace = true;
+                                statusCheckScopes?.Add("workspace");
                             }
                             else
                                 AddParseError(parseStaleAfterError!);

@@ -1772,8 +1772,12 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
-    public void RunStatus_StaleAfterJson_ReturnsStaleExitWhenWorkspaceDiffers_Issue4576()
+    [Theory]
+    [InlineData(false, QueryCommandRunner.StatusCheckModeImpliedByStaleAfter)]
+    [InlineData(true, QueryCommandRunner.StatusCheckModeExplicit)]
+    public void RunStatus_StaleAfterJson_ReturnsStaleExitWhenWorkspaceDiffers_Issue4576(
+        bool useScopedCheck,
+        string expectedCheckMode)
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_stale_after_changed_4576");
         try
@@ -1786,9 +1790,11 @@ public partial class QueryCommandRunnerTests
             MarkStatusReadinessReady(dbPath);
             File.WriteAllText(sourcePath, "class App { void Run() {} }\n");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
-                ["--db", dbPath, "--stale-after", "1m", "--json"],
-                _jsonOptions));
+            var args = new List<string> { "--db", dbPath };
+            if (useScopedCheck)
+                args.Add("--check=fold");
+            args.AddRange(["--stale-after", "1m", "--json"]);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(args.ToArray(), _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
@@ -1798,7 +1804,7 @@ public partial class QueryCommandRunnerTests
             Assert.False(json.GetProperty("index_matches_workspace").GetBoolean());
             Assert.Equal("workspace_stale", json.GetProperty("failed_checks")[0].GetString());
             var queryContext = json.GetProperty("query_context");
-            Assert.Equal(QueryCommandRunner.StatusCheckModeImpliedByStaleAfter, queryContext.GetProperty("check_mode").GetString());
+            Assert.Equal(expectedCheckMode, queryContext.GetProperty("check_mode").GetString());
             Assert.Equal(60, queryContext.GetProperty("stale_after_seconds").GetInt64());
         }
         finally
