@@ -362,7 +362,11 @@ public static partial class QueryCommandRunner
                         counts.FileCount,
                         query: options.Query,
                         queryOptions: options);
-                    AddGeneratedFileFilterJsonFields(payload, options, generatedFileCountExcluded);
+                    AddGeneratedFileFilterJsonFields(
+                        payload,
+                        options,
+                        generatedFileCountExcluded,
+                        reader.GeneratedFileFilterAvailable);
                     if (options.RawBytes)
                         AddFileCountBytesJsonFields(payload, counts);
                     return WriteJsonPayloadWithOptionalByteLimit(
@@ -496,9 +500,11 @@ public static partial class QueryCommandRunner
         return new(pathPatterns, excludePaths, ExcludeTests: true);
     }
 
-    private static int CountGeneratedFilesExcluded(DbReader reader, QueryCommandOptions options, FileListScopeFilters filesScope)
+    private static int? CountGeneratedFilesExcluded(DbReader reader, QueryCommandOptions options, FileListScopeFilters filesScope)
         => options.IncludeGenerated
             ? 0
+            : !reader.GeneratedFileFilterAvailable
+                ? null
             : reader.CountListFiles(
                 options.Query,
                 options.Lang,
@@ -508,10 +514,27 @@ public static partial class QueryCommandRunner
                 options.Since,
                 generatedOnly: true).Count;
 
-    private static void AddGeneratedFileFilterJsonFields(JsonObject payload, QueryCommandOptions options, int generatedFileCountExcluded)
+    private static void AddGeneratedFileFilterJsonFields(
+        JsonObject payload,
+        QueryCommandOptions options,
+        int? generatedFileCountExcluded,
+        bool generatedFileFilterAvailable)
     {
-        payload["generated_code_policy"] = options.IncludeGenerated ? "include" : "exclude";
+        var policy = options.IncludeGenerated
+            ? "include"
+            : generatedFileFilterAvailable
+                ? "exclude"
+                : "unavailable";
+        var authoritative = options.IncludeGenerated || generatedFileFilterAvailable;
+        payload["generated_code_policy"] = policy;
         payload["generated_file_count_excluded"] = generatedFileCountExcluded;
+        payload["generated_file_count_excluded_authoritative"] = authoritative;
+        payload["generated_file_filter_available"] = generatedFileFilterAvailable;
+        if (payload["query_context"] is JsonObject queryContext)
+        {
+            queryContext["generated_code_policy"] = policy;
+            queryContext["generated_file_filter_available"] = generatedFileFilterAvailable;
+        }
     }
 
     private static void AddFileCountBytesJsonFields(JsonObject payload, QueryCountResult counts)
@@ -656,8 +679,7 @@ public static partial class QueryCommandRunner
         if (options.JsonOutputFormat == JsonOutputFormatArray)
         {
             var bestJson = "[]";
-            var jsonByteLimit = maxJsonBytes - Encoding.UTF8.GetByteCount(Environment.NewLine);
-            if (!JsonFitsByteLimit(bestJson, jsonByteLimit))
+            if (!JsonFitsByteLimit(bestJson, maxJsonBytes))
             {
                 return WriteJsonObjectWithOptionalByteLimit(
                     bestJson,
@@ -672,8 +694,13 @@ public static partial class QueryCommandRunner
             while (low <= high)
             {
                 var mid = low + ((high - low) / 2);
-                var candidate = BuildDiscoveryRows(results, mid, rowFactory).ToJsonString(jsonNodeOptions);
-                if (JsonFitsByteLimit(candidate, jsonByteLimit))
+                var candidate = BuildDiscoveryRows(
+                    results,
+                    mid,
+                    rowFactory,
+                    exactSignal,
+                    addActiveSqliteDiagnostics: true).ToJsonString(jsonNodeOptions);
+                if (JsonFitsByteLimit(candidate, maxJsonBytes))
                 {
                     bestJson = candidate;
                     low = mid + 1;
@@ -692,9 +719,7 @@ public static partial class QueryCommandRunner
         var emittedRows = 0;
         foreach (var result in results)
         {
-            var node = rowFactory(result);
-            if (exactSignal.HasValue && node is JsonObject row)
-                AddExactJsonFields(row, exactSignal.Value);
+            var node = BuildDiscoveryRow(result, rowFactory, exactSignal, addActiveSqliteDiagnostics: true);
             var json = node?.ToJsonString(jsonNodeOptions) ?? "null";
             var rowBytes = Encoding.UTF8.GetByteCount(json) + newlineBytes;
             if (rowBytes > maxJsonBytes)
@@ -783,23 +808,50 @@ public static partial class QueryCommandRunner
             payload[resultsKey] = BuildDiscoveryRows(results, emittedRows, rowFactory);
         if (exactSignal.HasValue)
             AddExactJsonFields(payload, exactSignal.Value);
-        if (generatedFileCountExcluded.HasValue)
-            AddGeneratedFileFilterJsonFields(payload, options, generatedFileCountExcluded.Value);
         payload["query_context"] = BuildQueryContextJson(options, jsonOptions);
+        if (generatedFileCountExcluded.HasValue || !reader.GeneratedFileFilterAvailable)
+        {
+            AddGeneratedFileFilterJsonFields(
+                payload,
+                options,
+                generatedFileCountExcluded,
+                reader.GeneratedFileFilterAvailable);
+        }
         AddFreshnessHint(payload, reader);
         return payload;
     }
 
-    private static JsonArray BuildDiscoveryRows<T>(IReadOnlyList<T> results, int emittedRows, Func<T, JsonNode?> rowFactory)
+    private static JsonArray BuildDiscoveryRows<T>(
+        IReadOnlyList<T> results,
+        int emittedRows,
+        Func<T, JsonNode?> rowFactory,
+        ExactQuerySignal? exactSignal = null,
+        bool addActiveSqliteDiagnostics = false)
     {
         var rows = new JsonArray();
         for (var i = 0; i < emittedRows && i < results.Count; i++)
-            rows.Add(rowFactory(results[i]));
+            rows.Add(BuildDiscoveryRow(results[i], rowFactory, exactSignal, addActiveSqliteDiagnostics));
         return rows;
     }
 
+    private static JsonNode? BuildDiscoveryRow<T>(
+        T result,
+        Func<T, JsonNode?> rowFactory,
+        ExactQuerySignal? exactSignal,
+        bool addActiveSqliteDiagnostics)
+    {
+        var node = rowFactory(result);
+        if (node is not JsonObject row)
+            return node;
+        if (exactSignal.HasValue)
+            AddExactJsonFields(row, exactSignal.Value);
+        if (addActiveSqliteDiagnostics)
+            AddActiveSqliteDiagnostics(row);
+        return row;
+    }
+
     private static bool JsonFitsByteLimit(string json, int maxJsonBytes)
-        => Encoding.UTF8.GetByteCount(json) + Environment.NewLine.Length <= maxJsonBytes;
+        => Encoding.UTF8.GetByteCount(json) + Encoding.UTF8.GetByteCount(Environment.NewLine) <= maxJsonBytes;
 
     private static JsonNode? ToFileDiscoveryJsonNode(FileResult result, JsonSerializerOptions jsonOptions, bool compact)
     {

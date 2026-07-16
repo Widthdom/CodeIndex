@@ -1770,6 +1770,8 @@ public partial class DbReader : IDisposable
         return ExecuteFileCountSummary(cmd);
     }
 
+    public bool GeneratedFileFilterAvailable => _fileColumns.Contains("generated");
+
     private static QueryCountResult ExecuteFileCountSummary(SqliteCommand cmd)
     {
         using var reader = cmd.ExecuteTrackedReader();
