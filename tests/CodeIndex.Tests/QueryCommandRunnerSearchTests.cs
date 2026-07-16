@@ -10165,7 +10165,7 @@ jobs:
     }
 
     [Fact]
-    public void RunFind_AllScopeJsonArrayEmitsSingleArray_Issue3896()
+    public void RunFind_AllScopeJsonArrayRejectsMissingScanMetadata_Issues3896_4578()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_json_array_3896");
         try
@@ -10181,14 +10181,10 @@ jobs:
                 ["TODO", "--db", dbPath, "--all", "--json=array"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            var root = document.RootElement;
-            Assert.Equal(JsonValueKind.Array, root.ValueKind);
-            var result = Assert.Single(root.EnumerateArray());
-            Assert.Equal("src/todo.txt", result.GetProperty("path").GetString());
-            Assert.Equal(1, result.GetProperty("line").GetInt32());
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("streaming NDJSON", stderr, StringComparison.Ordinal);
+            Assert.Contains("scan authority and recovery metadata", stderr, StringComparison.Ordinal);
         }
         finally
         {
