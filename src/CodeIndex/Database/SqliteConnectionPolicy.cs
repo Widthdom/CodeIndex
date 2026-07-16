@@ -88,7 +88,11 @@ internal static class SqliteConnectionPolicy
         string? walCheckpointSkippedReason,
         string? walCheckpointFailureReason,
         bool walStaleSnapshotRisk,
-        string? walStaleSnapshotReason)
+        string? walStaleSnapshotReason,
+        long? walCheckpointBusy = null,
+        long? walCheckpointLogPageCount = null,
+        long? walCheckpointCheckpointedPageCount = null,
+        long? walCheckpointRemainingPageCount = null)
     {
         var mode = immutableReadOnly
             ? ImmutableReadOnlyUriModeName
@@ -109,6 +113,10 @@ internal static class SqliteConnectionPolicy
             ReadOnlyImmutableFallback = readOnlyImmutableFallback,
             WalCheckpointSkippedReason = walCheckpointSkippedReason,
             WalCheckpointFailureReason = walCheckpointFailureReason,
+            WalCheckpointBusy = walCheckpointBusy,
+            WalCheckpointLogPageCount = walCheckpointLogPageCount,
+            WalCheckpointCheckpointedPageCount = walCheckpointCheckpointedPageCount,
+            WalCheckpointRemainingPageCount = walCheckpointRemainingPageCount,
             WalStaleSnapshotRisk = walStaleSnapshotRisk,
             WalStaleSnapshotReason = walStaleSnapshotReason,
         };

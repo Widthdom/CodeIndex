@@ -56,6 +56,10 @@ public partial class DbReader : IDisposable
     private readonly bool _immutableReadOnly;
     private readonly string? _walCheckpointSkippedReason;
     private readonly string? _walCheckpointFailureReason;
+    private readonly long? _walCheckpointBusy;
+    private readonly long? _walCheckpointLogPageCount;
+    private readonly long? _walCheckpointCheckpointedPageCount;
+    private readonly long? _walCheckpointRemainingPageCount;
     private readonly DbSchemaCache? _schemaCache;
     private readonly CancellationToken _cancellation;
     private readonly HashSet<string> _fileColumns;
@@ -407,7 +411,11 @@ public partial class DbReader : IDisposable
                context.ReadOnlyImmutableFallback,
                context.ImmutableReadOnly,
                context.WalCheckpointSkippedReason,
-               context.WalCheckpointFailureReason)
+               context.WalCheckpointFailureReason,
+               context.WalCheckpointBusy,
+               context.WalCheckpointLogPageCount,
+               context.WalCheckpointCheckpointedPageCount,
+               context.WalCheckpointRemainingPageCount)
     {
     }
 
@@ -429,7 +437,11 @@ public partial class DbReader : IDisposable
                context.ReadOnlyImmutableFallback,
                context.ImmutableReadOnly,
                context.WalCheckpointSkippedReason,
-               context.WalCheckpointFailureReason)
+               context.WalCheckpointFailureReason,
+               context.WalCheckpointBusy,
+               context.WalCheckpointLogPageCount,
+               context.WalCheckpointCheckpointedPageCount,
+               context.WalCheckpointRemainingPageCount)
     {
     }
 
@@ -467,7 +479,11 @@ public partial class DbReader : IDisposable
         bool readOnlyImmutableFallback = false,
         bool immutableReadOnly = false,
         string? walCheckpointSkippedReason = null,
-        string? walCheckpointFailureReason = null)
+        string? walCheckpointFailureReason = null,
+        long? walCheckpointBusy = null,
+        long? walCheckpointLogPageCount = null,
+        long? walCheckpointCheckpointedPageCount = null,
+        long? walCheckpointRemainingPageCount = null)
     {
         _conn = connection;
         _commandCache = commandCache;
@@ -485,6 +501,10 @@ public partial class DbReader : IDisposable
         _immutableReadOnly = immutableReadOnly;
         _walCheckpointSkippedReason = walCheckpointSkippedReason;
         _walCheckpointFailureReason = walCheckpointFailureReason;
+        _walCheckpointBusy = walCheckpointBusy;
+        _walCheckpointLogPageCount = walCheckpointLogPageCount;
+        _walCheckpointCheckpointedPageCount = walCheckpointCheckpointedPageCount;
+        _walCheckpointRemainingPageCount = walCheckpointRemainingPageCount;
         _schemaCache = schemaCache;
         _cancellation = cancellation;
         _fileColumns = LoadColumns("files");
@@ -1020,6 +1040,19 @@ public partial class DbReader : IDisposable
     public bool WalStaleSnapshotRisk => _immutableReadOnly && !_walCheckpointSucceeded;
     public string? WalCheckpointSkippedReason => _walCheckpointSkippedReason;
     public string? WalCheckpointFailureReason => _walCheckpointFailureReason;
+    public long? WalCheckpointBusy => _walCheckpointBusy;
+    public long? WalCheckpointLogPageCount => _walCheckpointLogPageCount;
+    public long? WalCheckpointCheckpointedPageCount => _walCheckpointCheckpointedPageCount;
+    public long? WalCheckpointRemainingPageCount => _walCheckpointRemainingPageCount;
+    public WalCheckpointResult LastWalCheckpointResult => new(
+        _walCheckpointAttempted,
+        _walCheckpointSucceeded,
+        _walCheckpointBusy,
+        _walCheckpointLogPageCount,
+        _walCheckpointCheckpointedPageCount,
+        _walCheckpointRemainingPageCount,
+        _walCheckpointSkippedReason,
+        _walCheckpointFailureReason);
     public string? WalStaleSnapshotReason => WalStaleSnapshotRisk
         ? _walCheckpointSkippedReason
           ?? _walCheckpointFailureReason

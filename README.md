@@ -177,8 +177,18 @@ fields, including readiness fields and runtime diagnostics such as
 | Version and forward compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`. |
 | Unknown-extension and runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `process`, `last_index_run`, `last_workspace_freshened_at`, `last_index_run.bytes_read_skipped_file_count`, `last_index_run.bytes_read_incomplete`, `last_index_run.diagnostics`, `last_index_run.diagnostic_count`, `last_index_run.diagnostics_truncated`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`. |
 | Database maintenance | `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `busy_timeout_ms`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `prepared_command_cache` (`count`, `capacity`, `hit_count`, `miss_count`, `eviction_count`), `maintenance_guidance`. |
+| WAL checkpoint diagnostics | `read_only_fallback`, `wal_checkpoint_attempted`, `wal_checkpoint_succeeded`, `wal_checkpoint_skipped_reason`, `wal_checkpoint_failure_reason`, `wal_checkpoint_busy`, `wal_checkpoint_log_page_count`, `wal_checkpoint_checkpointed_page_count`, `wal_checkpoint_remaining_page_count`, `read_only_immutable_fallback`, `wal_stale_snapshot_risk`, `wal_stale_snapshot_reason`. |
 | Remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`. |
 | MCP-only session diagnostics | `mcp_session`, `mcp_session.metrics`, `mcp_session.audit_log`, `mcp.rate_limit.bucket_limit`, `mcp.rate_limit.bucket_limit_rejection_count`. |
+
+Explicit `PRAGMA wal_checkpoint(TRUNCATE)` calls read SQLite's `(busy, log,
+checkpointed)` result row. A non-zero `busy` value or positive remaining page
+count makes `wal_checkpoint_succeeded=false`, with the bounded reasons
+`checkpoint_busy` or `checkpoint_pages_remaining`; the count fields preserve
+the relevant evidence. SQLite's `(0, -1, -1)` response for a non-WAL database
+is a successful no-op with zero remaining pages. SQLite errors are reduced to
+stable machine reasons such as `sqlite_read_only` and never expose raw
+exception text or paths.
 
 Full MCP status always includes `mcp_session.metrics`; an unconfigured sink is
 `{"enabled":false}`. An enabled object reports `enabled`, `path`, `max_bytes`,
@@ -439,8 +449,18 @@ readiness field に加えて、`path_case_sensitive` などの runtime diagnosti
 | version / forward compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`。 |
 | unknown-extension / runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `process`, `last_index_run`, `last_workspace_freshened_at`, `last_index_run.bytes_read_skipped_file_count`, `last_index_run.bytes_read_incomplete`, `last_index_run.diagnostics`, `last_index_run.diagnostic_count`, `last_index_run.diagnostics_truncated`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`。 |
 | database maintenance | `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `busy_timeout_ms`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `prepared_command_cache` (`count`, `capacity`, `hit_count`, `miss_count`, `eviction_count`), `maintenance_guidance`。 |
+| WAL checkpoint diagnostics | `read_only_fallback`、`wal_checkpoint_attempted`、`wal_checkpoint_succeeded`、`wal_checkpoint_skipped_reason`、`wal_checkpoint_failure_reason`、`wal_checkpoint_busy`、`wal_checkpoint_log_page_count`、`wal_checkpoint_checkpointed_page_count`、`wal_checkpoint_remaining_page_count`、`read_only_immutable_fallback`、`wal_stale_snapshot_risk`、`wal_stale_snapshot_reason`。 |
 | remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`。 |
 | MCP-only session diagnostics | `mcp_session`, `mcp_session.metrics`, `mcp_session.audit_log`, `mcp.rate_limit.bucket_limit`, `mcp.rate_limit.bucket_limit_rejection_count`。 |
+
+明示的な `PRAGMA wal_checkpoint(TRUNCATE)` は SQLite の `(busy, log,
+checkpointed)` 結果行を読み取ります。`busy` が 0 以外、または未 checkpoint
+page 数が正の場合は `wal_checkpoint_succeeded=false` とし、上限付きの
+`checkpoint_busy` または `checkpoint_pages_remaining` を理由として返します。
+関連する件数は count field に保持されます。非 WAL database に対する SQLite の
+`(0, -1, -1)` は remaining page が 0 の成功した no-op として扱います。SQLite
+error は `sqlite_read_only` など安定した machine reason に変換し、raw exception
+text や path は公開しません。
 
 MCP の full status は常に `mcp_session.metrics` を含み、sink が未設定なら
 `{"enabled":false}` になります。有効な object は `enabled`、`path`、`max_bytes`、

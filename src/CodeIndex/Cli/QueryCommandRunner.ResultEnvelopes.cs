@@ -391,6 +391,14 @@ public static partial class QueryCommandRunner
             payload["wal_checkpoint_skipped_reason"] = reader.WalCheckpointSkippedReason;
         if (reader.WalCheckpointFailureReason != null)
             payload["wal_checkpoint_failure_reason"] = reader.WalCheckpointFailureReason;
+        if (reader.WalCheckpointBusy != null)
+            payload["wal_checkpoint_busy"] = reader.WalCheckpointBusy;
+        if (reader.WalCheckpointLogPageCount != null)
+            payload["wal_checkpoint_log_page_count"] = reader.WalCheckpointLogPageCount;
+        if (reader.WalCheckpointCheckpointedPageCount != null)
+            payload["wal_checkpoint_checkpointed_page_count"] = reader.WalCheckpointCheckpointedPageCount;
+        if (reader.WalCheckpointRemainingPageCount != null)
+            payload["wal_checkpoint_remaining_page_count"] = reader.WalCheckpointRemainingPageCount;
         payload["wal_stale_snapshot_risk"] = reader.WalStaleSnapshotRisk;
         if (reader.WalStaleSnapshotReason != null)
             payload["wal_stale_snapshot_reason"] = reader.WalStaleSnapshotReason;
