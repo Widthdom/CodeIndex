@@ -3063,10 +3063,13 @@ public partial class QueryCommandRunnerTests
             var (filesExit, filesStdout, filesStderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
                 ["--db", options.DbPath, "--json", "--limit", "1"],
                 _jsonOptions));
-            using var filesDocument = ParseJsonOutput(filesStdout);
+            var filesLines = filesStdout.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(2, filesLines.Length);
+            using var filesDone = JsonDocument.Parse(filesLines[1]);
             Assert.Equal(CommandExitCodes.Success, filesExit);
             Assert.Equal(string.Empty, filesStderr);
-            Assert.True(filesDocument.RootElement.GetProperty("wal_stale_snapshot_risk").GetBoolean());
+            Assert.True(filesDone.RootElement.GetProperty("terminal_record").GetBoolean());
+            Assert.True(filesDone.RootElement.GetProperty("wal_stale_snapshot_risk").GetBoolean());
 
             var (outlineExit, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
                 ["src/app.cs", "--db", options.DbPath, "--json"],

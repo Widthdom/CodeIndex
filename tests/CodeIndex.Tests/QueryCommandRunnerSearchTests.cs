@@ -4923,7 +4923,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSearch_NdjsonByteCapMarksDoneFalseWhenInterrupted_Issue3904()
+    public void RunSearch_NdjsonByteCapReportsPartialOrRejectsUndersizedTerminal_Issues3904_4561()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_ndjson_byte_cap");
         try
@@ -4936,13 +4936,14 @@ public partial class QueryCommandRunnerTests
                 "public sealed class TokenStore { private string token = \"secret\"; }");
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["token", "--db", dbPath, "--json=ndjson", "--max-json-bytes", "1"],
+                ["token", "--db", dbPath, "--json=ndjson", "--max-json-bytes", "600"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal(string.Empty, stderr);
             var done = Assert.Single(ParseJsonLines(stdout)).RootElement;
 
+            Assert.True(done.GetProperty("terminal_record").GetBoolean());
             Assert.False(done.GetProperty("done").GetBoolean());
             Assert.True(done.GetProperty("interrupted").GetBoolean());
             Assert.Equal(0, done.GetProperty("count").GetInt32());
@@ -4951,13 +4952,9 @@ public partial class QueryCommandRunnerTests
                 ["MissingToken", "--db", dbPath, "--json=ndjson", "--max-json-bytes", "1"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, zeroExitCode);
-            Assert.Equal(string.Empty, zeroStderr);
-            var zeroDone = Assert.Single(ParseJsonLines(zeroStdout)).RootElement;
-
-            Assert.False(zeroDone.GetProperty("done").GetBoolean());
-            Assert.True(zeroDone.GetProperty("interrupted").GetBoolean());
-            Assert.Equal(0, zeroDone.GetProperty("count").GetInt32());
+            Assert.Equal(CommandExitCodes.UsageError, zeroExitCode);
+            Assert.Equal(string.Empty, zeroStdout);
+            Assert.Contains("terminal record", zeroStderr, StringComparison.Ordinal);
         }
         finally
         {
