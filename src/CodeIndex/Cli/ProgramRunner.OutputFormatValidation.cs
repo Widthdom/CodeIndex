@@ -15,6 +15,11 @@ internal static partial class ProgramRunner
             return true;
 
         var commandName = args[0];
+        // Suggestions owns a structured JSON usage-error contract for export format conflicts.
+        // Let its command runner validate the combination after it has parsed the export verb.
+        if (string.Equals(commandName, "suggestions", StringComparison.Ordinal))
+            return true;
+
         string? outputFormat = null;
         string? jsonStreamMode = null;
         var jsonRequested = false;
