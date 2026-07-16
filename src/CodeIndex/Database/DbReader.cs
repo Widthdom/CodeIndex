@@ -58,12 +58,12 @@ public partial class DbReader : IDisposable
     private readonly string? _walCheckpointFailureReason;
     private readonly DbSchemaCache? _schemaCache;
     private readonly CancellationToken _cancellation;
-    private readonly HashSet<string> _fileColumns;
-    private readonly HashSet<string> _symbolColumns;
-    private readonly HashSet<string> _referenceColumns;
-    private readonly HashSet<string> _chunkIndexes;
-    private readonly HashSet<string> _symbolIndexes;
-    private readonly HashSet<string> _referenceIndexes;
+    private readonly IReadOnlySet<string> _fileColumns;
+    private readonly IReadOnlySet<string> _symbolColumns;
+    private readonly IReadOnlySet<string> _referenceColumns;
+    private readonly IReadOnlySet<string> _chunkIndexes;
+    private readonly IReadOnlySet<string> _symbolIndexes;
+    private readonly IReadOnlySet<string> _referenceIndexes;
     private readonly HashSet<string> _indexedHotspotFamilyLanguages;
     private readonly Dictionary<string, List<CSharpUsingStaticScope>> _csharpUsingStaticScopesByPath = new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<CSharpNamespaceScope>> _csharpNamespaceScopesByPath = new(StringComparer.Ordinal);
@@ -88,7 +88,7 @@ public partial class DbReader : IDisposable
     internal readonly bool _hasChunksTable;
     internal readonly bool _hasReferenceLinesTable;
     internal readonly bool _canUseReferenceLines;
-    private readonly HashSet<string> _issueColumns;
+    private readonly IReadOnlySet<string> _issueColumns;
     public bool IncludeGenerated { get; set; }
     private static readonly AsyncLocal<bool> IncludeGeneratedScope = new();
     private static readonly AsyncLocal<bool> GeneratedColumnAvailableScope = new();
@@ -834,7 +834,7 @@ public partial class DbReader : IDisposable
         return DegradationReasonCodes.GetMetadata(DegradationReasonCodes.HotspotFamilySupportNotIndexed).RecommendedAction;
     }
 
-    private HashSet<string> LoadIndexes(string tableName)
+    private IReadOnlySet<string> LoadIndexes(string tableName)
     {
         if (_schemaCache != null)
             return _schemaCache.GetIndexes(tableName);
@@ -1748,7 +1748,7 @@ public partial class DbReader : IDisposable
 
 
 
-    private HashSet<string> LoadColumns(string tableName)
+    private IReadOnlySet<string> LoadColumns(string tableName)
     {
         if (_schemaCache != null)
             return _schemaCache.GetColumns(tableName);
