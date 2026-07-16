@@ -420,8 +420,12 @@ public class ProgramRunnerTests
         }
     }
 
-    [Fact]
-    public void RunSearch_NdjsonWithPretty_ReturnsUsageError_Issues2996And4562()
+    [Theory]
+    [InlineData("--json", false)]
+    [InlineData("--json", true)]
+    [InlineData("--json=ndjson", false)]
+    [InlineData("--json=ndjson", true)]
+    public void RunSearch_NdjsonWithPretty_ReturnsUsageError_Issues2996And4562(string jsonFlag, bool prettyBeforeCommand)
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_pretty_ndjson");
         try
@@ -433,14 +437,80 @@ public class ProgramRunnerTests
                 "csharp",
                 "class App { void Needle() {} }\n");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
-                ["search", "Needle", "--db", dbPath, "--json=ndjson", "--pretty"],
-                appVersion: "1.10.0"));
+            var args = prettyBeforeCommand
+                ? new[] { "--pretty", "search", "Needle", "--db", dbPath, jsonFlag }
+                : new[] { "search", "Needle", "--db", dbPath, jsonFlag, "--pretty" };
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(args, appVersion: "1.10.0"));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Empty(stdout);
-            Assert.Contains("--pretty cannot be combined with --json=ndjson", stderr, StringComparison.Ordinal);
+            Assert.Contains($"--pretty cannot be combined with {jsonFlag}", stderr, StringComparison.Ordinal);
             Assert.Contains("Usage: cdidx search", stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("--json")]
+    [InlineData("--json=ndjson")]
+    public void RunSearch_NdjsonWithOwnSchemaFormat_ReturnsUsageError_Issue4562(string jsonFlag)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["search", "Needle", "--format", "compact", jsonFlag],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains($"{jsonFlag} cannot be combined with --format compact", stderr, StringComparison.Ordinal);
+        Assert.Contains("Usage: cdidx search", stderr, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("--json")]
+    [InlineData("--json=array")]
+    public void RunSearch_DashPrefixedQueryValueIsNotTreatedAsOutputFlag_Issue4562(string query)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_output_query_literal_4562");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "--query", query, "--db", dbPath, "--format", "csv"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            Assert.StartsWith("file,line,column", stdout, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_CountJsonPrettyRemainsSingleDocument_Issue4562()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_output_count_pretty_4562");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class Needle { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "Needle", "--db", dbPath, "--count", "--json", "--pretty"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            Assert.Contains(Environment.NewLine + "  \"count\": 1", stdout, StringComparison.Ordinal);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
         }
         finally
         {

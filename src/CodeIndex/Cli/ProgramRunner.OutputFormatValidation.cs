@@ -11,10 +11,10 @@ internal static partial class ProgramRunner
         error = string.Empty;
         hint = string.Empty;
         usage = string.Empty;
-        if (args.Length < 2)
+        if (args.Length < 2
+            || !TryResolveOutputValidationCommand(args, out _, out var commandName))
             return true;
 
-        var commandName = args[0];
         // Suggestions owns a structured JSON usage-error contract for export format conflicts.
         // Let its command runner validate the combination after it has parsed the export verb.
         if (string.Equals(commandName, "suggestions", StringComparison.Ordinal))
@@ -22,24 +22,42 @@ internal static partial class ProgramRunner
 
         string? outputFormat = null;
         string? jsonStreamMode = null;
+        string? jsonStreamOption = null;
         var jsonRequested = false;
         var prettyRequested = false;
+        var usesSingleDocumentSearchMode = false;
 
-        for (var i = 1; i < args.Length; i++)
+        for (var i = 0; i < args.Length; i++)
         {
             var arg = args[i];
             if (arg == "--")
                 break;
+            var tokenRole = GetQueryCommandTokenRole(args, i);
+
+            if (string.Equals(commandName, "search", StringComparison.Ordinal)
+                && tokenRole != QueryCommandTokenRole.CommandOptionValue
+                && (arg is "--count" or "--count-by" or "--named-query" or "--list-recipes"
+                    || arg.StartsWith("--count-by=", StringComparison.Ordinal)
+                    || arg.StartsWith("--named-query=", StringComparison.Ordinal)))
+            {
+                usesSingleDocumentSearchMode = true;
+            }
 
             if (arg == "--json")
             {
+                if (tokenRole == QueryCommandTokenRole.CommandOptionValue)
+                    continue;
                 jsonRequested = true;
+                jsonStreamOption = "--json";
                 continue;
             }
             if (arg.StartsWith("--json=", StringComparison.Ordinal))
             {
+                if (tokenRole == QueryCommandTokenRole.CommandOptionValue)
+                    continue;
                 jsonRequested = true;
                 jsonStreamMode = arg["--json=".Length..].ToLowerInvariant();
+                jsonStreamOption = arg;
                 continue;
             }
             if (arg == "--pretty")
@@ -50,15 +68,27 @@ internal static partial class ProgramRunner
             }
             if (arg.StartsWith("--format=", StringComparison.Ordinal))
             {
+                if (tokenRole == QueryCommandTokenRole.CommandOptionValue)
+                    continue;
                 outputFormat = arg["--format=".Length..].ToLowerInvariant();
                 continue;
             }
             if (arg == "--format"
+                && tokenRole != QueryCommandTokenRole.CommandOptionValue
                 && i + 1 < args.Length
                 && !args[i + 1].StartsWith("-", StringComparison.Ordinal))
             {
                 outputFormat = args[++i].ToLowerInvariant();
             }
+        }
+
+        if (jsonRequested
+            && jsonStreamMode == null
+            && string.Equals(commandName, "search", StringComparison.Ordinal)
+            && !usesSingleDocumentSearchMode)
+        {
+            jsonStreamMode = "ndjson";
+            jsonStreamOption = "--json";
         }
 
         if (jsonRequested
@@ -77,15 +107,17 @@ internal static partial class ProgramRunner
             && CliOutputFormatCapabilities.TryGet(outputFormat, out var streamCapability)
             && !streamCapability.SupportsJsonStreamMode)
         {
-            error = $"--json={jsonStreamMode} cannot be combined with --format {outputFormat} because that format defines its own output schema.";
-            hint = $"remove --json={jsonStreamMode} to keep --format {outputFormat}, or use --format json.";
+            var streamOption = jsonStreamOption ?? $"--json={jsonStreamMode}";
+            error = $"{streamOption} cannot be combined with --format {outputFormat} because that format defines its own output schema.";
+            hint = $"remove {streamOption} to keep --format {outputFormat}, or use --format json.";
             usage = ConsoleUi.GetUsageLine(commandName) ?? $"cdidx {commandName} --help";
             return false;
         }
 
         if (prettyRequested && string.Equals(jsonStreamMode, "ndjson", StringComparison.Ordinal))
         {
-            error = "--pretty cannot be combined with --json=ndjson because NDJSON requires one JSON value per line.";
+            var streamOption = jsonStreamOption ?? "--json=ndjson";
+            error = $"--pretty cannot be combined with {streamOption} because NDJSON requires one JSON value per line.";
             hint = "use --json=array --pretty for one indented JSON array, or remove --pretty to keep streaming NDJSON.";
             usage = ConsoleUi.GetUsageLine(commandName) ?? $"cdidx {commandName} --help";
             return false;
@@ -103,5 +135,45 @@ internal static partial class ProgramRunner
         }
 
         return true;
+    }
+
+    private static bool TryResolveOutputValidationCommand(
+        string[] args,
+        out int commandIndex,
+        out string commandName)
+    {
+        commandIndex = -1;
+        commandName = string.Empty;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (arg == "--")
+                return false;
+            if (CliFlagSchema.AllCommands.Contains(arg))
+            {
+                commandIndex = i;
+                commandName = arg;
+                return true;
+            }
+
+            if (TryGetInlineOptionName(arg, out var inlineName)
+                && (TopLevelValueOptionNames.Contains(inlineName)
+                    || NonLogGlobalOptionNames.Contains(inlineName)))
+            {
+                continue;
+            }
+            if (TopLevelValueOptionNames.Contains(arg))
+            {
+                i++;
+                continue;
+            }
+            if (NonLogGlobalOptionNames.Contains(arg))
+                continue;
+
+            return false;
+        }
+
+        return false;
     }
 }

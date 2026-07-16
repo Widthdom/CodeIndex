@@ -1471,6 +1471,24 @@ public class ProgramCliTests
     }
 
     [ProductionRuntimeFact]
+    public void Suggestions_PreCommandPrettyPreservesStructuredFormatError_Issue4562()
+    {
+        using var fixture = SuggestionFixture.Create();
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+            "--pretty", "suggestions", "export", "--db", fixture.DbPath, "--format", "markdown", "--json"
+        ]);
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        var root = doc.RootElement;
+        Assert.Equal("error", root.GetProperty("status").GetString());
+        Assert.Contains("--format markdown", root.GetProperty("message").GetString());
+        Assert.Contains("--format json", root.GetProperty("hint").GetString());
+    }
+
+    [ProductionRuntimeFact]
     public void Suggestions_ExportJsonCapsDetailedBodyFields()
     {
         using var fixture = SuggestionFixture.Create();
