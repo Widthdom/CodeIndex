@@ -827,6 +827,7 @@ public class DatabaseTests : IDisposable
     [InlineData("join_condition_reference")]
     [InlineData("lifetime_reference")]
     [InlineData("subscribe")]
+    [InlineData("type_tag")]
     [InlineData("implicit_implementation")]
     public void InsertReferences_ExistingReferenceKinds_AreAccepted(string referenceKind)
     {
