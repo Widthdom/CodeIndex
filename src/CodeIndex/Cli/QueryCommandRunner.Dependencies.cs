@@ -1584,8 +1584,12 @@ public static partial class QueryCommandRunner
 
     private static List<FileDependencyResult> GetCrossDatabaseFileDependencies(string sourceDbPath, string targetDbPath, QueryCommandOptions options, bool reverse, int limit)
     {
-        using var sourceDb = new DbContext(DbOpenIntent.QueryOnly, sourceDbPath);
+        // Declare the target first so reverse-order disposal closes the source ATTACH handle
+        // before the target context attempts to delete its private snapshot on Windows.
+        // target を先に宣言し、Windows で private snapshot を削除する前に source の
+        // ATTACH handle が reverse-order disposal で閉じられるようにする。
         using var targetDb = new DbContext(DbOpenIntent.QueryOnly, targetDbPath);
+        using var sourceDb = new DbContext(DbOpenIntent.QueryOnly, sourceDbPath);
         var connection = sourceDb.Connection;
         // Keep the target context alive for the whole attached query. WAL-backed targets may
         // resolve to a private artifact-preserving snapshot whose cleanup is owned by that

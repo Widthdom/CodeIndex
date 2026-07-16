@@ -4671,17 +4671,29 @@ public partial class QueryCommandRunnerTests
 
         Assert.True(new FileInfo(memberDb + "-wal").Length > 0);
         var expectedArtifacts = CaptureDatabaseArtifacts(memberDb);
+        var snapshotDirectories = new List<string>();
+        var originalDirectoryHook = DbConnectionFactory.QueryOnlySnapshotDirectoryCreatedForTesting;
+        try
+        {
+            DbConnectionFactory.QueryOnlySnapshotDirectoryCreatedForTesting = snapshotDirectories.Add;
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10", "--lang", "csharp"],
+                _jsonOptions));
 
-        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-            ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10", "--lang", "csharp"],
-            _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var edge = Assert.Single(document.RootElement.GetProperty("edges").EnumerateArray());
+            Assert.Equal("src/HotWalTarget.cs", edge.GetProperty("target_path").GetString());
+            Assert.Equal(expectedArtifacts, CaptureDatabaseArtifacts(memberDb));
+        }
+        finally
+        {
+            DbConnectionFactory.QueryOnlySnapshotDirectoryCreatedForTesting = originalDirectoryHook;
+        }
 
-        Assert.Equal(CommandExitCodes.Success, exitCode);
-        Assert.Equal(string.Empty, stderr);
-        using var document = ParseJsonOutput(stdout);
-        var edge = Assert.Single(document.RootElement.GetProperty("edges").EnumerateArray());
-        Assert.Equal("src/HotWalTarget.cs", edge.GetProperty("target_path").GetString());
-        Assert.Equal(expectedArtifacts, CaptureDatabaseArtifacts(memberDb));
+        Assert.NotEmpty(snapshotDirectories);
+        Assert.All(snapshotDirectories, path => Assert.False(Directory.Exists(path), path));
     }
 
     [Fact]

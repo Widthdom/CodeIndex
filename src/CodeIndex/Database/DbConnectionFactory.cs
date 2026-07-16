@@ -10,6 +10,8 @@ internal static class DbConnectionFactory
 {
     private static readonly AsyncLocal<Func<string, SqliteConnection>?> ScopedOpenReadOnlyForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedQueryOnlySnapshotCapturedForTesting = new();
+    private static readonly AsyncLocal<Action<string>?> ScopedQueryOnlySnapshotDirectoryCreatedForTesting = new();
+    private static readonly AsyncLocal<Action<string, string>?> ScopedQueryOnlySnapshotFileCopyingForTesting = new();
 
     internal static Func<string, SqliteConnection>? OpenReadOnlyForTesting
     {
@@ -22,6 +24,20 @@ internal static class DbConnectionFactory
         get => ScopedQueryOnlySnapshotCapturedForTesting.Value;
         set => ScopedQueryOnlySnapshotCapturedForTesting.Value = value;
     }
+
+    internal static Action<string>? QueryOnlySnapshotDirectoryCreatedForTesting
+    {
+        get => ScopedQueryOnlySnapshotDirectoryCreatedForTesting.Value;
+        set => ScopedQueryOnlySnapshotDirectoryCreatedForTesting.Value = value;
+    }
+
+    internal static Action<string, string>? QueryOnlySnapshotFileCopyingForTesting
+    {
+        get => ScopedQueryOnlySnapshotFileCopyingForTesting.Value;
+        set => ScopedQueryOnlySnapshotFileCopyingForTesting.Value = value;
+    }
+
+    internal const string QueryOnlySnapshotCopyFailedCode = "query_only_snapshot_copy_failed";
 
     private const int SqliteCantOpen = 14;
     private const int SqliteCantOpenDirtyWal = SqliteCantOpen | (5 << 8);
@@ -330,9 +346,19 @@ internal static class DbConnectionFactory
                     else if (File.Exists(snapshotWalPath))
                         File.Delete(snapshotWalPath);
                 }
-                catch (IOException)
+                catch (QueryOnlySnapshotSourceChangedException)
                 {
                     continue;
+                }
+                catch (IOException ex)
+                {
+                    throw new CodeIndexException(
+                        QueryOnlySnapshotCopyFailedCode,
+                        CodeIndexExceptionCategory.Filesystem,
+                        "Query-only open could not copy the database into a private temporary snapshot.",
+                        path: localDbPath,
+                        hint: "Check temporary-storage capacity and permissions, then retry or query a SQLite backup snapshot.",
+                        innerException: ex);
                 }
 
                 if (TryCaptureQueryOnlySnapshotState(snapshotDbPath, cancellationToken, out var copied)
@@ -348,6 +374,7 @@ internal static class DbConnectionFactory
                             ? SqliteConnectionPolicyMode.ReadOnlyUnpooled
                             : SqliteConnectionPolicyMode.ImmutableReadOnlyUriUnpooled));
                     AttachSnapshotCleanup(connection, snapshotDirectory.FullName);
+                    QueryOnlySnapshotDirectoryCreatedForTesting?.Invoke(snapshotDirectory.FullName);
                     return connection;
                 }
             }
@@ -370,21 +397,32 @@ internal static class DbConnectionFactory
     private static void CopySnapshotFile(string sourcePath, string destinationPath, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using (var source = new FileStream(
-                   sourcePath,
-                   FileMode.Open,
-                   FileAccess.Read,
-                   FileShare.ReadWrite | FileShare.Delete,
-                   bufferSize: 1024 * 1024,
-                   FileOptions.Asynchronous | FileOptions.SequentialScan))
-        using (var destination = new FileStream(
-                   destinationPath,
-                   FileMode.Create,
-                   FileAccess.Write,
-                   FileShare.None,
-                   bufferSize: 1024 * 1024,
-                   FileOptions.Asynchronous | FileOptions.SequentialScan))
+        FileStream source;
+        try
         {
+            source = new FileStream(
+                sourcePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                bufferSize: 1024 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            throw new QueryOnlySnapshotSourceChangedException(ex);
+        }
+
+        using (source)
+        {
+            QueryOnlySnapshotFileCopyingForTesting?.Invoke(sourcePath, destinationPath);
+            using var destination = new FileStream(
+                destinationPath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 1024 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
             source.CopyToAsync(destination, 1024 * 1024, cancellationToken).GetAwaiter().GetResult();
             destination.Flush();
         }
@@ -573,6 +611,9 @@ internal static class DbConnectionFactory
         long WalLength,
         string? WalHeaderFingerprint,
         string? WalLastFrameFingerprint);
+
+    private sealed class QueryOnlySnapshotSourceChangedException(Exception innerException)
+        : IOException("The query-only snapshot source disappeared while it was being copied.", innerException);
 
     internal static bool IsTransientBusyError(SqliteException ex) =>
         ex.SqliteErrorCode is 5 or 6;

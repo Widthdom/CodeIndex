@@ -258,6 +258,52 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void QueryOnlySnapshot_ReportsPersistentCopyFailureWithoutRetrying_Issue4557()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_only_snapshot_copy_failure_issue4557");
+        var originalCopyHook = DbConnectionFactory.QueryOnlySnapshotFileCopyingForTesting;
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            SqliteConnection.ClearAllPools();
+            using var writer = new SqliteConnection(
+                new SqliteConnectionStringBuilder { DataSource = dbPath, Pooling = false }.ConnectionString);
+            writer.Open();
+            using (var setup = writer.CreateCommand())
+            {
+                setup.CommandText = "PRAGMA journal_mode=WAL; PRAGMA wal_checkpoint(TRUNCATE)";
+                _ = setup.ExecuteScalar();
+                setup.CommandText = "INSERT OR REPLACE INTO codeindex_meta(key, value) VALUES ('issue4557_copy_failure', 'visible')";
+                Assert.Equal(1, setup.ExecuteNonQuery());
+            }
+            Assert.True(new FileInfo(dbPath + "-wal").Length > 0);
+
+            var copyAttempts = 0;
+            DbConnectionFactory.QueryOnlySnapshotFileCopyingForTesting = (_, _) =>
+            {
+                Interlocked.Increment(ref copyAttempts);
+                throw new IOException("injected destination copy failure");
+            };
+
+            var error = Assert.Throws<CodeIndexException>(() =>
+                new DbContext(DbOpenIntent.QueryOnly, dbPath));
+
+            Assert.Equal(DbConnectionFactory.QueryOnlySnapshotCopyFailedCode, error.Code);
+            Assert.Equal(CodeIndexExceptionCategory.Filesystem, error.Category);
+            Assert.Contains("temporary-storage capacity", error.Hint, StringComparison.Ordinal);
+            Assert.DoesNotContain("injected destination copy failure", error.Message, StringComparison.Ordinal);
+            Assert.IsType<IOException>(error.InnerException);
+            Assert.Equal(1, copyAttempts);
+        }
+        finally
+        {
+            DbConnectionFactory.QueryOnlySnapshotFileCopyingForTesting = originalCopyHook;
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     private static Dictionary<string, (long Length, DateTime LastWriteTimeUtc, string Sha256)> CaptureDatabaseArtifacts(string dbPath)
     {
         var result = new Dictionary<string, (long, DateTime, string)>(StringComparer.Ordinal);
