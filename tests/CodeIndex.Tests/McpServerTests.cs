@@ -1466,6 +1466,74 @@ public sealed class Caller
         }
     }
 
+    [Fact]
+    public void StatusAndPing_ReportMetricsDiagnosticsWithoutChangingLiveness_Issue4552()
+    {
+        var metricsPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_metrics_diag_{Guid.NewGuid():N}.jsonl");
+        MetricsSink.Session? metricsSession = null;
+        try
+        {
+            metricsSession = MetricsSink.TryStartForTesting(
+                metricsPath,
+                maxBytes: 1024 * 1024,
+                queueCapacity: 4,
+                retryDelay: static (_, _) => Task.CompletedTask);
+            Assert.NotNull(metricsSession);
+            File.Delete(metricsPath);
+            Directory.CreateDirectory(metricsPath);
+            MetricsSink.Record(new MetricsEvent(
+                DateTimeOffset.UtcNow,
+                "seed-failure",
+                "mcp",
+                ElapsedMs: 1,
+                ExitCode: 0));
+            Assert.True(metricsSession.WaitForIdle(TimeSpan.FromSeconds(5)));
+            using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false);
+
+            var status = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+            var statusResponse = server.HandleMessage(status)!;
+            var statusMetrics = statusResponse["result"]!["structuredContent"]!["mcp_session"]!["metrics"]!;
+
+            Assert.True(statusMetrics["enabled"]!.GetValue<bool>());
+            Assert.Equal(metricsPath, statusMetrics["path"]!.GetValue<string>());
+            Assert.Equal(1024 * 1024, statusMetrics["max_bytes"]!.GetValue<long>());
+            Assert.Equal(0, statusMetrics["bytes_written"]!.GetValue<long>());
+            Assert.False(statusMetrics["disposed"]!.GetValue<bool>());
+            Assert.True(statusMetrics["degraded"]!.GetValue<bool>());
+            Assert.Equal(4, statusMetrics["queue_capacity"]!.GetValue<int>());
+            Assert.Equal(0, statusMetrics["queue_depth"]!.GetValue<long>());
+            Assert.Equal(1, statusMetrics["queued_event_count"]!.GetValue<long>());
+            Assert.Equal(0, statusMetrics["written_event_count"]!.GetValue<long>());
+            Assert.Equal(1, statusMetrics["dropped_event_count"]!.GetValue<long>());
+            Assert.Equal(0, statusMetrics["queue_full_drop_count"]!.GetValue<long>());
+            Assert.Equal(0, statusMetrics["serialization_failure_count"]!.GetValue<long>());
+            Assert.Equal(1, statusMetrics["write_failure_count"]!.GetValue<long>());
+            Assert.Equal(0, statusMetrics["rotation_failure_count"]!.GetValue<long>());
+            Assert.Equal(0, statusMetrics["batch_flush_count"]!.GetValue<long>());
+            Assert.Equal(1, statusMetrics["consecutive_failure_count"]!.GetValue<int>());
+            Assert.Equal(0, statusMetrics["recovery_count"]!.GetValue<long>());
+            Assert.NotNull(statusMetrics["next_retry_at"]);
+            Assert.StartsWith("write_failure:", statusMetrics["last_failure"]!.GetValue<string>(), StringComparison.Ordinal);
+
+            var ping = JsonNode.Parse("""{"jsonrpc":"2.0","id":3,"method":"ping"}""")!;
+            var pingResponse = server.HandleMessage(ping)!;
+            var health = pingResponse["result"]!;
+            Assert.Equal("ok", health["status"]!.GetValue<string>());
+            Assert.True(health["metrics"]!["enabled"]!.GetValue<bool>());
+            Assert.True(health["metrics"]!["degraded"]!.GetValue<bool>());
+
+            metricsSession.Dispose();
+            var disabledPing = server.HandleMessage(ping)!;
+            Assert.False(disabledPing["result"]!["metrics"]!["enabled"]!.GetValue<bool>());
+        }
+        finally
+        {
+            metricsSession?.Dispose();
+            TestProjectHelper.DeleteFile(metricsPath);
+            TestProjectHelper.DeleteDirectory(metricsPath);
+        }
+    }
+
 
 
     [Fact]

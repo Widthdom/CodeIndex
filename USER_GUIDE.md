@@ -1805,7 +1805,11 @@ Currently only the `cdidx --sushi` / `--coffee` / `--ramen` / `--wine` / `--beer
 
 ### Metrics emission
 
-Pass `--metrics <path>` (or set `CDIDX_METRICS=<path>` in the environment) to make `cdidx` append one JSON-lines record per CLI command and per MCP tool call. The flag wins over the environment variable when both are present. The destination file is opened in append mode, so multiple cdidx invocations writing to the same path interleave cleanly. If the destination cannot be opened at startup, cdidx emits a bounded warning to stderr, disables metrics, and continues the underlying command. Later record writes and rotation attempts remain best-effort and never break the command.
+Pass `--metrics <path>` (or set `CDIDX_METRICS=<path>` in the environment) to make `cdidx` append one JSON-lines record per CLI command and per MCP tool call. The flag wins over the environment variable when both are present. Recording is best-effort: the request path serializes the bounded event and makes a non-blocking attempt to place it in a bounded in-memory queue, while a background writer appends and flushes queued records in batches. A slow or blocked destination therefore does not make a CLI command or MCP response wait for file IO. If the queue is full or unavailable, the event is explicitly counted as dropped instead of blocking the caller.
+
+If the destination cannot be opened at startup, cdidx emits a bounded warning to stderr, disables metrics, and continues the underlying command. After a runtime write or rotation failure, the affected batch is counted as dropped and is not replayed because a partial append may already have reached the file. The writer applies capped exponential backoff before trying later batches and clears its current degraded state after a successful batch, so recovery remains visible without risking duplicate JSONL records. The first runtime sink failure emits one bounded warning that does not include the configured path; repeated failures are observed through counters rather than repeated stderr messages. During shutdown cdidx drains the queue only up to a bounded deadline, counts records it cannot finish in `dropped_event_count`, and never waits indefinitely for the metrics destination.
+
+Full MCP `status` always includes a `mcp_session.metrics` object; it contains only `enabled:false` when metrics are not configured. An enabled object reports `enabled`, `path`, `max_bytes`, `bytes_written`, `disposed`, `degraded`, `queue_capacity`, `queue_depth`, `queued_event_count`, `written_event_count`, `dropped_event_count`, `queue_full_drop_count`, `serialization_failure_count`, `write_failure_count`, `rotation_failure_count`, `batch_flush_count`, `consecutive_failure_count`, and `recovery_count`. Optional `next_retry_at`, `last_recovery_at`, and `last_failure` fields show the active backoff and latest recovery/failure. MCP `ping` always mirrors the object as `metrics`. Metrics degradation does not change the top-level MCP liveness result.
 
 Each record is a single JSON object on its own line with these fields:
 
@@ -4667,7 +4671,11 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 
 ### メトリクス出力
 
-`--metrics <path>` を渡す（または環境変数 `CDIDX_METRICS=<path>` を設定する）と、`cdidx` は CLI コマンド 1 回・MCP ツール呼び出し 1 回ごとに 1 行の JSON レコードを指定パスへ追記します。両方指定されている場合はフラグが優先されます。出力先は append モードで開かれるため、複数の cdidx 実行が同じファイルへ書いてもきれいにインターリーブされます。起動時に出力先を開けない場合、cdidx は stderr に長さを制限した警告を出してメトリクスを無効化し、本体コマンドを続行します。その後のレコード書き込みやローテーションの失敗はベストエフォートのまま扱われ、本体コマンドを壊しません。
+`--metrics <path>` を渡す（または環境変数 `CDIDX_METRICS=<path>` を設定する）と、`cdidx` は CLI コマンド 1 回・MCP ツール呼び出し 1 回ごとに 1 行の JSON レコードを指定パスへ追記します。両方指定されている場合はフラグが優先されます。記録はベストエフォートです。リクエスト処理側では上限付き event を serialize し、上限付きメモリ内 queue への追加をノンブロッキングで試みます。バックグラウンド writer は queue 内のレコードを batch 単位で追記・flush します。そのため、出力先が低速または block しても CLI コマンドや MCP response がファイル IO を待つことはありません。queue が満杯または利用不能な場合、その event は caller を待たせず明示的に drop として計数されます。
+
+起動時に出力先を開けない場合、cdidx は stderr に長さを制限した警告を出してメトリクスを無効化し、本体コマンドを続行します。実行中の write または rotation が失敗した場合、partial append がすでにファイルへ到達している可能性があるため、該当 batch は drop として計数し再送しません。writer は後続 batch の再試行前に上限付き exponential backoff を適用し、batch が成功すると現在の degraded 状態を解除するため、JSONL の重複を避けながら回復を観測できます。実行中の sink failure では最初の 1 回だけ、設定パスを含まない上限付き警告を出し、その後の失敗は stderr を繰り返さず counter で確認できます。shutdown 時には上限付き deadline まで queue を drain し、完了できなかったレコードを `dropped_event_count` に計上して、metrics の出力先を無期限に待ちません。
+
+MCP の full `status` は常に `mcp_session.metrics` object を含み、metrics が未設定の場合は `enabled:false` だけを返します。有効な object は `enabled`、`path`、`max_bytes`、`bytes_written`、`disposed`、`degraded`、`queue_capacity`、`queue_depth`、`queued_event_count`、`written_event_count`、`dropped_event_count`、`queue_full_drop_count`、`serialization_failure_count`、`write_failure_count`、`rotation_failure_count`、`batch_flush_count`、`consecutive_failure_count`、`recovery_count` を報告します。任意の `next_retry_at`、`last_recovery_at`、`last_failure` は現在の backoff と直近の recovery/failure を示します。MCP `ping` は常に同じ object を `metrics` として返します。metrics の degradation は top-level MCP liveness result を変更しません。
 
 各レコードは独立した行に 1 つの JSON オブジェクトとして書き出され、フィールドは次の通りです。
 

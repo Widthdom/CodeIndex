@@ -6407,6 +6407,7 @@ public partial class McpServerTests
             var response = _server.HandleMessage(request)!;
 
             Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+            Assert.True(session.WaitForIdle(TimeSpan.FromSeconds(5)));
             var line = Assert.Single(File.ReadAllLines(metricsPath));
             Assert.DoesNotContain(toolName, line, StringComparison.Ordinal);
             Assert.DoesNotContain(language, line, StringComparison.Ordinal);
@@ -6419,6 +6420,41 @@ public partial class McpServerTests
         }
         finally
         {
+            DeleteFileRobust(metricsPath);
+        }
+    }
+
+    [Fact]
+    public async Task ToolsCall_ResponseCompletesWhileMetricsWriterIsBlocked_Issue4552()
+    {
+        var metricsPath = TestProjectHelper.CreateTempFilePath("cdidx_mcp_metrics_blocked", ".jsonl");
+        using var writerEntered = new ManualResetEventSlim(false);
+        using var releaseWriter = new ManualResetEventSlim(false);
+        try
+        {
+            using var session = MetricsSink.TryStartForTesting(metricsPath, maxBytes: 1024 * 1024);
+            Assert.NotNull(session);
+            session.BeforeBatchWriteForTests = () =>
+            {
+                writerEntered.Set();
+                releaseWriter.Wait(TimeSpan.FromSeconds(5));
+            };
+            var request = JsonNode.Parse(
+                """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"not-a-tool","arguments":{}}}""")!;
+
+            var responseTask = Task.Run(() => _server.HandleMessage(request));
+
+            Assert.True(writerEntered.Wait(TimeSpan.FromSeconds(5)));
+            var response = await responseTask.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(-32602, response!["error"]!["code"]!.GetValue<int>());
+            Assert.Equal(1, session.SnapshotDiagnostics().QueuedEventCount);
+            Assert.Equal(0, session.SnapshotDiagnostics().WrittenEventCount);
+            releaseWriter.Set();
+            Assert.True(session.WaitForIdle(TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            releaseWriter.Set();
             DeleteFileRobust(metricsPath);
         }
     }
