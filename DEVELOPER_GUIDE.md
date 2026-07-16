@@ -1071,6 +1071,7 @@ JavaScript and TypeScript export/reference details:
 | Object-literal exports | Exported object-literal alias and shorthand properties are indexed. |
 | Destructured named exports | `export const { foo, renamed: localName } = source` is indexed by emitted binding names. |
 | Namespace and dynamic import aliases | TypeScript namespace aliases from `export * as NS from "./module"`, `import * as NS from "./module"`, named import aliases, and `const NS = await import("./module")` produce a `reference` edge back to the module specifier when later qualified usage such as `NS.Member()` appears. A later local declaration with the same alias name conservatively stops that module-linking range; dynamic import aliases are limited to their local brace scope. |
+| Discriminant string guards | JavaScript/TypeScript comparisons such as `shape.type === "circle"` emit queryable `type_tag` references. These rows describe narrowing metadata and stay outside runtime call graphs. |
 | React hooks | Detection is name-based: JavaScript/TypeScript function symbols matching `use[A-Z]...` are reclassified as `hook`, and calls to `use[A-Z]...()` are emitted as `consumes_hook` references. |
 | Module specifier resolution | Module specifiers collected as `import` symbols consult the nearest `tsconfig.json` or `jsconfig.json`, follow relative `extends` chains, and apply `compilerOptions.baseUrl` / `paths` mappings before falling back to the literal specifier. Alias matches only rewrite to project-relative paths when a concrete file exists, trying TypeScript/JavaScript extensions and `index.*` candidates. |
 
@@ -3781,6 +3782,7 @@ JavaScript / TypeScript の export / reference 詳細:
 | object-literal export | exported object-literal alias / shorthand property を index します。 |
 | destructured named export | `export const { foo, renamed: localName } = source` のような destructured named export も、実際に出力される binding 名で index します。 |
 | namespace / dynamic import alias | `export * as NS from "./module"`、`import * as NS from "./module"`、named import alias、`const NS = await import("./module")` 由来の namespace alias は、後続の `NS.Member()` のような qualified usage から module specifier への `reference` edge も出します。同名の local declaration が後から現れた場合は保守的にその行以降の module linking を止め、dynamic import alias は local brace scope 内に限定します。 |
+| discriminant string guard | `shape.type === "circle"` のような JavaScript / TypeScript の比較は query 可能な `type_tag` reference を出力します。この行は narrowing metadata であり、runtime call graph には含めません。 |
 | React hook | 名前ベースです。JavaScript / TypeScript の function symbol name が `use[A-Z]...` に一致する場合は `hook` として再分類し、`use[A-Z]...()` call は `consumes_hook` reference として出力します。 |
 | module specifier resolution | `import` symbol として収集した module specifier は、最寄りの `tsconfig.json` / `jsconfig.json`、relative `extends` chain、`compilerOptions.baseUrl` / `paths` mapping を使って解決し、解決できなければ literal specifier のまま残します。alias は実 file が存在する場合だけ project-relative path へ書き換え、TypeScript / JavaScript extension と `index.*` 候補を試します。 |
 

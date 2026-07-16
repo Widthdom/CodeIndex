@@ -112,6 +112,7 @@ public static class SymbolKindCatalog
         "razor_event_binding",
         "subscribe",
         "type_reference",
+        "type_tag",
         "unsubscribe",
         "use",
     ];

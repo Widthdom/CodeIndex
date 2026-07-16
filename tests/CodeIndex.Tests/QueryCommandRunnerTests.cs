@@ -3517,10 +3517,12 @@ public partial class QueryCommandRunnerTests
     [InlineData("callers", "attribute")]
     [InlineData("callers", "annotation")]
     [InlineData("callers", "type_reference")]
+    [InlineData("callers", "type_tag")]
     [InlineData("callers", "import")]
     [InlineData("callees", "attribute")]
     [InlineData("callees", "annotation")]
     [InlineData("callees", "type_reference")]
+    [InlineData("callees", "type_tag")]
     [InlineData("callees", "import")]
     public void RunCallersCallees_RejectNonCallGraphKind_WithUsageError(string command, string kind)
     {
@@ -3532,9 +3534,10 @@ public partial class QueryCommandRunnerTests
         // `container_name` is NULL. `type_reference` rows are compile-time type-position edges
         // (declaration types, generic constraints, `is`/`as`/`instanceof`, XML-doc `cref`) and
         // are not runtime calls, so `callers Foo --kind type_reference` would misreport type
-        // mentions as caller edges. `import` rows are structural dependency edges rather than
-        // runtime calls, so callers/callees cannot answer them as graph edges. The correct path
-        // for these kinds is `references <name> --kind attribute|annotation|type_reference|import`.
+        // mentions as caller edges. `type_tag` rows describe JavaScript/TypeScript discriminant
+        // narrowing rather than runtime calls. `import` rows are structural dependency edges rather
+        // than runtime calls, so callers/callees cannot answer them as graph edges. The correct path
+        // for these kinds is `references <name> --kind attribute|annotation|type_reference|type_tag|import`.
         // issue #293 + issue #444 補足: `callers` / `callees` は CLI 境界で非 call-graph な
         // reference kind を必ず弾く。metadata (`attribute` / `annotation`) 行は注釈対象ではなく
         // body-range の外側シンボルに帰属するため、`callers Obsolete --kind attribute` では
@@ -3542,9 +3545,10 @@ public partial class QueryCommandRunnerTests
         // file-level target は `container_name = NULL` で完全に脱落する。`type_reference` は
         // 宣言型・generic 制約・`is`/`as`/`instanceof`・XML-doc `cref` といった compile-time な
         // 型言及であり実行時呼び出しではないので、`callers Foo --kind type_reference` は型言及を
-        // caller edge として誤って返す。`import` 行は runtime call ではなく構造的な dependency
-        // edge なので callers/callees では graph edge として答えられない。正しい経路は
-        // `references <name> --kind attribute|annotation|type_reference|import`。
+        // caller edge として誤って返す。`type_tag` 行も JavaScript / TypeScript の discriminant
+        // narrowing を表し runtime call ではない。`import` 行は構造的な dependency edge なので
+        // callers/callees では graph edge として答えられない。正しい経路は
+        // `references <name> --kind attribute|annotation|type_reference|type_tag|import`。
         using var project = TestProjectHelper.CreateTempProjectScope($"cdidx_{command}_reject_kind_{kind}");
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
         var args = new[] { "Symbol", "--db", dbPath, "--kind", kind };
