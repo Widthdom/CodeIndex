@@ -236,6 +236,36 @@ public class ProgramRunnerTests
         Assert.True(document.RootElement.TryGetProperty("count", out _));
     }
 
+    [Theory]
+    [InlineData(new[] { "recipes", "list", "extra" }, "1 unexpected extra positional argument for recipes")]
+    [InlineData(new[] { "recipes", "--unsupported" }, "--unsupported")]
+    public void RunRecipesAlias_InvalidArgumentsKeepRecipesDiagnostic_Issue4574(string[] args, string expectedMessage)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            args,
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains(expectedMessage, stderr, StringComparison.Ordinal);
+        Assert.Contains("Usage: cdidx recipes", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("Usage: cdidx search", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunCompletions_InvalidShellWritesOneTopLevelDiagnostic_Issue4574()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["completions", "nope"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains("unsupported completion shell `nope`", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("Unknown shell", stderr, StringComparison.Ordinal);
+        Assert.Single(stderr.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries), line => line.StartsWith("Error:", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void RunAuditAlias_SummaryOnlyJsonUsesCompactRecipeSummary_Issue4472()
     {
@@ -411,6 +441,33 @@ public class ProgramRunnerTests
             Assert.Empty(stdout);
             Assert.Contains("--pretty cannot be combined with --json=ndjson", stderr, StringComparison.Ordinal);
             Assert.Contains("Usage: cdidx search", stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_PathLineModeConsumesTrailingPrettyFlag_Issue4574()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_line_pretty_4574");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App { }\n");
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["inspect", "--path", "src/app.cs", "--line", "1", "--body", "--json", "--pretty", "--db", dbPath],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            Assert.Contains(Environment.NewLine + "  \"query\": \"src/app.cs:1\"", stdout, StringComparison.Ordinal);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal("src/app.cs:1", document.RootElement.GetProperty("query").GetString());
         }
         finally
         {

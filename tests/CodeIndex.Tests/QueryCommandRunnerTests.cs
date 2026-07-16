@@ -531,6 +531,20 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatus_InvalidCheckScopeEmitsOnlyPrimaryDiagnostic_Issue4574()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--check=nope"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains("unsupported --check scope 'nope'", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("--check scope list cannot be empty", stderr, StringComparison.Ordinal);
+        Assert.Single(stderr.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries), line => line.StartsWith("Error:", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void RunStatusConfig_PrintsEffectiveConfigWithoutOpeningDb()
     {
         using var env = EnvironmentVariableScope.Capture(

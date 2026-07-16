@@ -127,10 +127,10 @@ internal static partial class ProgramRunner
 
     private static int RunRecipesAlias(string[] subArgs, CommandRunContext context)
     {
-        var searchArgs = new string[subArgs.Length + 1];
-        searchArgs[0] = "--list-recipes";
-        Array.Copy(subArgs, 0, searchArgs, 1, subArgs.Length);
-        return QueryCommandRunner.RunSearch(searchArgs, context.JsonOptions, context.CancellationToken);
+        var recipeArgs = subArgs.Length > 0 && string.Equals(subArgs[0], "list", StringComparison.Ordinal)
+            ? subArgs[1..]
+            : subArgs;
+        return QueryCommandRunner.RunRecipeList(recipeArgs, context.JsonOptions, context.CancellationToken);
     }
 
     private static int RunAuditAlias(string[] subArgs, CommandRunContext context)

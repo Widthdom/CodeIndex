@@ -77,6 +77,7 @@ public static partial class QueryCommandRunner
         bool strictNotFound = false;
         int? startLine = null;
         int? endLine = null;
+        bool endLineExplicit = false;
         int contextBefore = 0;
         int contextAfter = 0;
         int? focusLine = null;
@@ -294,6 +295,7 @@ public static partial class QueryCommandRunner
                 return;
 
             statusCheckScopes ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var invalidScope = false;
             foreach (var rawScope in rawScopes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             {
                 var scope = rawScope.ToLowerInvariant();
@@ -310,12 +312,13 @@ public static partial class QueryCommandRunner
                         statusCheckScopes.Add(scope);
                         break;
                     default:
+                        invalidScope = true;
                         AddParseError($"Error: unsupported --check scope '{ConsoleUi.FormatBoundedValue(rawScope)}'. Use one or more of workspace, fold, graph, issues, hotspot, csharp, sql, newer.");
                         break;
                 }
             }
 
-            if (statusCheckScopes.Count == 0)
+            if (statusCheckScopes.Count == 0 && !invalidScope)
                 AddParseError("Error: --check scope list cannot be empty. Use --check or --check=workspace,fold,graph,issues,hotspot,csharp,sql,newer.");
         }
 
@@ -1330,9 +1333,9 @@ public static partial class QueryCommandRunner
                     else if (TryParsePositiveInt(lineValue!, "--line", out var parsedLine, out var lineError))
                     {
                         WarnIfDuplicateSingleValueOption("--start", lineValue!);
-                        WarnIfDuplicateSingleValueOption("--end", lineValue!);
                         startLine = parsedLine;
-                        endLine = parsedLine;
+                        if (!endLineExplicit)
+                            endLine = parsedLine;
                     }
                     else
                         AddParseError(lineError!);
@@ -1359,6 +1362,7 @@ public static partial class QueryCommandRunner
                     {
                         WarnIfDuplicateSingleValueOption("--end", endValue!);
                         endLine = parsedEnd;
+                        endLineExplicit = true;
                     }
                     else
                         AddParseError(endError!);
@@ -1813,6 +1817,7 @@ public static partial class QueryCommandRunner
         var fields = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var all = false;
+        var invalidField = false;
 
         if (!ValidateCsvBounds("--fields", rawValue, MaxInspectFieldsCsvLength, MaxInspectFieldsCsvEntries, addParseError))
             return fields;
@@ -1879,6 +1884,7 @@ public static partial class QueryCommandRunner
                     canonical = "callees";
                     break;
                 default:
+                    invalidField = true;
                     addParseError($"Error: unsupported --fields value '{ConsoleUi.FormatBoundedValue(rawField)}'. Use one or more of all, file, workspace, graph, definitions, body, source_excerpt, nearby_symbols, outline, references, callers, callees.");
                     continue;
             }
@@ -1889,7 +1895,7 @@ public static partial class QueryCommandRunner
 
         if (all && fields.Count > 0)
             addParseError("Error: --fields all cannot be combined with specific field names.");
-        if (!all && fields.Count == 0)
+        if (!all && fields.Count == 0 && !invalidField)
             addParseError("Error: --fields requires at least one field name.");
 
         return all ? null : fields;

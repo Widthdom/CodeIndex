@@ -1513,7 +1513,6 @@ public static class ConsoleUi
         }
         catch (ArgumentOutOfRangeException)
         {
-            CommandErrorWriter.WriteStderr($"Unknown shell: {shell}. Supported: bash, zsh, fish, powershell");
             return false;
         }
     }

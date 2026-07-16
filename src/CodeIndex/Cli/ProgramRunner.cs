@@ -1019,6 +1019,13 @@ internal static partial class ProgramRunner
                 return QueryCommandTokenRole.CommandOptionValue;
         }
 
+        if (IsInspectPathLineModeBefore(commandName, subArgs, targetIndex))
+        {
+            var targetArg = NormalizeCommandOptionToken(subArgs[targetIndex], withValues, flagOnly, out _);
+            if (withValues.Contains(targetArg) || flagOnly.Contains(targetArg))
+                return QueryCommandTokenRole.None;
+        }
+
         for (var i = 0; i < targetIndex; i++)
         {
             var arg = subArgs[i];
@@ -1054,6 +1061,23 @@ internal static partial class ProgramRunner
         }
 
         return QueryCommandTokenRole.FirstQueryLiteral;
+    }
+
+    private static bool IsInspectPathLineModeBefore(string commandName, string[] subArgs, int targetIndex)
+    {
+        if (!string.Equals(commandName, "inspect", StringComparison.Ordinal))
+            return false;
+
+        var pathSeen = false;
+        var lineSeen = false;
+        for (var i = 0; i < targetIndex; i++)
+        {
+            var arg = subArgs[i];
+            pathSeen |= arg == "--path" || arg.StartsWith("--path=", StringComparison.Ordinal);
+            lineSeen |= arg == "--line" || arg.StartsWith("--line=", StringComparison.Ordinal);
+        }
+
+        return pathSeen && lineSeen;
     }
 
     private static bool CommandAcceptsQueryLiteral(string commandName) =>

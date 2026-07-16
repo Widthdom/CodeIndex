@@ -9,7 +9,36 @@ public static partial class QueryCommandRunner
     public static int RunSearch(
         string[] cmdArgs,
         JsonSerializerOptions jsonOptions,
+        CancellationToken cancellationToken = default) =>
+        RunSearchCore(cmdArgs, cmdArgs, "search", jsonOptions, cancellationToken);
+
+    internal static int RunRecipeList(
+        string[] cmdArgs,
+        JsonSerializerOptions jsonOptions,
         CancellationToken cancellationToken = default)
+    {
+        var unexpectedPositionals = FindUnexpectedRecipePositionals(cmdArgs);
+        if (unexpectedPositionals.Count > 0)
+        {
+            return CommandErrorWriter.Write(
+                $"{ConsoleUi.Counted(unexpectedPositionals.Count, "unexpected extra positional argument")} for recipes: {string.Join(", ", unexpectedPositionals.Select(value => $"`{value}`"))}.",
+                CommandExitCodes.UsageError,
+                "remove the extra positional arguments, or pass a recipe-list filter with --query <text>.",
+                GetUsageLineOrThrow("recipes"));
+        }
+
+        var searchArgs = new string[cmdArgs.Length + 1];
+        searchArgs[0] = "--list-recipes";
+        Array.Copy(cmdArgs, 0, searchArgs, 1, cmdArgs.Length);
+        return RunSearchCore(searchArgs, cmdArgs, "recipes", jsonOptions, cancellationToken);
+    }
+
+    private static int RunSearchCore(
+        string[] cmdArgs,
+        string[] validationArgs,
+        string usageCommandName,
+        JsonSerializerOptions jsonOptions,
+        CancellationToken cancellationToken)
     {
         int? jsonDoneTotalCount = null;
         int? jsonDoneFirstOmittedResultBytes = null;
@@ -25,9 +54,9 @@ public static partial class QueryCommandRunner
             allowNamedQuery: true,
             allowIssueDraftsFormat: true,
             applySearchSourceDefaults: true);
-        if (TryWriteUnsupportedOptionError("search", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("search"), options.Query))
+        if (TryWriteUnsupportedOptionError(usageCommandName, validationArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand(usageCommandName), options.Query))
             return CommandExitCodes.UsageError;
-        if (TryWriteParseError(options, "search"))
+        if (TryWriteParseError(options, usageCommandName))
             return CommandExitCodes.UsageError;
         if (!TryResolveSearchExactMode(options, out var exact, out var exactError))
         {
@@ -235,7 +264,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--list-recipes cannot be combined with --recipe, --named-query, or extra positional arguments.",
-                    GetUsageLineOrThrow("search"),
+                    GetUsageLineOrThrow(usageCommandName),
                     "Run `cdidx search --list-recipes --query <text>` to filter built-in audit recipes by recipe, query, label, severity, path, or search text.");
                 return CommandExitCodes.UsageError;
             }
@@ -243,7 +272,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--format count/csv/tsv/lsp/qf/sarif/issue-drafts is not supported with --list-recipes.",
-                    GetUsageLineOrThrow("search"),
+                    GetUsageLineOrThrow(usageCommandName),
                     "Use plain text output, `--json` / `--format json` for the full recipe list, or `--format compact` for a compact summary.");
                 return CommandExitCodes.UsageError;
             }
@@ -251,7 +280,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--json=array is not supported with --list-recipes because recipe-list output is a JSON object.",
-                    GetUsageLineOrThrow("search"),
+                    GetUsageLineOrThrow(usageCommandName),
                     "Use plain `--json` for the recipe-list object.");
                 return CommandExitCodes.UsageError;
             }
@@ -801,5 +830,35 @@ public static partial class QueryCommandRunner
             if (options.Json && options.JsonOutputFormat == JsonOutputFormatNdjson && jsonDoneCount.HasValue && !options.ResultsOnly)
                 WriteJsonStreamDone(jsonDoneCount.Value, ndjsonOptions, jsonDoneInterrupted, jsonDoneTruncated, jsonDoneReader, options.MaxJsonBytes, jsonDoneFirstOmittedResultBytes, jsonDoneTotalCount - jsonDoneCount);
         });
+    }
+
+    private static List<string> FindUnexpectedRecipePositionals(string[] args)
+    {
+        var unexpected = new List<string>();
+        var (withValues, flagOnly) = CliFlagSchema.GetParserFlagsPartitionedByValueBearing("recipes");
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (arg == "--")
+            {
+                unexpected.AddRange(args[(i + 1)..]);
+                break;
+            }
+
+            var equalsIndex = arg.IndexOf('=');
+            var optionName = equalsIndex > 0 ? arg[..equalsIndex] : arg;
+            if (withValues.Contains(optionName))
+            {
+                if (equalsIndex < 0 && i + 1 < args.Length)
+                    i++;
+                continue;
+            }
+            if (flagOnly.Contains(optionName) || arg.StartsWith("-", StringComparison.Ordinal))
+                continue;
+
+            unexpected.Add(arg);
+        }
+
+        return unexpected;
     }
 }

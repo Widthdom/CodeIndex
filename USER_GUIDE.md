@@ -296,6 +296,10 @@ Stable since values are intentionally not repeated in this guide because the
 release changelog is the source of truth for when each command first shipped.
 Run `cdidx --help` for the full syntax line for every command.
 
+Invalid CLI input emits one command-specific `Error` / `Hint` / `Usage` diagnostic.
+Dependent validation stops after the primary invalid token, and transformed aliases
+such as `recipes list` retain the command name and usage shape the user invoked.
+
 ## JSON output format
 
 Most query commands emit one complete JSON value when `--json` is set. `search
@@ -3212,6 +3216,11 @@ cdidx index . --quiet
 Stable since の値はこのガイドでは重複管理しません。各コマンドがいつ入ったかは
 release changelog を source of truth とします。完全な syntax line は `cdidx --help`
 を参照してください。
+
+不正な CLI input は、コマンド固有の `Error` / `Hint` / `Usage` diagnostic を 1 件だけ
+出力します。primary な不正 token の後では dependent validation を打ち切り、
+`recipes list` のように内部変換する alias でも、ユーザーが呼び出した command 名と
+usage shape を維持します。
 
 ## JSON 出力形式
 
