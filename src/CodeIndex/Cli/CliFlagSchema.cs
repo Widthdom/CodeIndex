@@ -113,7 +113,7 @@ internal static class CliFlagSchema
         "search", "definition", "references", "callers", "callees", "symbols",
         "files", "find", "excerpt", "map", "inspect", "deps", "impact", "unused", "hotspots",
     ];
-    private static readonly string[] AllowPartialCommands = ["search", "symbols", "files"];
+    private static readonly string[] AllowPartialCommands = ["search", "symbols", "files", "find"];
 
     private static readonly string[] KindCommands =
     [
@@ -279,7 +279,7 @@ internal static class CliFlagSchema
             new() { Name = "--raw-kinds", Description = "Show raw reference kinds instead of logical graph kinds", Commands = Set(RawKindsCommands) },
             new() { Name = "--count", Description = "Count only; result limits are ignored by count modes, but scan caps can still mark approximate counts as degraded", Commands = Set(CountCommands) },
             new() { Name = "--strict-not-found", Description = "Return exit code 2 when a valid query has zero rows", Commands = Set(StrictNotFoundCommands) },
-            new() { Name = "--allow-partial", Description = "Return exit code 0 instead of 11 when a byte cap produces explicit partial-result metadata", Commands = Set(AllowPartialCommands) },
+            new() { Name = "--allow-partial", Description = "Return exit code 0 instead of 11 when an explicit cap produces partial-result metadata", Commands = Set(AllowPartialCommands) },
             new() { Name = "--strict", Description = "Return exit code 4 when impact preconditions are unmet", Commands = Set("impact") },
             new() { Name = "--since", ValuePlaceholder = "<datetime>", Description = "Filter by modified-since timestamp", Commands = Set(SinceCommands) },
             new() { Name = "--bytes", Description = "Files: sort by size and show raw byte counts in human output; map: show raw byte counts", Commands = Set(ByteFormatCommands) },

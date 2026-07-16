@@ -10413,7 +10413,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(QueryCommandRunner.FindAllLineScanLimit, json.GetProperty("count").GetInt32());
             Assert.True(json.GetProperty("scan_truncated").GetBoolean());

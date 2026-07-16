@@ -238,6 +238,7 @@ public class ConsoleUiTests
     [Theory]
     [InlineData("symbols", "partial output exits 11")]
     [InlineData("files", "partial output exits 11")]
+    [InlineData("find", "capped partial scans exit 11")]
     [InlineData("search", "--json=array rejects the whole output")]
     [InlineData("inspect", "rejects the whole response")]
     [InlineData("map", "issue-drafts output reject the whole response")]

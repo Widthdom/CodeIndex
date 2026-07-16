@@ -605,6 +605,7 @@ For background log or metrics sinks, use explicit writer-entry/release signals a
 - Assert exit codes with `CommandExitCodes`.
 - For JSON output, parse it with `JsonDocument` instead of asserting raw strings.
 - For bounded NDJSON streams, parse the final `terminal_record`, count UTF-8 bytes including newlines, and assert partial exit `11` plus the explicit `--allow-partial` exit-`0` opt-in.
+- For `find --all`, cover row-terminal and count-object scan metadata together: assert active file/line caps, `scan_complete` / authority fields, stable continuation guidance, and the same partial-exit opt-in.
 - For rejected checkpoint names, assert the usage exit/error code and syntax hint together, and verify that no checkpoint directory was created.
 
 ### JSON `--json` output snapshots
@@ -1251,6 +1252,7 @@ background の log / metrics sink は、sleep や狭い stopwatch 閾値では�
 - 終了コードは `CommandExitCodes` で検証する。
 - JSON 出力は生文字列比較ではなく `JsonDocument` で解析して検証する。
 - 上限付き NDJSON stream は最後の `terminal_record` を解析し、改行を含む UTF-8 byte 数を数え、partial 終了コード `11` と明示的な `--allow-partial` による終了コード `0` の opt-in を検証する。
+- `find --all` は row 終端と count object の scan metadata を併せて検証し、有効な file / line cap、`scan_complete` / authority field、安定した continuation 案内、同じ partial-exit opt-in を確認する。
 - 拒否される checkpoint 名では usage の終了コード / error code と構文 hint を併せて検証し、checkpoint directory が作成されていないことも確認する。
 
 ### JSON `--json` 出力 snapshot
