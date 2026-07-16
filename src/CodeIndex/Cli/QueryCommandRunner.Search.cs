@@ -444,11 +444,15 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (options.Query == null)
         {
-            WriteUsageError(
+            return CommandErrorWriter.WriteJsonOrHuman(
+                options.Json,
+                jsonOptions,
                 "search requires a query argument",
+                CommandExitCodes.UsageError,
+                BuildMissingSearchQueryHint(cmdArgs),
                 GetUsageLineOrThrow("search"),
-                BuildMissingSearchQueryHint(cmdArgs));
-            return CommandExitCodes.UsageError;
+                CommandErrorCodes.UsageError,
+                category: "usage");
         }
         if (options.Query.Length > QueryLimits.MaxQueryLength)
         {

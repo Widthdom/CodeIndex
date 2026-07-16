@@ -136,6 +136,35 @@ public class CommandErrorCodesTests
         Assert.Equal(RegexTimeoutPolicy.RegexTimeoutCategory, json.GetProperty("category").GetString());
     }
 
+    [Theory]
+    [InlineData(CommandErrorCodes.QueryNotFound)]
+    [InlineData(CommandErrorCodes.FileNotFound)]
+    [InlineData(CommandErrorCodes.LineOutOfRange)]
+    public void QueryLookupCodes_AppearInHumanAndJsonErrors_Issue4564(string errorCode)
+    {
+        var (humanExitCode, _, stderr) = CaptureStreams(() => CommandErrorWriter.WriteJsonOrHuman(
+            false,
+            _jsonOptions,
+            "lookup failed",
+            CommandExitCodes.NotFound,
+            errorCode: errorCode));
+
+        Assert.Equal(CommandExitCodes.NotFound, humanExitCode);
+        Assert.Contains($"[{errorCode}]", stderr);
+
+        using var capture = ConsoleCapture.Start(captureOut: true);
+        var jsonExitCode = CommandErrorWriter.WriteJsonOrHuman(
+            true,
+            _jsonOptions,
+            "lookup failed",
+            CommandExitCodes.NotFound,
+            errorCode: errorCode);
+        using var document = JsonDocument.Parse(capture.Out!.ToString()!);
+
+        Assert.Equal(CommandExitCodes.NotFound, jsonExitCode);
+        Assert.Equal(errorCode, document.RootElement.GetProperty("error_code").GetString());
+    }
+
     [Fact]
     public void Symbols_InvalidKind_ReturnsInvalidArgumentExitCode()
     {

@@ -606,6 +606,7 @@ For background log or metrics sinks, use explicit writer-entry/release signals a
 - Prefer `ConsoleCapture` for simple stdout/stderr capture, and lock direct console mutations with `TestConsoleLock.Gate`.
 - Assert exit codes with `CommandExitCodes`.
 - For JSON output, parse it with `JsonDocument` instead of asserting raw strings.
+- JSON failure-contract tests must assert that stdout contains one parseable versioned error object, stderr is empty, the documented exit code is preserved, and `status` / `error_code` identify the failure.
 - For bounded NDJSON streams, include plain and recipe/audit search paths, parse the final `terminal_record`, verify authoritative-versus-lower-bound totals (including per-query and total-limit omissions) and selection reasons/counts before result-limit trimming, count UTF-8 bytes including newlines, and assert partial exit `11` plus the explicit `--allow-partial` exit-`0` opt-in. Also assert that capped profile/verbose/envelope combinations fail before stdout.
 - For `find --all`, cover row-terminal, count-object, and human scan metadata together: assert active file/line caps, `scan_complete` / authority fields, stable continuation/recovery guidance, the same partial-exit opt-in, option-order handling, and rejection of every row format that cannot carry terminal metadata. Envelope tests must keep row terminals in `metadata.stream_terminal` and preserve count objects as results.
 - For rejected checkpoint names, assert the usage exit/error code and syntax hint together, and verify that no checkpoint directory was created.
@@ -1255,6 +1256,7 @@ background の log / metrics sink は、sleep や狭い stopwatch 閾値では�
 - 単純な stdout/stderr capture では `ConsoleCapture` を優先し、直接コンソールを差し替える場合は `TestConsoleLock.Gate` で直列化する。
 - 終了コードは `CommandExitCodes` で検証する。
 - JSON 出力は生文字列比較ではなく `JsonDocument` で解析して検証する。
+- JSON failure contract のテストでは、stdout に parse 可能な version 付き error object が 1 件だけあること、stderr が空であること、documented exit code が維持されること、`status` / `error_code` が失敗を識別することを検証する。
 - 上限付き NDJSON stream は plain search と recipe / audit search の両経路を含め、最後の `terminal_record` を解析し、query ごとおよび total-limit の省略を含む authoritative / lower-bound の総件数、result-limit 適用前の selection 理由 / 件数、改行を含む UTF-8 byte 数、partial 終了コード `11`、明示的な `--allow-partial` による終了コード `0` の opt-in を検証する。上限付き profile / verbose / envelope の組み合わせが stdout 前に失敗することも確認する。
 - `find --all` は row 終端、count object、human scan metadata を併せて検証し、有効な file / line cap、`scan_complete` / authority field、安定した continuation / recovery 案内、同じ partial-exit opt-in、option 順序の扱い、終端 metadata を持てない全 row format の拒否を確認する。envelope test では row 終端を `metadata.stream_terminal` に入れ、count object を result として保持することを検証する。
 - 拒否される checkpoint 名では usage の終了コード / error code と構文 hint を併せて検証し、checkpoint directory が作成されていないことも確認する。

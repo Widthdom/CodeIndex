@@ -1711,7 +1711,7 @@ If a query itself begins with `-`, pass it as `--query <query>` or `-- <query>`.
 
 ### Error codes
 
-For scripts and AI agents that need to classify failures without substring-matching the human prose, every CLI error carries a stable machine-readable code. Human stderr prefixes the code in brackets (`Error [E001_DB_NOT_FOUND]: database not found at …`) and CLI `--json` envelopes add an optional `error_code` field (omitted when not applicable, so existing JSON consumers see no schema break). MCP tool errors usually surface as `isError: true` text content, while newer failure modes can also expose stable fields under `structuredContent`; the bracketed CLI constant is not guaranteed to appear in MCP message text. See [Troubleshooting](#troubleshooting) for the MCP message text and structured fields each failure mode expects clients to match. Codes never get renamed or reused once published — retired codes simply stop being emitted.
+For scripts and AI agents that need to classify failures without substring-matching the human prose, every CLI error carries a stable machine-readable code. Human stderr prefixes the code in brackets (`Error [E001_DB_NOT_FOUND]: database not found at …`) and CLI `--json` envelopes add an optional `error_code` field (omitted when not applicable, so existing JSON consumers see no schema break). In JSON mode, missing-query validation for `search` / `find`, incompatible `status --config` modes, `goto` misses, and missing or out-of-range `excerpt` coordinates are emitted as one versioned `{ "status": "error", ... }` object on stdout instead of plain text or an empty stream. MCP tool errors usually surface as `isError: true` text content, while newer failure modes can also expose stable fields under `structuredContent`; the bracketed CLI constant is not guaranteed to appear in MCP message text. See [Troubleshooting](#troubleshooting) for the MCP message text and structured fields each failure mode expects clients to match. Codes never get renamed or reused once published — retired codes simply stop being emitted.
 
 | Code | When emitted |
 |---|---|
@@ -1729,6 +1729,9 @@ For scripts and AI agents that need to classify failures without substring-match
 | `E012_INTERRUPTED` | The user interrupted the command with Ctrl-C / signal cancellation |
 | `E013_INDEX_EXTRACTION_STALLED` | Index extraction made no forward progress within the bounded stall timeout |
 | `E014_REGEX_MATCH_TIMEOUT` | A user-supplied regular expression exceeded the bounded match timeout while executing |
+| `E018_QUERY_NOT_FOUND` | A lookup that requires a result did not match an indexed entity |
+| `E019_FILE_NOT_FOUND` | An exact indexed file path requested by a query command does not exist |
+| `E020_LINE_OUT_OF_RANGE` | A requested source line falls outside the indexed file's 1-based line range |
 
 ### Debugging reader errors
 
@@ -4611,7 +4614,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 
 ### エラーコード
 
-スクリプトや AI エージェントが人間向け文言の部分一致なしで失敗を分類できるよう、CLI のエラーには安定した機械可読コードが付与されます。人間向け stderr ではコードを角括弧で前置し（`Error [E001_DB_NOT_FOUND]: database not found at …`）、CLI `--json` エンベロープには任意フィールド `error_code` を追加します（該当しない場合は省略されるので、既存 JSON 利用者にスキーマ破壊なし）。MCP ツールエラーは通常 `isError: true` のテキストコンテンツとして返りますが、新しい失敗モードでは `structuredContent` に安定フィールドを持つこともあります。本文に CLI 側の角括弧付き定数が必ず含まれる保証はありません。MCP クライアントが照合すべき各失敗モードの MCP メッセージ本文と構造化フィールドは [トラブルシューティング](#トラブルシューティング) を参照してください。一度公開したコードは renaming / 使い回しをせず、廃止する場合も新規 emission を止めるだけです。
+スクリプトや AI エージェントが人間向け文言の部分一致なしで失敗を分類できるよう、CLI のエラーには安定した機械可読コードが付与されます。人間向け stderr ではコードを角括弧で前置し（`Error [E001_DB_NOT_FOUND]: database not found at …`）、CLI `--json` エンベロープには任意フィールド `error_code` を追加します（該当しない場合は省略されるので、既存 JSON 利用者にスキーマ破壊なし）。JSON モードでは、`search` / `find` の query 欠落、`status --config` の mode 競合、`goto` の未検出、`excerpt` の file 未検出・行範囲外を plain text や空ストリームではなく、version 付きの `{ "status": "error", ... }` オブジェクト 1 件として stdout に出力します。MCP ツールエラーは通常 `isError: true` のテキストコンテンツとして返りますが、新しい失敗モードでは `structuredContent` に安定フィールドを持つこともあります。本文に CLI 側の角括弧付き定数が必ず含まれる保証はありません。MCP クライアントが照合すべき各失敗モードの MCP メッセージ本文と構造化フィールドは [トラブルシューティング](#トラブルシューティング) を参照してください。一度公開したコードは renaming / 使い回しをせず、廃止する場合も新規 emission を止めるだけです。
 
 | コード | 発行条件 |
 |---|---|
@@ -4629,6 +4632,9 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `E012_INTERRUPTED` | Ctrl-C / signal cancellation でユーザーがコマンドを中断した |
 | `E013_INDEX_EXTRACTION_STALLED` | 制限付きの停止判定時間内に index 抽出が前進しなかった |
 | `E014_REGEX_MATCH_TIMEOUT` | ユーザー指定の正規表現が実行中に制限付き match timeout を超えた |
+| `E018_QUERY_NOT_FOUND` | 結果必須の lookup が indexed entity に一致しなかった |
+| `E019_FILE_NOT_FOUND` | query command が要求した indexed file の完全一致 path が存在しない |
+| `E020_LINE_OUT_OF_RANGE` | 要求した source line が indexed file の 1-based 行範囲外だった |
 
 ### reader エラーのデバッグ
 

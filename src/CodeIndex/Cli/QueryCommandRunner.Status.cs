@@ -41,8 +41,15 @@ public static partial class QueryCommandRunner
         {
             if (options.CheckWorkspace || options.StatusLogPath || options.StatusExplainField != null)
             {
-                CommandErrorWriter.WriteStderr("Error: status --config cannot be combined with --check, --log-path, or --explain.");
-                return CommandExitCodes.UsageError;
+                return CommandErrorWriter.WriteJsonOrHuman(
+                    options.Json,
+                    jsonOptions,
+                    "status --config cannot be combined with --check, --log-path, or --explain.",
+                    CommandExitCodes.UsageError,
+                    "Run status --config by itself, or remove --config to use the other status mode.",
+                    GetUsageLineOrThrow("status"),
+                    CommandErrorCodes.UsageError,
+                    category: "usage");
             }
 
             Console.WriteLine(BuildEffectiveConfigJson(options, cmdArgs, appVersion).ToJsonString(jsonOptions));
