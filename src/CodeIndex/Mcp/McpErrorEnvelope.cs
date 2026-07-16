@@ -27,6 +27,7 @@ internal static class McpErrorEnvelope
     // 使う。
     public const int CodeRateLimited = -32000;
     public const int CodeUnauthorized = -32001;
+    public const int CodeServerBusy = -32003;
     public const int CodeIndexMissing = -32010;
     public const int CodeIndexStale = -32011;
     public const int CodeIndexCorrupted = -32012;
@@ -44,6 +45,7 @@ internal static class McpErrorEnvelope
     public const string CategoryToolDisabled = "tool_disabled";
     public const string CategoryPermissionDenied = "permission_denied";
     public const string CategoryRateLimited = "rate_limited";
+    public const string CategoryServerBusy = "server_busy";
     public const string CategoryRequestCancelled = "request_cancelled";
     public const string CategoryIndexMissing = "index_missing";
     public const string CategoryIndexStale = "index_stale";

@@ -137,6 +137,96 @@ public class DbDebugTests
     }
 
     [Fact]
+    public async Task RequestAndProfileState_FlowsAcrossAwaitWithoutCrossContamination_Issue4536()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
+        env.Set("CDIDX_DEBUG", "1");
+        DbDebug.ResetContext();
+        _ = DbDebug.EndProfile();
+
+        try
+        {
+            var start = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var bothTracked = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var trackedCount = 0;
+
+            async Task<ExecutionContext> CaptureFlowAsync(string marker)
+            {
+                try
+                {
+                    await start.Task;
+                    DbDebug.BeginProfile();
+                    // ResetContext must clear only request diagnostics and retain the active profile.
+                    // ResetContext は request 診断だけを消去し、active profile は維持する。
+                    DbDebug.ResetContext();
+                    using var connection = new SqliteConnection("Data Source=:memory:");
+                    connection.Open();
+                    using var command = connection.CreateCommand();
+                    command.CommandText = $"SELECT 1 AS {marker}";
+                    using (var reader = command.ExecuteTrackedReader())
+                    {
+                        Assert.True(reader.TrackedRead());
+                        Assert.Equal(1, reader.GetInt32(0));
+                    }
+
+                    if (Interlocked.Increment(ref trackedCount) == 2)
+                        bothTracked.TrySetResult(true);
+                    await bothTracked.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+
+                    await Task.Yield();
+                    return ExecutionContext.Capture()!;
+                }
+                catch (Exception ex)
+                {
+                    bothTracked.TrySetException(ex);
+                    throw;
+                }
+            }
+
+            var firstTask = Task.Run(() => CaptureFlowAsync("request_alpha"));
+            var secondTask = Task.Run(() => CaptureFlowAsync("request_beta"));
+            start.SetResult(true);
+            var contexts = await Task.WhenAll(firstTask, secondTask).WaitAsync(TestDeterminism.DefaultTimeout);
+
+            // Clear the inspecting flow. Thread-static state cannot be restored by the captured
+            // ExecutionContexts, while AsyncLocal request state can.
+            // inspection flow を消去する。ThreadStatic state は capture した ExecutionContext
+            // から復元できないが、AsyncLocal の request state は復元できる。
+            DbDebug.ResetContext();
+            _ = DbDebug.EndProfile();
+
+            static (string Stderr, List<QueryProfileEntry> Entries) Inspect(ExecutionContext context)
+            {
+                string? stderr = null;
+                List<QueryProfileEntry>? entries = null;
+                ExecutionContext.Run(context, _ =>
+                {
+                    stderr = CaptureStderr(() => DbDebug.DumpToStderr(new InvalidOperationException("boom")));
+                    entries = DbDebug.EndProfile();
+                }, null);
+                return (stderr!, entries!);
+            }
+
+            var first = Inspect(contexts[0]);
+            var second = Inspect(contexts[1]);
+
+            Assert.Contains("SELECT 1 AS request_alpha", first.Stderr);
+            Assert.Contains("[request_alpha] = 1", first.Stderr);
+            Assert.DoesNotContain("request_beta", first.Stderr);
+            Assert.Equal("SELECT 1 AS request_alpha", Assert.Single(first.Entries).Sql);
+            Assert.Contains("SELECT 1 AS request_beta", second.Stderr);
+            Assert.Contains("[request_beta] = 1", second.Stderr);
+            Assert.DoesNotContain("request_alpha", second.Stderr);
+            Assert.Equal("SELECT 1 AS request_beta", Assert.Single(second.Entries).Sql);
+        }
+        finally
+        {
+            DbDebug.ResetContext();
+            _ = DbDebug.EndProfile();
+        }
+    }
+
+    [Fact]
     public void QueryProfileEntry_SlowQueryGlobalToolLogTruncatesSql()
     {
         var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_slow_query_log_{Guid.NewGuid():N}");
@@ -225,6 +315,34 @@ public class DbDebugTests
         DbDebug.ResetContext();
         var output = CaptureStderr(() => DbDebug.DumpToStderr(new InvalidOperationException("boom")));
         Assert.Empty(output);
+    }
+
+    [Fact]
+    public void CapturedDump_SurvivesRequestContextReset_Issue4536()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
+        env.Set("CDIDX_DEBUG", "1");
+        DbDebug.ResetContext();
+
+        try
+        {
+            using var connection = new SqliteConnection("Data Source=:memory:");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT 1 AS deferred_request";
+            using (var reader = command.ExecuteTrackedReader())
+                Assert.True(reader.TrackedRead());
+
+            var dump = DbDebug.CaptureDump(new InvalidOperationException("boom"));
+            DbDebug.ResetContext();
+
+            var output = CaptureStderr(() => DbDebug.WriteCapturedDumpToStderr(dump));
+            Assert.Contains("SELECT 1 AS deferred_request", output);
+        }
+        finally
+        {
+            DbDebug.ResetContext();
+        }
     }
 
     [Theory]

@@ -17,18 +17,19 @@ namespace CodeIndex.Mcp;
 /// <summary>
 /// HTTP MCP transport (issue #1558). Each HTTP POST carries one JSON-RPC request frame in the
 /// body and the matching JSON-RPC response is returned as the response body (or 204 No Content
-/// for notifications). The implementation is intentionally single-session — one logical client
-/// identified by `Mcp-Session-Id`, with one in-flight request at a time — to mirror the existing
-/// stdio loop's request/response pairing and to keep the JSON-RPC ordering invariant the rest of
-/// the MCP server depends on. Server-initiated JSON-RPC notifications are exposed through
-/// `/events` as a bounded SSE fan-out channel for that same logical session.
+/// for notifications). Concurrent POSTs carry request-scoped response writers so completion order
+/// cannot attach a response to the wrong HTTP request. The transport serves one logical client
+/// session identified by `Mcp-Session-Id`; concurrent requests and `/events` subscriptions all
+/// belong to that session. Server-initiated JSON-RPC notifications are exposed through `/events`
+/// as a bounded SSE fan-out channel for the same logical session.
 /// HTTP MCP トランスポート (issue #1558)。HTTP POST 1 件が JSON-RPC リクエスト 1 件と対応し、
-/// 応答も同じ HTTP レスポンスのボディに乗せる（通知の場合は 204 No Content）。stdio ループと
-/// 同様に `Mcp-Session-Id` で識別する 1 logical client のシングルセッションとして
-/// 「リクエスト 1 件 → レスポンス 1 件」の順序不変条件を維持する。サーバー起点の JSON-RPC
-/// 通知は同じ logical session 向けの bounded SSE fan-out channel `/events` で公開する。
+/// 応答も同じ HTTP レスポンスのボディに乗せる（通知の場合は 204 No Content）。並行 POST は
+/// request-scoped response writer を持つため、完了順が前後しても別 request に応答が結び付かない。
+/// transport は `Mcp-Session-Id` で識別する 1 logical client session を扱い、並行 request と
+/// `/events` subscription はすべて同じ session に属する。サーバー起点の JSON-RPC 通知は
+/// 同じ logical session 向けの bounded SSE fan-out channel `/events` で公開する。
 /// </summary>
-internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport, IMcpResponseSizeLimitProvider
+internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport, IConcurrentMcpTransport, IMcpResponseSizeLimitProvider
 {
     internal const int DefaultMaxRequestBodyBytes = 1_000_000;
     internal const int DefaultMaxResponseBodyBytes = 1_000_000;
@@ -527,13 +528,30 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         if (_pendingRequest is not null)
             throw new InvalidOperationException("HttpMcpTransport: ReadFrameAsync called twice without an intervening WriteFrameAsync.");
 
+        _pendingRequest = await ReadPendingRequestAsync(cancellationToken).ConfigureAwait(false);
+        return _pendingRequest?.Body;
+    }
+
+    public async Task<McpTransportFrame?> ReadConcurrentFrameAsync(CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
+        var request = await ReadPendingRequestAsync(cancellationToken).ConfigureAwait(false);
+        if (request is null)
+            return null;
+
+        return new McpTransportFrame(
+            request.Body ?? string.Empty,
+            (frame, writeToken) => WriteFrameAsync(request, frame, writeToken));
+    }
+
+    private async Task<PendingRequest?> ReadPendingRequestAsync(CancellationToken cancellationToken)
+    {
         try
         {
             var request = await _requestQueue.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
             Interlocked.Decrement(ref _queuedRequestCount);
             _queueSlots.Release();
-            _pendingRequest = request;
-            return request.Body;
+            return request;
         }
         catch (ChannelClosedException)
         {
@@ -1036,13 +1054,34 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
 
     private async Task<bool> TryHandleOutOfBandFrameAsync(PendingRequest request, string body, CancellationToken cancellationToken)
     {
-        if (OutOfBandFrameHandler is null || (!IsCancellationNotification(body) && !IsJsonRpcResponse(body)))
+        if (OutOfBandFrameHandler is null)
             return false;
+
+        var hasCancellationBatch = TrySplitCancellationBatch(
+            body,
+            out var cancellationBatch,
+            out var remainingBatch);
+        if (!hasCancellationBatch && !IsCancellationNotification(body) && !IsJsonRpcResponse(body))
+            return false;
+
+        var outOfBandBody = cancellationBatch ?? body;
 
         var context = request.Context;
         try
         {
-            var frame = await OutOfBandFrameHandler(body, cancellationToken).ConfigureAwait(false);
+            var frame = await OutOfBandFrameHandler(outOfBandBody, cancellationToken).ConfigureAwait(false);
+            if (remainingBatch is not null)
+            {
+                if (frame is not null)
+                    throw new InvalidDataException("Cancellation notifications in a mixed JSON-RPC batch must not produce a response.");
+
+                // The extracted cancellation notifications have already been dispatched. Queue only
+                // the remaining raw batch items so cancellation side effects cannot be replayed.
+                request.Body = remainingBatch;
+                request.RequestId = TryExtractJsonRpcId(remainingBatch, _maxRequestBodyBytes);
+                return false;
+            }
+
             if (frame is null)
             {
                 context.Response.StatusCode = (int)HttpStatusCode.NoContent;
@@ -1081,6 +1120,149 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             return true;
         }
     }
+
+    private bool TrySplitCancellationBatch(
+        string body,
+        out string? cancellationBatch,
+        out string? remainingBatch)
+    {
+        cancellationBatch = null;
+        remainingBatch = null;
+
+        try
+        {
+            using var document = BoundedJson.ParseDocument(body, _maxRequestBodyBytes, McpServer.MaxJsonDepth);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Array
+                || root.GetArrayLength() is 0 or > McpServer.MaxBatchRequestCount)
+            {
+                return false;
+            }
+
+            var batchRequestIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var item in root.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.Object
+                    && item.TryGetProperty("id", out var id)
+                    && TryCanonicalizeJsonRpcId(id, out var requestId))
+                {
+                    batchRequestIds.Add(requestId);
+                }
+            }
+
+            var cancellations = new List<string>();
+            var remaining = new List<string>();
+            foreach (var item in root.EnumerateArray())
+            {
+                var rawItem = item.GetRawText();
+                if (IsValidCancellationNotification(item)
+                    && (!TryGetCancellationTargetId(item, out var targetId)
+                        || !batchRequestIds.Contains(targetId)))
+                {
+                    cancellations.Add(rawItem);
+                }
+                else
+                {
+                    // A cancellation targeting an item in this same batch must remain with the
+                    // raw batch. The server pre-registers all unique IDs before its eager control
+                    // pass, avoiding the short tombstone TTL/cap without weakening cross-frame
+                    // cancellation before HTTP queue admission (#4545).
+                    // 同じ batch 内 item を対象にする cancellation は raw batch に残す。server が
+                    // eager control pass 前に unique ID を事前登録し、cross-frame cancellation の
+                    // queue admission 前処理を保ったまま tombstone TTL/cap 依存を除く (#4545)。
+                    remaining.Add(rawItem);
+                }
+            }
+
+            if (cancellations.Count == 0)
+                return false;
+
+            cancellationBatch = BuildRawBatch(cancellations);
+            remainingBatch = remaining.Count == 0 ? null : BuildRawBatch(remaining);
+            return true;
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsValidCancellationNotification(JsonElement item)
+    {
+        if (item.ValueKind != JsonValueKind.Object
+            || item.TryGetProperty("id", out _)
+            || !item.TryGetProperty("jsonrpc", out var version)
+            || version.ValueKind != JsonValueKind.String
+            || !string.Equals(version.GetString(), "2.0", StringComparison.Ordinal)
+            || !item.TryGetProperty("method", out var method)
+            || method.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        var methodName = method.GetString();
+        if (!string.Equals(methodName, "$/cancelRequest", StringComparison.Ordinal)
+            && !string.Equals(methodName, "notifications/cancelled", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return !item.TryGetProperty("params", out var parameters)
+            || parameters.ValueKind is JsonValueKind.Null or JsonValueKind.Object;
+    }
+
+    private static bool TryGetCancellationTargetId(JsonElement item, out string targetId)
+    {
+        targetId = string.Empty;
+        if (!item.TryGetProperty("params", out var parameters)
+            || parameters.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (parameters.TryGetProperty("id", out var id)
+            && id.ValueKind != JsonValueKind.Null
+            && TryCanonicalizeJsonRpcId(id, out targetId))
+        {
+            return true;
+        }
+
+        return parameters.TryGetProperty("requestId", out var requestId)
+            && TryCanonicalizeJsonRpcId(requestId, out targetId);
+    }
+
+    private static bool TryCanonicalizeJsonRpcId(JsonElement id, out string canonicalId)
+    {
+        canonicalId = string.Empty;
+        switch (id.ValueKind)
+        {
+            case JsonValueKind.String:
+                var stringId = id.GetString() ?? string.Empty;
+                if (stringId.Length > McpServer.MaxRequestIdCharacterCount
+                    || Encoding.UTF8.GetByteCount(stringId) > McpServer.MaxRequestIdByteLength)
+                {
+                    return false;
+                }
+                canonicalId = JsonSerializer.Serialize(stringId);
+                return true;
+
+            case JsonValueKind.Number:
+                var numberId = id.GetRawText();
+                if (numberId.Length > McpServer.MaxRequestIdCharacterCount
+                    || Encoding.UTF8.GetByteCount(numberId) > McpServer.MaxRequestIdByteLength)
+                {
+                    return false;
+                }
+                canonicalId = numberId;
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    private static string BuildRawBatch(IReadOnlyList<string> items)
+        => "[" + string.Join(',', items) + "]";
 
     private static bool IsCancellationNotification(string body)
     {
@@ -1136,6 +1318,12 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
         var request = _pendingRequest
             ?? throw new InvalidOperationException("HttpMcpTransport: WriteFrameAsync called without a pending ReadFrameAsync.");
         _pendingRequest = null;
+        await WriteFrameAsync(request, frame, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task WriteFrameAsync(PendingRequest request, string? frame, CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
         var context = request.Context;
 
         try
@@ -2027,7 +2215,9 @@ internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTra
             using var doc = BoundedJson.ParseDocument(body, maxRequestBodyBytes, McpServer.MaxJsonDepth);
             if (doc.RootElement.ValueKind != JsonValueKind.Object
                 || !doc.RootElement.TryGetProperty("id", out var id))
+            {
                 return null;
+            }
 
             var requestId = id.ValueKind switch
             {

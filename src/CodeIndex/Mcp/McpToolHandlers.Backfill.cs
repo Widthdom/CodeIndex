@@ -110,10 +110,11 @@ public partial class McpServer
         }
         catch (Exception ex)
         {
+            var dbDebugDump = Database.DbDebug.CaptureDump(ex);
             DeferFrameLog(() =>
             {
                 WriteMcpLogLine(BuildToolErrorLog("backfill_fold", ex));
-                Database.DbDebug.DumpToStderr(ex);
+                Database.DbDebug.WriteCapturedDumpToStderr(dbDebugDump);
             });
             var classification = McpErrorEnvelope.ClassifyException(ex);
             return CreateToolErrorResponse(id, BuildSanitizedToolErrorMessage("backfill_fold", ex),
