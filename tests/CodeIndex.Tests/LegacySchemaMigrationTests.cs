@@ -456,6 +456,32 @@ public class LegacySchemaMigrationTests : IDisposable
     }
 
     [Fact]
+    public void TryMigrateForRead_UnrelatedSqliteErrorFromBegin_PropagatesWithoutPartialMigration_Issue4560()
+    {
+        using var db = new DbContext(_dbPath);
+        var previousFactory = DbContext.ReadMigrationTransactionFactoryForTesting;
+        DbContext.ReadMigrationTransactionFactoryForTesting = _ =>
+            throw CreateSyntheticSqliteError(1, "injected unrelated SQLITE_ERROR from BEGIN");
+
+        try
+        {
+            var ex = Assert.Throws<SqliteException>(db.TryMigrateForRead);
+
+            Assert.Equal(1, ex.SqliteErrorCode);
+            Assert.Contains("unrelated SQLITE_ERROR", ex.Message, StringComparison.Ordinal);
+            Assert.False(ColumnExists(_dbPath, "symbols", "signature"));
+            Assert.Null(db.LastMigrationFailure);
+        }
+        finally
+        {
+            DbContext.ReadMigrationTransactionFactoryForTesting = previousFactory;
+        }
+
+        db.TryMigrateForRead();
+        Assert.True(ColumnExists(_dbPath, "symbols", "signature"));
+    }
+
+    [Fact]
     public void TryMigrateForRead_PartialDdlFailure_FailureSurvivesForLaterInspection()
     {
         // The recorded failure must outlive the TryMigrateForRead call so a caller that hits
@@ -510,10 +536,11 @@ public class LegacySchemaMigrationTests : IDisposable
             .SetValue(db, value);
 
     [Fact]
-    public void InitializeSchema_ForeignKeysRestoredWhenMigrationWindowFailsInsideTransaction_Issue3678()
+    public void InitializeSchema_FailureRollsBackRestoresForeignKeysAndRecovers_Issues3678_4560()
     {
         using var db = new DbContext(_dbPath);
         Assert.Equal(1, ReadForeignKeys(db));
+        Assert.False(ColumnExists(_dbPath, "symbols", "signature"));
 
         var previousHook = DbContext.ForeignKeysDisabledForTesting;
         DbContext.ForeignKeysDisabledForTesting = operation =>
@@ -528,11 +555,55 @@ public class LegacySchemaMigrationTests : IDisposable
 
             Assert.Contains("injected kind-check", ex.Message, StringComparison.Ordinal);
             Assert.Equal(1, ReadForeignKeys(db));
+            Assert.False(ColumnExists(_dbPath, "symbols", "signature"));
         }
         finally
         {
             DbContext.ForeignKeysDisabledForTesting = previousHook;
         }
+
+        db.InitializeSchema();
+        Assert.Equal(1, ReadForeignKeys(db));
+        Assert.True(ColumnExists(_dbPath, "symbols", "signature"));
+    }
+
+    [Fact]
+    public void InitializeSchema_ForeignKeyPopulatedKindRebuildPreservesRowsAndEffectiveMode_Issue4560()
+    {
+        using var db = new DbContext(_dbPath);
+        using (var rebuildLegacySymbols = db.Connection.CreateCommand())
+        {
+            rebuildLegacySymbols.CommandText = """
+                PRAGMA foreign_keys=OFF;
+                ALTER TABLE symbols RENAME TO symbols_before_kind_rebuild;
+                CREATE TABLE symbols (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    kind TEXT CHECK (kind IN ('class', 'function')),
+                    name TEXT,
+                    line INTEGER
+                );
+                INSERT INTO symbols(id, file_id, kind, name, line)
+                    SELECT id, file_id, kind, name, line FROM symbols_before_kind_rebuild;
+                DROP TABLE symbols_before_kind_rebuild;
+                PRAGMA foreign_keys=ON;
+                """;
+            rebuildLegacySymbols.ExecuteNonQuery();
+        }
+
+        Assert.Equal(1, ReadForeignKeys(db));
+        db.InitializeSchema();
+
+        Assert.Equal(1, ReadForeignKeys(db));
+        using (var symbolCount = db.Connection.CreateCommand())
+        {
+            symbolCount.CommandText = "SELECT COUNT(*) FROM symbols WHERE file_id = 1";
+            Assert.Equal(3L, Convert.ToInt64(symbolCount.ExecuteScalar(), CultureInfo.InvariantCulture));
+        }
+
+        using var foreignKeyCheck = db.Connection.CreateCommand();
+        foreignKeyCheck.CommandText = "PRAGMA foreign_key_check";
+        Assert.Null(foreignKeyCheck.ExecuteScalar());
     }
 
     [Fact]
@@ -566,13 +637,31 @@ public class LegacySchemaMigrationTests : IDisposable
     }
 
     [Fact]
+    public void MigrationWindow_ExternalTransactionRejectsIneffectiveForeignKeyDisable_Issue4560()
+    {
+        using var db = new DbContext(_dbPath);
+        db.InitializeSchema();
+        Assert.Equal(1, ReadForeignKeys(db));
+
+        using var transaction = db.Connection.BeginTransaction(deferred: true);
+        var ex = Assert.Throws<CodeIndexException>(() =>
+            InvokePrivateDbContextMethod(db, "EnsureKindCheckConstraintsCurrent"));
+
+        Assert.Equal(CommandErrorCodes.DbError, ex.Code);
+        Assert.Contains("PRAGMA foreign_keys remained 1", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("roll back the external transaction", ex.Hint, StringComparison.OrdinalIgnoreCase);
+        transaction.Rollback();
+        Assert.Equal(1, ReadForeignKeys(db));
+    }
+
+    [Fact]
     public void InitializeSchema_ForeignKeyRestoreFailureReportsActionableDatabaseError_Issue3678()
     {
         using var db = new DbContext(_dbPath);
         var previousHook = DbContext.ForeignKeysRestoringForTesting;
         DbContext.ForeignKeysRestoringForTesting = (operation, _) =>
         {
-            if (operation == "EnsureKindCheckConstraintsCurrent")
+            if (operation == "InitializeSchema")
                 throw new InvalidOperationException("restore blocked");
         };
 
@@ -583,13 +672,15 @@ public class LegacySchemaMigrationTests : IDisposable
             Assert.Equal(CommandErrorCodes.DbError, ex.Code);
             Assert.Equal(CodeIndexExceptionCategory.Database, ex.Category);
             Assert.Contains("Failed to restore PRAGMA foreign_keys", ex.Message, StringComparison.Ordinal);
-            Assert.Contains("EnsureKindCheckConstraintsCurrent", ex.Message, StringComparison.Ordinal);
+            Assert.Contains("InitializeSchema", ex.Message, StringComparison.Ordinal);
             Assert.Contains("rerun the command", ex.Hint, StringComparison.OrdinalIgnoreCase);
             Assert.IsType<InvalidOperationException>(ex.InnerException);
+            Assert.Equal(0, ReadForeignKeys(db));
         }
         finally
         {
             DbContext.ForeignKeysRestoringForTesting = previousHook;
+            SetForeignKeys(db, enabled: true);
         }
     }
 
