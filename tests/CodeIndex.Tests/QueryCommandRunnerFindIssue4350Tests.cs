@@ -20,7 +20,7 @@ public partial class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(1, json.GetProperty("count").GetInt32());
             Assert.Equal(1, json.GetProperty("lines_scanned").GetInt32());
@@ -30,6 +30,8 @@ public partial class QueryCommandRunnerTests
             Assert.True(json.GetProperty("degraded").GetBoolean());
             Assert.False(json.GetProperty("authoritative_count").GetBoolean());
             Assert.Equal(1, json.GetProperty("line_scan_limit").GetInt32());
+            Assert.True(json.GetProperty("terminal_record").GetBoolean());
+            Assert.Equal("increase_line_scan_limit_or_narrow_scope", json.GetProperty("continuation_action").GetString());
         }
         finally
         {

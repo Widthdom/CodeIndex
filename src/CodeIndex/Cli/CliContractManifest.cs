@@ -28,6 +28,7 @@ internal static class CliContractManifest
         new(nameof(CommandExitCodes.CancelledBySignal), CommandExitCodes.CancelledBySignal),
         new(nameof(CommandExitCodes.InstallError), CommandExitCodes.InstallError),
         new(nameof(CommandExitCodes.RuntimeError), CommandExitCodes.RuntimeError),
+        new(nameof(CommandExitCodes.PartialResult), CommandExitCodes.PartialResult),
         new(nameof(CommandExitCodes.UnhandledException), CommandExitCodes.UnhandledException),
         new(nameof(CommandExitCodes.ExUsage), CommandExitCodes.ExUsage),
         new(nameof(CommandExitCodes.Interrupted), CommandExitCodes.Interrupted, IsAlias: true, AliasOf: nameof(CommandExitCodes.CancelledBySignal)),

@@ -1455,7 +1455,7 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stdout);
+            AssertEmptyDiscoveryTerminal(stdout);
             Assert.Equal(string.Empty, stderr);
         }
         finally
@@ -3417,7 +3417,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, fontFaceExitCode);
             Assert.Equal(string.Empty, fontFaceStderr);
-            Assert.Equal(string.Empty, fontFaceStdout);
+            AssertEmptyDiscoveryTerminal(fontFaceStdout);
         }
         finally
         {
@@ -3846,10 +3846,10 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
             Assert.Equal(CommandExitCodes.Success, valueExitCode);
-            Assert.Equal(string.Empty, valueStdout);
+            AssertEmptyDiscoveryTerminal(valueStdout);
             Assert.Equal(string.Empty, valueStderr);
             Assert.Equal(CommandExitCodes.Success, otherExitCode);
-            Assert.Equal(string.Empty, otherStdout);
+            AssertEmptyDiscoveryTerminal(otherStdout);
             Assert.Equal(string.Empty, otherStderr);
         }
         finally
@@ -6466,7 +6466,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stdout);
+            AssertEmptyDiscoveryTerminal(stdout);
             Assert.Equal(string.Empty, stderr);
         }
         finally
@@ -6507,7 +6507,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stdout);
+            AssertEmptyDiscoveryTerminal(stdout);
             Assert.Equal(string.Empty, stderr);
         }
         finally
@@ -6698,6 +6698,7 @@ public partial class QueryCommandRunnerTests
             var symbols = stdout
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Select(line => JsonDocument.Parse(line).RootElement)
+                .Where(symbol => !symbol.TryGetProperty("terminal_record", out _))
                 .ToList();
             var foo = Assert.Single(symbols, symbol => symbol.GetProperty("name").GetString() == "foo");
             var bar = Assert.Single(symbols, symbol => symbol.GetProperty("name").GetString() == "bar");

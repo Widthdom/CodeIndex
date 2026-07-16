@@ -75,8 +75,11 @@ public class JsonEnvelopeWrapperTests
 
             var results = document.RootElement.GetProperty("results");
             Assert.Equal(JsonValueKind.Array, results.ValueKind);
-            Assert.Equal(1, results.GetArrayLength());
-            Assert.Equal(0, results[0].GetProperty("count").GetInt32());
+            Assert.Empty(results.EnumerateArray());
+            Assert.Equal(0, metadata.GetProperty("result_count").GetInt32());
+            var controls = metadata.GetProperty("stream_control_records");
+            Assert.Single(controls.EnumerateArray());
+            Assert.Equal(0, controls[0].GetProperty("count").GetInt32());
         }
         finally
         {

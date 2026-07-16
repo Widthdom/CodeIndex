@@ -4923,7 +4923,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSearch_NdjsonByteCapMarksDoneFalseWhenInterrupted_Issue3904()
+    public void RunSearch_NdjsonByteCapReportsPartialOrRejectsUndersizedTerminal_Issues3904_4561()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_ndjson_byte_cap");
         try
@@ -4936,13 +4936,14 @@ public partial class QueryCommandRunnerTests
                 "public sealed class TokenStore { private string token = \"secret\"; }");
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["token", "--db", dbPath, "--json=ndjson", "--max-json-bytes", "1"],
+                ["token", "--db", dbPath, "--json=ndjson", "--max-json-bytes", "600"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal(string.Empty, stderr);
             var done = Assert.Single(ParseJsonLines(stdout)).RootElement;
 
+            Assert.True(done.GetProperty("terminal_record").GetBoolean());
             Assert.False(done.GetProperty("done").GetBoolean());
             Assert.True(done.GetProperty("interrupted").GetBoolean());
             Assert.Equal(0, done.GetProperty("count").GetInt32());
@@ -4951,13 +4952,9 @@ public partial class QueryCommandRunnerTests
                 ["MissingToken", "--db", dbPath, "--json=ndjson", "--max-json-bytes", "1"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, zeroExitCode);
-            Assert.Equal(string.Empty, zeroStderr);
-            var zeroDone = Assert.Single(ParseJsonLines(zeroStdout)).RootElement;
-
-            Assert.False(zeroDone.GetProperty("done").GetBoolean());
-            Assert.True(zeroDone.GetProperty("interrupted").GetBoolean());
-            Assert.Equal(0, zeroDone.GetProperty("count").GetInt32());
+            Assert.Equal(CommandExitCodes.UsageError, zeroExitCode);
+            Assert.Equal(string.Empty, zeroStdout);
+            Assert.Contains("terminal record", zeroStderr, StringComparison.Ordinal);
         }
         finally
         {
@@ -5016,6 +5013,8 @@ public partial class QueryCommandRunnerTests
             using var doneDocument = JsonDocument.Parse(lines[^1]);
             Assert.False(doneDocument.RootElement.GetProperty("truncated").GetBoolean());
             Assert.False(doneDocument.RootElement.GetProperty("has_more").GetBoolean());
+            Assert.Equal("sample", doneDocument.RootElement.GetProperty("selection_reason").GetString());
+            Assert.Equal(1, doneDocument.RootElement.GetProperty("selection_omitted_count").GetInt32());
         }
         finally
         {
@@ -10166,7 +10165,7 @@ jobs:
     }
 
     [Fact]
-    public void RunFind_AllScopeJsonArrayEmitsSingleArray_Issue3896()
+    public void RunFind_AllScopeJsonArrayRejectsMissingScanMetadata_Issues3896_4578()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_json_array_3896");
         try
@@ -10182,14 +10181,10 @@ jobs:
                 ["TODO", "--db", dbPath, "--all", "--json=array"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            var root = document.RootElement;
-            Assert.Equal(JsonValueKind.Array, root.ValueKind);
-            var result = Assert.Single(root.EnumerateArray());
-            Assert.Equal("src/todo.txt", result.GetProperty("path").GetString());
-            Assert.Equal(1, result.GetProperty("line").GetInt32());
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("streaming NDJSON", stderr, StringComparison.Ordinal);
+            Assert.Contains("scan authority and recovery metadata", stderr, StringComparison.Ordinal);
         }
         finally
         {
@@ -10413,7 +10408,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(QueryCommandRunner.FindAllLineScanLimit, json.GetProperty("count").GetInt32());
             Assert.True(json.GetProperty("scan_truncated").GetBoolean());
@@ -11707,10 +11702,10 @@ jobs:
             TestProjectHelper.InsertIndexedFile(dbPath, "src/b.cs", "csharp", "SampleNeedle();\n");
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["SampleNeedle", "--db", dbPath, "--exact-substring", "--first-per-file", "--sample", "2", "--json=ndjson", "--max-json-bytes", "2"],
+                ["SampleNeedle", "--db", dbPath, "--exact-substring", "--first-per-file", "--sample", "2", "--json=ndjson", "--max-json-bytes", "600"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal(string.Empty, stderr);
             var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
             var done = Assert.Single(lines);
@@ -11719,8 +11714,8 @@ jobs:
             Assert.True(document.RootElement.GetProperty("interrupted").GetBoolean());
             Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
             Assert.Equal("max_json_bytes_exceeded", document.RootElement.GetProperty("interruption_reason").GetString());
-            Assert.Equal(2, document.RootElement.GetProperty("max_json_bytes").GetInt32());
-            Assert.True(document.RootElement.GetProperty("first_omitted_result_bytes").GetInt32() > 2);
+            Assert.Equal(600, document.RootElement.GetProperty("max_json_bytes").GetInt32());
+            Assert.True(document.RootElement.GetProperty("first_omitted_result_bytes").GetInt32() > 600);
             Assert.Equal(2, document.RootElement.GetProperty("omitted_count").GetInt32());
             Assert.Contains("Increase --max-json-bytes", document.RootElement.GetProperty("recovery_guidance").GetString(), StringComparison.Ordinal);
         }
