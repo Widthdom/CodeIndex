@@ -826,7 +826,7 @@ public partial class QueryCommandRunnerTests
             _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains("Error: search requires a query argument", stderr);
+        Assert.Contains("Error [E010_USAGE_ERROR]: search requires a query argument", stderr);
         Assert.Contains("`--query \"--profile\"`", stderr);
         Assert.Contains("`cdidx search -- \"--profile\"`", stderr);
     }
@@ -11357,7 +11357,7 @@ jobs:
             _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains("Error: find requires a query argument", stderr);
+        Assert.Contains("Error [E010_USAGE_ERROR]: find requires a query argument", stderr);
         Assert.DoesNotContain("query cannot be empty or whitespace-only", stderr);
     }
 
