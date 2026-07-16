@@ -19,7 +19,7 @@ public static partial class QueryCommandRunner
     // compile-time な `type_reference` エッジを含む。C++ の `friend` 宣言も extractor が出す
     // dependency edge として受け付け、graph query にも参加させる。
     private static readonly string[] AllValidReferenceKinds =
-        ["annotation", "attribute", "augmentation", "bcl_regex_without_timeout", "call", "consumes_hook", "dependency", "friend", "import", "instantiate", "razor_event_binding", "subscribe", "type_reference", "unsubscribe"];
+        ["annotation", "attribute", "augmentation", "bcl_regex_without_timeout", "call", "consumes_hook", "dependency", "friend", "import", "instantiate", "razor_event_binding", "subscribe", "type_reference", "type_tag", "unsubscribe"];
 
     // Reference kinds that `callers` / `callees` can legitimately return. Metadata kinds
     // (`attribute` / `annotation`) and type-position edges (`type_reference`) are structurally
@@ -66,6 +66,8 @@ public static partial class QueryCommandRunner
     // - `type_reference`: type-position edges are compile-time references, not runtime calls,
     //   so `callers Foo --kind type_reference` misreports type mentions as caller edges
     //   (declaration types, generic constraints, `is`/`as`, XML-doc `cref`, etc.).
+    // - `type_tag`: JavaScript/TypeScript discriminant comparisons describe narrowing metadata,
+    //   not runtime calls.
     // Reject these kinds at the CLI boundary and redirect users to
     // `references --kind <kind>` (which IS correct).
     // `references --kind` では有効だが、`callers --kind` / `callees --kind` では
@@ -77,20 +79,22 @@ public static partial class QueryCommandRunner
     // - `type_reference`: 型位置エッジは compile-time な参照であり実行時呼び出しではない。
     //   `callers Foo --kind type_reference` は宣言型や generic 制約、`is`/`as`、XML-doc `cref`
     //   などの型言及を caller edge として誤って返す。
+    // - `type_tag`: JavaScript / TypeScript の discriminant 比較は narrowing metadata であり、
+    //   実行時呼び出しではない。
     // - `import`: import/include dependency edges are structural, not call-graph edges.
     // CLI 境界で弾き、正しい列挙パスである `references --kind <kind>` に誘導する。
     private static readonly HashSet<string> NonCallGraphReferenceKinds = new(StringComparer.Ordinal)
     {
-        "attribute", "annotation", "type_reference", "import",
+        "attribute", "annotation", "type_reference", "type_tag", "import",
     };
 
     /// <summary>
-    /// Reject non-call-graph reference kinds (`attribute` / `annotation` / `type_reference` / `import`) on
+    /// Reject non-call-graph reference kinds (`attribute` / `annotation` / `type_reference` / `type_tag` / `import`) on
     /// commands (`callers` / `callees`) whose data model cannot answer those queries correctly.
     /// Returns true if the kind was rejected; the caller should then return
     /// `CommandExitCodes.UsageError`.
     /// `callers` / `callees` のようにデータモデル的に metadata / 型位置参照に答えられない
-    /// コマンドで `--kind attribute` / `--kind annotation` / `--kind type_reference` / `--kind import` を弾く。
+    /// コマンドで `--kind attribute` / `--kind annotation` / `--kind type_reference` / `--kind type_tag` / `--kind import` を弾く。
     /// 弾いた場合 true を返すので、呼び出し側は `CommandExitCodes.UsageError` を返すこと。
     /// </summary>
     private static bool TryRejectNonCallGraphKindForGraphCommand(string command, string? kind)
@@ -100,6 +104,8 @@ public static partial class QueryCommandRunner
 
         if (kind == "type_reference")
             CommandErrorWriter.WriteStderr($"Error: '--kind type_reference' is not supported on '{command}'. Type-position references are compile-time edges (declaration types, generic constraints, `is`/`as`/`instanceof`, XML-doc `cref`), not runtime calls, so `{command} --kind type_reference` cannot return accurate call-graph rows.");
+        else if (kind == "type_tag")
+            CommandErrorWriter.WriteStderr($"Error: '--kind type_tag' is not supported on '{command}'. JavaScript/TypeScript discriminant tags are narrowing metadata, not runtime calls, so `{command} --kind type_tag` cannot return accurate call-graph rows.");
         else if (kind == "import")
             CommandErrorWriter.WriteStderr($"Error: '--kind import' is not supported on '{command}'. Import references are structural dependency edges, not runtime calls, so `{command} --kind import` cannot return accurate call-graph rows.");
         else

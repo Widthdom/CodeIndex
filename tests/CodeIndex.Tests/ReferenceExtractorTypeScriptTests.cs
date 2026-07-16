@@ -812,15 +812,13 @@ public partial class ReferenceExtractorTests
             && r.ContainerName == "render");
     }
 
-    [Fact]
-    public void Extract_TypeScriptDiscriminantStringGuard_EmitsPropertyAndTypeTag()
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScriptDiscriminantStringGuard_EmitsPropertyAndTypeTag(string language)
     {
         const string content = """
-            type Shape =
-                | { type: 'circle'; radius: number }
-                | { type: 'square'; side: number };
-
-            export function area(shape: Shape) {
+            export function area(shape) {
                 if (shape.type === 'circle') {
                     return shape.radius;
                 }
@@ -830,8 +828,7 @@ public partial class ReferenceExtractorTests
             }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "typescript", content);
-        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences(language, content);
 
         Assert.Contains(references, r =>
             r.SymbolName == "shape.type"
