@@ -23,7 +23,7 @@ internal sealed record BackfillFoldJsonResult(
     [property: JsonPropertyName("user_version_before")] int UserVersionBefore,
     [property: JsonPropertyName("user_version_after")] int UserVersionAfter,
     [property: JsonPropertyName("fold_ready")] bool FoldReady,
-    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion);
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record OptimizeFtsJsonResult(
     [property: JsonPropertyName("status")] string Status,
@@ -31,7 +31,7 @@ internal sealed record OptimizeFtsJsonResult(
     [property: JsonPropertyName("writes_since_optimize_before")] int WritesSinceOptimizeBefore,
     [property: JsonPropertyName("writes_since_optimize_after")] int WritesSinceOptimizeAfter,
     [property: JsonPropertyName("elapsed_ms")] long ElapsedMs,
-    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion);
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record CommandErrorJsonResult(
     [property: JsonPropertyName("status")] string Status,
@@ -39,7 +39,8 @@ internal sealed record CommandErrorJsonResult(
     [property: JsonPropertyName("hint")] string? Hint,
     [property: JsonPropertyName("error_code")] string? ErrorCode = null,
     [property: JsonPropertyName("path")] string? Path = null,
-    [property: JsonPropertyName("category")] string? Category = null);
+    [property: JsonPropertyName("category")] string? Category = null,
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record DoctorJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
@@ -59,7 +60,7 @@ internal sealed record DoctorJsonResult(
     [property: JsonPropertyName("cdidx_env")] IReadOnlyList<DoctorEnvironmentVariableJsonResult> CdidxEnv,
     [property: JsonPropertyName("environment_inventory_summary")] EnvironmentVariableInventorySummaryJsonResult EnvironmentInventorySummary,
     [property: JsonPropertyName("environment_inventory")] IReadOnlyList<EnvironmentVariableInventoryItem>? EnvironmentInventory,
-    [property: JsonPropertyName("redaction")] DoctorRedactionJsonResult Redaction);
+    [property: JsonPropertyName("redaction")] DoctorRedactionJsonResult Redaction) : IVersionedJsonResult;
 
 internal sealed record DoctorTerminalJsonResult(
     [property: JsonPropertyName("stdout_tty")] bool StdoutTty,
@@ -161,7 +162,8 @@ internal sealed record UpgradeJsonResult(
     [property: JsonPropertyName("installer_stdout_tail")] string? InstallerStdoutTail,
     [property: JsonPropertyName("installer_stderr_tail")] string? InstallerStderrTail,
     [property: JsonPropertyName("installer_output_truncated")] bool? InstallerOutputTruncated,
-    [property: JsonPropertyName("install_directory_error")] string? InstallDirectoryError);
+    [property: JsonPropertyName("install_directory_error")] string? InstallDirectoryError,
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record DbIntegrityCheckJsonResult(
     [property: JsonPropertyName("db_path")] string DbPath,
@@ -174,7 +176,7 @@ internal sealed record DbIntegrityCheckJsonResult(
     [property: JsonPropertyName("text_truncated")] bool TextTruncated = false,
     [property: JsonPropertyName("row_limit")] int RowLimit = 0,
     [property: JsonPropertyName("text_limit")] int TextLimit = 0,
-    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion);
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record DbCheckpointJsonResult(
     [property: JsonPropertyName("status")] string Status,
@@ -187,7 +189,7 @@ internal sealed record DbCheckpointJsonResult(
     [property: JsonPropertyName("diagnostics")] List<DbDiagnosticJsonResult>? Diagnostics = null,
     [property: JsonPropertyName("dry_run")] bool DryRun = false,
     [property: JsonPropertyName("bytes")] long Bytes = 0,
-    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion);
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record DbCheckpointListJsonResult(
     [property: JsonPropertyName("db_path")] string DbPath,
@@ -196,7 +198,7 @@ internal sealed record DbCheckpointListJsonResult(
     [property: JsonPropertyName("checkpoint_limit")] int CheckpointLimit = 0,
     [property: JsonPropertyName("file_limit")] int FileLimit = 0,
     [property: JsonPropertyName("diagnostics")] List<DbDiagnosticJsonResult>? Diagnostics = null,
-    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion);
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record DbCheckpointListEntryJsonResult(
     [property: JsonPropertyName("name")] string Name,
@@ -215,7 +217,8 @@ internal sealed record DbRestoreJsonResult(
     [property: JsonPropertyName("error_code")] string? ErrorCode = null,
     [property: JsonPropertyName("hint")] string? Hint = null,
     [property: JsonPropertyName("rollback_failed")] bool RollbackFailed = false,
-    [property: JsonPropertyName("rollback_failure")] DbDiagnosticJsonResult? RollbackFailure = null);
+    [property: JsonPropertyName("rollback_failure")] DbDiagnosticJsonResult? RollbackFailure = null,
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record DbRestoreBackupEntryJsonResult(
     [property: JsonPropertyName("name")] string Name,
@@ -230,7 +233,8 @@ internal sealed record DbRestoreBackupListJsonResult(
     [property: JsonPropertyName("truncated")] bool Truncated = false,
     [property: JsonPropertyName("backup_limit")] int BackupLimit = 0,
     [property: JsonPropertyName("file_limit")] int FileLimit = 0,
-    [property: JsonPropertyName("diagnostics")] List<DbDiagnosticJsonResult>? Diagnostics = null);
+    [property: JsonPropertyName("diagnostics")] List<DbDiagnosticJsonResult>? Diagnostics = null,
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record DbRestoreBackupPruneJsonResult(
     [property: JsonPropertyName("status")] string Status,
@@ -240,7 +244,8 @@ internal sealed record DbRestoreBackupPruneJsonResult(
     [property: JsonPropertyName("retained")] int Retained,
     [property: JsonPropertyName("truncated")] bool Truncated = false,
     [property: JsonPropertyName("backup_limit")] int BackupLimit = 0,
-    [property: JsonPropertyName("diagnostics")] List<DbDiagnosticJsonResult>? Diagnostics = null);
+    [property: JsonPropertyName("diagnostics")] List<DbDiagnosticJsonResult>? Diagnostics = null,
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record DbSchemaEntryJsonResult(
     [property: JsonPropertyName("type")] string Type,
@@ -265,7 +270,7 @@ internal sealed record DbSchemaJsonResult(
     [property: JsonPropertyName("type_filter")] string? TypeFilter = null,
     [property: JsonPropertyName("name_filter")] string? NameFilter = null,
     [property: JsonPropertyName("include_internal")] bool IncludeInternal = true,
-    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion);
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record DbPruneJsonResult(
     [property: JsonPropertyName("status")] string Status,
@@ -276,7 +281,7 @@ internal sealed record DbPruneJsonResult(
     [property: JsonPropertyName("orphan_symbols")] int OrphanSymbols,
     [property: JsonPropertyName("total")] int Total,
     [property: JsonPropertyName("warnings")] List<DbDiagnosticJsonResult>? Warnings = null,
-    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion);
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record DbDiagnosticJsonResult(
     [property: JsonPropertyName("code")] string Code,
@@ -311,7 +316,8 @@ internal sealed record DiffJsonResult(
     [property: JsonPropertyName("limit")] int Limit,
     [property: JsonPropertyName("detailed")] bool Detailed,
     [property: JsonPropertyName("truncated")] bool Truncated = false,
-    [property: JsonPropertyName("diagnostics")] List<DiffDiagnosticJsonResult>? Diagnostics = null);
+    [property: JsonPropertyName("diagnostics")] List<DiffDiagnosticJsonResult>? Diagnostics = null,
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record DiffDiagnosticJsonResult(
     [property: JsonPropertyName("code")] string Code,
@@ -327,7 +333,8 @@ internal sealed record DiffSummaryOnlyJsonResult(
     [property: JsonPropertyName("identical")] bool Identical,
     [property: JsonPropertyName("left_db")] string LeftDb,
     [property: JsonPropertyName("right_db")] string RightDb,
-    [property: JsonPropertyName("summary")] DiffSummaryJsonResult Summary);
+    [property: JsonPropertyName("summary")] DiffSummaryJsonResult Summary,
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record ReportBundleSummary(
     [property: JsonPropertyName("output_path")] string OutputPath,
@@ -343,7 +350,7 @@ internal sealed record ReportBundleSummary(
     [property: JsonPropertyName("log_included")] bool LogIncluded,
     [property: JsonPropertyName("db_included")] bool DbIncluded,
     [property: JsonPropertyName("db_path")] string? DbPath,
-    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion);
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record QueryCountJsonResult(
     [property: JsonPropertyName("count")] int Count,
@@ -357,7 +364,7 @@ internal sealed record QueryCountFilesJsonResult(
 
 internal sealed record StatusLogPathJsonResult(
     [property: JsonPropertyName("log_path")] string LogPath,
-    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion);
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record SearchGroupedCountJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
@@ -482,10 +489,12 @@ internal sealed record LanguageEntryJsonResult(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? IndexedFileCount = null);
 
 internal sealed record LanguagesJsonResult(
-    [property: JsonPropertyName("languages")] List<LanguageEntryJsonResult> Languages);
+    [property: JsonPropertyName("languages")] List<LanguageEntryJsonResult> Languages,
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
-internal sealed class IndexDryRunJsonResult
+internal sealed class IndexDryRunJsonResult : IVersionedJsonResult
 {
+    public string ApiVersion { get; init; } = JsonOutputContract.ApiVersion;
     public string Status { get; init; } = string.Empty;
     public int FilesTotal { get; init; }
     public bool Estimates { get; init; }
@@ -511,7 +520,7 @@ internal sealed class IndexDryRunJsonResult
     public int ErrorLimit { get; init; }
 }
 
-internal sealed class IndexWatchEventJsonResult
+internal sealed class IndexWatchEventJsonResult : IVersionedJsonResult
 {
     public string ApiVersion { get; init; } = JsonOutputContract.ApiVersion;
     public string Status { get; init; } = string.Empty;
@@ -601,8 +610,9 @@ public sealed class IndexSymbolKindFilterJsonResult
     public IReadOnlyList<string> Exclude { get; init; } = [];
 }
 
-internal sealed class IndexUpdateJsonResult
+internal sealed class IndexUpdateJsonResult : IVersionedJsonResult
 {
+    public string ApiVersion { get; init; } = JsonOutputContract.ApiVersion;
     public string Status { get; init; } = string.Empty;
     public string Mode { get; init; } = string.Empty;
     public IndexUpdateSummaryJsonResult Summary { get; init; } = new();
@@ -632,8 +642,9 @@ internal sealed class IndexUpdateJsonResult
     public long ElapsedMs { get; init; }
 }
 
-internal sealed class IndexFullScanJsonResult
+internal sealed class IndexFullScanJsonResult : IVersionedJsonResult
 {
+    public string ApiVersion { get; init; } = JsonOutputContract.ApiVersion;
     public string Status { get; init; } = string.Empty;
     public string Mode { get; init; } = string.Empty;
     public IndexFullScanSummaryJsonResult Summary { get; init; } = new();
@@ -710,7 +721,12 @@ internal sealed record VersionInfoJsonResult(
     [property: JsonPropertyName("version")] string Version,
     [property: JsonPropertyName("commit")] string Commit,
     [property: JsonPropertyName("build_date")] string BuildDate,
-    [property: JsonPropertyName("dirty")] string Dirty);
+    [property: JsonPropertyName("dirty")] string Dirty,
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
+
+internal sealed record TestExtractorJsonResult(
+    [property: JsonPropertyName("symbols")] JsonElement Symbols,
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record ValidateConfigJsonResult(
     [property: JsonPropertyName("valid")] bool Valid,
@@ -720,7 +736,7 @@ internal sealed record ValidateConfigJsonResult(
     [property: JsonPropertyName("reason")] string? Reason,
     [property: JsonPropertyName("config_file_found")] bool ConfigFileFound,
     [property: JsonPropertyName("validated")] bool Validated,
-    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion);
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 [JsonSourceGenerationOptions(
     WriteIndented = false,
@@ -950,6 +966,7 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(SymbolAnalysisResult))]
 [JsonSerializable(typeof(SymbolHotspotJsonResult))]
 [JsonSerializable(typeof(SymbolResult))]
+[JsonSerializable(typeof(TestExtractorJsonResult))]
 [JsonSerializable(typeof(UnusedSymbolResult))]
 [JsonSerializable(typeof(CodeIndex.Models.UpdateCheckResult))]
 [JsonSerializable(typeof(UpgradeJsonResult))]

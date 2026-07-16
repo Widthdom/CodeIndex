@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using CodeIndex.Database;
 using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 
@@ -18,14 +19,18 @@ internal sealed record WorkspaceListJsonResult(
     WorkspaceManifest? Manifest,
     IReadOnlyList<WorkspaceMember> Members,
     WorkspaceManifestStatusJsonResult ManifestStatus,
-    ActiveWorkspaceJsonResult? ActiveWorkspaceStatus = null)
+    ActiveWorkspaceJsonResult? ActiveWorkspaceStatus = null,
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult
 {
     [JsonPropertyName("manifest_found")]
     public bool ManifestFound => Manifest is not null;
 }
 
-internal sealed record ActiveWorkspaceJsonResult
+internal sealed record ActiveWorkspaceJsonResult : IVersionedJsonResult
 {
+    [JsonPropertyName("api_version")]
+    public string ApiVersion { get; init; } = JsonOutputContract.ApiVersion;
+
     [JsonPropertyName("active")]
     public bool Active { get; init; }
 
@@ -138,7 +143,8 @@ internal sealed record ConfigShowJsonResult(
     IReadOnlyList<string> SearchedPaths,
     IReadOnlyDictionary<string, ConfigEffectiveValueJsonResult> EffectiveConfig,
     EnvironmentVariableInventorySummaryJsonResult EnvironmentInventorySummary,
-    DoctorRedactionJsonResult Redaction);
+    DoctorRedactionJsonResult Redaction,
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record ConfigFileStatusJsonResult(
     string Status,

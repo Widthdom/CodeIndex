@@ -1741,7 +1741,7 @@ public partial class DbReader : IDisposable
             yield return new IndexedFileSnapshot(reader.GetString(0), GetNullableString(reader, 1), GetNullableInt32(reader, 2));
     }
 
-    public QueryCountResult CountListFiles(string? query = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null)
+    public QueryCountResult CountListFiles(string? query = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool generatedOnly = false)
     {
         lang = NormalizeQueryLanguage(lang);
         using var cmd = _conn.CreateCommand();
@@ -1758,7 +1758,9 @@ public partial class DbReader : IDisposable
             sql += " AND f.lang = @lang";
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
-        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        if (generatedOnly)
+            sql += _fileColumns.Contains("generated") ? " AND COALESCE(f.generated, 0) = 1" : " AND 1=0";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests, applyGeneratedFilter: !generatedOnly);
         sql += @"
             )
             SELECT COUNT(*),
@@ -1780,6 +1782,8 @@ public partial class DbReader : IDisposable
 
         return ExecuteFileCountSummary(cmd);
     }
+
+    public bool GeneratedFileFilterAvailable => _fileColumns.Contains("generated");
 
     private static QueryCountResult ExecuteFileCountSummary(SqliteCommand cmd)
     {
@@ -1812,11 +1816,11 @@ public partial class DbReader : IDisposable
         return DbSchemaCache.LoadColumns(_conn, tableName);
     }
 
-    internal static void AppendPathFilters(ref string sql, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    internal static void AppendPathFilters(ref string sql, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool applyGeneratedFilter = true)
     {
         EnsurePathFilterParameterBudget(pathPatterns, excludePathPatterns);
 
-        if (!IncludeGeneratedScope.Value && GeneratedColumnAvailableScope.Value)
+        if (applyGeneratedFilter && !IncludeGeneratedScope.Value && GeneratedColumnAvailableScope.Value)
             sql += " AND COALESCE(f.generated, 0) = 0";
 
         if (pathPatterns != null && pathPatterns.Count > 0)

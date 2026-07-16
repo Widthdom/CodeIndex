@@ -57,6 +57,16 @@ public static partial class QueryCommandRunner
             var compactLimit = GetCompactSectionLimit(options);
             var mapLimit = options.Compact ? GetCompactSourceLimit(compactLimit) : options.Limit;
             var map = reader.GetRepoMap(mapLimit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.MinEntrypointConfidence);
+            var generatedFileCountExcluded = options.IncludeGenerated
+                ? 0
+                : !reader.GeneratedFileFilterAvailable
+                    ? (int?)null
+                : reader.CountListFiles(
+                    lang: options.Lang,
+                    pathPatterns: options.PathPatterns,
+                    excludePathPatterns: options.ExcludePaths,
+                    excludeTests: options.ExcludeTests,
+                    generatedOnly: true).Count;
             WorkspaceMetadataEnricher.Enrich(map, options.DbPath, options.DbPathExplicit);
             if (options.ContextAfterExplicit)
                 ApplyRepoMapDepth(map, options.ContextAfter);
@@ -72,7 +82,13 @@ public static partial class QueryCommandRunner
                 var preflightResult = IssueDuplicatePreflight.TryLoadAsync(options.OpenIssuesPath, options.OpenIssuesRepository, issueState: options.IssueState).GetAwaiter().GetResult();
                 if (!preflightResult.Loaded)
                     return CommandErrorWriter.Write(preflightResult.Error!, CommandExitCodes.UsageError, usage: ConsoleUi.GetUsageLine("map"));
-                var issueDraftsJson = BuildRepoMapIssueDraftsPayload(map, options, jsonOptions, preflightResult.Preflight);
+                var issueDraftsJson = BuildRepoMapIssueDraftsPayload(
+                    map,
+                    options,
+                    jsonOptions,
+                    preflightResult.Preflight,
+                    generatedFileCountExcluded,
+                    reader.GeneratedFileFilterAvailable);
                 var issueDraftsExitCode = WriteJsonObjectWithOptionalByteLimit(
                     issueDraftsJson,
                     options,
@@ -87,7 +103,13 @@ public static partial class QueryCommandRunner
             {
                 if (options.Json)
                 {
-                    var payload = BuildRepoMapJsonPayload(map, options, jsonOptions, compactTruncation);
+                    var payload = BuildRepoMapJsonPayload(
+                        map,
+                        options,
+                        jsonOptions,
+                        generatedFileCountExcluded,
+                        reader.GeneratedFileFilterAvailable,
+                        compactTruncation);
                     var json = payload.ToJsonString(GetJsonNodeSerializationOptions(jsonOptions));
                     var zeroJsonExitCode = WriteJsonObjectWithOptionalByteLimit(
                         json,
@@ -107,7 +129,13 @@ public static partial class QueryCommandRunner
 
             if (options.Json)
             {
-                var payload = BuildRepoMapJsonPayload(map, options, jsonOptions, compactTruncation);
+                var payload = BuildRepoMapJsonPayload(
+                    map,
+                    options,
+                    jsonOptions,
+                    generatedFileCountExcluded,
+                    reader.GeneratedFileFilterAvailable,
+                    compactTruncation);
                 var json = payload.ToJsonString(GetJsonNodeSerializationOptions(jsonOptions));
                 return WriteJsonObjectWithOptionalByteLimit(
                     json,
@@ -208,9 +236,20 @@ public static partial class QueryCommandRunner
     private static int GetPathDepth(string path)
         => string.IsNullOrEmpty(path) ? 0 : path.Split('/', StringSplitOptions.RemoveEmptyEntries).Length;
 
-    private static JsonObject BuildRepoMapJsonPayload(RepoMapResult map, QueryCommandOptions options, JsonSerializerOptions jsonOptions, JsonObject? compactTruncation = null)
+    private static JsonObject BuildRepoMapJsonPayload(
+        RepoMapResult map,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        int? generatedFileCountExcluded,
+        bool generatedFileFilterAvailable,
+        JsonObject? compactTruncation = null)
     {
         var payload = JsonSerializer.SerializeToNode(map, CliJsonSerializerContextFactory.Create(jsonOptions).RepoMapResult)!.AsObject();
+        AddGeneratedFileFilterJsonFields(
+            payload,
+            options,
+            generatedFileCountExcluded,
+            generatedFileFilterAvailable);
         if (options.MapSummaryOnly)
         {
             KeepRepoMapJsonProperties(payload, RepoMapSummaryJsonProperties);
@@ -307,7 +346,13 @@ public static partial class QueryCommandRunner
             AddReplayValueOption(args, "--max-json-bytes", options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture));
     }
 
-    private static string BuildRepoMapIssueDraftsPayload(RepoMapResult map, QueryCommandOptions options, JsonSerializerOptions jsonOptions, IssueDuplicatePreflight preflight)
+    private static string BuildRepoMapIssueDraftsPayload(
+        RepoMapResult map,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        IssueDuplicatePreflight preflight,
+        int? generatedFileCountExcluded,
+        bool generatedFileFilterAvailable)
     {
         var candidates = map.LargestFiles
             .Where(IsRepoMapOversizedFileCandidate)
@@ -374,6 +419,11 @@ public static partial class QueryCommandRunner
             payload["indexed_head_commit"] = map.IndexedHeadCommit;
         if (map.WorktreeHeadChanged != null)
             payload["worktree_head_changed"] = map.WorktreeHeadChanged;
+        AddGeneratedFileFilterJsonFields(
+            payload,
+            options,
+            generatedFileCountExcluded,
+            generatedFileFilterAvailable);
         AddJsonByteLimitField(payload, options);
         return payload.ToJsonString(GetJsonNodeSerializationOptions(jsonOptions));
     }
@@ -468,6 +518,10 @@ public static partial class QueryCommandRunner
     {
         "api_version",
         "file_count",
+        "generated_code_policy",
+        "generated_file_count_excluded",
+        "generated_file_count_excluded_authoritative",
+        "generated_file_filter_available",
         "total_lines",
         "total_symbols",
         "total_references",
