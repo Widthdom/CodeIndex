@@ -392,6 +392,9 @@ internal sealed class AuditLogSink : IDisposable
             CallerName = null,
             CallerVersion = null,
             RequestId = null,
+            RequestIdType = null,
+            RequestIdLength = null,
+            RequestIdTruncated = false,
             ResultCount = null,
             ErrorType = null,
             ArgKeys = Array.Empty<string>(),
@@ -455,6 +458,8 @@ internal sealed class AuditLogSink : IDisposable
             jw.WriteBoolean("caller_version_truncated", true);
         if (evt.RequestId is { } reqId)
             jw.WriteString("request_id", reqId);
+        if (evt.RequestIdType is { } requestIdType)
+            jw.WriteString("request_id_type", requestIdType);
         if (evt.RequestIdLength is { } requestIdLength)
             jw.WriteNumber("request_id_length", requestIdLength);
         if (evt.RequestIdTruncated)
@@ -579,6 +584,9 @@ internal sealed class AuditLogSink : IDisposable
             CallerVersionLength = callerVersion.Length,
             CallerVersionTruncated = callerVersion.Truncated,
             RequestId = requestId.Text,
+            RequestIdType = evt.RequestIdType is null
+                ? null
+                : McpBoundedText.ForDisplay(evt.RequestIdType, McpBoundedText.MaxDiagnosticDisplayChars).Text,
             RequestIdLength = requestId.Length,
             RequestIdTruncated = requestId.Truncated,
             ErrorType = evt.ErrorType is null
@@ -984,5 +992,6 @@ internal sealed class AuditLogSink : IDisposable
         int? CallerNameLength = null,
         bool CallerNameTruncated = false,
         int? CallerVersionLength = null,
-        bool CallerVersionTruncated = false);
+        bool CallerVersionTruncated = false,
+        string? RequestIdType = null);
 }

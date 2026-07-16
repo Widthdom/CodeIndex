@@ -6420,11 +6420,248 @@ public partial class McpServerTests
             Assert.Equal(languageDisplay.Text, root.GetProperty("language").GetString());
             Assert.Equal(1, root.GetProperty("exit_code").GetInt32());
             Assert.Equal("unknown_tool", root.GetProperty("error").GetString());
+            var requestId = root.GetProperty("request_id").GetString()!;
+            Assert.StartsWith(McpRequestIdTelemetry.TokenPrefix, requestId, StringComparison.Ordinal);
+            Assert.Equal(McpRequestIdTelemetry.TokenLength, requestId.Length);
+            Assert.Equal("number", root.GetProperty("request_id_type").GetString());
+            Assert.Equal(1, root.GetProperty("request_id_length").GetInt32());
         }
         finally
         {
             DeleteFileRobust(metricsPath);
         }
+    }
+
+    [Fact]
+    public void ToolsCall_HighCardinalityCredentialRequestIds_KeepMetricsTokensFixedAndOpaque_Issue4551()
+    {
+        var metricsPath = TestProjectHelper.CreateTempFilePath("cdidx_mcp_metrics_request_ids", ".jsonl");
+        var ids = Enumerable.Range(0, 32)
+            .Select(index => $"Bearer metrics-secret-{index:D2}-" + new string((char)('a' + (index % 26)), 64))
+            .ToArray();
+        try
+        {
+            using var session = MetricsSink.TryStartForTesting(metricsPath, maxBytes: 1024 * 1024);
+            Assert.NotNull(session);
+            foreach (var id in ids)
+            {
+                var request = new JsonObject
+                {
+                    ["jsonrpc"] = "2.0",
+                    ["id"] = id,
+                    ["method"] = "tools/call",
+                    ["params"] = new JsonObject
+                    {
+                        ["name"] = "ping",
+                        ["arguments"] = new JsonObject(),
+                    },
+                };
+
+                var response = _server.HandleMessage(request)!;
+                Assert.Equal(id, response["id"]!.GetValue<string>());
+            }
+
+            var lines = File.ReadAllLines(metricsPath);
+            Assert.Equal(ids.Length, lines.Length);
+            var rawMetrics = string.Join('\n', lines);
+            Assert.All(ids, id => Assert.DoesNotContain(id, rawMetrics, StringComparison.Ordinal));
+            var records = lines
+                .Select(ParseTelemetryRecord)
+                .ToArray();
+            Assert.All(records, record =>
+            {
+                var token = record.GetProperty("request_id").GetString()!;
+                Assert.StartsWith(McpRequestIdTelemetry.TokenPrefix, token, StringComparison.Ordinal);
+                Assert.Equal(McpRequestIdTelemetry.TokenLength, token.Length);
+                Assert.Equal("string", record.GetProperty("request_id_type").GetString());
+                Assert.Equal(ids[0].Length, record.GetProperty("request_id_length").GetInt32());
+            });
+            Assert.Equal(ids.Length, records
+                .Select(record => record.GetProperty("request_id").GetString())
+                .Distinct(StringComparer.Ordinal)
+                .Count());
+        }
+        finally
+        {
+            DeleteFileRobust(metricsPath);
+        }
+    }
+
+    [Fact]
+    public void ProcessFrame_BatchToolCallsUseItemRequestIdsAcrossStderrAndMetrics_Issue4551()
+    {
+        var metricsPath = TestProjectHelper.CreateTempFilePath("cdidx_mcp_batch_request_ids", ".jsonl");
+        var auditPath = TestProjectHelper.CreateTempFilePath("cdidx_mcp_batch_request_ids_audit", ".jsonl");
+        var ids = new[]
+        {
+            "Bearer batch-secret-alpha-4551",
+            "sk-proj-batch-secret-beta-4551",
+        };
+        var expected = ids
+            .Select(id => McpRequestIdTelemetry.Create(JsonValue.Create(id)))
+            .ToArray();
+        var batch = new JsonArray();
+        foreach (var id in ids)
+        {
+            batch.Add(new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = id,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "ping",
+                    ["arguments"] = new JsonObject(),
+                },
+            });
+        }
+
+        try
+        {
+            using var session = MetricsSink.TryStartForTesting(metricsPath, maxBytes: 1024 * 1024);
+            Assert.NotNull(session);
+            using var auditSink = new AuditLogSink(
+                auditPath,
+                AuditLogSink.DefaultMaxBytes,
+                includeValues: false);
+            using var server = new McpServer(
+                _dbPath,
+                ConsoleUi.LoadVersion(),
+                dbPathExplicit: false,
+                authenticator: null,
+                auditLog: auditSink);
+            using var error = new StringWriter();
+            string? response;
+            lock (TestConsoleLock.Gate)
+            {
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(error);
+                    response = server.ProcessFrame(batch.ToJsonString());
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
+            }
+
+            Assert.NotNull(response);
+            using (var responseDocument = JsonDocument.Parse(response))
+            {
+                Assert.Equal(
+                    ids,
+                    responseDocument.RootElement.EnumerateArray()
+                        .Select(item => item.GetProperty("id").GetString())
+                        .ToArray());
+            }
+
+            var metricsText = File.ReadAllText(metricsPath);
+            Assert.True(auditSink.WaitForIdle(TimeSpan.FromSeconds(5)), "audit log writer did not become idle");
+            var auditText = File.ReadAllText(auditPath);
+            var stderrText = error.ToString();
+            Assert.All(ids, id =>
+            {
+                Assert.DoesNotContain(id, metricsText, StringComparison.Ordinal);
+                Assert.DoesNotContain(id, auditText, StringComparison.Ordinal);
+                Assert.DoesNotContain(id, stderrText, StringComparison.Ordinal);
+            });
+
+            var metricsRecords = File.ReadAllLines(metricsPath)
+                .Select(ParseTelemetryRecord)
+                .ToDictionary(
+                    record => record.GetProperty("request_id").GetString()!,
+                    StringComparer.Ordinal);
+            var auditRecords = File.ReadAllLines(auditPath)
+                .Select(ParseTelemetryRecord)
+                .ToDictionary(
+                    record => record.GetProperty("request_id").GetString()!,
+                    StringComparer.Ordinal);
+            var stderrRecords = stderrText
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Where(line => line.Contains("\"event\":\"mcp.tool.invocation\"", StringComparison.Ordinal))
+                .Select(line => ParseTelemetryRecord(line[line.IndexOf('{')..]))
+                .ToDictionary(
+                    record => record.GetProperty("request_id").GetString()!,
+                    StringComparer.Ordinal);
+
+            Assert.Equal(ids.Length, metricsRecords.Count);
+            Assert.Equal(ids.Length, auditRecords.Count);
+            Assert.Equal(ids.Length, stderrRecords.Count);
+            foreach (var requestId in expected)
+            {
+                var metric = metricsRecords[requestId.Token];
+                var audit = auditRecords[requestId.Token];
+                var stderr = stderrRecords[requestId.Token];
+                Assert.Equal(requestId.Type, metric.GetProperty("request_id_type").GetString());
+                Assert.Equal(requestId.Length, metric.GetProperty("request_id_length").GetInt32());
+                Assert.Equal(requestId.Type, audit.GetProperty("request_id_type").GetString());
+                Assert.Equal(requestId.Length, audit.GetProperty("request_id_length").GetInt32());
+                Assert.Equal(requestId.Type, stderr.GetProperty("request_id_type").GetString());
+                Assert.Equal(requestId.Length, stderr.GetProperty("request_id_length").GetInt32());
+            }
+        }
+        finally
+        {
+            DeleteFileRobust(metricsPath);
+            DeleteFileRobust(auditPath);
+        }
+    }
+
+    [Fact]
+    public void ProcessFrame_BatchExplicitNullIdIsDistinctFromAbsentAndInvalidTelemetry_Issue4551()
+    {
+        var metricsPath = TestProjectHelper.CreateTempFilePath("cdidx_mcp_batch_null_request_id", ".jsonl");
+        var batch = JsonNode.Parse(
+            """[{"jsonrpc":"2.0","id":null,"method":"tools/call","params":{"name":"ping","arguments":{}}},{"jsonrpc":"2.0","method":"tools/call","params":{"name":"ping","arguments":{}}},{"jsonrpc":"2.0","id":true,"method":"tools/call","params":{"name":"ping","arguments":{}}}]""")!;
+        var expected = McpRequestIdTelemetry.Create(id: (JsonNode?)null);
+
+        try
+        {
+            using var session = MetricsSink.TryStartForTesting(metricsPath, maxBytes: 1024 * 1024);
+            Assert.NotNull(session);
+            using var error = new StringWriter();
+            string? response;
+            lock (TestConsoleLock.Gate)
+            {
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(error);
+                    response = _server.ProcessFrame(batch.ToJsonString());
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
+            }
+
+            Assert.NotNull(response);
+            using (var responseDocument = JsonDocument.Parse(response))
+                Assert.Equal(2, responseDocument.RootElement.GetArrayLength());
+
+            var metric = Assert.Single(File.ReadAllLines(metricsPath).Select(ParseTelemetryRecord));
+            Assert.Equal(expected.Token, metric.GetProperty("request_id").GetString());
+            Assert.Equal("null", metric.GetProperty("request_id_type").GetString());
+            Assert.Equal(0, metric.GetProperty("request_id_length").GetInt32());
+
+            var invocation = Assert.Single(error.ToString()
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Where(line => line.Contains("\"event\":\"mcp.tool.invocation\"", StringComparison.Ordinal)));
+            Assert.Contains(expected.Token, invocation, StringComparison.Ordinal);
+            Assert.Contains("\"request_id_type\":\"null\"", invocation, StringComparison.Ordinal);
+            Assert.Contains("\"request_id_length\":0", invocation, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteFileRobust(metricsPath);
+        }
+    }
+
+    private static JsonElement ParseTelemetryRecord(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.Clone();
     }
 
     [Fact]

@@ -101,6 +101,34 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void FormatHttpMcpRequestLogRecord_UsesOpaqueRequestIdTuple_Issue4551()
+    {
+        const string rawRequestId = "github_pat_4551_persistent_http_log_secret";
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new { id = rawRequestId }));
+        var requestId = McpRequestIdTelemetry.Create(document.RootElement.GetProperty("id"));
+        var record = new HttpMcpTransport.HttpRequestLogRecord(
+            CorrelationId: "correlation-4551",
+            RequestId: requestId.Token,
+            RemotePeer: "127.0.0.1:12345",
+            Method: "POST",
+            Path: "/",
+            StatusCode: 200,
+            DurationMs: 1.25,
+            AuthOutcome: "ok",
+            RejectionReason: null,
+            Diagnostic: null,
+            RequestIdType: requestId.Type,
+            RequestIdLength: requestId.Length);
+
+        var line = ProgramRunner.FormatHttpMcpRequestLogRecord(record);
+
+        Assert.Contains($"request_id={requestId.Token}", line, StringComparison.Ordinal);
+        Assert.Contains("request_id_type=string", line, StringComparison.Ordinal);
+        Assert.Contains($"request_id_length={rawRequestId.Length}", line, StringComparison.Ordinal);
+        Assert.DoesNotContain(rawRequestId, line, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TryExtractMcpTransportFlags_ExtractsExplicitUnauthenticatedHttpOptIn_Issue4549()
     {
         var success = ProgramRunner.TryExtractMcpTransportFlags(
