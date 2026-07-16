@@ -95,5 +95,7 @@
   "total_count": 1,
   "interrupted": false,
   "truncated": false,
-  "has_more": false
+  "has_more": false,
+  "total_count_authoritative": false,
+  "total_count_lower_bound": 1
 }

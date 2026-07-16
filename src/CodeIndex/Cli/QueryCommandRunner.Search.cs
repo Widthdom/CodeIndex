@@ -227,6 +227,8 @@ public static partial class QueryCommandRunner
                 $"Remove {mode}, or run a plain `cdidx search <query> --format grouped`.");
             return CommandExitCodes.UsageError;
         }
+        if (TryWriteCappedJsonDiagnosticsUsageError("search", options))
+            return CommandExitCodes.UsageError;
         if (options.ListRecipes)
         {
             if (options.RecipeName != null || options.NamedSearchQueries.Count > 0 || options.ExtraNames.Count > 0)
@@ -688,7 +690,8 @@ public static partial class QueryCommandRunner
                                 reader,
                                 "search",
                                 limitTruncated: false,
-                                "Increase --limit or narrow the query to retrieve the remaining search results.");
+                                "Increase --limit or narrow the query to retrieve the remaining search results.",
+                                totalCountAuthoritative: false);
                             jsonDoneTerminalLine = stream.TerminalLine;
                             return stream.ExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : stream.ExitCode;
                         }
@@ -715,7 +718,8 @@ public static partial class QueryCommandRunner
                     var projectedExitCode = WriteProjectedSearchResults(
                         compactResults,
                         selection.OriginalCount,
-                        selection.LimitTruncated,
+                        selection.Truncated,
+                        selection.TruncationReason,
                         options,
                         jsonOptions,
                         ndjsonOptions,
@@ -771,7 +775,8 @@ public static partial class QueryCommandRunner
                     return WriteSearchNdjsonResults(
                         compactResults,
                         selection.OriginalCount,
-                        selection.LimitTruncated,
+                        selection.Truncated,
+                        selection.TruncationReason,
                         options,
                         ndjsonOptions,
                         reader,

@@ -15,6 +15,20 @@ public static partial class QueryCommandRunner
         string? TerminalLine,
         int ExitCode);
 
+    private static bool TryWriteCappedJsonDiagnosticsUsageError(
+        string commandName,
+        QueryCommandOptions options)
+    {
+        if (!options.MaxJsonBytes.HasValue || (!options.Profile && !options.Verbose))
+            return false;
+
+        WriteUsageError(
+            "--max-json-bytes cannot be combined with --profile or --verbose because those diagnostics add separate stdout records outside the bounded result payload.",
+            GetUsageLineOrThrow(commandName),
+            "Remove --profile/--verbose to keep a hard stdout byte cap, or remove --max-json-bytes when diagnostic records are required.");
+        return true;
+    }
+
     private static NdjsonStreamWriteResult WriteNdjsonStream(
         IReadOnlyList<NdjsonOutputRecord> records,
         int totalCount,
@@ -23,7 +37,9 @@ public static partial class QueryCommandRunner
         DbReader? reader,
         string commandName,
         bool limitTruncated,
-        string limitRecoveryGuidance)
+        string limitRecoveryGuidance,
+        bool totalCountAuthoritative = true,
+        string? truncationReason = null)
     {
         if (options.ResultsOnly)
             return WriteResultOnlyNdjson(records, options);
@@ -51,7 +67,9 @@ public static partial class QueryCommandRunner
                     appliedLimit: options.Limit,
                     recoveryGuidance: candidateInterrupted
                         ? "Increase --max-json-bytes or reduce --limit. Pass --allow-partial only when exit code 0 is acceptable for incomplete output."
-                        : limitTruncated ? limitRecoveryGuidance : null);
+                        : limitTruncated ? limitRecoveryGuidance : null,
+                    totalCountAuthoritative: totalCountAuthoritative,
+                    truncationReason: truncationReason);
                 if (PrefixBytes(records, candidate) + JsonLineBytes(candidateTerminal) > options.MaxJsonBytes.Value)
                     continue;
 
@@ -74,7 +92,9 @@ public static partial class QueryCommandRunner
                     omittedCount: totalCount,
                     omittedRecordCount: records.Count,
                     appliedLimit: options.Limit,
-                    recoveryGuidance: "Increase --max-json-bytes so the bounded NDJSON terminal record fits before streaming begins.");
+                    recoveryGuidance: "Increase --max-json-bytes so the bounded NDJSON terminal record fits before streaming begins.",
+                    totalCountAuthoritative: totalCountAuthoritative,
+                    truncationReason: truncationReason);
                 WriteUsageError(
                     $"{commandName} NDJSON terminal record is {JsonLineBytes(requiredTerminal)} bytes and exceeds --max-json-bytes {options.MaxJsonBytes.Value}.",
                     GetUsageLineOrThrow(commandName),
@@ -95,7 +115,9 @@ public static partial class QueryCommandRunner
                 omittedCount: Math.Max(0, totalCount - returnedCount),
                 omittedRecordCount: 0,
                 appliedLimit: options.Limit,
-                recoveryGuidance: limitTruncated ? limitRecoveryGuidance : null);
+                recoveryGuidance: limitTruncated ? limitRecoveryGuidance : null,
+                totalCountAuthoritative: totalCountAuthoritative,
+                truncationReason: truncationReason);
         }
 
         for (var i = 0; i < emittedRecords; i++)

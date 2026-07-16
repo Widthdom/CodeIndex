@@ -76,6 +76,13 @@ internal static class JsonEnvelopeWrapper
         JsonSerializerOptions jsonOptions,
         Func<string[], int> runInner)
     {
+        if (HasArgument(args, "--max-json-bytes"))
+        {
+            CommandErrorWriter.WriteStderr("Error [E010_USAGE_ERROR]: --json-envelope cannot be combined with --max-json-bytes because envelope serialization changes the final stdout byte count.");
+            CommandErrorWriter.WriteStderr("Hint: use streaming --json=ndjson with --max-json-bytes, or remove the byte cap when a single JSON envelope is required.");
+            return CommandExitCodes.UsageError;
+        }
+
         var innerArgs = PrepareInnerArgs(args);
         var queryNormalized = ExtractQueryArg(args);
         var dbPathExplicit = TryExtractDbPath(args, out var explicitDbPath);
@@ -134,9 +141,10 @@ internal static class JsonEnvelopeWrapper
         var raw = captured.ToString();
         JsonArray results;
         JsonObject? parseError = null;
+        JsonObject? streamTerminal = null;
         try
         {
-            results = ParseRawJsonItems(raw);
+            results = ParseRawJsonItems(raw, out streamTerminal);
         }
         catch (JsonEnvelopeRawJsonItemLimitExceededException ex)
         {
@@ -179,11 +187,16 @@ internal static class JsonEnvelopeWrapper
             stopwatch.Elapsed.TotalMilliseconds,
             results,
             exitCode,
-            parseError);
+            parseError,
+            streamTerminal);
 
         Console.WriteLine(envelope.ToJsonString(jsonOptions));
         return exitCode;
     }
+
+    private static bool HasArgument(string[] args, string option)
+        => args.Any(arg => string.Equals(arg, option, StringComparison.Ordinal)
+                           || arg.StartsWith(option + "=", StringComparison.Ordinal));
 
     private static JsonObject BuildEnvelope(
         string command,
@@ -194,7 +207,8 @@ internal static class JsonEnvelopeWrapper
         double elapsedMs,
         JsonArray results,
         int exitCode,
-        JsonObject? error = null)
+        JsonObject? error = null,
+        JsonObject? streamTerminal = null)
     {
         var metadata = new JsonObject
         {
@@ -211,6 +225,8 @@ internal static class JsonEnvelopeWrapper
             metadata["query_normalized"] = queryNormalized;
         if (error is not null)
             metadata["error"] = error;
+        if (streamTerminal is not null)
+            metadata["stream_terminal"] = streamTerminal.DeepClone();
 
         var indexedHead = SafeReadIndexedHead(dbPath, dbPathExplicit);
         if (!string.IsNullOrEmpty(indexedHead))
@@ -238,9 +254,10 @@ internal static class JsonEnvelopeWrapper
         }
     }
 
-    private static JsonArray ParseRawJsonItems(string raw)
+    private static JsonArray ParseRawJsonItems(string raw, out JsonObject? streamTerminal)
     {
         var array = new JsonArray();
+        streamTerminal = null;
         var rawJsonNodeCount = 0;
         if (string.IsNullOrEmpty(raw))
             return array;
@@ -267,8 +284,11 @@ internal static class JsonEnvelopeWrapper
 
             if (node is null)
                 continue;
-            if (IsJsonStreamDoneSentinel(node))
+            if (IsJsonStreamTerminal(node))
+            {
+                streamTerminal = (JsonObject)node.DeepClone();
                 continue;
+            }
 
             EnsureRawJsonItemBudget(array.Count);
             rawJsonNodeCount = AddRawJsonNodeCount(rawJsonNodeCount, CountJsonNodes(node));
@@ -344,10 +364,15 @@ internal static class JsonEnvelopeWrapper
         }
     }
 
-    private static bool IsJsonStreamDoneSentinel(JsonNode node)
+    private static bool IsJsonStreamTerminal(JsonNode node)
     {
         if (node is not JsonObject obj)
             return false;
+        if (obj.TryGetPropertyValue("terminal_record", out var terminalNode)
+            && terminalNode is JsonValue terminalValue
+            && terminalValue.TryGetValue<bool>(out var terminal)
+            && terminal)
+            return true;
         return obj.TryGetPropertyValue("done", out var doneNode)
             && doneNode is JsonValue doneValue
             && doneValue.TryGetValue<bool>(out var done)

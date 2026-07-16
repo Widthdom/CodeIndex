@@ -88,7 +88,7 @@ cdidx suggestions delete <id> --json
 cdidx validate
 ```
 
-The default NDJSON output of `search`, `symbols`, and `files` always ends with a bounded `terminal_record` unless `--results-only` explicitly suppresses it. The record reports returned and total counts, the truncation reason, applied limits, omitted rows, and recovery guidance. `--max-json-bytes` is a hard cap over all stdout bytes, including row newlines and the terminal record. If that record cannot fit by itself, the command fails with a usage error before writing stdout.
+The default NDJSON output of `search`, `symbols`, and `files` always ends with a bounded `terminal_record` unless `--results-only` explicitly suppresses it; recipe/audit search row streams use the same contract. The record reports returned and observed total counts, whether that total is authoritative or a lower bound, the truncation reason, applied limits, omitted rows, and recovery guidance. `--max-json-bytes` is a hard cap over all stdout bytes, including row newlines and the terminal record. If that record cannot fit by itself, the command fails with a usage error before writing stdout. Capped output rejects `--profile`, `--verbose`, and `--json-envelope`, whose additional serialization would otherwise escape the cap.
 
 When the byte cap omits rows, these commands return partial-result exit code `11`; pass `--allow-partial` to opt into exit code `0` while retaining the same terminal metadata. Ordinary `--limit` truncation remains a successful, explicitly described stream. Array and compact outputs keep their documented whole-response behavior; check `cdidx <command> --help` before relying on partial output.
 
@@ -372,7 +372,7 @@ cdidx suggestions delete <id> --json
 cdidx validate
 ```
 
-`search`、`symbols`、`files` の既定 NDJSON 出力は、`--results-only` で明示的に抑止しない限り、常に上限付きの `terminal_record` で終了します。このレコードは返却件数と総件数、切り詰め理由、適用上限、省略行数、復旧案内を返します。`--max-json-bytes` は各行の改行と終端レコードを含む stdout 全体の hard cap です。終端レコード自体が収まらない場合は、stdout を書く前に usage error で失敗します。
+`search`、`symbols`、`files` の既定 NDJSON 出力は、`--results-only` で明示的に抑止しない限り、常に上限付きの `terminal_record` で終了し、recipe / audit search の row stream も同じ契約を使います。このレコードは返却件数と観測済み総件数、その総件数が authoritative か lower bound か、切り詰め理由、適用上限、省略行数、復旧案内を返します。`--max-json-bytes` は各行の改行と終端レコードを含む stdout 全体の hard cap です。終端レコード自体が収まらない場合は、stdout を書く前に usage error で失敗します。追加 serialization が cap 外へ出ることを防ぐため、上限付き出力では `--profile`、`--verbose`、`--json-envelope` を拒否します。
 
 byte cap により行を省略した場合、これらのコマンドは partial-result 終了コード `11` を返します。同じ終端 metadata を維持したまま終了コード `0` を明示的に許容するには `--allow-partial` を指定します。通常の `--limit` による切り詰めは、理由が明示された成功 stream のままです。array / compact 出力は文書化済みの whole-response 挙動を維持します。部分出力へ依存する前に `cdidx <command> --help` を確認してください。
 

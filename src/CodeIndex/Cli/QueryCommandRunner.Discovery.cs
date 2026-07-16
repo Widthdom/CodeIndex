@@ -36,6 +36,8 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteBlankQueryError(options, "symbols"))
             return CommandExitCodes.UsageError;
+        if (TryWriteCappedJsonDiagnosticsUsageError("symbols", options))
+            return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "symbols", out var exact, out var exactError))
         {
             CommandErrorWriter.WriteStderr(exactError);
@@ -378,6 +380,8 @@ public static partial class QueryCommandRunner
         if (TryWriteParseError(options, "files"))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedExtraPositionals("files", options))
+            return CommandExitCodes.UsageError;
+        if (TryWriteCappedJsonDiagnosticsUsageError("files", options))
             return CommandExitCodes.UsageError;
         var filesScope = BuildFilesScopeFilters(options);
 

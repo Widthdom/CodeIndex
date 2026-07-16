@@ -436,6 +436,9 @@ internal sealed record JsonStreamDoneResult(
     [property: JsonPropertyName("interrupted")] bool Interrupted,
     [property: JsonPropertyName("truncated")] bool Truncated,
     [property: JsonPropertyName("has_more")] bool HasMore,
+    [property: JsonPropertyName("total_count_authoritative")] bool TotalCountAuthoritative,
+    [property: JsonPropertyName("total_count_lower_bound")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? TotalCountLowerBound = null,
     [property: JsonPropertyName("interruption_reason")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? InterruptionReason = null,
     [property: JsonPropertyName("truncation_reason")]

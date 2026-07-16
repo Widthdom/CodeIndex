@@ -490,19 +490,21 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
+        string? ndjsonTerminalLine = null;
         return WithDb(options, jsonOptions, reader =>
         {
             if (options.ResultsOnly || options.SearchFields != null || (options.Json && options.JsonOutputFormatExplicit && options.JsonOutputFormat == JsonOutputFormatNdjson))
             {
-                var rowQueryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, scope, options, userExact, out _);
-                WriteRecipeSearchResultRows(
+                var rowQueryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, scope, options, userExact, out var rowTotal);
+                var stream = WriteRecipeSearchResultRows(
+                    reader,
                     recipe.Name,
                     rowQueryResults,
+                    rowTotal,
                     options,
-                    GetCompactJsonOptions(jsonOptions),
-                    out _,
-                    out _);
-                return CommandExitCodes.Success;
+                    GetCompactJsonOptions(jsonOptions));
+                ndjsonTerminalLine = stream.TerminalLine;
+                return stream.ExitCode;
             }
 
             if (options.OutputFormat == OutputFormatCompact)
@@ -591,6 +593,10 @@ public static partial class QueryCommandRunner
 
             CommandErrorWriter.WriteStderr($"({total} recipe results across {selection.Queries.Count} queries)");
             return CommandExitCodes.Success;
+        }, _ =>
+        {
+            if (ndjsonTerminalLine != null && !options.ResultsOnly)
+                Console.WriteLine(ndjsonTerminalLine);
         });
     }
 
@@ -883,17 +889,15 @@ public static partial class QueryCommandRunner
         });
     }
 
-    private static void WriteRecipeSearchResultRows(
+    private static NdjsonStreamWriteResult WriteRecipeSearchResultRows(
+        DbReader reader,
         string recipeName,
         IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults,
+        int totalCount,
         QueryCommandOptions options,
-        JsonSerializerOptions ndjsonOptions,
-        out int emittedCount,
-        out bool interrupted)
+        JsonSerializerOptions ndjsonOptions)
     {
-        emittedCount = 0;
-        interrupted = false;
-        var bytesWritten = 0;
+        var records = new List<NdjsonOutputRecord>();
         foreach (var query in queryResults)
         {
             foreach (var result in query.Results)
@@ -901,14 +905,22 @@ public static partial class QueryCommandRunner
                 JsonObject payload = options.SearchFields != null
                     ? BuildProjectedSearchResult(result, options.SearchFields, query.Name, recipeName)
                     : BuildRecipeSearchResultRow(recipeName, query.Name, result, ndjsonOptions);
-                var line = payload.ToJsonString(ndjsonOptions);
-                if (WouldExceedJsonByteLimit(options, bytesWritten, line, out interrupted))
-                    return;
-                Console.WriteLine(line);
-                bytesWritten += Encoding.UTF8.GetByteCount(line) + Environment.NewLine.Length;
-                emittedCount++;
+                AddActiveSqliteDiagnostics(payload);
+                records.Add(new NdjsonOutputRecord(payload.ToJsonString(ndjsonOptions)));
             }
         }
+
+        return WriteNdjsonStream(
+            records,
+            totalCount,
+            options,
+            ndjsonOptions,
+            reader,
+            "search",
+            limitTruncated: records.Count < totalCount,
+            "Increase --limit or --total-limit, select one recipe query, or narrow the recipe scope.",
+            totalCountAuthoritative: false,
+            truncationReason: records.Count < totalCount ? "limit" : null);
     }
 
     private static JsonObject BuildRecipeSearchResultRow(

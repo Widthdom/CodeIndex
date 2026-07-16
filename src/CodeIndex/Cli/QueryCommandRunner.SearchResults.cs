@@ -371,22 +371,36 @@ public static partial class QueryCommandRunner
     private static SearchOutputSelection ApplySearchOutputSelection(List<SearchDisplayRow> rows, QueryCommandOptions options)
     {
         var originalCount = rows.Count;
+        var firstPerFileTruncated = false;
         if (options.FirstPerFile)
         {
+            var beforeFirstPerFile = rows.Count;
             rows = rows
                 .GroupBy(row => row.Result.Path, StringComparer.Ordinal)
                 .Select(group => group.First())
                 .ToList();
+            firstPerFileTruncated = rows.Count < beforeFirstPerFile;
         }
 
+        var sampleTruncated = false;
         if (options.SampleSize.HasValue && rows.Count > options.SampleSize.Value)
+        {
+            sampleTruncated = true;
             rows = SampleSearchRows(rows, options.SampleSize.Value);
+        }
 
         var limitTruncated = rows.Count > options.Limit;
         if (limitTruncated)
             rows = rows.Take(options.Limit).ToList();
 
-        return new SearchOutputSelection(rows, originalCount, rows.Count < originalCount, limitTruncated);
+        var truncationReason = firstPerFileTruncated
+            ? "first_per_file"
+            : sampleTruncated
+                ? "sample"
+                : limitTruncated
+                    ? "limit"
+                    : null;
+        return new SearchOutputSelection(rows, originalCount, rows.Count < originalCount, limitTruncated, truncationReason);
     }
 
     private static List<SearchDisplayRow> SampleSearchRows(List<SearchDisplayRow> rows, int sampleSize)
@@ -463,7 +477,16 @@ public static partial class QueryCommandRunner
             .ThenBy(group => group.Path, StringComparer.Ordinal)
             .ToList();
 
-    private static int WriteProjectedSearchResults(CompactSearchResult[] results, int totalCount, bool limitTruncated, QueryCommandOptions options, JsonSerializerOptions jsonOptions, JsonSerializerOptions ndjsonOptions, DbReader reader, out string? terminalLine)
+    private static int WriteProjectedSearchResults(
+        CompactSearchResult[] results,
+        int totalCount,
+        bool truncated,
+        string? truncationReason,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        JsonSerializerOptions ndjsonOptions,
+        DbReader reader,
+        out string? terminalLine)
     {
         var projected = results.Select(result => BuildProjectedSearchResult(result, options.SearchFields!, queryName: null, recipeName: null)).ToArray();
         if (options.JsonOutputFormat == JsonOutputFormatArray)
@@ -495,8 +518,10 @@ public static partial class QueryCommandRunner
             ndjsonOptions,
             reader,
             "search",
-            limitTruncated,
-            "Increase --limit or narrow the query to retrieve the remaining search results.");
+            truncated,
+            "Increase --limit, remove selection options, or narrow the query to retrieve the remaining search results.",
+            totalCountAuthoritative: false,
+            truncationReason: truncationReason);
         terminalLine = stream.TerminalLine;
         return stream.ExitCode;
     }
@@ -556,7 +581,15 @@ public static partial class QueryCommandRunner
         return payload;
     }
 
-    private static int WriteSearchNdjsonResults(CompactSearchResult[] results, int totalCount, bool limitTruncated, QueryCommandOptions options, JsonSerializerOptions ndjsonOptions, DbReader reader, out string? terminalLine)
+    private static int WriteSearchNdjsonResults(
+        CompactSearchResult[] results,
+        int totalCount,
+        bool truncated,
+        string? truncationReason,
+        QueryCommandOptions options,
+        JsonSerializerOptions ndjsonOptions,
+        DbReader reader,
+        out string? terminalLine)
     {
         var context = CliJsonSerializerContextFactory.Create(ndjsonOptions);
         var records = results
@@ -569,8 +602,10 @@ public static partial class QueryCommandRunner
             ndjsonOptions,
             reader,
             "search",
-            limitTruncated,
-            "Increase --limit or narrow the query to retrieve the remaining search results.");
+            truncated,
+            "Increase --limit, remove selection options, or narrow the query to retrieve the remaining search results.",
+            totalCountAuthoritative: false,
+            truncationReason: truncationReason);
         terminalLine = stream.TerminalLine;
         return stream.ExitCode;
     }
@@ -639,7 +674,12 @@ public static partial class QueryCommandRunner
         }
     }
 
-    private sealed record SearchOutputSelection(List<SearchDisplayRow> Rows, int OriginalCount, bool Truncated, bool LimitTruncated);
+    private sealed record SearchOutputSelection(
+        List<SearchDisplayRow> Rows,
+        int OriginalCount,
+        bool Truncated,
+        bool LimitTruncated,
+        string? TruncationReason);
 
     private sealed record SearchGroupOutputSelection(
         List<SearchGroupedCountItemJsonResult> Groups,
@@ -1348,7 +1388,9 @@ public static partial class QueryCommandRunner
         int? omittedCount = null,
         int? omittedRecordCount = null,
         int? appliedLimit = null,
-        string? recoveryGuidance = null)
+        string? recoveryGuidance = null,
+        bool totalCountAuthoritative = true,
+        string? truncationReason = null)
     {
         var includeDiagnostics = HasReadOnlyFallbackDiagnostics(reader);
         return JsonSerializer.Serialize(
@@ -1360,8 +1402,10 @@ public static partial class QueryCommandRunner
                 Interrupted: interrupted,
                 Truncated: truncated,
                 HasMore: truncated || interrupted,
+                TotalCountAuthoritative: totalCountAuthoritative,
+                TotalCountLowerBound: totalCountAuthoritative ? null : totalCount,
                 InterruptionReason: interrupted ? "max_json_bytes_exceeded" : null,
-                TruncationReason: interrupted ? "max_json_bytes_exceeded" : truncated ? "limit" : null,
+                TruncationReason: interrupted ? "max_json_bytes_exceeded" : truncated ? truncationReason ?? "limit" : null,
                 AppliedLimit: truncated ? appliedLimit : null,
                 MaxJsonBytes: maxJsonBytes,
                 FirstOmittedResultBytes: interrupted ? firstOmittedResultBytes : null,

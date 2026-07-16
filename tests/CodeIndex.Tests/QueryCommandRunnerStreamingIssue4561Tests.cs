@@ -101,6 +101,195 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void RunSearch_RecipeNdjsonUsesSharedTerminalAndPartialExitContract_Issue4561()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_recipe_stream_terminal_4561");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/recipe.cs",
+                "csharp",
+                $"try {{ Work(); }} catch (Exception ex) {{ Console.WriteLine(ex.Message); }} // {new string('x', 2_000)}\n");
+
+            var recipeArgs = new[]
+            {
+                "--recipe", "risky-code/raw-diagnostic-echo",
+                "--db", dbPath,
+                "--json=ndjson",
+                "--limit", "1",
+            };
+            var (completeExitCode, completeStdout, completeStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSearch(recipeArgs, _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, completeExitCode);
+            Assert.Equal(string.Empty, completeStderr);
+            var completeLines = completeStdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(2, completeLines.Length);
+            using (var row = JsonDocument.Parse(completeLines[0]))
+            {
+                Assert.Equal("risky-code", row.RootElement.GetProperty("recipe").GetString());
+                Assert.Equal("raw-diagnostic-echo", row.RootElement.GetProperty("query_name").GetString());
+            }
+            using (var terminal = JsonDocument.Parse(completeLines[1]))
+            {
+                Assert.True(terminal.RootElement.GetProperty("terminal_record").GetBoolean());
+                Assert.True(terminal.RootElement.GetProperty("done").GetBoolean());
+                Assert.Equal(1, terminal.RootElement.GetProperty("count").GetInt32());
+            }
+
+            var (emptyExitCode, emptyStdout, emptyStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [.. recipeArgs, "--path", "does-not-match/**"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, emptyExitCode);
+            Assert.Equal(string.Empty, emptyStderr);
+            using (var terminal = ParseLastNdjsonRecord(emptyStdout))
+            {
+                Assert.Equal(0, terminal.RootElement.GetProperty("count").GetInt32());
+                Assert.True(terminal.RootElement.GetProperty("terminal_record").GetBoolean());
+            }
+
+            string[] cappedArgs = [.. recipeArgs, "--max-json-bytes", "650"];
+            var (partialExitCode, partialStdout, partialStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSearch(cappedArgs, _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.PartialResult, partialExitCode);
+            Assert.Equal(string.Empty, partialStderr);
+            Assert.True(Encoding.UTF8.GetByteCount(partialStdout) <= 650);
+            using (var terminal = ParseLastNdjsonRecord(partialStdout))
+            {
+                Assert.False(terminal.RootElement.GetProperty("done").GetBoolean());
+                Assert.Equal("max_json_bytes_exceeded", terminal.RootElement.GetProperty("truncation_reason").GetString());
+            }
+
+            var (allowedExitCode, allowedStdout, allowedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [.. cappedArgs, "--allow-partial"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, allowedExitCode);
+            Assert.Equal(string.Empty, allowedStderr);
+            Assert.Equal(partialStdout, allowedStdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void BoundedQueryOutputRejectsUnbudgetedDiagnosticsAndEnvelope_Issue4561()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_bounded_diagnostics_4561");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/needle.cs", "csharp", "public class Issue4561Needle {}\n");
+
+            foreach (var diagnosticFlag in new[] { "--profile", "--verbose" })
+            {
+                var commands = new Func<int>[]
+                {
+                    () => QueryCommandRunner.RunSearch(
+                        ["Issue4561Needle", "--db", dbPath, "--json", "--max-json-bytes", "650", diagnosticFlag],
+                        _jsonOptions),
+                    () => QueryCommandRunner.RunSymbols(
+                        ["Issue4561Needle", "--db", dbPath, "--json", "--max-json-bytes", "650", diagnosticFlag],
+                        _jsonOptions),
+                    () => QueryCommandRunner.RunFiles(
+                        ["needle", "--db", dbPath, "--json", "--max-json-bytes", "650", diagnosticFlag],
+                        _jsonOptions),
+                };
+
+                foreach (var command in commands)
+                {
+                    var (exitCode, stdout, stderr) = CaptureConsole(command);
+                    Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                    Assert.Equal(string.Empty, stdout);
+                    Assert.Contains("--max-json-bytes cannot be combined", stderr, StringComparison.Ordinal);
+                }
+            }
+
+            var (envelopeExitCode, envelopeStdout, envelopeStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "Issue4561Needle", "--db", dbPath, "--json-envelope", "--max-json-bytes", "650"],
+                _jsonOptions,
+                "test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, envelopeExitCode);
+            Assert.Equal(string.Empty, envelopeStdout);
+            Assert.Contains("--json-envelope cannot be combined", envelopeStderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void SearchTerminalMarksBoundedTotalsAndSelectionOmissions_Issue4561()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_lower_bound_4561");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/a.cs", "csharp", "Issue4561Sample();\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/b.cs", "csharp", "Issue4561Sample();\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/c.cs", "csharp", "Issue4561Sample();\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Issue4561Sample", "--db", dbPath, "--exact-substring", "--json", "--sample", "1", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var terminal = ParseLastNdjsonRecord(stdout);
+            var json = terminal.RootElement;
+            Assert.True(json.GetProperty("truncated").GetBoolean());
+            Assert.True(json.GetProperty("has_more").GetBoolean());
+            Assert.Equal("sample", json.GetProperty("truncation_reason").GetString());
+            Assert.False(json.GetProperty("total_count_authoritative").GetBoolean());
+            Assert.Equal(3, json.GetProperty("total_count_lower_bound").GetInt32());
+            Assert.Equal(2, json.GetProperty("omitted_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void JsonEnvelopeMovesStreamTerminalIntoMetadata_Issue4561()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_envelope_terminal_4561");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/needle.cs", "csharp", "Issue4561Envelope();\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "Issue4561Envelope", "--db", dbPath, "--json-envelope"],
+                _jsonOptions,
+                "test"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var root = document.RootElement;
+            Assert.Equal(1, root.GetProperty("results").GetArrayLength());
+            var metadata = root.GetProperty("metadata");
+            Assert.Equal(1, metadata.GetProperty("result_count").GetInt32());
+            var terminal = metadata.GetProperty("stream_terminal");
+            Assert.True(terminal.GetProperty("terminal_record").GetBoolean());
+            Assert.Equal(1, terminal.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     private static JsonDocument ParseLastNdjsonRecord(string stdout)
     {
         var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
