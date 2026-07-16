@@ -1373,9 +1373,11 @@ cdidx definition UserService --visibility public
 ```bash
 cdidx inspect ResolveGitCommonDir --exclude-tests
 cdidx inspect ResolveGitCommonDir --exclude-tests --json
+cdidx inspect SELF_IMPROVEMENT.md --json --limit 2
+cdidx inspect --path src/CodeIndex/Cli/ProgramRunner.cs --line 20 --json
 ```
 
-`inspect` bundles the primary definition, nearby symbols from the same file, references, callers, callees, file metadata, workspace freshness metadata, and call-graph support metadata so AI clients can answer many symbol-oriented questions without chaining several separate commands. When a language is unsupported for `references` / `callers` / `callees`, `inspect --json` now says so explicitly instead of leaving AI clients to infer that from empty arrays.
+`inspect` bundles the primary definition, nearby symbols from the same file, references, callers, callees, file metadata, workspace freshness metadata, and call-graph support metadata so AI clients can answer many symbol-oriented questions without chaining several separate commands. A positional query that exactly matches an indexed path is resolved as that file before symbol/text lookup. Explicit `--path <file> --line <line>` coordinates are strict: a missing indexed path returns `E019_FILE_NOT_FOUND`, and a line outside `1..file.lines` returns `E020_LINE_OUT_OF_RANGE`, both with a non-success exit status. When a language is unsupported for `references` / `callers` / `callees`, `inspect --json` says so explicitly instead of leaving AI clients to infer that from empty arrays.
 
 ### Find references, callers, and callees
 
@@ -4280,9 +4282,11 @@ cdidx definition UserService --visibility public
 ```bash
 cdidx inspect ResolveGitCommonDir --exclude-tests
 cdidx inspect ResolveGitCommonDir --exclude-tests --json
+cdidx inspect SELF_IMPROVEMENT.md --json --limit 2
+cdidx inspect --path src/CodeIndex/Cli/ProgramRunner.cs --line 20 --json
 ```
 
-`inspect` は、主定義、同一ファイル内の近傍シンボル、参照、caller、callee、ファイルメタデータ、さらにワークスペース鮮度メタデータと call graph 対応メタデータをまとめて返すため、AIクライアントが複数コマンドを連鎖させずにシンボル調査を進められます。`references` / `callers` / `callees` が未対応言語で空になる場合も、`inspect --json` がその理由を明示します。
+`inspect` は、主定義、同一ファイル内の近傍シンボル、参照、caller、callee、ファイルメタデータ、さらにワークスペース鮮度メタデータと call graph 対応メタデータをまとめて返すため、AIクライアントが複数コマンドを連鎖させずにシンボル調査を進められます。positional query が indexed path に完全一致する場合は、symbol / text lookup より先にその file として解決します。明示的な `--path <file> --line <line>` 座標は strict で、indexed path が無ければ `E019_FILE_NOT_FOUND`、line が `1..file.lines` の範囲外なら `E020_LINE_OUT_OF_RANGE` を non-success status で返します。`references` / `callers` / `callees` が未対応言語で空になる場合も、`inspect --json` がその理由を明示します。
 
 ### 参照、callers、callees を調べる
 
