@@ -273,6 +273,7 @@ public partial class McpServerTests : IDisposable
     [Fact]
     public void ProcessFrame_UsesTraceParentFromMetaAsActivityParent()
     {
+        const string requestId = "github_pat_4551_activity_abcdefghijklmnopqrstuvwxyz";
         var parentTraceId = ActivityTraceId.CreateRandom();
         var parentSpanId = ActivitySpanId.CreateRandom();
         var traceParent = $"00-{parentTraceId}-{parentSpanId}-01";
@@ -288,7 +289,7 @@ public partial class McpServerTests : IDisposable
         var request = new JsonObject
         {
             ["jsonrpc"] = "2.0",
-            ["id"] = 123,
+            ["id"] = requestId,
             ["method"] = "tools/list",
             ["params"] = new JsonObject
             {
@@ -302,10 +303,40 @@ public partial class McpServerTests : IDisposable
         var response = _server.ProcessFrame(request.ToJsonString());
 
         Assert.NotNull(response);
+        using var responseDocument = JsonDocument.Parse(response);
+        Assert.Equal(requestId, responseDocument.RootElement.GetProperty("id").GetString());
         var activity = Assert.Single(stopped.Where(activity => activity.OperationName == "mcp.request"));
         Assert.Equal(parentTraceId, activity.TraceId);
         Assert.Equal(parentSpanId, activity.ParentSpanId);
         Assert.Equal("tools/list", activity.GetTagItem("rpc.method"));
+        var requestIdToken = Assert.IsType<string>(activity.GetTagItem("rpc.request_id"));
+        Assert.Equal(McpRequestIdTelemetry.TokenLength, requestIdToken.Length);
+        Assert.DoesNotContain(requestId, requestIdToken, StringComparison.Ordinal);
+        Assert.Equal("string", activity.GetTagItem("rpc.request_id_type"));
+        Assert.Equal(requestId.Length, activity.GetTagItem("rpc.request_id_length"));
+    }
+
+    [Theory]
+    [InlineData("""[{"jsonrpc":"2.0","id":"batch-secret-a-4551","method":"tools/list"},{"jsonrpc":"2.0","id":"batch-secret-b-4551","method":"tools/list"}]""")]
+    [InlineData("""{"jsonrpc":"2.0","id":true,"method":"tools/list"}""")]
+    [InlineData("42")]
+    public void ProcessFrame_WithoutSingleValidRequestId_OmitsActivityRequestIdTags_Issue4551(string frame)
+    {
+        var stopped = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == CodeIndex.CodeIndexTelemetry.ActivitySourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStopped = activity => stopped.Add(activity),
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        _ = _server.ProcessFrame(frame);
+
+        var activity = Assert.Single(stopped.Where(activity => activity.OperationName == "mcp.request"));
+        Assert.Null(activity.GetTagItem("rpc.request_id"));
+        Assert.Null(activity.GetTagItem("rpc.request_id_type"));
+        Assert.Null(activity.GetTagItem("rpc.request_id_length"));
     }
 
     [Fact]
@@ -352,20 +383,49 @@ public partial class McpServerTests : IDisposable
     [Fact]
     public async Task ProcessFrameAsync_TimedOutIsolatedActionReportsAndCleansUpDrain_Issue3722()
     {
+        const string requestId = "github_pat_4551_timeout_abcdefghijklmnopqrstuvwxyz";
         using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion())
         {
             RequestTimeout = TimeSpan.FromMilliseconds(20),
         };
         var blocker = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         server.RequestDelayForTests = _ => blocker.Task;
+        using var stderr = new StringWriter();
 
-        var response = await server.ProcessFrameAsync("""{"jsonrpc":"2.0","id":3722,"method":"ping"}""")
-            .WaitAsync(TimeSpan.FromSeconds(5));
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = requestId,
+            ["method"] = "ping",
+        };
+        string? response = null;
+        await Task.Run(() =>
+        {
+            lock (TestConsoleLock.Gate)
+            {
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(stderr);
+#pragma warning disable xUnit1031
+                    response = server.ProcessFrameAsync(request.ToJsonString())
+                        .WaitAsync(TimeSpan.FromSeconds(5))
+                        .GetAwaiter()
+                        .GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
+            }
+        });
 
         Assert.NotNull(response);
         using (var document = JsonDocument.Parse(response))
         {
             var error = document.RootElement.GetProperty("error");
+            Assert.Equal(requestId, document.RootElement.GetProperty("id").GetString());
             Assert.Equal("Request timed out", error.GetProperty("message").GetString());
             var data = error.GetProperty("data");
             Assert.Equal(OperationTimeoutCategories.McpRequest, data.GetProperty("timeout_category").GetString());
@@ -374,6 +434,17 @@ public partial class McpServerTests : IDisposable
         var draining = server.BuildRequestTimeoutDiagnosticsStatus();
         Assert.Equal(1, draining["isolated_action_draining_count"]!.GetValue<long>());
         Assert.Equal("draining", draining["last"]!["state"]!.GetValue<string>());
+        var requestIdToken = draining["last"]!["request_id"]!.GetValue<string>();
+        Assert.Equal(McpRequestIdTelemetry.TokenLength, requestIdToken.Length);
+        Assert.NotEqual(requestId, requestIdToken);
+        Assert.Equal("string", draining["last"]!["request_id_type"]!.GetValue<string>());
+        Assert.Equal(requestId.Length, draining["last"]!["request_id_length"]!.GetValue<int>());
+        Assert.DoesNotContain(requestId, draining.ToJsonString(), StringComparison.Ordinal);
+        var stderrText = stderr.ToString();
+        Assert.Contains($"request_id={requestIdToken}", stderrText, StringComparison.Ordinal);
+        Assert.Contains("request_id_type=string", stderrText, StringComparison.Ordinal);
+        Assert.Contains($"request_id_length={requestId.Length}", stderrText, StringComparison.Ordinal);
+        Assert.DoesNotContain(requestId, stderrText, StringComparison.Ordinal);
 
         blocker.SetResult();
 
@@ -383,6 +454,7 @@ public partial class McpServerTests : IDisposable
         var drained = server.BuildRequestTimeoutDiagnosticsStatus();
         Assert.Equal(1, drained["isolated_action_drained_count"]!.GetValue<long>());
         Assert.Equal("completed", drained["last"]!["state"]!.GetValue<string>());
+        Assert.Equal(requestIdToken, drained["last"]!["request_id"]!.GetValue<string>());
     }
 
     [Fact]
@@ -1069,6 +1141,8 @@ public sealed class Caller
     [Fact]
     public async Task ProcessLineAsync_ToolCallEmitsInvocationTelemetry()
     {
+        const string requestId = "sk-proj-4551_abcdefghijklmnopqrstuvwxyz0123456789";
+        var expectedRequestId = McpRequestIdTelemetry.Create(JsonValue.Create(requestId));
         using var writer = new StringWriter();
         using var error = new StringWriter();
 
@@ -1081,7 +1155,18 @@ public sealed class Caller
                 {
                     Console.SetError(error);
 #pragma warning disable xUnit1031
-                    _server.ProcessLineAsync("""{"jsonrpc":"2.0","id":123,"method":"tools/call","params":{"name":"ping","arguments":{}}}""", writer).GetAwaiter().GetResult();
+                    var request = new JsonObject
+                    {
+                        ["jsonrpc"] = "2.0",
+                        ["id"] = requestId,
+                        ["method"] = "tools/call",
+                        ["params"] = new JsonObject
+                        {
+                            ["name"] = "ping",
+                            ["arguments"] = new JsonObject(),
+                        },
+                    };
+                    _server.ProcessLineAsync(request.ToJsonString(), writer).GetAwaiter().GetResult();
 #pragma warning restore xUnit1031
                 }
                 finally
@@ -1093,14 +1178,23 @@ public sealed class Caller
 
         var line = error.ToString()
             .Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Single(l => l.Contains("\"event\":\"mcp.tool.invocation\"", StringComparison.Ordinal));
-        Assert.Contains("[rid=123 cid=", line);
+            .Single(l => l.Contains("\"event\":\"mcp.tool.invocation\"", StringComparison.Ordinal)
+                && l.Contains(expectedRequestId.Token, StringComparison.Ordinal));
+        Assert.DoesNotContain(requestId, error.ToString(), StringComparison.Ordinal);
+        using (var response = JsonDocument.Parse(writer.ToString()))
+            Assert.Equal(requestId, response.RootElement.GetProperty("id").GetString());
         var jsonStart = line.IndexOf('{');
         using var document = JsonDocument.Parse(line[jsonStart..]);
         var root = document.RootElement;
         Assert.Equal("mcp.tool.invocation", root.GetProperty("event").GetString());
         Assert.Equal("ping", root.GetProperty("tool").GetString());
-        Assert.Equal("123", root.GetProperty("request_id").GetString());
+        var token = root.GetProperty("request_id").GetString();
+        Assert.NotNull(token);
+        Assert.Equal(expectedRequestId.Token, token);
+        Assert.Equal(McpRequestIdTelemetry.TokenLength, token.Length);
+        Assert.Equal("string", root.GetProperty("request_id_type").GetString());
+        Assert.Equal(requestId.Length, root.GetProperty("request_id_length").GetInt32());
+        Assert.Contains($"[rid={token} rid_type=string rid_length={requestId.Length} cid=", line, StringComparison.Ordinal);
         Assert.Equal("success", root.GetProperty("status").GetString());
         Assert.True(root.TryGetProperty("correlation_id", out var correlationId));
         Assert.False(string.IsNullOrWhiteSpace(correlationId.GetString()));
@@ -1262,8 +1356,7 @@ public sealed class Caller
 
         var line = error.ToString()
             .Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Single(l => l.Contains("\"event\":\"mcp.tool.invocation\"", StringComparison.Ordinal)
-                && l.Contains($"\"request_id\":\"{requestId}\"", StringComparison.Ordinal));
+            .Single(l => l.Contains("\"event\":\"mcp.tool.invocation\"", StringComparison.Ordinal));
         var jsonStart = line.IndexOf('{');
         using var document = JsonDocument.Parse(line[jsonStart..]);
         var root = document.RootElement;
@@ -1305,7 +1398,12 @@ public sealed class Caller
         var data = response["error"]!["data"]!;
         Assert.Equal("321", data["request_id"]!.GetValue<string>());
         Assert.False(string.IsNullOrWhiteSpace(data["correlation_id"]!.GetValue<string>()));
-        Assert.Contains("[cdidx-mcp] [rid=321 cid=", error.ToString());
+        var telemetryRequestId = McpRequestIdTelemetry.Create(JsonValue.Create(321));
+        Assert.Contains(
+            $"[cdidx-mcp] [rid={telemetryRequestId.Token} rid_type=number rid_length=3 cid=",
+            error.ToString(),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("[rid=321 ", error.ToString(), StringComparison.Ordinal);
     }
 
 
@@ -9719,7 +9817,10 @@ public sealed class Caller
             var requestTimeouts = server.BuildRequestTimeoutDiagnosticsStatus();
             Assert.Equal(1L, requestTimeouts["isolated_action_draining_count"]!.GetValue<long>());
             Assert.Equal(0L, requestTimeouts["isolated_action_drained_count"]!.GetValue<long>());
-            Assert.Equal("123", requestTimeouts["last"]!["request_id"]!.GetValue<string>());
+            var telemetryRequestId = McpRequestIdTelemetry.Create(JsonValue.Create(123));
+            Assert.Equal(telemetryRequestId.Token, requestTimeouts["last"]!["request_id"]!.GetValue<string>());
+            Assert.Equal("number", requestTimeouts["last"]!["request_id_type"]!.GetValue<string>());
+            Assert.Equal(3, requestTimeouts["last"]!["request_id_length"]!.GetValue<int>());
             Assert.Equal("draining", requestTimeouts["last"]!["state"]!.GetValue<string>());
             Assert.True(requestTimeouts["last"]!["elapsed_ms"]!.GetValue<long>() >= 1);
         }

@@ -632,7 +632,7 @@ After a successful `cdidx index` run, the writer refreshes SQLite planner statis
 
 Each JSON-RPC MCP request gets a server-generated `correlation_id` in addition to the client-controlled JSON-RPC `id`. Successful MCP responses include it under `result._meta.correlation_id`, and error responses include it in `error.data.correlation_id` or tool-error `result.structuredContent.correlation_id`. The serialized JSON-RPC id is echoed as `request_id` in the same metadata when one exists. `batch_query` assigns child correlation IDs to each slot by suffixing the parent value with `.1`, `.2`, and so on.
 
-MCP stderr diagnostics are prefixed with `[rid=<json-rpc-id> cid=<correlation-id>]` when a request context exists. Every `tools/call` also emits one structured JSON line with `event: "mcp.tool.invocation"`, the tool name, elapsed milliseconds, status, result count when available, error metadata, argument keys, and argument lengths. Argument values are intentionally not logged in this telemetry line.
+MCP stderr diagnostics are prefixed with `[rid=<opaque-token> rid_type=<id-type> rid_length=<decoded-value-length> cid=<correlation-id>]` when a request context has an id. Every `tools/call` also emits one structured JSON line with `event: "mcp.tool.invocation"`, the same opaque `request_id` / `request_id_type` / `request_id_length` tuple, the tool name, elapsed milliseconds, status, result count when available, error metadata, argument keys, and argument lengths. Neither the raw request id nor argument values are logged in this telemetry.
 
 ### MCP search pagination
 
@@ -2266,9 +2266,10 @@ malformed, or too-deep frames return `-32700` with `id: null`; MCP `status`
   to `GlobalToolLog`, so persistent logging records one `mcp_http_request`
   line per HTTP request when the lifecycle log is enabled. The record includes
   method, path, status, duration, auth outcome, remote peer, correlation id,
-  and JSON-RPC request id when available; caller-controlled method, path,
-  remote peer, and request id values are capped at 256 characters with a
-  `...<truncated>` marker, and it never includes request or response bodies.
+  and, when available, an opaque JSON-RPC request-id token plus its type and
+  decoded-value length. Caller-controlled method, path, and remote peer values
+  are capped at 256 characters with a `...<truncated>` marker. The record never
+  includes request/response bodies or a raw JSON-RPC id.
 - Cancellation hooks the `CancellationToken` into
   `_listener.Stop()` so `GetContextAsync()` unblocks on shutdown;
   `HttpListenerException` / `ObjectDisposedException` are treated as
@@ -2285,6 +2286,33 @@ ordering invariant identical across both transports, so the existing
 McpServer test surface (which exercises `ProcessLineAsync`) continues
 to cover the per-method behavior, while `HttpMcpTransportTests` cover
 the wire-level contract for the new transport.
+
+#### JSON-RPC request-id telemetry boundary — issue #4551
+
+`McpRequestIdTelemetry` is the single conversion boundary between a
+client-supplied JSON-RPC id and observability data. It derives a fixed-length
+`rid:v1:...` token with HMAC-SHA256 and a random process-local salt. The raw id
+stays only on the JSON-RPC wire and in protocol internals that need it for
+response echo, routing, or cancellation; it must never be copied into a log,
+metric, trace, activity, or audit event.
+
+Token cardinality is process-bounded as well as token length. The provider
+keeps individual tokens for at most 4,096 distinct ids per process. After that
+budget is exhausted, every previously unseen id maps to one process-salted,
+fixed-length overflow token while already registered ids retain their tokens.
+Consequently, `request_id` has at most 4,097 distinct values in one process.
+
+The associated metadata is content-free: `request_id_type` is `string`,
+`number`, or `null`, while `request_id_length` is the decoded string-value
+UTF-16 code-unit count, the numeric JSON-text character count, or `0` for `null`.
+The stderr correlation prefix and invocation JSON, Activity tags
+(`rpc.request_id`, `rpc.request_id_type`, `rpc.request_id_length`), MCP metrics,
+audit JSONL, HTTP request logs, and timeout diagnostics/status all use the same
+token/type/length tuple. CLI metrics omit these fields because they have no
+JSON-RPC request. A token is deterministic only within one process; restarting
+the server process changes the salt and intentionally breaks cross-process
+correlation. Tests for any new telemetry surface must include a credential-like
+id and prove that the raw value is absent.
 
 #### Structured error envelope and server codes — issue #1581
 
@@ -2451,7 +2479,8 @@ Contract guarantees:
 
 Contract guarantees that downstream consumers can rely on:
 
-- **Field stability.** `timestamp`, `tool`, `arg_keys`, `arg_lengths`, `elapsed_ms`, `error_code` are emitted on every record. `caller`, `caller_version`, `request_id`, `request_id_length`, `request_id_truncated`, `arg_key_lengths`, `arg_keys_truncated`, `arg_key_truncation_reasons`, `arg_values`, `arg_values_redacted`, `arg_values_truncated`, `arg_values_truncation_reasons`, `arg_values_serialized_bytes`, `arg_values_max_bytes`, `result_count`, `error` are emitted only when non-null or true; renaming or repurposing any published field is a breaking change, the same policy as the CLI `--metrics` schema.
+- **Field stability.** `timestamp`, `tool`, `arg_keys`, `arg_lengths`, `elapsed_ms`, `error_code` are emitted on every record. `caller`, `caller_version`, `request_id`, `request_id_type`, `request_id_length`, `request_id_truncated`, `arg_key_lengths`, `arg_keys_truncated`, `arg_key_truncation_reasons`, `arg_values`, `arg_values_redacted`, `arg_values_truncated`, `arg_values_truncation_reasons`, `arg_values_serialized_bytes`, `arg_values_max_bytes`, `result_count`, `error` are emitted only when non-null or true; renaming or repurposing any published field is a breaking change, the same policy as the CLI `--metrics` schema.
+- **Request-id privacy.** `request_id` is the process-salted fixed-length token described above, never the JSON-RPC wire value. A present token is accompanied by `request_id_type` and the decoded-value `request_id_length`; the legacy truncation guard is normally absent because the token is already bounded.
 - **Error code semantics.** `0` = success, `1` = MCP tool error (`isError: true`), negative = the verbatim JSON-RPC error code (e.g. `-32602` for invalid params, `-32603` for internal error). The companion `error` string is one of `jsonrpc_error`, `tool_error`, `missing_tool_name`, or the sanitized exception type name (`McpServer.BuildSanitizedToolErrorMessage` keeps `ex.Message` out of the wire and out of the audit, #1530).
 - **Result count.** `ExtractResultCount` prefers `structuredContent.count` over `structuredContent.results.length`; tool errors and JSON-RPC errors omit the field. Tools that return no count-shaped payload (e.g. `ping`) leave `result_count` absent rather than emitting `0`.
 - **Argument privacy.** `arg_keys` and `arg_lengths` are always recorded so query *shape* is recoverable, but argument-key count and displayed key length are capped and marked with `arg_keys_truncated`. `arg_values` is gated behind `--audit-log-include-values` because cdidx queries can carry literal source snippets or secret-shaped strings. The echo is a sanitized, budgeted clone: secret-like keys classified by the shared diagnostic/audit taxonomy and known token patterns are replaced with `[REDACTED]`, and depth, object-property, array-item, total-node, string-length, serialized-byte, and event-byte limits can mark `arg_values_truncated` before values are written.
@@ -3246,7 +3275,7 @@ operator は environment variable で既定値を上書きできる。
 
 各 JSON-RPC MCP request には、client-controlled な JSON-RPC `id` に加えて、server-generated な `correlation_id` を付与する。成功 response は `result._meta.correlation_id`、error response は `error.data.correlation_id` または tool-error の `result.structuredContent.correlation_id` に含める。serialized JSON-RPC id がある場合は同じ metadata に `request_id` として echo する。`batch_query` は parent value に `.1`、`.2` のような suffix を付けて slot ごとの child correlation ID を割り当てる。
 
-MCP stderr diagnostic は request context がある場合、`[rid=<json-rpc-id> cid=<correlation-id>]` prefix を付ける。すべての `tools/call` は `event: "mcp.tool.invocation"`、tool name、elapsed milliseconds、status、可能な場合の result count、error metadata、argument key、argument length を含む structured JSON line も出す。argument value はこの telemetry line には意図的に記録しない。
+MCP stderr diagnostic は request context に id がある場合、`[rid=<opaque-token> rid_type=<id-type> rid_length=<decode 後の値長> cid=<correlation-id>]` prefix を付ける。すべての `tools/call` は同じ opaque な `request_id` / `request_id_type` / `request_id_length` tuple、`event: "mcp.tool.invocation"`、tool name、elapsed milliseconds、status、可能な場合の result count、error metadata、argument key、argument length を含む structured JSON line も出す。request id の生値と argument value はこの telemetry に記録しない。
 
 ### MCP 検索ページング
 
@@ -4439,10 +4468,34 @@ JSON-RPC batch array は最大 100 item を受け付ける。独立 item は glo
 - SSE stream lifetime は active stream registry と上限付き active-stream counter だけで表現する。idle stream には最小限の SSE comment heartbeat を送り、切断済み client を検出して stream slot を解放する。その registry entry が削除された後に完了済み stream task を保持しない。
 - `ResolveListenSpec("host:port")` は prefix を事前に解決するため、CLI が stderr に `Listening on http://...` を出せる。ポート `0` は一時 `TcpListener` を probe して空きポートを取得する。probe から `HttpListener.Start()` までの TOCTOU window は、本トランスポートが local-only / single-tenant 想定であるため許容する。ワイルドカードホスト `+` / `*` はパース時点で拒否する。
 - 共有秘密認証は secure by default: loopback を含むすべての HTTP listener が `Authorization: Bearer <token>` を要求し、定数時間で比較する。`CDIDX_MCP_HTTP_TOKEN` が未設定なら `CDIDX_MCP_AUTH_TOKEN` を bearer secret として fallback し、両方が設定されている場合は前者を優先する。HTTP クライアントが `params.auth.token` も送る必要はない。token 未指定／空文字では loopback も起動を拒否し、明示的な `--allow-unauthenticated-http` だけが unsafe な loopback 例外となる。この flag は non-loopback では拒否する。設定 token は 1-4096 文字で、空白文字・制御文字・カンマを含んではならない。受信 bearer token は `Bearer ` 接頭辞の後を trim せず完全一致で扱い、空白文字・制御文字・カンマを含む値または 4096 文字超の値は hash 前に拒否する。bearer 認証は `Mcp-Session-Id` 契約とは別に評価され、確立済み session では両方が必要になる。
-- 任意のリクエストループログ: `ProgramRunner` は `HttpMcpTransport` を `GlobalToolLog` に接続するため、lifecycle log が有効な場合は HTTP リクエストごとに `mcp_http_request` 行を 1 件記録する。記録内容は method、path、status、duration、auth outcome、remote peer、correlation id、利用可能な JSON-RPC request id で、caller-controlled な method、path、remote peer、request id は 256 文字を上限に `...<truncated>` marker 付きで切り詰める。リクエスト/レスポンス本文は含めない。
+- 任意のリクエストループログ: `ProgramRunner` は `HttpMcpTransport` を `GlobalToolLog` に接続するため、lifecycle log が有効な場合は HTTP リクエストごとに `mcp_http_request` 行を 1 件記録する。記録内容は method、path、status、duration、auth outcome、remote peer、correlation id、および利用可能な場合は opaque な JSON-RPC request-id token とその型・decode 後の値長である。caller-controlled な method、path、remote peer は 256 文字を上限に `...<truncated>` marker 付きで切り詰める。リクエスト/レスポンス本文や JSON-RPC id の生値は含めない。
 - キャンセルは `_listener.Stop()` に接続するため、シャットダウン時に `GetContextAsync()` が unblock する。`HttpListenerException` / `ObjectDisposedException` は EOS と同じ扱いで MCP ループを stdin クローズと同じ経路で終了させる。
 
 ワイヤー選択は `ProgramRunner.RunMcp` で行う。`--transport stdio|http`、`--http-listen <host:port>`、loopback 専用の `--allow-unauthenticated-http` は下流の引数解析より前に取り除かれ、HTTP bearer token 解決は `CDIDX_MCP_HTTP_TOKEN` を先に見て、未設定なら `CDIDX_MCP_AUTH_TOKEN` に fallback する。ディスパッチは旧来の stdio 経路または `RunMcpHttp` に着地する。プラガブルなシームは JSON-RPC 順序不変条件を両トランスポートで同一に保つので、既存の McpServer テスト群（`ProcessLineAsync` を叩く）は引き続きメソッド単位の挙動をカバーし、新トランスポートのワイヤーレベル契約は `HttpMcpTransportTests` がカバーする。
+
+#### JSON-RPC request id の telemetry 境界 — issue #4551
+
+`McpRequestIdTelemetry` は、client-supplied な JSON-RPC id と observability data
+の間に置く唯一の変換境界である。random な process-local salt を使った
+HMAC-SHA256 から固定長の `rid:v1:...` token を導出する。id の生値は JSON-RPC
+wire と、response echo / routing / cancellation に必要な protocol 内部だけに残し、
+log、metric、trace、activity、audit event へコピーしてはならない。
+
+token は長さだけでなく cardinality も process 単位で制限する。process ごとに最大
+4,096 件の distinct id までは個別 token を保持する。その budget を使い切った後の
+未観測 id はすべて、process-salted な固定長 overflow token 1 個へ集約し、登録済み id
+の token は維持する。したがって 1 process 内の `request_id` は最大 4,097 distinct 値である。
+
+同伴 metadata は内容を保持しない。`request_id_type` は `string`、`number`、
+`null` のいずれかで、`request_id_length` は string なら decode 後の値の UTF-16 code unit 数、
+number なら JSON text の文字数、`null` なら `0` である。stderr の correlation
+prefix と invocation JSON、Activity tag（`rpc.request_id`、
+`rpc.request_id_type`、`rpc.request_id_length`）、MCP metrics、audit JSONL、
+HTTP request log、timeout diagnostics / status は、すべて同じ token/type/length
+tuple を使う。CLI metrics には JSON-RPC request がないため、これらの field を
+省略する。token が deterministic なのは同一 process 内だけで、server process 再起動時に
+salt が変わり、process をまたぐ相関は意図的に切れる。新しい telemetry surface の
+test には credential 風 id を含め、生値が現れないことを検証する。
 
 #### 構造化エラーエンベロープとサーバーコード — issue #1581
 
@@ -4547,7 +4600,8 @@ Regex timeout の挙動は `RegexTimeoutPolicy` (`src/CodeIndex/Diagnostics/Rege
 
 下流コンシューマが依存できる契約:
 
-- **フィールドの安定性。** `timestamp`、`tool`、`arg_keys`、`arg_lengths`、`elapsed_ms`、`error_code` は全レコードで出力する。`caller`、`caller_version`、`request_id`、`request_id_length`、`request_id_truncated`、`arg_key_lengths`、`arg_keys_truncated`、`arg_key_truncation_reasons`、`arg_values`、`arg_values_redacted`、`arg_values_truncated`、`arg_values_truncation_reasons`、`arg_values_serialized_bytes`、`arg_values_max_bytes`、`result_count`、`error` は値が non-null または true のときだけ含める。既存フィールドの改名や流用は破壊的変更扱い（CLI `--metrics` と同じ運用）。
+- **フィールドの安定性。** `timestamp`、`tool`、`arg_keys`、`arg_lengths`、`elapsed_ms`、`error_code` は全レコードで出力する。`caller`、`caller_version`、`request_id`、`request_id_type`、`request_id_length`、`request_id_truncated`、`arg_key_lengths`、`arg_keys_truncated`、`arg_key_truncation_reasons`、`arg_values`、`arg_values_redacted`、`arg_values_truncated`、`arg_values_truncation_reasons`、`arg_values_serialized_bytes`、`arg_values_max_bytes`、`result_count`、`error` は値が non-null または true のときだけ含める。既存フィールドの改名や流用は破壊的変更扱い（CLI `--metrics` と同じ運用）。
+- **request id のプライバシー。** `request_id` は前述の process-salted な固定長 token で、JSON-RPC wire の値ではない。token がある場合は `request_id_type` と decode 後の値長を示す `request_id_length` を同伴する。token 自体がすでに bounded なため、legacy の truncation guard は通常付かない。
 - **エラーコード意味論。** `0`=成功、`1`=MCP ツールエラー (`isError: true`)、負値=JSON-RPC エラーコードそのまま（例: invalid params なら `-32602`、internal error なら `-32603`）。同伴する `error` 文字列は `jsonrpc_error` / `tool_error` / `missing_tool_name` / サニタイズ済み例外型名のいずれか。`McpServer.BuildSanitizedToolErrorMessage` が `ex.Message` をワイヤーと audit から除外している（#1530）。
 - **result count。** `ExtractResultCount` は `structuredContent.count` を優先し、無ければ `structuredContent.results.length`、いずれも無ければ省略する。ツールエラー / JSON-RPC エラー時も省略する（`0` ではなく欠落）。
 - **引数のプライバシー。** `arg_keys` / `arg_lengths` は常に記録するので呼び出しの *形状* は復元できるが、引数キー数と表示キー長は capped され `arg_keys_truncated` で明示される。`arg_values` は `--audit-log-include-values` に gated（cdidx クエリにはソース片や secret 風文字列が混入しうる）。echo は sanitize と budget を適用した clone として作り、diagnostic / audit 共有 taxonomy で分類された secret 風キーや既知 token pattern は `[REDACTED]` に置換し、depth / object property / array item / total node / string length / serialized byte / event byte の上限に達した場合は値を書き出す前に `arg_values_truncated` を記録する。

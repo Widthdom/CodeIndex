@@ -2988,10 +2988,15 @@ internal static partial class ProgramRunner
 
     private static void LogHttpMcpRequest(HttpMcpTransport.HttpRequestLogRecord record)
     {
-        GlobalToolLog.Info(
-            "mcp_http_request"
+        GlobalToolLog.Info(FormatHttpMcpRequestLogRecord(record));
+    }
+
+    internal static string FormatHttpMcpRequestLogRecord(HttpMcpTransport.HttpRequestLogRecord record)
+        => "mcp_http_request"
             + $" correlation_id={record.CorrelationId}"
             + $" request_id={FormatLogValue(record.RequestId)}"
+            + $" request_id_type={FormatLogValue(record.RequestIdType)}"
+            + $" request_id_length={(record.RequestIdLength?.ToString(CultureInfo.InvariantCulture) ?? "-")}"
             + $" remote_peer={FormatLogValue(record.RemotePeer)}"
             + $" method={FormatLogValue(record.Method)}"
             + $" path={FormatLogValue(record.Path)}"
@@ -2999,8 +3004,7 @@ internal static partial class ProgramRunner
             + $" duration_ms={record.DurationMs.ToString("0.###", CultureInfo.InvariantCulture)}"
             + $" auth={FormatLogValue(record.AuthOutcome)}"
             + $" rejection={FormatLogValue(record.RejectionReason)}"
-            + $" diagnostic={FormatLogValue(record.Diagnostic)}");
-    }
+            + $" diagnostic={FormatLogValue(record.Diagnostic)}";
 
     private static string FormatLogValue(string? value)
     {

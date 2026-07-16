@@ -1461,9 +1461,20 @@ public partial class McpServer : IDisposable
 
             capacityRejectedRegistrations?.Register(request);
             ExtractResponseId(request, out responseHasId, out responseId);
-            if (responseHasId && CurrentCorrelationContext.Value is null)
-                frameCorrelationScope = BeginRequestCorrelation(responseId);
-            using var activity = StartMcpActivity(request, responseId);
+            // A batch frame has no single JSON-RPC id. Invalid ids and malformed scalar frames
+            // also use id:null only for the JSON-RPC error response; that wire fallback must not
+            // be mistaken for an explicit null request id in telemetry. Batch items establish
+            // their own valid-id contexts in HandleMessageAsync.
+            // batch frame 自体には単一の JSON-RPC id がない。invalid id や scalar frame の
+            // id:null は error response 専用で、telemetry 上の明示 null id と混同しない。
+            // batch item は HandleMessageAsync で valid id ごとの context を作る。
+            var frameHasRequestId = request is JsonObject requestObject
+                && TryGetRequestId(requestObject, out var requestObjectHasId, out _)
+                && requestObjectHasId;
+            var frameHasCorrelation = responseHasId && request is not JsonArray;
+            if (frameHasCorrelation && CurrentCorrelationContext.Value is null)
+                frameCorrelationScope = BeginRequestCorrelation(responseId, frameHasRequestId);
+            using var activity = StartMcpActivity(request, frameHasRequestId, responseId);
             var response = await HandleMessageAsync(
                 request,
                 isolateRequestDb: true,
@@ -1526,7 +1537,7 @@ public partial class McpServer : IDisposable
         }
     }
 
-    private static Activity? StartMcpActivity(JsonNode request, JsonNode? responseId)
+    private static Activity? StartMcpActivity(JsonNode request, bool responseHasId, JsonNode? responseId)
     {
         var method = request is JsonObject obj ? TryGetStringMember(obj, "method") : null;
         var traceParent = TryGetMcpTraceParent(request);
@@ -1541,8 +1552,13 @@ public partial class McpServer : IDisposable
         activity?.SetTag("rpc.service", "mcp");
         if (!string.IsNullOrWhiteSpace(method))
             activity?.SetTag("rpc.method", method);
-        if (responseId != null)
-            activity?.SetTag("rpc.request_id", responseId.ToJsonString());
+        if (responseHasId)
+        {
+            var requestId = McpRequestIdTelemetry.Create(responseId);
+            activity?.SetTag("rpc.request_id", requestId.Token);
+            activity?.SetTag("rpc.request_id_type", requestId.Type);
+            activity?.SetTag("rpc.request_id_length", requestId.Length);
+        }
         return activity;
     }
 
@@ -1935,9 +1951,10 @@ public partial class McpServer : IDisposable
         if (context is null)
             return message;
 
-        var prefix = context.RequestId == null
-            ? $"[cid={context.CorrelationId}] "
-            : $"[rid={context.RequestId} cid={context.CorrelationId}] ";
+        var requestId = context.TelemetryRequestId;
+        var prefix = requestId is { } presentRequestId
+            ? $"[rid={presentRequestId.Token} rid_type={presentRequestId.Type} rid_length={presentRequestId.Length.ToString(CultureInfo.InvariantCulture)} cid={context.CorrelationId}] "
+            : $"[cid={context.CorrelationId}] ";
         return message.StartsWith("[cdidx-mcp] ", StringComparison.Ordinal)
             ? "[cdidx-mcp] " + prefix + message["[cdidx-mcp] ".Length..]
             : prefix + message;
@@ -1984,10 +2001,10 @@ public partial class McpServer : IDisposable
 
         builder.Append(",\"data\":{\"correlation_id\":");
         builder.Append(JsonSerializer.Serialize(context.CorrelationId));
-        if (context.RequestId != null)
+        if (context.WireRequestId != null)
         {
             builder.Append(",\"request_id\":");
-            builder.Append(JsonSerializer.Serialize(context.RequestId));
+            builder.Append(JsonSerializer.Serialize(context.WireRequestId));
         }
         builder.Append('}');
     }
@@ -2247,7 +2264,7 @@ public partial class McpServer : IDisposable
                     request["params"],
                     deferredInitializeCommits)),
                 "tools/list" => Task.FromResult<JsonNode>(HandleToolsList(id, request["params"])),
-                "tools/call" => HandleToolsCallAsync(id, request["params"]),
+                "tools/call" => HandleToolsCallAsync(hasId, id, request["params"]),
                 "resources/list" => Task.FromResult<JsonNode>(HandleResourcesList(id, request["params"])),
                 "resources/read" => Task.FromResult<JsonNode>(HandleResourcesRead(id, request["params"])),
                 "prompts/list" => Task.FromResult<JsonNode>(HandlePromptsList(id)),
@@ -2897,7 +2914,10 @@ public partial class McpServer : IDisposable
         _currentBatchResponseItemMaxBytes.Value = responseItemMaxBytes;
         Database.DbDebug.ResetContext();
         ExtractResponseId(item, out var hasId, out var id);
-        using var correlationScope = BeginBatchItemCorrelation(id, index);
+        var hasTelemetryRequestId = item is JsonObject itemObject
+            && TryGetRequestId(itemObject, out var itemHasId, out _)
+            && itemHasId;
+        using var correlationScope = BeginBatchItemCorrelation(id, index, hasTelemetryRequestId);
         try
         {
             var response = await HandleMessageAsync(
@@ -3076,6 +3096,7 @@ public partial class McpServer : IDisposable
         Func<Task<JsonNode>> action)
     {
         var requestKey = SerializeRequestId(id);
+        var telemetryRequestId = McpRequestIdTelemetry.Create(id);
         var requestCts = queuedBatchRegistration is null
             ? CancellationTokenSource.CreateLinkedTokenSource(_currentRequestToken.Value, _shutdownCts.Token)
             : CancellationTokenSource.CreateLinkedTokenSource(
@@ -3158,8 +3179,7 @@ public partial class McpServer : IDisposable
                 try { requestCts.Cancel(); }
                 catch (ObjectDisposedException) { /* completed while timeout cancellation was being delivered. */ }
                 var elapsed = stopwatch.Elapsed;
-                var diagnosticRequestKey = requestKey ?? "null";
-                RecordTimedOutIsolatedActionDraining(diagnosticRequestKey, elapsed);
+                RecordTimedOutIsolatedActionDraining(telemetryRequestId, elapsed);
                 cleanupNow = false;
                 releaseExecutionSlotNow = false;
                 // This cleanup must run even after request timeout/shutdown cancellation;
@@ -3177,7 +3197,7 @@ public partial class McpServer : IDisposable
                         _ = task.Exception;
                         if (registeredRequest)
                             _activeRequests.TryRemove(requestKey!, out _);
-                        RecordTimedOutIsolatedActionDrained(diagnosticRequestKey, task);
+                        RecordTimedOutIsolatedActionDrained(telemetryRequestId, task);
                     }
                     finally
                     {
@@ -3236,21 +3256,21 @@ public partial class McpServer : IDisposable
                 ["isolated_action_draining"] = isolatedActionDraining,
             });
 
-    private void RecordTimedOutIsolatedActionDraining(string requestKey, TimeSpan elapsed)
+    private void RecordTimedOutIsolatedActionDraining(McpRequestIdTelemetryData requestId, TimeSpan elapsed)
     {
         var elapsedMs = (long)Math.Ceiling(elapsed.TotalMilliseconds);
         Interlocked.Increment(ref _timedOutIsolatedActionDrainingCount);
         lock (_requestTimeoutDiagnosticsGate)
         {
             _lastRequestTimeoutDrainDiagnostic = new RequestTimeoutDrainDiagnostic(
-                McpBoundedText.ForDisplay(requestKey, MaxRequestIdCharacterCount).Text,
+                requestId,
                 elapsedMs,
                 "draining");
         }
-        CommandErrorWriter.WriteStderr(BuildTimedOutIsolatedActionDrainingLog(requestKey, elapsedMs));
+        CommandErrorWriter.WriteStderr(BuildTimedOutIsolatedActionDrainingLog(requestId, elapsedMs));
     }
 
-    private void RecordTimedOutIsolatedActionDrained(string requestKey, Task task)
+    private void RecordTimedOutIsolatedActionDrained(McpRequestIdTelemetryData requestId, Task task)
     {
         Interlocked.Decrement(ref _timedOutIsolatedActionDrainingCount);
         Interlocked.Increment(ref _timedOutIsolatedActionDrainedCount);
@@ -3258,7 +3278,7 @@ public partial class McpServer : IDisposable
         lock (_requestTimeoutDiagnosticsGate)
         {
             _lastRequestTimeoutDrainDiagnostic = new RequestTimeoutDrainDiagnostic(
-                McpBoundedText.ForDisplay(requestKey, MaxRequestIdCharacterCount).Text,
+                requestId,
                 null,
                 state);
         }
@@ -3282,7 +3302,9 @@ public partial class McpServer : IDisposable
         {
             payload["last"] = new JsonObject
             {
-                ["request_id"] = last.RequestId,
+                ["request_id"] = last.RequestId.Token,
+                ["request_id_type"] = last.RequestId.Type,
+                ["request_id_length"] = last.RequestId.Length,
                 ["elapsed_ms"] = last.ElapsedMs.HasValue ? JsonValue.Create(last.ElapsedMs.Value) : null,
                 ["state"] = last.State,
             };
@@ -3290,41 +3312,52 @@ public partial class McpServer : IDisposable
         return payload;
     }
 
-    internal static string BuildTimedOutIsolatedActionDrainingLog(string requestKey, long elapsedMs)
-        => $"[cdidx-mcp] Request timed out while isolated action is still draining: request_id={McpBoundedText.ForDisplay(requestKey, MaxRequestIdCharacterCount).Text} elapsed_ms={elapsedMs}. The response has been sent; cleanup will continue in the background.";
+    internal static string BuildTimedOutIsolatedActionDrainingLog(McpRequestIdTelemetryData requestId, long elapsedMs)
+        => $"[cdidx-mcp] Request timed out while isolated action is still draining: request_id={requestId.Token} request_id_type={requestId.Type} request_id_length={requestId.Length.ToString(CultureInfo.InvariantCulture)} elapsed_ms={elapsedMs}. The response has been sent; cleanup will continue in the background.";
 
-    private static IDisposable BeginRequestCorrelation(JsonNode? id)
+    private static IDisposable BeginRequestCorrelation(JsonNode? id, bool includeRequestId = true)
     {
         var previous = CurrentCorrelationContext.Value;
         CurrentCorrelationContext.Value = new RequestCorrelationContext(
             SerializeRequestId(id),
+            includeRequestId ? McpRequestIdTelemetry.Create(id) : null,
             Guid.NewGuid().ToString("D"));
         return new CorrelationScope(previous);
     }
 
-    private static IDisposable BeginBatchItemCorrelation(JsonNode? id, int itemIndex)
+    private static IDisposable BeginBatchItemCorrelation(JsonNode? id, int itemIndex, bool includeRequestId = false)
     {
         var previous = CurrentCorrelationContext.Value;
         var correlationId = previous is null
             ? Guid.NewGuid().ToString("D")
             : $"{previous.CorrelationId}.{itemIndex.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
-        CurrentCorrelationContext.Value = new RequestCorrelationContext(SerializeRequestId(id), correlationId);
+        CurrentCorrelationContext.Value = new RequestCorrelationContext(
+            SerializeRequestId(id),
+            includeRequestId ? McpRequestIdTelemetry.Create(id) : null,
+            correlationId);
         return new CorrelationScope(previous);
     }
 
     private static IDisposable BeginChildCorrelation(int childIndex)
     {
         var previous = CurrentCorrelationContext.Value;
-        var requestId = previous?.RequestId;
+        var requestId = previous?.WireRequestId;
+        var telemetryRequestId = previous?.TelemetryRequestId;
         var correlationId = previous == null
             ? Guid.NewGuid().ToString("D")
             : $"{previous.CorrelationId}.{childIndex.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
-        CurrentCorrelationContext.Value = new RequestCorrelationContext(requestId, correlationId);
+        CurrentCorrelationContext.Value = new RequestCorrelationContext(requestId, telemetryRequestId, correlationId);
         return new CorrelationScope(previous);
     }
 
-    private sealed record RequestCorrelationContext(string? RequestId, string CorrelationId);
-    private sealed record RequestTimeoutDrainDiagnostic(string? RequestId, long? ElapsedMs, string State);
+    private sealed record RequestCorrelationContext(
+        string? WireRequestId,
+        McpRequestIdTelemetryData? TelemetryRequestId,
+        string CorrelationId);
+    private sealed record RequestTimeoutDrainDiagnostic(
+        McpRequestIdTelemetryData RequestId,
+        long? ElapsedMs,
+        string State);
 
     private sealed class CorrelationScope : IDisposable
     {
@@ -5263,7 +5296,7 @@ public partial class McpServer : IDisposable
     /// Execute a tool call.
     /// ツール呼び出しを実行。
     /// </summary>
-    private async Task<JsonNode> HandleToolsCallAsync(JsonNode? id, JsonNode? callParams)
+    private async Task<JsonNode> HandleToolsCallAsync(bool hasId, JsonNode? id, JsonNode? callParams)
     {
         var toolName = callParams?["name"]?.GetValue<string>();
         var args = callParams?["arguments"];
@@ -5278,7 +5311,7 @@ public partial class McpServer : IDisposable
             // Even malformed tool-call requests are audited so a misbehaving client cannot
             // hide its activity by sending invalid params on every call (#1562).
             // 不正な tools/call も audit する。不正引数でログから消えるのを防ぐため (#1562)。
-            TryEmitAudit("(missing)", id, args, missingNameResponse, _timeProvider.GetUtcNow(), 0.0, errorType: "missing_tool_name");
+            TryEmitAudit(hasId, "(missing)", id, args, missingNameResponse, _timeProvider.GetUtcNow(), 0.0, errorType: "missing_tool_name");
             return missingNameResponse;
         }
         var toolNameTooLong = toolName.Length > McpBoundedText.MaxToolNameChars;
@@ -5309,7 +5342,7 @@ public partial class McpServer : IDisposable
             // even though missing/unknown tools are captured (#1562 review).
             // オペレータ拒否された呼び出しも audit する。missing/unknown は記録されるのに
             // disabled だけ消えると、deny リストの効果を後から検証できなくなる。
-            TryEmitAudit(toolName, id, args, disabledResponse, _timeProvider.GetUtcNow(), 0.0, errorType: "tool_disabled");
+            TryEmitAudit(hasId, toolName, id, args, disabledResponse, _timeProvider.GetUtcNow(), 0.0, errorType: "tool_disabled");
             return disabledResponse;
         }
 
@@ -5435,6 +5468,7 @@ public partial class McpServer : IDisposable
             {
                 metricsStopwatch.Stop();
                 var metricsTool = BoundToolNameForDisplay(toolName).Text;
+                var requestId = CurrentCorrelationContext.Value?.TelemetryRequestId;
                 MetricsSink.Record(new MetricsEvent(
                     Timestamp: metricsStartedAt,
                     Tool: metricsTool,
@@ -5442,7 +5476,10 @@ public partial class McpServer : IDisposable
                     ElapsedMs: metricsStopwatch.Elapsed.TotalMilliseconds,
                     ExitCode: metricsError == null ? 0 : 1,
                     Language: TryReadMetricStringArg(args, "language") ?? TryReadMetricStringArg(args, "lang"),
-                    Error: metricsError));
+                    Error: metricsError,
+                    RequestId: requestId?.Token,
+                    RequestIdType: requestId?.Type,
+                    RequestIdLength: requestId?.Length));
             }
         }
 
@@ -5454,7 +5491,7 @@ public partial class McpServer : IDisposable
         // 出力する。Stopwatch.Stop は冪等。TryEmitAudit 内部でベストエフォート化済み (#1562)。
         metricsStopwatch.Stop();
         var auditErrorType = metricsError == "unknown_tool" ? null : metricsError;
-        TryEmitAudit(toolName, id, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, errorType: auditErrorType);
+        TryEmitAudit(hasId, toolName, id, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, errorType: auditErrorType);
         EmitToolInvocationTelemetry(toolName, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, metricsError);
         return response;
     }
@@ -5535,7 +5572,9 @@ public partial class McpServer : IDisposable
             ["event"] = "mcp.tool.invocation",
             ["timestamp"] = startedAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
             ["tool"] = toolDisplay.Text,
-            ["request_id"] = context?.RequestId,
+            ["request_id"] = context?.TelemetryRequestId?.Token,
+            ["request_id_type"] = context?.TelemetryRequestId?.Type,
+            ["request_id_length"] = context?.TelemetryRequestId?.Length,
             ["correlation_id"] = context?.CorrelationId,
             ["elapsed_ms"] = Math.Round(elapsedMs, 3),
             ["status"] = errorCode == 0 ? "success" : "error",
@@ -5673,7 +5712,7 @@ public partial class McpServer : IDisposable
     /// 値と一致させるため、wire response から result count / error code を抽出する (#1562)。
     /// audit 失敗で本体ツール呼び出しを壊さないようベストエフォート化する。
     /// </summary>
-    private void TryEmitAudit(string toolName, JsonNode? id, JsonNode? args, JsonNode response, DateTimeOffset startedAt, double elapsedMs, string? errorType)
+    private void TryEmitAudit(bool hasId, string toolName, JsonNode? id, JsonNode? args, JsonNode response, DateTimeOffset startedAt, double elapsedMs, string? errorType)
     {
         if (_auditLog is null)
             return;
@@ -5694,16 +5733,15 @@ public partial class McpServer : IDisposable
                     out var argKeysOmittedCount,
                     out var argKeyNamesTruncatedCount);
             var toolDisplay = BoundToolNameForDisplay(toolName);
-            var requestId = SerializeRequestId(id);
-            BoundedMcpText? requestIdDisplay = requestId is null
-                ? null
-                : McpBoundedText.ForDisplay(requestId, AuditLogSink.MaxRequestIdChars);
+            McpRequestIdTelemetryData? requestId = hasId
+                ? McpRequestIdTelemetry.Create(id)
+                : null;
             var evt = new AuditLogSink.AuditEvent(
                 Timestamp: startedAt,
                 Tool: toolDisplay.Text,
                 CallerName: initializeState.ClientName,
                 CallerVersion: initializeState.ClientVersion,
-                RequestId: requestIdDisplay?.Text,
+                RequestId: requestId?.Token,
                 ArgKeys: argKeys,
                 ArgLengths: argLengths,
                 ArgValues: argValuesEcho,
@@ -5722,8 +5760,8 @@ public partial class McpServer : IDisposable
                 ArgValuesTruncated: argValuesTruncated,
                 ArgValueTruncationReasons: argValueTruncationReasons,
                 ArgValuesSerializedBytes: argValuesSerializedBytes,
-                RequestIdLength: requestIdDisplay?.Truncated == true ? requestIdDisplay.Value.OriginalLength : null,
-                RequestIdTruncated: requestIdDisplay?.Truncated == true,
+                RequestIdType: requestId?.Type,
+                RequestIdLength: requestId?.Length,
                 CallerNameLength: initializeState.ClientNameDisplay?.Truncated == true ? initializeState.ClientNameDisplay.Value.OriginalLength : null,
                 CallerNameTruncated: initializeState.ClientNameDisplay?.Truncated == true,
                 CallerVersionLength: initializeState.ClientVersionDisplay?.Truncated == true ? initializeState.ClientVersionDisplay.Value.OriginalLength : null,
@@ -6395,8 +6433,8 @@ public partial class McpServer : IDisposable
 
         var meta = obj["_meta"] as JsonObject ?? new JsonObject();
         meta["correlation_id"] = context.CorrelationId;
-        if (context.RequestId != null)
-            meta["request_id"] = context.RequestId;
+        if (context.WireRequestId != null)
+            meta["request_id"] = context.WireRequestId;
         obj["_meta"] = meta;
     }
 
@@ -6408,8 +6446,8 @@ public partial class McpServer : IDisposable
 
         var data = extraData is null ? new JsonObject() : (JsonObject)extraData.DeepClone();
         data["correlation_id"] = context.CorrelationId;
-        if (context.RequestId != null)
-            data["request_id"] = context.RequestId;
+        if (context.WireRequestId != null)
+            data["request_id"] = context.WireRequestId;
         return data;
     }
 
