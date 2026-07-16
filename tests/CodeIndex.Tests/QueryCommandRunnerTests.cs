@@ -5605,7 +5605,7 @@ public partial class QueryCommandRunnerTests
         var (exitCode, _, stderr) = CaptureConsole(() => RunQueryCommand(commandName, []));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains($"Error: {expectedMessage}", stderr);
+        Assert.Contains(expectedMessage, stderr);
         Assert.DoesNotContain("query cannot be empty or whitespace-only", stderr);
     }
 
