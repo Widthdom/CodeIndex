@@ -59,13 +59,23 @@ Development contracts:
 | Artifact | POSIX permission and behavior |
 |---|---|
 | `.cdidx/` | Created with mode `0700`. |
-| `codeindex.db` plus WAL/SHM sidecars | Mode `0600` is applied when the files exist. |
+| `codeindex.db` plus WAL/SHM sidecars | Mode `0600` is applied when the files exist. Enforcement defaults to best-effort and can be made strict with `CDIDX_DB_PERMISSION_POLICY=strict`. |
 | `suggestions-*.json` suggestion stores | Written atomically with owner-only mode `0600` on POSIX. |
 | Indexed workspace source reads | Source-file content and checksum reads use `FileShare.ReadWrite | FileShare.Delete`, long-path normalization, the configured max-file byte cap, and modified-time retry checks so indexing can inspect files that build tools keep open without allowing unbounded growth. |
 | Atomic file writes | `AtomicFileWriter` writes to a sibling temp file, applies the requested POSIX mode before replacement, flushes file contents, renames over the target, and fsyncs the parent directory on Unix. Callers must use the `Sensitive` write profile for local state, caches, suggestions, checkpoints, and other private payloads; user-requested exports and reports use the default `Public` profile unless their content is explicitly private. If the parent directory flush fails after replacement, the command fails explicitly so callers know the file was replaced but directory durability was not confirmed. Windows skips directory fsync because the helper only promises it on supported Unix platforms. |
 | Index locks, watch sub-run spools, staged hook scripts, lock metadata sidecars, and active workspace `active.json` | Created or written as owner-only files (`0600`) before contents are exposed, and read through small bounded buffers where applicable so stale or corrupted diagnostics cannot expose local paths more broadly or force unbounded allocation. |
 | Checkpoint roots, snapshot directories, manifest files, copied DB/WAL/SHM snapshots, and restore staging/backup directories | Forced owner-only on POSIX. |
-| `status --json` | Reports `data_dir_mode` and `db_file_mode` when the platform exposes Unix file modes. |
+| `status --json` | Reports `data_dir_mode`, `db_file_mode`, the effective `database_permission_policy`, and support-safe `database_permission_diagnostics` when Unix mode operations fail. |
+
+`CDIDX_DB_PERMISSION_POLICY` accepts `best_effort` (the default) or `strict`. In
+best-effort mode, `IOException`, `UnauthorizedAccessException`, and
+`NotSupportedException` from database/WAL/SHM mode changes or database mode reads do
+not make an otherwise usable SQLite database inaccessible. cdidx emits a stable
+`database_permission_hardening_failed` warning and records the operation, logical
+target, stable reason, message, and remediation without exposing the database path.
+Strict mode instead fails with a structured `CodeIndexException` carrying the same
+error code and a remediation hint. Windows and explicit SQLite file URIs skip this
+POSIX-only enforcement.
 
 ### Destructive Filesystem Operation Audit
 
@@ -2697,13 +2707,22 @@ net9 CI lane に合わせる場合は `FRAMEWORK=net9.0 make test` を使いま�
 | artifact | POSIX permission / behavior |
 |---|---|
 | `.cdidx/` | mode `0700` で作成。 |
-| `codeindex.db` と WAL/SHM sidecar | ファイルが存在する場合は mode `0600` を適用。 |
+| `codeindex.db` と WAL/SHM sidecar | ファイルが存在する場合は mode `0600` を適用。既定は best-effort で、`CDIDX_DB_PERMISSION_POLICY=strict` により strict enforcement にできます。 |
 | `suggestions-*.json` suggestion store | POSIX では owner-only の mode `0600` で atomic write します。 |
 | インデックス対象ワークスペースソースの読み取り | ソースファイル本文とチェックサムの読み取りは `FileShare.ReadWrite | FileShare.Delete`、長いパスの正規化、設定された最大ファイルバイト数、更新時刻の再確認を使い、ビルドツールが開いたままのファイルも無制限な肥大化を許さず検査できるようにします。 |
 | atomic file write | `AtomicFileWriter` は sibling temp file に書き込み、要求された POSIX mode を置換前に適用し、file content を flush してから target へ rename し、Unix では parent directory を fsync します。local state、cache、suggestion、checkpoint など private payload には `Sensitive` write profile を使い、user-requested export や report は内容が明示的に private でない限り既定の `Public` profile を使います。置換後に parent directory flush が失敗した場合、file は置換済みだが directory durability を確認できていないことが caller に分かるよう command は明示的に失敗します。Windows では、この helper の directory fsync 保証は supported Unix platform に限定されるため skip します。 |
 | index lock、watch sub-run spool、staged hook script、lock metadata sidecar、active workspace の `active.json` | 内容が露出する前に owner-only file (`0600`) として作成または書き込み、該当するものは stale / corrupt diagnostic が local path を広く漏らしたり unbounded allocation を強制したりしないよう小さな bounded buffer で読みます。 |
 | database checkpoint root、snapshot directory、manifest file、copy された DB/WAL/SHM snapshot、restore staging/backup directory | POSIX では owner-only に固定。 |
-| `status --json` | platform が Unix file mode を公開する場合、`data_dir_mode` と `db_file_mode` を報告。 |
+| `status --json` | `data_dir_mode`、`db_file_mode`、有効な `database_permission_policy`、Unix mode 操作失敗時の support-safe な `database_permission_diagnostics` を報告。 |
+
+`CDIDX_DB_PERMISSION_POLICY` は `best_effort`（既定）または `strict` を受け付けます。
+best-effort mode では、database / WAL / SHM の mode 変更または database mode 読み取りで
+`IOException`、`UnauthorizedAccessException`、`NotSupportedException` が発生しても、
+利用可能な SQLite database を使用不能にしません。cdidx は安定した
+`database_permission_hardening_failed` warning を出し、database path を公開せずに
+operation、logical target、安定 reason、message、remediation を記録します。strict mode
+では、同じ error code と remediation hint を持つ structured `CodeIndexException` で失敗します。
+Windows と明示的な SQLite file URI では、この POSIX 限定 enforcement を skip します。
 
 ### 破壊的ファイルシステム操作の監査
 

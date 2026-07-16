@@ -1,5 +1,6 @@
 using CodeIndex.Indexer;
 using CodeIndex.Cli;
+using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
 using System.Text;
@@ -56,6 +57,8 @@ public partial class DbReader : IDisposable
     private readonly bool _immutableReadOnly;
     private readonly string? _walCheckpointSkippedReason;
     private readonly string? _walCheckpointFailureReason;
+    private readonly string _databasePermissionPolicy;
+    private readonly IReadOnlyList<StatusDatabasePermissionDiagnostic> _databasePermissionDiagnostics;
     private readonly DbSchemaCache? _schemaCache;
     private readonly CancellationToken _cancellation;
     private readonly HashSet<string> _fileColumns;
@@ -407,7 +410,9 @@ public partial class DbReader : IDisposable
                context.ReadOnlyImmutableFallback,
                context.ImmutableReadOnly,
                context.WalCheckpointSkippedReason,
-               context.WalCheckpointFailureReason)
+               context.WalCheckpointFailureReason,
+               context.DatabasePermissionPolicyName,
+               context.DatabasePermissionDiagnostics)
     {
     }
 
@@ -467,7 +472,9 @@ public partial class DbReader : IDisposable
         bool readOnlyImmutableFallback = false,
         bool immutableReadOnly = false,
         string? walCheckpointSkippedReason = null,
-        string? walCheckpointFailureReason = null)
+        string? walCheckpointFailureReason = null,
+        string databasePermissionPolicy = DatabasePermissionPolicy.BestEffortName,
+        IReadOnlyList<StatusDatabasePermissionDiagnostic>? databasePermissionDiagnostics = null)
     {
         _conn = connection;
         _commandCache = commandCache;
@@ -485,6 +492,8 @@ public partial class DbReader : IDisposable
         _immutableReadOnly = immutableReadOnly;
         _walCheckpointSkippedReason = walCheckpointSkippedReason;
         _walCheckpointFailureReason = walCheckpointFailureReason;
+        _databasePermissionPolicy = databasePermissionPolicy;
+        _databasePermissionDiagnostics = databasePermissionDiagnostics?.ToArray() ?? [];
         _schemaCache = schemaCache;
         _cancellation = cancellation;
         _fileColumns = LoadColumns("files");
