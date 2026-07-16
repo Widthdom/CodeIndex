@@ -50,6 +50,8 @@ public static partial class QueryCommandRunner
     internal const string HotspotsGroupedBySymbol = "symbol";
     internal const string HotspotsGroupedByFile = "file";
     internal const string HotspotsGroupedByStatement = "statement";
+    internal const string StatusCheckModeExplicit = "explicit";
+    internal const string StatusCheckModeImpliedByStaleAfter = "implied_by_stale_after";
     public static string FormatReferenceRankMode(ReferenceRankMode mode) => mode switch
     {
         ReferenceRankMode.Count => "count",
@@ -127,6 +129,7 @@ public sealed class QueryCommandOptions
     public bool ExactSubstring { get; init; }
     public bool TokenBoundary { get; init; }
     public bool CheckWorkspace { get; init; }
+    public string? StatusCheckMode { get; init; }
     public TimeSpan? StaleAfter { get; init; }
     public IReadOnlySet<string>? StatusCheckScopes { get; init; }
     public bool WithPaths { get; init; }

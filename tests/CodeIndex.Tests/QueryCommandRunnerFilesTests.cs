@@ -1728,6 +1728,9 @@ public partial class QueryCommandRunnerTests
             Assert.True(headFreshness.GetProperty("workspace_matches_index").GetBoolean());
             Assert.Equal(1, check.GetProperty("matched_file_count").GetInt32());
             Assert.Contains("index fresh", json.GetProperty("summary").GetString());
+            var queryContext = json.GetProperty("query_context");
+            Assert.Equal(QueryCommandRunner.StatusCheckModeExplicit, queryContext.GetProperty("check_mode").GetString());
+            Assert.Equal(json.GetProperty("stale_after_seconds").GetInt64(), queryContext.GetProperty("stale_after_seconds").GetInt64());
         }
         finally
         {
@@ -1736,7 +1739,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunStatus_CheckJson_ReportsEffectiveStaleThreshold()
+    public void RunStatus_StaleAfterJson_ImpliesCheckAndReportsEffectiveContext_Issue4576()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_stale_after_json");
         try
@@ -1748,7 +1751,7 @@ public partial class QueryCommandRunnerTests
             MarkStatusReadinessReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
-                ["--db", dbPath, "--check", "--stale-after", "30m", "--json"],
+                ["--db", dbPath, "--stale-after", "30m", "--json"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -1758,6 +1761,45 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(30 * 60, json.GetProperty("stale_after_seconds").GetInt64());
             Assert.True(json.GetProperty("index_age_seconds").GetInt64() >= 0);
+            Assert.True(json.GetProperty("index_matches_workspace").GetBoolean());
+            var queryContext = json.GetProperty("query_context");
+            Assert.Equal(QueryCommandRunner.StatusCheckModeImpliedByStaleAfter, queryContext.GetProperty("check_mode").GetString());
+            Assert.Equal(30 * 60, queryContext.GetProperty("stale_after_seconds").GetInt64());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_StaleAfterJson_ReturnsStaleExitWhenWorkspaceDiffers_Issue4576()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_stale_after_changed_4576");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            var sourcePath = Path.Combine(projectRoot, "src", "app.cs");
+            File.WriteAllText(sourcePath, "class App {}\n");
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+            MarkStatusReadinessReady(dbPath);
+            File.WriteAllText(sourcePath, "class App { void Run() {} }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--stale-after", "1m", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(1, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.Equal("workspace_stale", json.GetProperty("failed_checks")[0].GetString());
+            var queryContext = json.GetProperty("query_context");
+            Assert.Equal(QueryCommandRunner.StatusCheckModeImpliedByStaleAfter, queryContext.GetProperty("check_mode").GetString());
+            Assert.Equal(60, queryContext.GetProperty("stale_after_seconds").GetInt64());
         }
         finally
         {
@@ -1813,6 +1855,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.False(json.TryGetProperty("stale_after_seconds", out _));
             Assert.False(json.TryGetProperty("index_age_seconds", out _));
+            Assert.False(json.TryGetProperty("query_context", out _));
         }
         finally
         {

@@ -527,6 +527,20 @@ public partial class QueryCommandRunnerTests
             allowStatusCheck: true);
 
         Assert.True(options.CheckWorkspace);
+        Assert.Equal(QueryCommandRunner.StatusCheckModeExplicit, options.StatusCheckMode);
+        Assert.Equal(TimeSpan.FromHours(2), options.StaleAfter);
+    }
+
+    [Fact]
+    public void ParseArgs_StatusStaleAfterImpliesCheck_Issue4576()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["--stale-after=2h"],
+            jsonDefault: false,
+            allowStatusCheck: true);
+
+        Assert.True(options.CheckWorkspace);
+        Assert.Equal(QueryCommandRunner.StatusCheckModeImpliedByStaleAfter, options.StatusCheckMode);
         Assert.Equal(TimeSpan.FromHours(2), options.StaleAfter);
     }
 

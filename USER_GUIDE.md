@@ -1464,7 +1464,7 @@ until the payload fits the requested byte budget.
 ```bash
 cdidx status
 cdidx status --check --json
-cdidx status --check --stale-after 30m
+cdidx status --stale-after 30m --json
 cdidx status --explain fold_ready
 ```
 
@@ -1486,7 +1486,12 @@ Languages:
 - scans the current indexable files with the same `FileIndexer` path filters and ignore rules used for indexing;
 - recomputes raw-byte SHA256 checksums and compares them with the DB's saved checksums;
 - reports `index_matches_workspace` plus `workspace_check.changed_files`, `missing_files`, `outside_sparse_cone_files`, `unindexed_files`, `unverifiable_files`, `scan_errors`, and `head_changed` (with `indexed_head_commit` / `workspace_head_commit` when the worktree HEAD has moved since the last full scan). Indexed paths whose git index entry is flagged skip-worktree (sparse-checkout cone/non-cone, partial clone, or manual `git update-index --skip-worktree`) land in `outside_sparse_cone_files` and do not fail the freshness gate;
-- exits `0` only when the DB exactly matches the current workspace. Stale indexes exit `5`.
+- exits `0` only when the DB exactly matches the current workspace. A stale-only check exits `1`.
+
+Supplying `--stale-after <duration>` implies `--check`, so a configured threshold
+cannot silently fall back to ordinary status. Check-mode JSON records whether the
+check was `explicit` or `implied_by_stale_after` in `query_context.check_mode` and
+repeats the effective threshold in `query_context.stale_after_seconds`.
 
 `cdidx index <projectPath>` also detects the same HEAD movement on incremental runs: if the recorded HEAD differs from the workspace HEAD it emits a `head_changed` warning (also exposed as `head_changed`, `prior_indexed_head_commit`, `current_head_commit`, and `head_change_notice` in `--json` output). When a branch-switch workflow knows the previous and current refs, refresh with `cdidx index <projectPath> --changed-between <old-ref> <new-ref>` instead of rebuilding the whole project; it updates only files changed between the refs and includes rename/delete old paths for purging. Use a full `cdidx index <projectPath> --rebuild` or `cdidx <projectPath> --json` refresh when the refs are unavailable, after history-moving operations, or when you need a whole-checkout stale-path purge.
 
@@ -3161,6 +3166,11 @@ cdidx index . --quiet
 `cdidx status --check` を使います。成功時、非 JSON の `--check` は exit 0 で stdout に
 何も出力しません。失敗時は `[stale] workspace_check ...` や
 `[degraded] fold_ready=false ...` のように、失敗した check ごとに stderr へ 1 行出力します。
+
+`--stale-after <duration>` を指定すると `--check` を暗黙に有効化するため、設定した
+しきい値が通常の status として無視されることはありません。check mode の JSON は
+`query_context.check_mode` に `explicit` または `implied_by_stale_after` を記録し、
+有効なしきい値を `query_context.stale_after_seconds` にも出力します。
 
 `status --check` の exit code はこのコマンド専用です:
 

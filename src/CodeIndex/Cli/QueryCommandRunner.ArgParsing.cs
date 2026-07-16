@@ -118,6 +118,7 @@ public static partial class QueryCommandRunner
         bool readOnly = false;
         bool dryRun = false;
         bool checkWorkspace = false;
+        bool statusCheckExplicit = false;
         TimeSpan? staleAfter = null;
         HashSet<string>? statusCheckScopes = null;
         bool withPaths = false;
@@ -343,6 +344,7 @@ public static partial class QueryCommandRunner
             if (allowStatusCheck && currentArg.StartsWith("--check=", StringComparison.Ordinal))
             {
                 checkWorkspace = true;
+                statusCheckExplicit = true;
                 AddStatusCheckScopes(currentArg["--check=".Length..]);
                 continue;
             }
@@ -1167,6 +1169,7 @@ public static partial class QueryCommandRunner
                     if (allowStatusCheck)
                     {
                         checkWorkspace = true;
+                        statusCheckExplicit = true;
                     }
                     else if (allowNamedQuery && query == null)
                     {
@@ -1198,7 +1201,10 @@ public static partial class QueryCommandRunner
                         {
                             WarnIfDuplicateSingleValueOption("--stale-after", staleAfterValue!);
                             if (TryParseStaleAfter(staleAfterValue!, out var parsedStaleAfter, out var parseStaleAfterError))
+                            {
                                 staleAfter = parsedStaleAfter;
+                                checkWorkspace = true;
+                            }
                             else
                                 AddParseError(parseStaleAfterError!);
                         }
@@ -1636,6 +1642,11 @@ public static partial class QueryCommandRunner
             ExactSubstring = exactSubstring,
             TokenBoundary = tokenBoundary,
             CheckWorkspace = checkWorkspace,
+            StatusCheckMode = checkWorkspace
+                ? statusCheckExplicit
+                    ? StatusCheckModeExplicit
+                    : StatusCheckModeImpliedByStaleAfter
+                : null,
             StaleAfter = staleAfter,
             StatusCheckScopes = statusCheckScopes,
             WithPaths = withPaths,
