@@ -178,7 +178,7 @@ fields, including readiness fields and runtime diagnostics such as
 | Unknown-extension and runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `process`, `last_index_run`, `last_workspace_freshened_at`, `last_index_run.bytes_read_skipped_file_count`, `last_index_run.bytes_read_incomplete`, `last_index_run.diagnostics`, `last_index_run.diagnostic_count`, `last_index_run.diagnostics_truncated`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`. |
 | Database maintenance | `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `busy_timeout_ms`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `prepared_command_cache` (`count`, `capacity`, `hit_count`, `miss_count`, `eviction_count`), `maintenance_guidance`. |
 | Remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`. |
-| MCP-only session diagnostics | `mcp_session`, `mcp_session.metrics`, `mcp.rate_limit.bucket_limit`, `mcp.rate_limit.bucket_limit_rejection_count`. |
+| MCP-only session diagnostics | `mcp_session`, `mcp_session.metrics`, `mcp_session.audit_log`, `mcp.rate_limit.bucket_limit`, `mcp.rate_limit.bucket_limit_rejection_count`. |
 
 Full MCP status always includes `mcp_session.metrics`; an unconfigured sink is
 `{"enabled":false}`. An enabled object reports `enabled`, `path`, `max_bytes`,
@@ -190,6 +190,20 @@ Full MCP status always includes `mcp_session.metrics`; an unconfigured sink is
 `last_failure`. MCP ping mirrors this object as `metrics`. Metrics are optional
 telemetry, so a degraded or recovering sink does not change the top-level MCP
 liveness result.
+
+When MCP audit logging is enabled, full status exposes `mcp_session.audit_log`
+and ping mirrors it as `audit_log`. The object includes `enabled`, `path`,
+`include_values`, `max_bytes`, `bytes_written`, `disposed`, `queue_capacity`,
+`queue_depth`, `queued_record_count`, `written_record_count`,
+`shutdown_abandoned_record_count`, `shutdown_flush_timed_out`,
+`dropped_record_count`, `queue_full_drop_count`, `serialization_failure_count`,
+`write_failure_count`, `rotation_failure_count`,
+`rotation_cleanup_failure_count`, and `rotation_degraded`, plus optional
+`last_drop_reason` and `last_rotation_failure`. Dropped records, degraded
+rotation, or an incomplete shutdown flush degrade MCP ping/health. The abandoned
+count is a monotonic snapshot of records not confirmed written at the shutdown
+deadline, not another dropped-record count; it remains unchanged even if the
+background writer later finishes.
 
 `worktree_head_changed` compares the runtime HEAD with the latest successful
 index stamp from `indexed_head_sha` when available, and falls back to the older
@@ -417,7 +431,7 @@ readiness field に加えて、`path_case_sensitive` などの runtime diagnosti
 | unknown-extension / runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `process`, `last_index_run`, `last_workspace_freshened_at`, `last_index_run.bytes_read_skipped_file_count`, `last_index_run.bytes_read_incomplete`, `last_index_run.diagnostics`, `last_index_run.diagnostic_count`, `last_index_run.diagnostics_truncated`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`。 |
 | database maintenance | `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `busy_timeout_ms`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `prepared_command_cache` (`count`, `capacity`, `hit_count`, `miss_count`, `eviction_count`), `maintenance_guidance`。 |
 | remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`。 |
-| MCP-only session diagnostics | `mcp_session`, `mcp_session.metrics`, `mcp.rate_limit.bucket_limit`, `mcp.rate_limit.bucket_limit_rejection_count`。 |
+| MCP-only session diagnostics | `mcp_session`, `mcp_session.metrics`, `mcp_session.audit_log`, `mcp.rate_limit.bucket_limit`, `mcp.rate_limit.bucket_limit_rejection_count`。 |
 
 MCP の full status は常に `mcp_session.metrics` を含み、sink が未設定なら
 `{"enabled":false}` になります。有効な object は `enabled`、`path`、`max_bytes`、
@@ -429,6 +443,20 @@ MCP の full status は常に `mcp_session.metrics` を含み、sink が未設�
 `last_failure` を報告します。MCP ping は同じ object を `metrics` として返します。
 metrics は任意の telemetry であるため、sink が degraded または recovery 中でも
 top-level MCP liveness result は変わりません。
+
+MCP audit log が有効な場合、full status は `mcp_session.audit_log` を公開し、
+ping は同じ object を `audit_log` として返します。この object は `enabled`、
+`path`、`include_values`、`max_bytes`、`bytes_written`、`disposed`、
+`queue_capacity`、`queue_depth`、`queued_record_count`、`written_record_count`、
+`shutdown_abandoned_record_count`、`shutdown_flush_timed_out`、
+`dropped_record_count`、`queue_full_drop_count`、`serialization_failure_count`、
+`write_failure_count`、`rotation_failure_count`、
+`rotation_cleanup_failure_count`、`rotation_degraded` に加え、任意の
+`last_drop_reason` と `last_rotation_failure` を含みます。record の drop、
+rotation degradation、または未完了の shutdown flush は MCP ping / health を
+degraded にします。abandoned count は shutdown deadline 時点で write 完了を
+確認できなかった record の単調な snapshot であり、drop count とは別物です。
+background writer が後から完了しても、この値は変更されません。
 
 `worktree_head_changed` は、利用可能な場合は最新の成功 index stamp である
 `indexed_head_sha` と runtime HEAD を比較し、legacy DB だけで従来の

@@ -1857,7 +1857,10 @@ public partial class McpServer
 
     private static bool IsAuditLogDegraded(AuditLogSink.AuditLogDiagnostics? diagnostics)
         => diagnostics is not null
-            && (diagnostics.DroppedRecordCount > 0 || diagnostics.RotationDegraded);
+            && (diagnostics.DroppedRecordCount > 0
+                || diagnostics.RotationDegraded
+                || diagnostics.ShutdownAbandonedRecordCount > 0
+                || diagnostics.ShutdownFlushTimedOut);
 
     private static JsonObject BuildAuditLogStatus(AuditLogSink.AuditLogDiagnostics diagnostics)
     {
@@ -1871,6 +1874,10 @@ public partial class McpServer
             ["disposed"] = diagnostics.Disposed,
             ["queue_capacity"] = diagnostics.QueueCapacity,
             ["queue_depth"] = diagnostics.QueueDepth,
+            ["queued_record_count"] = diagnostics.QueuedRecordCount,
+            ["written_record_count"] = diagnostics.WrittenRecordCount,
+            ["shutdown_abandoned_record_count"] = diagnostics.ShutdownAbandonedRecordCount,
+            ["shutdown_flush_timed_out"] = diagnostics.ShutdownFlushTimedOut,
             ["dropped_record_count"] = diagnostics.DroppedRecordCount,
             ["queue_full_drop_count"] = diagnostics.QueueFullDropCount,
             ["serialization_failure_count"] = diagnostics.SerializationFailureCount,

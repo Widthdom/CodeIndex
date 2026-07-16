@@ -1847,6 +1847,7 @@ Example output:
 | `--audit-log <path>` | (off) | Enable audit emission and write JSONL records to `<path>`. The parent directory is created if missing. |
 | `--audit-log-include-values` | off | Echo a redacted copy of the argument payload into each record. Requires `--audit-log`. Off by default because `query` / `name` arguments may contain literal source snippets or secret-shaped strings. |
 | `--audit-log-max-bytes <n>` | `52428800` (50 MiB) | Size threshold (bytes) at which the active log rotates. Must be between 4096 and 1073741824. |
+| `--audit-log-strict` | off | Require the audit queue to finish flushing during shutdown. Requires `--audit-log`; an incomplete flush changes an otherwise-successful MCP session to runtime exit code `10`. Existing nonzero exits are preserved. |
 
 Each record is a single JSON object on its own line with these fields:
 
@@ -1875,7 +1876,9 @@ Each record is a single JSON object on its own line with these fields:
 | `error_code` | number | `0` on success, `1` for MCP tool errors (`isError: true`), or the verbatim JSON-RPC error code (e.g. `-32602`) |
 | `error` | string (optional) | Short error category (`jsonrpc_error`, `tool_error`, `missing_tool_name`, `rate_limited`, or sanitized exception type name) |
 
-Emission is best-effort: any IO failure (read-only mount, deleted target, etc.) is swallowed silently and never breaks the underlying tool call.
+Emission remains best-effort by default: serialization, queue-full, write, and rotation failures never break the underlying tool call. At shutdown cdidx waits only for the bounded audit flush deadline. If the deadline expires, it emits one bounded, path-free warning to stderr and preserves the MCP session's exit code. Pass `--audit-log-strict` when an incomplete flush must fail automation: it returns runtime exit code `10` only when the MCP session would otherwise return `0`, and preserves an existing nonzero exit such as a protocol, server, or signal failure.
+
+Full MCP `status` exposes an enabled sink under `mcp_session.audit_log`, and MCP `ping` mirrors the same object as `audit_log`. It reports `enabled`, `path`, `include_values`, `max_bytes`, `bytes_written`, `disposed`, `queue_capacity`, `queue_depth`, `queued_record_count`, `written_record_count`, `shutdown_abandoned_record_count`, `shutdown_flush_timed_out`, `dropped_record_count`, `queue_full_drop_count`, `serialization_failure_count`, `write_failure_count`, `rotation_failure_count`, `rotation_cleanup_failure_count`, and `rotation_degraded`, plus optional `last_drop_reason` and `last_rotation_failure`. `queued_record_count` counts successful queue admissions, `written_record_count` counts successful file appends, and `shutdown_abandoned_record_count` snapshots records not confirmed written when the shutdown deadline expired. The abandoned count is monotonic and distinct from `dropped_record_count`: an abandoned record may still be written after shutdown returns, so the snapshot is not decremented and must not be added to dropped records as another known-loss count. Dropped records, degraded rotation, or a timed-out shutdown flush make MCP ping/health degraded.
 
 Example output:
 
@@ -4713,6 +4716,7 @@ MCP の full `status` は常に `mcp_session.metrics` object を含み、metrics
 | `--audit-log <path>` | (無効) | 監査出力を有効化し `<path>` に JSONL を書き出す。親ディレクトリは無ければ自動作成 |
 | `--audit-log-include-values` | off | redaction 済みの引数値をレコードに含める。`--audit-log` 必須。既定で off なのは `query` / `name` 引数にソース片や secret 風の文字列が入りうるため |
 | `--audit-log-max-bytes <n>` | `52428800` (50 MiB) | ローテーションの閾値（バイト）。4096 以上 1073741824 以下 |
+| `--audit-log-strict` | off | shutdown 時に audit queue の flush 完了を必須にする。`--audit-log` 必須。flush が未完了なら、本来成功する MCP session のみ runtime exit code `10` に変更し、既存の nonzero exit は保持する |
 
 各レコードは独立した行に 1 つの JSON オブジェクトとして書き出され、フィールドは次の通りです。
 
@@ -4741,7 +4745,9 @@ MCP の full `status` は常に `mcp_session.metrics` object を含み、metrics
 | `error_code` | number | 成功=`0`、MCP ツールエラー（`isError: true`）=`1`、JSON-RPC エラー=そのコード（例: `-32000` のレート制限、`-32602` の引数エラー） |
 | `error` | string（任意） | エラー種別の短いタグ（`rate_limited`、`jsonrpc_error`、`tool_error`、`missing_tool_name`、またはサニタイズ済み例外型名） |
 
-出力は best-effort で、ディレクトリ不在・読み取り専用マウント・対象ファイル削除などの IO 失敗は黙って握り潰し、本体ツール呼び出しを壊しません。レート制限超過（後述）で拒否された呼び出しも `error_code: -32000` / `error: "rate_limited"` で監査されるため、削減量を後から検証できます。
+出力は既定では best-effort で、serialization、queue-full、write、rotation failure が本体ツール呼び出しを壊すことはありません。shutdown 時の待機は上限付き audit flush deadline までです。deadline を超えた場合、cdidx は path を含まない上限付き warning を stderr に 1 回出し、MCP session の exit code を保持します。未完了 flush を automation failure にしたい場合は `--audit-log-strict` を指定します。この flag は MCP session が本来 `0` を返す場合だけ runtime exit code `10` を返し、protocol、server、signal failure など既存の nonzero exit は保持します。レート制限超過（後述）で拒否された呼び出しも `error_code: -32000` / `error: "rate_limited"` で監査されるため、削減量を後から検証できます。
+
+MCP の full `status` は有効な sink を `mcp_session.audit_log` に公開し、MCP `ping` は同じ object を `audit_log` として返します。この object は `enabled`、`path`、`include_values`、`max_bytes`、`bytes_written`、`disposed`、`queue_capacity`、`queue_depth`、`queued_record_count`、`written_record_count`、`shutdown_abandoned_record_count`、`shutdown_flush_timed_out`、`dropped_record_count`、`queue_full_drop_count`、`serialization_failure_count`、`write_failure_count`、`rotation_failure_count`、`rotation_cleanup_failure_count`、`rotation_degraded` に加え、任意の `last_drop_reason` と `last_rotation_failure` を報告します。`queued_record_count` は queue への追加成功数、`written_record_count` は file append 成功数、`shutdown_abandoned_record_count` は shutdown deadline 時点で write 完了を確認できなかった record 数の snapshot です。abandoned count は単調で、`dropped_record_count` とは別物です。abandoned record は shutdown の return 後に write される可能性があるため、後から snapshot を減らさず、既知の loss を示す drop count として二重加算してはいけません。record の drop、rotation degradation、または shutdown flush timeout があると、MCP ping / health は degraded になります。
 
 出力例:
 
