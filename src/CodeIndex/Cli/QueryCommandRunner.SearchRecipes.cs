@@ -9,7 +9,10 @@ namespace CodeIndex.Cli;
 
 public static partial class QueryCommandRunner
 {
-    private static int WriteSearchRecipeList(QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    private static int WriteSearchRecipeList(
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        string usageCommandName)
     {
         var emitsJson = options.NamesOnly
             ? options.Json
@@ -18,7 +21,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--max-json-bytes is only supported with JSON recipe-list output.",
-                GetUsageLineOrThrow("search"),
+                GetUsageLineOrThrow(usageCommandName),
                 "Add `--json` or `--format compact`, or remove --max-json-bytes for text recipe output.");
             return CommandExitCodes.UsageError;
         }
@@ -42,7 +45,8 @@ public static partial class QueryCommandRunner
                     json,
                     options,
                     "recipe-name list",
-                    "Use a larger --max-json-bytes value or remove recipe filters.");
+                    "Use a larger --max-json-bytes value or remove recipe filters.",
+                    usageCommandName);
             }
 
             foreach (var name in names)
@@ -61,7 +65,8 @@ public static partial class QueryCommandRunner
                 json,
                 options,
                 "recipe summary",
-                "Use `cdidx recipes --names --json` for the smallest recipe-list JSON.");
+                "Use `cdidx recipes --names --json` for the smallest recipe-list JSON.",
+                usageCommandName);
         }
         if (options.SummaryOnly)
         {
@@ -78,7 +83,8 @@ public static partial class QueryCommandRunner
                 json,
                 options,
                 "recipe list",
-                "Use `cdidx recipes --names --json` or `cdidx recipes --summary-only --json` for smaller output.");
+                "Use `cdidx recipes --names --json` or `cdidx recipes --summary-only --json` for smaller output.",
+                usageCommandName);
         }
 
         foreach (var recipe in recipes)

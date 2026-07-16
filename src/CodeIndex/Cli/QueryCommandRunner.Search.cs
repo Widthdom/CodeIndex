@@ -182,7 +182,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--names cannot be combined with --summary-only.",
-                GetUsageLineOrThrow("search"),
+                GetUsageLineOrThrow(usageCommandName),
                 "Use one recipe-list shape at a time.");
             return CommandExitCodes.UsageError;
         }
@@ -256,7 +256,7 @@ public static partial class QueryCommandRunner
                 $"Remove {mode}, or run a plain `cdidx search <query> --format grouped`.");
             return CommandExitCodes.UsageError;
         }
-        if (TryWriteCappedJsonDiagnosticsUsageError("search", options))
+        if (TryWriteCappedJsonDiagnosticsUsageError(usageCommandName, options))
             return CommandExitCodes.UsageError;
         if (options.ListRecipes)
         {
@@ -285,7 +285,7 @@ public static partial class QueryCommandRunner
                 return CommandExitCodes.UsageError;
             }
 
-            return WriteSearchRecipeList(options, jsonOptions);
+            return WriteSearchRecipeList(options, jsonOptions, usageCommandName);
         }
         if (options.NamedSearchQueries.Count > 0)
         {

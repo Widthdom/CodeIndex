@@ -239,6 +239,11 @@ public class ProgramRunnerTests
     [Theory]
     [InlineData(new[] { "recipes", "list", "extra" }, "1 unexpected extra positional argument for recipes")]
     [InlineData(new[] { "recipes", "--unsupported" }, "--unsupported")]
+    [InlineData(new[] { "recipes", "--names", "--summary-only" }, "--names cannot be combined with --summary-only")]
+    [InlineData(new[] { "recipes", "--max-json-bytes", "10" }, "--max-json-bytes is only supported with JSON recipe-list output")]
+    [InlineData(new[] { "recipes", "--json", "--max-json-bytes", "10" }, "exceeds --max-json-bytes 10")]
+    [InlineData(new[] { "recipes", "--format", "compact", "--max-json-bytes", "10" }, "exceeds --max-json-bytes 10")]
+    [InlineData(new[] { "recipes", "--names", "--json", "--max-json-bytes", "10" }, "exceeds --max-json-bytes 10")]
     public void RunRecipesAlias_InvalidArgumentsKeepRecipesDiagnostic_Issue4574(string[] args, string expectedMessage)
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
