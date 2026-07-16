@@ -18,22 +18,26 @@ public partial class QueryCommandRunnerTests
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_only_issue4557");
         try
         {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App {}\n");
+            var sourceDbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(sourceDbPath, "src/App.cs", "csharp", "class App {}\n");
             SqliteConnection.ClearAllPools();
             using (var connection = new SqliteConnection(
-                new SqliteConnectionStringBuilder { DataSource = dbPath, Pooling = false }.ConnectionString))
+                new SqliteConnectionStringBuilder { DataSource = sourceDbPath, Pooling = false }.ConnectionString))
             {
                 connection.Open();
                 using var command = connection.CreateCommand();
-                command.CommandText = "PRAGMA journal_mode=DELETE";
-                Assert.Equal("delete", (string?)command.ExecuteScalar());
+                command.CommandText = "PRAGMA journal_mode=WAL; PRAGMA wal_checkpoint(TRUNCATE)";
+                _ = command.ExecuteScalar();
             }
 
             SqliteConnection.ClearAllPools();
+            var dbPath = Path.Combine(projectRoot, "checkpointed-wal-copy.db");
+            File.Copy(sourceDbPath, dbPath);
+            Assert.False(File.Exists(dbPath + "-wal"));
+            Assert.False(File.Exists(dbPath + "-shm"));
             var expectedArtifacts = CaptureDatabaseArtifacts(dbPath);
-            var expectedUserVersion = ReadPragmaInt64(dbPath, "user_version");
-            var expectedApplicationId = ReadPragmaInt64(dbPath, "application_id");
+            var expectedUserVersion = ReadPragmaInt64(sourceDbPath, "user_version");
+            var expectedApplicationId = ReadPragmaInt64(sourceDbPath, "application_id");
 
             var commands = new (string Name, Func<int> Run)[]
             {
@@ -47,19 +51,78 @@ public partial class QueryCommandRunnerTests
                 var (exitCode, stdout, _) = CaptureConsole(run);
                 Assert.Equal(CommandExitCodes.Success, exitCode);
                 Assert.False(string.IsNullOrWhiteSpace(stdout));
+                using (var verificationDb = new DbContext(DbOpenIntent.QueryOnly, dbPath))
+                {
+                    using var userVersion = verificationDb.Connection.CreateCommand();
+                    userVersion.CommandText = "PRAGMA user_version";
+                    Assert.Equal(expectedUserVersion, (long)userVersion.ExecuteScalar()!);
+                    using var applicationId = verificationDb.Connection.CreateCommand();
+                    applicationId.CommandText = "PRAGMA application_id";
+                    Assert.Equal(expectedApplicationId, (long)applicationId.ExecuteScalar()!);
+                }
                 Assert.Equal(expectedArtifacts, CaptureDatabaseArtifacts(dbPath));
-                Assert.Equal(expectedUserVersion, ReadPragmaInt64(dbPath, "user_version"));
-                Assert.Equal(expectedApplicationId, ReadPragmaInt64(dbPath, "application_id"));
 
                 if (name == "status")
                 {
                     using var document = ParseJsonOutput(stdout);
                     var policy = document.RootElement.GetProperty("sqlite_connection_policy");
-                    Assert.Equal("read_only", policy.GetProperty("active_mode").GetString());
-                    Assert.Equal("read_only", policy.GetProperty("open_mode").GetString());
+                    Assert.Equal(SqliteConnectionPolicy.ImmutableReadOnlyUriModeName, policy.GetProperty("active_mode").GetString());
+                    Assert.Equal(SqliteConnectionPolicy.ImmutableReadOnlyUriModeName, policy.GetProperty("open_mode").GetString());
+                    Assert.True(policy.GetProperty("immutable_uri").GetBoolean());
+                    Assert.False(policy.GetProperty("wal_stale_snapshot_risk").GetBoolean());
                     Assert.Equal("delete", document.RootElement.GetProperty("db_pragma_settings").GetProperty("journal_mode").GetString());
                 }
             }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ReadCommands_SnapshotHotWalWithoutTouchingArtifacts_Issue4557()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_only_hot_wal_issue4557");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            SqliteConnection.ClearAllPools();
+            using var writer = new SqliteConnection(
+                new SqliteConnectionStringBuilder { DataSource = dbPath, Pooling = false }.ConnectionString);
+            writer.Open();
+            using (var command = writer.CreateCommand())
+            {
+                command.CommandText = "PRAGMA journal_mode=WAL; PRAGMA wal_checkpoint(TRUNCATE)";
+                _ = command.ExecuteScalar();
+                command.CommandText = "INSERT OR REPLACE INTO codeindex_meta(key, value) VALUES ('issue4557_hot_wal', 'committed')";
+                Assert.Equal(1, command.ExecuteNonQuery());
+                command.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'issue4557_hot_wal'";
+                Assert.Equal("committed", (string?)command.ExecuteScalar());
+            }
+
+            Assert.True(new FileInfo(dbPath + "-wal").Length > 0);
+            var expectedArtifacts = CaptureDatabaseArtifacts(dbPath);
+
+            string snapshotDirectory;
+            using (var queryDb = new DbContext(DbOpenIntent.QueryOnly, dbPath))
+            {
+                snapshotDirectory = Path.GetDirectoryName(queryDb.Connection.DataSource)!;
+                Assert.NotEqual(Path.GetDirectoryName(dbPath), snapshotDirectory);
+                using var committedValue = queryDb.Connection.CreateCommand();
+                committedValue.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'issue4557_hot_wal'";
+                Assert.Equal("committed", (string?)committedValue.ExecuteScalar());
+            }
+            Assert.False(Directory.Exists(snapshotDirectory));
+            Assert.Equal(expectedArtifacts, CaptureDatabaseArtifacts(dbPath));
+
+            var (exitCode, stdout, _) = CaptureConsole(
+                () => QueryCommandRunner.RunStatus(["--db", dbPath, "--json"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.False(string.IsNullOrWhiteSpace(stdout));
+            Assert.Equal(expectedArtifacts, CaptureDatabaseArtifacts(dbPath));
         }
         finally
         {
@@ -89,12 +152,7 @@ public partial class QueryCommandRunnerTests
     private static long ReadPragmaInt64(string dbPath, string pragmaName)
     {
         using var connection = new SqliteConnection(
-            new SqliteConnectionStringBuilder
-            {
-                DataSource = dbPath,
-                Mode = SqliteOpenMode.ReadOnly,
-                Pooling = false,
-            }.ConnectionString);
+            $"Data Source={DbContext.ToReadOnlyUri(dbPath)};Mode=ReadOnly;Pooling=False");
         connection.Open();
         using var command = connection.CreateCommand();
         command.CommandText = $"PRAGMA {pragmaName}";

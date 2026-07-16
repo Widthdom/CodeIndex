@@ -1212,7 +1212,11 @@ internal static class ExportImportCommandRunner
     internal static void CreateDatabaseSnapshot(string sourceDbPath, string snapshotPath, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var source = new SqliteConnection(CreateReadOnlyUnpooledConnectionString(sourceDbPath));
+        using var source = DbConnectionFactory.CreateArtifactPreservingQueryOnlyConnection(
+            sourceDbPath,
+            pooling: false,
+            out _,
+            out _);
         using var destination = new SqliteConnection(CreateUnpooledConnectionString(snapshotPath));
         source.Open();
         destination.Open();
@@ -1225,9 +1229,6 @@ internal static class ExportImportCommandRunner
 
     private static string CreateUnpooledConnectionString(string dbPath)
         => SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.Unpooled);
-
-    private static string CreateReadOnlyUnpooledConnectionString(string dbPath)
-        => SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.ReadOnlyUnpooled);
 
     internal static void ReplaceImportedDatabase(string tempPath, string fullDbPath, CancellationToken cancellationToken)
     {
@@ -1456,7 +1457,11 @@ internal static class ExportImportCommandRunner
         pathCaseSensitive = false;
         try
         {
-            using var connection = new SqliteConnection(CreateReadOnlyUnpooledConnectionString(dbPath));
+            using var connection = DbConnectionFactory.CreateArtifactPreservingQueryOnlyConnection(
+                dbPath,
+                pooling: false,
+                out _,
+                out _);
             connection.Open();
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key LIMIT 1";
@@ -1464,7 +1469,7 @@ internal static class ExportImportCommandRunner
             var raw = cmd.ExecuteScalar();
             return raw is string value && bool.TryParse(value, out pathCaseSensitive);
         }
-        catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
+        catch (Exception ex) when (ex is SqliteException or CodeIndexException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
         {
             return false;
         }

@@ -1152,6 +1152,7 @@ public class DatabaseTests : IDisposable
         _writer.MarkIssuesReady();
         _writer.MarkBatchInProgress();
         var expectedUserVersion = _db.GetUserVersion();
+        Assert.True(_db.TryCheckpointWalTruncate());
 
         using var reopened = new DbContext(DbOpenIntent.QueryOnly, _dbPath);
 

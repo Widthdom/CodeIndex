@@ -706,7 +706,11 @@ public static partial class IndexCommandRunner
                 return DryRunDbSnapshot.Empty;
             }
 
-            using var connection = new SqliteConnection(DbPathResolver.BuildSqliteConnectionString(dbPath, SqliteOpenMode.ReadOnly));
+            using var connection = DbConnectionFactory.CreateArtifactPreservingQueryOnlyConnection(
+                dbPath,
+                pooling: false,
+                out _,
+                out _);
             connection.Open();
             if (!DryRunTableExists(connection, "files"))
                 return DryRunDbSnapshot.Empty;

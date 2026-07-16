@@ -75,6 +75,7 @@ public class SqliteConnectionPolicyTests
             walCheckpointSucceeded: false,
             readOnlyImmutableFallback: true,
             immutableReadOnly: true,
+            pooling: false,
             walCheckpointSkippedReason: "uri_path_parse_failed",
             walCheckpointFailureReason: "sqlite_error_14",
             walStaleSnapshotRisk: true,
@@ -83,6 +84,7 @@ public class SqliteConnectionPolicyTests
         Assert.Equal(SqliteConnectionPolicy.ImmutableReadOnlyUriModeName, status.ActiveMode);
         Assert.True(status.ReadOnlyFallback);
         Assert.True(status.ImmutableUri);
+        Assert.False(status.Pooling);
         Assert.Equal(SqliteConnectionPolicy.DefaultCommandTimeoutSeconds, status.CommandTimeoutSeconds);
         Assert.True(status.LongRunningCommandsRequireCancellation);
         Assert.Equal("uri_path_parse_failed", status.WalCheckpointSkippedReason);

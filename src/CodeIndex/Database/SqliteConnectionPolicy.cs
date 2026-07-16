@@ -8,6 +8,7 @@ internal enum SqliteConnectionPolicyMode
     ReadWrite,
     ReadOnly,
     ImmutableReadOnlyUri,
+    ImmutableReadOnlyUriUnpooled,
     Unpooled,
     ReadOnlyUnpooled,
 }
@@ -41,6 +42,7 @@ internal static class SqliteConnectionPolicy
             SqliteConnectionPolicyMode.ReadWrite => BuildBuilder(dbPath, SqliteOpenMode.ReadWrite).ConnectionString,
             SqliteConnectionPolicyMode.ReadOnly => BuildBuilder(dbPath, SqliteOpenMode.ReadOnly).ConnectionString,
             SqliteConnectionPolicyMode.ImmutableReadOnlyUri => $"Data Source={ToReadOnlyUri(dbPath)};Mode=ReadOnly",
+            SqliteConnectionPolicyMode.ImmutableReadOnlyUriUnpooled => $"Data Source={ToReadOnlyUri(dbPath)};Mode=ReadOnly;Pooling=False",
             SqliteConnectionPolicyMode.Unpooled => BuildBuilder(dbPath, pooling: false).ConnectionString,
             SqliteConnectionPolicyMode.ReadOnlyUnpooled => BuildBuilder(dbPath, SqliteOpenMode.ReadOnly, pooling: false).ConnectionString,
             _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unknown SQLite connection policy mode."),
@@ -85,6 +87,7 @@ internal static class SqliteConnectionPolicy
         bool walCheckpointSucceeded,
         bool readOnlyImmutableFallback,
         bool immutableReadOnly,
+        bool pooling,
         string? walCheckpointSkippedReason,
         string? walCheckpointFailureReason,
         bool walStaleSnapshotRisk,
@@ -99,7 +102,7 @@ internal static class SqliteConnectionPolicy
         {
             ActiveMode = mode,
             OpenMode = mode,
-            Pooling = true,
+            Pooling = pooling,
             ImmutableUri = immutableReadOnly,
             CommandTimeoutSeconds = DefaultCommandTimeoutSeconds,
             LongRunningCommandsRequireCancellation = LongRunningCommandsRequireCancellation,

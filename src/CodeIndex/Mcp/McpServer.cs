@@ -2518,8 +2518,11 @@ public partial class McpServer : IDisposable
         string? probeError = null;
         try
         {
-            var connectionString = SqliteConnectionPolicy.BuildConnectionString(_dbPath, SqliteConnectionPolicyMode.ReadOnly);
-            using var connection = new Microsoft.Data.Sqlite.SqliteConnection(connectionString);
+            using var connection = DbConnectionFactory.CreateArtifactPreservingQueryOnlyConnection(
+                _dbPath,
+                pooling: false,
+                out _,
+                out _);
             connection.Open();
             using var command = SqliteConnectionPolicy.CreateCommand(connection);
             command.CommandText = "SELECT 1;";
@@ -6309,6 +6312,19 @@ public partial class McpServer : IDisposable
             using var isolatedReader = new DbReader(isolatedDb, requestToken);
             isolatedReader.IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
             return RunWithSqliteDiagnostics(isolatedReader, action);
+        }
+
+        // Artifact-preserving WAL reads may use an immutable source handle or a detached
+        // private snapshot. Refresh those handles between MCP calls so a long-lived server
+        // observes commits made after the previous call while each individual call keeps one
+        // stable SQLite snapshot.
+        // artifact-preserving WAL read は immutable source handle または切り離した private
+        // snapshot を使うことがある。各呼び出し内の一貫性を保ちつつ、長時間動作する MCP が
+        // 前回以降の commit を観測できるよう、呼び出し間でそれらの handle を更新する。
+        if (_sharedDb?.OpenIntent == DbOpenIntent.QueryOnly
+            && _sharedDb.QueryOnlySnapshotRequiresRefresh)
+        {
+            CloseSharedDb();
         }
 
         var db = GetOrOpenSharedDb(DbOpenIntent.QueryOnly);

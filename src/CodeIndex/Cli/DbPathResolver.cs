@@ -429,7 +429,11 @@ public static class DbPathResolver
         if (OpenMetadataConnectionForTesting != null)
             return OpenMetadataConnectionForTesting(dbPath);
 
-        return new SqliteConnection(BuildSqliteConnectionString(dbPath, SqliteOpenMode.ReadOnly));
+        return DbConnectionFactory.CreateArtifactPreservingQueryOnlyConnection(
+            dbPath,
+            pooling: false,
+            out _,
+            out _);
     }
 
     internal static Func<string, SqliteConnection>? OpenMetadataConnectionForTesting { get; set; }

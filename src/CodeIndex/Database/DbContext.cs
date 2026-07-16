@@ -174,6 +174,9 @@ public class DbContext : IDisposable
     private bool _walCheckpointSucceeded;
     private bool _readOnlyImmutableFallback;
     private bool _immutableReadOnly;
+    private bool _immutableReadOnlyWalRisk;
+    private bool _connectionPooling = true;
+    private bool _queryOnlySnapshotRequiresRefresh;
     private string? _walCheckpointSkippedReason;
     private string? _walCheckpointFailureReason;
     private readonly string? _schemaCacheKey;
@@ -252,6 +255,9 @@ public class DbContext : IDisposable
     public bool WalCheckpointSucceeded => _walCheckpointSucceeded;
     public bool ReadOnlyImmutableFallback => _readOnlyImmutableFallback;
     internal bool ImmutableReadOnly => _immutableReadOnly;
+    internal bool ImmutableReadOnlyWalRisk => _immutableReadOnlyWalRisk;
+    internal bool ConnectionPooling => _connectionPooling;
+    internal bool QueryOnlySnapshotRequiresRefresh => _queryOnlySnapshotRequiresRefresh;
     public string? WalCheckpointSkippedReason => _walCheckpointSkippedReason;
     public string? WalCheckpointFailureReason => _walCheckpointFailureReason;
 
@@ -412,7 +418,7 @@ public class DbContext : IDisposable
                     sleep,
                     dbPath: dbPath,
                     cancellationToken: cancellationToken)
-                : OpenReadOnly(openTarget);
+                : OpenArtifactPreservingQueryOnly(dbPath);
 
             using var cmd = connection.CreateCommand();
             cmd.CommandText = SqliteCommandPolicy.PragmaSql("application_id");
@@ -457,6 +463,11 @@ public class DbContext : IDisposable
         catch (SqliteException)
         {
             message = $"database is not an existing CodeIndex DB: {dbPath}";
+            return false;
+        }
+        catch (CodeIndexException ex)
+        {
+            message = ex.Message;
             return false;
         }
     }
@@ -701,11 +712,16 @@ public class DbContext : IDisposable
 
         try
         {
-            var connectionString = SqliteConnectionPolicy.BuildConnectionString(
-                dbPath,
-                SqliteConnectionPolicyMode.ReadOnly);
+            var immutableSnapshot = false;
+            var immutableWalRisk = false;
+            var detachedSnapshot = false;
             _connection = OpenSqliteConnectionWithRetry(
-                () => new SqliteConnection(connectionString),
+                () => CreateArtifactPreservingQueryOnlyConnection(
+                    dbPath,
+                    pooling: false,
+                    out immutableSnapshot,
+                    out immutableWalRisk,
+                    out detachedSnapshot),
                 static connection => connection.Open(),
                 dbPath: dbPath,
                 cancellationToken: cancellationToken);
@@ -714,7 +730,10 @@ public class DbContext : IDisposable
             ApplyConnectionPerformancePragmas();
             RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
             _isReadOnly = true;
-            _immutableReadOnly = SqliteFileUri.RequestsImmutableSnapshot(dbPath);
+            _immutableReadOnly = immutableSnapshot;
+            _immutableReadOnlyWalRisk = immutableWalRisk;
+            _connectionPooling = false;
+            _queryOnlySnapshotRequiresRefresh = immutableSnapshot || detachedSnapshot;
             WarnIfBatchInProgress();
         }
         catch
@@ -1115,6 +1134,31 @@ public class DbContext : IDisposable
 
     private static SqliteConnection OpenReadOnly(string dbPath, out bool usedImmutableFallback)
         => DbConnectionFactory.OpenReadOnly(dbPath, out usedImmutableFallback);
+
+    private static SqliteConnection CreateArtifactPreservingQueryOnlyConnection(
+        string dbPath,
+        bool pooling,
+        out bool immutableSnapshot,
+        out bool immutableWalRisk,
+        out bool detachedSnapshot)
+        => DbConnectionFactory.CreateArtifactPreservingQueryOnlyConnection(
+            dbPath,
+            pooling,
+            out immutableSnapshot,
+            out immutableWalRisk,
+            out detachedSnapshot);
+
+    private static SqliteConnection OpenArtifactPreservingQueryOnly(string dbPath)
+    {
+        var connection = CreateArtifactPreservingQueryOnlyConnection(
+            dbPath,
+            pooling: false,
+            out _,
+            out _,
+            out _);
+        connection.Open();
+        return connection;
+    }
 
     internal static void RegisterConnectionFunctions(SqliteConnection connection)
     {

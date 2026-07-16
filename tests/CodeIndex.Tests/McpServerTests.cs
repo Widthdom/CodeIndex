@@ -1936,9 +1936,11 @@ public sealed class Caller
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_resources_generation_writable_legacy");
         var dbPath = CreateLegacyResourceDatabase(project.Root);
+        SqliteConnection.ClearAllPools();
         using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
         var first = server.HandleMessage(
             JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}""")!)!;
+        Assert.True(first["error"] != null, first.ToJsonString());
         Assert.Equal(
             "resources_list_generation_unavailable",
             first["error"]!["data"]!["reason"]!.GetValue<string>());
