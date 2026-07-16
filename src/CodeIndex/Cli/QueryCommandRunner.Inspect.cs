@@ -79,6 +79,7 @@ public static partial class QueryCommandRunner
             }
 
             var fileInspectMode = inspectPath != null;
+            var coordinateExplicit = options.StartLine.HasValue || options.EndLine.HasValue;
             if (fileInspectMode && indexedFile == null)
             {
                 return CommandErrorWriter.WriteJsonOrHuman(
@@ -91,7 +92,7 @@ public static partial class QueryCommandRunner
                     category: "not_found");
             }
 
-            if (fileInspectMode && (inspectLine > indexedFile!.Lines || (options.EndLine.HasValue && options.EndLine.Value > indexedFile.Lines)))
+            if (fileInspectMode && coordinateExplicit && (inspectLine > indexedFile!.Lines || (options.EndLine.HasValue && options.EndLine.Value > indexedFile.Lines)))
             {
                 var requestedEndLine = options.EndLine ?? inspectLine;
                 return CommandErrorWriter.WriteJsonOrHuman(

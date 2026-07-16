@@ -21,6 +21,7 @@ public partial class QueryCommandRunnerTests
                 "docs/Target.md",
                 "markdown",
                 "# Target\n\nDetails\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "docs/Empty.md", "markdown", string.Empty);
 
             var (fileExitCode, fileStdout, fileStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
                 ["docs/Target.md", "--db", dbPath, "--json", "--limit", "2"],
@@ -35,6 +36,19 @@ public partial class QueryCommandRunnerTests
                 Assert.Equal("docs/Target.md", root.GetProperty("file").GetProperty("path").GetString());
             }
 
+            var (emptyExitCode, emptyStdout, emptyStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["docs/Empty.md", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, emptyExitCode);
+            Assert.Equal(string.Empty, emptyStderr);
+            using (var emptyDocument = ParseJsonOutput(emptyStdout))
+            {
+                var file = emptyDocument.RootElement.GetProperty("file");
+                Assert.Equal("docs/Empty.md", file.GetProperty("path").GetString());
+                Assert.Equal(0, file.GetProperty("lines").GetInt32());
+            }
+
             var cases = new (string Name, int ExpectedExitCode, string ExpectedErrorCode, string[] Args)[]
             {
                 (
@@ -47,6 +61,11 @@ public partial class QueryCommandRunnerTests
                     CommandExitCodes.InvalidArgument,
                     CommandErrorCodes.LineOutOfRange,
                     ["--path", "docs/Target.md", "--line", "99", "--db", dbPath, "--json"]),
+                (
+                    "empty file coordinate",
+                    CommandExitCodes.InvalidArgument,
+                    CommandErrorCodes.LineOutOfRange,
+                    ["--path", "docs/Empty.md", "--line", "1", "--db", dbPath, "--json"]),
             };
 
             foreach (var testCase in cases)
