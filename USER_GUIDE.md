@@ -2841,7 +2841,7 @@ This section catalogs the failure modes you are most likely to hit while running
 4. **Database is not writable** (`E004_DB_NOT_WRITABLE`)
    - Symptom: `Error [E004_DB_NOT_WRITABLE]: ...` on `cdidx index`, often paired with SQLite `CANTOPEN(14)` on read-only filesystems (e.g. read-only bind mounts, container layers).
    - Cause: the DB path is on a read-only filesystem, filesystem permissions block writes by the current user, or Linux mandatory access control blocks SQLite WAL/SHM sidecar creation under AppArmor / SELinux. WAL mode requires write access even for some read paths.
-   - Recovery: relocate the DB with `--db <writable-path>`, fix filesystem permissions, or remount writable. On AppArmor / SELinux systems, check the reported `mac_profile` from `cdidx status --json`, then inspect `aa-status` / snap or flatpak permissions / audit logs for AppArmor, or `getenforce`, `ausearch`, and `audit2why` for SELinux. Read-only queries can use a SQLite URI such as `--db 'file:///abs/path/codeindex.db?immutable=1'` when policy allows reading the DB file but blocks sidecar writes.
+   - Recovery: relocate the DB with `--db <writable-path>`, fix filesystem permissions, or remount writable. On AppArmor / SELinux systems, check the reported `mac_profile` from `cdidx status --json`, then inspect `aa-status` / snap or flatpak permissions / audit logs for AppArmor, or `getenforce`, `ausearch`, and `audit2why` for SELinux. Automatic read-only fallback uses `Mode=ReadOnly` and does not reinterpret generic `SQLITE_IOERR` failures. Read-only queries can explicitly opt into a SQLite URI such as `--db 'file:///abs/path/codeindex.db?immutable=1'` when policy allows reading the DB file but blocks sidecar writes; this can ignore committed hot-WAL pages, so JSON responses and MCP structured content report `wal_stale_snapshot_risk=true` and the snapshot must not be treated as authoritative. When such a snapshot produces an otherwise empty JSON array, the array contains one `diagnostic_only: true` / `diagnostic_type: "sqlite_stale_snapshot_risk"` carrier; it is metadata, not a query result.
 
 #### Sandbox diagnostics
 
@@ -2850,6 +2850,8 @@ When SQLite returns permission-style errors such as `SQLITE_AUTH`, `SQLITE_PERM`
 - Snap / AppArmor: run `aa-status`, inspect snap interface grants, and check audit logs for denied `codeindex.db-wal` or `codeindex.db-shm` creation.
 - Flatpak: check filesystem portal permissions and AppArmor/audit logs when the host policy confines the app.
 - SELinux: run `getenforce`, inspect denials with `ausearch -m avc -ts recent`, and explain them with `audit2why`.
+
+Existing-database validation does not interpret every `SQLITE_CANTOPEN` as a missing file. It reports one stable bracketed cause: `missing_database`, `permission_denied`, `sidecar_failure`, `invalid_uri`, or `unknown_open_failure`. The classification uses file/directory preflight, SQLite extended codes, and bounded OS probes without exposing provider messages or full sensitive paths.
 
 5. **Database disk image malformed / integrity failure** (`E005_DB_INTEGRITY_FAILED`)
    - Symptom: queries crash with `database disk image is malformed`, or `cdidx db --integrity-check` exits `3` and lists `PRAGMA integrity_check` failures with `Error [E005_DB_INTEGRITY_FAILED]: ...`.
@@ -5702,7 +5704,7 @@ cdidx には、AI エージェントがギャップや不具合に気づいた�
 4. **データベースが書き込み不可**（`E004_DB_NOT_WRITABLE`）
    - 症状: `cdidx index` が `Error [E004_DB_NOT_WRITABLE]: ...` で失敗。読み取り専用ファイルシステム（read-only バインドマウント、コンテナレイヤー等）では SQLite の `CANTOPEN(14)` を併発する。
    - 原因: DB パスが読み取り専用ファイルシステム上にある、現在のユーザーで書き込み権限が無い、または Linux mandatory access control が AppArmor / SELinux profile で SQLite の WAL / SHM sidecar 作成をブロックしている。WAL モードは一部の読み取り経路でも書き込みを要求する。
-   - 復旧: `--db <writable-path>` で書き込み可能なパスへ移す、権限を直す、または書き込み可能で再マウントする。AppArmor / SELinux 環境では `cdidx status --json` の `mac_profile` を確認してから、AppArmor は `aa-status` / snap・flatpak 権限 / audit log、SELinux は `getenforce`、`ausearch`、`audit2why` を確認する。policy が DB file 読み取りだけを許し sidecar write を拒む場合、読み取り専用 query では `--db 'file:///abs/path/codeindex.db?immutable=1'` の SQLite URI を使えることがある。
+   - 復旧: `--db <writable-path>` で書き込み可能なパスへ移す、権限を直す、または書き込み可能で再マウントする。AppArmor / SELinux 環境では `cdidx status --json` の `mac_profile` を確認してから、AppArmor は `aa-status` / snap・flatpak 権限 / audit log、SELinux は `getenforce`、`ausearch`、`audit2why` を確認する。自動 read-only fallback は `Mode=ReadOnly` のみを使い、汎用 `SQLITE_IOERR` を読み取り専用事象として扱わない。policy が DB file 読み取りだけを許し sidecar write を拒む場合、読み取り専用 query では `--db 'file:///abs/path/codeindex.db?immutable=1'` の SQLite URIへ明示 opt-in できる。ただし committed な hot-WAL page を無視する可能性があるため、JSON response と MCP structured content は `wal_stale_snapshot_risk=true` を返し、その snapshot を authoritative と扱ってはいけない。この snapshot で JSON array が本来空になる場合、`diagnostic_only: true` / `diagnostic_type: "sqlite_stale_snapshot_risk"` の要素を1件返す。これは query result ではなく metadata である。
 
 #### Sandbox diagnostics
 
@@ -5713,6 +5715,8 @@ SELinux profile が取れれば confinement-aware hint を追加します。
 `status --json` にも同じ best-effort signal として `mac_profile` が入り、
 例として `apparmor:snap.cdidx.cdidx` や `selinux:user_u:user_r:user_t:s0`
 が返ります。
+
+既存 DB の validation はすべての `SQLITE_CANTOPEN` を file missing と解釈しません。`missing_database`、`permission_denied`、`sidecar_failure`、`invalid_uri`、`unknown_open_failure` のいずれかを安定した角括弧 cause として返します。分類には file / directory preflight、SQLite extended code、bounded な OS probe を使い、provider message や機微な full path は公開しません。
 
 - Snap / AppArmor: `aa-status`、snap interface grant、`codeindex.db-wal`
   や `codeindex.db-shm` 作成拒否の audit log を確認する。

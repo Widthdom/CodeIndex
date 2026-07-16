@@ -180,9 +180,10 @@ public static partial class QueryCommandRunner
                 {
                     if (options.OutputFormat == OutputFormatJson && options.JsonOutputFormat == JsonOutputFormatArray)
                     {
-                        CommandOutputWriter.WriteJson(
+                        Console.WriteLine(SerializeQueryJson(
                             new List<FileFindResult>(),
-                            CliJsonSerializerContextFactory.Create(jsonOptions).ListFileFindResult);
+                            CliJsonSerializerContextFactory.Create(jsonOptions).ListFileFindResult,
+                            jsonOptions));
                         return ZeroResultExitCode(options);
                     }
                     if (TryWriteEmptyFormattedResult(options, jsonOptions))
@@ -243,13 +244,14 @@ public static partial class QueryCommandRunner
                 }
                 if (options.OutputFormat == OutputFormatJson && options.JsonOutputFormat == JsonOutputFormatArray)
                 {
-                    CommandOutputWriter.WriteJson(
+                    Console.WriteLine(SerializeQueryJson(
                         results,
-                        CliJsonSerializerContextFactory.Create(jsonOptions).ListFileFindResult);
+                        CliJsonSerializerContextFactory.Create(jsonOptions).ListFileFindResult,
+                        jsonOptions));
                     return CommandExitCodes.Success;
                 }
                 foreach (var r in results)
-                    Console.WriteLine(JsonSerializer.Serialize(r, CliJsonSerializerContextFactory.Create(jsonOptions).FileFindResult));
+                    Console.WriteLine(SerializeQueryJson(r, CliJsonSerializerContextFactory.Create(jsonOptions).FileFindResult, jsonOptions));
             }
             else
             {

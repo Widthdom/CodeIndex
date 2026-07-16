@@ -13,11 +13,44 @@ internal static class DbConnectionFactory
         set => ScopedOpenReadOnlyForTesting.Value = value;
     }
 
-    // SQLITE_READONLY(8), SQLITE_CANTOPEN(14), SQLITE_IOERR(10). A read-only filesystem
-    // typically surfaces as CANTOPEN because -journal/-shm cannot be created.
-    // read-only FS では -journal / -shm を作れず CANTOPEN(14) を返すことが多い。
-    internal static bool IsReadOnlyOpenError(SqliteException ex) =>
-        ex.SqliteErrorCode is 8 or 14 or 10;
+    private const int SqliteCantOpen = 14;
+    private const int SqliteCantOpenDirtyWal = SqliteCantOpen | (5 << 8);
+
+    // SQLITE_READONLY is direct evidence that a read-only retry is appropriate. Generic
+    // SQLITE_IOERR is deliberately excluded: media, transport, and corruption-adjacent I/O
+    // failures must not be converted into a seemingly successful snapshot. CANTOPEN is only
+    // eligible when its extended code is compatible with a DB/sidecar open failure and a
+    // bounded filesystem probe confirms that the requested DB is an existing regular file.
+    // READONLY は read-only retry の直接的な根拠。汎用 IOERR は成功に見える snapshot へ
+    // 変換しない。CANTOPEN は extended code と実在する通常 DB file の確認後だけ対象にする。
+    internal static bool IsReadOnlyOpenError(SqliteException ex, string? dbPath = null)
+    {
+        if (ex.SqliteErrorCode == 8)
+            return true;
+        if (ex.SqliteErrorCode != SqliteCantOpen
+            || ex.SqliteExtendedErrorCode is not (SqliteCantOpen or SqliteCantOpenDirtyWal)
+            || string.IsNullOrWhiteSpace(dbPath))
+        {
+            return false;
+        }
+
+        var localPath = dbPath;
+        if (SqliteFileUri.StartsWithFileScheme(dbPath)
+            && (!TryGetLocalPath(dbPath, out localPath, out _) || localPath == null))
+        {
+            return false;
+        }
+
+        try
+        {
+            var attributes = File.GetAttributes(localPath);
+            return (attributes & FileAttributes.Directory) == 0;
+        }
+        catch (Exception probeError) when (probeError is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            return false;
+        }
+    }
 
     internal static SqliteConnection OpenWithRetry(
         Func<SqliteConnection> createConnection,
@@ -149,45 +182,9 @@ internal static class DbConnectionFactory
         // still reads hot -wal state so nothing committed but not yet checkpointed is lost.
         // 第一段: Mode=ReadOnly。多くの read-only 環境で動作し、hot -wal の未チェックポイント
         // 済みコミットも正しく読める。
-        try
-        {
-            var conn = new SqliteConnection(SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.ReadOnly));
-            conn.Open();
-            return conn;
-        }
-        catch (SqliteException ex) when (IsReadOnlyOpenError(ex))
-        {
-            // Attempt 2: immutable=1 URI. This bypasses -shm/-wal entirely, which is the only
-            // way to survive a sandbox that cannot touch side files. Trade-off documented:
-            // if the base DB has uncheckpointed WAL state, immutable will serve data that
-            // predates those commits. We warn to stderr so the caller can see it, but do not
-            // block — a file-size heuristic on `-wal` produces false positives (WAL files
-            // remain allocated after checkpoint), and real hot-WAL detection requires the
-            // very -shm/-wal access the sandbox is blocking. The explicit escape hatch
-            // `--db file:///...?immutable=1` is the user's way to opt into the same
-            // trade-off knowingly.
-            // サンドボックスで -shm/-wal に触れない場合の最終手段。hot WAL 誤判定を避けるため、
-            // ファイルサイズでの拒否はやめ、stderr 警告のみ出してフォールバック。
-            CommandErrorWriter.WriteStderr("Warning: falling back to SQLite immutable=1 read-only open. " +
-                "If the base DB has uncheckpointed WAL state, the snapshot may be stale. " +
-                "Re-run cdidx on writable storage to checkpoint WAL if this matters.");
-
-            // Build the connection string directly instead of routing through
-            // SqliteConnectionStringBuilder. The builder quotes DataSource values that
-            // contain special characters, and the extra quoting was enough in some sandboxes
-            // (observed by Codex: raw sqlite3 file:///... ?immutable=1 succeeds while the
-            // builder-wrapped form fails with SQLITE_CANTOPEN). The shared connection policy
-            // percent-encodes connection-string separators that Uri.AbsoluteUri can legally
-            // leave in file paths, then appends the immutable/read-only URI flags.
-            // Mode=ReadOnly is redundant with immutable=1 but kept explicit so cdidx's
-            // intent is visible in logs / traces.
-            // builder は DataSource を quote して URI 解釈を壊すため直接組む。
-            // 共有 policy が URI に残り得る connection-string separator を %-エンコードする。
-            var conn = new SqliteConnection(SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.ImmutableReadOnlyUri));
-            conn.Open();
-            usedImmutableFallback = true;
-            return conn;
-        }
+        var conn = new SqliteConnection(SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.ReadOnly));
+        conn.Open();
+        return conn;
     }
 
     internal static bool IsTransientBusyError(SqliteException ex) =>

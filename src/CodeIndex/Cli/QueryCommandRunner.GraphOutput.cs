@@ -187,6 +187,7 @@ public static partial class QueryCommandRunner
             payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(exactZeroHint, CliJsonSerializerContextFactory.Create(jsonOptions).ExactZeroHintResult);
         extraFields?.Invoke(payload);
         AddCountAuthorityJsonFields(payload);
+        AddActiveSqliteDiagnostics(payload);
         Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 
@@ -205,6 +206,7 @@ public static partial class QueryCommandRunner
         if (exactZeroHint != null)
             payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(exactZeroHint, CliJsonSerializerContextFactory.Create(jsonOptions).ExactZeroHintResult);
         extraFields?.Invoke(payload);
+        AddActiveSqliteDiagnostics(payload);
         Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 
@@ -214,6 +216,7 @@ public static partial class QueryCommandRunner
         AddExactGraphJsonFields(payload, exactSignal);
         AddGraphSupportOverrideFields(payload, graphSupportOverride);
         extraFields?.Invoke(payload);
+        AddActiveSqliteDiagnostics(payload);
         Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 
@@ -221,6 +224,7 @@ public static partial class QueryCommandRunner
     {
         var payload = JsonSerializer.SerializeToNode(result, jsonTypeInfo)!.AsObject();
         extraFields?.Invoke(payload);
+        AddActiveSqliteDiagnostics(payload);
         Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 
@@ -228,6 +232,7 @@ public static partial class QueryCommandRunner
     {
         var payload = JsonSerializer.SerializeToNode(result, jsonTypeInfo)!.AsObject();
         AddExactJsonFields(payload, exactSignal);
+        AddActiveSqliteDiagnostics(payload);
         Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 

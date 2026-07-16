@@ -84,12 +84,13 @@ internal static class SqliteConnectionPolicy
         bool walCheckpointAttempted,
         bool walCheckpointSucceeded,
         bool readOnlyImmutableFallback,
+        bool immutableReadOnly,
         string? walCheckpointSkippedReason,
         string? walCheckpointFailureReason,
         bool walStaleSnapshotRisk,
         string? walStaleSnapshotReason)
     {
-        var mode = readOnlyImmutableFallback
+        var mode = immutableReadOnly
             ? ImmutableReadOnlyUriModeName
             : isReadOnly
                 ? ReadOnlyModeName
@@ -99,7 +100,7 @@ internal static class SqliteConnectionPolicy
             ActiveMode = mode,
             OpenMode = mode,
             Pooling = true,
-            ImmutableUri = readOnlyImmutableFallback,
+            ImmutableUri = immutableReadOnly,
             CommandTimeoutSeconds = DefaultCommandTimeoutSeconds,
             LongRunningCommandsRequireCancellation = LongRunningCommandsRequireCancellation,
             ReadOnlyFallback = readOnlyFallback,

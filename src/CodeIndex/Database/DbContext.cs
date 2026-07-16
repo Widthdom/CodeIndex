@@ -22,6 +22,12 @@ public class DbContext : IDisposable
     public const string CacheSizeEnvironmentVariable = "CDIDX_SQLITE_CACHE_KB";
     public const string MmapSizeEnvironmentVariable = "CDIDX_SQLITE_MMAP_BYTES";
     public const string BusyTimeoutEnvironmentVariable = "CDIDX_SQLITE_BUSY_TIMEOUT_MS";
+    internal const string DatabaseOpenMissingCategory = "missing_database";
+    internal const string DatabaseOpenPermissionCategory = "permission_denied";
+    internal const string DatabaseOpenSidecarCategory = "sidecar_failure";
+    internal const string DatabaseOpenInvalidUriCategory = "invalid_uri";
+    internal const string DatabaseOpenUnknownCategory = "unknown_open_failure";
+    private const int SqliteCantOpenDirtyWal = 14 | (5 << 8);
     public const int DefaultWalAutocheckpointPages = 1000;
     public const string DefaultSynchronousMode = "NORMAL";
     public const string SymbolExtractorVersionMetaPrefix = "symbol_extractor_version_";
@@ -352,7 +358,10 @@ public class DbContext : IDisposable
 
         if (SqliteFileUri.StartsWithFileScheme(dbPath) && !SqliteFileUri.TryValidateBounds(dbPath, out var boundsError))
         {
-            message = boundsError?.Message ?? "Invalid SQLite file URI.";
+            message = FormatDatabaseOpenFailure(
+                DatabaseOpenInvalidUriCategory,
+                dbPath,
+                boundsError?.Message ?? "Invalid SQLite file URI.");
             return false;
         }
 
@@ -365,23 +374,30 @@ public class DbContext : IDisposable
         var openTarget = dbPath;
         if (SqliteFileUri.StartsWithFileScheme(dbPath))
         {
-            var normalized = TryGetLocalPath(dbPath);
-            if (normalized != null)
+            if (!TryGetLocalPath(dbPath, out var normalized, out var pathFailureReason)
+                || normalized == null)
             {
-                if (!File.Exists(LongPath.EnsureWindowsPrefix(normalized)))
-                {
-                    message = $"database not found: {dbPath}";
-                    isNotFound = true;
-                    return false;
-                }
-
-                openTarget = normalized;
+                message = FormatDatabaseOpenFailure(
+                    DatabaseOpenInvalidUriCategory,
+                    dbPath,
+                    pathFailureReason);
+                return false;
             }
+
+            openTarget = normalized;
         }
-        else if (!File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
+
+        var preflight = ProbeDatabasePath(openTarget);
+        if (preflight is DatabasePathProbe.Missing or DatabasePathProbe.PermissionDenied or DatabasePathProbe.Directory)
         {
-            message = $"database not found: {dbPath}";
-            isNotFound = true;
+            var category = preflight switch
+            {
+                DatabasePathProbe.Missing => DatabaseOpenMissingCategory,
+                DatabasePathProbe.PermissionDenied => DatabaseOpenPermissionCategory,
+                _ => DatabaseOpenUnknownCategory,
+            };
+            message = FormatDatabaseOpenFailure(category, dbPath);
+            isNotFound = category == DatabaseOpenMissingCategory;
             return false;
         }
 
@@ -431,8 +447,9 @@ public class DbContext : IDisposable
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode is 14)
         {
-            message = $"database not found: {dbPath}";
-            isNotFound = true;
+            var category = ClassifyCantOpenFailure(openTarget, ex.SqliteExtendedErrorCode);
+            message = FormatDatabaseOpenFailure(category, dbPath);
+            isNotFound = category == DatabaseOpenMissingCategory;
             return false;
         }
         catch (SqliteException)
@@ -440,6 +457,85 @@ public class DbContext : IDisposable
             message = $"database is not an existing CodeIndex DB: {dbPath}";
             return false;
         }
+    }
+
+    internal static string ClassifyCantOpenFailure(string dbPath, int sqliteExtendedErrorCode)
+    {
+        if (sqliteExtendedErrorCode == SqliteCantOpenDirtyWal)
+            return DatabaseOpenSidecarCategory;
+
+        return ProbeDatabasePath(dbPath) switch
+        {
+            DatabasePathProbe.Missing => DatabaseOpenMissingCategory,
+            DatabasePathProbe.PermissionDenied => DatabaseOpenPermissionCategory,
+            _ when HasInaccessibleSqliteSidecar(dbPath) => DatabaseOpenSidecarCategory,
+            _ => DatabaseOpenUnknownCategory,
+        };
+    }
+
+    private static bool HasInaccessibleSqliteSidecar(string dbPath)
+        => ProbeDatabasePath(dbPath + "-wal") == DatabasePathProbe.PermissionDenied
+           || ProbeDatabasePath(dbPath + "-shm") == DatabasePathProbe.PermissionDenied;
+
+    private static DatabasePathProbe ProbeDatabasePath(string path)
+    {
+        try
+        {
+            var attributes = File.GetAttributes(LongPath.EnsureWindowsPrefix(path));
+            if ((attributes & FileAttributes.Directory) != 0)
+                return DatabasePathProbe.Directory;
+
+            using var stream = new FileStream(
+                LongPath.EnsureWindowsPrefix(path),
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                bufferSize: 1,
+                FileOptions.RandomAccess);
+            return DatabasePathProbe.Readable;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return DatabasePathProbe.Missing;
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            return DatabasePathProbe.PermissionDenied;
+        }
+        catch (IOException)
+        {
+            return DatabasePathProbe.Unknown;
+        }
+    }
+
+    private static string FormatDatabaseOpenFailure(string category, string dbPath, string? detail = null)
+    {
+        var displayPath = dbPath;
+        if (SqliteFileUri.StartsWithFileScheme(dbPath))
+        {
+            var queryIndex = dbPath.IndexOf('?', StringComparison.Ordinal);
+            if (queryIndex >= 0)
+                displayPath = dbPath[..queryIndex];
+        }
+        var pathLabel = DiagnosticSanitizer.ForPath(displayPath);
+        var sanitizedDetail = string.IsNullOrWhiteSpace(detail)
+            ? null
+            : DiagnosticSanitizer.ForMessage(detail);
+        var prefix = category == DatabaseOpenMissingCategory
+            ? $"database not found [{category}]"
+            : $"database open failed [{category}]";
+        return sanitizedDetail == null
+            ? $"{prefix}: {pathLabel}"
+            : $"{prefix}: {pathLabel}; {sanitizedDetail}";
+    }
+
+    private enum DatabasePathProbe
+    {
+        Readable,
+        Missing,
+        PermissionDenied,
+        Directory,
+        Unknown,
     }
 
     public DbContext(string dbPath, CancellationToken cancellationToken = default)
@@ -476,7 +572,7 @@ public class DbContext : IDisposable
                     ApplyConnectionPerformancePragmas();
                     RegisterConnectionFunctionsWithRetry(_connection, cancellationToken: cancellationToken);
                     _isReadOnly = true;
-                    _immutableReadOnly = SqliteFileUri.RequestsUnambiguousImmutableSnapshot(dbPath);
+                    _immutableReadOnly = SqliteFileUri.RequestsImmutableSnapshot(dbPath);
                     WarnIfBatchInProgress();
                     return;
                 }
@@ -531,16 +627,15 @@ public class DbContext : IDisposable
             Execute("PRAGMA optimize=0x10002");
             WarnIfBatchInProgress();
         }
-        catch (SqliteException ex) when (IsReadOnlyOpenError(ex))
+        catch (SqliteException ex) when (IsReadOnlyOpenError(ex, dbPath))
         {
             // Retry as read-only so indexes living on read-only filesystems / WORM storage /
             // sandbox mounts still drive the degraded read path (no WAL, no migration, no writes).
-            // The immutable=1 URI flag is the crucial second step: without it, SQLite still tries
-            // to read/lock the -shm/-wal side files and may fail with CANTOPEN on a sandbox that
-            // allows reading the DB but nothing else in the directory. Immutable tells SQLite the
-            // file will never change, bypassing all journal/wal machinery.
+            // This automatic path keeps WAL visibility by using Mode=ReadOnly only. Callers must
+            // explicitly provide an immutable=1 file URI if they accept a potentially stale base
+            // database snapshot when sidecars cannot be opened.
             // read-only FS / サンドボックスでも縮退 read path を動かせるようフォールバック。
-            // immutable=1 を付けないと SQLite は -shm/-wal を触ろうとして CANTOPEN で落ちることがある。
+            // 自動経路は Mode=ReadOnly のみとし、immutable=1 は stale risk を受け入れる明示指定に限る。
             _connection?.Dispose();
             _walCheckpointAttempted = true;
             _walCheckpointSucceeded = _walCheckpointSkippedReason == null
@@ -570,7 +665,7 @@ public class DbContext : IDisposable
                     Execute("PRAGMA optimize=0x10002");
                     WarnIfBatchInProgress();
                 }
-                catch (SqliteException retryEx) when (IsReadOnlyOpenError(retryEx))
+                catch (SqliteException retryEx) when (IsReadOnlyOpenError(retryEx, dbPath))
                 {
                     _connection?.Dispose();
                     _readOnlyFallback = true;
@@ -957,8 +1052,8 @@ public class DbContext : IDisposable
     internal static bool IsSafetyLevelTransactionError(SqliteException ex) =>
         DbPragmaPolicy.IsSafetyLevelTransactionError(ex);
 
-    private static bool IsReadOnlyOpenError(SqliteException ex) =>
-        DbConnectionFactory.IsReadOnlyOpenError(ex);
+    private static bool IsReadOnlyOpenError(SqliteException ex, string dbPath) =>
+        DbConnectionFactory.IsReadOnlyOpenError(ex, dbPath);
 
     internal static SqliteConnection OpenSqliteConnectionWithRetry(
         Func<SqliteConnection> createConnection,
@@ -2735,7 +2830,7 @@ public class DbContext : IDisposable
                 RunReadMigrationStepsInsideExternalTransaction();
                 return;
             }
-            catch (SqliteException ex) when (IsReadOnlyOpenError(ex))
+            catch (SqliteException ex) when (IsReadOnlyOpenError(ex, _connection.DataSource))
             {
                 RecordMigrationFailure("BEGIN IMMEDIATE schema migration", ex);
                 return;
@@ -2792,13 +2887,13 @@ public class DbContext : IDisposable
                     RecordMigrationFailure(description, ex);
 
                     // Read-only DB / filesystem / sandbox — stop further steps and degrade.
-                    // Catches SQLITE_READONLY (8), SQLITE_IOERR (10), and SQLITE_CANTOPEN (14):
+                    // Catches SQLITE_READONLY (8) and compatible SQLITE_CANTOPEN (14):
                     // some restricted environments report CANTOPEN when SQLite tries to create
                     // -journal side files for the DDL. DbReader.LoadColumns() / table-detection
                     // will drive the degraded read path; later read queries that hit a still-
                     // missing column will now have a single clear preceding diagnostic to refer to.
                     // 読み取り専用 DB・FS・サンドボックスでの DDL 失敗は縮退扱いで打ち切る。
-                    if (IsReadOnlyOpenError(ex)) return false;
+                    if (IsReadOnlyOpenError(ex, _connection.DataSource)) return false;
 
                     // Other SQLite errors (e.g. corruption, full disk) are not opportunistic-
                     // migration concerns — preserve the existing surface-the-exception behavior.

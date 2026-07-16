@@ -74,6 +74,7 @@ public class SqliteConnectionPolicyTests
             walCheckpointAttempted: true,
             walCheckpointSucceeded: false,
             readOnlyImmutableFallback: true,
+            immutableReadOnly: true,
             walCheckpointSkippedReason: "uri_path_parse_failed",
             walCheckpointFailureReason: "sqlite_error_14",
             walStaleSnapshotRisk: true,

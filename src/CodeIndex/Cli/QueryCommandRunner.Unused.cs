@@ -164,6 +164,7 @@ public static partial class QueryCommandRunner
                     payload["query_context"] = queryContext;
                     if (options.Compact || options.SummaryOnly)
                         payload["omitted_sections"] = omittedSections;
+                    AddActiveSqliteDiagnostics(payload);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
@@ -751,6 +752,7 @@ public static partial class QueryCommandRunner
                 queryContext["all"] = true;
             payload["query_context"] = queryContext;
         }
+        AddActiveSqliteDiagnostics(payload);
         return payload.ToJsonString(GetJsonNodeSerializationOptions(jsonOptions));
     }
 

@@ -443,6 +443,7 @@ public partial class McpServer
         JsonObject payload;
         string summary;
         var compactSummary = false;
+        var omitSplitHint = false;
         while (true)
         {
             payload = BuildPayload();
@@ -450,7 +451,8 @@ public partial class McpServer
             {
                 payload["truncated"] = true;
                 payload["truncated_queries"] = truncatedQueries.DeepClone();
-                payload["split_hint"] = BuildBatchSplitHint(queries.Count, cascadeStartedAtIndex, resultsArray.Count);
+                if (!omitSplitHint)
+                    payload["split_hint"] = BuildBatchSplitHint(queries.Count, cascadeStartedAtIndex, resultsArray.Count);
             }
 
             summary = BuildSummary();
@@ -493,6 +495,11 @@ public partial class McpServer
             if (truncated && !compactSummary)
             {
                 compactSummary = true;
+                continue;
+            }
+            if (truncated && !omitSplitHint)
+            {
+                omitSplitHint = true;
                 continue;
             }
             break;

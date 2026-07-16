@@ -58,7 +58,9 @@ public static partial class QueryCommandRunner
             itemList,
             (resultWriter, item) => WriteSarifResult(resultWriter, item, level, itemOptions),
             separator: ",");
-        writer.WriteLine("}]}");
+        writer.Write("}]");
+        WriteActiveSqliteDiagnosticsProperties(writer, itemOptions);
+        writer.WriteLine('}');
     }
 
     private static void WriteJsonArrayInline<T>(IEnumerable<T> items, Action<TextWriter, T> writeItem, string separator)

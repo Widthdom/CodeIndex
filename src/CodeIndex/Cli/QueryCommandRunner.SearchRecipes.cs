@@ -118,6 +118,7 @@ public static partial class QueryCommandRunner
         string hint,
         string commandName = "search")
     {
+        json = AddActiveSqliteDiagnostics(json);
         if (options.MaxJsonBytes.HasValue)
         {
             var byteCount = Encoding.UTF8.GetByteCount(json) + Environment.NewLine.Length;

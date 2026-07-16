@@ -79,14 +79,17 @@ public static partial class QueryCommandRunner
                     }
                     if (options.OutputFormat == OutputFormatJson && options.JsonOutputFormat == JsonOutputFormatArray)
                     {
-                        Console.WriteLine(JsonSerializer.Serialize(
+                        Console.WriteLine(SerializeQueryJson(
                             new List<FileIssue>(),
-                            CliJsonSerializerContextFactory.Create(jsonOptions).ListFileIssue));
+                            CliJsonSerializerContextFactory.Create(jsonOptions).ListFileIssue,
+                            jsonOptions));
                         return CommandExitCodes.Success;
                     }
                     if (TryWriteEmptyFormattedResult(options, jsonOptions))
                         return CommandExitCodes.Success;
-                    Console.WriteLine(BuildValidateJsonPayload(issues, issuesAvailable, jsonOptions).ToJsonString(jsonOptions));
+                    var payload = BuildValidateJsonPayload(issues, issuesAvailable, jsonOptions);
+                    AddActiveSqliteDiagnostics(payload);
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else if (!issuesAvailable)
                     CommandErrorWriter.WriteStderr("WARN: file_issues table missing in this index (legacy or read-only DB) — validate output is degraded, not a real clean signal.");
@@ -127,12 +130,15 @@ public static partial class QueryCommandRunner
                 }
                 if (options.OutputFormat == OutputFormatJson && options.JsonOutputFormat == JsonOutputFormatArray)
                 {
-                    Console.WriteLine(JsonSerializer.Serialize(
+                    Console.WriteLine(SerializeQueryJson(
                         issues,
-                        CliJsonSerializerContextFactory.Create(jsonOptions).ListFileIssue));
+                        CliJsonSerializerContextFactory.Create(jsonOptions).ListFileIssue,
+                        jsonOptions));
                     return CommandExitCodes.Success;
                 }
-                Console.WriteLine(BuildValidateJsonPayload(issues, issuesAvailable, jsonOptions).ToJsonString(jsonOptions));
+                var payload = BuildValidateJsonPayload(issues, issuesAvailable, jsonOptions);
+                AddActiveSqliteDiagnostics(payload);
+                Console.WriteLine(payload.ToJsonString(jsonOptions));
             }
             else
             {
@@ -195,7 +201,7 @@ public static partial class QueryCommandRunner
 
     private static void WriteValidateCompactJson(IReadOnlyList<FileIssue> issues, bool issuesAvailable, JsonSerializerOptions jsonOptions)
     {
-        Console.WriteLine(new JsonObject
+        var payload = new JsonObject
         {
             ["format"] = OutputFormatCompact,
             ["count"] = issues.Count,
@@ -203,7 +209,9 @@ public static partial class QueryCommandRunner
             ["issues"] = BuildCompactValidateIssues(issues),
             ["issues_table_available"] = issuesAvailable,
             ["degraded"] = !issuesAvailable,
-        }.ToJsonString(jsonOptions));
+        };
+        AddActiveSqliteDiagnostics(payload);
+        Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 
     private static JsonArray BuildCompactValidateIssues(IEnumerable<FileIssue> issues)

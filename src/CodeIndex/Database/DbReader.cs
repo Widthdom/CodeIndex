@@ -1017,11 +1017,13 @@ public partial class DbReader : IDisposable
     public bool WalCheckpointAttempted => _walCheckpointAttempted;
     public bool WalCheckpointSucceeded => _walCheckpointSucceeded;
     public bool ReadOnlyImmutableFallback => _readOnlyImmutableFallback;
-    public bool WalStaleSnapshotRisk => _readOnlyImmutableFallback && !_walCheckpointSucceeded;
+    public bool WalStaleSnapshotRisk => _immutableReadOnly && !_walCheckpointSucceeded;
     public string? WalCheckpointSkippedReason => _walCheckpointSkippedReason;
     public string? WalCheckpointFailureReason => _walCheckpointFailureReason;
     public string? WalStaleSnapshotReason => WalStaleSnapshotRisk
-        ? _walCheckpointSkippedReason ?? _walCheckpointFailureReason ?? "immutable_read_only_fallback"
+        ? _walCheckpointSkippedReason
+          ?? _walCheckpointFailureReason
+          ?? (_readOnlyImmutableFallback ? "immutable_read_only_fallback" : "explicit_immutable_read_only")
         : null;
 
     private bool HasSymbolIndex(string indexName) => _symbolIndexes.Contains(indexName);

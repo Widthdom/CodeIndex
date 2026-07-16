@@ -42,9 +42,17 @@ internal static class SqliteFileUri
 
     internal static bool RequestsReadOnly(string uriText)
     {
-        return HasQuerySegment(uriText, "immutable=1")
+        return RequestsImmutableSnapshot(uriText)
             || HasQuerySegment(uriText, "mode=ro");
     }
+
+    // Freshness diagnostics must be conservative: SQLite still honors immutable=1 when
+    // unrelated URI parameters (for example cache=shared) are present. This is deliberately
+    // broader than RequestsUnambiguousImmutableSnapshot, whose stricter contract protects
+    // generation-zero cursor trust rather than stale-snapshot reporting.
+    // freshness 診断では追加 URI parameter があっても SQLite の immutable=1 を検出する。
+    internal static bool RequestsImmutableSnapshot(string uriText)
+        => HasQuerySegment(uriText, "immutable=1");
 
     internal static bool RequestsUnambiguousImmutableSnapshot(string uriText)
     {

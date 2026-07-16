@@ -3022,7 +3022,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunStatus_ReadOnlyFlagOpensImmutableUriAndReportsModeFields()
+    public void RunStatus_ReadOnlyFlagReportsImmutableRiskAcrossJsonCommands_Issue4555()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_readonly");
         try
@@ -3052,10 +3052,68 @@ public partial class QueryCommandRunnerTests
             Assert.False(document.RootElement.GetProperty("wal_checkpoint_attempted").GetBoolean());
             Assert.False(document.RootElement.GetProperty("wal_checkpoint_succeeded").GetBoolean());
             var policy = document.RootElement.GetProperty("sqlite_connection_policy");
-            Assert.Equal("read_only", policy.GetProperty("active_mode").GetString());
+            Assert.Equal(SqliteConnectionPolicy.ImmutableReadOnlyUriModeName, policy.GetProperty("active_mode").GetString());
+            Assert.True(policy.GetProperty("immutable_uri").GetBoolean());
+            Assert.True(document.RootElement.GetProperty("wal_stale_snapshot_risk").GetBoolean());
+            Assert.Equal("explicit_immutable_read_only", document.RootElement.GetProperty("wal_stale_snapshot_reason").GetString());
             Assert.Equal(SqliteConnectionPolicy.DefaultCommandTimeoutSeconds, policy.GetProperty("command_timeout_seconds").GetInt32());
             Assert.True(policy.GetProperty("long_running_commands_require_cancellation").GetBoolean());
             Assert.False(policy.GetProperty("read_only_fallback").GetBoolean());
+
+            var (filesExit, filesStdout, filesStderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", options.DbPath, "--json", "--limit", "1"],
+                _jsonOptions));
+            using var filesDocument = ParseJsonOutput(filesStdout);
+            Assert.Equal(CommandExitCodes.Success, filesExit);
+            Assert.Equal(string.Empty, filesStderr);
+            Assert.True(filesDocument.RootElement.GetProperty("wal_stale_snapshot_risk").GetBoolean());
+
+            var (outlineExit, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/app.cs", "--db", options.DbPath, "--json"],
+                _jsonOptions));
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+            Assert.Equal(CommandExitCodes.Success, outlineExit);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.True(outlineDocument.RootElement.GetProperty("wal_stale_snapshot_risk").GetBoolean());
+
+            var (sarifExit, sarifStdout, sarifStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["class", "--db", options.DbPath, "--format", "sarif", "--limit", "1"],
+                _jsonOptions));
+            using var sarifDocument = ParseJsonOutput(sarifStdout);
+            Assert.Equal(CommandExitCodes.Success, sarifExit);
+            Assert.Equal(string.Empty, sarifStderr);
+            Assert.True(sarifDocument.RootElement.GetProperty("wal_stale_snapshot_risk").GetBoolean());
+            Assert.Equal("explicit_immutable_read_only", sarifDocument.RootElement.GetProperty("wal_stale_snapshot_reason").GetString());
+
+            var (lspExit, lspStdout, lspStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["class", "--db", options.DbPath, "--format", "lsp", "--limit", "1"],
+                _jsonOptions));
+            using var lspDocument = ParseJsonOutput(lspStdout);
+            Assert.Equal(CommandExitCodes.Success, lspExit);
+            Assert.Equal(string.Empty, lspStderr);
+            Assert.True(lspDocument.RootElement[0].GetProperty("wal_stale_snapshot_risk").GetBoolean());
+
+            var (ndjsonExit, ndjsonStdout, ndjsonStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["class", "--db", options.DbPath, "--json=ndjson", "--limit", "1"],
+                _jsonOptions));
+            var ndjsonLines = ndjsonStdout.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            using var ndjsonResult = JsonDocument.Parse(ndjsonLines[0]);
+            using var ndjsonDone = JsonDocument.Parse(ndjsonLines[1]);
+            Assert.Equal(CommandExitCodes.Success, ndjsonExit);
+            Assert.Equal(string.Empty, ndjsonStderr);
+            Assert.True(ndjsonResult.RootElement.GetProperty("wal_stale_snapshot_risk").GetBoolean());
+            Assert.True(ndjsonDone.RootElement.GetProperty("wal_stale_snapshot_risk").GetBoolean());
+
+            var (emptyArrayExit, emptyArrayStdout, emptyArrayStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["__missing_issue4555__", "--db", options.DbPath, "--json=array"],
+                _jsonOptions));
+            using var emptyArrayDocument = ParseJsonOutput(emptyArrayStdout);
+            var diagnosticsOnly = Assert.Single(emptyArrayDocument.RootElement.EnumerateArray());
+            Assert.Equal(CommandExitCodes.Success, emptyArrayExit);
+            Assert.Equal(string.Empty, emptyArrayStderr);
+            Assert.True(diagnosticsOnly.GetProperty("diagnostic_only").GetBoolean());
+            Assert.Equal("sqlite_stale_snapshot_risk", diagnosticsOnly.GetProperty("diagnostic_type").GetString());
+            Assert.True(diagnosticsOnly.GetProperty("wal_stale_snapshot_risk").GetBoolean());
         }
         finally
         {

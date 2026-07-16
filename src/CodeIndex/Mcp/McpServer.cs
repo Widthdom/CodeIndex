@@ -93,6 +93,7 @@ public partial class McpServer : IDisposable
     // を渡せるようにするため (#1567)。
     private readonly AsyncLocal<CancellationToken> _currentRequestToken = new();
     private readonly AsyncLocal<bool> _isolateDbForCurrentRequest = new();
+    private readonly AsyncLocal<DbReader?> _activeSqliteDiagnosticsReader = new();
     // JSON-RPC batches divide the complete array-envelope budget among response-bearing
     // items. resources/list and resources/read observe their current share here so large
     // pages cannot each claim the full response cap and overflow the aggregate frame.
@@ -6187,7 +6188,7 @@ public partial class McpServer : IDisposable
             isolatedDb.TryMigrateForRead();
             using var isolatedReader = new DbReader(isolatedDb, requestToken);
             isolatedReader.IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
-            return isolatedReader.RunWithGeneratedScope(() => action(isolatedReader));
+            return RunWithSqliteDiagnostics(isolatedReader, action);
         }
 
         var db = GetOrOpenSharedDb();
@@ -6208,7 +6209,37 @@ public partial class McpServer : IDisposable
         // shutdown / 切断を観測できるようにする (#1567)。
         using var reader = new DbReader(db, requestToken);
         reader.IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
-        return reader.RunWithGeneratedScope(() => action(reader));
+        return RunWithSqliteDiagnostics(reader, action);
+    }
+
+    private JsonNode RunWithSqliteDiagnostics(DbReader reader, Func<DbReader, JsonNode> action)
+    {
+        var previousReader = _activeSqliteDiagnosticsReader.Value;
+        _activeSqliteDiagnosticsReader.Value = reader;
+        try
+        {
+            return reader.RunWithGeneratedScope(() => action(reader));
+        }
+        finally
+        {
+            _activeSqliteDiagnosticsReader.Value = previousReader;
+        }
+    }
+
+    private void AddConfiguredSqliteDiagnostics(JsonObject payload)
+    {
+        var diagnosticsReader = _activeSqliteDiagnosticsReader.Value;
+        if (diagnosticsReader != null)
+        {
+            QueryCommandRunner.AddReadOnlyFallbackDiagnostics(payload, diagnosticsReader);
+            return;
+        }
+
+        if (!SqliteFileUri.RequestsImmutableSnapshot(_dbPath))
+            return;
+
+        payload["wal_stale_snapshot_risk"] = true;
+        payload["wal_stale_snapshot_reason"] = "explicit_immutable_read_only";
     }
 
     /// <summary>
@@ -6562,6 +6593,7 @@ public partial class McpServer : IDisposable
         {
             structuredObject.TryAdd("api_version", JsonOutputContract.ApiVersion);
             AddProjectFilterRootDiagnostics(structuredObject);
+            AddConfiguredSqliteDiagnostics(structuredObject);
             result["structuredContent"] = structuredContent;
         }
         else if (structuredContent != null)
@@ -6624,9 +6656,9 @@ public partial class McpServer : IDisposable
         public int BytesWritten { get; } = bytesWritten;
     }
 
-    private static JsonObject CreateResponseTooLargeError(bool hasId, JsonNode? id, int responseBytes, int responseLimit, bool actualBytesExact = true)
+    private JsonObject CreateResponseTooLargeError(bool hasId, JsonNode? id, int responseBytes, int responseLimit, bool actualBytesExact = true)
     {
-        return CreateErrorResponse(
+        var response = CreateErrorResponse(
             hasId: hasId,
             id: id,
             code: -32603,
@@ -6641,6 +6673,8 @@ public partial class McpServer : IDisposable
                 ["actual_bytes"] = responseBytes,
                 ["actual_bytes_exact"] = actualBytesExact,
             });
+        AddConfiguredSqliteDiagnostics((JsonObject)response["error"]!["data"]!);
+        return response;
     }
 
     private static int GetMaxResponseBytes()
@@ -6720,6 +6754,8 @@ public partial class McpServer : IDisposable
         IReadOnlyList<string>? similarValues = null)
     {
         ClearProjectFilterRootDiagnostics();
+        var structuredContent = McpErrorEnvelope.BuildData(category, suggestion, retrySafe, AddCorrelationData(extraData));
+        AddConfiguredSqliteDiagnostics(structuredContent);
         var result = new JsonObject
         {
             ["content"] = new JsonArray
@@ -6731,7 +6767,7 @@ public partial class McpServer : IDisposable
                 }
             },
             ["isError"] = true,
-            ["structuredContent"] = McpErrorEnvelope.BuildData(category, suggestion, retrySafe, AddCorrelationData(extraData)),
+            ["structuredContent"] = structuredContent,
         };
         if (similarValues != null && similarValues.Count > 0)
         {
