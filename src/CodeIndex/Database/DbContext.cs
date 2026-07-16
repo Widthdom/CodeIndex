@@ -178,7 +178,7 @@ public class DbContext : IDisposable
     private string? _walCheckpointFailureReason;
     private readonly string? _schemaCacheKey;
     private SqliteTransaction? _activeMigrationTransaction;
-    private bool _readMigrationInsideExternalTransaction;
+    private MigrationTransactionOwnership _migrationTransactionOwnership;
     private readonly object _schemaCacheLock = new();
     private DbSchemaCache? _schemaCache;
     private bool _disposed;
@@ -199,6 +199,14 @@ public class DbContext : IDisposable
     private static readonly AsyncLocal<Action<string>?> ScopedForeignKeysDisabledForTesting = new();
     private static readonly AsyncLocal<Action<string, long>?> ScopedForeignKeysRestoringForTesting = new();
     private static readonly AsyncLocal<Action<SqliteConnection, string>?> ScopedForeignKeyValidationBeforeCheckForTesting = new();
+    private static readonly AsyncLocal<Func<SqliteConnection, SqliteTransaction>?> ScopedReadMigrationTransactionFactoryForTesting = new();
+
+    private enum MigrationTransactionOwnership
+    {
+        None,
+        Owned,
+        External,
+    }
 
     internal static Action<string>? OptimizePragmaExecutedForTesting
     {
@@ -246,6 +254,12 @@ public class DbContext : IDisposable
     {
         get => ScopedForeignKeyValidationBeforeCheckForTesting.Value;
         set => ScopedForeignKeyValidationBeforeCheckForTesting.Value = value;
+    }
+
+    internal static Func<SqliteConnection, SqliteTransaction>? ReadMigrationTransactionFactoryForTesting
+    {
+        get => ScopedReadMigrationTransactionFactoryForTesting.Value;
+        set => ScopedReadMigrationTransactionFactoryForTesting.Value = value;
     }
 
     public SqliteConnection Connection => _connection;
@@ -2049,13 +2063,27 @@ public class DbContext : IDisposable
     public void InitializeSchema()
     {
         var legacyAlterTable = ExecuteScalar("PRAGMA legacy_alter_table");
-        var foreignKeys = ReadPragmaLong("foreign_keys");
-        Execute("PRAGMA foreign_keys=OFF");
-        Execute("PRAGMA legacy_alter_table=ON");
         try
         {
-            using var transaction = _connection.BeginTransaction(deferred: false);
+            RunWithForeignKeysDisabledForMigration(
+                "InitializeSchema",
+                () => InitializeSchemaInOwnedTransaction(legacyAlterTable));
+        }
+        finally
+        {
+            _schemaCache?.Refresh();
+        }
+    }
+
+    private void InitializeSchemaInOwnedTransaction(string legacyAlterTable)
+    {
+        SqliteTransaction? transaction = null;
+        try
+        {
+            Execute("PRAGMA legacy_alter_table=ON");
+            transaction = _connection.BeginTransaction(deferred: false);
             _activeMigrationTransaction = transaction;
+            _migrationTransactionOwnership = MigrationTransactionOwnership.Owned;
             try
             {
                 // Files table / ファイルテーブル
@@ -2285,24 +2313,36 @@ public class DbContext : IDisposable
             finally
             {
                 _activeMigrationTransaction = null;
+                _migrationTransactionOwnership = MigrationTransactionOwnership.None;
             }
         }
         finally
         {
-            Execute($"PRAGMA foreign_keys={foreignKeys}");
-            Execute($"PRAGMA legacy_alter_table={legacyAlterTable}");
-            _schemaCache?.Refresh();
+            try
+            {
+                transaction?.Dispose();
+            }
+            finally
+            {
+                Execute($"PRAGMA legacy_alter_table={legacyAlterTable}");
+            }
         }
     }
 
     private void EnforceRequiredFileIdConstraints()
     {
         var symbolKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds);
-        Execute("PRAGMA foreign_keys=OFF");
         var legacyAlterTable = ExecuteScalar("PRAGMA legacy_alter_table");
-        Execute("PRAGMA legacy_alter_table=ON");
+        RunWithForeignKeysDisabledForMigration(
+            "EnforceRequiredFileIdConstraints",
+            () => EnforceRequiredFileIdConstraintsCore(symbolKindCheck, legacyAlterTable));
+    }
+
+    private void EnforceRequiredFileIdConstraintsCore(string symbolKindCheck, string legacyAlterTable)
+    {
         try
         {
+            Execute("PRAGMA legacy_alter_table=ON");
             RebuildTableWithRequiredFileId(
                 "chunks",
                 """
@@ -2364,7 +2404,6 @@ public class DbContext : IDisposable
         finally
         {
             Execute($"PRAGMA legacy_alter_table={legacyAlterTable}");
-            Execute("PRAGMA foreign_keys=ON");
         }
     }
 
@@ -2665,11 +2704,19 @@ public class DbContext : IDisposable
 
     private void RunWithForeignKeysDisabledForMigration(string operation, Action action)
     {
+        if (IsSqliteTransactionActive())
+        {
+            AssertForeignKeyMode(operation, expected: 0);
+            ForeignKeysDisabledForTesting?.Invoke(operation);
+            action();
+            return;
+        }
+
         var foreignKeys = ReadPragmaLong("foreign_keys");
-        Execute("PRAGMA foreign_keys=OFF");
         ExceptionDispatchInfo? operationFailure = null;
         try
         {
+            SetForeignKeyModeAndVerify(operation, expected: 0);
             ForeignKeysDisabledForTesting?.Invoke(operation);
             action();
         }
@@ -2681,7 +2728,7 @@ public class DbContext : IDisposable
         try
         {
             ForeignKeysRestoringForTesting?.Invoke(operation, foreignKeys);
-            Execute($"PRAGMA foreign_keys={foreignKeys}");
+            SetForeignKeyModeAndVerify(operation, foreignKeys);
         }
         catch (Exception ex)
         {
@@ -2696,6 +2743,29 @@ public class DbContext : IDisposable
 
         operationFailure?.Throw();
     }
+
+    private void SetForeignKeyModeAndVerify(string operation, long expected)
+    {
+        Execute($"PRAGMA foreign_keys={expected}");
+        AssertForeignKeyMode(operation, expected);
+    }
+
+    private void AssertForeignKeyMode(string operation, long expected)
+    {
+        var effective = ReadPragmaLong("foreign_keys");
+        if (effective == expected)
+            return;
+
+        throw new CodeIndexException(
+            code: CommandErrorCodes.DbError,
+            category: CodeIndexExceptionCategory.Database,
+            message: $"PRAGMA foreign_keys remained {effective} while schema migration operation '{operation}' required {expected}.",
+            path: _connection.DataSource,
+            hint: "Finish or roll back the external transaction, then rerun the migration on a writable database connection.");
+    }
+
+    private bool IsSqliteTransactionActive()
+        => SQLitePCL.raw.sqlite3_get_autocommit(_connection.Handle) == 0;
 
     private void InvokeForeignKeyValidationBeforeCheckForTesting(string phase)
     {
@@ -2928,21 +2998,18 @@ public class DbContext : IDisposable
 
         try
         {
+            if (IsSqliteTransactionActive())
+            {
+                RunReadMigrationSteps(MigrationTransactionOwnership.External);
+                return;
+            }
+
             EnsureForeignKeysEnabled();
-            SqliteTransaction? transaction;
+            SqliteTransaction transaction;
             try
             {
-                transaction = _connection.BeginTransaction(deferred: false);
-            }
-            catch (SqliteException ex) when (IsBeginTransactionSqliteError(ex))
-            {
-                RunReadMigrationStepsInsideExternalTransaction();
-                return;
-            }
-            catch (InvalidOperationException)
-            {
-                RunReadMigrationStepsInsideExternalTransaction();
-                return;
+                transaction = ReadMigrationTransactionFactoryForTesting?.Invoke(_connection)
+                    ?? _connection.BeginTransaction(deferred: false);
             }
             catch (SqliteException ex) when (IsReadOnlyOpenError(ex, _connection.DataSource))
             {
@@ -2953,12 +3020,17 @@ public class DbContext : IDisposable
             using (transaction)
             {
                 _activeMigrationTransaction = transaction;
-                if (!RunReadMigrationSteps())
-                    return;
-                transaction.Commit();
+                try
+                {
+                    if (!RunReadMigrationSteps(MigrationTransactionOwnership.Owned))
+                        return;
+                    transaction.Commit();
+                }
+                finally
+                {
+                    _activeMigrationTransaction = null;
+                }
             }
-
-            _activeMigrationTransaction = null;
 
             EnsureForeignKeysEnabled();
         }
@@ -2972,22 +3044,13 @@ public class DbContext : IDisposable
         }
     }
 
-    private void RunReadMigrationStepsInsideExternalTransaction()
+    private bool RunReadMigrationSteps(MigrationTransactionOwnership ownership)
     {
-        _readMigrationInsideExternalTransaction = true;
-        try
-        {
-            if (RunReadMigrationSteps())
-                EnsureForeignKeysEnabled();
-        }
-        finally
-        {
-            _readMigrationInsideExternalTransaction = false;
-        }
-    }
+        if (ownership == MigrationTransactionOwnership.None)
+            throw new InvalidOperationException("Read migration transaction ownership must be explicit.");
 
-    private bool RunReadMigrationSteps()
-    {
+        var previousOwnership = _migrationTransactionOwnership;
+        _migrationTransactionOwnership = ownership;
         try
         {
             foreach (var (description, action) in BuildReadMigrationSteps())
@@ -3020,12 +3083,9 @@ public class DbContext : IDisposable
         }
         finally
         {
-            _activeMigrationTransaction = null;
+            _migrationTransactionOwnership = previousOwnership;
         }
     }
-
-    private static bool IsBeginTransactionSqliteError(SqliteException exception) =>
-        exception.SqliteErrorCode == 1;
 
     private void RecordMigrationFailure(string description, SqliteException exception)
     {
@@ -3230,7 +3290,7 @@ public class DbContext : IDisposable
     {
         var quotedTableName = SqliteIdentifier.Quote(tableName);
         var quotedColumnName = SqliteIdentifier.Quote(columnName);
-        if (_activeMigrationTransaction != null || _readMigrationInsideExternalTransaction)
+        if (_migrationTransactionOwnership != MigrationTransactionOwnership.None)
         {
             DbColumnEnsurer.EnsureColumn(
                 () => ColumnExists(tableName, columnName),
