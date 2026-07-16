@@ -173,7 +173,9 @@ public class DbContext : IDisposable
     private readonly string? _schemaCacheKey;
     private SqliteTransaction? _activeMigrationTransaction;
     private bool _readMigrationInsideExternalTransaction;
+    private readonly object _schemaCacheLock = new();
     private DbSchemaCache? _schemaCache;
+    private bool _disposed;
     private PreparedCommandCache? _preparedCommands;
     private bool _suppressWriteWorkTracking = true;
     private bool _hasWriteWork;
@@ -257,7 +259,18 @@ public class DbContext : IDisposable
     /// / `sqlite_master` results instead of re-running the scan on every
     /// construction (issues #1565 / #1701).
     /// </summary>
-    public DbSchemaCache SchemaCache => _schemaCache ??= new DbSchemaCache(_connection, _schemaCacheKey);
+    public DbSchemaCache SchemaCache
+    {
+        get
+        {
+            lock (_schemaCacheLock)
+            {
+                if (_disposed)
+                    throw new ObjectDisposedException(nameof(DbContext));
+                return _schemaCache ??= new DbSchemaCache(_connection, _schemaCacheKey);
+            }
+        }
+    }
 
     /// <summary>
     /// Drop cached schema state so subsequent reads observe DDL that ran
@@ -265,7 +278,14 @@ public class DbContext : IDisposable
     /// (`InitializeSchema`, `TryMigrateForRead`, `DropAll`) already invalidate
     /// the cache automatically.
     /// </summary>
-    public void RefreshSchemaCache() => _schemaCache?.Refresh();
+    public void RefreshSchemaCache()
+    {
+        lock (_schemaCacheLock)
+        {
+            if (!_disposed)
+                _schemaCache?.Refresh();
+        }
+    }
 
     /// <summary>
     /// Lazily-initialized LRU cache of prepared <see cref="SqliteCommand"/> instances shared
@@ -3157,6 +3177,17 @@ public class DbContext : IDisposable
 
     public void Dispose()
     {
+        DbSchemaCache? schemaCache;
+        lock (_schemaCacheLock)
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            schemaCache = _schemaCache;
+            _schemaCache = null;
+        }
+        schemaCache?.Dispose();
+
         // Dispose cached prepared statements before closing the connection so each
         // SqliteCommand's finalizer does not race the connection teardown.
         // connection を閉じる前にキャッシュ済み command を dispose し、finalizer と

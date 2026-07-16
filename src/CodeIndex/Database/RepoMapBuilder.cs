@@ -11,7 +11,7 @@ namespace CodeIndex.Database;
 internal sealed class RepoMapBuilder
 {
     private readonly SqliteConnection _conn;
-    private readonly HashSet<string> _fileColumns;
+    private readonly IReadOnlySet<string> _fileColumns;
     private readonly Func<StringComparer> _getIndexedPathComparer;
 
     private static readonly Dictionary<string, string[]> EntrypointNameHints = new(StringComparer.OrdinalIgnoreCase)
@@ -65,7 +65,7 @@ internal sealed class RepoMapBuilder
 
     private readonly bool _hasReferencesTable;
 
-    public RepoMapBuilder(SqliteConnection connection, HashSet<string> fileColumns, bool hasReferencesTable, Func<StringComparer> getIndexedPathComparer)
+    public RepoMapBuilder(SqliteConnection connection, IReadOnlySet<string> fileColumns, bool hasReferencesTable, Func<StringComparer> getIndexedPathComparer)
     {
         _conn = connection;
         _fileColumns = fileColumns;
