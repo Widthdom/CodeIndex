@@ -856,6 +856,92 @@ public class LegacySchemaMigrationTests : IDisposable
         }
     }
 
+    [Fact]
+    public void TryValidateExistingCodeIndexDb_ClassifiesCantOpenCausesWithoutLeakingDetails_Issue4556()
+    {
+        var missingPath = _dbPath + ".missing";
+        Assert.False(DbContext.TryValidateExistingCodeIndexDb(missingPath, out var missingMessage, out var isNotFound));
+        Assert.True(isNotFound);
+        Assert.Contains($"[{DbContext.DatabaseOpenMissingCategory}]", missingMessage, StringComparison.Ordinal);
+
+        var oversizedUri = "file:///tmp/codeindex.db?" + new string('x', SqliteFileUri.MaxQueryLength + 1);
+        Assert.False(DbContext.TryValidateExistingCodeIndexDb(oversizedUri, out var uriMessage, out isNotFound));
+        Assert.False(isNotFound);
+        Assert.Contains($"[{DbContext.DatabaseOpenInvalidUriCategory}]", uriMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain(new string('x', 32), uriMessage, StringComparison.Ordinal);
+
+        const string sensitiveProviderMessage = "/private/secret/db: permission denied";
+        var valid = DbContext.TryValidateExistingCodeIndexDb(
+            _dbPath,
+            _ => new SqliteConnection("Data Source=:memory:"),
+            _ => throw CreateSqliteException(sensitiveProviderMessage, 14),
+            sleep: null,
+            out var unknownMessage,
+            out isNotFound);
+        Assert.False(valid);
+        Assert.False(isNotFound);
+        Assert.Contains($"[{DbContext.DatabaseOpenUnknownCategory}]", unknownMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain(sensitiveProviderMessage, unknownMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain(_dbDir, unknownMessage, StringComparison.Ordinal);
+
+        Assert.Equal(
+            DbContext.DatabaseOpenSidecarCategory,
+            DbContext.ClassifyCantOpenFailure(_dbPath, 14 | (5 << 8)));
+
+        if (OperatingSystem.IsWindows())
+            return;
+
+        SqliteConnection.ClearAllPools();
+        var originalDbMode = File.GetUnixFileMode(_dbPath);
+        try
+        {
+            File.SetUnixFileMode(_dbPath, UnixFileMode.None);
+            Assert.False(DbContext.TryValidateExistingCodeIndexDb(_dbPath, out var permissionMessage, out isNotFound));
+            Assert.False(isNotFound);
+            Assert.Contains($"[{DbContext.DatabaseOpenPermissionCategory}]", permissionMessage, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.SetUnixFileMode(_dbPath, originalDbMode);
+        }
+
+        foreach (var suffix in new[] { "-wal", "-shm" })
+        {
+            var sidecarPath = _dbPath + suffix;
+            File.WriteAllText(sidecarPath, "unreadable sidecar");
+            var originalSidecarMode = File.GetUnixFileMode(sidecarPath);
+            try
+            {
+                File.SetUnixFileMode(sidecarPath, UnixFileMode.None);
+                Assert.Equal(
+                    DbContext.DatabaseOpenSidecarCategory,
+                    DbContext.ClassifyCantOpenFailure(_dbPath, 14));
+            }
+            finally
+            {
+                File.SetUnixFileMode(sidecarPath, originalSidecarMode);
+                File.Delete(sidecarPath);
+            }
+        }
+
+        var deniedDirectory = Path.Combine(_dbDir, "denied");
+        Directory.CreateDirectory(deniedDirectory);
+        var deniedDb = Path.Combine(deniedDirectory, "codeindex.db");
+        File.WriteAllText(deniedDb, "not opened");
+        var originalDirectoryMode = File.GetUnixFileMode(deniedDirectory);
+        try
+        {
+            File.SetUnixFileMode(deniedDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            Assert.False(DbContext.TryValidateExistingCodeIndexDb(deniedDb, out var directoryMessage, out isNotFound));
+            Assert.False(isNotFound);
+            Assert.Contains($"[{DbContext.DatabaseOpenPermissionCategory}]", directoryMessage, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.SetUnixFileMode(deniedDirectory, originalDirectoryMode);
+        }
+    }
+
     private static SqliteException CreateTransientBusyException()
         => CreateSqliteException("busy", 5);
 

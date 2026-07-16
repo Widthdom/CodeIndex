@@ -2844,6 +2844,8 @@ When SQLite returns permission-style errors such as `SQLITE_AUTH`, `SQLITE_PERM`
 - Flatpak: check filesystem portal permissions and AppArmor/audit logs when the host policy confines the app.
 - SELinux: run `getenforce`, inspect denials with `ausearch -m avc -ts recent`, and explain them with `audit2why`.
 
+Existing-database validation does not interpret every `SQLITE_CANTOPEN` as a missing file. It reports one stable bracketed cause: `missing_database`, `permission_denied`, `sidecar_failure`, `invalid_uri`, or `unknown_open_failure`. The classification uses file/directory preflight, SQLite extended codes, and bounded OS probes without exposing provider messages or full sensitive paths.
+
 5. **Database disk image malformed / integrity failure** (`E005_DB_INTEGRITY_FAILED`)
    - Symptom: queries crash with `database disk image is malformed`, or `cdidx db --integrity-check` exits `3` and lists `PRAGMA integrity_check` failures with `Error [E005_DB_INTEGRITY_FAILED]: ...`.
    - Cause: the SQLite file was corrupted — typical sources are abrupt host shutdown, killed `cdidx index` while writing, antivirus quarantine, or filesystem-level corruption.
@@ -5699,6 +5701,8 @@ SELinux profile が取れれば confinement-aware hint を追加します。
 `status --json` にも同じ best-effort signal として `mac_profile` が入り、
 例として `apparmor:snap.cdidx.cdidx` や `selinux:user_u:user_r:user_t:s0`
 が返ります。
+
+既存 DB の validation はすべての `SQLITE_CANTOPEN` を file missing と解釈しません。`missing_database`、`permission_denied`、`sidecar_failure`、`invalid_uri`、`unknown_open_failure` のいずれかを安定した角括弧 cause として返します。分類には file / directory preflight、SQLite extended code、bounded な OS probe を使い、provider message や機微な full path は公開しません。
 
 - Snap / AppArmor: `aa-status`、snap interface grant、`codeindex.db-wal`
   や `codeindex.db-shm` 作成拒否の audit log を確認する。

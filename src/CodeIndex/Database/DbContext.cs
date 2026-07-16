@@ -22,6 +22,12 @@ public class DbContext : IDisposable
     public const string CacheSizeEnvironmentVariable = "CDIDX_SQLITE_CACHE_KB";
     public const string MmapSizeEnvironmentVariable = "CDIDX_SQLITE_MMAP_BYTES";
     public const string BusyTimeoutEnvironmentVariable = "CDIDX_SQLITE_BUSY_TIMEOUT_MS";
+    internal const string DatabaseOpenMissingCategory = "missing_database";
+    internal const string DatabaseOpenPermissionCategory = "permission_denied";
+    internal const string DatabaseOpenSidecarCategory = "sidecar_failure";
+    internal const string DatabaseOpenInvalidUriCategory = "invalid_uri";
+    internal const string DatabaseOpenUnknownCategory = "unknown_open_failure";
+    private const int SqliteCantOpenDirtyWal = 14 | (5 << 8);
     public const int DefaultWalAutocheckpointPages = 1000;
     public const string DefaultSynchronousMode = "NORMAL";
     public const string SymbolExtractorVersionMetaPrefix = "symbol_extractor_version_";
@@ -352,7 +358,10 @@ public class DbContext : IDisposable
 
         if (SqliteFileUri.StartsWithFileScheme(dbPath) && !SqliteFileUri.TryValidateBounds(dbPath, out var boundsError))
         {
-            message = boundsError?.Message ?? "Invalid SQLite file URI.";
+            message = FormatDatabaseOpenFailure(
+                DatabaseOpenInvalidUriCategory,
+                dbPath,
+                boundsError?.Message ?? "Invalid SQLite file URI.");
             return false;
         }
 
@@ -365,23 +374,30 @@ public class DbContext : IDisposable
         var openTarget = dbPath;
         if (SqliteFileUri.StartsWithFileScheme(dbPath))
         {
-            var normalized = TryGetLocalPath(dbPath);
-            if (normalized != null)
+            if (!TryGetLocalPath(dbPath, out var normalized, out var pathFailureReason)
+                || normalized == null)
             {
-                if (!File.Exists(LongPath.EnsureWindowsPrefix(normalized)))
-                {
-                    message = $"database not found: {dbPath}";
-                    isNotFound = true;
-                    return false;
-                }
-
-                openTarget = normalized;
+                message = FormatDatabaseOpenFailure(
+                    DatabaseOpenInvalidUriCategory,
+                    dbPath,
+                    pathFailureReason);
+                return false;
             }
+
+            openTarget = normalized;
         }
-        else if (!File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
+
+        var preflight = ProbeDatabasePath(openTarget);
+        if (preflight is DatabasePathProbe.Missing or DatabasePathProbe.PermissionDenied or DatabasePathProbe.Directory)
         {
-            message = $"database not found: {dbPath}";
-            isNotFound = true;
+            var category = preflight switch
+            {
+                DatabasePathProbe.Missing => DatabaseOpenMissingCategory,
+                DatabasePathProbe.PermissionDenied => DatabaseOpenPermissionCategory,
+                _ => DatabaseOpenUnknownCategory,
+            };
+            message = FormatDatabaseOpenFailure(category, dbPath);
+            isNotFound = category == DatabaseOpenMissingCategory;
             return false;
         }
 
@@ -431,8 +447,9 @@ public class DbContext : IDisposable
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode is 14)
         {
-            message = $"database not found: {dbPath}";
-            isNotFound = true;
+            var category = ClassifyCantOpenFailure(openTarget, ex.SqliteExtendedErrorCode);
+            message = FormatDatabaseOpenFailure(category, dbPath);
+            isNotFound = category == DatabaseOpenMissingCategory;
             return false;
         }
         catch (SqliteException)
@@ -440,6 +457,82 @@ public class DbContext : IDisposable
             message = $"database is not an existing CodeIndex DB: {dbPath}";
             return false;
         }
+    }
+
+    internal static string ClassifyCantOpenFailure(string dbPath, int sqliteExtendedErrorCode)
+    {
+        if (sqliteExtendedErrorCode == SqliteCantOpenDirtyWal)
+            return DatabaseOpenSidecarCategory;
+
+        return ProbeDatabasePath(dbPath) switch
+        {
+            DatabasePathProbe.Missing => DatabaseOpenMissingCategory,
+            DatabasePathProbe.PermissionDenied => DatabaseOpenPermissionCategory,
+            _ when HasInaccessibleSqliteSidecar(dbPath) => DatabaseOpenSidecarCategory,
+            _ => DatabaseOpenUnknownCategory,
+        };
+    }
+
+    private static bool HasInaccessibleSqliteSidecar(string dbPath)
+        => ProbeDatabasePath(dbPath + "-wal") == DatabasePathProbe.PermissionDenied
+           || ProbeDatabasePath(dbPath + "-shm") == DatabasePathProbe.PermissionDenied;
+
+    private static DatabasePathProbe ProbeDatabasePath(string path)
+    {
+        try
+        {
+            var attributes = File.GetAttributes(LongPath.EnsureWindowsPrefix(path));
+            if ((attributes & FileAttributes.Directory) != 0)
+                return DatabasePathProbe.Directory;
+
+            using var stream = new FileStream(
+                LongPath.EnsureWindowsPrefix(path),
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                bufferSize: 1,
+                FileOptions.RandomAccess);
+            return DatabasePathProbe.Readable;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return DatabasePathProbe.Missing;
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            return DatabasePathProbe.PermissionDenied;
+        }
+        catch (IOException)
+        {
+            return DatabasePathProbe.Unknown;
+        }
+    }
+
+    private static string FormatDatabaseOpenFailure(string category, string dbPath, string? detail = null)
+    {
+        var displayPath = dbPath;
+        if (SqliteFileUri.StartsWithFileScheme(dbPath))
+        {
+            var queryIndex = dbPath.IndexOf('?', StringComparison.Ordinal);
+            if (queryIndex >= 0)
+                displayPath = dbPath[..queryIndex];
+        }
+        var pathLabel = DiagnosticSanitizer.ForPath(displayPath);
+        var sanitizedDetail = string.IsNullOrWhiteSpace(detail)
+            ? null
+            : DiagnosticSanitizer.ForMessage(detail);
+        return sanitizedDetail == null
+            ? $"database open failed [{category}]: {pathLabel}"
+            : $"database open failed [{category}]: {pathLabel}; {sanitizedDetail}";
+    }
+
+    private enum DatabasePathProbe
+    {
+        Readable,
+        Missing,
+        PermissionDenied,
+        Directory,
+        Unknown,
     }
 
     public DbContext(string dbPath, CancellationToken cancellationToken = default)
