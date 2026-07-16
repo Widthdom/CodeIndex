@@ -142,9 +142,10 @@ internal static class JsonEnvelopeWrapper
         JsonArray results;
         JsonObject? parseError = null;
         JsonObject? streamTerminal = null;
+        JsonArray? streamControlRecords = null;
         try
         {
-            results = ParseRawJsonItems(raw, out streamTerminal);
+            results = ParseRawJsonItems(raw, out streamTerminal, out streamControlRecords);
         }
         catch (JsonEnvelopeRawJsonItemLimitExceededException ex)
         {
@@ -188,7 +189,8 @@ internal static class JsonEnvelopeWrapper
             results,
             exitCode,
             parseError,
-            streamTerminal);
+            streamTerminal,
+            streamControlRecords);
 
         Console.WriteLine(envelope.ToJsonString(jsonOptions));
         return exitCode;
@@ -208,7 +210,8 @@ internal static class JsonEnvelopeWrapper
         JsonArray results,
         int exitCode,
         JsonObject? error = null,
-        JsonObject? streamTerminal = null)
+        JsonObject? streamTerminal = null,
+        JsonArray? streamControlRecords = null)
     {
         var metadata = new JsonObject
         {
@@ -227,6 +230,8 @@ internal static class JsonEnvelopeWrapper
             metadata["error"] = error;
         if (streamTerminal is not null)
             metadata["stream_terminal"] = streamTerminal.DeepClone();
+        if (streamControlRecords is { Count: > 0 })
+            metadata["stream_control_records"] = streamControlRecords.DeepClone();
 
         var indexedHead = SafeReadIndexedHead(dbPath, dbPathExplicit);
         if (!string.IsNullOrEmpty(indexedHead))
@@ -254,10 +259,14 @@ internal static class JsonEnvelopeWrapper
         }
     }
 
-    private static JsonArray ParseRawJsonItems(string raw, out JsonObject? streamTerminal)
+    private static JsonArray ParseRawJsonItems(
+        string raw,
+        out JsonObject? streamTerminal,
+        out JsonArray streamControlRecords)
     {
         var array = new JsonArray();
         streamTerminal = null;
+        streamControlRecords = [];
         var rawJsonNodeCount = 0;
         if (string.IsNullOrEmpty(raw))
             return array;
@@ -289,8 +298,15 @@ internal static class JsonEnvelopeWrapper
                 streamTerminal = (JsonObject)node.DeepClone();
                 continue;
             }
+            else if (IsJsonStreamControlRecord(node))
+            {
+                EnsureRawJsonItemBudget(array.Count + streamControlRecords.Count);
+                rawJsonNodeCount = AddRawJsonNodeCount(rawJsonNodeCount, CountJsonNodes(node));
+                streamControlRecords.Add(node);
+                continue;
+            }
 
-            EnsureRawJsonItemBudget(array.Count);
+            EnsureRawJsonItemBudget(array.Count + streamControlRecords.Count);
             rawJsonNodeCount = AddRawJsonNodeCount(rawJsonNodeCount, CountJsonNodes(node));
             array.Add(node);
         }
@@ -380,6 +396,22 @@ internal static class JsonEnvelopeWrapper
             && obj.TryGetPropertyValue("interrupted", out _)
             && obj.TryGetPropertyValue("count", out _);
     }
+
+    private static bool IsJsonStreamControlRecord(JsonNode node)
+    {
+        if (node is not JsonObject obj
+            || !obj.TryGetPropertyValue("count", out var countNode)
+            || countNode is not JsonValue countValue
+            || !countValue.TryGetValue<int>(out var count)
+            || count != 0)
+            return false;
+
+        return HasEmptyArray(obj, "results") || HasEmptyArray(obj, "files");
+    }
+
+    private static bool HasEmptyArray(JsonObject obj, string propertyName)
+        => obj.TryGetPropertyValue(propertyName, out var node)
+           && node is JsonArray { Count: 0 };
 
     // Mirrors the value-taking options in QueryCommandRunner.ParseArgs so we can locate the
     // first positional (= query) without being fooled by `--db <path>`-style values.

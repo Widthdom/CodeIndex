@@ -495,12 +495,20 @@ public static partial class QueryCommandRunner
         {
             if (options.ResultsOnly || options.SearchFields != null || (options.Json && options.JsonOutputFormatExplicit && options.JsonOutputFormat == JsonOutputFormatNdjson))
             {
-                var rowQueryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, scope, options, userExact, out var rowTotal);
+                var rowQueryResults = CollectSearchRecipeQueryResults(
+                    reader,
+                    selection.Queries,
+                    scope,
+                    options,
+                    userExact,
+                    out _,
+                    out var rowMinimumMatchedTotal);
                 var stream = WriteRecipeSearchResultRows(
                     reader,
                     recipe.Name,
                     rowQueryResults,
-                    rowTotal,
+                    rowMinimumMatchedTotal,
+                    rowQueryResults.Any(query => query.Truncated),
                     options,
                     GetCompactJsonOptions(jsonOptions));
                 ndjsonTerminalLine = stream.TerminalLine;
@@ -526,7 +534,7 @@ public static partial class QueryCommandRunner
                     "Reduce --limit or --total-limit, select one child query with --recipe <recipe>/<query>, stream rows with --json=ndjson, or increase --max-json-bytes.");
             }
 
-            var queryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, scope, options, userExact, out var total);
+            var queryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, scope, options, userExact, out var total, out _);
 
             if (options.Json)
             {
@@ -894,6 +902,7 @@ public static partial class QueryCommandRunner
         string recipeName,
         IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults,
         int totalCount,
+        bool limitTruncated,
         QueryCommandOptions options,
         JsonSerializerOptions ndjsonOptions)
     {
@@ -917,10 +926,10 @@ public static partial class QueryCommandRunner
             ndjsonOptions,
             reader,
             "search",
-            limitTruncated: records.Count < totalCount,
+            limitTruncated,
             "Increase --limit or --total-limit, select one recipe query, or narrow the recipe scope.",
             totalCountAuthoritative: false,
-            truncationReason: records.Count < totalCount ? "limit" : null);
+            truncationReason: limitTruncated ? "limit" : null);
     }
 
     private static JsonObject BuildRecipeSearchResultRow(
@@ -970,7 +979,7 @@ public static partial class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
-            var queryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, scope, options, userExact, out var total);
+            var queryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, scope, options, userExact, out var total, out _);
             var drafts = queryResults
                 .Where(queryResult => queryResult.Count > 0)
                 .Select(queryResult => ToSearchIssueDraft(recipe, queryResult, preflight, options))
@@ -1191,10 +1200,12 @@ public static partial class QueryCommandRunner
         SearchRecipeScopeJsonResult scope,
         QueryCommandOptions options,
         bool userExact,
-        out int total)
+        out int total,
+        out int minimumMatchedTotal)
     {
         var queryResults = new List<SearchRecipeQueryResultJsonResult>();
         total = 0;
+        minimumMatchedTotal = 0;
         foreach (var recipeQuery in recipeQueries)
         {
             var exact = userExact || recipeQuery.ExactSubstring;
@@ -1226,6 +1237,7 @@ public static partial class QueryCommandRunner
             ApplySearchRecipeAuditClassifications(recipeQuery, rows);
             var minimumOmitted = truncated ? Math.Max(1, availableCount - rows.Count) : 0;
             total += rows.Count;
+            minimumMatchedTotal += rows.Count + minimumOmitted;
             queryResults.Add(new SearchRecipeQueryResultJsonResult(
                 recipeQuery.Name,
                 recipeQuery.Query,

@@ -389,6 +389,7 @@ public static partial class QueryCommandRunner
             rows = SampleSearchRows(rows, options.SampleSize.Value);
         }
 
+        var postSelectionCount = rows.Count;
         var limitTruncated = rows.Count > options.Limit;
         if (limitTruncated)
             rows = rows.Take(options.Limit).ToList();
@@ -400,7 +401,13 @@ public static partial class QueryCommandRunner
                 : limitTruncated
                     ? "limit"
                     : null;
-        return new SearchOutputSelection(rows, originalCount, rows.Count < originalCount, limitTruncated, truncationReason);
+        return new SearchOutputSelection(
+            rows,
+            originalCount,
+            rows.Count < originalCount,
+            limitTruncated,
+            truncationReason,
+            Math.Max(0, originalCount - postSelectionCount));
     }
 
     private static List<SearchDisplayRow> SampleSearchRows(List<SearchDisplayRow> rows, int sampleSize)
@@ -687,7 +694,8 @@ public static partial class QueryCommandRunner
         int OriginalCount,
         bool Truncated,
         bool LimitTruncated,
-        string? TruncationReason);
+        string? TruncationReason,
+        int SelectionOmittedCount);
 
     private sealed record SearchGroupOutputSelection(
         List<SearchGroupedCountItemJsonResult> Groups,

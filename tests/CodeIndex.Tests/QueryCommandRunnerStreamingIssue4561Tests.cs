@@ -113,6 +113,11 @@ public partial class QueryCommandRunnerTests
                 "src/recipe.cs",
                 "csharp",
                 $"try {{ Work(); }} catch (Exception ex) {{ Console.WriteLine(ex.Message); }} // {new string('x', 2_000)}\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/recipe-second.cs",
+                "csharp",
+                "try { Work(); } catch (Exception ex) { Log(ex.Message); }\n");
 
             var recipeArgs = new[]
             {
@@ -138,6 +143,10 @@ public partial class QueryCommandRunnerTests
                 Assert.True(terminal.RootElement.GetProperty("terminal_record").GetBoolean());
                 Assert.True(terminal.RootElement.GetProperty("done").GetBoolean());
                 Assert.Equal(1, terminal.RootElement.GetProperty("count").GetInt32());
+                Assert.True(terminal.RootElement.GetProperty("truncated").GetBoolean());
+                Assert.True(terminal.RootElement.GetProperty("has_more").GetBoolean());
+                Assert.Equal("limit", terminal.RootElement.GetProperty("truncation_reason").GetString());
+                Assert.True(terminal.RootElement.GetProperty("total_count_lower_bound").GetInt32() >= 2);
             }
 
             var (emptyExitCode, emptyStdout, emptyStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
@@ -172,6 +181,39 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, allowedExitCode);
             Assert.Equal(string.Empty, allowedStderr);
             Assert.Equal(partialStdout, allowedStdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeTotalLimitReportsKnownOmissions_Issue4561()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_recipe_total_limit_4561");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/recipe.cs",
+                "csharp",
+                "var doc = JsonDocument.Parse(payload); var text = reader.ReadToEnd();\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code", "--db", dbPath, "--json=ndjson", "--limit", "10", "--total-limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var terminal = ParseLastNdjsonRecord(stdout);
+            var json = terminal.RootElement;
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.True(json.GetProperty("truncated").GetBoolean());
+            Assert.True(json.GetProperty("has_more").GetBoolean());
+            Assert.Equal("limit", json.GetProperty("truncation_reason").GetString());
+            Assert.True(json.GetProperty("total_count_lower_bound").GetInt32() >= 2);
         }
         finally
         {
@@ -252,6 +294,19 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(2, json.GetProperty("selection_omitted_count").GetInt32());
             Assert.False(json.GetProperty("total_count_authoritative").GetBoolean());
             Assert.Equal(3, json.GetProperty("total_count_lower_bound").GetInt32());
+
+            var (combinedExitCode, combinedStdout, combinedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Issue4561Sample", "--db", dbPath, "--exact-substring", "--json", "--sample", "2", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, combinedExitCode);
+            Assert.Equal(string.Empty, combinedStderr);
+            using var combinedTerminal = ParseLastNdjsonRecord(combinedStdout);
+            var combined = combinedTerminal.RootElement;
+            Assert.True(combined.GetProperty("truncated").GetBoolean());
+            Assert.Equal("sample", combined.GetProperty("selection_reason").GetString());
+            Assert.Equal(1, combined.GetProperty("selection_omitted_count").GetInt32());
+            Assert.Equal(2, combined.GetProperty("omitted_count").GetInt32());
         }
         finally
         {
@@ -283,6 +338,40 @@ public partial class QueryCommandRunnerTests
             var terminal = metadata.GetProperty("stream_terminal");
             Assert.True(terminal.GetProperty("terminal_record").GetBoolean());
             Assert.Equal(1, terminal.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void JsonEnvelopeSeparatesZeroResultControlRecordsFromRows_Issue4561()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_envelope_controls_4561");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/needle.cs", "csharp", "Issue4561Envelope();\n");
+
+            foreach (var args in new[]
+            {
+                new[] { "search", "NoSuchIssue4561Match", "--db", dbPath, "--json-envelope" },
+                new[] { "files", "--path", "NoSuchIssue4561Path", "--db", dbPath, "--json-envelope" },
+            })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(args, _jsonOptions, "test"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                using var document = JsonDocument.Parse(stdout);
+                var root = document.RootElement;
+                Assert.Equal(0, root.GetProperty("results").GetArrayLength());
+                var metadata = root.GetProperty("metadata");
+                Assert.Equal(0, metadata.GetProperty("result_count").GetInt32());
+                Assert.Single(metadata.GetProperty("stream_control_records").EnumerateArray());
+                Assert.True(metadata.GetProperty("stream_terminal").GetProperty("terminal_record").GetBoolean());
+            }
         }
         finally
         {

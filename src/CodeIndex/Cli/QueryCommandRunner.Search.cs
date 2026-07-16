@@ -722,7 +722,7 @@ public static partial class QueryCommandRunner
                         selection.LimitTruncated ? "limit" : null,
                         selection.TruncationReason is "sample" or "first_per_file" ? selection.TruncationReason : null,
                         selection.TruncationReason is "sample" or "first_per_file"
-                            ? Math.Max(0, selection.OriginalCount - selection.Rows.Count)
+                            ? selection.SelectionOmittedCount
                             : null,
                         options,
                         jsonOptions,
@@ -783,7 +783,7 @@ public static partial class QueryCommandRunner
                         selection.LimitTruncated ? "limit" : null,
                         selection.TruncationReason is "sample" or "first_per_file" ? selection.TruncationReason : null,
                         selection.TruncationReason is "sample" or "first_per_file"
-                            ? Math.Max(0, selection.OriginalCount - selection.Rows.Count)
+                            ? selection.SelectionOmittedCount
                             : null,
                         options,
                         ndjsonOptions,
