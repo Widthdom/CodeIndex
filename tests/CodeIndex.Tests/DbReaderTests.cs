@@ -26,7 +26,7 @@ public partial class DbReaderTests : IDisposable
     {
         _dbDir = TestProjectHelper.CreateTempProject("codeindex_reader_test");
         _dbPath = Path.Combine(_dbDir, "codeindex.db");
-        _db = new DbContext(_dbPath);
+        _db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         _db.InitializeSchema();
         _writer = new DbWriter(_db.Connection);
 
@@ -1157,7 +1157,7 @@ public partial class DbReaderTests : IDisposable
         var legacyPath = Path.Combine(legacyDir, "codeindex.db");
         try
         {
-            using var db = new DbContext(legacyPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, legacyPath);
             db.InitializeSchema();
             var writer = new DbWriter(db.Connection);
 
@@ -1213,7 +1213,7 @@ public partial class DbReaderTests : IDisposable
         var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_fold_status_verify_{Guid.NewGuid():N}.db");
         try
         {
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.InitializeSchema();
             var writer = new DbWriter(db.Connection);
             var fileId = writer.UpsertFile(new FileRecord
@@ -1256,7 +1256,7 @@ public partial class DbReaderTests : IDisposable
         var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.InitializeSchema();
             var writer = new DbWriter(db.Connection);
             var fileId = writer.UpsertFile(new FileRecord
@@ -1308,7 +1308,7 @@ public partial class DbReaderTests : IDisposable
         var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.InitializeSchema();
             var writer = new DbWriter(db.Connection);
             var fileId = writer.UpsertFile(new FileRecord
@@ -1377,7 +1377,7 @@ public partial class DbReaderTests : IDisposable
         var legacyPath = Path.Combine(legacyDir, "codeindex.db");
         try
         {
-            using (var db = new DbContext(legacyPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, legacyPath))
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
@@ -1413,7 +1413,7 @@ public partial class DbReaderTests : IDisposable
             }
 
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            using var legacyDb = new DbContext(legacyPath);
+            using var legacyDb = new DbContext(DbOpenIntent.WriteIndex, legacyPath);
             // Deliberately skip TryMigrateForRead: on a truly read-only mount it cannot add
             // the column back, which is the scenario the issue reproduces.
             // 読み取り専用 FS 上で列を再追加できない状況を模擬するため TryMigrateForRead は呼ばない。
@@ -8001,7 +8001,7 @@ public partial class DbReaderTests : IDisposable
 
     private static SqliteConnection CreateLegacyReferenceConnection(string legacyPath)
     {
-        var db = new DbContext(legacyPath);
+        var db = new DbContext(DbOpenIntent.WriteIndex, legacyPath);
         db.InitializeSchema();
         var writer = new DbWriter(db.Connection);
 

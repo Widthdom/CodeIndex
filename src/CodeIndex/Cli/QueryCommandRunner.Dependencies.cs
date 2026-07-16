@@ -1425,8 +1425,7 @@ public static partial class QueryCommandRunner
         foreach (var normalizedDbPath in memberDbs.Skip(1))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            using var db = new DbContext(normalizedDbPath, cancellationToken);
-            db.TryMigrateForRead();
+            using var db = new DbContext(DbOpenIntent.QueryOnly, normalizedDbPath, cancellationToken);
             var reader = new DbReader(db) { IncludeGenerated = primaryReader.IncludeGenerated };
             var memberResults = reader.GetFileDependencies(limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse, cancellationToken);
             TagFileDependencyResults(memberResults, normalizedDbPath);
@@ -1483,8 +1482,7 @@ public static partial class QueryCommandRunner
         foreach (var normalizedDbPath in memberDbs.Skip(1))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            using var db = new DbContext(normalizedDbPath, cancellationToken);
-            db.TryMigrateForRead();
+            using var db = new DbContext(DbOpenIntent.QueryOnly, normalizedDbPath, cancellationToken);
             var reader = new DbReader(db) { IncludeGenerated = primaryReader.IncludeGenerated };
             var memberResults = reader.GetFileDependencyCycleCandidates(
                 limit,
@@ -1586,10 +1584,20 @@ public static partial class QueryCommandRunner
 
     private static List<FileDependencyResult> GetCrossDatabaseFileDependencies(string sourceDbPath, string targetDbPath, QueryCommandOptions options, bool reverse, int limit)
     {
-        using var sourceDb = new DbContext(sourceDbPath);
-        sourceDb.TryMigrateForRead();
+        // Declare the target first so reverse-order disposal closes the source ATTACH handle
+        // before the target context attempts to delete its private snapshot on Windows.
+        // target を先に宣言し、Windows で private snapshot を削除する前に source の
+        // ATTACH handle が reverse-order disposal で閉じられるようにする。
+        using var targetDb = new DbContext(DbOpenIntent.QueryOnly, targetDbPath);
+        using var sourceDb = new DbContext(DbOpenIntent.QueryOnly, sourceDbPath);
         var connection = sourceDb.Connection;
-        AttachCrossDatabaseTarget(connection, targetDbPath);
+        // Keep the target context alive for the whole attached query. WAL-backed targets may
+        // resolve to a private artifact-preserving snapshot whose cleanup is owned by that
+        // context; attaching the original path would let SQLite create/touch source sidecars.
+        // attached query 全体で target context を保持する。WAL-backed target は context が
+        // cleanup を所有する private snapshot になり得るため、original path を ATTACH して
+        // source sidecar を作成・更新させない。
+        AttachCrossDatabaseTarget(connection, targetDb.Connection.DataSource);
 
         using var cmd = connection.CreateCommand();
         var sourcePathExpr = reverse ? "dst.path" : "src.path";
@@ -1683,6 +1691,8 @@ public static partial class QueryCommandRunner
     {
         try
         {
+            // The owning QueryOnly connection is opened with Mode=ReadOnly and
+            // PRAGMA query_only=ON, so attached databases inherit a non-mutating session.
             AttachCrossDatabaseTargetCore(connection, targetDbPath);
         }
         catch (SqliteException) when (!SqliteFileUri.StartsWithFileScheme(targetDbPath) && File.Exists(LongPath.EnsureWindowsPrefix(targetDbPath)))

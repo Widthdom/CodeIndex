@@ -16,7 +16,7 @@ public sealed class DbSchemaCacheTests : IDisposable
     public DbSchemaCacheTests()
     {
         _dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_schema_cache_{Guid.NewGuid():N}.db");
-        _db = new DbContext(_dbPath);
+        _db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         _db.InitializeSchema();
     }
 
@@ -164,11 +164,11 @@ public sealed class DbSchemaCacheTests : IDisposable
         // A writable open may run SQLite maintenance that changes
         // schema_version. Once two separately-opened contexts observe the
         // same generation, they should reuse the process-level snapshot.
-        using var secondDb = new DbContext(_dbPath);
+        using var secondDb = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         _ = new DbReader(secondDb);
         var secondContextColumns = secondDb.SchemaCache.GetColumns("files");
 
-        using var thirdDb = new DbContext(_dbPath);
+        using var thirdDb = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         _ = new DbReader(thirdDb);
         var thirdContextColumns = thirdDb.SchemaCache.GetColumns("files");
 
@@ -178,7 +178,7 @@ public sealed class DbSchemaCacheTests : IDisposable
     [Fact]
     public void DbContext_DisposeRetainsActiveSharedStateAndReleasesLastOwner()
     {
-        using var secondDb = new DbContext(_dbPath);
+        using var secondDb = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         var secondSnapshot = secondDb.SchemaCache.GetColumns("files");
         var firstSnapshot = _db.SchemaCache.GetColumns("files");
         var activeStateCount = DbSchemaCache.SharedStateCountForTest;
@@ -207,7 +207,7 @@ public sealed class DbSchemaCacheTests : IDisposable
         {
             foreach (var path in paths)
             {
-                using (var db = new DbContext(path))
+                using (var db = new DbContext(DbOpenIntent.WriteIndex, path))
                 {
                     _ = db.SchemaCache.GetColumns("files");
                     Assert.Equal(baseline + 1, DbSchemaCache.SharedStateCountForTest);

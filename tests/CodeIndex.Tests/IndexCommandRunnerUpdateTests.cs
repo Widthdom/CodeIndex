@@ -117,7 +117,7 @@ public partial class IndexCommandRunnerTests
             Assert.True(hookInvoked);
             Assert.Equal(CommandExitCodes.Interrupted, exitCode);
             Assert.Equal(CommandErrorCodes.Interrupted, json.GetProperty("error_code").GetString());
-            using var db = new DbContext(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            using var db = new DbContext(DbOpenIntent.WriteIndex, Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
             Assert.Equal(0, db.GetUserVersion());
         }
         finally
@@ -326,7 +326,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(JsonValueKind.Null, updateJson.GetProperty("recommended_action").ValueKind);
             Assert.Equal(JsonValueKind.Null, updateJson.GetProperty("alternative_action").ValueKind);
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 Assert.Equal(Path.GetFullPath(projectRootA), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
             }
@@ -372,14 +372,14 @@ public partial class IndexCommandRunnerTests
 
             long CountReferences()
             {
-                using var db = new DbContext(dbPath);
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = "SELECT COUNT(*) FROM symbol_references";
                 return (long)cmd.ExecuteScalar()!;
             }
 
             var baselineReferenceCount = CountReferences();
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 var fileId = writer.UpsertFile(new FileRecord
@@ -420,7 +420,7 @@ public partial class IndexCommandRunnerTests
 
             Assert.Equal(baselineReferenceCount, CountReferences());
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 Assert.Equal(Path.GetFullPath(projectRootA), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
             }
@@ -464,7 +464,7 @@ public partial class IndexCommandRunnerTests
             var initialExitCode = IndexCommandRunner.Run([projectRoot, "--db", dbPath, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 var fileId = writer.UpsertFile(new FileRecord
@@ -557,7 +557,7 @@ public partial class IndexCommandRunnerTests
             var initialExitCode = IndexCommandRunner.Run([projectRootA, "--db", dbPath, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 Assert.Equal(Path.GetFullPath(projectRootA), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
             }
@@ -567,7 +567,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal("success", updateJson.GetProperty("status").GetString());
             Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 Assert.Equal(Path.GetFullPath(projectRootB), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
             }
@@ -614,7 +614,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
             Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("skipped").GetInt32());
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 Assert.Null(db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
             }
@@ -658,7 +658,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal("success", updateJson.GetProperty("status").GetString());
             Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 Assert.Equal(Path.GetFullPath(projectRoot), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
             }
@@ -693,14 +693,14 @@ public partial class IndexCommandRunnerTests
             DeleteIndexedProjectRootMetadata(dbPath);
             int CountReferences()
             {
-                using var db = new DbContext(dbPath);
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = "SELECT COUNT(*) FROM symbol_references";
                 return Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
             }
 
             var baselineReferenceCount = CountReferences();
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 var fileId = writer.UpsertFile(new FileRecord
@@ -736,7 +736,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("skipped").GetInt32());
             Assert.Equal(baselineReferenceCount, updateJson.GetProperty("summary").GetProperty("references_total").GetInt32());
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 Assert.Null(db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
             }
@@ -792,7 +792,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
 
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 Assert.Null(db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
             }
@@ -1331,7 +1331,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 Assert.Equal(
                     DbContext.TypeScriptAugmentationVersion.ToString(CultureInfo.InvariantCulture),
@@ -1368,7 +1368,7 @@ public partial class IndexCommandRunnerTests
 
             Assert.True(hookInvoked);
             Assert.Equal(CommandExitCodes.Interrupted, interruptedExitCode);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 Assert.Null(db.GetMetaString(DbContext.TypeScriptAugmentationVersionMetaKey));
         }
         finally
@@ -3157,7 +3157,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal("success", json1.GetProperty("status").GetString());
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            using (var seededDb = new DbContext(dbPath))
+            using (var seededDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
 
             WriteOversizedAsciiFile(Path.Combine(projectRoot, "app.cs"));
@@ -3167,7 +3167,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal("success", json2.GetProperty("status").GetString());
             Assert.Equal(0, json2.GetProperty("summary").GetProperty("errors").GetInt32());
 
-            using var verifyDb = new DbContext(dbPath);
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
         }
         finally
@@ -3194,7 +3194,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal("success", json1.GetProperty("status").GetString());
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            using (var seededDb = new DbContext(dbPath))
+            using (var seededDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
                 Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
 
             File.WriteAllText(Path.Combine(projectRoot, "Extra.csproj"), "<Project />");
@@ -3203,7 +3203,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode2);
             Assert.Equal("success", json2.GetProperty("status").GetString());
 
-            using var verifyDb = new DbContext(dbPath);
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
             Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp")));
         }
@@ -3232,7 +3232,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal("success", initialJson.GetProperty("status").GetString());
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), null);
@@ -3289,7 +3289,7 @@ public partial class IndexCommandRunnerTests
                 RunAndCaptureJson([projectRoot, "--files", "src/Caller.cs", "--json"]));
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            using var verifyDb = new DbContext(dbPath);
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
             Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp")));
         }
@@ -3386,7 +3386,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, updateExitCode);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal(initialHead, db.GetMetaString(DbContext.IndexedHeadCommitMetaKey));
         }
         finally

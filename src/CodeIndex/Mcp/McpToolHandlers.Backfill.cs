@@ -10,7 +10,15 @@ public partial class McpServer
     private async Task<JsonNode> ExecuteBackfillFoldAsync(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
     {
         var requestToken = _currentRequestToken.Value;
-        if (!DbContext.TryValidateExistingCodeIndexDb(_dbPath, out var validationMessage, out var isNotFound, requestToken))
+        var dryRun = args?["dry_run"]?.GetValue<bool>() ?? args?["dryRun"]?.GetValue<bool>() ?? false;
+        if (!DbContext.TryValidateExistingCodeIndexDb(
+                _dbPath,
+                requireWritable: !dryRun,
+                requireSupportedUserVersion: false,
+                out var validationMessage,
+                out var isNotFound,
+                out _,
+                requestToken))
         {
             var detail = isNotFound
                 ? $"Database not found: {_dbPath}. Run 'cdidx index <projectPath>' first."
@@ -25,9 +33,9 @@ public partial class McpServer
             // Reuse the per-session DbContext (issue #1494). InitializeSchema is idempotent
             // and remains correct on a long-lived connection.
             // セッション共有 DbContext を再利用する（#1494）。InitializeSchema は冪等。
-            var db = GetOrOpenSharedDb();
-            db.InitializeSchema();
-            MarkSharedDbMigrated();
+            var db = GetOrOpenSharedDb(dryRun ? DbOpenIntent.QueryOnly : DbOpenIntent.Migration);
+            if (!dryRun)
+                db.InitializeSchema();
             var writer = new DbWriter(db);
             var userVersionBefore = db.GetUserVersion();
             var foldReadyBefore = (userVersionBefore & DbContext.FoldReadyFlag) != 0;
@@ -38,7 +46,6 @@ public partial class McpServer
             var foldMetadataCurrentBefore = storedFoldVersion == currentFoldVersion
                 && storedFoldFingerprint == currentFoldFingerprint;
             foldReadyBefore = foldReadyBefore && foldMetadataCurrentBefore;
-            var dryRun = args?["dry_run"]?.GetValue<bool>() ?? args?["dryRun"]?.GetValue<bool>() ?? false;
             var force = args?["force"]?.GetValue<bool>() ?? false;
             var rewriteAll = force
                 || !foldMetadataCurrentBefore;

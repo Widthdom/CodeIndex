@@ -131,7 +131,7 @@ internal static class TestProjectHelper
         Directory.CreateDirectory(dbDir);
 
         var dbPath = Path.Combine(dbDir, "codeindex.db");
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         db.InitializeSchema();
         var writer = new DbWriter(db.Connection);
         writer.SetMeta(DbContext.IndexedProjectRootMetaKey, Path.GetFullPath(projectRoot));
@@ -144,7 +144,7 @@ internal static class TestProjectHelper
         var lines = normalized.Split('\n');
         var lineCount = FileIndexer.CountPhysicalLines(content);
 
-        using (var db = new DbContext(dbPath))
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
         {
             db.InitializeSchema();
 

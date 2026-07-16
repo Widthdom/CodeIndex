@@ -6734,7 +6734,7 @@ public partial class QueryCommandRunnerTests
 
         static void ReplaceChunks(string dbPath, string path, params ChunkRecord[] chunks)
         {
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var cmd = db.Connection.CreateCommand();
             cmd.CommandText = "SELECT id FROM files WHERE path = @path";
             cmd.Parameters.AddWithValue("@path", path);
@@ -9182,7 +9182,7 @@ jobs:
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 var fileId = writer.UpsertFile(new FileRecord
@@ -9250,7 +9250,7 @@ jobs:
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 var fileId = writer.UpsertFile(new FileRecord
@@ -10377,7 +10377,7 @@ jobs:
                 "text",
                 "alpha\nalpha\n");
 
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             var reader = new DbReader(db.Connection);
             var counts = reader.CountFindInFiles("alpha", maxLinesScanned: 1);
 
@@ -11101,7 +11101,7 @@ jobs:
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 var fileId = writer.UpsertFile(new FileRecord
@@ -11400,7 +11400,7 @@ jobs:
             Environment.SetEnvironmentVariable(QueryCommandRunner.StaleAfterEnvironmentVariable, "1m");
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = "UPDATE files SET indexed_at = @indexedAt";
@@ -11582,7 +11582,7 @@ jobs:
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
                 var fileId = writer.UpsertFile(new FileRecord

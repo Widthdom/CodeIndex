@@ -133,14 +133,6 @@ public partial class McpServer : IDisposable
     // セッション内で MCP ツール呼び出しごとに再利用する DbContext。接続再開・PRAGMA 再適用・
     // SQL 関数再登録のコストを毎回払わないために保持する（#1494）。
     private DbContext? _sharedDb;
-    // TryMigrateForRead is a read-path concern (legacy / read-only sandbox DBs). It is
-    // idempotent but does run PRAGMA table_info + CREATE INDEX IF NOT EXISTS round trips,
-    // so we run it once per session. Write tools (`index`, `backfill_fold`) cover the same
-    // surface via InitializeSchema, which also flips this flag through MarkSharedDbMigrated.
-    // TryMigrateForRead は read path 向けの遅延移行で、レガシー DB / read-only サンドボックス
-    // でのみ意味を持つ。冪等だが PRAGMA table_info などの往復が発生するため、セッションで一度だけ
-    // 実行する。書き込みツールは InitializeSchema で同等以上の DDL を流すため、そこでフラグを立てる。
-    private bool _sharedDbReadMigrated;
     private bool _disposed;
     // Per-call MCP audit log (#1562). Null when no `--audit-log` path was supplied. Captured
     // from the constructor so the AuditLogSink lifecycle (file handle / rotation) is owned by
@@ -2526,8 +2518,11 @@ public partial class McpServer : IDisposable
         string? probeError = null;
         try
         {
-            var connectionString = SqliteConnectionPolicy.BuildConnectionString(_dbPath, SqliteConnectionPolicyMode.ReadOnly);
-            using var connection = new Microsoft.Data.Sqlite.SqliteConnection(connectionString);
+            using var connection = DbConnectionFactory.CreateArtifactPreservingQueryOnlyConnection(
+                _dbPath,
+                pooling: false,
+                out _,
+                out _);
             connection.Open();
             using var command = SqliteConnectionPolicy.CreateCommand(connection);
             command.CommandText = "SELECT 1;";
@@ -6313,19 +6308,27 @@ public partial class McpServer : IDisposable
         requestToken.ThrowIfCancellationRequested();
         if (isolateRequestDb)
         {
-            using var isolatedDb = new DbContext(_dbPath, requestToken);
-            isolatedDb.TryMigrateForRead();
+            using var isolatedDb = new DbContext(DbOpenIntent.QueryOnly, _dbPath, requestToken);
             using var isolatedReader = new DbReader(isolatedDb, requestToken);
             isolatedReader.IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
             return RunWithSqliteDiagnostics(isolatedReader, action);
         }
 
-        var db = GetOrOpenSharedDb();
-        if (!_sharedDbReadMigrated)
+        // Artifact-preserving WAL reads use detached private snapshots. Refresh them between
+        // MCP calls when the source generation changes so a long-lived server
+        // observes commits made after the previous call while each individual call keeps one
+        // stable SQLite snapshot.
+        // artifact-preserving WAL read は切り離した private snapshot を使う。各呼び出し内の
+        // 一貫性を保ちつつ、長時間動作する MCP が source generation の変更後に新しい
+        // commit を観測できるよう、呼び出し間でそれらの handle を更新する。
+        if (_sharedDb?.OpenIntent == DbOpenIntent.QueryOnly
+            && _sharedDb.QueryOnlySnapshotRequiresRefresh
+            && !_sharedDb.IsQueryOnlySnapshotCurrent(requestToken))
         {
-            db.TryMigrateForRead();
-            _sharedDbReadMigrated = true;
+            CloseSharedDb();
         }
+
+        var db = GetOrOpenSharedDb(DbOpenIntent.QueryOnly);
         // Reuse the connection-scoped schema cache for single-threaded direct callers so each
         // call no longer re-runs PRAGMA table_info / PRAGMA index_list per DbReader (issue #1565),
         // and hand the per-request cancellation token to the reader so SQLite work
@@ -6372,37 +6375,28 @@ public partial class McpServer : IDisposable
     }
 
     /// <summary>
-    /// Open the per-session DbContext on first use and reuse it on every subsequent direct call.
+    /// Open the per-session DbContext on first use and reuse it while the requested intent matches.
     /// Centralising the open lets us pay the connection setup, pragma application, and SQL
     /// function registration once per direct session instead of once per tool invocation
     /// (#1494). Transport requests that may time out independently use isolated DB contexts.
     /// 直接呼び出しセッション初回に DbContext を開き、以後は再利用する。timeout 後も独立して
     /// 継続し得る transport リクエストは、共有接続を避けるためリクエスト単位の DB context を使う。
     /// </summary>
-    internal DbContext GetOrOpenSharedDb()
+    internal DbContext GetOrOpenSharedDb(DbOpenIntent openIntent)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_sharedDb != null)
+        if (_sharedDb?.OpenIntent == openIntent)
             return _sharedDb;
 
-        _sharedDb = new DbContext(_dbPath, _currentRequestToken.Value);
+        CloseSharedDb();
+        _sharedDb = new DbContext(openIntent, _dbPath, _currentRequestToken.Value);
         return _sharedDb;
     }
-
-    /// <summary>
-    /// Mark the shared DbContext as already covered by `TryMigrateForRead`. Write tools that
-    /// run `InitializeSchema` reuse the same connection, so the read path can skip the
-    /// migration round trip on later calls.
-    /// 書き込みツールが InitializeSchema を流した後の共有 DbContext に対し、read path の
-    /// TryMigrateForRead を省略するためのマーカ。
-    /// </summary>
-    internal void MarkSharedDbMigrated() => _sharedDbReadMigrated = true;
 
     private void CloseSharedDb()
     {
         _sharedDb?.Dispose();
         _sharedDb = null;
-        _sharedDbReadMigrated = false;
     }
 
     public void Dispose()

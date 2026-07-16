@@ -174,7 +174,14 @@ internal static class ExportImportCommandRunner
             }
 
             phase = PhaseSqliteValidate;
-            if (!DbContext.TryValidateExistingCodeIndexDb(tempPath, out var validationMessage, out _, cancellationToken: cancellationToken))
+            if (!DbContext.TryValidateExistingCodeIndexDb(
+                    tempPath,
+                    requireWritable: true,
+                    requireSupportedUserVersion: false,
+                    out var validationMessage,
+                    out _,
+                    out _,
+                    cancellationToken))
                 return WriteImportError(wantsJson, jsonOptions, PhaseSqliteValidate, "import_database_invalid", $"archive database is invalid: {validationMessage}.", "re-export from a compatible CodeIndex database.", ImportUsage);
             AddImportValidationPhase(validationPhases, PhaseSqliteValidate);
             SqliteConnection.ClearAllPools();
@@ -345,7 +352,13 @@ internal static class ExportImportCommandRunner
 
         dbPath ??= DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null).DbPath;
         var normalizedDbPath = DbPathResolver.NormalizeDbPath(dbPath);
-        if (!DbContext.TryValidateExistingCodeIndexDb(normalizedDbPath, out var validationMessage, out _))
+        if (!DbContext.TryValidateExistingCodeIndexDb(
+                normalizedDbPath,
+                requireWritable: false,
+                requireSupportedUserVersion: false,
+                out var validationMessage,
+                out _,
+                out _))
             return WriteExportError(wantsJson, jsonOptions, PhaseSqliteValidate, "export_database_invalid", validationMessage, "run `cdidx index <projectPath>` first or pass `--db <path>`.", "cdidx export <archive> [--db <path>] [--json]");
 
         var fullSourceDbPath = Path.GetFullPath(normalizedDbPath);
@@ -492,14 +505,19 @@ internal static class ExportImportCommandRunner
             return WriteExportError(wantsJson, jsonOptions, PhaseParseArgs, "ctags_export_output_overlaps_database", "ctags output path must not be the source database or a SQLite sidecar.", "choose a separate tags path, for example `tags`.", CtagsExportUsage);
         }
 
-        if (!DbContext.TryValidateExistingCodeIndexDb(normalizedDbPath, out var validationMessage, out _))
+        if (!DbContext.TryValidateExistingCodeIndexDb(
+                normalizedDbPath,
+                requireWritable: false,
+                requireSupportedUserVersion: false,
+                out var validationMessage,
+                out _,
+                out _))
             return WriteExportError(wantsJson, jsonOptions, PhaseSqliteValidate, "ctags_export_database_invalid", validationMessage, "run `cdidx index <projectPath>` first or pass `--db <path>`.", CtagsExportUsage);
 
         var filters = new CtagsExportOptions(lang, pathPatterns.ToArray(), excludePathPatterns.ToArray(), excludeTests);
         try
         {
-            using var db = new DbContext(normalizedDbPath);
-            db.TryMigrateForRead();
+            using var db = new DbContext(DbOpenIntent.QueryOnly, normalizedDbPath);
             var outputDirectory = Path.GetDirectoryName(fullOutputPath);
             if (!string.IsNullOrWhiteSpace(outputDirectory))
                 Directory.CreateDirectory(outputDirectory);
@@ -1194,7 +1212,11 @@ internal static class ExportImportCommandRunner
     internal static void CreateDatabaseSnapshot(string sourceDbPath, string snapshotPath, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var source = new SqliteConnection(CreateUnpooledConnectionString(sourceDbPath));
+        using var source = DbConnectionFactory.CreateArtifactPreservingQueryOnlyConnection(
+            sourceDbPath,
+            pooling: false,
+            out _,
+            out _);
         using var destination = new SqliteConnection(CreateUnpooledConnectionString(snapshotPath));
         source.Open();
         destination.Open();
@@ -1207,9 +1229,6 @@ internal static class ExportImportCommandRunner
 
     private static string CreateUnpooledConnectionString(string dbPath)
         => SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.Unpooled);
-
-    private static string CreateReadOnlyUnpooledConnectionString(string dbPath)
-        => SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.ReadOnlyUnpooled);
 
     internal static void ReplaceImportedDatabase(string tempPath, string fullDbPath, CancellationToken cancellationToken)
     {
@@ -1438,7 +1457,11 @@ internal static class ExportImportCommandRunner
         pathCaseSensitive = false;
         try
         {
-            using var connection = new SqliteConnection(CreateReadOnlyUnpooledConnectionString(dbPath));
+            using var connection = DbConnectionFactory.CreateArtifactPreservingQueryOnlyConnection(
+                dbPath,
+                pooling: false,
+                out _,
+                out _);
             connection.Open();
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key LIMIT 1";
@@ -1446,7 +1469,7 @@ internal static class ExportImportCommandRunner
             var raw = cmd.ExecuteScalar();
             return raw is string value && bool.TryParse(value, out pathCaseSensitive);
         }
-        catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
+        catch (Exception ex) when (ex is SqliteException or CodeIndexException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
         {
             return false;
         }

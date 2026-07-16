@@ -18,6 +18,7 @@ public sealed class DatabasePermissionPolicyTests
         try
         {
             using var db = new DbContext(
+                DbOpenIntent.WriteIndex,
                 dbPath,
                 DatabasePermissionPolicyMode.BestEffort,
                 provider);
@@ -58,6 +59,7 @@ public sealed class DatabasePermissionPolicyTests
         try
         {
             using var db = new DbContext(
+                DbOpenIntent.WriteIndex,
                 dbPath,
                 DatabasePermissionPolicyMode.Strict,
                 new TestFileModeProvider());
@@ -85,6 +87,7 @@ public sealed class DatabasePermissionPolicyTests
         try
         {
             var exception = Assert.Throws<CodeIndexException>(() => new DbContext(
+                DbOpenIntent.WriteIndex,
                 dbPath,
                 DatabasePermissionPolicyMode.Strict,
                 provider));
@@ -111,6 +114,7 @@ public sealed class DatabasePermissionPolicyTests
         try
         {
             using (var db = new DbContext(
+                DbOpenIntent.WriteIndex,
                 dbPath,
                 DatabasePermissionPolicyMode.BestEffort,
                 new TestFileModeProvider()))

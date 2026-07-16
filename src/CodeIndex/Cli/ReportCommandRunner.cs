@@ -279,9 +279,11 @@ public static class ReportCommandRunner
         }
 
         var tables = new List<ReportSchemaTable>();
-        var connectionString = SqliteConnectionPolicy.BuildConnectionString(normalizedDbPath, SqliteConnectionPolicyMode.ReadOnly);
-
-        using var connection = new SqliteConnection(connectionString);
+        using var connection = DbConnectionFactory.CreateArtifactPreservingQueryOnlyConnection(
+            normalizedDbPath,
+            pooling: false,
+            out _,
+            out _);
         connection.Open();
 
         var tableNames = new List<string>();
@@ -467,8 +469,11 @@ public static class ReportCommandRunner
         try
         {
             var normalizedDbPath = DbPathResolver.NormalizeDbPath(dbPath);
-            var connectionString = SqliteConnectionPolicy.BuildConnectionString(normalizedDbPath, SqliteConnectionPolicyMode.ReadOnly);
-            using var connection = new SqliteConnection(connectionString);
+            using var connection = DbConnectionFactory.CreateArtifactPreservingQueryOnlyConnection(
+                normalizedDbPath,
+                pooling: false,
+                out _,
+                out _);
             connection.Open();
             var tables = LoadTableNames(connection);
             var symbolColumns = LoadColumnNames(connection, "symbols");

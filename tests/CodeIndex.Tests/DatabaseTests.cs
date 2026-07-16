@@ -26,7 +26,7 @@ public class DatabaseTests : IDisposable
     {
         _dbDir = TestProjectHelper.CreateTempProject("codeindex_test");
         _dbPath = Path.Combine(_dbDir, "codeindex.db");
-        _db = new DbContext(_dbPath);
+        _db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         _db.InitializeSchema();
         _writer = new DbWriter(_db.Connection);
     }
@@ -935,7 +935,7 @@ public class DatabaseTests : IDisposable
         {
             SeedLegacyKindCheckSchema(dbPath);
 
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.InitializeSchema();
             var writer = new DbWriter(db.Connection);
             var fileId = writer.UpsertFile(new FileRecord
@@ -1002,7 +1002,7 @@ public class DatabaseTests : IDisposable
                     """);
             };
 
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             var ex = Assert.Throws<CodeIndexException>(db.InitializeSchema);
 
             Assert.Equal(CommandErrorCodes.DbIntegrityFailed, ex.Code);
@@ -1139,7 +1139,7 @@ public class DatabaseTests : IDisposable
     public void CheckpointWalTruncate_OnReadOnlyContext_PersistsSkippedResult_Issue4558()
     {
         Assert.True(_db.TryCheckpointWalTruncate());
-        using var readOnlyDb = new DbContext(DbContext.ToReadOnlyUri(_dbPath));
+        using var readOnlyDb = new DbContext(DbOpenIntent.QueryOnly, DbContext.ToReadOnlyUri(_dbPath));
 
         var result = readOnlyDb.CheckpointWalTruncate();
 
@@ -1167,7 +1167,7 @@ public class DatabaseTests : IDisposable
         DbContext.WalCheckpointTruncateExecutedForTesting = _ => checkpointAttempted = true;
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 db.MarkWriteWork();
@@ -1192,7 +1192,7 @@ public class DatabaseTests : IDisposable
         DbContext.WalCheckpointTruncateExecutedForTesting = _ => checkpointAttempted = true;
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
             }
@@ -1237,7 +1237,7 @@ public class DatabaseTests : IDisposable
 
         var stderr = ConsoleCapture.CaptureError(() =>
         {
-            using var reopened = new DbContext(_dbPath);
+            using var reopened = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         });
 
         Assert.Contains("Last batch did not complete", stderr);
@@ -1245,16 +1245,54 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
-    public void DbContext_OpenWithBatchInProgress_DemotesReadiness()
+    public void DbContext_WriteOpenWithBatchInProgress_ReportsWithoutDemotingReadiness_Issue4557()
+    {
+        _writer.MarkGraphReady();
+        _writer.MarkIssuesReady();
+        _writer.MarkBatchInProgress();
+        var expectedUserVersion = _db.GetUserVersion();
+
+        using (var reopened = new DbContext(DbOpenIntent.WriteIndex, _dbPath))
+        {
+            Assert.Equal(DbOpenIntent.WriteIndex, reopened.OpenIntent);
+            Assert.Equal(expectedUserVersion, reopened.GetUserVersion());
+        }
+    }
+
+    [Fact]
+    public void DbContext_QueryOnlyWithBatchInProgress_ReportsWithoutDemotingReadiness_Issue4557()
+    {
+        _writer.MarkGraphReady();
+        _writer.MarkIssuesReady();
+        _writer.MarkBatchInProgress();
+        var expectedUserVersion = _db.GetUserVersion();
+        Assert.True(_db.TryCheckpointWalTruncate());
+
+        using var reopened = new DbContext(DbOpenIntent.QueryOnly, _dbPath);
+
+        Assert.True(reopened.IsReadOnly);
+        Assert.Equal(DbOpenIntent.QueryOnly, reopened.OpenIntent);
+        using var queryOnly = reopened.Connection.CreateCommand();
+        queryOnly.CommandText = "PRAGMA query_only";
+        Assert.Equal(1L, queryOnly.ExecuteScalar());
+        Assert.Equal(expectedUserVersion, reopened.GetUserVersion());
+    }
+
+    [Fact]
+    public void RepairIncompleteBatchReadiness_RequiresExplicitRepairIntent_Issue4557()
     {
         _writer.MarkGraphReady();
         _writer.MarkIssuesReady();
         _writer.MarkBatchInProgress();
 
-        using (var reopened = new DbContext(_dbPath))
+        using (var writeDb = new DbContext(DbOpenIntent.WriteIndex, _dbPath))
         {
-            Assert.Equal(0, reopened.GetUserVersion());
+            Assert.Throws<InvalidOperationException>(() => writeDb.RepairIncompleteBatchReadiness());
         }
+
+        using var repairDb = new DbContext(DbOpenIntent.Repair, _dbPath);
+        Assert.True(repairDb.RepairIncompleteBatchReadiness());
+        Assert.Equal(0, repairDb.GetUserVersion());
     }
 
     [Fact]
@@ -1270,7 +1308,7 @@ public class DatabaseTests : IDisposable
 
         var stderr = ConsoleCapture.CaptureError(() =>
         {
-            using var reopened = new DbContext(_dbPath);
+            using var reopened = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         });
 
         Assert.DoesNotContain("Last batch did not complete", stderr);
@@ -1288,7 +1326,7 @@ public class DatabaseTests : IDisposable
 
         var stderr = ConsoleCapture.CaptureError(() =>
         {
-            using var reopened = new DbContext(_dbPath);
+            using var reopened = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         });
 
         Assert.Contains("Last batch did not complete", stderr);
@@ -1427,7 +1465,7 @@ public class DatabaseTests : IDisposable
         try
         {
             VacuumResult result;
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
                 using (var cmd = db.Connection.CreateCommand())
@@ -1474,7 +1512,7 @@ public class DatabaseTests : IDisposable
         var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.InitializeSchema();
             using var cts = new CancellationTokenSource();
             cts.Cancel();
@@ -1496,7 +1534,7 @@ public class DatabaseTests : IDisposable
         var progress = new List<string>();
         try
         {
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.InitializeSchema();
             DbContext.MaintenanceProgressForTesting = (operation, phase) => progress.Add($"{operation}:{phase}");
 
@@ -1603,7 +1641,7 @@ public class DatabaseTests : IDisposable
             }
 
             VacuumResult result;
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 result = db.RunIncrementalVacuum();
                 using var autoVacuumCmd = db.Connection.CreateCommand();
@@ -1635,7 +1673,7 @@ public class DatabaseTests : IDisposable
         };
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
             }
@@ -1663,7 +1701,7 @@ public class DatabaseTests : IDisposable
         };
         try
         {
-            using (var db = new DbContext(dbPath))
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
             }
 
@@ -1736,7 +1774,7 @@ public class DatabaseTests : IDisposable
                 cmd.ExecuteNonQuery();
             }
 
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.TryMigrateForRead();
             var indexes = ReadIndexNames(db.Connection, "symbol_references");
 
@@ -1774,7 +1812,7 @@ public class DatabaseTests : IDisposable
                 cmd.ExecuteNonQuery();
             }
 
-            var ex = Assert.Throws<CodeIndexException>(() => new DbContext(dbPath));
+            var ex = Assert.Throws<CodeIndexException>(() => new DbContext(DbOpenIntent.WriteIndex, dbPath));
 
             Assert.Equal(CodeIndex.Cli.CommandErrorCodes.SchemaTooNew, ex.Code);
             Assert.Equal(CodeIndexExceptionCategory.Database, ex.Category);
@@ -1834,7 +1872,7 @@ public class DatabaseTests : IDisposable
                 cmd.ExecuteNonQuery();
             }
 
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var transaction = db.Connection.BeginTransaction(deferred: true);
 
             db.TryMigrateForRead();
@@ -1894,7 +1932,7 @@ public class DatabaseTests : IDisposable
                 cmd.ExecuteNonQuery();
             }
 
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.TryMigrateForRead();
 
             using (var fkCheck = db.Connection.CreateCommand())
@@ -1994,7 +2032,7 @@ public class DatabaseTests : IDisposable
                 env.Set(DbContext.CacheSizeEnvironmentVariable, cacheSizeValue);
                 env.Set(DbContext.MmapSizeEnvironmentVariable, mmapSizeValue);
 
-                using var db = new DbContext(dbPath);
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
 
                 Assert.Equal(-expectedCacheSizeKb, ExecuteScalarLong(db.Connection, "PRAGMA cache_size"));
                 if (Environment.Is64BitProcess)
@@ -3953,7 +3991,7 @@ public class DatabaseTests : IDisposable
                 seed.ExecuteNonQuery();
             }
 
-            using var migrated = new DbContext(dbPath);
+            using var migrated = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             migrated.InitializeSchema();
             var writer = new DbWriter(migrated.Connection);
             writer.InsertReferences([

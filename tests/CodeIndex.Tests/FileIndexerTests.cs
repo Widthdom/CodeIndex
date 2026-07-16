@@ -3751,7 +3751,7 @@ public partial class FileIndexerTests
             Assert.Contains(scannedFiles, path => PathsEqual(path, leafPath));
 
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            db = new DbContext(dbPath);
+            db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.InitializeSchema();
             var writer = new DbWriter(db.Connection);
 
@@ -4245,7 +4245,7 @@ public partial class FileIndexerTests
         var nfdPath = "Cafe\u0301.cs";
         TestProjectHelper.InsertIndexedFile(dbPath, nfcPath, "csharp", "class CafeFixture { }\n");
 
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         db.InitializeSchema();
         var writer = new DbWriter(db.Connection);
         var retainedPaths = new[]
@@ -4269,7 +4269,7 @@ public partial class FileIndexerTests
         var dbPath = TestProjectHelper.CreateProjectDb(tempDir);
         TestProjectHelper.InsertIndexedFile(dbPath, "Caf\u00e9/src/File.cs", "csharp", "class NestedCafe { }\n");
 
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         db.InitializeSchema();
         var writer = new DbWriter(db.Connection);
         var prunedDirectories = new[] { "Cafe\u0301" }

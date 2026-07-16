@@ -24,7 +24,7 @@ public class PerformanceTests : IDisposable
         _dbDir = TestProjectHelper.CreateTempProject("codeindex_perf");
         _dbPath = Path.Combine(_dbDir, "codeindex.db");
         _projectRoot = TestProjectHelper.CreateTempProject("cdidx_perf_smoke");
-        _db = new DbContext(_dbPath);
+        _db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         _db.InitializeSchema();
     }
 

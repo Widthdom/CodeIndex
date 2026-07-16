@@ -268,7 +268,10 @@ public static partial class IndexCommandRunner
 
             using (indexLock)
             {
-                using var db = new DbContext(dbPath, indexCancellation.Token);
+                using var db = new DbContext(
+                    options.Rebuild ? DbOpenIntent.Repair : DbOpenIntent.WriteIndex,
+                    dbPath,
+                    indexCancellation.Token);
                 if (db.ReadOnlyFallback)
                 {
                     return WriteCommandError(
@@ -279,6 +282,8 @@ public static partial class IndexCommandRunner
                         "Move the database to writable storage, stop the writer holding the WAL lock, or rerun the query command with --read-only if you only need read access.",
                         CommandErrorCodes.DbNotWritable);
                 }
+                if (options.Rebuild)
+                    db.RepairIncompleteBatchReadiness();
 
                 // Capture prior readiness BEFORE we clear it. Update mode (--commits / --files) only
                 // touches a subset of files, so trust bits the DB did NOT previously carry must not
@@ -691,7 +696,7 @@ public static partial class IndexCommandRunner
 
         try
         {
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.InitializeSchema();
             var writer = new DbWriter(db);
             writer.SetMetaValues(

@@ -55,6 +55,8 @@ public partial class DbReader : IDisposable
     private readonly bool _walCheckpointSucceeded;
     private readonly bool _readOnlyImmutableFallback;
     private readonly bool _immutableReadOnly;
+    private readonly bool _immutableReadOnlyWalRisk;
+    private readonly bool _connectionPooling;
     private readonly string? _walCheckpointSkippedReason;
     private readonly string? _walCheckpointFailureReason;
     private readonly long? _walCheckpointBusy;
@@ -413,6 +415,8 @@ public partial class DbReader : IDisposable
                context.WalCheckpointSucceeded,
                context.ReadOnlyImmutableFallback,
                context.ImmutableReadOnly,
+               context.ImmutableReadOnlyWalRisk,
+               context.ConnectionPooling,
                context.WalCheckpointSkippedReason,
                context.WalCheckpointFailureReason,
                context.WalCheckpointBusy,
@@ -441,6 +445,8 @@ public partial class DbReader : IDisposable
                context.WalCheckpointSucceeded,
                context.ReadOnlyImmutableFallback,
                context.ImmutableReadOnly,
+               context.ImmutableReadOnlyWalRisk,
+               context.ConnectionPooling,
                context.WalCheckpointSkippedReason,
                context.WalCheckpointFailureReason,
                context.WalCheckpointBusy,
@@ -485,6 +491,8 @@ public partial class DbReader : IDisposable
         bool walCheckpointSucceeded = false,
         bool readOnlyImmutableFallback = false,
         bool immutableReadOnly = false,
+        bool immutableReadOnlyWalRisk = false,
+        bool connectionPooling = true,
         string? walCheckpointSkippedReason = null,
         string? walCheckpointFailureReason = null,
         long? walCheckpointBusy = null,
@@ -508,6 +516,8 @@ public partial class DbReader : IDisposable
         _walCheckpointSucceeded = walCheckpointSucceeded;
         _readOnlyImmutableFallback = readOnlyImmutableFallback;
         _immutableReadOnly = immutableReadOnly;
+        _immutableReadOnlyWalRisk = immutableReadOnlyWalRisk;
+        _connectionPooling = connectionPooling;
         _walCheckpointSkippedReason = walCheckpointSkippedReason;
         _walCheckpointFailureReason = walCheckpointFailureReason;
         _walCheckpointBusy = walCheckpointBusy;
@@ -1048,7 +1058,8 @@ public partial class DbReader : IDisposable
     public bool WalCheckpointAttempted => _walCheckpointAttempted;
     public bool WalCheckpointSucceeded => _walCheckpointSucceeded;
     public bool ReadOnlyImmutableFallback => _readOnlyImmutableFallback;
-    public bool WalStaleSnapshotRisk => _immutableReadOnly && !_walCheckpointSucceeded;
+    public bool WalStaleSnapshotRisk =>
+        (_immutableReadOnlyWalRisk || _readOnlyImmutableFallback) && !_walCheckpointSucceeded;
     public string? WalCheckpointSkippedReason => _walCheckpointSkippedReason;
     public string? WalCheckpointFailureReason => _walCheckpointFailureReason;
     public long? WalCheckpointBusy => _walCheckpointBusy;
@@ -1069,6 +1080,8 @@ public partial class DbReader : IDisposable
           ?? _walCheckpointFailureReason
           ?? (_readOnlyImmutableFallback ? "immutable_read_only_fallback" : "explicit_immutable_read_only")
         : null;
+    private bool TreatResourceListAsImmutableSnapshot =>
+        _immutableReadOnlyWalRisk || _readOnlyImmutableFallback;
 
     private bool HasSymbolIndex(string indexName) => _symbolIndexes.Contains(indexName);
     private bool HasReferenceIndex(string indexName) => _referenceIndexes.Contains(indexName);

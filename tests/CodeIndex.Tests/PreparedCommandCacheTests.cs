@@ -21,7 +21,7 @@ public class PreparedCommandCacheTests : IDisposable
     {
         _dbDir = TestProjectHelper.CreateTempProject("prepcache_test");
         _dbPath = Path.Combine(_dbDir, "codeindex.db");
-        _db = new DbContext(_dbPath);
+        _db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         _db.InitializeSchema();
     }
 
@@ -275,7 +275,7 @@ public class PreparedCommandCacheTests : IDisposable
         DbContext? db = null;
         try
         {
-            db = new DbContext(dbPath);
+            db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.InitializeSchema();
 
             Assert.Equal(4, db.PreparedCommands.Capacity);

@@ -743,7 +743,7 @@ public partial class QueryCommandRunnerTests
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_dry_run");
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
-        using (var db = new DbContext(dbPath))
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
         {
             using var command = db.Connection.CreateCommand();
             command.CommandText = @"
@@ -784,7 +784,7 @@ public partial class QueryCommandRunnerTests
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_wal_timing");
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
-        using (var db = new DbContext(dbPath))
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
         {
             using var command = db.Connection.CreateCommand();
             command.CommandText = @"
@@ -2655,7 +2655,7 @@ public partial class QueryCommandRunnerTests
             </Project>
             """);
 
-        using (var db = new DbContext(dbPath))
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
         using (var cmd = db.Connection.CreateCommand())
         {
             new DbWriter(db.Connection).MarkGraphReady();
@@ -3667,7 +3667,7 @@ public partial class QueryCommandRunnerTests
             }
             """);
 
-        using (var db = new DbContext(dbPath))
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
         {
             using var cmd = db.Connection.CreateCommand();
             cmd.CommandText = """
@@ -4637,6 +4637,66 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunDeps_WorkspaceDbHotWalUsesArtifactPreservingTargetSnapshot_Issue4557()
+    {
+        using var primaryProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_hot_wal_primary");
+        using var memberProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_hot_wal_member");
+        var primaryDb = TestProjectHelper.CreateProjectDb(primaryProject.Root);
+        var memberDb = TestProjectHelper.CreateProjectDb(memberProject.Root);
+        InsertFileWithReference(primaryDb, "src/PrimaryCaller.cs", "HotWalTarget");
+        SqliteConnection.ClearAllPools();
+
+        using var memberWriterDb = new DbContext(DbOpenIntent.WriteIndex, memberDb);
+        var memberWriter = new DbWriter(memberWriterDb.Connection);
+        var fileId = memberWriter.UpsertFile(new FileRecord
+        {
+            Path = "src/HotWalTarget.cs",
+            Lang = "csharp",
+            Size = 1,
+            Lines = 1,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = "issue4557-hot-wal-target",
+        });
+        memberWriter.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "HotWalTarget",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+        ]);
+
+        Assert.True(new FileInfo(memberDb + "-wal").Length > 0);
+        var expectedArtifacts = CaptureDatabaseArtifacts(memberDb);
+        var snapshotDirectories = new List<string>();
+        var originalDirectoryHook = DbConnectionFactory.QueryOnlySnapshotDirectoryCreatedForTesting;
+        try
+        {
+            DbConnectionFactory.QueryOnlySnapshotDirectoryCreatedForTesting = snapshotDirectories.Add;
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var edge = Assert.Single(document.RootElement.GetProperty("edges").EnumerateArray());
+            Assert.Equal("src/HotWalTarget.cs", edge.GetProperty("target_path").GetString());
+            Assert.Equal(expectedArtifacts, CaptureDatabaseArtifacts(memberDb));
+        }
+        finally
+        {
+            DbConnectionFactory.QueryOnlySnapshotDirectoryCreatedForTesting = originalDirectoryHook;
+        }
+
+        Assert.NotEmpty(snapshotDirectories);
+        Assert.All(snapshotDirectories, path => Assert.False(Directory.Exists(path), path));
+    }
+
+    [Fact]
     public void RunDeps_WorkspaceDbRejectsNonCodeIndexDatabase_Issue3737()
     {
         using var primaryProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_non_codeindex_primary");
@@ -4853,7 +4913,7 @@ public partial class QueryCommandRunnerTests
         IReadOnlyList<string> symbolNames,
         IReadOnlyList<string> referenceNames)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
         var fileId = writer.UpsertFile(new FileRecord
         {
@@ -4894,7 +4954,7 @@ public partial class QueryCommandRunnerTests
 
     private static void MarkDependencyGraphReady(string dbPath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
         writer.MarkCSharpSymbolNameContractReady();
@@ -5922,14 +5982,14 @@ public partial class QueryCommandRunnerTests
                 """;
 
         TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", content);
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
     }
 
     private static void MarkStatusReadinessReady(string dbPath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
         writer.MarkIssuesReady();
@@ -6229,7 +6289,7 @@ public partial class QueryCommandRunnerTests
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_confidence");
         var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         db.InitializeSchema();
         var writer = new DbWriter(db.Connection);
         var fileId = writer.UpsertFile(new FileRecord
@@ -6361,7 +6421,7 @@ public partial class QueryCommandRunnerTests
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_cli_options");
         var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         db.InitializeSchema();
         var writer = new DbWriter(db.Connection);
         var fileId = writer.UpsertFile(new FileRecord
@@ -6421,7 +6481,7 @@ public partial class QueryCommandRunnerTests
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_reflection");
         var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         db.InitializeSchema();
         var writer = new DbWriter(db.Connection);
         var fileId = writer.UpsertFile(new FileRecord
@@ -6487,7 +6547,7 @@ public partial class QueryCommandRunnerTests
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_reflection_diversified");
         var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         db.InitializeSchema();
         var writer = new DbWriter(db.Connection);
         var fileId = writer.UpsertFile(new FileRecord
@@ -6595,7 +6655,7 @@ public partial class QueryCommandRunnerTests
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_reflection_commented");
         var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         db.InitializeSchema();
         var writer = new DbWriter(db.Connection);
         var fileId = writer.UpsertFile(new FileRecord
@@ -6662,7 +6722,7 @@ public partial class QueryCommandRunnerTests
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_reflection_qualified");
         var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         db.InitializeSchema();
         var writer = new DbWriter(db.Connection);
         var fileId = writer.UpsertFile(new FileRecord
@@ -6758,7 +6818,7 @@ public partial class QueryCommandRunnerTests
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_reflection_block_comment");
         var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         db.InitializeSchema();
         var writer = new DbWriter(db.Connection);
         var fileId = writer.UpsertFile(new FileRecord
@@ -6826,7 +6886,7 @@ public partial class QueryCommandRunnerTests
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_text_json");
         var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         db.InitializeSchema();
         var writer = new DbWriter(db.Connection);
         var fileId = writer.UpsertFile(new FileRecord
@@ -6859,7 +6919,7 @@ public partial class QueryCommandRunnerTests
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_large_public");
         var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         db.InitializeSchema();
         var writer = new DbWriter(db.Connection);
         var fileId = writer.UpsertFile(new FileRecord
@@ -6905,7 +6965,7 @@ public partial class QueryCommandRunnerTests
 
     private static void MarkGraphAndFoldReady(string dbPath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
         writer.MarkFoldReady();
@@ -6941,7 +7001,7 @@ public partial class QueryCommandRunnerTests
             GO
             """);
 
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
         writer.MarkSqlGraphContractReady();
@@ -6967,7 +7027,7 @@ public partial class QueryCommandRunnerTests
             }
             """);
 
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
         writer.MarkSqlGraphContractReady();
@@ -7005,7 +7065,7 @@ public partial class QueryCommandRunnerTests
             GO
             """);
 
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
         writer.MarkSqlGraphContractReady();
@@ -7038,7 +7098,7 @@ public partial class QueryCommandRunnerTests
             GO
             """);
 
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
         writer.MarkSqlGraphContractReady();
@@ -7047,7 +7107,7 @@ public partial class QueryCommandRunnerTests
 
     private static void DowngradeSqlGraphContractRows(string dbPath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         using var cmd = db.Connection.CreateCommand();
         cmd.CommandText = """
             UPDATE symbol_references
@@ -7062,7 +7122,7 @@ public partial class QueryCommandRunnerTests
 
     private static void DowngradeMixedSqlGraphContractCountRows(string dbPath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         using var cmd = db.Connection.CreateCommand();
         cmd.CommandText = """
             UPDATE symbol_references
@@ -7077,7 +7137,7 @@ public partial class QueryCommandRunnerTests
 
     private static void DowngradeSqlGraphContractVersion(string dbPath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         using var cmd = db.Connection.CreateCommand();
         cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = 'sql_graph_contract_version';";
         cmd.ExecuteNonQuery();
@@ -7203,7 +7263,7 @@ public partial class QueryCommandRunnerTests
 
         if (markGraphReady)
         {
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             var writer = new DbWriter(db.Connection);
             writer.MarkGraphReady();
         }
@@ -7249,7 +7309,7 @@ public partial class QueryCommandRunnerTests
             }
             """);
 
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
         if (markHotspotFamilyReady)
@@ -7355,7 +7415,7 @@ public partial class QueryCommandRunnerTests
 
     private static void DropGraphExactFallbackIndexes(string dbPath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
         using var cmd = db.Connection.CreateCommand();
@@ -7374,7 +7434,7 @@ public partial class QueryCommandRunnerTests
         var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
         TestProjectHelper.InsertIndexedFile(dbPath, "src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
 
-        using (var db = new DbContext(dbPath))
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
         {
             using var cmd = db.Connection.CreateCommand();
             cmd.CommandText = """
@@ -7390,7 +7450,7 @@ public partial class QueryCommandRunnerTests
 
     private static void DropSymbolExactFallbackIndex(string dbPath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         using var cmd = db.Connection.CreateCommand();
         cmd.CommandText = """
             DROP INDEX IF EXISTS idx_symbols_name_nocase;
@@ -7402,7 +7462,7 @@ public partial class QueryCommandRunnerTests
 
     private static void ForceLegacyExactFallbackMode(string dbPath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         db.ClearReadyFlags();
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
@@ -7411,7 +7471,7 @@ public partial class QueryCommandRunnerTests
 
     private static void DropGraphTable(string dbPath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         using var cmd = db.Connection.CreateCommand();
         cmd.CommandText = """
                 DROP TABLE IF EXISTS symbol_references;
@@ -7422,7 +7482,7 @@ public partial class QueryCommandRunnerTests
 
     private static void DropChunksTables(string dbPath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         using var cmd = db.Connection.CreateCommand();
         cmd.CommandText = """
             DROP TABLE IF EXISTS fts_chunks;
@@ -7598,7 +7658,7 @@ public partial class QueryCommandRunnerTests
 
     private static void SetIndexedFileSize(string dbPath, string path, long size)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         using var command = db.Connection.CreateCommand();
         command.CommandText = "UPDATE files SET size = $size WHERE path = $path";
         command.Parameters.AddWithValue("$size", size);

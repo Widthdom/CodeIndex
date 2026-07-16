@@ -20,7 +20,7 @@ public class ConcurrencyTests : IDisposable
     {
         _dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_concurrency_{Guid.NewGuid():N}.db");
         _sqlitePoolOwner = SqlitePoolCleanup.EnterExclusiveOwner();
-        _db = new DbContext(_dbPath);
+        _db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         _db.InitializeSchema();
     }
 
@@ -45,7 +45,7 @@ public class ConcurrencyTests : IDisposable
         var results = await TestDeterminism.RunConcurrentlyAsync(
             Enumerable.Range(0, 5).Select<int, Func<long>>(_ => () =>
             {
-                using var readDb = new DbContext(_dbPath);
+                using var readDb = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
                 readDb.TryMigrateForRead();
                 var reader = new DbReader(readDb.Connection);
                 var status = reader.GetStatus();
@@ -77,7 +77,7 @@ public class ConcurrencyTests : IDisposable
         {
             for (int i = 0; i < 20; i++)
             {
-                using var writeDb = new DbContext(_dbPath);
+                using var writeDb = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
                 writeDb.TryMigrateForRead();
                 var w = new DbWriter(writeDb.Connection);
                 w.UpsertFile(new FileRecord
@@ -96,7 +96,7 @@ public class ConcurrencyTests : IDisposable
         {
             for (int i = 0; i < 20; i++)
             {
-                using var readDb = new DbContext(_dbPath);
+                using var readDb = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
                 readDb.TryMigrateForRead();
                 var reader = new DbReader(readDb.Connection);
                 // Should not throw even during concurrent writes
@@ -156,7 +156,7 @@ public class ConcurrencyTests : IDisposable
 
         var writeTask = Task.Run(() =>
         {
-            using var writeDb = new DbContext(_dbPath);
+            using var writeDb = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
             writeDb.TryMigrateForRead();
             var w = new DbWriter(writeDb.Connection);
             var extra = 0;
@@ -181,7 +181,7 @@ public class ConcurrencyTests : IDisposable
 
         var readTask = Task.Run(() =>
         {
-            using var readDb = new DbContext(_dbPath);
+            using var readDb = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
             readDb.TryMigrateForRead();
             var reader = new DbReader(readDb.Connection);
             while (!cts.IsCancellationRequested)
@@ -279,7 +279,7 @@ public class ConcurrencyTests : IDisposable
 
         var writeTask = Task.Run(() =>
         {
-            using var writeDb = new DbContext(_dbPath);
+            using var writeDb = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
             writeDb.TryMigrateForRead();
             var w = new DbWriter(writeDb.Connection);
             var toggle = 0;
@@ -324,7 +324,7 @@ public class ConcurrencyTests : IDisposable
 
         var readTask = Task.Run(() =>
         {
-            using var readDb = new DbContext(_dbPath);
+            using var readDb = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
             readDb.TryMigrateForRead();
             var reader = new DbReader(readDb.Connection);
             while (!cts.IsCancellationRequested)
@@ -414,7 +414,7 @@ public class ConcurrencyTests : IDisposable
 
         var writeTask = Task.Run(() =>
         {
-            using var writeDb = new DbContext(_dbPath);
+            using var writeDb = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
             writeDb.TryMigrateForRead();
             var w = new DbWriter(writeDb.Connection);
             var toggle = 0;
@@ -452,7 +452,7 @@ public class ConcurrencyTests : IDisposable
 
         var readTask = Task.Run(() =>
         {
-            using var readDb = new DbContext(_dbPath);
+            using var readDb = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
             readDb.TryMigrateForRead();
             var reader = new DbReader(readDb.Connection);
             while (!cts.IsCancellationRequested)
@@ -526,13 +526,13 @@ public class ConcurrencyTests : IDisposable
             await TestDeterminism.RunConcurrentlyAsync(
                 () =>
                 {
-                    using var graphDb = new DbContext(_dbPath);
+                    using var graphDb = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
                     var w = new DbWriter(graphDb.Connection);
                     w.MarkGraphReady();
                 },
                 () =>
                 {
-                    using var issuesDb = new DbContext(_dbPath);
+                    using var issuesDb = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
                     var w = new DbWriter(issuesDb.Connection);
                     w.MarkIssuesReady();
                 });

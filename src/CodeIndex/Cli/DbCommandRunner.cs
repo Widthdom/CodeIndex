@@ -736,9 +736,11 @@ public static class DbCommandRunner
             return BoundIntegrityRows(IntegrityCheckRowsForTesting(), cancellationToken);
 
         cancellationToken.ThrowIfCancellationRequested();
-        var connectionString = DbPathResolver.BuildSqliteConnectionString(dbPath, SqliteOpenMode.ReadOnly);
-
-        using var connection = new SqliteConnection(connectionString);
+        using var connection = DbConnectionFactory.CreateArtifactPreservingQueryOnlyConnection(
+            dbPath,
+            pooling: false,
+            out _,
+            out _);
         ReportMaintenanceProgress("integrity_check", "open_connection", dbPath);
         connection.Open();
         ApplyBusyTimeout(connection, cancellationToken);
@@ -976,10 +978,13 @@ public static class DbCommandRunner
     private static SqliteConnection OpenConnection(string dbPath, bool writable, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var connectionString = DbPathResolver.BuildSqliteConnectionString(
-            dbPath,
-            writable ? SqliteOpenMode.ReadWrite : SqliteOpenMode.ReadOnly);
-        var connection = new SqliteConnection(connectionString);
+        var connection = writable
+            ? new SqliteConnection(DbPathResolver.BuildSqliteConnectionString(dbPath, SqliteOpenMode.ReadWrite))
+            : DbConnectionFactory.CreateArtifactPreservingQueryOnlyConnection(
+                dbPath,
+                pooling: false,
+                out _,
+                out _);
         try
         {
             connection.Open();

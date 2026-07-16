@@ -3,10 +3,12 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Security.Cryptography;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Lsp;
 using CodeIndex.Models;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -192,7 +194,7 @@ public class LspServerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             using var input = new MemoryStream(Encoding.UTF8.GetBytes("Content-Length: 2\r\n\r\n{}"));
             using var output = new MemoryStream();
@@ -227,7 +229,7 @@ public class LspServerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             using var input = new PendingReadStream();
             using var output = new MemoryStream();
@@ -252,7 +254,7 @@ public class LspServerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
 
             var response = server.HandleMessage("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}");
@@ -299,7 +301,7 @@ public class LspServerTests
             var liveSource = "class App { void Needle() { } void Call() { Needle(); } }\n";
             File.WriteAllText(sourcePath, diskSource);
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", diskSource);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
 
             Assert.Null(server.HandleMessage(CreateDidOpenRequest(sourcePath, diskSource, version: 1)));
@@ -363,7 +365,7 @@ public class LspServerTests
                 }
             }
 
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             for (var i = 0; i < sources.Count; i++)
             {
@@ -418,7 +420,7 @@ public class LspServerTests
             var sourcePath = Path.Combine(projectRoot, "app.cs");
             File.WriteAllText(sourcePath, "class App { void Run() { } }\n");
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", File.ReadAllText(sourcePath));
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = CreatePositionRequest(method, sourcePath, 4360, 0, 6);
 
@@ -452,7 +454,7 @@ public class LspServerTests
             File.WriteAllText(sourcePath, source);
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
             MarkGraphReady(dbPath);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var countCallCharacter = CharacterOf(source, 3, "Count();");
 
@@ -508,7 +510,7 @@ public class LspServerTests
             ]);
             File.WriteAllText(sourcePath, source);
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
 
             var response = server.HandleMessage(CreateTextDocumentRequest("textDocument/semanticTokens/full", sourcePath, 4444));
@@ -566,7 +568,7 @@ public class LspServerTests
             var source = sourceBuilder.ToString();
             File.WriteAllText(sourcePath, source);
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
-            using (var fixtureDb = new DbContext(dbPath))
+            using (var fixtureDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var fileIdCommand = fixtureDb.Connection.CreateCommand();
                 fileIdCommand.CommandText = "SELECT id FROM files WHERE path = 'app.cs'";
@@ -576,7 +578,7 @@ public class LspServerTests
                     symbol.FileId = fileId;
                 writer.InsertSymbols(symbols);
             }
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
 
             var response = server.HandleMessage(CreateInlayHintRequest(sourcePath, 4418, 1001, 0, 1002, 0));
@@ -611,7 +613,7 @@ public class LspServerTests
                 """;
             File.WriteAllText(sourcePath, source);
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var missingCharacter = CharacterOf(source, 3, "MissingPrefix();") + 3;
 
@@ -634,7 +636,7 @@ public class LspServerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
 
             var response = server.HandleMessage(BuildNestedLspRequest(LspServer.MaxJsonDepth + 1));
@@ -659,7 +661,7 @@ public class LspServerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var method = new string('m', LspServer.MaxLspFrameBytes - 4096) + "UNBOUNDED_SENTINEL";
             var request = JsonSerializer.Serialize(new
@@ -693,7 +695,7 @@ public class LspServerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"" + new string('m', LspServer.MaxLspFrameBytes) + "\"}";
 
@@ -716,7 +718,7 @@ public class LspServerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var method = "workspace/" + new string('m', LspServer.MaxUnknownMethodDiagnosticChars + 20) + "LEAK_SENTINEL";
             var request = JsonSerializer.Serialize(new
@@ -750,7 +752,7 @@ public class LspServerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = JsonSerializer.Serialize(new
             {
@@ -778,7 +780,7 @@ public class LspServerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
 
             var response = server.HandleMessage("""{"jsonrpc":"2.0","id":{"nested":1},"method":"initialize"}""");
@@ -800,7 +802,7 @@ public class LspServerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var oversizedId = new string('i', LspServer.MaxRequestIdStringChars + 1);
             var request = JsonSerializer.Serialize(new
@@ -830,7 +832,7 @@ public class LspServerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = JsonSerializer.Serialize(new
             {
@@ -864,7 +866,7 @@ public class LspServerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var db = new DbContext(dbPath);
+            var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             db.Dispose();
             var request = JsonSerializer.Serialize(new
@@ -893,13 +895,97 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_OwnedQuerySnapshotRefreshesAfterExternalWalCommit_Issue4557()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_query_snapshot_refresh");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            SqliteConnection.ClearAllPools();
+            var queryDb = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+            using var server = new LspServer(queryDb, dbPath, "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 4557,
+                method = "workspace/symbol",
+                @params = new { query = "AddedAfterLspStart" },
+            });
+
+            var before = server.HandleMessage(request);
+            Assert.NotNull(before);
+            Assert.Empty(before!["result"]!.AsArray());
+
+            using (var writerDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(writerDb.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/AddedAfterLspStart.cs",
+                    Lang = "csharp",
+                    Size = 1,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "issue4557-lsp-refresh",
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "class",
+                        Name = "AddedAfterLspStart",
+                        Line = 1,
+                        StartLine = 1,
+                        EndLine = 1,
+                    },
+                ]);
+            }
+
+            var expectedArtifacts = CaptureDatabaseArtifactsForLsp(dbPath);
+            var after = server.HandleMessage(request);
+
+            Assert.NotNull(after);
+            var symbol = Assert.Single(after!["result"]!.AsArray());
+            Assert.Equal("AddedAfterLspStart", symbol!["name"]!.GetValue<string>());
+            Assert.Equal(expectedArtifacts, CaptureDatabaseArtifactsForLsp(dbPath));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    private static Dictionary<string, (long Length, DateTime LastWriteTimeUtc, string Sha256)> CaptureDatabaseArtifactsForLsp(string dbPath)
+    {
+        var result = new Dictionary<string, (long, DateTime, string)>(StringComparer.Ordinal);
+        foreach (var path in new[] { dbPath, dbPath + "-wal", dbPath + "-shm" })
+        {
+            if (!File.Exists(path))
+                continue;
+            var info = new FileInfo(path);
+            using var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            result[Path.GetFileName(path)] = (
+                info.Length,
+                info.LastWriteTimeUtc,
+                Convert.ToHexString(SHA256.HashData(stream)));
+        }
+
+        return result;
+    }
+
+    [Fact]
     public void HandleMessage_WorkspaceSymbol_RejectsOversizedQuery_Issue3128()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_workspace_symbol_long_query");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var oversizedQuery = new string('q', QueryLimits.MaxQueryLength + 1);
             var request = JsonSerializer.Serialize(new
@@ -943,7 +1029,7 @@ public class LspServerTests
                     $"class Needle{i} {{ }}\n");
             }
 
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = JsonSerializer.Serialize(new
             {
@@ -975,7 +1061,7 @@ public class LspServerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             const string initializeRequest = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}";
             using var input = new MemoryStream(Encoding.UTF8.GetBytes(Frame("{") + Frame(initializeRequest)));
@@ -1011,7 +1097,7 @@ public class LspServerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             const string shutdownRequest = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\"}";
             const string exitNotification = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
@@ -1043,7 +1129,7 @@ public class LspServerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             const string exitNotification = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
             const string initializeRequest = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"initialize\",\"params\":{}}";
@@ -1072,7 +1158,7 @@ public class LspServerTests
             var sourcePath = Path.Combine(projectRoot, "app.cs");
             File.WriteAllText(sourcePath, "class App { void Needle() { } }\n");
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", File.ReadAllText(sourcePath));
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = JsonSerializer.Serialize(new
             {
@@ -1110,7 +1196,7 @@ public class LspServerTests
             var source = "class Alpha { } class Beta { }\n";
             File.WriteAllText(sourcePath, source);
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = JsonSerializer.Serialize(new
             {
@@ -1149,7 +1235,7 @@ public class LspServerTests
             var source = "class Z { void A() { } }\n";
             File.WriteAllText(sourcePath, source);
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = JsonSerializer.Serialize(new
             {
@@ -1187,7 +1273,7 @@ public class LspServerTests
             var source = "namespace N { class C {\n}\n}\n";
             File.WriteAllText(sourcePath, source);
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = JsonSerializer.Serialize(new
             {
@@ -1229,7 +1315,7 @@ public class LspServerTests
             File.WriteAllText(testPath, "class TestApp { }\n");
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", File.ReadAllText(srcPath));
             TestProjectHelper.InsertIndexedFile(dbPath, "tests/app.cs", "csharp", File.ReadAllText(testPath));
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = JsonSerializer.Serialize(new
             {
@@ -1271,7 +1357,7 @@ public class LspServerTests
             File.WriteAllText(indexedPath, "class IndexedApp { }\n");
             File.WriteAllText(unindexedPath, "class UnindexedApp { }\n");
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", File.ReadAllText(indexedPath));
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = JsonSerializer.Serialize(new
             {
@@ -1302,7 +1388,7 @@ public class LspServerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var oversizedUri = "file:///" + new string('a', LspServer.MaxTextDocumentUriChars);
             var request = JsonSerializer.Serialize(new
@@ -1352,7 +1438,7 @@ public class LspServerTests
 
             File.WriteAllText(sourcePath, source.ToString());
             TestProjectHelper.InsertIndexedFile(dbPath, "large.cs", "csharp", source.ToString());
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             var jsonOptions = new JsonSerializerOptions(ProgramRunner.CreateDefaultJsonOptions())
             {
                 WriteIndented = writeIndented,
@@ -1413,7 +1499,7 @@ public class LspServerTests
 
             File.WriteAllText(sourcePath, source.ToString());
             TestProjectHelper.InsertIndexedFile(dbPath, "materialization.cs", "csharp", source.ToString());
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = JsonSerializer.Serialize(new
             {
@@ -1455,7 +1541,7 @@ public class LspServerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = JsonSerializer.Serialize(new
             {
@@ -1492,7 +1578,7 @@ public class LspServerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = JsonSerializer.Serialize(new
             {
@@ -1530,7 +1616,7 @@ public class LspServerTests
             var source = "class App { void Needle() { } void Call() { Needle(); } }\n";
             File.WriteAllText(sourcePath, source);
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = JsonSerializer.Serialize(new
             {
@@ -1578,7 +1664,7 @@ public class LspServerTests
             File.WriteAllText(sourcePath, source);
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
             MarkGraphReady(dbPath);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var classCharacter = CharacterOf(source, 0, "Widget");
 
@@ -1617,7 +1703,7 @@ public class LspServerTests
             var source = "class App { void Needle() { } void Call() { Needle(); } }\n";
             File.WriteAllText(sourcePath, source);
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = CreatePositionRequest(
                 "textDocument/declaration",
@@ -1651,7 +1737,7 @@ public class LspServerTests
             var source = "class App { void Needle() { } void Call() { Needle(); } }\n";
             File.WriteAllText(sourcePath, source);
             TestProjectHelper.InsertIndexedFile(dbPath, sourcePath, "csharp", source);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = CreateDefinitionRequest(
                 sourcePath,
@@ -1726,7 +1812,7 @@ public class LspServerTests
             var secondarySource = "class Secondary { void Call() { Needle(); } }\n";
             File.WriteAllText(secondaryPath, secondarySource);
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", primarySource);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             Assert.NotNull(server.HandleMessage(CreateInitializeRequestWithWorkspaceFolder(secondaryRoot, 35372)));
 
@@ -1762,7 +1848,7 @@ public class LspServerTests
             File.WriteAllText(callerPath, callerSource);
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", targetSource);
             TestProjectHelper.InsertIndexedFile(dbPath, callerPath, "csharp", callerSource);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             Assert.NotNull(server.HandleMessage(CreateInitializeRequestWithWorkspaceFolder(secondaryRoot, 35376)));
 
@@ -1811,7 +1897,7 @@ public class LspServerTests
             File.WriteAllText(betaPath, betaSource);
             TestProjectHelper.InsertIndexedFile(dbPath, "alpha.cs", "csharp", alphaSource);
             TestProjectHelper.InsertIndexedFile(dbPath, "beta.cs", "csharp", betaSource);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = CreateDefinitionRequest(betaPath, 31, 3, CharacterOf(betaSource, 3, "Run();"));
 
@@ -1847,7 +1933,7 @@ public class LspServerTests
             TestProjectHelper.InsertIndexedFile(dbPath, "alpha.cs", "csharp", alphaSource);
             TestProjectHelper.InsertIndexedFile(dbPath, "beta.cs", "csharp", betaSource);
             TestProjectHelper.InsertIndexedFile(dbPath, "caller.cs", "csharp", callerSource);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = CreateDefinitionRequest(callerPath, 3537, 0, callerSource.IndexOf("Shared();", StringComparison.Ordinal));
 
@@ -1897,7 +1983,7 @@ public class LspServerTests
             TestProjectHelper.InsertIndexedFile(dbPath, "alpha.cs", "csharp", alphaSource);
             TestProjectHelper.InsertIndexedFile(dbPath, "beta.cs", "csharp", betaSource);
             MarkGraphReady(dbPath);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = CreateReferencesRequest(betaPath, 32, 4, CharacterOf(betaSource, 4, "Worker();"));
 
@@ -1932,7 +2018,7 @@ public class LspServerTests
             File.WriteAllText(sourcePath, source);
             TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
             MarkGraphReady(dbPath);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var character = CharacterOf(source, 3, "Needle();");
             var withoutDeclaration = CreateReferencesRequest(sourcePath, 3537, 3, character, includeDeclaration: false);
@@ -1986,7 +2072,7 @@ public class LspServerTests
             TestProjectHelper.InsertIndexedFile(dbPath, "alpha.cs", "csharp", alphaSource);
             TestProjectHelper.InsertIndexedFile(dbPath, "beta.cs", "csharp", betaSource);
             MarkGraphReady(dbPath);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = CreateReferencesRequest(betaPath, 33, 2, CharacterOf(betaSource, 2, "WriteLine"));
 
@@ -2017,7 +2103,7 @@ public class LspServerTests
             var unindexedPath = Path.Combine(projectRoot, "unindexed.cs");
             var unindexedSource = "class Unindexed { void Call() { Needle(); } }\n";
             File.WriteAllText(unindexedPath, unindexedSource);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = CreateDefinitionRequest(
                 unindexedPath,
@@ -2050,7 +2136,7 @@ public class LspServerTests
             var unindexedPath = Path.Combine(projectRoot, "unindexed.cs");
             var unindexedSource = "class Unindexed { void Call() { Needle(); } }\n";
             File.WriteAllText(unindexedPath, unindexedSource);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = CreateDefinitionRequest(
                 unindexedPath,
@@ -2091,7 +2177,7 @@ public class LspServerTests
             var outsidePath = Path.Combine(outsideRoot, "app.cs");
             var outsideSource = "class Outside { void Call() { Needle(); } }\n";
             File.WriteAllText(outsidePath, outsideSource);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = CreateDefinitionRequest(
                 outsidePath,
@@ -2123,7 +2209,7 @@ public class LspServerTests
             TestProjectHelper.InsertIndexedFile(dbPath, "huge.cs", "csharp", indexedSource);
             var oversizedSource = "class App { void Call() { Needle(); } }\n" + new string('x', LspServer.MaxPositionDocumentBytes);
             File.WriteAllText(sourcePath, oversizedSource);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = CreateDefinitionRequest(
                 sourcePath,
@@ -2154,7 +2240,7 @@ public class LspServerTests
             TestProjectHelper.InsertIndexedFile(dbPath, "long_line.cs", "csharp", indexedSource);
             var oversizedLine = new string('x', LspServer.MaxPositionLineChars + 1) + " Needle();\n";
             File.WriteAllText(sourcePath, oversizedLine);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = CreateDefinitionRequest(
                 sourcePath,
@@ -2187,7 +2273,7 @@ public class LspServerTests
             var source = "class App { void Needle() { } void Call() { Needle(); } }\n";
             File.WriteAllText(sourcePath, source);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/Foo.cs", "csharp", source);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = CreateDefinitionRequest(
                 requestPath,
@@ -2220,7 +2306,7 @@ public class LspServerTests
             var source = "class App { void Needle() { } void Call() { Needle(); } }\n";
             File.WriteAllText(sourcePath, source);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/Foo.cs", "csharp", source);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = CreateDefinitionRequest(
                 requestPath,
@@ -2261,7 +2347,7 @@ public class LspServerTests
             var source = "class Target { void Needle() { } void Call() { Needle(); } }\n";
             File.WriteAllText(sourcePath, source);
             TestProjectHelper.InsertIndexedFile(dbPath, targetRelativePath, "csharp", source);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             var request = CreateDefinitionRequest(
                 sourcePath,
@@ -2302,7 +2388,7 @@ public class LspServerTests
             var source = "class Target { void Needle() { } void Call() { Needle(); } }\n";
             File.WriteAllText(targetPath, source);
             TestProjectHelper.InsertIndexedFile(dbPath, targetPath, "csharp", source);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions());
             var request = CreateDefinitionRequest(
                 targetPath,
@@ -2333,7 +2419,7 @@ public class LspServerTests
             var source = "class Target { void Needle() { } void Call() { Needle(); } }\n";
             File.WriteAllText(sourcePath, source);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", source);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions());
             var request = CreateDefinitionRequest(
                 sourcePath,
@@ -2370,7 +2456,7 @@ public class LspServerTests
             var source = "class Target { void Needle() { } void Call() { Needle(); } }\n";
             File.WriteAllText(sourcePath, source);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", source);
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions());
             Assert.NotNull(server.HandleMessage(CreateInitializeRequestWithWorkspaceFolder(projectRoot, 34260)));
             var request = CreateDefinitionRequest(
@@ -2602,7 +2688,7 @@ public class LspServerTests
 
     private static void MarkGraphReady(string dbPath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
     }

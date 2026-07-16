@@ -33,7 +33,14 @@ public static partial class QueryCommandRunner
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!DbContext.TryValidateExistingCodeIndexDb(options.DbPath, out var validationMessage, out var isNotFound, cancellationToken: cancellationToken))
+            if (!DbContext.TryValidateExistingCodeIndexDb(
+                    options.DbPath,
+                    requireWritable: !options.DryRun,
+                    requireSupportedUserVersion: false,
+                    out var validationMessage,
+                    out var isNotFound,
+                    out _,
+                    cancellationToken))
             {
                 CommandErrorWriter.WriteStderr($"Error [{(isNotFound ? CommandErrorCodes.DbNotFound : CommandErrorCodes.DbError)}]: {validationMessage}");
                 CommandErrorWriter.WriteStderr(isNotFound
@@ -42,7 +49,10 @@ public static partial class QueryCommandRunner
                 return isNotFound ? CommandExitCodes.NotFound : CommandExitCodes.DatabaseError;
             }
 
-            using var db = new DbContext(options.DbPath, cancellationToken);
+            using var db = new DbContext(
+                options.DryRun ? DbOpenIntent.QueryOnly : DbOpenIntent.Repair,
+                options.DbPath,
+                cancellationToken);
             var result = db.RunIncrementalVacuum(options.DryRun, cancellationToken);
             if (options.Json)
             {

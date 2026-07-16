@@ -54,7 +54,7 @@ public partial class McpServerTests : IDisposable
     {
         _dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_test_{Guid.NewGuid():N}.db");
         _projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_workspace");
-        _db = new DbContext(_dbPath);
+        _db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         _db.InitializeSchema();
 
         // Seed test data / テストデータを投入
@@ -921,7 +921,7 @@ public partial class McpServerTests : IDisposable
     private static string CreateLegacyResourceDatabase(string projectRoot, int fileCount = 205)
     {
         var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
         using (var transaction = writer.BeginTransaction())
         {
@@ -1907,7 +1907,7 @@ public sealed class Caller
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_resources_generation_fresh");
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
 
         using (var generation = db.Connection.CreateCommand())
         {
@@ -1932,29 +1932,27 @@ public sealed class Caller
     }
 
     [Fact]
-    public void ResourcesList_WritableLegacyDatabaseMigratesBeforeIssuingCursor_Issue4541()
+    public void ResourcesList_WritableLegacyDatabaseDoesNotMigrateDuringQuery_Issue4557()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_resources_generation_writable_legacy");
         var dbPath = CreateLegacyResourceDatabase(project.Root);
+        SqliteConnection.ClearAllPools();
         using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
         var first = server.HandleMessage(
             JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}""")!)!;
-        var cursor = first["result"]!["nextCursor"]!.GetValue<string>();
+        Assert.True(first["error"] != null, first.ToJsonString());
+        Assert.Equal(
+            "resources_list_generation_unavailable",
+            first["error"]!["data"]!["reason"]!.GetValue<string>());
+        Assert.True(first["error"]!["data"]!["migration_required"]!.GetValue<bool>());
 
-        using (var externalDb = new DbContext(dbPath))
-        {
-            var writer = new DbWriter(externalDb.Connection);
-            Assert.True(writer.DeleteFileByPath("src/legacy-resource-00000.cs"));
-        }
-
-        var stale = server.HandleMessage(new JsonObject
-        {
-            ["jsonrpc"] = "2.0",
-            ["id"] = 2,
-            ["method"] = "resources/list",
-            ["params"] = new JsonObject { ["cursor"] = cursor },
-        })!;
-        AssertResourcesListRestartRequired(stale);
+        using var check = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+        using var generation = check.Connection.CreateCommand();
+        generation.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'resource_list_generation'";
+        Assert.Null(generation.ExecuteScalar());
+        using var triggers = check.Connection.CreateCommand();
+        triggers.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'files_resource_generation_%'";
+        Assert.Equal(0L, triggers.ExecuteScalar());
     }
 
     [Fact]
@@ -2722,7 +2720,7 @@ public sealed class Caller
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_mcp_resource_legacy_ro");
         var dbPath = Path.Combine(project.Root, "legacy.db");
         var source = string.Join('\n', Enumerable.Range(1, 400).Select(line => $"line-{line:D3}"));
-        using (var db = new DbContext(dbPath))
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
         {
             db.InitializeSchema();
             var writer = new DbWriter(db.Connection);
@@ -2752,7 +2750,7 @@ public sealed class Caller
 
         var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
         long schemaVersion;
-        using (var baseline = new DbContext(readOnlyUri))
+        using (var baseline = new DbContext(DbOpenIntent.QueryOnly, readOnlyUri))
         using (var version = baseline.Connection.CreateCommand())
         {
             version.CommandText = "PRAGMA schema_version";
@@ -2770,7 +2768,7 @@ public sealed class Caller
         }
         SqliteConnection.ClearAllPools();
 
-        using var verify = new DbContext(readOnlyUri);
+        using var verify = new DbContext(DbOpenIntent.QueryOnly, readOnlyUri);
         using (var version = verify.Connection.CreateCommand())
         {
             version.CommandText = "PRAGMA schema_version";
@@ -4505,7 +4503,7 @@ public sealed class Caller
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_dispose_{Guid.NewGuid():N}.db");
         try
         {
-            using (var seed = new DbContext(dbPath))
+            using (var seed = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 seed.InitializeSchema();
             }
@@ -4518,7 +4516,7 @@ public sealed class Caller
             server.Dispose();
 
             Assert.Null(GetSharedDbContextField(server));
-            Assert.Throws<ObjectDisposedException>(() => server.GetOrOpenSharedDb());
+            Assert.Throws<ObjectDisposedException>(() => server.GetOrOpenSharedDb(DbOpenIntent.QueryOnly));
         }
         finally
         {
@@ -8694,7 +8692,7 @@ public sealed class Caller
             var response = CallIndex(server, fixtureDir);
 
             Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false);
-            using var verifyDb = new DbContext(dbPath);
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal("1", verifyDb.GetMetaString(DbContext.LastIndexRunRowsUpsertedMetaKey));
             var connectionString = new SqliteConnectionStringBuilder
             {
@@ -10165,7 +10163,7 @@ public sealed class Caller
             GO
             """);
 
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
         writer.MarkSqlGraphContractReady();
@@ -10191,7 +10189,7 @@ public sealed class Caller
             }
             """);
 
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
         writer.MarkSqlGraphContractReady();
@@ -10224,7 +10222,7 @@ public sealed class Caller
             GO
             """);
 
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
         writer.MarkSqlGraphContractReady();
@@ -10233,7 +10231,7 @@ public sealed class Caller
 
     private static void DowngradeSqlGraphContractRows(string dbPath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         using var cmd = db.Connection.CreateCommand();
         cmd.CommandText = """
             UPDATE symbol_references
@@ -10248,7 +10246,7 @@ public sealed class Caller
 
     private static void DowngradeSqlGraphContractVersion(string dbPath)
     {
-        using var db = new DbContext(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         using var cmd = db.Connection.CreateCommand();
         cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = 'sql_graph_contract_version';";
         cmd.ExecuteNonQuery();
@@ -10298,7 +10296,7 @@ public sealed class Caller
 
     private void ForceLegacyExactFallbackMode()
     {
-        using var db = new DbContext(_dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
         db.ClearReadyFlags();
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();

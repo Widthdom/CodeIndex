@@ -79,7 +79,7 @@ public class JsonStringListCodecTests
         var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_json_string_list_{Guid.NewGuid():N}.db");
         try
         {
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.InitializeSchema();
             var writer = new DbWriter(db.Connection);
             var longPathPrefix = new string('a', 2048);
@@ -110,7 +110,7 @@ public class JsonStringListCodecTests
         var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_json_string_list_{Guid.NewGuid():N}.db");
         try
         {
-            using var db = new DbContext(dbPath);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.InitializeSchema();
             var writer = new DbWriter(db.Connection);
 
