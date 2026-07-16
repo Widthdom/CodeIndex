@@ -469,6 +469,181 @@ public class ProgramRunnerTests
     }
 
     [Theory]
+    [InlineData("search", "format_json")]
+    [InlineData("files", "json")]
+    [InlineData("files", "format_json")]
+    [InlineData("symbols", "json")]
+    [InlineData("symbols", "format_json")]
+    public void Run_ImplicitNdjsonWithPretty_ReturnsUsageError_Issue4562(string command, string jsonOption)
+    {
+        var commandArgs = command == "search"
+            ? new[] { command, "Needle" }
+            : new[] { command };
+        string[] args = jsonOption == "format_json"
+            ? [.. commandArgs, "--format", "json", "--pretty"]
+            : [.. commandArgs, "--json", "--pretty"];
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(args, appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stdout);
+        var streamOption = jsonOption == "format_json" ? "--format json" : "--json";
+        Assert.Contains($"--pretty cannot be combined with {streamOption}", stderr, StringComparison.Ordinal);
+        Assert.Contains($"Usage: cdidx {command}", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunSearch_InvalidJsonModePrecedesOutputCombinationError_Issue4562()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["search", "Needle", "--json=bogus", "--format", "csv"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains("--json format must be one of ndjson or array", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("cannot be combined", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunSearch_UnsupportedOptionPrecedesOutputCombinationError_Issue4562()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["search", "Needle", "--unsupported", "--json", "--format", "csv"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains("--unsupported is not supported for search", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("cannot be combined", stderr, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("search")]
+    [InlineData("files")]
+    [InlineData("symbols")]
+    public void Run_LeadingUnsupportedOptionPrecedesOutputCombinationError_Issue4562(string command)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            [command, "--unsupported", "--json", "--pretty"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains($"--unsupported is not supported for {command}", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("--pretty cannot be combined", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunSearch_UnsupportedFormatPrecedesPrettyCombinationError_Issue4562()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["search", "Needle", "--format", "graphml", "--pretty"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains("--format must be one of", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("--pretty cannot be combined", stderr, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("files")]
+    [InlineData("symbols")]
+    public void Run_DiscoveryCountJsonPrettyRemainsSingleDocument_Issue4562(string command)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_discovery_count_pretty_4562");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class Needle { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                [command, "--db", dbPath, "--count", "--json", "--pretty"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            Assert.Contains(Environment.NewLine + "  \"count\":", stdout, StringComparison.Ordinal);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("files", "summary")]
+    [InlineData("symbols", "summary")]
+    [InlineData("files", "format_count")]
+    [InlineData("symbols", "format_count")]
+    [InlineData("files", "format_compact")]
+    [InlineData("symbols", "format_compact")]
+    public void Run_DiscoverySingleDocumentJsonModesSupportPretty_Issue4562(string command, string mode)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_discovery_single_document_pretty_4562");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class Needle { }\n");
+            string[] outputArgs = mode switch
+            {
+                "summary" => ["--summary-only", "--json"],
+                "format_count" => ["--format", "count"],
+                _ => ["--format", "compact"],
+            };
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                [command, "--db", dbPath, .. outputArgs, "--pretty"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            Assert.Contains(Environment.NewLine + "  \"", stdout, StringComparison.Ordinal);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("unique")]
+    [InlineData("recipe")]
+    public void RunSearch_SingleDocumentJsonModesSupportPretty_Issue4562(string mode)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_single_document_pretty_4562");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "class Needle { string Load(string path) => File.ReadAllText(path); }\n");
+            var args = mode == "unique"
+                ? new[] { "search", "Needle", "--db", dbPath, "--unique", "path", "--json", "--pretty" }
+                : new[] { "search", "--recipe", "risky-code/file-read-all-text", "--db", dbPath, "--format", "json", "--pretty", "--limit", "1" };
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(args, appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            Assert.Contains(Environment.NewLine + "  \"", stdout, StringComparison.Ordinal);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal(JsonValueKind.Object, document.RootElement.ValueKind);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
     [InlineData("--json")]
     [InlineData("--json=array")]
     public void RunSearch_DashPrefixedQueryValueIsNotTreatedAsOutputFlag_Issue4562(string query)

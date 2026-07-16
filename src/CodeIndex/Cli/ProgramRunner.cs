@@ -1220,6 +1220,7 @@ internal static partial class ProgramRunner
         if (args.Length == 0)
             return false;
 
+        var hasExplicitPrettyJsonOutput = HasExplicitPrettyJsonOutputSelection(args);
         var kept = new List<string>(args.Length);
         var pretty = false;
         var passthrough = false;
@@ -1235,6 +1236,13 @@ internal static partial class ProgramRunner
             {
                 passthrough = true;
                 kept.Add(arg);
+                continue;
+            }
+            if (arg == "--pretty"
+                && GetQueryCommandTokenRole(args, i) != QueryCommandTokenRole.CommandOptionValue
+                && hasExplicitPrettyJsonOutput)
+            {
+                pretty = true;
                 continue;
             }
             if (ShouldPreserveQueryCommandToken(args, i))

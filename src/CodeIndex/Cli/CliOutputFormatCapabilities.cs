@@ -12,7 +12,7 @@ internal static class CliOutputFormatCapabilities
     [
         new("text", false, false, false),
         new("json", true, true, true),
-        new("count", true, false, false),
+        new("count", true, true, false),
         new("compact", true, true, false),
         new("grouped", true, true, false),
         new("csv", false, false, false),

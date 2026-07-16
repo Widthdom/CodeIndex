@@ -12,7 +12,7 @@ internal static partial class ProgramRunner
         hint = string.Empty;
         usage = string.Empty;
         if (args.Length < 2
-            || !TryResolveOutputValidationCommand(args, out _, out var commandName))
+            || !TryResolveOutputValidationCommand(args, out var commandIndex, out var commandName))
             return true;
 
         // Suggestions owns a structured JSON usage-error contract for export format conflicts.
@@ -25,7 +25,8 @@ internal static partial class ProgramRunner
         string? jsonStreamOption = null;
         var jsonRequested = false;
         var prettyRequested = false;
-        var usesSingleDocumentSearchMode = false;
+        var usesSingleDocumentJsonMode = false;
+        var hasExplicitPrettyJsonOutput = HasExplicitPrettyJsonOutputSelection(args);
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -34,13 +35,18 @@ internal static partial class ProgramRunner
                 break;
             var tokenRole = GetQueryCommandTokenRole(args, i);
 
-            if (string.Equals(commandName, "search", StringComparison.Ordinal)
-                && tokenRole != QueryCommandTokenRole.CommandOptionValue
-                && (arg is "--count" or "--count-by" or "--named-query" or "--list-recipes"
-                    || arg.StartsWith("--count-by=", StringComparison.Ordinal)
-                    || arg.StartsWith("--named-query=", StringComparison.Ordinal)))
+            if (tokenRole != QueryCommandTokenRole.CommandOptionValue
+                && (arg == "--count"
+                    || arg == "--summary-only"
+                    || (string.Equals(commandName, "search", StringComparison.Ordinal)
+                        && (arg is "--count-by" or "--unique" or "--group-by" or "--named-query" or "--list-recipes" or "--recipe"
+                            || arg.StartsWith("--count-by=", StringComparison.Ordinal)
+                            || arg.StartsWith("--unique=", StringComparison.Ordinal)
+                            || arg.StartsWith("--group-by=", StringComparison.Ordinal)
+                            || arg.StartsWith("--named-query=", StringComparison.Ordinal)
+                            || arg.StartsWith("--recipe=", StringComparison.Ordinal)))))
             {
-                usesSingleDocumentSearchMode = true;
+                usesSingleDocumentJsonMode = true;
             }
 
             if (arg == "--json")
@@ -62,8 +68,11 @@ internal static partial class ProgramRunner
             }
             if (arg == "--pretty")
             {
-                if (!ShouldPreserveQueryCommandToken(args, i))
+                if (tokenRole != QueryCommandTokenRole.CommandOptionValue
+                    && (hasExplicitPrettyJsonOutput || !ShouldPreserveQueryCommandToken(args, i)))
+                {
                     prettyRequested = true;
+                }
                 continue;
             }
             if (arg.StartsWith("--format=", StringComparison.Ordinal))
@@ -82,13 +91,19 @@ internal static partial class ProgramRunner
             }
         }
 
-        if (jsonRequested
-            && jsonStreamMode == null
-            && string.Equals(commandName, "search", StringComparison.Ordinal)
-            && !usesSingleDocumentSearchMode)
+        if (ShouldDeferOutputCombinationValidation(args, commandIndex, commandName, outputFormat, jsonStreamMode))
+            return true;
+
+        var commandUsesImplicitNdjson = string.Equals(commandName, "search", StringComparison.Ordinal)
+            || string.Equals(commandName, "files", StringComparison.Ordinal)
+            || string.Equals(commandName, "symbols", StringComparison.Ordinal);
+        if (jsonStreamMode == null
+            && (jsonRequested || string.Equals(outputFormat, "json", StringComparison.Ordinal))
+            && commandUsesImplicitNdjson
+            && !usesSingleDocumentJsonMode)
         {
             jsonStreamMode = "ndjson";
-            jsonStreamOption = "--json";
+            jsonStreamOption = jsonRequested ? "--json" : "--format json";
         }
 
         if (jsonRequested
@@ -135,6 +150,94 @@ internal static partial class ProgramRunner
         }
 
         return true;
+    }
+
+    private static bool HasExplicitPrettyJsonOutputSelection(string[] args)
+    {
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (arg == "--")
+                break;
+            if (GetQueryCommandTokenRole(args, i) == QueryCommandTokenRole.CommandOptionValue)
+                continue;
+
+            if (arg == "--json"
+                || arg.StartsWith("--json=", StringComparison.Ordinal)
+                || arg == JsonEnvelopeWrapper.EnvelopeFlag
+                || (arg.StartsWith("--format=", StringComparison.Ordinal)
+                    && CliOutputFormatCapabilities.TryGet(arg["--format=".Length..], out var inlineCapability)
+                    && inlineCapability.SupportsPretty))
+            {
+                return true;
+            }
+
+            if (arg == "--format"
+                && i + 1 < args.Length
+                && CliOutputFormatCapabilities.TryGet(args[i + 1], out var separatedCapability)
+                && separatedCapability.SupportsPretty)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ShouldDeferOutputCombinationValidation(
+        string[] args,
+        int commandIndex,
+        string commandName,
+        string? outputFormat,
+        string? jsonStreamMode)
+    {
+        if (jsonStreamMode is not null and not "ndjson" and not "array")
+            return true;
+
+        if (outputFormat != null && !CommandAcceptsOutputFormat(commandName, outputFormat))
+            return true;
+
+        var acceptedFlags = CliFlagSchema.GetAcceptedFlagNamesForCommand(commandName);
+        for (var i = commandIndex + 1; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (arg == "--")
+                break;
+            if (!arg.StartsWith("-", StringComparison.Ordinal)
+                || GetQueryCommandTokenRole(args, i) == QueryCommandTokenRole.CommandOptionValue)
+            {
+                continue;
+            }
+
+            var optionName = TryGetInlineOptionName(arg, out var inlineName)
+                ? inlineName
+                : arg;
+            if (!acceptedFlags.Contains(optionName) && !NonLogGlobalOptionNames.Contains(optionName))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool CommandAcceptsOutputFormat(string commandName, string outputFormat)
+    {
+        var usage = ConsoleUi.GetUsageLine(commandName);
+        if (usage == null)
+            return false;
+
+        const string formatPrefix = "--format <";
+        var formatStart = usage.IndexOf(formatPrefix, StringComparison.Ordinal);
+        if (formatStart < 0)
+            return false;
+
+        formatStart += formatPrefix.Length;
+        var formatEnd = usage.IndexOf('>', formatStart);
+        if (formatEnd < 0)
+            return false;
+
+        return usage[formatStart..formatEnd]
+            .Split('|', StringSplitOptions.RemoveEmptyEntries)
+            .Contains(outputFormat, StringComparer.Ordinal);
     }
 
     private static bool TryResolveOutputValidationCommand(
