@@ -11,8 +11,6 @@ public static partial class QueryCommandRunner
         JsonSerializerOptions jsonOptions,
         CancellationToken cancellationToken = default)
     {
-        int? jsonDoneTotalCount = null;
-        int? jsonDoneFirstOmittedResultBytes = null;
         var previewOptionError = ValidatePreviewOptions("search", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
         if (previewOptionError != null)
         {
@@ -564,13 +562,9 @@ public static partial class QueryCommandRunner
 
         var exactSubstringHint = SearchQueryAdvisor.BuildExactSubstringHint(options.Query, options.RawFts, exactSearch, options.Prefix);
         var ndjsonOptions = options.JsonOutputFormat == JsonOutputFormatNdjson ? GetCompactJsonOptions(jsonOptions) : jsonOptions;
-        int? jsonDoneCount = null;
-        var jsonDoneInterrupted = false;
-        var jsonDoneTruncated = false;
-        DbReader? jsonDoneReader = null;
+        string? jsonDoneTerminalLine = null;
         return WithDb(options, jsonOptions, reader =>
         {
-            jsonDoneReader = reader;
             if (options.GroupBy != null)
             {
                 return RunGroupedSearchCount(reader, options, jsonOptions, exactSearch, exactSubstringHint);
@@ -639,7 +633,6 @@ public static partial class QueryCommandRunner
             var ftsQueryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
             var displayRows = ReadSearchDisplayRows(reader, options, exactSearch);
             var selection = ApplySearchOutputSelection(displayRows, options);
-            jsonDoneTruncated = selection.LimitTruncated;
             displayRows = selection.Rows;
             if (displayRows.Count == 0)
             {
@@ -687,12 +680,18 @@ public static partial class QueryCommandRunner
                                     AddSearchPathHint(payload, pathHint);
                                     AddBareTokenSearchHint(payload, options);
                                 }).ToJsonString(ndjsonOptions);
-                            if (WouldExceedJsonByteLimit(options, bytesWritten: 0, payload, out var interrupted))
-                                jsonDoneInterrupted = interrupted;
-                            else
-                                Console.WriteLine(payload);
+                            var stream = WriteNdjsonStream(
+                                [new NdjsonOutputRecord(payload, CountsAsResult: false)],
+                                totalCount: 0,
+                                options,
+                                ndjsonOptions,
+                                reader,
+                                "search",
+                                limitTruncated: false,
+                                "Increase --limit or narrow the query to retrieve the remaining search results.");
+                            jsonDoneTerminalLine = stream.TerminalLine;
+                            return stream.ExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : stream.ExitCode;
                         }
-                        jsonDoneCount = 0;
                     }
                 }
                 else if (!options.Json)
@@ -713,11 +712,15 @@ public static partial class QueryCommandRunner
                 AttachSearchNextSteps(compactResults, options);
                 if (options.SearchFields != null)
                 {
-                    var projectedExitCode = WriteProjectedSearchResults(compactResults, options, jsonOptions, ndjsonOptions, out var projectedDoneCount, out var projectedInterrupted, out var projectedFirstOmittedResultBytes);
-                    jsonDoneCount = projectedDoneCount;
-                    jsonDoneInterrupted = projectedInterrupted;
-                    jsonDoneTotalCount = compactResults.Length;
-                    jsonDoneFirstOmittedResultBytes = projectedFirstOmittedResultBytes;
+                    var projectedExitCode = WriteProjectedSearchResults(
+                        compactResults,
+                        selection.OriginalCount,
+                        selection.LimitTruncated,
+                        options,
+                        jsonOptions,
+                        ndjsonOptions,
+                        reader,
+                        out jsonDoneTerminalLine);
                     return projectedExitCode;
                 }
                 if (options.OutputFormat == OutputFormatCompact)
@@ -765,11 +768,14 @@ public static partial class QueryCommandRunner
                 }
                 else
                 {
-                    WriteSearchNdjsonResults(compactResults, options, ndjsonOptions, out var emittedCount, out var interrupted, out var firstOmittedResultBytes);
-                    jsonDoneCount = emittedCount;
-                    jsonDoneInterrupted = interrupted;
-                    jsonDoneTotalCount = compactResults.Length;
-                    jsonDoneFirstOmittedResultBytes = firstOmittedResultBytes;
+                    return WriteSearchNdjsonResults(
+                        compactResults,
+                        selection.OriginalCount,
+                        selection.LimitTruncated,
+                        options,
+                        ndjsonOptions,
+                        reader,
+                        out jsonDoneTerminalLine);
                 }
             }
             else
@@ -798,8 +804,8 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.Success;
         }, exitCode =>
         {
-            if (options.Json && options.JsonOutputFormat == JsonOutputFormatNdjson && jsonDoneCount.HasValue && !options.ResultsOnly)
-                WriteJsonStreamDone(jsonDoneCount.Value, ndjsonOptions, jsonDoneInterrupted, jsonDoneTruncated, jsonDoneReader, options.MaxJsonBytes, jsonDoneFirstOmittedResultBytes, jsonDoneTotalCount - jsonDoneCount);
+            if (options.Json && options.JsonOutputFormat == JsonOutputFormatNdjson && jsonDoneTerminalLine != null && !options.ResultsOnly)
+                Console.WriteLine(jsonDoneTerminalLine);
         });
     }
 }

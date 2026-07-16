@@ -17,6 +17,7 @@ public static class CommandExitCodes
     public const int CancelledBySignal = 8;
     public const int InstallError = 9;
     public const int RuntimeError = 10;
+    public const int PartialResult = 11;
     public const int UnhandledException = 99;
     public const int ExUsage = 64;
     public const int Interrupted = CancelledBySignal;

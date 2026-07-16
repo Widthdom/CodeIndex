@@ -429,19 +429,27 @@ internal sealed record QueryPathErrorJsonResult(
     [property: JsonPropertyName("error")] string Error);
 
 internal sealed record JsonStreamDoneResult(
+    [property: JsonPropertyName("terminal_record")] bool TerminalRecord,
     [property: JsonPropertyName("done")] bool Done,
     [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("total_count")] int TotalCount,
     [property: JsonPropertyName("interrupted")] bool Interrupted,
     [property: JsonPropertyName("truncated")] bool Truncated,
     [property: JsonPropertyName("has_more")] bool HasMore,
     [property: JsonPropertyName("interruption_reason")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? InterruptionReason = null,
+    [property: JsonPropertyName("truncation_reason")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TruncationReason = null,
+    [property: JsonPropertyName("applied_limit")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? AppliedLimit = null,
     [property: JsonPropertyName("max_json_bytes")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? MaxJsonBytes = null,
     [property: JsonPropertyName("first_omitted_result_bytes")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? FirstOmittedResultBytes = null,
     [property: JsonPropertyName("omitted_count")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? OmittedCount = null,
+    [property: JsonPropertyName("omitted_record_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? OmittedRecordCount = null,
     [property: JsonPropertyName("recovery_guidance")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RecoveryGuidance = null,
     [property: JsonPropertyName("read_only_fallback")]

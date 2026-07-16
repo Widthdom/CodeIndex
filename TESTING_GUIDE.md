@@ -604,6 +604,7 @@ For background log or metrics sinks, use explicit writer-entry/release signals a
 - Prefer `ConsoleCapture` for simple stdout/stderr capture, and lock direct console mutations with `TestConsoleLock.Gate`.
 - Assert exit codes with `CommandExitCodes`.
 - For JSON output, parse it with `JsonDocument` instead of asserting raw strings.
+- For bounded NDJSON streams, parse the final `terminal_record`, count UTF-8 bytes including newlines, and assert partial exit `11` plus the explicit `--allow-partial` exit-`0` opt-in.
 - For rejected checkpoint names, assert the usage exit/error code and syntax hint together, and verify that no checkpoint directory was created.
 
 ### JSON `--json` output snapshots
@@ -1249,6 +1250,7 @@ background の log / metrics sink は、sleep や狭い stopwatch 閾値では�
 - 単純な stdout/stderr capture では `ConsoleCapture` を優先し、直接コンソールを差し替える場合は `TestConsoleLock.Gate` で直列化する。
 - 終了コードは `CommandExitCodes` で検証する。
 - JSON 出力は生文字列比較ではなく `JsonDocument` で解析して検証する。
+- 上限付き NDJSON stream は最後の `terminal_record` を解析し、改行を含む UTF-8 byte 数を数え、partial 終了コード `11` と明示的な `--allow-partial` による終了コード `0` の opt-in を検証する。
 - 拒否される checkpoint 名では usage の終了コード / error code と構文 hint を併せて検証し、checkpoint directory が作成されていないことも確認する。
 
 ### JSON `--json` 出力 snapshot
