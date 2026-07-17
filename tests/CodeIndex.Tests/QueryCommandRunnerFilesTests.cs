@@ -1720,6 +1720,16 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("data_dir_mode", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
         Assert.Contains("unknown_extension_file_count", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
         Assert.Contains("path_case_sensitive", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("sqlite_connection_policy", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
+
+        var (policyExitCode, policyStdout, policyStderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", "sqlite_connection_policy", "--json"],
+            _jsonOptions));
+        Assert.Equal(CommandExitCodes.Success, policyExitCode);
+        Assert.Equal(string.Empty, policyStderr);
+        using var policyDocument = ParseJsonOutput(policyStdout);
+        Assert.Equal("sqlite_connection_policy", policyDocument.RootElement.GetProperty("field").GetString());
+        Assert.Contains("immutable-URI", policyDocument.RootElement.GetProperty("ready").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]

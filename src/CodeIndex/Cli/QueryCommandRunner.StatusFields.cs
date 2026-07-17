@@ -151,6 +151,12 @@ public static partial class QueryCommandRunner
                 "entries identify the failed `operation`, database `target`, stable `reason`, support-safe message, and `recommended_action` without exposing the database path.",
                 $"Follow each `recommended_action`, or set `{DatabasePermissionPolicy.EnvironmentVariable}={DatabasePermissionPolicy.StrictName}` when permission hardening must be mandatory."),
             new(
+                StatusResult.SqliteConnectionPolicyJsonFieldName,
+                "SQLite connection policy",
+                "the object reports the active/open modes, pooling and immutable-URI choices, command timeout, cancellation requirement, and WAL snapshot-risk diagnostics used by this status read.",
+                "read-only fallback or stale-snapshot risk fields identify when the preferred query-only connection path could not be used safely or may omit hot WAL content.",
+                "Inspect the nested policy and WAL diagnostics; avoid explicit immutable mode for a hot WAL database, or rerun after the writer checkpoints and closes."),
+            new(
                 "unknown_extension_file_count",
                 "Unknown extension inventory",
                 "`0` means the last successful full scan found no non-empty unknown extensions; positive values summarize skipped files with extensions that no language recognized.",

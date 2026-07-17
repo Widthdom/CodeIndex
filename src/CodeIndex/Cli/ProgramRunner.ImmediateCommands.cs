@@ -39,6 +39,14 @@ internal static partial class ProgramRunner
             return true;
         }
 
+        if (args[0] == "help")
+        {
+            exitCode = RunHelpCommand(args[1..], context.JsonOptions);
+            GlobalToolLog.Info($"command_complete exit_code={exitCode} conventional_help=true");
+            EmitCommandMetric("help", args, context.StartTimestamp, context.Stopwatch, exitCode);
+            return true;
+        }
+
         if (args[0] == "--help-flags")
         {
             ConsoleUi.PrintFlagUsage(showBanner: true);
@@ -66,6 +74,95 @@ internal static partial class ProgramRunner
 
         exitCode = CommandExitCodes.Success;
         return false;
+    }
+
+    private static int RunHelpCommand(string[] helpArgs, System.Text.Json.JsonSerializerOptions jsonOptions)
+    {
+        const string usage = "cdidx help <command> [subcommand]";
+        var wantsJson = ContainsJsonOutputFlag(helpArgs);
+        if (helpArgs.Length == 0 || helpArgs[0].StartsWith("-", StringComparison.Ordinal))
+        {
+            return CommandErrorWriter.WriteJsonOrHuman(
+                wantsJson,
+                jsonOptions,
+                "help requires a command name.",
+                CommandExitCodes.UsageError,
+                "run `cdidx --help` to list commands, then rerun as `cdidx help <command>`.",
+                usage,
+                errorCode: "help_command_required");
+        }
+
+        var requestedCommand = helpArgs[0];
+        if (!CliCommandCatalog.TryResolvePublicCommand(requestedCommand, out var command))
+        {
+            var suggestion = ConsoleUi.FindClosestCommand(requestedCommand);
+            var hint = suggestion is null
+                ? "run `cdidx --help` to list available commands."
+                : $"Did you mean: `cdidx help {suggestion}`?";
+            return CommandErrorWriter.WriteJsonOrHuman(
+                wantsJson,
+                jsonOptions,
+                $"unknown help command `{ConsoleUi.FormatBoundedValue(requestedCommand)}`.",
+                CommandExitCodes.UsageError,
+                hint,
+                usage,
+                errorCode: "help_command_unknown");
+        }
+
+        if (helpArgs.Length > 2)
+        {
+            return CommandErrorWriter.WriteJsonOrHuman(
+                wantsJson,
+                jsonOptions,
+                $"help accepts at most one nested subcommand; got {ConsoleUi.Counted(helpArgs.Length - 2, "extra argument")}.",
+                CommandExitCodes.UsageError,
+                "rerun with `cdidx help <command>` or `cdidx help <command> <subcommand>`.",
+                usage,
+                errorCode: "help_argument_count_invalid");
+        }
+
+        var helpTarget = command;
+        if (helpArgs.Length == 2)
+        {
+            var requestedSubcommand = helpArgs[1];
+            var subcommand = CliCommandCatalog.NormalizeSubcommandName(command, requestedSubcommand);
+            var subcommands = CliCommandCatalog.GetSubcommands(command);
+            if (!subcommands.Contains(subcommand, StringComparer.Ordinal))
+            {
+                var suggestion = ConsoleUi.FindClosestMatch(requestedSubcommand, subcommands);
+                var hint = suggestion is null
+                    ? $"run `cdidx help {command}` to list its accepted forms."
+                    : $"Did you mean: `cdidx help {command} {suggestion}`?";
+                return CommandErrorWriter.WriteJsonOrHuman(
+                    wantsJson,
+                    jsonOptions,
+                    $"unknown subcommand `{ConsoleUi.FormatBoundedValue(requestedSubcommand)}` for help command `{ConsoleUi.FormatBoundedValue(command)}`.",
+                    CommandExitCodes.UsageError,
+                    hint,
+                    usage,
+                    errorCode: "help_subcommand_unknown");
+            }
+
+            if (command == "suggestions" && subcommand == "add")
+            {
+                SuggestionsCommandRunner.PrintAddHelp();
+                return CommandExitCodes.Success;
+            }
+
+            helpTarget = ResolveSubcommandHelpName([command, subcommand, "--help"]);
+        }
+
+        if (ConsoleUi.PrintCommandUsage(helpTarget))
+            return CommandExitCodes.Success;
+
+        return CommandErrorWriter.WriteJsonOrHuman(
+            wantsJson,
+            jsonOptions,
+            $"help metadata is unavailable for `{ConsoleUi.FormatBoundedValue(command)}`.",
+            CommandExitCodes.UsageError,
+            "run `cdidx --help` to list available command syntax.",
+            usage,
+            errorCode: "help_metadata_unavailable");
     }
 
     private static bool TryRunStandaloneUtilityCommand(string[] args, CommandRunContext context, out int exitCode)

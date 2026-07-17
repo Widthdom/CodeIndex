@@ -66,14 +66,6 @@ internal static class ConsoleCompletionRenderer
         "definition", "callers", "callees", "symbols", "files", "map", "impact", "deps", "unused",
     ];
 
-    private static readonly (string Command, string[] Subcommands)[] CommandSubcommands =
-    [
-        ("hooks", ["install", "uninstall", "status"]),
-        ("workspace", ["list", "status", "use", "current"]),
-        ("config", ["show"]),
-        ("db", ["integrity", "schema", "prune", "checkpoint", "checkpoints", "restore", "restore-backups"]),
-    ];
-
     private static string GetBashCompletions()
     {
         var cmds = string.Join(" ", Commands);
@@ -98,8 +90,13 @@ internal static class ConsoleCompletionRenderer
         sb.Append("    fi\n");
         sb.Append("\n");
         sb.Append("    case \"$prev\" in\n");
-        foreach (var (command, subcommands) in CommandSubcommands)
-            sb.Append($"        {command}) COMPREPLY=($(compgen -W \"{string.Join(' ', subcommands)}\" -- \"$cur\")); return ;;\n");
+        foreach (var (command, subcommands) in CliCommandCatalog.CommandSubcommands)
+        {
+            var candidates = string.Join(' ', subcommands);
+            if (CliCommandCatalog.HasOptionalSubcommand(command))
+                candidates += $" {BuildBashFlagList(command)}";
+            sb.Append($"        {command}) COMPREPLY=($(compgen -W \"{candidates}\" -- \"$cur\")); return ;;\n");
+        }
         sb.Append("        --db|--path|--exclude-path|--open-issues|--output|-o|--metrics) COMPREPLY=($(compgen -f -- \"$cur\")) ;;\n");
         sb.Append("        --color) COMPREPLY=($(compgen -W \"auto always never\" -- \"$cur\")) ;;\n");
         sb.Append("        --palette) COMPREPLY=($(compgen -W \"basic 256 truecolor\" -- \"$cur\")) ;;\n");
@@ -206,7 +203,7 @@ internal static class ConsoleCompletionRenderer
         sb.Append("        args)\n");
         sb.Append("            local subcmd\n");
         sb.Append("            subcmd=$words[2]\n");
-        foreach (var (command, subcommands) in CommandSubcommands)
+        foreach (var (command, subcommands) in CliCommandCatalog.CommandSubcommands)
         {
             sb.Append($"            if [[ $subcmd == {command} && $CURRENT -le 3 ]]; then\n");
             sb.Append("                local -a subcommands\n");
@@ -214,6 +211,8 @@ internal static class ConsoleCompletionRenderer
             sb.Append($"                    {string.Join(' ', subcommands.Select(subcommand => $"'{subcommand}:{subcommand} subcommand'"))}\n");
             sb.Append("                )\n");
             sb.Append("                _describe 'subcommand' subcommands\n");
+            if (CliCommandCatalog.HasOptionalSubcommand(command))
+                AppendZshArguments(sb, BuildZshArgsForCommand(command, langs, kinds));
             sb.Append("                return\n");
             sb.Append("            fi\n");
         }
@@ -343,7 +342,7 @@ internal static class ConsoleCompletionRenderer
         };
         foreach (var cmd in Commands)
             lines.Add($"complete -c cdidx -n '__fish_use_subcommand' -a '{cmd}' -d '{cmd} command'");
-        foreach (var (command, subcommands) in CommandSubcommands)
+        foreach (var (command, subcommands) in CliCommandCatalog.CommandSubcommands)
             lines.Add($"complete -c cdidx -n '__fish_seen_subcommand_from {command}' -a '{string.Join(' ', subcommands)}' -d '{command} subcommand'");
         lines.Add("complete -c cdidx -n '__fish_use_subcommand' -l help -d 'Show help'");
         lines.Add("complete -c cdidx -n '__fish_use_subcommand' -l version -d 'Show version'");
@@ -439,8 +438,12 @@ internal static class ConsoleCompletionRenderer
         sb.AppendLine("    }");
         sb.AppendLine($"    $topLevelFlags = @({topLevelFlags})");
         sb.AppendLine("    $subcommands = @{");
-        foreach (var (command, subcommands) in CommandSubcommands)
+        foreach (var (command, subcommands) in CliCommandCatalog.CommandSubcommands)
             sb.AppendLine($"        '{EscapePowerShellSingleQuoted(command)}' = @({FormatPowerShellArray(subcommands)})");
+        sb.AppendLine("    }");
+        sb.AppendLine("    $optionalSubcommandFlags = @{");
+        foreach (var command in CliCommandCatalog.OptionalSubcommandCommands)
+            sb.AppendLine($"        '{EscapePowerShellSingleQuoted(command)}' = @({FormatPowerShellArray(BuildPowerShellFlagList(command))})");
         sb.AppendLine("    }");
         sb.AppendLine("    $elements = @($commandAst.CommandElements)");
         sb.AppendLine("    $tokens = @($elements | ForEach-Object { $_.Extent.Text })");
@@ -472,7 +475,9 @@ internal static class ConsoleCompletionRenderer
         sb.AppendLine("        $subcmdIndex = [Array]::IndexOf($tokens, $subcmd)");
         sb.AppendLine("        $nested = $tokens | Select-Object -Skip ($subcmdIndex + 1) | Where-Object { $_ -and -not $_.StartsWith('-') } | Select-Object -First 1");
         sb.AppendLine("        if (-not $nested -or ($tokens.Count -le ($subcmdIndex + 2) -and -not $afterLastToken)) {");
-        sb.AppendLine("            $subcommands[$subcmd] | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ 'ParameterValue' }");
+        sb.AppendLine("            $candidates = @($subcommands[$subcmd])");
+        sb.AppendLine("            if ($optionalSubcommandFlags.ContainsKey($subcmd)) { $candidates += $optionalSubcommandFlags[$subcmd] }");
+        sb.AppendLine("            $candidates | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ $(if ($_.StartsWith('-')) { 'ParameterName' } else { 'ParameterValue' }) }");
         sb.AppendLine("            return");
         sb.AppendLine("        }");
         sb.AppendLine("    }");
