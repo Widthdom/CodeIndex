@@ -260,6 +260,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   exercise the same in-process cancellation paths used after Ctrl-C/SIGINT wiring, including scan-time cancellation, so interrupted index runs keep returning the canonical JSON error contract.
 - `IndexCommandRunnerTests.RunOptimizeFts_DryRunPreviewsWithoutWritingThenOptimizeMutates_Issue4577`, `RunOptimizeFts_LockHeld_ReturnsStructuredErrorWithoutMutation`, and `RunOptimizeFts_ReadOnlyUri_ReturnsStructuredErrorWithoutMutation`
   share seeded databases to verify that optimize dry-run reports sizes, readiness, lock state, recommendations, and planned work while preserving the source bytes and creating no lock artifacts; the same fixtures retain the writable optimize and lock/read-only URI mutation guards.
+  `ConsoleUiTests.PrintUsage_WithoutBanner_HidesAsciiArtAndEasterEggFlags` keeps the optimize dry-run flag visible in full CLI usage.
 - `IndexCommandRunnerTests.Run_DryRunWithRebuildAndMemoryTrace_SkipsConfirmationAndPreservesWorkspace_Issue4580`
   runs a rebuild preview as redirected input without `--yes`, verifies live memory phases and samples, and byte-compares the complete project file set before and after so source, DB, WAL, SHM, and other workspace artifacts cannot be changed silently.
 - `IndexCommandRunnerTests.SymbolExtractionWorker_LegacyEnvironmentHooksAreIgnored_Issue3398`
@@ -933,6 +934,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   Ctrl-C/SIGINT 配線後に使われる in-process cancellation 経路を、scan 中のキャンセルも含めて検証し、interrupted index run が標準の JSON error contract を返し続けることを固定する。
 - `IndexCommandRunnerTests.RunOptimizeFts_DryRunPreviewsWithoutWritingThenOptimizeMutates_Issue4577`、`RunOptimizeFts_LockHeld_ReturnsStructuredErrorWithoutMutation`、`RunOptimizeFts_ReadOnlyUri_ReturnsStructuredErrorWithoutMutation`
   seed 済み database を共有し、optimize dry-run が size、readiness、lock state、推奨、planned work を報告しつつ source byte を保持し、lock artifact を作成しないことを検証する。同じ fixture で、書き込み版 optimize と lock/read-only URI の mutation guard も維持する。
+  `ConsoleUiTests.PrintUsage_WithoutBanner_HidesAsciiArtAndEasterEggFlags` は、full CLI usage に optimize dry-run flag が表示され続けることを固定します。
 - `IndexCommandRunnerTests.Run_DryRunWithRebuildAndMemoryTrace_SkipsConfirmationAndPreservesWorkspace_Issue4580`
   redirect input で `--yes` なしの rebuild preview を実行し、live memory phase/sample を検証します。実行前後の project file set 全体を byte 比較し、source、DB、WAL、SHM、その他 workspace artifact が暗黙に変更されないことも固定します。
 - `IndexCommandRunnerTests.SymbolExtractionWorker_LegacyEnvironmentHooksAreIgnored_Issue3398`
