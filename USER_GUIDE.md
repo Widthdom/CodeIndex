@@ -502,7 +502,8 @@ metadata as `returned`, `total`, `omitted`, and `truncated`. Their `count` is th
 number of emitted issue rows, while `summary` is computed over all matching
 issues before `--limit` and is grouped by kind, severity, origin, category, and
 actionability. SARIF exposes the same pagination fields under each run's
-`properties`; each result maps `info` to `note`, preserves `warning` / `error`,
+`properties`, together with `issues_table_available` and `degraded` so unavailable
+legacy validation data is not mistaken for an authoritative zero; each result maps `info` to `note`, preserves `warning` / `error`,
 and carries the original `severity`, `origin`, `category`, and `actionable`
 values in result properties. Use `--format compact` when an agent or pipeline
 only needs that summary plus compact issue rows.
@@ -3480,7 +3481,8 @@ validation issue row には `category` と `actionable` も入り、想定済み
 pagination metadata として `returned`、`total`、`omitted`、`truncated` が入ります。`count` は
 実際に出力した issue row 数で、`summary` は `--limit` を適用する前の全 matching issue を対象に
 kind、severity、origin、category、actionability ごとに集計します。SARIF では同じ pagination field が
-各 run の `properties` に入り、各 result は `info` を `note` に mapping し、`warning` / `error` は
+各 run の `properties` に入り、`issues_table_available` と `degraded` も併記されるため、利用できない
+legacy validation data が authoritative な 0 件と誤認されることはありません。各 result は `info` を `note` に mapping し、`warning` / `error` は
 維持したうえで、元の `severity`、`origin`、`category`、`actionable` を result properties に保持します。
 agent や pipeline が summary と compact な issue row だけを必要とする場合は `--format compact` を使えます。`--severity warning`
 を使うと、informational な source literal を隠して、エンコーディング破損の

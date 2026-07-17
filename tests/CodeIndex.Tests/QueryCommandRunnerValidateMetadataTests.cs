@@ -204,11 +204,42 @@ public partial class QueryCommandRunnerTests
 
         using var limitedSarifDocument = ParseJsonOutput(limitedSarifStdout);
         var limitedSarifRun = limitedSarifDocument.RootElement.GetProperty("runs")[0];
-        AssertValidatePageMetadata(limitedSarifRun.GetProperty("properties"), returned: 1, total: 2, omitted: 1, truncated: true);
+        var limitedSarifProperties = limitedSarifRun.GetProperty("properties");
+        AssertValidatePageMetadata(limitedSarifProperties, returned: 1, total: 2, omitted: 1, truncated: true);
+        Assert.True(limitedSarifProperties.GetProperty("issues_table_available").GetBoolean());
+        Assert.False(limitedSarifProperties.GetProperty("degraded").GetBoolean());
         Assert.Equal(1, limitedSarifRun.GetProperty("results").GetArrayLength());
 
         using var countDocument = ParseJsonOutput(countStdout);
         Assert.Equal(2, countDocument.RootElement.GetProperty("count").GetInt32());
+    }
+
+    [Fact]
+    public void RunValidate_EmptySarifReportsUnavailableIssueDataAsDegraded_Issue4583()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_validate_sarif_degraded_4583");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "DROP TABLE file_issues";
+            command.ExecuteNonQuery();
+        }
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+            ["--db", dbPath, "--format", "sarif"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var run = document.RootElement.GetProperty("runs")[0];
+        var properties = run.GetProperty("properties");
+        AssertValidatePageMetadata(properties, returned: 0, total: 0, omitted: 0, truncated: false);
+        Assert.False(properties.GetProperty("issues_table_available").GetBoolean());
+        Assert.True(properties.GetProperty("degraded").GetBoolean());
+        Assert.Empty(run.GetProperty("results").EnumerateArray());
     }
 
     private static void AssertValidatePageMetadata(

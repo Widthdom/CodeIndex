@@ -90,8 +90,7 @@ public static partial class QueryCommandRunner
                     }
                     if (options.OutputFormat == OutputFormatSarif)
                     {
-                        var runProperties = new JsonObject();
-                        AddValidatePaginationMetadata(runProperties, returned: 0, total: 0);
+                        var runProperties = BuildValidateSarifRunProperties(returned: 0, total: 0, issuesAvailable);
                         WriteSarif(Array.Empty<SarifLocation>(), jsonOptions, runProperties: runProperties);
                         return CommandExitCodes.Success;
                     }
@@ -135,8 +134,7 @@ public static partial class QueryCommandRunner
                 }
                 if (options.OutputFormat == OutputFormatSarif)
                 {
-                    var runProperties = new JsonObject();
-                    AddValidatePaginationMetadata(runProperties, issues.Count, allIssues.Count);
+                    var runProperties = BuildValidateSarifRunProperties(issues.Count, allIssues.Count, issuesAvailable);
                     WriteSarif(issues.Select(ToValidateSarifLocation), jsonOptions, runProperties: runProperties);
                     return CommandExitCodes.Success;
                 }
@@ -248,6 +246,17 @@ public static partial class QueryCommandRunner
         payload["total"] = total;
         payload["omitted"] = omitted;
         payload["truncated"] = omitted > 0;
+    }
+
+    private static JsonObject BuildValidateSarifRunProperties(int returned, int total, bool issuesAvailable)
+    {
+        var properties = new JsonObject
+        {
+            ["issues_table_available"] = issuesAvailable,
+            ["degraded"] = !issuesAvailable,
+        };
+        AddValidatePaginationMetadata(properties, returned, total);
+        return properties;
     }
 
     private static SarifLocation ToValidateSarifLocation(FileIssue issue)
