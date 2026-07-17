@@ -320,6 +320,18 @@ public static class DbPathResolver
     public static string? TryReadIndexedHeadSha(string dbPath)
         => TryReadMetaString(dbPath, CodeIndex.Database.DbContext.IndexedHeadShaMetaKey);
 
+    public static DateTimeOffset? TryReadIndexedHeadTimestamp(string dbPath)
+    {
+        var raw = TryReadMetaString(dbPath, CodeIndex.Database.DbContext.IndexedHeadTimestampMetaKey);
+        return DateTimeOffset.TryParse(
+            raw,
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+            out var value)
+            ? value.ToUniversalTime()
+            : null;
+    }
+
     public static bool TryHasIndexedHeadBranchStamp(string dbPath)
         => TryMetaKeyExists(dbPath, CodeIndex.Database.DbContext.IndexedHeadBranchMetaKey);
 

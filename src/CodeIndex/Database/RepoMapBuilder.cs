@@ -79,7 +79,8 @@ internal sealed class RepoMapBuilder
     /// </summary>
     public RepoMapResult Build(int limit, string? lang, IReadOnlyList<string>? pathPatterns,
         IReadOnlyList<string>? excludePathPatterns, bool excludeTests, double minEntrypointConfidence,
-        Func<(DateTime? IndexedAt, DateTime? LatestModified)> getFreshness)
+        Func<(DateTime? IndexedAt, DateTime? LatestModified)> getFreshness,
+        int? moduleDepth = null, int? oversizedLineThreshold = null, long? oversizedByteThreshold = null)
     {
         // Query file stats first, then workspace freshness — preserves original
         // ordering so concurrent indexing cannot make workspace timestamps older
@@ -103,7 +104,10 @@ internal sealed class RepoMapBuilder
         var aggregate = BuildAggregate(
             EnumerateFileStats(lang, pathPatterns, excludePathPatterns, excludeTests),
             Math.Max(limit, 0),
-            javaModuleDescriptors);
+            javaModuleDescriptors,
+            moduleDepth,
+            oversizedLineThreshold,
+            oversizedByteThreshold);
         var freshness = getFreshness();
         var result = new RepoMapResult
         {
@@ -123,6 +127,8 @@ internal sealed class RepoMapBuilder
             ReferenceRichFiles = BuildReferenceRichFileResults(aggregate.ReferenceRichFiles),
             Entrypoints = GetEntrypoints(aggregate.EntrypointFallbacks, limit, lang, pathPatterns, excludePathPatterns, excludeTests, minEntrypointConfidence, indexedPathComparer),
             GraphTableAvailable = _hasReferencesTable,
+            IssueDraftCandidateCount = aggregate.IssueDraftCandidateCount,
+            IssueDraftCandidates = BuildLargestFileResults(aggregate.IssueDraftCandidates),
         };
         txn.Commit();
         return result;
@@ -176,7 +182,10 @@ internal sealed class RepoMapBuilder
     private static RepoMapAggregate BuildAggregate(
         IEnumerable<RepoFileStat> fileStats,
         int limit,
-        IReadOnlyDictionary<string, string> moduleByDescriptorPath)
+        IReadOnlyDictionary<string, string> moduleByDescriptorPath,
+        int? moduleDepth,
+        int? oversizedLineThreshold,
+        long? oversizedByteThreshold)
     {
         var languages = new Dictionary<string, RepoLanguageResult>(StringComparer.Ordinal);
         var modules = new Dictionary<string, RepoModuleResult>(StringComparer.Ordinal);
@@ -189,6 +198,7 @@ internal sealed class RepoMapBuilder
             SymbolRichFiles = [],
             ReferenceRichFiles = [],
             EntrypointFallbacks = [],
+            IssueDraftCandidates = [],
         };
 
         foreach (var file in fileStats)
@@ -216,7 +226,7 @@ internal sealed class RepoMapBuilder
 
             AddFileStats(language, file);
 
-            var moduleKey = GetModuleKey(file);
+            var moduleKey = GetModuleKey(file, moduleDepth);
             if (!modules.TryGetValue(moduleKey, out var module))
             {
                 module = new RepoModuleResult { Module = moduleKey };
@@ -230,6 +240,17 @@ internal sealed class RepoMapBuilder
             AddBounded(aggregate.LargestFiles, scoredSummary, limit, CompareLargestFiles);
             AddBounded(aggregate.SymbolRichFiles, scoredSummary, limit, CompareSymbolRichFiles);
             AddBounded(aggregate.ReferenceRichFiles, scoredSummary, limit, CompareReferenceRichFiles);
+
+            if ((oversizedLineThreshold.HasValue && file.Lines >= oversizedLineThreshold.Value)
+                || (oversizedByteThreshold.HasValue && file.Size >= oversizedByteThreshold.Value))
+            {
+                aggregate.IssueDraftCandidateCount++;
+                AddBounded(
+                    aggregate.IssueDraftCandidates,
+                    CreateUnscoredFileSummary(file),
+                    limit,
+                    CompareLargestFiles);
+            }
 
             var fallback = ScoreEntrypointFileFallback(file.Path, file.Lang, file.SymbolCount, file.ReferenceCount);
             if (fallback.Score > 0)
@@ -523,12 +544,24 @@ internal sealed class RepoMapBuilder
         };
     }
 
-    private static string GetModuleKey(RepoFileStat file)
+    private static string GetModuleKey(RepoFileStat file, int? moduleDepth)
+    {
+        var moduleKey = GetNaturalModuleKey(file);
+        if (!moduleDepth.HasValue)
+            return moduleKey;
+        if (moduleDepth.Value <= 0)
+            return ".";
+
+        var segments = moduleKey.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length <= moduleDepth.Value
+            ? moduleKey
+            : string.Join('/', segments.Take(moduleDepth.Value));
+    }
+
+    private static string GetNaturalModuleKey(RepoFileStat file)
     {
         if (!string.IsNullOrWhiteSpace(file.ModuleName))
-        {
             return file.ModuleName;
-        }
 
         var segments = file.Path.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (segments.Length == 0)
@@ -855,5 +888,7 @@ internal sealed class RepoMapBuilder
         public required List<RepoFileSummaryResult> SymbolRichFiles { get; init; }
         public required List<RepoFileSummaryResult> ReferenceRichFiles { get; init; }
         public required List<RepoEntrypointResult> EntrypointFallbacks { get; init; }
+        public int IssueDraftCandidateCount { get; set; }
+        public required List<RepoFileSummaryResult> IssueDraftCandidates { get; init; }
     }
 }

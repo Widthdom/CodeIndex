@@ -1129,26 +1129,18 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
-            var map = reader.GetRepoMap(limit, lang, pathPatterns, excludePaths, excludeTests, minEntrypointConfidence);
+            var map = reader.GetRepoMap(
+                limit,
+                lang,
+                pathPatterns,
+                excludePaths,
+                excludeTests,
+                minEntrypointConfidence,
+                moduleDepth: depth);
             WorkspaceMetadataEnricher.Enrich(map, _dbPath, _dbPathExplicit);
             var structured = JsonSerializer.SerializeToNode(map, _jsonOptions)!.AsObject();
             if (depth is >= 0)
-            {
-                var modules = structured["modules"] as JsonArray;
-                if (modules != null)
-                {
-                    var kept = new JsonArray(modules
-                        .Where(node =>
-                        {
-                            var module = node?["module"]?.GetValue<string>() ?? string.Empty;
-                            return module.Split('/', StringSplitOptions.RemoveEmptyEntries).Length <= depth.Value;
-                        })
-                        .Select(node => node!.DeepClone())
-                        .ToArray());
-                    structured["modules"] = kept;
-                }
                 structured["depth"] = depth.Value;
-            }
             if (sections.Count > 0)
                 ApplyMapSectionFilter(structured, sections);
             structured["limit"] = limit;
@@ -1173,7 +1165,9 @@ public partial class McpServer
         {
             "api_version", "fileCount", "totalLines", "totalSymbols", "totalReferences",
             "indexedAt", "latestModified", "workspaceIndexedAt", "workspaceLatestModified",
-            "projectRoot", "gitHead", "gitIsDirty", "indexed_head_commit", "worktree_head_changed",
+            "projectRoot", "gitHead", "gitIsDirty", "indexed_head_commit", "indexed_head_sha",
+            "indexed_head_branch", "indexed_head_timestamp", "commits_ahead_of_indexed_head",
+            "worktree_head_changed", "head_freshness",
             "graphTableAvailable", "limit", "lang", "path", "excludeTests", "depth", "minEntrypointConfidence",
         };
         foreach (var section in sections)

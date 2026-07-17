@@ -56,7 +56,17 @@ public static partial class QueryCommandRunner
         {
             var compactLimit = GetCompactSectionLimit(options);
             var mapLimit = options.Compact ? GetCompactSourceLimit(compactLimit) : options.Limit;
-            var map = reader.GetRepoMap(mapLimit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.MinEntrypointConfidence);
+            var evaluateIssueDraftCandidates = options.OutputFormat == OutputFormatIssueDrafts;
+            var map = reader.GetRepoMap(
+                mapLimit,
+                options.Lang,
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests,
+                options.MinEntrypointConfidence,
+                moduleDepth: options.ContextAfterExplicit ? options.ContextAfter : null,
+                oversizedLineThreshold: evaluateIssueDraftCandidates ? MapIssueDraftLineThreshold : null,
+                oversizedByteThreshold: evaluateIssueDraftCandidates ? MapIssueDraftByteThreshold : null);
             var generatedFileCountExcluded = options.IncludeGenerated
                 ? 0
                 : !reader.GeneratedFileFilterAvailable
@@ -68,8 +78,6 @@ public static partial class QueryCommandRunner
                     excludeTests: options.ExcludeTests,
                     generatedOnly: true).Count;
             WorkspaceMetadataEnricher.Enrich(map, options.DbPath, options.DbPathExplicit);
-            if (options.ContextAfterExplicit)
-                ApplyRepoMapDepth(map, options.ContextAfter);
             var compactTruncation = options.Compact ? ApplyRepoMapCompactCaps(map, compactLimit, options) : null;
 
             // Return not-found only when a narrowing filter is active and produces zero files.
@@ -174,7 +182,8 @@ public static partial class QueryCommandRunner
                     WriteRepoMapSection("Symbol-rich files", map.SymbolRichFiles.Select(item => $"{item.Path}  [{item.SymbolCount} syms, {item.ReferenceCount} refs]"));
                     WriteRepoMapSection("Reference-rich files", map.ReferenceRichFiles.Select(item => $"{item.Path}  [{item.ReferenceCount} refs, {item.SymbolCount} syms]"));
                     WriteRepoMapSection("Entrypoints", map.Entrypoints.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.Line}  [score {item.Score}, confidence {item.Confidence:0.###}, {item.MatchType}, hint #{item.HintRank}]"));
-                    WriteLargeFileDecompositionPlanHintIfAvailable(options);
+                    if (!RepoMapHasNarrowingScope(options))
+                        WriteLargeFileDecompositionPlanHintIfAvailable(options);
                 }
                 if (MapSectionEnabled(options, "metrics"))
                     WriteRepoMapSection("Largest files", map.LargestFiles.Select(item =>
@@ -226,16 +235,6 @@ public static partial class QueryCommandRunner
         return CommandExitCodes.Success;
     }
 
-    private static void ApplyRepoMapDepth(RepoMapResult map, int depth)
-    {
-        map.Modules = map.Modules
-            .Where(module => GetPathDepth(module.Module) <= depth)
-            .ToList();
-    }
-
-    private static int GetPathDepth(string path)
-        => string.IsNullOrEmpty(path) ? 0 : path.Split('/', StringSplitOptions.RemoveEmptyEntries).Length;
-
     private static JsonObject BuildRepoMapJsonPayload(
         RepoMapResult map,
         QueryCommandOptions options,
@@ -255,7 +254,8 @@ public static partial class QueryCommandRunner
             KeepRepoMapJsonProperties(payload, RepoMapSummaryJsonProperties);
             payload["summary_only"] = true;
             payload["sections"] = new JsonArray();
-            AddLargeFileDecompositionPlanJsonField(payload, options);
+            if (!RepoMapHasNarrowingScope(options))
+                AddLargeFileDecompositionPlanJsonField(payload, options);
             AddJsonByteLimitField(payload, options);
             return payload;
         }
@@ -269,7 +269,8 @@ public static partial class QueryCommandRunner
                 AddCompactJsonFields(payload, GetCompactSectionLimit(options), compactTruncation);
                 payload["next_commands"] = BuildRepoMapNextCommands(options);
             }
-            AddLargeFileDecompositionPlanJsonField(payload, options);
+            if (!RepoMapHasNarrowingScope(options))
+                AddLargeFileDecompositionPlanJsonField(payload, options);
             AddJsonByteLimitField(payload, options);
             return payload;
         }
@@ -288,7 +289,8 @@ public static partial class QueryCommandRunner
             AddCompactJsonFields(payload, GetCompactSectionLimit(options), compactTruncation);
             payload["next_commands"] = BuildRepoMapNextCommands(options);
         }
-        AddLargeFileDecompositionPlanJsonField(payload, options);
+        if (!RepoMapHasNarrowingScope(options))
+            AddLargeFileDecompositionPlanJsonField(payload, options);
         AddJsonByteLimitField(payload, options);
         return payload;
     }
@@ -354,23 +356,27 @@ public static partial class QueryCommandRunner
         int? generatedFileCountExcluded,
         bool generatedFileFilterAvailable)
     {
-        var candidates = map.LargestFiles
-            .Where(IsRepoMapOversizedFileCandidate)
+        var candidates = map.IssueDraftCandidates
             .Select(file => BuildRepoMapIssueDraftJson(file, preflight))
             .ToArray();
         var summaryOnly = options.MapSummaryOnly || options.SummaryOnly;
         var sourceLimit = options.Compact ? GetCompactSourceLimit(GetCompactSectionLimit(options)) : options.Limit;
-        var largestFilesTruncated = map.FileCount > map.LargestFiles.Count && map.LargestFiles.Count >= sourceLimit;
+        var candidateCount = map.IssueDraftCandidateCount;
+        var emittedCount = summaryOnly ? 0 : candidates.Length;
+        var candidateDetailsTruncated = candidateCount > candidates.Length;
+        var limitOmittedCount = summaryOnly ? 0 : Math.Max(0, candidateCount - candidates.Length);
+        var omittedCount = Math.Max(0, candidateCount - emittedCount);
+        var rowLimitReached = limitOmittedCount > 0;
         var payload = new JsonObject
         {
             ["api_version"] = JsonOutputContract.ApiVersion,
             ["format"] = OutputFormatIssueDrafts,
-            ["count"] = candidates.Length,
-            ["emitted_count"] = summaryOnly ? 0 : candidates.Length,
-            ["omitted_count"] = summaryOnly ? candidates.Length : 0,
-            ["truncated"] = largestFilesTruncated,
+            ["count"] = candidateCount,
+            ["emitted_count"] = emittedCount,
+            ["omitted_count"] = omittedCount,
+            ["truncated"] = rowLimitReached,
             ["issue_drafts"] = summaryOnly ? new JsonArray() : new JsonArray(candidates),
-            ["groups"] = BuildRepoMapIssueDraftGroupsJson(candidates),
+            ["groups"] = BuildRepoMapIssueDraftGroupsJson(candidates, candidateCount),
             ["thresholds"] = new JsonObject
             {
                 ["line_threshold"] = MapIssueDraftLineThreshold,
@@ -381,10 +387,11 @@ public static partial class QueryCommandRunner
                 ["largest_files"] = new JsonObject
                 {
                     ["source_section"] = "largest_files",
-                    ["returned"] = map.LargestFiles.Count,
+                    ["returned"] = candidates.Length,
                     ["source_limit"] = sourceLimit,
                     ["total_files"] = map.FileCount,
-                    ["truncated"] = largestFilesTruncated,
+                    ["total_candidates"] = candidateCount,
+                    ["truncated"] = candidateDetailsTruncated,
                 },
             },
             ["query_context"] = BuildQueryContextJson(options, jsonOptions),
@@ -398,16 +405,17 @@ public static partial class QueryCommandRunner
         if (summaryOnly)
         {
             payload["summary_only"] = true;
-            if (candidates.Length > 0)
+            if (candidateCount > 0)
             {
-                payload["summary_only_omitted_count"] = candidates.Length;
+                payload["summary_only_omitted_count"] = candidateCount;
                 payload["omitted_by"] = new JsonArray("summary_only");
             }
         }
-        if (largestFilesTruncated)
+        if (rowLimitReached)
         {
             payload["row_limit_reached"] = true;
-            payload["limit_omitted_count"] = Math.Max(0, map.FileCount - map.LargestFiles.Count);
+            payload["limit_omitted_count"] = limitOmittedCount;
+            payload["omitted_by"] = new JsonArray("limit");
         }
         if (map.ProjectRoot != null)
             payload["project_root"] = map.ProjectRoot;
@@ -417,8 +425,20 @@ public static partial class QueryCommandRunner
             payload["git_is_dirty"] = map.GitIsDirty;
         if (map.IndexedHeadCommit != null)
             payload["indexed_head_commit"] = map.IndexedHeadCommit;
+        if (map.IndexedHeadSha != null)
+            payload["indexed_head_sha"] = map.IndexedHeadSha;
+        if (map.IndexedHeadBranch != null)
+            payload["indexed_head_branch"] = map.IndexedHeadBranch;
+        if (map.IndexedHeadTimestamp != null)
+            payload["indexed_head_timestamp"] = map.IndexedHeadTimestamp;
+        if (map.CommitsAheadOfIndexedHead != null)
+            payload["commits_ahead_of_indexed_head"] = map.CommitsAheadOfIndexedHead;
         if (map.WorktreeHeadChanged != null)
             payload["worktree_head_changed"] = map.WorktreeHeadChanged;
+        if (map.HeadFreshness != null)
+            payload["head_freshness"] = JsonSerializer.SerializeToNode(
+                map.HeadFreshness,
+                CliJsonSerializerContextFactory.Create(jsonOptions).StatusHeadFreshness);
         AddGeneratedFileFilterJsonFields(
             payload,
             options,
@@ -428,7 +448,7 @@ public static partial class QueryCommandRunner
         return payload.ToJsonString(GetJsonNodeSerializationOptions(jsonOptions));
     }
 
-    private static JsonObject BuildRepoMapIssueDraftGroupsJson(IReadOnlyList<JsonObject> candidates)
+    private static JsonObject BuildRepoMapIssueDraftGroupsJson(IReadOnlyList<JsonObject> candidates, int candidateCount)
     {
         var representativePaths = new JsonArray();
         foreach (var candidate in candidates.Take(DefaultCompactSectionLimit))
@@ -443,16 +463,13 @@ public static partial class QueryCommandRunner
             ["oversized_file"] = new JsonObject
             {
                 ["kind"] = "oversized_file",
-                ["count"] = candidates.Count,
+                ["count"] = candidateCount,
                 ["source_section"] = "largest_files",
                 ["representative_paths"] = representativePaths,
-                ["representative_paths_truncated"] = candidates.Count > representativePaths.Count,
+                ["representative_paths_truncated"] = candidateCount > representativePaths.Count,
             },
         };
     }
-
-    private static bool IsRepoMapOversizedFileCandidate(RepoFileSummaryResult file)
-        => file.Lines >= MapIssueDraftLineThreshold || file.Size >= MapIssueDraftByteThreshold;
 
     private static JsonObject BuildRepoMapIssueDraftJson(RepoFileSummaryResult file, IssueDuplicatePreflight preflight)
     {
@@ -533,7 +550,12 @@ public static partial class QueryCommandRunner
         "git_head",
         "git_is_dirty",
         "indexed_head_commit",
+        "indexed_head_sha",
+        "indexed_head_branch",
+        "indexed_head_timestamp",
+        "commits_ahead_of_indexed_head",
         "worktree_head_changed",
+        "head_freshness",
         "graph_table_available",
     };
 
@@ -560,6 +582,12 @@ public static partial class QueryCommandRunner
         foreach (var property in properties)
             keep.Add(property);
     }
+
+    private static bool RepoMapHasNarrowingScope(QueryCommandOptions options)
+        => options.PathPatterns.Count > 0
+            || options.ExcludePaths.Count > 0
+            || options.ExcludeTests
+            || options.Lang != null;
 
     private static JsonObject BuildRepoMapSectionProperties(IEnumerable<string> sections)
     {
