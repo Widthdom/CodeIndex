@@ -296,6 +296,10 @@ Stable since values are intentionally not repeated in this guide because the
 release changelog is the source of truth for when each command first shipped.
 Run `cdidx --help` for the full syntax line for every command.
 
+Invalid CLI input emits one command-specific `Error` / `Hint` / `Usage` diagnostic.
+Dependent validation stops after the primary invalid token, and transformed aliases
+such as `recipes list` retain the command name and usage shape the user invoked.
+
 ## JSON output format
 
 Most query commands emit one complete JSON value when `--json` is set. `search
@@ -306,6 +310,10 @@ can use `jq -s '.'` or pass `--json=array` to `search` to emit the result set as
 one JSON array. Add `--pretty` with `--json` to indent single-document JSON
 responses; for `search`, use `--json=array --pretty` when the result set itself
 should be indented because default `search --json` stays newline-delimited.
+Output modifiers are validated as one contract: `--json` is rejected with
+non-JSON formats such as `csv`, `tsv`, and `qf`, and `--pretty` is rejected with
+`--json=ndjson` instead of being silently ignored. Use `--json=array --pretty`
+when an indented search result is required.
 `search --named-query <name>=<query>` can be repeated to run an ad hoc grouped
 batch with the same filters and snippet bounds. Named batches emit one grouped
 JSON document, and `--format compact` keeps the per-result
@@ -1456,7 +1464,7 @@ until the payload fits the requested byte budget.
 ```bash
 cdidx status
 cdidx status --check --json
-cdidx status --check --stale-after 30m
+cdidx status --stale-after 30m --json
 cdidx status --explain fold_ready
 ```
 
@@ -1478,7 +1486,12 @@ Languages:
 - scans the current indexable files with the same `FileIndexer` path filters and ignore rules used for indexing;
 - recomputes raw-byte SHA256 checksums and compares them with the DB's saved checksums;
 - reports `index_matches_workspace` plus `workspace_check.changed_files`, `missing_files`, `outside_sparse_cone_files`, `unindexed_files`, `unverifiable_files`, `scan_errors`, and `head_changed` (with `indexed_head_commit` / `workspace_head_commit` when the worktree HEAD has moved since the last full scan). Indexed paths whose git index entry is flagged skip-worktree (sparse-checkout cone/non-cone, partial clone, or manual `git update-index --skip-worktree`) land in `outside_sparse_cone_files` and do not fail the freshness gate;
-- exits `0` only when the DB exactly matches the current workspace. Stale indexes exit `5`.
+- exits `0` only when the DB exactly matches the current workspace. A stale-only check exits `1`.
+
+Supplying `--stale-after <duration>` implies `--check`, so a configured threshold
+cannot silently fall back to ordinary status. Check-mode JSON records whether the
+check was `explicit` or `implied_by_stale_after` in `query_context.check_mode` and
+repeats the effective threshold in `query_context.stale_after_seconds`.
 
 `cdidx index <projectPath>` also detects the same HEAD movement on incremental runs: if the recorded HEAD differs from the workspace HEAD it emits a `head_changed` warning (also exposed as `head_changed`, `prior_indexed_head_commit`, `current_head_commit`, and `head_change_notice` in `--json` output). When a branch-switch workflow knows the previous and current refs, refresh with `cdidx index <projectPath> --changed-between <old-ref> <new-ref>` instead of rebuilding the whole project; it updates only files changed between the refs and includes rename/delete old paths for purging. Use a full `cdidx index <projectPath> --rebuild` or `cdidx <projectPath> --json` refresh when the refs are unavailable, after history-moving operations, or when you need a whole-checkout stale-path purge.
 
@@ -3165,6 +3178,11 @@ cdidx index . --quiet
 何も出力しません。失敗時は `[stale] workspace_check ...` や
 `[degraded] fold_ready=false ...` のように、失敗した check ごとに stderr へ 1 行出力します。
 
+`--stale-after <duration>` を指定すると `--check` を暗黙に有効化するため、設定した
+しきい値が通常の status として無視されることはありません。check mode の JSON は
+`query_context.check_mode` に `explicit` または `implied_by_stale_after` を記録し、
+有効なしきい値を `query_context.stale_after_seconds` にも出力します。
+
 `status --check` の exit code はこのコマンド専用です:
 
 | Exit | 意味 |
@@ -3220,6 +3238,11 @@ Stable since の値はこのガイドでは重複管理しません。各コマ�
 release changelog を source of truth とします。完全な syntax line は `cdidx --help`
 を参照してください。
 
+不正な CLI input は、コマンド固有の `Error` / `Hint` / `Usage` diagnostic を 1 件だけ
+出力します。primary な不正 token の後では dependent validation を打ち切り、
+`recipes list` のように内部変換する alias でも、ユーザーが呼び出した command 名と
+usage shape を維持します。
+
 ## JSON 出力形式
 
 ほとんどの query command は `--json` 指定時に 1 つの完全な JSON 値を出力します。
@@ -3231,6 +3254,10 @@ newline-delimited JSON (ndjson) として出力し、最後に `{"done":true,...
 単一 document の JSON 応答をインデント付きで出力します。`search` の result set を
 整形したい場合は、既定の `search --json` が newline-delimited のまま保たれるため
 `--json=array --pretty` を使います。
+output modifier は 1 つの contract として検証されます。`--json` と `csv` / `tsv` / `qf`
+などの非 JSON format の組み合わせ、および `--pretty` と `--json=ndjson` の組み合わせは、
+黙って無視せず usage error として拒否します。indent 済みの search result が必要な場合は
+`--json=array --pretty` を使ってください。
 `search --named-query <name>=<query>` は繰り返し指定でき、同じ filter と snippet 上限で
 ad hoc な grouped batch を実行します。名前付き batch は 1 つの grouped JSON document を
 出力し、`--format compact` でも各 result の `CompactSearchResult` snippet / highlight

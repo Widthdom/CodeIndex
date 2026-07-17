@@ -187,6 +187,11 @@ internal static partial class ProgramRunner
             CommandErrorWriter.Write(StripErrorPrefix(strictVersionError), "use `--strict-version` without a value.");
             return CommandExitCodes.InvalidArgument;
         }
+        if (!TryValidateOutputFormatOptions(args, out var outputFormatError, out var outputFormatHint, out var outputFormatUsage))
+        {
+            CommandErrorWriter.Write(outputFormatError, outputFormatHint, outputFormatUsage);
+            return CommandExitCodes.UsageError;
+        }
         if (TryConsumePrettyJsonFlag(ref args))
             jsonOptions = new JsonSerializerOptions(jsonOptions) { WriteIndented = true };
         using var jsonAnsiScope = ConsoleUi.SuppressAnsiForJsonOutput(ContainsJsonOutputFlag(args));
@@ -1005,13 +1010,13 @@ internal static partial class ProgramRunner
 
     private static QueryCommandTokenRole GetQueryCommandTokenRole(string[] args, int index)
     {
-        if (!TryFindQueryCommandBefore(args, index, out var commandIndex, out var commandName))
+        if (!TryFindCommandBefore(args, index, out var commandIndex, out var commandName))
             return QueryCommandTokenRole.None;
 
         return GetQueryCommandTokenRole(commandName, args[(commandIndex + 1)..], index - commandIndex - 1);
     }
 
-    private static bool TryFindQueryCommandBefore(string[] args, int index, out int commandIndex, out string commandName)
+    private static bool TryFindCommandBefore(string[] args, int index, out int commandIndex, out string commandName)
     {
         commandIndex = -1;
         commandName = string.Empty;
@@ -1032,8 +1037,6 @@ internal static partial class ProgramRunner
                 continue;
             if (!CliFlagSchema.AllCommands.Contains(arg))
                 return false;
-            if (!CommandAcceptsQueryLiteral(arg))
-                return false;
 
             commandIndex = i;
             commandName = arg;
@@ -1045,15 +1048,22 @@ internal static partial class ProgramRunner
 
     private static QueryCommandTokenRole GetQueryCommandTokenRole(string commandName, string[] subArgs, int targetIndex)
     {
-        if (!CommandAcceptsQueryLiteral(commandName))
-            return QueryCommandTokenRole.None;
-
         var (withValues, flagOnly) = CliFlagSchema.GetParserFlagsPartitionedByValueBearing(commandName);
         if (targetIndex > 0)
         {
             var previousArg = NormalizeCommandOptionToken(subArgs[targetIndex - 1], withValues, flagOnly, out var previousHasInlineValue);
             if (!previousHasInlineValue && withValues.Contains(previousArg))
                 return QueryCommandTokenRole.CommandOptionValue;
+        }
+
+        if (!CommandAcceptsQueryLiteral(commandName))
+            return QueryCommandTokenRole.None;
+
+        if (IsInspectPathLineMode(commandName, subArgs))
+        {
+            var targetArg = NormalizeCommandOptionToken(subArgs[targetIndex], withValues, flagOnly, out _);
+            if (withValues.Contains(targetArg) || flagOnly.Contains(targetArg))
+                return QueryCommandTokenRole.None;
         }
 
         for (var i = 0; i < targetIndex; i++)
@@ -1091,6 +1101,33 @@ internal static partial class ProgramRunner
         }
 
         return QueryCommandTokenRole.FirstQueryLiteral;
+    }
+
+    private static bool IsInspectPathLineMode(string commandName, string[] subArgs)
+    {
+        if (!string.Equals(commandName, "inspect", StringComparison.Ordinal))
+            return false;
+
+        var (withValues, flagOnly) = CliFlagSchema.GetParserFlagsPartitionedByValueBearing(commandName);
+        var pathSeen = false;
+        var lineSeen = false;
+        for (var i = 0; i < subArgs.Length; i++)
+        {
+            var arg = subArgs[i];
+            if (arg == "--")
+                break;
+
+            var normalizedArg = NormalizeCommandOptionToken(arg, withValues, flagOnly, out var hasInlineValue);
+            if (!withValues.Contains(normalizedArg))
+                continue;
+
+            pathSeen |= normalizedArg == "--path";
+            lineSeen |= normalizedArg == "--line";
+            if (!hasInlineValue && i + 1 < subArgs.Length)
+                i++;
+        }
+
+        return pathSeen && lineSeen;
     }
 
     private static bool CommandAcceptsQueryLiteral(string commandName) =>
@@ -1183,6 +1220,7 @@ internal static partial class ProgramRunner
         if (args.Length == 0)
             return false;
 
+        var hasExplicitPrettyJsonOutput = HasExplicitPrettyJsonOutputSelection(args);
         var kept = new List<string>(args.Length);
         var pretty = false;
         var passthrough = false;
@@ -1198,6 +1236,13 @@ internal static partial class ProgramRunner
             {
                 passthrough = true;
                 kept.Add(arg);
+                continue;
+            }
+            if (arg == "--pretty"
+                && GetQueryCommandTokenRole(args, i) != QueryCommandTokenRole.CommandOptionValue
+                && hasExplicitPrettyJsonOutput)
+            {
+                pretty = true;
                 continue;
             }
             if (ShouldPreserveQueryCommandToken(args, i))

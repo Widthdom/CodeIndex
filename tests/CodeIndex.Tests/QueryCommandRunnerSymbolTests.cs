@@ -1455,7 +1455,7 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            AssertEmptyDiscoveryTerminal(stdout);
+            Assert.Equal(string.Empty, stdout);
             Assert.Equal(string.Empty, stderr);
         }
         finally
@@ -3417,7 +3417,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, fontFaceExitCode);
             Assert.Equal(string.Empty, fontFaceStderr);
-            AssertEmptyDiscoveryTerminal(fontFaceStdout);
+            Assert.Equal(string.Empty, fontFaceStdout);
         }
         finally
         {
@@ -3846,10 +3846,10 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
             Assert.Equal(CommandExitCodes.Success, valueExitCode);
-            AssertEmptyDiscoveryTerminal(valueStdout);
+            Assert.Equal(string.Empty, valueStdout);
             Assert.Equal(string.Empty, valueStderr);
             Assert.Equal(CommandExitCodes.Success, otherExitCode);
-            AssertEmptyDiscoveryTerminal(otherStdout);
+            Assert.Equal(string.Empty, otherStdout);
             Assert.Equal(string.Empty, otherStderr);
         }
         finally
@@ -6466,7 +6466,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            AssertEmptyDiscoveryTerminal(stdout);
+            Assert.Equal(string.Empty, stdout);
             Assert.Equal(string.Empty, stderr);
         }
         finally
@@ -6507,7 +6507,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            AssertEmptyDiscoveryTerminal(stdout);
+            Assert.Equal(string.Empty, stdout);
             Assert.Equal(string.Empty, stderr);
         }
         finally
