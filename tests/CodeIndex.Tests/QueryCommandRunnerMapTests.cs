@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -53,6 +54,44 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("hotspots", root.GetProperty("sections").EnumerateArray().Select(section => section.GetString()));
         Assert.Equal("hotspots", root.GetProperty("aliases").GetProperty("entrypoints").GetString());
         Assert.True(root.GetProperty("section_properties").TryGetProperty("summary", out _));
+    }
+
+    [Fact]
+    public void RunMap_DepthReaggregatesScopedModulesByPrefix_Issue4573()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_depth_4573");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/feature4573/App.cs", "csharp", "class App {}\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/feature4573/Worker.cs", "csharp", "class Worker {}\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "tests/feature4573/AppTests.cs", "csharp", "class AppTests {}\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--json", "--sections", "tree", "--depth", "1", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var modules = document.RootElement.GetProperty("modules").EnumerateArray().ToList();
+            Assert.Collection(
+                modules.OrderBy(module => module.GetProperty("module").GetString(), StringComparer.Ordinal),
+                module =>
+                {
+                    Assert.Equal("src", module.GetProperty("module").GetString());
+                    Assert.Equal(2, module.GetProperty("files").GetInt32());
+                },
+                module =>
+                {
+                    Assert.Equal("tests", module.GetProperty("module").GetString());
+                    Assert.Equal(1, module.GetProperty("files").GetInt32());
+                });
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]
@@ -176,8 +215,12 @@ public partial class QueryCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             var largerFile = string.Join('\n', Enumerable.Range(1, QueryCommandRunner.MapIssueDraftLineThreshold + 20).Select(line => $"// large {line}")) + "\n";
             var smallerFile = string.Join('\n', Enumerable.Range(1, QueryCommandRunner.MapIssueDraftLineThreshold + 10).Select(line => $"// smaller {line}")) + "\n";
+            var nearThresholdNonCandidate = string.Join('\n', Enumerable.Repeat("x", QueryCommandRunner.MapIssueDraftLineThreshold - 1)) + "\n";
             TestProjectHelper.InsertIndexedFile(dbPath, "src/LargeOne.cs", "csharp", largerFile);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/LargeTwo.cs", "csharp", smallerFile);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/SizeOnly.cs", "csharp", "class SizeOnly {}\n");
+            SetIndexedFileSize(dbPath, "src/SizeOnly.cs", QueryCommandRunner.MapIssueDraftByteThreshold + 1);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/NearThreshold.cs", "csharp", nearThresholdNonCandidate);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
                 ["--db", dbPath, "--format", "issue-drafts", "--limit", "1"],
@@ -188,23 +231,65 @@ public partial class QueryCommandRunnerTests
             var draft = Assert.Single(json.GetProperty("issue_drafts").EnumerateArray());
             var candidate = draft.GetProperty("candidate");
             var oversizedGroup = json.GetProperty("groups").GetProperty("oversized_file");
-            var largestFiles = json.GetProperty("truncation").GetProperty("largest_files");
+            var candidateTruncation = json.GetProperty("truncation").GetProperty("issue_draft_candidates");
+            var legacyTruncationAlias = json.GetProperty("truncation").GetProperty("largest_files");
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("issue-drafts", json.GetProperty("format").GetString());
-            Assert.Equal(1, oversizedGroup.GetProperty("count").GetInt32());
+            Assert.Equal(3, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("emitted_count").GetInt32());
+            Assert.Equal(2, json.GetProperty("omitted_count").GetInt32());
+            Assert.Equal(2, json.GetProperty("limit_omitted_count").GetInt32());
+            Assert.Equal("evaluated_scoped_candidates", json.GetProperty("candidate_source").GetString());
+            Assert.Equal("limit", Assert.Single(json.GetProperty("omitted_by").EnumerateArray().ToList()).GetString());
+            Assert.Equal(3, oversizedGroup.GetProperty("count").GetInt32());
+            Assert.Equal("issue_draft_candidates", oversizedGroup.GetProperty("source_section").GetString());
             Assert.Equal("src/LargeOne.cs", oversizedGroup.GetProperty("representative_paths").EnumerateArray().Single().GetString());
+            Assert.True(oversizedGroup.GetProperty("representative_paths_truncated").GetBoolean());
             Assert.Equal("oversized_file", draft.GetProperty("kind").GetString());
             Assert.Contains("src/LargeOne.cs", draft.GetProperty("title").GetString(), StringComparison.Ordinal);
             Assert.Contains("## Checklist", draft.GetProperty("body").GetString(), StringComparison.Ordinal);
             Assert.Equal("src/LargeOne.cs", candidate.GetProperty("path").GetString());
+            Assert.Equal("issue_draft_candidates", candidate.GetProperty("source_section").GetString());
             Assert.True(candidate.GetProperty("line_threshold_exceeded").GetBoolean());
             Assert.Equal(QueryCommandRunner.MapIssueDraftLineThreshold, candidate.GetProperty("line_threshold").GetInt32());
             Assert.Equal(QueryCommandRunner.MapIssueDraftByteThreshold, candidate.GetProperty("byte_threshold").GetInt64());
-            Assert.Equal(1, largestFiles.GetProperty("source_limit").GetInt32());
-            Assert.Equal(2, largestFiles.GetProperty("total_files").GetInt32());
-            Assert.True(largestFiles.GetProperty("truncated").GetBoolean());
+            Assert.Equal(1, candidateTruncation.GetProperty("source_limit").GetInt32());
+            Assert.Equal(4, candidateTruncation.GetProperty("total_files").GetInt32());
+            Assert.Equal(3, candidateTruncation.GetProperty("total_candidates").GetInt32());
+            Assert.True(candidateTruncation.GetProperty("truncated").GetBoolean());
+            Assert.Equal("issue_draft_candidates", legacyTruncationAlias.GetProperty("compatibility_alias_for").GetString());
+
+            var (allExitCode, allStdout, allStderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--format", "issue-drafts", "--limit", "3"],
+                _jsonOptions));
+            using var allDocument = ParseJsonOutput(allStdout);
+            var allPaths = allDocument.RootElement.GetProperty("issue_drafts").EnumerateArray()
+                .Select(item => item.GetProperty("candidate").GetProperty("path").GetString())
+                .ToArray();
+            Assert.Equal(CommandExitCodes.Success, allExitCode);
+            Assert.Equal(string.Empty, allStderr);
+            Assert.Contains("src/SizeOnly.cs", allPaths);
+            Assert.DoesNotContain("src/NearThreshold.cs", allPaths);
+            Assert.False(allDocument.RootElement.GetProperty("truncated").GetBoolean());
+
+            var (summaryExitCode, summaryStdout, summaryStderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--format", "issue-drafts", "--limit", "1", "--summary-only"],
+                _jsonOptions));
+            using var summaryDocument = ParseJsonOutput(summaryStdout);
+            var summary = summaryDocument.RootElement;
+            Assert.Equal(CommandExitCodes.Success, summaryExitCode);
+            Assert.Equal(string.Empty, summaryStderr);
+            Assert.Equal(3, summary.GetProperty("count").GetInt32());
+            Assert.Equal(0, summary.GetProperty("emitted_count").GetInt32());
+            Assert.Equal(3, summary.GetProperty("omitted_count").GetInt32());
+            Assert.Equal(3, summary.GetProperty("summary_only_omitted_count").GetInt32());
+            Assert.Equal("summary_only", Assert.Single(summary.GetProperty("omitted_by").EnumerateArray().ToList()).GetString());
+            Assert.False(summary.GetProperty("truncated").GetBoolean());
+            Assert.False(summary.TryGetProperty("row_limit_reached", out _));
+            Assert.False(summary.TryGetProperty("limit_omitted_count", out _));
+            Assert.True(summary.GetProperty("truncation").GetProperty("issue_draft_candidates").GetProperty("truncated").GetBoolean());
         }
         finally
         {
@@ -508,7 +593,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunMap_WithJsonIncludesWorkspaceMetadataForProjectDb()
+    public void RunMap_WithJsonIncludesCurrentAndLegacyWorkspaceMetadataForProjectDb_Issue4573()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map");
         try
@@ -520,11 +605,35 @@ public partial class QueryCommandRunnerTests
             TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
 
             var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
+            var expectedBranch = TestProjectHelper.RunGit(projectRoot, "rev-parse", "--abbrev-ref", "HEAD").Trim();
+            var legacyHead = new string('a', 40);
+            var nextLegacyHead = new string('b', 40);
+            var nextIndexedHead = new string('c', 40);
+            var indexedHeadTimestamp = DateTimeOffset.Parse("2026-07-17T01:02:03Z", CultureInfo.InvariantCulture);
+            var nextIndexedHeadTimestamp = indexedHeadTimestamp.AddMinutes(1);
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMetaValues(
+                    (DbContext.IndexedHeadCommitMetaKey, legacyHead),
+                    (DbContext.IndexedHeadShaMetaKey, expectedHead),
+                    (DbContext.IndexedHeadBranchMetaKey, expectedBranch),
+                    (DbContext.IndexedHeadTimestampMetaKey, indexedHeadTimestamp.ToString("O", CultureInfo.InvariantCulture)));
+            }
+            RepoMapBuilder.HeadMetadataCapturedForTesting.Value = () =>
+            {
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                var writer = new DbWriter(db.Connection);
+                writer.SetMetaValues(
+                    (DbContext.IndexedHeadCommitMetaKey, nextLegacyHead),
+                    (DbContext.IndexedHeadShaMetaKey, nextIndexedHead),
+                    (DbContext.IndexedHeadTimestampMetaKey, nextIndexedHeadTimestamp.ToString("O", CultureInfo.InvariantCulture)));
+            };
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
-                ["--db", dbPath, "--json"],
+                ["--db", dbPath, "--json", "--summary-only"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -535,9 +644,20 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(projectRoot, json.GetProperty("project_root").GetString());
             Assert.Equal(expectedHead, json.GetProperty("git_head").GetString());
             Assert.False(json.GetProperty("git_is_dirty").GetBoolean());
+            Assert.Equal(legacyHead, json.GetProperty("indexed_head_commit").GetString());
+            Assert.Equal(expectedHead, json.GetProperty("indexed_head_sha").GetString());
+            Assert.Equal(expectedBranch, json.GetProperty("indexed_head_branch").GetString());
+            Assert.Equal(indexedHeadTimestamp, json.GetProperty("indexed_head_timestamp").GetDateTimeOffset());
+            Assert.Equal(0, json.GetProperty("commits_ahead_of_indexed_head").GetInt32());
+            var headFreshness = json.GetProperty("head_freshness");
+            Assert.Equal("head_current", headFreshness.GetProperty("state").GetString());
+            Assert.Equal("workspace", headFreshness.GetProperty("scope").GetString());
+            Assert.Equal("latest_index", headFreshness.GetProperty("indexed_head_source").GetString());
+            Assert.Equal(legacyHead, headFreshness.GetProperty("legacy_full_scan_head").GetString());
         }
         finally
         {
+            RepoMapBuilder.HeadMetadataCapturedForTesting.Value = null;
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
@@ -864,6 +984,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             using var document = ParseJsonOutput(stdout);
             Assert.Equal(0, document.RootElement.GetProperty("file_count").GetInt32());
+            Assert.False(document.RootElement.TryGetProperty("decomposition_plan", out _));
         }
         finally
         {

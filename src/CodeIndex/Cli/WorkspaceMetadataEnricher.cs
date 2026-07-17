@@ -12,82 +12,141 @@ public static class WorkspaceMetadataEnricher
         StatusResult status,
         string dbPath,
         bool dbPathExplicit = false,
-        CancellationToken cancellationToken = default) =>
-        Apply(dbPath, dbPathExplicit, cancellationToken, (root, head, dirty, indexedHead, headChanged) =>
-        {
-            status.ProjectRoot = root;
-            status.GitHead = head;
-            status.GitIsDirty = dirty;
-            status.IndexedHeadCommit = indexedHead;
-            status.WorktreeHeadChanged = headChanged;
-            // #1509: compare the current HEAD against the SHA stamped at index time. Only
-            // makes sense when both sides are known; otherwise leave the field null so the
-            // CLI/MCP consumer can render "indexed at <sha>" without a misleading 0/N hint.
-            // Note this reads `status.IndexedHeadSha` which was populated by the DbReader
-            // (#1509 keys, stamped on every successful index — distinct from `indexedHead`
-            // above which is #1508's full-scan-only `indexed_head_commit`).
-            // #1509: index 時 HEAD と現 HEAD を比較し、両方判明している時のみ N を載せる。
-            if (root != null && !string.IsNullOrWhiteSpace(status.IndexedHeadSha))
-                status.CommitsAheadOfIndexedHead = GitHelper.TryCountCommitsAhead(root, status.IndexedHeadSha, cancellationToken);
-        });
+        CancellationToken cancellationToken = default)
+    {
+        var metadata = Resolve(dbPath, dbPathExplicit, cancellationToken);
+        status.ProjectRoot = metadata.ProjectRoot;
+        status.GitHead = metadata.RuntimeHead;
+        status.GitIsDirty = metadata.IsDirty;
+        status.IndexedHeadCommit = metadata.LegacyIndexedHead;
+        status.WorktreeHeadChanged = metadata.HeadChanged;
+        // #1509: compare the current HEAD against the SHA stamped at index time. Only
+        // makes sense when both sides are known; otherwise leave the field null so the
+        // CLI/MCP consumer can render "indexed at <sha>" without a misleading 0/N hint.
+        // Note this reads `status.IndexedHeadSha` which was populated by the DbReader
+        // (#1509 keys, stamped on every successful index — distinct from the legacy
+        // full-scan-only `indexed_head_commit`).
+        if (metadata.ProjectRoot != null && !string.IsNullOrWhiteSpace(status.IndexedHeadSha))
+            status.CommitsAheadOfIndexedHead = GitHelper.TryCountCommitsAhead(metadata.ProjectRoot, status.IndexedHeadSha, cancellationToken);
+    }
 
     public static void Enrich(
         RepoMapResult map,
         string dbPath,
         bool dbPathExplicit = false,
-        CancellationToken cancellationToken = default) =>
-        Apply(dbPath, dbPathExplicit, cancellationToken, (root, head, dirty, indexedHead, headChanged) =>
-        {
-            map.ProjectRoot = root;
-            map.GitHead = head;
-            map.GitIsDirty = dirty;
-            map.IndexedHeadCommit = indexedHead;
-            map.WorktreeHeadChanged = headChanged;
-        });
+        CancellationToken cancellationToken = default)
+    {
+        var runtime = ResolveRuntime(dbPath, dbPathExplicit, cancellationToken);
+        map.ProjectRoot = runtime.ProjectRoot;
+        map.GitHead = runtime.RuntimeHead;
+        map.GitIsDirty = runtime.IsDirty;
+        if (runtime.ProjectRoot == null || map.IndexedHeadSnapshot == null)
+            return;
+
+        var snapshot = map.IndexedHeadSnapshot;
+        map.IndexedHeadCommit = snapshot.LegacyFullScanHead;
+        map.IndexedHeadSha = snapshot.LatestIndexHead;
+        map.IndexedHeadBranch = snapshot.LatestIndexBranch;
+        map.IndexedHeadTimestamp = snapshot.LatestIndexTimestamp;
+        map.WorktreeHeadChanged = ResolveHeadChanged(
+            runtime.RuntimeHead,
+            runtime.RuntimeBranch,
+            snapshot.LatestIndexHead,
+            snapshot.LatestIndexBranch,
+            snapshot.LatestIndexBranchStampPresent,
+            snapshot.LegacyFullScanHead,
+            snapshot.LegacyFullScanBranch,
+            snapshot.LegacyFullScanBranchStampPresent);
+        if (!string.IsNullOrWhiteSpace(map.IndexedHeadSha))
+            map.CommitsAheadOfIndexedHead = GitHelper.TryCountCommitsAhead(runtime.ProjectRoot, map.IndexedHeadSha, cancellationToken);
+    }
 
     public static void Enrich(
         SymbolAnalysisResult analysis,
         string dbPath,
         bool dbPathExplicit = false,
-        CancellationToken cancellationToken = default) =>
-        Apply(dbPath, dbPathExplicit, cancellationToken, (root, head, dirty, indexedHead, headChanged) =>
-        {
-            analysis.ProjectRoot = root;
-            analysis.GitHead = head;
-            analysis.GitIsDirty = dirty;
-            analysis.IndexedHeadCommit = indexedHead;
-            analysis.WorktreeHeadChanged = headChanged;
-        });
+        CancellationToken cancellationToken = default)
+    {
+        var metadata = Resolve(dbPath, dbPathExplicit, cancellationToken);
+        analysis.ProjectRoot = metadata.ProjectRoot;
+        analysis.GitHead = metadata.RuntimeHead;
+        analysis.GitIsDirty = metadata.IsDirty;
+        analysis.IndexedHeadCommit = metadata.LegacyIndexedHead;
+        analysis.WorktreeHeadChanged = metadata.HeadChanged;
+    }
 
     /// <summary>
-    /// Resolve workspace metadata once and apply it via callback.
-    /// ワークスペースメタデータを一度解決し、コールバックで適用する。
+    /// Resolve runtime and persisted workspace metadata once.
+    /// runtime と永続化済みのワークスペースメタデータを一度解決する。
     /// </summary>
-    private static void Apply(
+    private static WorkspaceMetadata Resolve(
         string dbPath,
         bool dbPathExplicit,
-        CancellationToken cancellationToken,
-        Action<string?, string?, bool?, string?, bool?> setter)
+        CancellationToken cancellationToken)
     {
-        var projectRoot = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit);
-        if (projectRoot == null)
-        {
-            setter(null, null, null, null, null);
-            return;
-        }
+        var runtime = ResolveRuntime(dbPath, dbPathExplicit, cancellationToken);
+        if (runtime.ProjectRoot == null)
+            return new(null, null, null, null, null, null, null, null);
 
-        var runtimeHead = GitHelper.TryGetHeadCommit(projectRoot, cancellationToken);
-        var runtimeBranch = GitHelper.TryGetHeadBranch(projectRoot, cancellationToken);
-        var dirty = GitHelper.TryIsWorktreeDirty(projectRoot, cancellationToken);
         var indexedHead = DbPathResolver.TryReadIndexedHeadCommit(dbPath);
         var indexedHeadSha = DbPathResolver.TryReadIndexedHeadSha(dbPath);
         var indexedHeadBranch = DbPathResolver.TryReadIndexedHeadBranch(dbPath);
+        var indexedHeadTimestamp = DbPathResolver.TryReadIndexedHeadTimestamp(dbPath);
         var hasIndexedHeadBranchStamp = DbPathResolver.TryHasIndexedHeadBranchStamp(dbPath);
         var indexedBranch = DbPathResolver.TryReadIndexedHeadCommitBranch(dbPath);
         var hasIndexedBranchStamp = DbPathResolver.TryHasIndexedHeadCommitBranchStamp(dbPath);
-        var comparisonHead = indexedHeadSha ?? indexedHead;
-        var comparisonBranch = indexedHeadSha != null ? indexedHeadBranch : indexedBranch;
-        var hasComparisonBranchStamp = indexedHeadSha != null ? hasIndexedHeadBranchStamp : hasIndexedBranchStamp;
+        var headChanged = ResolveHeadChanged(
+            runtime.RuntimeHead,
+            runtime.RuntimeBranch,
+            indexedHeadSha,
+            indexedHeadBranch,
+            hasIndexedHeadBranchStamp,
+            indexedHead,
+            indexedBranch,
+            hasIndexedBranchStamp);
+
+        return new(
+            runtime.ProjectRoot,
+            runtime.RuntimeHead,
+            runtime.IsDirty,
+            indexedHead,
+            indexedHeadSha,
+            indexedHeadBranch,
+            indexedHeadTimestamp,
+            headChanged);
+    }
+
+    private static RuntimeWorkspaceMetadata ResolveRuntime(
+        string dbPath,
+        bool dbPathExplicit,
+        CancellationToken cancellationToken)
+    {
+        var projectRoot = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit);
+        if (projectRoot == null)
+            return new(null, null, null, null);
+
+        return new(
+            projectRoot,
+            GitHelper.TryGetHeadCommit(projectRoot, cancellationToken),
+            GitHelper.TryGetHeadBranch(projectRoot, cancellationToken),
+            GitHelper.TryIsWorktreeDirty(projectRoot, cancellationToken));
+    }
+
+    private static bool? ResolveHeadChanged(
+        string? runtimeHead,
+        string? runtimeBranch,
+        string? latestIndexedHead,
+        string? latestIndexedBranch,
+        bool latestIndexedBranchStampPresent,
+        string? legacyIndexedHead,
+        string? legacyIndexedBranch,
+        bool legacyIndexedBranchStampPresent)
+    {
+        var comparisonHead = latestIndexedHead ?? legacyIndexedHead;
+        var comparisonBranch = latestIndexedHead != null ? latestIndexedBranch : legacyIndexedBranch;
+        var hasComparisonBranchStamp = latestIndexedHead != null
+            ? latestIndexedBranchStampPresent
+            : legacyIndexedBranchStampPresent;
         // Detect a per-worktree branch / HEAD switch by comparing the runtime HEAD against
         // the latest successful index HEAD. Fall back to the older full-scan-only stamp only
         // for legacy DBs. Also compare the matching branch stamp when a HEAD stamp is present
@@ -107,10 +166,24 @@ public static class WorkspaceMetadataEnricher
             && !string.Equals(comparisonBranch, runtimeBranch, StringComparison.Ordinal)
             ? true
             : (bool?)null;
-        bool? headChanged = commitChanged == true || branchChanged == true
+        return commitChanged == true || branchChanged == true
             ? true
             : commitChanged;
-
-        setter(projectRoot, runtimeHead, dirty, indexedHead, headChanged);
     }
+
+    private sealed record RuntimeWorkspaceMetadata(
+        string? ProjectRoot,
+        string? RuntimeHead,
+        string? RuntimeBranch,
+        bool? IsDirty);
+
+    private sealed record WorkspaceMetadata(
+        string? ProjectRoot,
+        string? RuntimeHead,
+        bool? IsDirty,
+        string? LegacyIndexedHead,
+        string? IndexedHeadSha,
+        string? IndexedHeadBranch,
+        DateTimeOffset? IndexedHeadTimestamp,
+        bool? HeadChanged);
 }

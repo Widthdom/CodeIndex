@@ -1566,10 +1566,20 @@ public partial class DbReader
     /// Delegate to RepoMapBuilder for repo-level overview generation.
     /// RepoMapBuilderに委譲してリポジトリ俯瞰情報を生成する。
     /// </summary>
-    public RepoMapResult GetRepoMap(int limit = 10, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, double minEntrypointConfidence = 0)
+    public RepoMapResult GetRepoMap(int limit = 10, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, double minEntrypointConfidence = 0, int? moduleDepth = null, int? oversizedLineThreshold = null, long? oversizedByteThreshold = null)
     {
         var builder = new RepoMapBuilder(_conn, _fileColumns, _hasReferencesTable, GetIndexedPathComparer);
-        return builder.Build(limit, lang, pathPatterns, excludePathPatterns, excludeTests, minEntrypointConfidence, GetWorkspaceFreshness);
+        return builder.Build(
+            limit,
+            lang,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            minEntrypointConfidence,
+            GetWorkspaceFreshness,
+            moduleDepth,
+            oversizedLineThreshold,
+            oversizedByteThreshold);
     }
 
     private long ExecuteScalar(string sql)
