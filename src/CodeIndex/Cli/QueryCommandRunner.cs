@@ -110,6 +110,7 @@ public sealed class QueryCommandOptions
     public bool ExcludeTests { get; init; }
     public bool IncludeGenerated { get; init; }
     public bool CountOnly { get; init; }
+    public bool GroupPartials { get; init; }
     public bool All { get; init; }
     public bool StrictNotFound { get; init; }
     public bool AllowPartial { get; init; }

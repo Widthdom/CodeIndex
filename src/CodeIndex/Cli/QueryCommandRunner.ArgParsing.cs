@@ -74,6 +74,7 @@ public static partial class QueryCommandRunner
         int? bodyStartLine = null;
         int? bodyLines = null;
         bool countOnly = false;
+        bool groupPartials = false;
         bool all = false;
         bool strictNotFound = false;
         bool allowPartial = false;
@@ -954,6 +955,9 @@ public static partial class QueryCommandRunner
                 case "--count":
                     countOnly = true;
                     break;
+                case "--group-partials":
+                    groupPartials = true;
+                    break;
                 case "--cycles":
                     dependencyCycles = true;
                     break;
@@ -1636,6 +1640,7 @@ public static partial class QueryCommandRunner
             ExcludeTests = excludeTests,
             IncludeGenerated = includeGenerated,
             CountOnly = countOnly,
+            GroupPartials = groupPartials,
             All = all,
             StrictNotFound = strictNotFound,
             AllowPartial = allowPartial,

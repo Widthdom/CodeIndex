@@ -14,10 +14,13 @@ public partial class DbReader
     /// Resolve symbol definitions with reconstructed excerpts.
     /// シンボル定義を抜粋付きで解決する。
     /// </summary>
-    public List<DefinitionResult> GetDefinitions(string query, int limit = 20, string? kind = null, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, int? bodyStartLine = null, int? bodyLineCount = null)
+    public List<DefinitionResult> GetDefinitions(string query, int limit = 20, string? kind = null, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, int? bodyStartLine = null, int? bodyLineCount = null, bool groupPartials = false)
     {
         lang = DbReader.NormalizeQueryLanguage(lang);
-        var symbols = SearchSymbols(query, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters);
+        var symbolLimit = groupPartials
+            ? Math.Max(limit, CountSearchSymbolsTotal(query, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters).Count)
+            : limit;
+        var symbols = SearchSymbols(query, symbolLimit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters);
         var results = new List<DefinitionResult>();
 
         foreach (var symbol in symbols)
@@ -27,7 +30,9 @@ public partial class DbReader
                 results.Add(definition);
         }
 
-        return results;
+        return groupPartials
+            ? LogicalPartialSymbolGrouper.Group(results).Take(limit).ToList()
+            : results;
     }
 
     private DefinitionResult? BuildDefinitionResult(
@@ -131,6 +136,7 @@ public partial class DbReader
             ContainerName = symbol.ContainerName,
             Visibility = symbol.Visibility,
             ReturnType = symbol.ReturnType,
+            DefinitionSites = symbol.DefinitionSites,
             Disambiguator = BuildDefinitionDisambiguator(symbol),
             Content = definitionExcerpt.Content,
             BodyContent = bodyContent,

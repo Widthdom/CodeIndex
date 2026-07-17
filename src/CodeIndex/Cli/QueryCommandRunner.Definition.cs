@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CodeIndex.Database;
 using CodeIndex.Models;
 
@@ -33,9 +34,18 @@ public static partial class QueryCommandRunner
         }
         if (exact && options.Query is not null && IsBareVerbatimQueryToken(options.Query) && options.CountOnly && string.Equals(options.Lang, "csharp", StringComparison.OrdinalIgnoreCase))
         {
-            Console.WriteLine(options.Json
-                ? JsonSerializer.Serialize(new QueryCountFilesJsonResult(0, 0, options.Query), CliJsonSerializerContextFactory.Create(jsonOptions).QueryCountFilesJsonResult)
-                : "0");
+            if (!options.Json)
+            {
+                Console.WriteLine("0");
+                return CommandExitCodes.Success;
+            }
+
+            var zeroPayload = JsonSerializer.SerializeToNode(
+                new QueryCountFilesJsonResult(0, 0, options.Query),
+                CliJsonSerializerContextFactory.Create(jsonOptions).QueryCountFilesJsonResult)!.AsObject();
+            if (options.GroupPartials)
+                AddLogicalPartialCountJsonFields(zeroPayload, logicalCount: 0, physicalCount: 0, physicalFileCount: 0);
+            Console.WriteLine(zeroPayload.ToJsonString(jsonOptions));
             return CommandExitCodes.Success;
         }
         if (TryWriteBlankQueryError(options, "definition"))
@@ -63,7 +73,26 @@ public static partial class QueryCommandRunner
         {
             if (options.CountOnly)
             {
-                var counts = reader.CountDefinitionsTotal(options.Query, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
+                var physicalCounts = reader.CountDefinitionsTotal(options.Query, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
+                var counts = physicalCounts;
+                if (options.GroupPartials && physicalCounts.Count > 0)
+                {
+                    var groupedDefinitions = reader.GetDefinitions(
+                        options.Query,
+                        physicalCounts.Count,
+                        options.Kind,
+                        options.Lang,
+                        includeBody: false,
+                        options.PathPatterns,
+                        options.ExcludePaths,
+                        options.ExcludeTests,
+                        options.Since,
+                        exact,
+                        visibilityFilters: options.VisibilityFilters,
+                        excludeVisibilityFilters: options.ExcludeVisibilityFilters,
+                        groupPartials: true);
+                    counts = new QueryCountResult(groupedDefinitions.Count, physicalCounts.FileCount);
+                }
                 var exactSignalForCount = reader.GetDefinitionExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
                 var exactZeroHintForCount = BuildExactZeroHint(
                     exact,
@@ -76,7 +105,18 @@ public static partial class QueryCommandRunner
                 {
                     if (options.Json)
                     {
-                        var zeroPayload = BuildCountJsonPayload(reader, jsonOptions, count: 0, files: 0, query: options.Query, exactZeroHint: exactZeroHintForCount, exactSignal: exact ? exactSignalForCount : null, queryOptions: options);
+                        var zeroPayload = BuildCountJsonPayload(
+                            reader,
+                            jsonOptions,
+                            count: 0,
+                            files: 0,
+                            query: options.Query,
+                            exactZeroHint: exactZeroHintForCount,
+                            exactSignal: exact ? exactSignalForCount : null,
+                            queryOptions: options,
+                            extraFields: options.GroupPartials
+                                ? payload => AddLogicalPartialCountJsonFields(payload, logicalCount: 0, physicalCount: 0, physicalFileCount: 0)
+                                : null);
                         var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
                             zeroPayload,
                             options,
@@ -96,7 +136,17 @@ public static partial class QueryCommandRunner
 
                 if (options.Json)
                 {
-                    var payload = BuildCountJsonPayload(reader, jsonOptions, counts.Count, counts.FileCount, query: options.Query, exactSignal: exact ? exactSignalForCount : null, queryOptions: options);
+                    var payload = BuildCountJsonPayload(
+                        reader,
+                        jsonOptions,
+                        counts.Count,
+                        counts.FileCount,
+                        query: options.Query,
+                        exactSignal: exact ? exactSignalForCount : null,
+                        queryOptions: options,
+                        extraFields: options.GroupPartials
+                            ? payload => AddLogicalPartialCountJsonFields(payload, counts.Count, physicalCounts.Count, physicalCounts.FileCount)
+                            : null);
                     var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
                         payload,
                         options,
@@ -114,7 +164,23 @@ public static partial class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.GetDefinitions(options.Query, options.Limit, options.Kind, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
+            var physicalCountsForResults = options.GroupPartials
+                ? reader.CountDefinitionsTotal(options.Query, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters)
+                : (QueryCountResult?)null;
+            var results = reader.GetDefinitions(
+                options.Query,
+                options.Limit,
+                options.Kind,
+                options.Lang,
+                options.IncludeBody,
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests,
+                options.Since,
+                exact,
+                visibilityFilters: options.VisibilityFilters,
+                excludeVisibilityFilters: options.ExcludeVisibilityFilters,
+                groupPartials: options.GroupPartials);
             var exactSignal = reader.GetDefinitionExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
             var exactZeroHint = BuildExactZeroHint(
                 exact,
@@ -193,11 +259,28 @@ public static partial class QueryCommandRunner
                     }
                     Console.WriteLine();
                 }
-                var defFileCount = results.Select(r => r.Path).Distinct().Count();
-                CommandErrorWriter.WriteStderr($"({results.Count} definitions in {defFileCount} files)");
+                if (physicalCountsForResults.HasValue)
+                {
+                    CommandErrorWriter.WriteStderr($"({results.Count} logical definitions from {physicalCountsForResults.Value.Count} physical declaration sites in {physicalCountsForResults.Value.FileCount} files)");
+                }
+                else
+                {
+                    var defFileCount = results.Select(r => r.Path).Distinct().Count();
+                    CommandErrorWriter.WriteStderr($"({results.Count} definitions in {defFileCount} files)");
+                }
             }
             return CommandExitCodes.Success;
         });
+    }
+
+    private static void AddLogicalPartialCountJsonFields(JsonObject payload, int logicalCount, int physicalCount, int physicalFileCount)
+    {
+        payload["group_partials"] = true;
+        payload["count_kind"] = "logical_partial_families";
+        payload["logical_count"] = logicalCount;
+        payload["physical_count"] = physicalCount;
+        payload["physical_file_count"] = physicalFileCount;
+        payload["partials_grouped"] = logicalCount != physicalCount;
     }
 
     public static int RunGoto(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -283,33 +366,11 @@ public static partial class QueryCommandRunner
         if (results.Count <= 1)
             return false;
 
-        var first = results[0];
-        if (!IsLogicalPartialDefinitionKind(first.Kind) || string.IsNullOrWhiteSpace(first.ContainerName))
+        var grouped = LogicalPartialSymbolGrouper.Group(results);
+        if (grouped.Count != 1 || grouped[0].DefinitionSites != results.Count)
             return false;
 
-        foreach (var result in results)
-        {
-            if (!IsLogicalPartialDefinitionKind(result.Kind))
-                return false;
-            if (!string.Equals(result.Lang, first.Lang, StringComparison.OrdinalIgnoreCase))
-                return false;
-            if (!string.Equals(result.Kind, first.Kind, StringComparison.OrdinalIgnoreCase))
-                return false;
-            if (!string.Equals(result.Name, first.Name, StringComparison.Ordinal))
-                return false;
-            if (!string.Equals(result.ContainerKind, first.ContainerKind, StringComparison.Ordinal))
-                return false;
-            if (!string.Equals(result.ContainerName, first.ContainerName, StringComparison.Ordinal))
-                return false;
-        }
-
-        representative = results
-            .OrderBy(result => result.Path, StringComparer.Ordinal)
-            .ThenBy(result => result.StartLine)
-            .First();
+        representative = grouped[0];
         return true;
     }
-
-    private static bool IsLogicalPartialDefinitionKind(string kind)
-        => kind is "class" or "struct" or "interface" or "record";
 }
