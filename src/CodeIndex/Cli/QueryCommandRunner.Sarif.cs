@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CodeIndex.Database;
 
 namespace CodeIndex.Cli;
@@ -39,7 +40,11 @@ public static partial class QueryCommandRunner
             jsonOptions,
             level);
 
-    private static void WriteSarif(IEnumerable<SarifLocation> items, JsonSerializerOptions jsonOptions, string level = "warning")
+    private static void WriteSarif(
+        IEnumerable<SarifLocation> items,
+        JsonSerializerOptions jsonOptions,
+        string level = "warning",
+        JsonObject? runProperties = null)
     {
         var writer = Console.Out;
         var itemOptions = GetCompactJsonOptions(jsonOptions);
@@ -47,20 +52,46 @@ public static partial class QueryCommandRunner
         writer.Write("{\"version\":\"2.1.0\",\"runs\":[{\"tool\":{\"driver\":{\"name\":\"cdidx\",\"informationUri\":\"https://github.com/Widthdom/CodeIndex\",\"rules\":");
         WriteJsonArrayInline(
             itemList
-                .Select(item => item.RuleId)
-                .Where(ruleId => !string.IsNullOrWhiteSpace(ruleId))
-                .Distinct(StringComparer.Ordinal)
-                .OrderBy(ruleId => ruleId, StringComparer.Ordinal),
-            (ruleWriter, ruleId) => WriteSarifRule(ruleWriter, ruleId, level, itemOptions),
+                .Where(item => !string.IsNullOrWhiteSpace(item.RuleId))
+                .GroupBy(item => item.RuleId, StringComparer.Ordinal)
+                .Select(group => (RuleId: group.Key, Level: GetHighestSarifLevel(group.Select(item => item.Level ?? level))))
+                .OrderBy(rule => rule.RuleId, StringComparer.Ordinal),
+            (ruleWriter, rule) => WriteSarifRule(ruleWriter, rule.RuleId, rule.Level, itemOptions),
             separator: ",");
         writer.Write("}},\"results\":");
         WriteJsonArrayInline(
             itemList,
-            (resultWriter, item) => WriteSarifResult(resultWriter, item, level, itemOptions),
+            (resultWriter, item) => WriteSarifResult(resultWriter, item, item.Level ?? level, itemOptions),
             separator: ",");
+        if (runProperties is { Count: > 0 })
+        {
+            writer.Write(",\"properties\":");
+            writer.Write(runProperties.ToJsonString(itemOptions));
+        }
         writer.Write("}]");
         WriteActiveSqliteDiagnosticsProperties(writer, itemOptions);
         writer.WriteLine('}');
+    }
+
+    private static string GetHighestSarifLevel(IEnumerable<string> levels)
+    {
+        var highest = "none";
+        var highestRank = 0;
+        foreach (var level in levels)
+        {
+            var rank = level switch
+            {
+                "error" => 3,
+                "warning" => 2,
+                "note" => 1,
+                _ => 0,
+            };
+            if (rank <= highestRank)
+                continue;
+            highest = level;
+            highestRank = rank;
+        }
+        return highest;
     }
 
     private static void WriteJsonArrayInline<T>(IEnumerable<T> items, Action<TextWriter, T> writeItem, string separator)
@@ -114,7 +145,13 @@ public static partial class QueryCommandRunner
             writer.Write(",\"endColumn\":");
             writer.Write(Math.Max(Math.Max(1, item.Column) + 1, item.EndColumn.Value).ToString(CultureInfo.InvariantCulture));
         }
-        writer.Write("}}}]}");
+        writer.Write("}}}]");
+        if (item.Properties is { Count: > 0 })
+        {
+            writer.Write(",\"properties\":");
+            writer.Write(item.Properties.ToJsonString(jsonOptions));
+        }
+        writer.Write('}');
     }
 
     private static string NormalizeSarifArtifactUri(string path)
@@ -125,5 +162,13 @@ public static partial class QueryCommandRunner
         return normalized;
     }
 
-    private sealed record SarifLocation(string Path, int Line, int Column, int? EndColumn, string Message, string RuleId);
+    private sealed record SarifLocation(
+        string Path,
+        int Line,
+        int Column,
+        int? EndColumn,
+        string Message,
+        string RuleId,
+        string? Level = null,
+        JsonObject? Properties = null);
 }
