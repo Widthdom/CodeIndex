@@ -199,7 +199,7 @@ public static partial class IndexCommandRunner
         string dbPath,
         JsonSerializerOptions jsonOptions)
     {
-        if (!options.Rebuild || options.Yes || options.Force)
+        if (!options.Rebuild || options.DryRun || options.Yes || options.Force)
             return null;
 
         var resolvedPreviewDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(dbPath));

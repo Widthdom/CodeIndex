@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -21,6 +22,10 @@ public static partial class IndexCommandRunner
         CliJsonSerializerContext jsonContext,
         CancellationToken cancellationToken)
     {
+        var stopwatch = Stopwatch.StartNew();
+        var memorySamples = options.MemoryTrace
+            ? new List<IndexMemorySampleJsonResult> { CaptureMemorySample("start", stopwatch) }
+            : [];
         var projectPath = options.ProjectPath!;
         var dryIndexer = new FileIndexer(
             projectPath,
@@ -39,6 +44,8 @@ public static partial class IndexCommandRunner
         DryRunScanMetadata dryScanMetadata;
         var resolvedDbPath = DbPathResolver.NormalizeDbPath(DbPathResolver.ResolveForIndex(projectPath, options.DbPath, options.DataDir).DbPath);
         var dbSnapshot = ReadDryRunDbSnapshot(resolvedDbPath, options.SymbolKindFilter);
+        if (options.MemoryTrace)
+            memorySamples.Add(CaptureMemorySample("snapshot", stopwatch));
         var normalizedProjectRoot = Path.GetFullPath(projectPath);
         var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(dbSnapshot.IndexedProjectRoot)
             ? null
@@ -242,6 +249,14 @@ public static partial class IndexCommandRunner
         foreach (var relativePath in projectedPurgePaths)
             AddEstimatedDeleteMutation(estimatedTableMutations, dbSnapshot, relativePath);
 
+        if (options.MemoryTrace)
+        {
+            memorySamples.Add(CaptureMemorySample("scan", stopwatch));
+            memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
+        }
+        var memoryTimeline = BuildMemoryTimeline(memorySamples);
+        WarnIfMemoryThresholdExceeded(memoryTimeline);
+
         if (options.Json)
         {
             Console.WriteLine(JsonSerializer.Serialize(new IndexDryRunJsonResult
@@ -269,6 +284,7 @@ public static partial class IndexCommandRunner
                 Errors = errorSamples.Count > 0 ? errorSamples : null,
                 ErrorsTruncated = errorCount > errorSamples.Count,
                 ErrorLimit = DryRunErrorSampleLimit,
+                MemoryTimeline = memoryTimeline,
             }, jsonContext.IndexDryRunJsonResult));
         }
         else

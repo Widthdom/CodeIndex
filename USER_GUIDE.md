@@ -616,6 +616,8 @@ Use the smallest change that reduces the expensive part of your run.
 | `--snippet-lines` / `--max-line-width` | `8` / `512` | Query payloads are too large for AI context | Smaller snippets may hide nearby context |
 | `--path`, `--exclude-path`, `--exclude-tests` | off | Queries or maps are noisy | Over-filtering can hide real matches |
 
+`index --dry-run --rebuild` previews a full replacement scan but does not delete the existing index, so it never prompts for `--yes`. Add `--json --memory-trace` to receive a `memory_timeline` with `start`, `snapshot`, `scan`, and `finalize` samples from the preview itself. Dry-run reads its database snapshot and source files without changing the workspace or DB/WAL/SHM set.
+
 For very large repos, index from the repository root once, exclude generated
 trees early, then use scoped refreshes for daily work. If a branch switch,
 rebase, reset, or merge makes freshness ambiguous, prefer a full `cdidx index .`
@@ -3572,6 +3574,8 @@ cdidx index . --duration-format seconds
 | `--watch-pending-path-limit <n>` / `CDIDX_INDEX_WATCH_PENDING_PATH_LIMIT` | `4096` | watcher が既定 queue を超える数の changed path を検知する | 大きくすると安全な full-rescan fallback 前に使うメモリが増える |
 | `--snippet-lines` / `--max-line-width` | `8` / `512` | AI context に対して query payload が大きすぎる | 小さくしすぎると周辺文脈が見えない |
 | `--path`, `--exclude-path`, `--exclude-tests` | off | query / map が noisy | 絞り込みすぎると実 match を隠す |
+
+`index --dry-run --rebuild` は full replacement scan を preview しますが既存 index を削除しないため、`--yes` の確認を要求しません。`--json --memory-trace` を追加すると、preview 自身から取得した `start`、`snapshot`、`scan`、`finalize` sample を含む `memory_timeline` を返します。dry-run は database snapshot と source file を読み取るだけで、workspace や DB/WAL/SHM set を変更しません。
 
 非常に大きい repo では、repo root で一度 index し、generated tree を早めに除外し、
 日々の作業は scoped refresh を使ってください。branch switch、rebase、reset、merge で

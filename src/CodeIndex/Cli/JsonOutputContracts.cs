@@ -572,6 +572,7 @@ internal sealed class IndexDryRunJsonResult : IVersionedJsonResult
     public List<CliJsonMessage>? Errors { get; init; }
     public bool ErrorsTruncated { get; init; }
     public int ErrorLimit { get; init; }
+    public IndexMemoryTimelineJsonResult? MemoryTimeline { get; init; }
 }
 
 internal sealed class IndexWatchEventJsonResult : IVersionedJsonResult
