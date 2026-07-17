@@ -502,6 +502,7 @@ cdidx validate --exclude-tests --exclude-path 'fixtures/**'
 cdidx validate --json=array --limit 50 --path legacy/
 cdidx validate --json --limit 50 --path legacy/
 cdidx validate --format compact --limit 50
+cdidx validate --format sarif --limit 50
 ```
 
 `validate` reports indexed files that are likely to produce misleading snippets
@@ -518,8 +519,15 @@ current binaries; expected fixture literals are grouped as
 risks are grouped as `decoding_risk` with `actionable: true`.
 Human-readable output prints the same markers in brackets and adds
 `test_fixture` when a finding comes from a test or fixture path.
-The default JSON object includes a `summary` grouped by kind, severity, origin,
-category, and actionability. Use `--format compact` when an agent or pipeline
+The default JSON object and `--format compact` expose authoritative pagination
+metadata as `returned`, `total`, `omitted`, and `truncated`. Their `count` is the
+number of emitted issue rows, while `summary` is computed over all matching
+issues before `--limit` and is grouped by kind, severity, origin, category, and
+actionability. SARIF exposes the same pagination fields under each run's
+`properties`, together with `issues_table_available` and `degraded` so unavailable
+legacy validation data is not mistaken for an authoritative zero; each result maps `info` to `note`, preserves `warning` / `error`,
+and carries the original `severity`, `origin`, `category`, and `actionable`
+values in result properties. Use `--format compact` when an agent or pipeline
 only needs that summary plus compact issue rows.
 Use `--severity warning` to hide informational source literals and focus on
 findings that indicate likely encoding damage.
@@ -529,7 +537,9 @@ issue list.
 UTF-8 BOM markers in Visual Studio `.sln` files are treated as expected solution
 file noise and are not reported by default.
 Use `--json=array` when a pipeline expects a bare issue array instead of the
-default `{ "count": ..., "summary": ..., "issues": [...] }` object.
+default `{ "count": ..., "returned": ..., "total": ..., "omitted": ...,
+"truncated": ..., "summary": ..., "issues": [...] }` object; the bare array
+intentionally omits pagination metadata.
 LFS pointers are recorded as `lfs_pointer_skipped`; their placeholder body is
 not indexed, and their checksum stays tied to the pointer identity until you run
 `git lfs pull` and then `cdidx index .` to index the real file content.
@@ -3501,6 +3511,7 @@ cdidx validate --exclude-tests --exclude-path 'fixtures/**'
 cdidx validate --json=array --limit 50 --path legacy/
 cdidx validate --json --limit 50 --path legacy/
 cdidx validate --format compact --limit 50
+cdidx validate --format sarif --limit 50
 ```
 
 `validate` は、snippet や symbol name を誤らせやすい indexed file を報告します。
@@ -3515,16 +3526,22 @@ validation issue row には `category` と `actionable` も入り、想定済み
 `expected_fixture_literal` / `actionable: false`、decoder replacement のリスクは
 `decoding_risk` / `actionable: true` として grouped summary に載ります。human-readable output
 にも同じ marker が角括弧で表示され、test / fixture path の finding には
-`test_fixture` が付きます。既定の JSON object には kind、severity、origin、category、
-actionability ごとの `summary` が入り、agent や pipeline が summary と compact な issue row だけを
-必要とする場合は `--format compact` を使えます。`--severity warning`
+`test_fixture` が付きます。既定の JSON object と `--format compact` には、authoritative な
+pagination metadata として `returned`、`total`、`omitted`、`truncated` が入ります。`count` は
+実際に出力した issue row 数で、`summary` は `--limit` を適用する前の全 matching issue を対象に
+kind、severity、origin、category、actionability ごとに集計します。SARIF では同じ pagination field が
+各 run の `properties` に入り、`issues_table_available` と `degraded` も併記されるため、利用できない
+legacy validation data が authoritative な 0 件と誤認されることはありません。各 result は `info` を `note` に mapping し、`warning` / `error` は
+維持したうえで、元の `severity`、`origin`、`category`、`actionable` を result properties に保持します。
+agent や pipeline が summary と compact な issue row だけを必要とする場合は `--format compact` を使えます。`--severity warning`
 を使うと、informational な source literal を隠して、エンコーディング破損の
 可能性がある finding に集中できます。fixture や generated sample が issue list を
 支配する場合は、`--exclude-tests` と繰り返し指定できる `--exclude-path` で
 本番コード側の path に validation output を絞れます。Visual Studio の `.sln`
 file に含まれる UTF-8 BOM marker は solution file の既知ノイズとして扱われ、
-既定では報告されません。pipeline が既定の `{ "count": ..., "summary": ..., "issues": [...] }`
-object ではなく bare issue array を期待する場合は `--json=array` を使えます。LFS pointer
+既定では報告されません。pipeline が既定の `{ "count": ..., "returned": ..., "total": ...,
+"omitted": ..., "truncated": ..., "summary": ..., "issues": [...] }` object ではなく bare issue array を
+期待する場合は `--json=array` を使えます。bare array は意図的に pagination metadata を含みません。LFS pointer
 は `lfs_pointer_skipped` として記録され、placeholder 本文は index されず、checksum は
 実体を取得するまで pointer identity に紐づきます。実体を index するには `git lfs pull`
 の後に `cdidx index .` を再実行してください。
