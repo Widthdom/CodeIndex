@@ -224,6 +224,9 @@ public class SymbolResult
     [JsonPropertyName("api_version")]
     public string ApiVersion { get; set; } = JsonOutputContract.ApiVersion;
     public string Path { get; set; } = string.Empty;
+    [JsonPropertyName("symbol_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? SymbolId { get; set; }
     public string? Lang { get; set; }
     public string Kind { get; set; } = string.Empty;
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -243,7 +246,8 @@ public class SymbolResult
     public int? SignatureOriginalLength { get; set; }
     public string? ContainerKind { get; set; }
     public string? ContainerName { get; set; }
-    internal string? ContainerQualifiedName { get; set; }
+    [JsonIgnore]
+    public string? ContainerQualifiedName { get; set; }
     internal string? LogicalPartialKey { get; set; }
     public string? Visibility { get; set; }
     public string? ReturnType { get; set; }
@@ -623,6 +627,14 @@ public class ReferenceResult
     public string? ContainerName { get; set; }
     public bool IsSelfReference { get; set; }
     public bool IsMutualRecursion { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? TargetSymbolId { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TargetSymbolKey { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ResolutionState { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int ResolutionCandidateCount { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? BodyContent { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -1897,6 +1909,18 @@ public class SymbolAnalysisResult
     public List<ReferenceResult> References { get; set; } = [];
     public List<CallerResult> Callers { get; set; } = [];
     public List<CalleeResult> Callees { get; set; } = [];
+    [JsonPropertyName("candidate_count")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int CandidateCount { get; set; }
+    [JsonPropertyName("graph_scope")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? GraphScope { get; set; }
+    [JsonPropertyName("selection_required")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool SelectionRequired { get; set; }
+    [JsonPropertyName("candidate_bundles")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<SymbolCandidateBundle>? CandidateBundles { get; set; }
     /// <summary>
     /// False when the index does not contain the reference table (legacy / read-only DB),
     /// meaning empty References / Callers / Callees are degraded — not a true "no callers".
@@ -1928,6 +1952,41 @@ public class SymbolAnalysisResult
     public bool? ExactHasMissingTable { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? DegradedReason { get; set; }
+}
+
+public class SymbolCandidateSelector
+{
+    [JsonPropertyName("selector")]
+    public string Selector { get; set; } = string.Empty;
+    [JsonPropertyName("symbol_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? SymbolId { get; set; }
+    [JsonPropertyName("qualified_name")]
+    public string QualifiedName { get; set; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Container { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Signature { get; set; }
+    public string Path { get; set; } = string.Empty;
+    public int Line { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Lang { get; set; }
+    public string Kind { get; set; } = string.Empty;
+}
+
+public class SymbolCandidateBundle
+{
+    public SymbolCandidateSelector Selector { get; set; } = new();
+    public DefinitionResult Definition { get; set; } = new();
+    public FileResult? File { get; set; }
+    public bool? GraphSupported { get; set; }
+    public string? GraphSupportReason { get; set; }
+    [JsonPropertyName("identity_scoped")]
+    public bool IdentityScoped { get; set; }
+    public List<SymbolResult> NearbySymbols { get; set; } = [];
+    public List<ReferenceResult> References { get; set; } = [];
+    public List<CallerResult> Callers { get; set; } = [];
+    public List<CalleeResult> Callees { get; set; } = [];
 }
 
 /// <summary>

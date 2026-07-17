@@ -127,6 +127,7 @@ public partial class DbReader
 
         return new DefinitionResult
         {
+            SymbolId = symbol.SymbolId,
             Path = symbol.Path,
             Lang = symbol.Lang,
             Kind = symbol.Kind,

@@ -140,10 +140,10 @@ public partial class DbReader
             GraphSupported = baseGraphSupported,
             GraphSupportReason = graphSupportReason,
             Definitions = definitions,
-            NearbySymbols = nearbySymbols,
-            References = references,
-            Callers = callers,
-            Callees = callees,
+            NearbySymbols = [.. nearbySymbols],
+            References = [.. references],
+            Callers = [.. callers],
+            Callees = [.. callees],
             GraphTableAvailable = _hasReferencesTable,
         };
         txn.Commit();
@@ -265,12 +265,10 @@ public partial class DbReader
             .FirstOrDefault(definition => ReferenceExtractor.SupportsLanguage(definition.Lang) == true && !IsCSharpEnumMemberDefinition(definition))
             ?? definitions.FirstOrDefault(definition => ReferenceExtractor.SupportsLanguage(definition.Lang) == true)
             ?? definitions.FirstOrDefault();
-        if (exact)
-            definitions = BuildAnalysisDefinitions(primaryDefinition, definitions, definitionLimit);
-        var file = primaryDefinition != null ? GetFileByPath(primaryDefinition.Path) : null;
+        definitions = BuildAnalysisDefinitions(primaryDefinition, definitions, definitionLimit);
         var freshness = GetWorkspaceFreshness();
         var hasGraphApplicableFiles = HasGraphApplicableFiles(lang, pathPatterns, excludePathPatterns, excludeTests);
-        var graphLanguage = lang ?? file?.Lang;
+        var graphLanguage = lang ?? primaryDefinition?.Lang;
         const bool hasUnsupportedEnumMember = false;
         var hasSupportedGraphDefinition = exact
             ? HasExactGraphSupportedDefinition(normalizedQuery, lang, pathPatterns, excludePathPatterns, excludeTests)
@@ -285,15 +283,40 @@ public partial class DbReader
             hasUnsupportedEnumMember,
             hasSupportedGraphDefinition);
         var unsupportedSymbolKind = hasUnsupportedEnumMember ? "enum_member" : null;
-        var references = SearchReferences(normalizedQuery, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact, maxLineWidth);
-        var callers = GetCallers(normalizedQuery, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
-        var callees = GetCallees(normalizedQuery, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
+        var candidateBundles = definitions
+            .Select((definition, index) => BuildSymbolCandidateBundle(
+                definition,
+                limit,
+                includeNameFallback: index == 0,
+                pathPatterns,
+                excludePathPatterns,
+                excludeTests,
+                maxLineWidth))
+            .ToList();
+        var selectedBundle = candidateBundles.FirstOrDefault();
+        var file = selectedBundle?.File;
+        var references = selectedBundle?.References
+            ?? (definitions.Count == 0
+                ? SearchReferences(normalizedQuery, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact, maxLineWidth)
+                : []);
+        var callers = selectedBundle?.Callers
+            ?? (definitions.Count == 0
+                ? GetCallers(normalizedQuery, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact)
+                : []);
+        var callees = selectedBundle?.Callees
+            ?? (definitions.Count == 0
+                ? GetCallees(normalizedQuery, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact)
+                : []);
         var sqlGraphRelevant = IsSqlLanguage(lang)
             || IsSqlLanguage(graphLanguage)
             || ContainsSqlLanguage(definitions.Select(definition => definition.Lang))
             || ContainsSqlLanguage(references.Select(reference => reference.Lang))
             || ContainsSqlLanguage(callers.Select(caller => caller.Lang))
-            || ContainsSqlLanguage(callees.Select(callee => callee.Lang));
+            || ContainsSqlLanguage(callees.Select(callee => callee.Lang))
+            || candidateBundles.Any(bundle =>
+                ContainsSqlLanguage(bundle.References.Select(reference => reference.Lang))
+                || ContainsSqlLanguage(bundle.Callers.Select(caller => caller.Lang))
+                || ContainsSqlLanguage(bundle.Callees.Select(callee => callee.Lang)));
         var exactSignal = exact
             ? GetAnalyzeSymbolExactQuerySignal(
                 includeGraphSignal: hasGraphApplicableFiles,
@@ -311,11 +334,11 @@ public partial class DbReader
                 relaxedSymbols!.Count,
                 relaxedSymbols.Select(result => result.Name))
             : null;
-        var nearbySymbols = primaryDefinition != null
-            ? GetNearbySymbols(primaryDefinition.Path, primaryDefinition.StartLine, Math.Min(limit, 10), primaryDefinition.Name, primaryDefinition.StartLine)
-            : [];
+        var nearbySymbols = selectedBundle?.NearbySymbols ?? [];
         ApplyQueryOutputSignatureLimits(definitions);
         ApplyQueryOutputSignatureLimits(nearbySymbols);
+        foreach (var bundle in candidateBundles)
+            ApplyQueryOutputSignatureLimits(bundle.NearbySymbols);
 
         var result = new SymbolAnalysisResult
         {
@@ -329,10 +352,19 @@ public partial class DbReader
             GraphDegraded = hasUnsupportedEnumMember ? true : null,
             UnsupportedSymbolKind = unsupportedSymbolKind,
             Definitions = definitions,
-            NearbySymbols = nearbySymbols,
-            References = references,
-            Callers = callers,
-            Callees = callees,
+            NearbySymbols = [.. nearbySymbols],
+            References = [.. references],
+            Callers = [.. callers],
+            Callees = [.. callees],
+            CandidateCount = candidateBundles.Count,
+            GraphScope = candidateBundles.Count switch
+            {
+                > 1 => "primary_candidate",
+                1 => "single_candidate",
+                _ => "query_fallback",
+            },
+            SelectionRequired = candidateBundles.Count > 1 && candidateBundles.Any(bundle => !bundle.IdentityScoped),
+            CandidateBundles = candidateBundles.Count > 0 ? candidateBundles : null,
             GraphTableAvailable = _hasReferencesTable,
             ExactZeroHint = exactZeroHint,
             ExactIndexAvailable = exactSignal?.ExactIndexAvailable,
@@ -342,6 +374,91 @@ public partial class DbReader
         };
         txn.Commit();
         return result;
+    }
+
+    private SymbolCandidateBundle BuildSymbolCandidateBundle(
+        DefinitionResult definition,
+        int limit,
+        bool includeNameFallback,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests,
+        int maxLineWidth)
+    {
+        var identityScoped = _hasReferencesTable
+                             && _referenceIdentityContractCurrent
+                             && definition.SymbolId != null
+                             && !string.Equals(definition.Lang, "sql", StringComparison.Ordinal)
+                             && _referenceColumns.Contains("source_symbol_id")
+                             && HasTable("symbol_reference_candidates");
+        var references = identityScoped
+            ? SearchReferencesForCandidate(definition, limit, pathPatterns, excludePathPatterns, excludeTests, maxLineWidth)
+            : includeNameFallback
+                ? SearchReferences(definition.Name, limit, definition.Lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true, maxLineWidth)
+                : [];
+        var callers = identityScoped
+            ? GetCallersForCandidate(definition, limit, pathPatterns, excludePathPatterns, excludeTests)
+            : includeNameFallback
+                ? GetCallers(definition.Name, limit, definition.Lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true)
+                : [];
+        var callees = identityScoped
+            ? GetCalleesForCandidate(definition, limit, pathPatterns, excludePathPatterns, excludeTests)
+            : includeNameFallback
+                ? GetCallees(definition.Name, limit, definition.Lang, null, pathPatterns, excludePathPatterns, excludeTests, exact: true)
+                : [];
+        var nearbySymbols = GetNearbySymbols(
+            definition.Path,
+            definition.StartLine,
+            Math.Min(limit, 10),
+            definition.Name,
+            definition.StartLine);
+        var graphSupported = ReferenceExtractor.SupportsSymbolGraph(
+            definition.Lang,
+            definition.Kind,
+            definition.ContainerKind);
+        var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(
+            definition.Lang,
+            graphSupported,
+            definition.Kind,
+            definition.ContainerKind);
+
+        return new SymbolCandidateBundle
+        {
+            Selector = BuildSymbolCandidateSelector(definition),
+            Definition = definition,
+            File = GetFileByPath(definition.Path),
+            GraphSupported = graphSupported,
+            GraphSupportReason = graphSupportReason,
+            IdentityScoped = identityScoped,
+            NearbySymbols = nearbySymbols,
+            References = references,
+            Callers = callers,
+            Callees = callees,
+        };
+    }
+
+    private static SymbolCandidateSelector BuildSymbolCandidateSelector(DefinitionResult definition)
+    {
+        var container = definition.ContainerQualifiedName ?? definition.ContainerName;
+        var qualifiedName = string.IsNullOrWhiteSpace(container)
+            ? definition.Name
+            : $"{container}.{definition.Name}";
+        var selector = definition.SymbolId is long symbolId
+            ? $"id:{symbolId.ToString(CultureInfo.InvariantCulture)}"
+            : $"{definition.Lang}:{definition.Path}:{definition.StartLine.ToString(CultureInfo.InvariantCulture)}:{qualifiedName}";
+
+        return new SymbolCandidateSelector
+        {
+            Selector = selector,
+            SymbolId = definition.SymbolId,
+            QualifiedName = qualifiedName,
+            Container = container,
+            Signature = definition.Signature,
+            Path = definition.Path,
+            Line = definition.StartLine,
+            Lang = definition.Lang,
+            Kind = definition.Kind,
+        };
     }
 
     private static List<DefinitionResult> PrioritizeSourceDefinitions(List<DefinitionResult> definitions)
