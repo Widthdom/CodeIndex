@@ -743,6 +743,7 @@ public partial class DbReader
                 DefinitionSites = includeRankingMetadata || (groupPartials && definitionSites > 1) ? definitionSites : null,
                 SizeLines = includeRankingMetadata ? Convert.ToInt32(reader.GetInt64(23)) : null,
                 ComplexityScore = includeRankingMetadata ? Math.Round(reader.GetDouble(24), 3) : null,
+                SymbolId = reader.GetInt64(27),
             });
         }
         return results;
@@ -797,7 +798,7 @@ public partial class DbReader
                    logical_ranking_reference_score, logical_ranking_hotspot_score,
                    logical_generic_name_penalty, logical_structural_rank_penalty,
                    logical_definition_sites, logical_size_lines, logical_complexity_score,
-                   container_qualified_name, logical_partial_key
+                   container_qualified_name, logical_partial_key, symbol_id
             FROM logical_symbols
             WHERE logical_row_number = 1
             {orderBy}";

@@ -1921,9 +1921,14 @@ public static partial class QueryCommandRunner
                 case "callees":
                     canonical = "callees";
                     break;
+                case "candidate":
+                case "candidates":
+                case "candidate_bundles":
+                    canonical = "candidates";
+                    break;
                 default:
                     invalidField = true;
-                    addParseError($"Error: unsupported --fields value '{ConsoleUi.FormatBoundedValue(rawField)}'. Use one or more of all, file, workspace, graph, definitions, body, source_excerpt, nearby_symbols, outline, references, callers, callees.");
+                    addParseError($"Error: unsupported --fields value '{ConsoleUi.FormatBoundedValue(rawField)}'. Use one or more of all, file, workspace, graph, definitions, body, source_excerpt, nearby_symbols, outline, references, callers, callees, candidates.");
                     continue;
             }
 

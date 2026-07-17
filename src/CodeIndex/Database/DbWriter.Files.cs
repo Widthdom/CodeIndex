@@ -177,6 +177,11 @@ public partial class DbWriter
     /// </summary>
     public void DeleteFileData(long fileId)
     {
+        using var transaction = !IsInTransaction() ? BeginTransaction() : null;
+        var hasIdentityRows = HasReferenceIdentityRowsForFile(fileId);
+        if (hasIdentityRows)
+            InvalidateReferenceIdentityContractForMutation();
+
         // FTS cleanup is handled automatically by fts_chunks_ad trigger on chunk deletion
         // FTSクリーンアップはチャンク削除時にfts_chunks_adトリガーで自動処理される
         var cmd = RentCommand(
@@ -196,5 +201,22 @@ public partial class DbWriter
         {
             ReleaseCommand(cmd);
         }
+        transaction?.Commit();
+    }
+
+    private bool HasReferenceIdentityRowsForFile(long fileId)
+    {
+        // This probe is conditional cleanup bookkeeping rather than a hot reusable write.
+        // Keep it outside the prepared-command cache so UpsertFile's established cache
+        // footprint remains stable for bulk indexing.
+        // この probe は conditional cleanup 用の補助queryであり、hot writeではない。
+        // prepared-command cache の外に置き、bulk index 時の UpsertFile cache footprintを保つ。
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT EXISTS (SELECT 1 FROM symbols WHERE file_id = @fid)
+                OR EXISTS (SELECT 1 FROM symbol_references WHERE file_id = @fid)
+            """;
+        cmd.Parameters.Add("@fid", SqliteType.Integer).Value = fileId;
+        return Convert.ToInt64(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture) != 0;
     }
 }

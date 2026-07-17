@@ -17,6 +17,7 @@ public partial class DbWriter
         if (supportedLanguages.Count == 0)
             return 0;
 
+        using var transaction = !IsInTransaction() ? BeginTransaction() : null;
         var values = SnapshotSupportedLanguages(supportedLanguages);
         var inParams = BuildSupportedLanguageParameterNames(values.Count);
         var cmd = RentCommand(
@@ -31,7 +32,11 @@ public partial class DbWriter
         try
         {
             BindSupportedLanguageParameterValues(cmd, values);
-            return cmd.ExecuteNonQuery();
+            var deleted = cmd.ExecuteNonQuery();
+            if (deleted > 0)
+                InvalidateReferenceIdentityContractForMutation();
+            transaction?.Commit();
+            return deleted;
         }
         finally
         {
@@ -45,6 +50,7 @@ public partial class DbWriter
     /// </summary>
     public int PurgeAllReferences()
     {
+        using var transaction = !IsInTransaction() ? BeginTransaction() : null;
         var referenceCmd = RentCommand("DELETE FROM symbol_references", static _ => { });
         int deletedReferences;
         try
@@ -55,6 +61,8 @@ public partial class DbWriter
         {
             ReleaseCommand(referenceCmd);
         }
+        if (deletedReferences > 0)
+            InvalidateReferenceIdentityContractForMutation();
 
         var lineCmd = RentCommand("DELETE FROM reference_lines", static _ => { });
         try
@@ -66,6 +74,7 @@ public partial class DbWriter
             ReleaseCommand(lineCmd);
         }
 
+        transaction?.Commit();
         return deletedReferences;
     }
 

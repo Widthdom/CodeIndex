@@ -4,6 +4,8 @@ namespace CodeIndex.Database;
 
 public partial class DbWriter
 {
+    private bool _referenceIdentityContractKnownInvalid;
+
     public void StampSymbolExtractorVersions(IReadOnlyCollection<string>? languagesToStamp = null)
     {
         var languages = languagesToStamp ?? GetIndexedLanguages();
@@ -67,6 +69,40 @@ public partial class DbWriter
     public void ClearSqlGraphContractReady()
     {
         SetMeta(DbContext.SqlGraphContractVersionMetaKey, null);
+    }
+
+    public bool ReferenceIdentityContractMatchesCurrent()
+        => string.Equals(
+            GetMetaString(DbContext.ReferenceIdentityContractVersionMetaKey),
+            DbContext.ReferenceIdentityContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            StringComparison.Ordinal);
+
+    public void MarkReferenceIdentityContractReady()
+    {
+        SetMeta(
+            DbContext.ReferenceIdentityContractVersionMetaKey,
+            DbContext.ReferenceIdentityContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        _referenceIdentityContractKnownInvalid = false;
+    }
+
+    public void ClearReferenceIdentityContractReady()
+    {
+        SetMeta(DbContext.ReferenceIdentityContractVersionMetaKey, null);
+        _referenceIdentityContractKnownInvalid = true;
+    }
+
+    private void InvalidateReferenceIdentityContractForMutation()
+    {
+        if (_referenceIdentityContractKnownInvalid)
+            return;
+
+        ClearReferenceIdentityContractReady();
+        if (IsInTransaction())
+        {
+            // A surrounding transaction may still roll back the marker deletion.
+            // 外側 transaction が marker 削除を rollback する可能性があるため cache しない。
+            _referenceIdentityContractKnownInvalid = false;
+        }
     }
 
     /// <summary>

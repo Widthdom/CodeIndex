@@ -9,6 +9,129 @@ namespace CodeIndex.Tests;
 
 public partial class QueryCommandRunnerTests
 {
+    private static JsonElement GetInspectCandidateBundle(JsonElement analysis, string qualifiedName)
+        => Assert.Single(analysis.GetProperty("candidate_bundles")
+            .EnumerateArray()
+            .Where(bundle => string.Equals(
+                bundle.GetProperty("selector").GetProperty("qualified_name").GetString(),
+                qualifiedName,
+                StringComparison.Ordinal)));
+
+    [Fact]
+    public void RunInspect_CompactCandidateBundlesOmitBodiesAndKeepIndependentTruncationCounts()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_compact_candidate_policy");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Alpha.cs", "csharp", """
+                namespace CompactCandidates;
+                public sealed class Alpha
+                {
+                    public void ParseArgs() { }
+                    public void InvokeA() => ParseArgs();
+                    public void InvokeB() => ParseArgs();
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Beta.cs", "csharp", """
+                namespace CompactCandidates;
+                public sealed class Beta
+                {
+                    public void ParseArgs() { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["ParseArgs", "--db", dbPath, "--json", "--compact", "--limit", "1", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var bundles = json.GetProperty("candidate_bundles").EnumerateArray().ToArray();
+            var sections = json.GetProperty("truncation").GetProperty("sections");
+            var topReferences = sections.GetProperty("references");
+            var primaryReferences = sections.GetProperty("candidate_bundles[0].references");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, bundles.Length);
+            Assert.All(bundles, bundle =>
+            {
+                var definition = bundle.GetProperty("definition");
+                Assert.False(definition.TryGetProperty("content", out _));
+                Assert.False(definition.TryGetProperty("body_content", out _));
+            });
+            Assert.Equal(2, topReferences.GetProperty("source_count").GetInt32());
+            Assert.True(topReferences.GetProperty("truncated").GetBoolean());
+            Assert.Equal(2, primaryReferences.GetProperty("source_count").GetInt32());
+            Assert.True(primaryReferences.GetProperty("truncated").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_FieldsCandidatesProjectsSeparatedIdentityBundles()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_candidate_fields");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/IndexCommandRunner.cs", "csharp", """
+                namespace InspectFields;
+                public sealed class IndexCommandRunner
+                {
+                    public void ParseArgs() => IndexOnly();
+                    private void IndexOnly() { }
+                    public void InvokeIndex() => ParseArgs();
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/QueryCommandRunner.cs", "csharp", """
+                namespace InspectFields;
+                public sealed class QueryCommandRunner
+                {
+                    public void ParseArgs() => QueryOnly();
+                    private void QueryOnly() { }
+                    public void InvokeQuery() => ParseArgs();
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["ParseArgs", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--fields", "candidates"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var indexBundle = GetInspectCandidateBundle(json, "InspectFields.IndexCommandRunner.ParseArgs");
+            var queryBundle = GetInspectCandidateBundle(json, "InspectFields.QueryCommandRunner.ParseArgs");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, json.GetProperty("candidate_count").GetInt32());
+            Assert.Equal("primary_candidate", json.GetProperty("graph_scope").GetString());
+            Assert.False(json.TryGetProperty("definitions", out _));
+            Assert.False(json.TryGetProperty("references", out _));
+            Assert.True(indexBundle.GetProperty("identity_scoped").GetBoolean());
+            Assert.Contains(indexBundle.GetProperty("callers").EnumerateArray(),
+                caller => caller.GetProperty("caller_name").GetString() == "InvokeIndex");
+            Assert.DoesNotContain(indexBundle.GetProperty("callers").EnumerateArray(),
+                caller => caller.GetProperty("caller_name").GetString() == "InvokeQuery");
+            Assert.True(queryBundle.GetProperty("identity_scoped").GetBoolean());
+            Assert.Contains(queryBundle.GetProperty("callees").EnumerateArray(),
+                callee => callee.GetProperty("callee_name").GetString() == "QueryOnly");
+            Assert.DoesNotContain(queryBundle.GetProperty("callees").EnumerateArray(),
+                callee => callee.GetProperty("callee_name").GetString() == "IndexOnly");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void RunInspect_ExactFilePathAndCoordinatesAreStrict_Issue4572()
     {
@@ -4218,10 +4341,13 @@ public partial class QueryCommandRunnerTests
 
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
-            var reference = Assert.Single(json.GetProperty("references").EnumerateArray());
+            var enumBundle = GetInspectCandidateBundle(json, "Demo.Color.Red");
+            var reference = Assert.Single(enumBundle.GetProperty("references").EnumerateArray());
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
+            Assert.Equal("primary_candidate", json.GetProperty("graph_scope").GetString());
+            Assert.Empty(json.GetProperty("references").EnumerateArray());
             Assert.Equal("M", reference.GetProperty("container_name").GetString());
             Assert.Equal(23, reference.GetProperty("line").GetInt32());
             Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
@@ -4495,18 +4621,21 @@ public partial class QueryCommandRunnerTests
 
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
-            var referenceContainers = json.GetProperty("references")
+            var enumBundle = GetInspectCandidateBundle(json, "Demo.Status.Ready");
+            var referenceContainers = enumBundle.GetProperty("references")
                 .EnumerateArray()
                 .Select(reference => reference.GetProperty("container_name").GetString())
                 .OrderBy(name => name)
                 .ToArray();
-            var callerReferenceCounts = json.GetProperty("callers")
+            var callerReferenceCounts = enumBundle.GetProperty("callers")
                 .EnumerateArray()
                 .Select(caller => caller.GetProperty("reference_count").GetInt32())
                 .ToArray();
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
+            Assert.Equal("primary_candidate", json.GetProperty("graph_scope").GetString());
+            Assert.Empty(json.GetProperty("references").EnumerateArray());
             Assert.Equal(["ReadComment", "ReadRecursive"], referenceContainers);
             Assert.Equal([1, 1], callerReferenceCounts);
             Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
@@ -4655,12 +4784,15 @@ public partial class QueryCommandRunnerTests
 
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
-            var reference = Assert.Single(json.GetProperty("references").EnumerateArray());
+            var enumBundle = GetInspectCandidateBundle(json, "Demo.Status.Ready");
+            var reference = Assert.Single(enumBundle.GetProperty("references").EnumerateArray());
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
+            Assert.Equal("primary_candidate", json.GetProperty("graph_scope").GetString());
+            Assert.Empty(json.GetProperty("references").EnumerateArray());
             Assert.Equal("Read", reference.GetProperty("container_name").GetString());
             Assert.Contains("Status.Ready", reference.GetProperty("context").GetString(), StringComparison.Ordinal);
             Assert.True(json.GetProperty("graph_supported").GetBoolean());
@@ -4840,11 +4972,14 @@ public partial class QueryCommandRunnerTests
 
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
-            var reference = Assert.Single(json.GetProperty("references").EnumerateArray());
+            var enumBundle = GetInspectCandidateBundle(json, "Demo.Status.Ready");
+            var reference = Assert.Single(enumBundle.GetProperty("references").EnumerateArray());
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(2, json.GetProperty("definitions").GetArrayLength());
+            Assert.Equal("primary_candidate", json.GetProperty("graph_scope").GetString());
+            Assert.Empty(json.GetProperty("references").EnumerateArray());
             Assert.Equal(28, reference.GetProperty("line").GetInt32());
             Assert.Equal("Read", reference.GetProperty("container_name").GetString());
             Assert.True(json.GetProperty("graph_supported").GetBoolean());

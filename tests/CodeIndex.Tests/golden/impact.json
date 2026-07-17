@@ -37,6 +37,7 @@
     {
       "api_version": "1",
       "path": "src/FolderDiffService.cs",
+      "symbol_id": 1,
       "lang": "csharp",
       "kind": "class",
       "name": "FolderDiffService",

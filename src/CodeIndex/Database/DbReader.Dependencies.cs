@@ -231,6 +231,47 @@ public partial class DbReader
         using var cmd = _conn.CreateCommand();
         var referenceLineJoin = ReferenceLineJoinSql("r");
         var contextSql = ReferenceContextSql("r");
+        var hasResolvedReferenceTargets = _referenceIdentityContractCurrent;
+        var resolutionStateSql = hasResolvedReferenceTargets ? "r.resolution_state" : "NULL";
+        var identityScopeConditionSql = "src.lang = 'csharp' AND r.reference_kind NOT IN ('attribute', 'annotation')";
+        var referenceIdSql = $"CASE WHEN {identityScopeConditionSql} THEN r.id ELSE 0 END";
+        var scopedResolutionStateSql = $"CASE WHEN {identityScopeConditionSql} THEN {resolutionStateSql} ELSE NULL END";
+        var identityScopedSql = $"CASE WHEN {identityScopeConditionSql} THEN 1 ELSE 0 END";
+        var csharpNameEdgePredicate = hasResolvedReferenceTargets
+            ? "(snc.source_lang != 'csharp' OR snc.identity_scoped = 0)"
+            : "1 = 1";
+        var resolvedIdentityLimitSql = lang == "csharp"
+            ? " LIMIT @sourceCandidateLimit"
+            : string.Empty;
+        var resolvedCSharpEdgesSql = hasResolvedReferenceTargets
+            ? @"
+                SELECT resolved.source_path,
+                       resolved.target_path,
+                       resolved.symbol_name,
+                       COUNT(*) AS ref_count
+                FROM (
+                    SELECT DISTINCT lrp.source_path,
+                           target_file.path AS target_path,
+                           lrp.symbol_name,
+                           lrp.reference_id
+                    FROM logical_references_primary lrp
+                    JOIN symbol_reference_candidates candidate
+                      ON candidate.reference_id = lrp.reference_id
+                    JOIN symbols target ON target.id = candidate.symbol_id
+                    JOIN files target_file ON target_file.id = target.file_id
+                    JOIN target_files scoped_target
+                      ON scoped_target.target_path = target_file.path
+                     AND scoped_target.target_lang = target_file.lang
+                    WHERE lrp.source_lang = 'csharp'
+                      AND lrp.identity_scoped = 1
+                      AND lrp.resolution_state IN ('resolved', 'resolved_group')
+                      AND lrp.source_path != target_file.path
+                    ORDER BY lrp.source_path, lrp.symbol_name, lrp.reference_id" + resolvedIdentityLimitSql + @"
+                ) resolved
+                GROUP BY resolved.source_path, resolved.target_path, resolved.symbol_name
+                UNION ALL
+                "
+            : string.Empty;
         // Aggregate logical reference sites per source-file/name first, then join that bounded
         // set to distinct target files. This avoids the per-reference × per-symbol explosion that
         // could exhaust SQLite temp-store on large indexes with many same-named symbols.
@@ -286,6 +327,9 @@ public partial class DbReader
                 SELECT src.id AS source_file_id,
                        src.path AS source_path,
                        src.lang AS source_lang,
+                       " + referenceIdSql + @" AS reference_id,
+                       " + scopedResolutionStateSql + @" AS resolution_state,
+                       " + identityScopedSql + @" AS identity_scoped,
                        r.symbol_name,
                        " + contextSql + @" AS context,
                        r.container_name,
@@ -330,10 +374,10 @@ public partial class DbReader
         if (excludeTests)
             sql += $" AND NOT {DependencyTestPathCondition($"{sourceFilterAlias}.path")}";
         sql += @"
-                GROUP BY src.id, src.path, src.lang, r.symbol_name, " + contextSql + @", r.container_name, r.line, r.column_number, r.reference_kind, logical_reference_kind
+                GROUP BY src.id, src.path, src.lang, " + referenceIdSql + @", " + scopedResolutionStateSql + @", " + identityScopedSql + @", r.symbol_name, " + contextSql + @", r.container_name, r.line, r.column_number, r.reference_kind, logical_reference_kind
             ),
             logical_references AS (
-                SELECT source_file_id, source_path, source_lang,
+                SELECT source_file_id, source_path, source_lang, reference_id, identity_scoped,
                        " + BuildLogicalReferenceNameExpr("source_lang", "symbol_name", "context", "container_name", "column_number") + @" AS symbol_name,
                        " + BuildLogicalReferenceSegmentCountExpr("source_lang", "symbol_name", "context", "container_name", "column_number") + @" AS symbol_segment_count,
                        " + BuildLogicalReferenceLeafFallbackAllowedExpr("source_lang", "symbol_name", "context", "container_name", "column_number") + @" AS allow_leaf_fallback,
@@ -353,7 +397,7 @@ public partial class DbReader
                 -- deps がクラス側のファイルを target として join できるようにする。alias 行には
                 -- フラグを付け、edges CTE 側で class-like target だけに限定する。これにより、
                 -- 偶然 'FooAttribute' という名前を持つ関数やプロパティへの誤ったエッジを防ぐ。
-                SELECT source_file_id, source_path, source_lang,
+                SELECT source_file_id, source_path, source_lang, reference_id, identity_scoped,
                        symbol_name || 'Attribute' AS symbol_name,
                        1 AS symbol_segment_count,
                        0 AS allow_leaf_fallback,
@@ -378,6 +422,7 @@ public partial class DbReader
                 SELECT source_file_id,
                        source_path,
                        source_lang,
+                       identity_scoped,
                        symbol_name,
                        symbol_segment_count,
                        allow_leaf_fallback,
@@ -390,7 +435,7 @@ public partial class DbReader
                        is_metadata,
                        COUNT(*) AS ref_count
                 FROM logical_references
-                GROUP BY source_file_id, source_path, source_lang, symbol_name, symbol_segment_count, allow_leaf_fallback, raw_symbol_name, context, column_number, raw_reference_kind, logical_reference_kind, is_attribute_alias, is_metadata
+                GROUP BY source_file_id, source_path, source_lang, identity_scoped, symbol_name, symbol_segment_count, allow_leaf_fallback, raw_symbol_name, context, column_number, raw_reference_kind, logical_reference_kind, is_attribute_alias, is_metadata
             )";
         if (lang == "csharp")
         {
@@ -574,6 +619,7 @@ public partial class DbReader
                 GROUP BY tf.target_lang, tf.symbol_name, tf.symbol_segment_count
             ),
             edges AS (
+                " + resolvedCSharpEdgesSql + @"
                 SELECT snc.source_path,
                        tf.target_path,
                        tf.symbol_name,
@@ -590,6 +636,7 @@ public partial class DbReader
                  AND ta.symbol_name = snc.symbol_name
                  AND ta.symbol_segment_count = snc.symbol_segment_count
                 WHERE snc.source_path != tf.target_path
+                  AND " + csharpNameEdgePredicate + @"
                   -- All metadata references ([Foo] / @Foo) and their synthetic C#
                   -- suffix aliases must only match class-like target kinds; otherwise
                   -- a metadata reference would spuriously depend on any file that

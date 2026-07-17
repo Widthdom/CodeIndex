@@ -7,7 +7,7 @@ public partial class DbReader
 {
     private const int CSharpUsingStaticReferenceFilterChunkSize = 64;
     private const int CSharpUsingStaticReferenceFilterMaxRawLimit = 65536;
-    private sealed record SearchReferenceRawRow(string Path, string? Lang, string SymbolName, string ReferenceKind, int Line, int Column, string Context, string? ContainerKind, string? ContainerName, bool IsSelfReference, bool IsMutualRecursion);
+    private sealed record SearchReferenceRawRow(string Path, string? Lang, string SymbolName, string ReferenceKind, int Line, int Column, string Context, string? ContainerKind, string? ContainerName, bool IsSelfReference, bool IsMutualRecursion, long? TargetSymbolId, string? TargetSymbolKey, string? ResolutionState, int ResolutionCandidateCount);
 
     /// <summary>
     /// Search indexed references such as call sites.
@@ -62,9 +62,9 @@ public partial class DbReader
         return filtered.Count <= limit ? filtered : filtered.Take(limit).ToList();
     }
 
-    private List<ReferenceResult> SearchReferencesCore(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset, int maxLineWidth, bool excludeSelfReferences)
+    private List<ReferenceResult> SearchReferencesCore(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset, int maxLineWidth, bool excludeSelfReferences, long? targetSymbolId = null)
     {
-        using var cmd = CreateSearchReferencesCommand(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, offset, excludeSelfReferences: excludeSelfReferences);
+        using var cmd = CreateSearchReferencesCommandCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, offset, includeOrdering: true, excludeSelfReferences, targetSymbolId);
         var results = new List<ReferenceResult>();
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
@@ -86,18 +86,55 @@ public partial class DbReader
                 ContainerName = row.ContainerName,
                 IsSelfReference = row.IsSelfReference,
                 IsMutualRecursion = row.IsMutualRecursion,
+                TargetSymbolId = row.TargetSymbolId,
+                TargetSymbolKey = row.TargetSymbolKey,
+                ResolutionState = row.ResolutionState,
+                ResolutionCandidateCount = row.ResolutionCandidateCount,
             });
         }
         return results;
     }
 
+    private List<ReferenceResult> SearchReferencesForCandidate(
+        DefinitionResult definition,
+        int limit,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests,
+        int maxLineWidth)
+    {
+        if (definition.SymbolId is not long symbolId || !HasTable("symbol_reference_candidates"))
+            return [];
+
+        return SearchReferencesCore(
+            definition.Name,
+            limit,
+            definition.Lang,
+            referenceKind: null,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            exact: true,
+            offset: 0,
+            maxLineWidth,
+            excludeSelfReferences: false,
+            targetSymbolId: symbolId);
+    }
+
     private SqliteCommand CreateSearchReferencesCommand(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset = 0, bool includeOrdering = true, bool excludeSelfReferences = false)
+        => CreateSearchReferencesCommandCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, offset, includeOrdering, excludeSelfReferences, targetSymbolId: null);
+
+    private SqliteCommand CreateSearchReferencesCommandCore(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset, bool includeOrdering, bool excludeSelfReferences, long? targetSymbolId)
     {
         var cmd = _conn.CreateCommand();
         var referenceLineJoin = ReferenceLineJoinSql("r");
         var contextSql = ReferenceContextSql("r");
         var selfReferenceSql = _referenceColumns.Contains("is_self_reference") ? "r.is_self_reference" : "0";
         var mutualRecursionSql = _referenceColumns.Contains("is_mutual_recursion") ? "r.is_mutual_recursion" : "0";
+        var targetSymbolIdSql = _referenceIdentityContractCurrent ? "r.target_symbol_id" : "NULL";
+        var targetSymbolKeySql = _referenceIdentityContractCurrent ? "r.target_symbol_key" : "NULL";
+        var resolutionStateSql = _referenceIdentityContractCurrent ? "r.resolution_state" : "NULL";
+        var resolutionCandidateCountSql = _referenceIdentityContractCurrent ? "r.resolution_candidate_count" : "0";
         var sql = referenceKind == null
             ? $@"
             WITH logical_references AS (
@@ -108,7 +145,11 @@ public partial class DbReader
                        CASE WHEN COUNT(DISTINCT COALESCE(r.container_kind, '')) = 1 THEN MIN(r.container_kind) ELSE NULL END AS container_kind,
                        CASE WHEN COUNT(DISTINCT COALESCE(r.container_name, '')) = 1 THEN MIN(r.container_name) ELSE NULL END AS container_name,
                        MAX({selfReferenceSql}) AS is_self_reference,
-                       MAX({mutualRecursionSql}) AS is_mutual_recursion
+                       MAX({mutualRecursionSql}) AS is_mutual_recursion,
+                       CASE WHEN COUNT(DISTINCT COALESCE({targetSymbolIdSql}, -1)) = 1 THEN MIN({targetSymbolIdSql}) ELSE NULL END AS target_symbol_id,
+                       CASE WHEN COUNT(DISTINCT COALESCE({targetSymbolKeySql}, '')) = 1 THEN MIN({targetSymbolKeySql}) ELSE NULL END AS target_symbol_key,
+                       CASE WHEN COUNT(DISTINCT COALESCE({resolutionStateSql}, '')) = 1 THEN MIN({resolutionStateSql}) ELSE 'ambiguous' END AS resolution_state,
+                       MAX({resolutionCandidateCountSql}) AS resolution_candidate_count
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 {referenceLineJoin}
@@ -118,7 +159,11 @@ public partial class DbReader
             SELECT f.path, f.lang, r.symbol_name, r.reference_kind, r.line, r.column_number,
                    " + contextSql + @", r.container_kind, r.container_name,
                    " + selfReferenceSql + @" AS is_self_reference,
-                   " + mutualRecursionSql + @" AS is_mutual_recursion
+                   " + mutualRecursionSql + @" AS is_mutual_recursion,
+                   " + targetSymbolIdSql + @" AS target_symbol_id,
+                   " + targetSymbolKeySql + @" AS target_symbol_key,
+                   " + resolutionStateSql + @" AS resolution_state,
+                   " + resolutionCandidateCountSql + @" AS resolution_candidate_count
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             " + referenceLineJoin + @"
@@ -221,6 +266,16 @@ public partial class DbReader
             sql += " AND r.reference_kind = @referenceKind";
         if (excludeSelfReferences)
             sql += $" AND {selfReferenceSql} = 0";
+        if (targetSymbolId != null && HasTable("symbol_reference_candidates"))
+        {
+            sql += @"
+                AND EXISTS (
+                    SELECT 1
+                    FROM symbol_reference_candidates AS identity_candidate
+                    WHERE identity_candidate.reference_id = r.id
+                      AND identity_candidate.symbol_id = @targetSymbolId
+                )";
+        }
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
@@ -230,7 +285,8 @@ public partial class DbReader
                 GROUP BY f.path, f.lang, r.file_id, r.symbol_name, r.line, r.column_number, " + GetLogicalReferenceKindSql("r.reference_kind") + @"
             )
             SELECT path, lang, symbol_name, reference_kind, line, column_number,
-                   context, container_kind, container_name, is_self_reference, is_mutual_recursion
+                   context, container_kind, container_name, is_self_reference, is_mutual_recursion,
+                   target_symbol_id, target_symbol_key, resolution_state, resolution_candidate_count
             FROM logical_references r";
         }
         if (includeOrdering)
@@ -278,6 +334,8 @@ public partial class DbReader
             SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", NormalizeQueryLanguage(lang));
+        if (targetSymbolId != null && HasTable("symbol_reference_candidates"))
+            SqliteCommandPolicy.Add(cmd, "@targetSymbolId", targetSymbolId.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         if (includeOrdering)
         {
@@ -300,7 +358,11 @@ public partial class DbReader
             GetNullableString(reader, 7),
             GetNullableString(reader, 8),
             reader.GetInt32(9) != 0,
-            reader.GetInt32(10) != 0);
+            reader.GetInt32(10) != 0,
+            reader.IsDBNull(11) ? null : reader.GetInt64(11),
+            GetNullableString(reader, 12),
+            GetNullableString(reader, 13),
+            reader.GetInt32(14));
     }
 
     private static bool ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(string? lang, string? referenceKind, bool exact) =>

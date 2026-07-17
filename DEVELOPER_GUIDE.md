@@ -742,7 +742,21 @@ symbol_references (
     column_number   INTEGER,                 -- 1-based column number
     context         TEXT,                    -- trimmed source line
     container_kind  TEXT,
-    container_name  TEXT
+    container_name  TEXT,
+    source_symbol_id INTEGER,                -- enclosing definition when resolved
+    target_symbol_id INTEGER,                -- single resolved target definition
+    target_symbol_key TEXT,                  -- stable language/path/container/name family key
+    target_qualifier TEXT,                   -- stable type-like receiver qualifier when extracted
+    resolution_state TEXT,                   -- resolved / resolved_group / ambiguous / unresolved
+    resolution_candidate_count INTEGER NOT NULL DEFAULT 0
+)
+
+-- Best-scope candidates retained for resolved groups and explicit ambiguity
+symbol_reference_candidates (
+    reference_id INTEGER NOT NULL,
+    symbol_id    INTEGER NOT NULL,
+    scope_rank   INTEGER NOT NULL,
+    PRIMARY KEY(reference_id, symbol_id)
 )
 
 -- FTS5 virtual table mirroring chunks.content
@@ -777,6 +791,9 @@ idx_symbol_refs_container_nocase_kind ON symbol_references(container_name COLLAT
 idx_symbol_refs_symbol_name_folded_kind ON symbol_references(symbol_name_folded, reference_kind)
 idx_symbol_refs_symbol_name_folded_file ON symbol_references(symbol_name_folded, file_id)
 idx_symbol_refs_container_name_folded_kind ON symbol_references(container_name_folded, reference_kind)
+idx_symbol_refs_source_symbol ON symbol_references(source_symbol_id)
+idx_symbol_refs_target_symbol ON symbol_references(target_symbol_id)
+idx_symbol_ref_candidates_symbol ON symbol_reference_candidates(symbol_id, reference_id)
 ```
 
 ### Query planner expectations
@@ -817,7 +834,23 @@ fts_chunks_au   AFTER UPDATE ON chunks  -- delete old + insert new in FTS
 files 1──N chunks 1──1 fts_chunks (content mirror)
 files 1──N symbols
 files 1──N symbol_references
+symbol_references 1──N symbol_reference_candidates N──1 symbols
 ```
+
+Identity-aware reads are enabled only when `codeindex_meta` contains the current
+`reference_identity_contract_version`. Adding the columns and candidate table through a
+legacy read migration is not sufficient readiness: a normal, no-op, or deletion-only index
+run refreshes reference resolution and stamps the marker atomically. C# references with an
+unqualified name receive a global candidate only when that name is unique in the applicable
+symbol set. Otherwise they remain `ambiguous` or `unresolved`, and dependency queries do not
+fall back to a same-name edge.
+
+`inspect` / MCP `analyze_symbol` treats each returned definition as a separate identity
+bundle. Candidate selectors expose the persisted symbol ID plus qualified/container name,
+signature, language, kind, path, and line. Identity-scoped reference/caller/callee queries
+join `symbol_reference_candidates` or `source_symbol_id`; with multiple candidates,
+top-level graph arrays are labeled `primary_candidate` and mirror only the first prioritized
+bundle, never an unlabeled aggregate across definitions.
 
 ### Reference taxonomy
 
@@ -3492,7 +3525,21 @@ symbol_references (
     column_number   INTEGER,                 -- 1始まりの列番号
     context         TEXT,                    -- trim済みソース行
     container_kind  TEXT,
-    container_name  TEXT
+    container_name  TEXT,
+    source_symbol_id INTEGER,                -- 解決済みの場合の親定義
+    target_symbol_id INTEGER,                -- 単一に解決した参照先定義
+    target_symbol_key TEXT,                  -- language/path/container/name による安定 family key
+    target_qualifier TEXT,                   -- 抽出できた安定した型相当 receiver 修飾子
+    resolution_state TEXT,                   -- resolved / resolved_group / ambiguous / unresolved
+    resolution_candidate_count INTEGER NOT NULL DEFAULT 0
+)
+
+-- resolved group と明示的な曖昧性のために保持する最良 scope の候補
+symbol_reference_candidates (
+    reference_id INTEGER NOT NULL,
+    symbol_id    INTEGER NOT NULL,
+    scope_rank   INTEGER NOT NULL,
+    PRIMARY KEY(reference_id, symbol_id)
 )
 
 -- chunks.contentをミラーするFTS5仮想テーブル
@@ -3519,6 +3566,9 @@ idx_files_lang_modified ON files(lang, modified)
 idx_symbol_refs_name      ON symbol_references(symbol_name)
 idx_symbol_refs_file      ON symbol_references(file_id)
 idx_symbol_refs_container ON symbol_references(container_name)
+idx_symbol_refs_source_symbol ON symbol_references(source_symbol_id)
+idx_symbol_refs_target_symbol ON symbol_references(target_symbol_id)
+idx_symbol_ref_candidates_symbol ON symbol_reference_candidates(symbol_id, reference_id)
 ```
 
 ### クエリプランナー期待値
@@ -3555,7 +3605,23 @@ fts_chunks_au   AFTER UPDATE ON chunks  -- 旧エントリ削除＋新エント�
 files 1──N chunks 1──1 fts_chunks（コンテンツミラー）
 files 1──N symbols
 files 1──N symbol_references
+symbol_references 1──N symbol_reference_candidates N──1 symbols
 ```
+
+identity-aware read は、`codeindex_meta` の `reference_identity_contract_version` が
+現在値である場合だけ有効になります。legacy read migration で column と candidate table を
+追加しただけでは ready とみなしません。通常、no-op、削除のみの index 実行でも reference
+resolution を再構築し、同じ transaction で marker を設定します。C# の無修飾名 reference は、
+対象となる symbol 集合で名前が一意の場合だけ global candidate を持ちます。それ以外は
+`ambiguous` または `unresolved` のままとし、dependency query は同名 edge へ fallback しません。
+
+`inspect` / MCP `analyze_symbol` は返された各定義を別々の identity bundle として
+扱います。candidate selector は永続化した symbol ID に加え、qualified/container name、
+signature、language、kind、path、line を公開します。identity-scoped な
+reference/caller/callee query は `symbol_reference_candidates` または
+`source_symbol_id` を join します。複数 candidate の top-level graph 配列は
+`primary_candidate` と明示して優先順位1位の bundle だけを反映し、複数定義を
+未ラベルで集約しません。
 
 ### 参照 taxonomy
 
