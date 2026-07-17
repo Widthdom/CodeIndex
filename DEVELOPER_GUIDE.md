@@ -200,9 +200,12 @@ git status --short -- '**/packages.lock.json'
 
 `CliCommandCatalog` owns command and nested-subcommand names, while
 `CliFlagSchema` owns primary flags, aliases, placeholders, descriptions, and
-command applicability. `ConsoleUi.PrintCommandUsage` and every shell completion
-renderer consume those shared definitions. Add new CLI metadata there first so
-parser validation, help, completion, and generated next-step flags stay aligned.
+command applicability. Every shell completion renderer consumes those shared
+definitions, and `ConsoleUi.PrintCommandUsage` uses them when the shared parser is
+the authoritative option inventory. Dedicated or nested parsers retain exact
+usage-specific syntax until their subcommand metadata is complete. Add new CLI
+metadata there first so parser validation, help, completion, and generated
+next-step flags stay aligned without emitting partial option lists.
 
 Full-scan resume checkpoints live at `.cdidx/scan-checkpoint.json`. The internal JSON schema is versioned (`Version` is currently `1`) and binds `GitHead` to a bounded `Directories` array; malformed, stale, future-version, oversized, or over-depth payloads are ignored with a bounded warning and a full scan.
 
@@ -2863,9 +2866,11 @@ git status --short -- '**/packages.lock.json'
 
 command と nested subcommand の名前は `CliCommandCatalog`、primary flag、alias、
 placeholder、description、command applicability は `CliFlagSchema` が管理します。
-`ConsoleUi.PrintCommandUsage` と全 shell completion renderer は、この共有定義を参照します。
-新しい CLI metadata はまず共有定義へ追加し、parser validation、help、completion、
-生成される next-step flag の同期を維持してください。
+全 shell completion renderer はこの共有定義を参照し、共有 parser が option 一覧の
+正本である場合は `ConsoleUi.PrintCommandUsage` も参照します。専用 parser / nested parser
+は subcommand metadata が揃うまで usage 固有の正確な構文を維持します。新しい CLI
+metadata はまず共有定義へ追加し、不完全な option 一覧を出さずに parser validation、
+help、completion、生成される next-step flag の同期を維持してください。
 
 大きな command / extractor file については
 [docs/large-file-decomposition-plan.md](docs/large-file-decomposition-plan.md)

@@ -282,7 +282,7 @@ public class CliFlagSchemaTests
     }
 
     [Fact]
-    public void EveryFlagInSchemaForEnumeratedBranch_AppearsInBashCompletionAndCommandHelpForThatBranch_Issue4571()
+    public void EveryFlagInSchemaForEnumeratedBranch_AppearsInCompletionAndAuthoritativeCommandHelp_Issue4571()
     {
         // Inverse direction: every flag the schema declares for a per-command branch must
         // surface in that branch's bash completion list. Otherwise users can't tab-complete
@@ -295,13 +295,18 @@ public class CliFlagSchemaTests
             var (printed, helpOutput, _) = ConsoleCapture.Capture(() =>
                 ConsoleUi.PrintCommandUsage(command) ? 1 : 0);
             Assert.Equal(1, printed);
-            foreach (var schemaFlag in CliFlagSchema.GetCompletionFlagsForCommand(command))
+            var schemaFlags = CliFlagSchema.GetCompletionFlagsForCommand(command);
+            foreach (var schemaFlag in schemaFlags)
             {
                 Assert.Contains(schemaFlag.Name, CliFlagSchema.GetAcceptedFlagNamesForCommand(command));
                 Assert.True(flags.Contains(schemaFlag.Name),
                     $"bash completion for {command} is missing schema flag {schemaFlag.Name}.");
-                Assert.Contains(schemaFlag.Name, helpOutput, StringComparison.Ordinal);
+                if (CliFlagSchema.HasAuthoritativeHelpOptions(command))
+                    Assert.Contains(schemaFlag.Name, helpOutput, StringComparison.Ordinal);
             }
+
+            if (!CliFlagSchema.HasAuthoritativeHelpOptions(command))
+                Assert.DoesNotContain("\nOptions:\n", helpOutput, StringComparison.Ordinal);
         }
     }
 

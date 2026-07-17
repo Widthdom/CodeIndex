@@ -1330,7 +1330,11 @@ public static class ConsoleUi
         Console.WriteLine("Usage:");
         foreach (var usage in usages)
             Console.WriteLine($"  {usage}");
-        var helpFlags = CliFlagSchema.GetCompletionFlagsForCommand(GetFlagSchemaCommandName(command));
+        var schemaCommand = GetFlagSchemaCommandName(command);
+        var helpFlags = string.Equals(command, schemaCommand, StringComparison.Ordinal)
+            && CliFlagSchema.HasAuthoritativeHelpOptions(schemaCommand)
+                ? CliFlagSchema.GetCompletionFlagsForCommand(schemaCommand)
+                : [];
         if (helpFlags.Count > 0)
         {
             Console.WriteLine();

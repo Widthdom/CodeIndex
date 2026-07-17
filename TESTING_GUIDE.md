@@ -608,7 +608,7 @@ For background log or metrics sinks, use explicit writer-entry/release signals a
 - Capture stdout and stderr explicitly.
 - Prefer `ConsoleCapture` for simple stdout/stderr capture, and lock direct console mutations with `TestConsoleLock.Gate`.
 - Assert exit codes with `CommandExitCodes`.
-- When command, subcommand, or flag metadata changes, assert that every accepted primary flag appears in both command help and shell completions, and that nested command families use the shared catalog.
+- When command, subcommand, or flag metadata changes, assert that every accepted primary flag appears in shell completions and in command help when the shared parser is authoritative. Dedicated or nested parsers must instead prove their exact usage syntax is complete and does not emit a misleading partial parent-command option list; nested command families still use the shared catalog.
 - Immediate help-routing tests must assert both rendered usage and exit code, and must use a nested command whose normal execution would require additional input so the test proves help does not dispatch it.
 - For JSON output, parse it with `JsonDocument` instead of asserting raw strings.
 - JSON failure-contract tests must assert that stdout contains one parseable versioned error object, stderr is empty, the documented exit code is preserved, and `status` / `error_code` identify the failure.
@@ -1265,7 +1265,7 @@ background の log / metrics sink は、sleep や狭い stopwatch 閾値では�
 - stdout と stderr を明示的にキャプチャする。
 - 単純な stdout/stderr capture では `ConsoleCapture` を優先し、直接コンソールを差し替える場合は `TestConsoleLock.Gate` で直列化する。
 - 終了コードは `CommandExitCodes` で検証する。
-- command、subcommand、flag metadata を変更した場合は、受理される全 primary flag が command help と shell completion の両方に現れること、および nested command family が共有 catalog を使うことを検証する。
+- command、subcommand、flag metadata を変更した場合は、受理される全 primary flag が shell completion に現れ、共有 parser が正本の場合は command help にも現れることを検証する。専用 parser / nested parser では代わりに、正確な usage 構文が完全で、誤解を招く不完全な親 command の option 一覧を出さないことを証明し、nested command family が共有 catalog を使うことも確認する。
 - immediate help routing の test は rendered usage と終了コードを併せて検証し、通常実行なら追加入力を必要とする nested command を含めて help が dispatch しないことを証明する。
 - JSON 出力は生文字列比較ではなく `JsonDocument` で解析して検証する。
 - JSON failure contract のテストでは、stdout に parse 可能な version 付き error object が 1 件だけあること、stderr が空であること、documented exit code が維持されること、`status` / `error_code` が失敗を識別することを検証する。

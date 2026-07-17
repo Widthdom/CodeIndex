@@ -15,6 +15,23 @@ namespace CodeIndex.Tests;
 public class ConsoleUiTests
 {
     [Fact]
+    public void PrintCommandUsage_DedicatedParsersDoNotEmitPartialParentOptionLists_Issue4571()
+    {
+        var (_, dbSchemaHelp, _) = ConsoleCapture.Capture(() =>
+            ConsoleUi.PrintCommandUsage("db-schema") ? 1 : 0);
+        var (_, hooksHelp, _) = ConsoleCapture.Capture(() =>
+            ConsoleUi.PrintCommandUsage("hooks") ? 1 : 0);
+
+        Assert.Contains("--type <table|index|trigger|view>", dbSchemaHelp, StringComparison.Ordinal);
+        Assert.DoesNotContain("--integrity-check", dbSchemaHelp, StringComparison.Ordinal);
+        Assert.DoesNotContain("\nOptions:\n", dbSchemaHelp, StringComparison.Ordinal);
+        Assert.Contains("--project <path>", hooksHelp, StringComparison.Ordinal);
+        Assert.Contains("--force", hooksHelp, StringComparison.Ordinal);
+        Assert.Contains("--json", hooksHelp, StringComparison.Ordinal);
+        Assert.DoesNotContain("\nOptions:\n", hooksHelp, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CompletionRenderer_EnumValuesMatchAcrossShells_Issue4426()
     {
         foreach (var shell in new[] { "bash", "zsh", "fish", "powershell" })

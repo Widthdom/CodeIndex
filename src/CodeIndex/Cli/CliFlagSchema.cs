@@ -59,6 +59,22 @@ internal static class CliFlagSchema
     // top-level command 一覧の正本は共有 command catalog に置く。
     public static IReadOnlyList<string> AllCommands { get; } = CliCommandCatalog.Commands;
 
+    // These commands use the shared flag parser as the authoritative source for their
+    // per-command option inventory. Command families with dedicated/nested parsers keep
+    // their exact syntax in CommandUsageLines until their subcommand metadata is complete;
+    // emitting a partial parent-command flag list would be actively misleading.
+    // 共有 flag parser が command ごとの option 一覧の正本になっている command 集合。
+    // 専用 parser / nested parser を持つ command family は subcommand metadata が揃うまで
+    // CommandUsageLines の正確な構文を使い、誤解を招く不完全な親 command の一覧は出さない。
+    private static readonly IReadOnlySet<string> AuthoritativeHelpOptionCommands = Set(
+        "index", "backfill-fold", "optimize", "vacuum",
+        "search", "recipes", "audit", "definition", "goto", "references", "callers", "callees",
+        "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
+        "validate", "deps", "impact", "unused", "hotspots", "languages");
+
+    public static bool HasAuthoritativeHelpOptions(string command) =>
+        AuthoritativeHelpOptionCommands.Contains(command);
+
     // Commands that accept the `--` end-of-options marker so a user can pass a literal
     // query token starting with `-`. `find` reroutes through `ValidateFindArgs`; everything
     // else uses `TryWriteUnsupportedOptionError`'s allowlist.
