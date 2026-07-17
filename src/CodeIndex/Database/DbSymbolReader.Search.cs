@@ -77,10 +77,10 @@ public partial class DbReader
     /// Search symbols by name pattern, optionally filtered by kind and language.
     /// シンボルを名前パターンで検索（種別・言語でフィルタ可能）。
     /// </summary>
-    public List<SymbolResult> SearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, SymbolSortMode sortMode = SymbolSortMode.Name, int? startLine = null, int? endLine = null)
+    public List<SymbolResult> SearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, SymbolSortMode sortMode = SymbolSortMode.Name, int? startLine = null, int? endLine = null, bool groupPartials = false)
     {
         var normalizedQuery = NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact);
-        return SearchSymbols(normalizedQuery == null ? null : new[] { normalizedQuery }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters, sortMode, startLine, endLine);
+        return SearchSymbols(normalizedQuery == null ? null : new[] { normalizedQuery }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters, sortMode, startLine, endLine, groupPartials);
     }
 
     public int CountSearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
@@ -278,23 +278,33 @@ public partial class DbReader
         return raw is long l ? (int)l : Convert.ToInt32(raw);
     }
 
-    public QueryCountResult CountSearchSymbolsTotal(string? query = null, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
+    public QueryCountResult CountSearchSymbolsTotal(string? query = null, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, bool groupPartials = false)
     {
-        return CountSearchSymbolsTotal(query == null ? null : new[] { NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact) ?? query ?? string.Empty }, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters);
+        return CountSearchSymbolsTotal(query == null ? null : new[] { NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact) ?? query ?? string.Empty }, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters, groupPartials);
     }
 
-    public QueryCountResult CountSearchSymbolsTotal(IReadOnlyList<string>? queries, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
+    public QueryCountResult CountSearchSymbolsTotal(IReadOnlyList<string>? queries, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, bool groupPartials = false)
     {
         lang = DbReader.NormalizeQueryLanguage(lang);
         using var cmd = _conn.CreateCommand();
 
-        var sql = @"
-            SELECT COUNT(*), COUNT(DISTINCT path)
-            FROM (
-                SELECT f.path AS path
-                FROM symbols s
-                JOIN files f ON s.file_id = f.id
-                WHERE 1=1";
+        var logicalPartialKeySql = LogicalPartialSymbolGrouper.BuildSqlKeyExpression(
+            "f.lang",
+            "s.kind",
+            "s.name",
+            "s.id",
+            GetSymbolColumnSql("signature"),
+            GetSymbolColumnSql("container_name"),
+            GetSymbolColumnSql("container_qualified_name"),
+            GetSymbolColumnSql("family_key"));
+        var countSql = groupPartials
+            ? $"COUNT(DISTINCT ({logicalPartialKeySql}))"
+            : "COUNT(*)";
+        var sql = $@"
+            SELECT {countSql}, COUNT(DISTINCT f.path)
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE 1=1";
 
         var effectiveQueries = NormalizeSymbolSearchQueries(queries, lang, exact);
         if (effectiveQueries != null && effectiveQueries.Count > 0)
@@ -343,7 +353,6 @@ public partial class DbReader
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         AppendVisibilityFilters(ref sql, visibilityFilters, excludeVisibilityFilters);
-        sql += ")";
 
         cmd.CommandText = sql;
         if (effectiveQueries != null)
@@ -395,7 +404,7 @@ public partial class DbReader
     /// 複数名前パターン（OR結合）でシンボルを検索。空/null なら他フィルタに一致する全シンボルを返す。
     /// <paramref name="exact"/> が true の場合、部分一致ではなく大文字小文字を無視した完全一致になる。
     /// </summary>
-    public List<SymbolResult> SearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, SymbolSortMode sortMode = SymbolSortMode.Name, int? startLine = null, int? endLine = null)
+    public List<SymbolResult> SearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, SymbolSortMode sortMode = SymbolSortMode.Name, int? startLine = null, int? endLine = null, bool groupPartials = false)
     {
         lang = DbReader.NormalizeQueryLanguage(lang);
         // Multi-name queries: run one search per name to guarantee per-name candidate coverage
@@ -409,7 +418,7 @@ public partial class DbReader
         {
             var perName = new List<List<SymbolResult>>(validQueries.Count);
             foreach (var q in validQueries)
-                perName.Add(SearchSymbols(new[] { q! }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters, sortMode, startLine, endLine));
+                perName.Add(SearchSymbols(new[] { q! }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters, sortMode, startLine, endLine, groupPartials));
 
             var seen = new HashSet<(string Path, int Line, string Name, string Kind)>();
             var merged = new List<SymbolResult>();
@@ -444,6 +453,8 @@ public partial class DbReader
         var signatureSql = GetSymbolColumnSql("signature");
         var containerKindSql = GetSymbolColumnSql("container_kind");
         var containerNameSql = GetSymbolColumnSql("container_name");
+        var containerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name");
+        var familyKeySql = GetSymbolColumnSql("family_key");
         var visibilitySql = GetSymbolColumnSql("visibility");
         var returnTypeSql = GetSymbolColumnSql("return_type");
         var startColumnSql = GetSymbolColumnSql("start_column", "CAST(2147483647 AS INTEGER)");
@@ -513,6 +524,22 @@ public partial class DbReader
                        WHEN {visibilitySql} IN ('protected', 'internal', 'protected internal') THEN 4.0
                        ELSE 0.0
                    END)";
+        var logicalPartialKeySql = LogicalPartialSymbolGrouper.BuildSqlKeyExpression(
+            "f.lang",
+            "s.kind",
+            "s.name",
+            "s.id",
+            signatureSql,
+            containerNameSql,
+            containerQualifiedNameSql,
+            familyKeySql);
+        var exactNameOrderSql = "CASE " +
+            "WHEN @preferLiteralExactMatch = 1 AND s.name = @rawQuery THEN 0 " +
+            "WHEN @preferLiteralNormalizedSqlMatch = 1 AND f.lang = 'sql' AND sql_segment_count(s.name) = @rawQuerySegmentCount AND sql_normalize_name(s.name) = @rawQueryNormalized THEN 1 " +
+            "WHEN @preferCaseInsensitiveExactMatch = 1 AND s.name = @rawQuery COLLATE NOCASE THEN 2 " +
+            "WHEN @preferCaseInsensitiveNormalizedSqlMatch = 1 AND f.lang = 'sql' AND sql_segment_count(s.name) = @rawQuerySegmentCount AND sql_normalize_name_folded(s.name) = @rawQueryNormalizedFolded THEN 3 " +
+            "WHEN @preferCaseInsensitiveSqlLeafMatch = 1 AND f.lang = 'sql' AND sql_leaf_name_folded(s.name) = @rawQueryLeafFolded THEN 4 " +
+            "ELSE 5 END";
 
         var sql = $@"
             SELECT f.path, f.lang, s.kind, {GetSymbolColumnSql("sub_kind")} AS sub_kind, s.name, s.line,
@@ -534,7 +561,14 @@ public partial class DbReader
                    {structuralRankPenaltySql} AS structural_rank_penalty,
                    {definitionSitesSql} AS definition_sites,
                    {sizeLinesSql} AS size_lines,
-                   {complexityScoreSql} AS complexity_score
+                   {complexityScoreSql} AS complexity_score,
+                   {containerQualifiedNameSql} AS container_qualified_name,
+                   {logicalPartialKeySql} AS logical_partial_key,
+                   s.id AS symbol_id,
+                   {exactNameOrderSql} AS exact_name_order,
+                   {PathBucketOrder} AS path_bucket,
+                   {VisibilityOrder} AS visibility_rank,
+                   {startColumnSql} AS stable_start_column
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             {symbolRankJoin}
@@ -597,14 +631,10 @@ public partial class DbReader
             sql += " AND s.line <= @endLine";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         AppendVisibilityFilters(ref sql, visibilityFilters, excludeVisibilityFilters);
-        var exactNameOrderSql = "CASE " +
-            "WHEN @preferLiteralExactMatch = 1 AND s.name = @rawQuery THEN 0 " +
-            "WHEN @preferLiteralNormalizedSqlMatch = 1 AND f.lang = 'sql' AND sql_segment_count(s.name) = @rawQuerySegmentCount AND sql_normalize_name(s.name) = @rawQueryNormalized THEN 1 " +
-            "WHEN @preferCaseInsensitiveExactMatch = 1 AND s.name = @rawQuery COLLATE NOCASE THEN 2 " +
-            "WHEN @preferCaseInsensitiveNormalizedSqlMatch = 1 AND f.lang = 'sql' AND sql_segment_count(s.name) = @rawQuerySegmentCount AND sql_normalize_name_folded(s.name) = @rawQueryNormalizedFolded THEN 3 " +
-            "WHEN @preferCaseInsensitiveSqlLeafMatch = 1 AND f.lang = 'sql' AND sql_leaf_name_folded(s.name) = @rawQueryLeafFolded THEN 4 " +
-            "ELSE 5 END";
-        sql += BuildSymbolSortOrderBy(sortMode, exactNameOrderSql, referenceCountSql, hotspotScoreSql, rankingReferenceScoreSql, rankingHotspotScoreSql, sizeLinesSql, complexityScoreSql, startColumnSql);
+        if (groupPartials)
+            sql = BuildLogicalPartialSymbolQuery(sql, sortMode);
+        else
+            sql += BuildSymbolSortOrderBy(sortMode, exactNameOrderSql, referenceCountSql, hotspotScoreSql, rankingReferenceScoreSql, rankingHotspotScoreSql, sizeLinesSql, complexityScoreSql, startColumnSql);
         sql += " LIMIT @limit";
 
         cmd.CommandText = sql;
@@ -679,6 +709,7 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
+            var definitionSites = Convert.ToInt32(reader.GetInt64(22));
             results.Add(new SymbolResult
             {
                 Path = reader.GetString(0),
@@ -698,6 +729,8 @@ public partial class DbReader
                 Signature = GetNullableString(reader, 11),
                 ContainerKind = GetNullableString(reader, 12),
                 ContainerName = GetNullableString(reader, 13),
+                ContainerQualifiedName = GetNullableString(reader, 25),
+                LogicalPartialKey = GetNullableString(reader, 26),
                 Visibility = GetNullableString(reader, 14),
                 ReturnType = GetNullableString(reader, 15),
                 SortMode = includeRankingMetadata ? sortModeName : null,
@@ -707,7 +740,7 @@ public partial class DbReader
                 RankingHotspotScore = includeRankingMetadata ? Math.Round(reader.GetDouble(19), 3) : null,
                 GenericNamePenalty = includeRankingMetadata ? Math.Round(reader.GetDouble(20), 3) : null,
                 StructuralRankPenalty = includeRankingMetadata ? Math.Round(reader.GetDouble(21), 3) : null,
-                DefinitionSites = includeRankingMetadata ? Convert.ToInt32(reader.GetInt64(22)) : null,
+                DefinitionSites = includeRankingMetadata || (groupPartials && definitionSites > 1) ? definitionSites : null,
                 SizeLines = includeRankingMetadata ? Convert.ToInt32(reader.GetInt64(23)) : null,
                 ComplexityScore = includeRankingMetadata ? Math.Round(reader.GetDouble(24), 3) : null,
             });
@@ -728,6 +761,61 @@ public partial class DbReader
 
     private static string GetGenericSymbolRankNamePenaltySql(string nameSql)
         => $"CASE WHEN lower({nameSql}) IN {GenericSymbolRankNamesSql} THEN {GenericSymbolRankNamePenaltySqlLiteral} ELSE 1.0 END";
+
+    private static string BuildLogicalPartialSymbolQuery(string matchingSymbolsSql, SymbolSortMode sortMode)
+    {
+        var orderBy = BuildLogicalPartialSortOrderBy(sortMode);
+        return $@"
+            WITH matching_symbols AS (
+                {matchingSymbolsSql}
+            ),
+            logical_symbols AS (
+                SELECT matching_symbols.*,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY logical_partial_key
+                           ORDER BY path COLLATE BINARY, start_line, stable_start_column, symbol_id
+                       ) AS logical_row_number,
+                       COUNT(*) OVER (PARTITION BY logical_partial_key) AS logical_definition_sites,
+                       MAX(reference_count) OVER (PARTITION BY logical_partial_key) AS logical_reference_count,
+                       MAX(hotspot_score) OVER (PARTITION BY logical_partial_key) AS logical_hotspot_score,
+                       MAX(ranking_reference_score) OVER (PARTITION BY logical_partial_key) AS logical_ranking_reference_score,
+                       MAX(ranking_hotspot_score) OVER (PARTITION BY logical_partial_key) AS logical_ranking_hotspot_score,
+                       MAX(generic_name_penalty) OVER (PARTITION BY logical_partial_key) AS logical_generic_name_penalty,
+                       MAX(structural_rank_penalty) OVER (PARTITION BY logical_partial_key) AS logical_structural_rank_penalty,
+                       MAX(size_lines) OVER (PARTITION BY logical_partial_key) AS logical_size_lines,
+                       MAX(complexity_score) OVER (PARTITION BY logical_partial_key) AS logical_complexity_score,
+                       MIN(exact_name_order) OVER (PARTITION BY logical_partial_key) AS logical_exact_name_order,
+                       MIN(path_bucket) OVER (PARTITION BY logical_partial_key) AS logical_path_bucket,
+                       MIN(visibility_rank) OVER (PARTITION BY logical_partial_key) AS logical_visibility_rank
+                FROM matching_symbols
+            )
+            SELECT path, lang, kind, sub_kind, name, line,
+                   start_line, start_column, end_line,
+                   body_start_line, body_end_line, signature,
+                   container_kind, container_name, visibility, return_type,
+                   logical_reference_count, logical_hotspot_score,
+                   logical_ranking_reference_score, logical_ranking_hotspot_score,
+                   logical_generic_name_penalty, logical_structural_rank_penalty,
+                   logical_definition_sites, logical_size_lines, logical_complexity_score,
+                   container_qualified_name, logical_partial_key
+            FROM logical_symbols
+            WHERE logical_row_number = 1
+            {orderBy}";
+    }
+
+    private static string BuildLogicalPartialSortOrderBy(SymbolSortMode sortMode)
+    {
+        const string stableTieBreakers = "logical_path_bucket, logical_visibility_rank, name, path COLLATE BINARY, line, stable_start_column, symbol_id";
+        return sortMode switch
+        {
+            SymbolSortMode.Hotspot => $"ORDER BY logical_ranking_hotspot_score DESC, logical_ranking_reference_score DESC, logical_hotspot_score DESC, logical_reference_count DESC, logical_size_lines DESC, {stableTieBreakers}",
+            SymbolSortMode.References => $"ORDER BY logical_ranking_reference_score DESC, logical_ranking_hotspot_score DESC, logical_reference_count DESC, logical_hotspot_score DESC, logical_size_lines DESC, {stableTieBreakers}",
+            SymbolSortMode.Size => $"ORDER BY logical_size_lines DESC, logical_ranking_reference_score DESC, logical_ranking_hotspot_score DESC, logical_reference_count DESC, {stableTieBreakers}",
+            SymbolSortMode.Complexity => $"ORDER BY logical_complexity_score DESC, logical_ranking_hotspot_score DESC, logical_ranking_reference_score DESC, logical_reference_count DESC, logical_size_lines DESC, {stableTieBreakers}",
+            SymbolSortMode.Path => "ORDER BY path COLLATE BINARY, line, stable_start_column, name, symbol_id",
+            _ => $"ORDER BY logical_exact_name_order, {stableTieBreakers}",
+        };
+    }
 
     private string BuildSymbolSortOrderBy(
         SymbolSortMode sortMode,

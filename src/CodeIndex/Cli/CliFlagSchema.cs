@@ -289,6 +289,7 @@ internal static class CliFlagSchema
             new() { Name = "--sort", ValuePlaceholder = "<mode>", Description = "Symbols/outline: order audit output by a ranking signal; outline also accepts source, kind, references, size, complexity, path, and name", Commands = Set(SymbolSortCommands) },
             new() { Name = "--raw-kinds", Description = "Show raw reference kinds instead of logical graph kinds", Commands = Set(RawKindsCommands) },
             new() { Name = "--count", Description = "Count only; result limits are ignored by count modes, but scan caps can still mark approximate counts as degraded", Commands = Set(CountCommands) },
+            new() { Name = "--group-partials", Description = "Definition/Symbols/Inspect: collapse C# partial-type declarations into logical families", Commands = Set("definition", "symbols", "inspect") },
             new() { Name = "--strict-not-found", Description = "Return exit code 2 when a valid query has zero rows", Commands = Set(StrictNotFoundCommands) },
             new() { Name = "--allow-partial", Description = "Return exit code 0 instead of 11 when an explicit cap produces partial-result metadata", Commands = Set(AllowPartialCommands) },
             new() { Name = "--strict", Description = "Return exit code 4 when impact preconditions are unmet", Commands = Set("impact") },

@@ -33,6 +33,14 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
         var pathLineInspectMode = IsInspectPathLineMode(options);
+        if (pathLineInspectMode && options.GroupPartials)
+        {
+            WriteUsageError(
+                "--group-partials is only supported for symbol-mode inspect queries.",
+                GetUsageLineOrThrow("inspect"),
+                "Remove --path/--line and inspect a symbol name, or remove --group-partials to keep coordinate-based physical navigation.");
+            return CommandExitCodes.UsageError;
+        }
         if (!pathLineInspectMode && TryWriteBlankQueryError(options, "inspect"))
             return CommandExitCodes.UsageError;
         if (!pathLineInspectMode && string.IsNullOrWhiteSpace(options.Query))
@@ -82,6 +90,14 @@ public static partial class QueryCommandRunner
 
             var fileInspectMode = inspectPath != null;
             var coordinateExplicit = options.StartLine.HasValue || options.EndLine.HasValue;
+            if (fileInspectMode && options.GroupPartials)
+            {
+                WriteUsageError(
+                    "--group-partials is only supported for symbol-mode inspect queries.",
+                    GetUsageLineOrThrow("inspect"),
+                    "Inspect a symbol name instead of a file path, or remove --group-partials to keep physical file navigation.");
+                return CommandExitCodes.UsageError;
+            }
             if (fileInspectMode && indexedFile == null)
             {
                 return CommandErrorWriter.WriteJsonOrHuman(
@@ -136,7 +152,8 @@ public static partial class QueryCommandRunner
                     options.MaxLineWidth,
                     options.BodyStartLine,
                     options.BodyLines,
-                    kind: options.Kind);
+                    kind: options.Kind,
+                    groupPartials: options.GroupPartials);
             var sourceExcerpt = BuildInspectSourceExcerpt(reader, options, analysis, inspectPath);
             var sqlGraphSignal = NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
@@ -175,6 +192,8 @@ public static partial class QueryCommandRunner
                     payload["source_excerpt"] = JsonSerializer.SerializeToNode(sourceExcerpt, CliJsonSerializerContextFactory.Create(jsonOptions).FileExcerptResult);
                 }
                 ApplyInspectFieldSelection(payload, options, jsonOptions);
+                if (options.GroupPartials)
+                    AddInspectLogicalPartialJsonFields(payload, analysis);
                 ApplyInspectDefinitionContentPolicy(payload, options);
                 AddInspectBodyModeJsonFields(payload, options, analysis);
                 var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
@@ -222,6 +241,11 @@ public static partial class QueryCommandRunner
                 }
                 WriteExactZeroHint(analysis.ExactZeroHint);
                 WriteInspectBodyModeHint(analysis, options);
+                if (options.GroupPartials)
+                {
+                    var physicalDefinitionCount = analysis.Definitions.Sum(definition => definition.DefinitionSites ?? 1);
+                    Console.WriteLine($"Definitions Grouping : {analysis.Definitions.Count} output logical families from {physicalDefinitionCount} output physical declaration sites");
+                }
                 if (sourceExcerpt != null)
                 {
                     Console.WriteLine($"Source Excerpt      : {sourceExcerpt.Path}:{sourceExcerpt.StartLine}-{sourceExcerpt.EndLine}");
@@ -236,6 +260,16 @@ public static partial class QueryCommandRunner
 
             return IsEmptySymbolAnalysis(analysis) && sourceExcerpt == null ? ZeroResultExitCode(options) : CommandExitCodes.Success;
         });
+    }
+
+    private static void AddInspectLogicalPartialJsonFields(JsonObject payload, SymbolAnalysisResult analysis)
+    {
+        var physicalDefinitionCount = analysis.Definitions.Sum(definition => definition.DefinitionSites ?? 1);
+        payload["group_partials"] = true;
+        payload["definition_result_scope"] = "logical_partial_families";
+        payload["logical_definition_output_count"] = analysis.Definitions.Count;
+        payload["physical_definition_output_count"] = physicalDefinitionCount;
+        payload["definitions_collapsed"] = physicalDefinitionCount != analysis.Definitions.Count;
     }
 
     private static void ApplyInspectFieldSelection(JsonObject payload, QueryCommandOptions options, JsonSerializerOptions jsonOptions)

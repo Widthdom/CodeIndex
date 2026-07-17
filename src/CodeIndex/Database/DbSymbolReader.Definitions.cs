@@ -14,10 +14,22 @@ public partial class DbReader
     /// Resolve symbol definitions with reconstructed excerpts.
     /// シンボル定義を抜粋付きで解決する。
     /// </summary>
-    public List<DefinitionResult> GetDefinitions(string query, int limit = 20, string? kind = null, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, int? bodyStartLine = null, int? bodyLineCount = null)
+    public List<DefinitionResult> GetDefinitions(string query, int limit = 20, string? kind = null, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, int? bodyStartLine = null, int? bodyLineCount = null, bool groupPartials = false)
     {
         lang = DbReader.NormalizeQueryLanguage(lang);
-        var symbols = SearchSymbols(query, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters);
+        var symbols = SearchSymbols(
+            query,
+            limit,
+            kind,
+            lang,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            since,
+            exact,
+            visibilityFilters,
+            excludeVisibilityFilters,
+            groupPartials: groupPartials);
         var results = new List<DefinitionResult>();
 
         foreach (var symbol in symbols)
@@ -129,8 +141,11 @@ public partial class DbReader
             Signature = symbol.Signature,
             ContainerKind = symbol.ContainerKind,
             ContainerName = symbol.ContainerName,
+            ContainerQualifiedName = symbol.ContainerQualifiedName,
+            LogicalPartialKey = symbol.LogicalPartialKey,
             Visibility = symbol.Visibility,
             ReturnType = symbol.ReturnType,
+            DefinitionSites = symbol.DefinitionSites,
             Disambiguator = BuildDefinitionDisambiguator(symbol),
             Content = definitionExcerpt.Content,
             BodyContent = bodyContent,
@@ -277,18 +292,28 @@ public partial class DbReader
         return string.Join(" ", tokens[start..end]);
     }
 
-    public QueryCountResult CountDefinitionsTotal(string query, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
+    public QueryCountResult CountDefinitionsTotal(string query, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, bool groupPartials = false)
     {
         var normalizedQuery = NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact);
         using var cmd = _conn.CreateCommand();
 
+        var logicalPartialKeySql = LogicalPartialSymbolGrouper.BuildSqlKeyExpression(
+            "f.lang",
+            "s.kind",
+            "s.name",
+            "s.id",
+            GetSymbolColumnSql("signature"),
+            GetSymbolColumnSql("container_name"),
+            GetSymbolColumnSql("container_qualified_name"),
+            GetSymbolColumnSql("family_key"));
+        var countSql = groupPartials
+            ? $"COUNT(DISTINCT ({logicalPartialKeySql}))"
+            : "COUNT(*)";
         var sql = $@"
-            SELECT COUNT(*), COUNT(DISTINCT path)
-            FROM (
-                SELECT f.path AS path
-                FROM symbols s
-                JOIN files f ON s.file_id = f.id
-                WHERE 1=1";
+            SELECT {countSql}, COUNT(DISTINCT f.path)
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE 1=1";
 
         if (!string.IsNullOrWhiteSpace(normalizedQuery))
         {
@@ -321,14 +346,13 @@ public partial class DbReader
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         AppendVisibilityFilters(ref sql, visibilityFilters, excludeVisibilityFilters);
         sql += $@"
-                  AND EXISTS (
-                      SELECT 1
-                      FROM chunks c
-                      WHERE c.file_id = s.file_id
-                        AND c.end_line >= {GetSymbolColumnSql("start_line", "s.line")}
-                        AND c.start_line <= {GetSymbolColumnSql("end_line", "s.line")}
-                  )
-            )";
+              AND EXISTS (
+                  SELECT 1
+                  FROM chunks c
+                  WHERE c.file_id = s.file_id
+                    AND c.end_line >= {GetSymbolColumnSql("start_line", "s.line")}
+                    AND c.start_line <= {GetSymbolColumnSql("end_line", "s.line")}
+              )";
 
         cmd.CommandText = sql;
         if (!string.IsNullOrWhiteSpace(normalizedQuery))

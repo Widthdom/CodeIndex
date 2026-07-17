@@ -243,6 +243,8 @@ public class SymbolResult
     public int? SignatureOriginalLength { get; set; }
     public string? ContainerKind { get; set; }
     public string? ContainerName { get; set; }
+    internal string? ContainerQualifiedName { get; set; }
+    internal string? LogicalPartialKey { get; set; }
     public string? Visibility { get; set; }
     public string? ReturnType { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -820,6 +822,8 @@ public class ImpactAnalysisResult
     public int MaxDepth { get; set; }
     public int DefinitionCount { get; set; }
     public int DefinitionFileCount { get; set; }
+    [JsonIgnore]
+    public int LogicalDefinitionCount { get; set; }
     public int HintCount { get; set; }
     public bool HasClassLikeDefinitions { get; set; }
     public bool HasMultipleDefinitions { get; set; }
