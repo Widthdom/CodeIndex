@@ -5257,7 +5257,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(2, callersRows.Count);
             Assert.All(callersRows, row => Assert.Contains(row.RootElement.GetProperty("caller_name").GetString(), [".button", ".card"]));
             Assert.All(callersRows, row => Assert.Equal("primary", row.RootElement.GetProperty("callee_name").GetString()));
-            Assert.All(callersRows, row => Assert.Equal("invoke", row.RootElement.GetProperty("reference_kind").GetString()));
+            Assert.All(callersRows, row => Assert.Equal("call", row.RootElement.GetProperty("reference_kind").GetString()));
 
             Assert.Equal(CommandExitCodes.Success, callersCountExitCode);
             Assert.Equal(string.Empty, callersCountStderr);
@@ -5269,7 +5269,7 @@ public partial class QueryCommandRunnerTests
             var calleesRow = Assert.Single(calleesRows);
             Assert.Equal("rounded", calleesRow.RootElement.GetProperty("caller_name").GetString());
             Assert.Equal("radius", calleesRow.RootElement.GetProperty("callee_name").GetString());
-            Assert.Equal("invoke", calleesRow.RootElement.GetProperty("reference_kind").GetString());
+            Assert.Equal("call", calleesRow.RootElement.GetProperty("reference_kind").GetString());
 
             Assert.Equal(CommandExitCodes.Success, calleesCountExitCode);
             Assert.Equal(string.Empty, calleesCountStderr);
