@@ -357,7 +357,7 @@ internal static class CliFlagSchema
             new() { Name = "--no-dedup", Description = "Show duplicate chunks", Commands = Set("search") },
             new() { Name = "--no-visibility-rank", Description = "Keep legacy search ranking without symbol visibility weighting", Commands = Set("search") },
             new() { Name = "--line", ValuePlaceholder = "<line>", Description = "Inspect/excerpt: include one source line as source_excerpt or excerpt window", Commands = Set(InspectSourceExcerptCommands) },
-            new() { Name = "--context", ValuePlaceholder = "<n|text>", Description = "Inspect/excerpt context lines, or suggestions add context text", Commands = Set(InspectSourceExcerptCommands), AlsoAcceptedBy = Set("suggestions") },
+            new() { Name = "--context", ValuePlaceholder = "<n>", Description = "Find/inspect/excerpt: symmetric context lines; explicit --before/--after override the corresponding find side", Commands = Set(InspectSourceExcerptCommands.Concat(new[] { "find" }).ToArray()), AlsoAcceptedBy = Set("suggestions") },
             new() { Name = "--before", ValuePlaceholder = "<n>", Description = "Context lines before", Commands = Set("find", "excerpt", "inspect") },
             new() { Name = "--after", ValuePlaceholder = "<n>", Description = "Context lines after", Commands = Set("find", "excerpt", "inspect") },
             new() { Name = "--start", ValuePlaceholder = "<line>", Description = "Start line", Commands = Set("excerpt") },

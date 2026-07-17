@@ -1383,8 +1383,7 @@ public static partial class QueryCommandRunner
                         AddParseError(missingContextError!);
                     else if (TryParseNonNegativeInt(contextValue!, "--context", out var parsedContext, out var contextError))
                     {
-                        WarnIfDuplicateSingleValueOption("--before", contextValue!);
-                        WarnIfDuplicateSingleValueOption("--after", contextValue!);
+                        WarnIfDuplicateSingleValueOption("--context", contextValue!);
                         contextBefore = parsedContext;
                         contextAfter = parsedContext;
                         contextAfterExplicit = true;

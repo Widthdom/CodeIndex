@@ -1433,11 +1433,15 @@ cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --line 24 --context 3 --json --no-s
 
 ```bash
 cdidx find "graph table" --path src/CodeIndex/Cli/QueryCommandRunner.cs
-cdidx find "Graph Table" --path src/CodeIndex/Cli/QueryCommandRunner.cs --exact --before 1 --after 1 --json
+cdidx find "Graph Table" --path src/CodeIndex/Cli/QueryCommandRunner.cs --exact --context 2 --json
 cdidx find "guard" --all --count --json
 ```
 
 `find` fills the gap between repo-wide `search` and line-number-based `excerpt`: when you already know the target file, it returns matching line numbers, columns, and short surrounding context from the indexed file without falling back to raw-text tools. The query text is capped at 1,000 characters, matching `search`.
+`--context <n>` sets both sides of each match to the same number of lines. When
+combined with `--before` or `--after`, the asymmetric flag overrides only its
+corresponding side regardless of argument order; these explicit controls take
+precedence over the fallback distribution from `--snippet-lines`.
 Use `--path <glob>` for a bounded file set, or pass `--all` to opt in to a repo-wide indexed-file scan with safety caps. `--all` and `--path` are mutually exclusive. Plain `find` is a literal substring scan that ignores case; add `--exact` when case-sensitive byte-for-byte matching matters, such as distinguishing `TODO` from `todo`. Count JSON includes scan summary fields such as `candidate_files`, `files_scanned`, `lines_scanned`, `scan_truncated`, `scan_cap_reached`, `candidate_file_limit`, and `line_scan_limit`; human count output writes the scan summary to stderr.
 
 ### List files
@@ -1624,7 +1628,7 @@ same source location.
 | `--body-start <line>` | `inspect` | Start the returned definition body slice at a 1-based source line inside the symbol body. Pair with `body_content_next_start_line` from JSON to page a long body. |
 | `--body-lines <n>` / `--body-line-count <n>` | `inspect` | Return at most this many definition body lines for `--body`, `--body-only`, or `--fields body`; maximum 1000. |
 | `--line <line>` / `--start-line <line>` / `--end-line <line>` | `inspect`, `excerpt` | Add a bounded `source_excerpt` to inspect output, or use `--line` as an `excerpt` shorthand for `--start <line> --end <line>`. Use `inspect --path <file> --line <line>` without a symbol query for a file/line excerpt. |
-| `--context <n>` / `--before <n>` / `--after <n>` | `inspect`, `excerpt` | Add symmetric or one-sided context lines to the `source_excerpt` or `excerpt` window. |
+| `--context <n>` / `--before <n>` / `--after <n>` | `find`, `inspect`, `excerpt` | Add symmetric or one-sided context lines. For `find`, explicit `--before` / `--after` values override the corresponding side from `--context` regardless of option order. |
 | `--status <all\|submitted\|unsubmitted>` | `suggestions` | Filter local suggestion history by GitHub submission state. |
 | `--language <lang>` / `--lang <lang>` | `suggestions` | Filter local suggestion history by recorded target language. |
 | `--category <category>` | `suggestions` | Filter local suggestion history by suggestion category. |
@@ -4383,11 +4387,14 @@ cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --line 24 --context 3 --json --no-s
 
 ```bash
 cdidx find "graph table" --path src/CodeIndex/Cli/QueryCommandRunner.cs
-cdidx find "Graph Table" --path src/CodeIndex/Cli/QueryCommandRunner.cs --exact --before 1 --after 1 --json
+cdidx find "Graph Table" --path src/CodeIndex/Cli/QueryCommandRunner.cs --exact --context 2 --json
 cdidx find "guard" --all --count --json
 ```
 
 `find` は、リポジトリ全体を対象にする `search` と、行番号が必要な `excerpt` の間を埋めるコマンドです。対象ファイルが既に分かっているときに、raw text ツールへ戻らずに、インデックス済みファイルから一致行番号・列番号・短い前後文脈を返します。query text は `search` と同じく 1,000 文字までです。
+`--context <n>` は各 match の前後を同じ行数に設定します。`--before` または
+`--after` と併用した場合、引数の順序にかかわらず asymmetric flag が対応する側だけを
+上書きします。これらの明示 context は `--snippet-lines` による fallback 配分より優先されます。
 対象を絞る場合は `--path <glob>` を使い、repo-wide の index 済みファイル走査が必要な場合だけ `--all` を明示します。`--all` と `--path` は併用できません。通常の `find` は大文字小文字を無視する literal substring scan です。`TODO` と `todo` を区別するような byte-for-byte の大文字小文字区別が必要な場合は `--exact` を追加します。count JSON には `candidate_files`、`files_scanned`、`lines_scanned`、`scan_truncated`、`scan_cap_reached`、`candidate_file_limit`、`line_scan_limit` などの scan summary field が入り、human count output では同じ scan summary が stderr に出ます。
 
 ### ファイル一覧
@@ -4569,7 +4576,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--body-start <line>` | `inspect` | symbol body 内の 1-based source line から definition body slice を返す。長い body の page 送りでは JSON の `body_content_next_start_line` を次の値として渡す。 |
 | `--body-lines <n>` / `--body-line-count <n>` | `inspect` | `--body`、`--body-only`、`--fields body` で返す definition body 行数の上限。最大 1000。 |
 | `--line <line>` / `--start-line <line>` / `--end-line <line>` | `inspect`, `excerpt` | inspect 出力に範囲を絞った `source_excerpt` を追加する。`excerpt` では `--start <line> --end <line>` の shorthand として `--line` を使える。symbol query なしで `inspect --path <file> --line <line>` を渡すと file/line 抜粋だけを返せる。 |
-| `--context <n>` / `--before <n>` / `--after <n>` | `inspect`, `excerpt` | `source_excerpt` または `excerpt` window の前後または片側 context 行を追加する。 |
+| `--context <n>` / `--before <n>` / `--after <n>` | `find`, `inspect`, `excerpt` | 前後または片側 context 行を追加する。`find` では、引数の順序にかかわらず明示した `--before` / `--after` が `--context` の対応する側を上書きする。 |
 | `--status <all\|submitted\|unsubmitted>` | `suggestions` | ローカル提案履歴を GitHub 送信状態で絞り込みます。 |
 | `--language <lang>` / `--lang <lang>` | `suggestions` | ローカル提案履歴を記録済み対象言語で絞り込みます。 |
 | `--category <category>` | `suggestions` | ローカル提案履歴を提案カテゴリで絞り込みます。 |

@@ -10,7 +10,7 @@ namespace CodeIndex.Cli;
 public static partial class QueryCommandRunner
 {
     internal const int MaxFindLineScanLimit = 10_000_000;
-    private const string FindUsage = "Usage: cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--line-scan-limit <n>] [--allow-partial] [--exact] [--regex] [--count]\n       cdidx find --query <query> (--path <glob>|--all) [...]\n       cdidx find [options] -- <query>";
+    private const string FindUsage = "Usage: cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--context <n>] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--line-scan-limit <n>] [--allow-partial] [--exact] [--regex] [--count]\n       cdidx find --query <query> (--path <glob>|--all) [...]\n       cdidx find [options] -- <query>";
 
     public static int RunFind(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -484,21 +484,49 @@ public static partial class QueryCommandRunner
     }
 
     private static bool HasFindContextOption(string[] preparedFindArgs) =>
-        HasOption(preparedFindArgs, "--before")
+        HasOption(preparedFindArgs, "--context")
+        || HasOption(preparedFindArgs, "--before")
         || HasOption(preparedFindArgs, "--after")
         || HasOption(preparedFindArgs, "--snippet-lines");
 
     private static (int Before, int After, int? SnippetLines) ResolveFindContext(QueryCommandOptions options, string[] preparedFindArgs)
     {
-        if (!HasOption(preparedFindArgs, "--snippet-lines"))
-            return (options.ContextBefore, options.ContextAfter, null);
+        var snippetLines = HasOption(preparedFindArgs, "--snippet-lines") ? options.SnippetLines : (int?)null;
+        var surroundingLines = snippetLines.HasValue ? Math.Max(0, snippetLines.Value - 1) : 0;
+        var symmetricContext = GetLastFindContextOptionValue(preparedFindArgs, "--context");
+        var explicitBefore = GetLastFindContextOptionValue(preparedFindArgs, "--before");
+        var explicitAfter = GetLastFindContextOptionValue(preparedFindArgs, "--after");
 
-        var explicitBefore = HasOption(preparedFindArgs, "--before");
-        var explicitAfter = HasOption(preparedFindArgs, "--after");
-        var surroundingLines = Math.Max(0, options.SnippetLines - 1);
-        var before = explicitBefore ? options.ContextBefore : surroundingLines / 2;
-        var after = explicitAfter ? options.ContextAfter : surroundingLines - before;
-        return (before, after, options.SnippetLines);
+        var before = explicitBefore
+            ?? symmetricContext
+            ?? (snippetLines.HasValue ? surroundingLines / 2 : 0);
+        var after = explicitAfter
+            ?? symmetricContext
+            ?? (snippetLines.HasValue ? Math.Max(0, surroundingLines - before) : 0);
+
+        return (before, after, snippetLines);
+    }
+
+    private static int? GetLastFindContextOptionValue(string[] args, string option)
+    {
+        int? value = null;
+        var inlinePrefix = option + "=";
+        for (var i = 0; i < args.Length; i++)
+        {
+            string? candidate = null;
+            if (string.Equals(args[i], option, StringComparison.Ordinal) && i + 1 < args.Length)
+                candidate = args[++i];
+            else if (args[i].StartsWith(inlinePrefix, StringComparison.Ordinal))
+                candidate = args[i][inlinePrefix.Length..];
+
+            if (candidate != null
+                && int.TryParse(candidate, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+            {
+                value = parsed;
+            }
+        }
+
+        return value;
     }
 
     private static string[] PrepareFindArgs(string[] args, out string? error)
