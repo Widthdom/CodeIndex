@@ -7,4 +7,5 @@ public static partial class QueryCommandRunner
     internal const int BatchMaxArgumentCount = 256;
     internal const int BatchMaxArgumentChars = 8192;
     internal const int BatchMaxJsonDepth = 32;
+    internal const int BatchMaxTotalCapturedOutputChars = JsonEnvelopeWrapper.MaxCapturedOutputChars;
 }

@@ -70,6 +70,7 @@ public static partial class QueryCommandRunner
             s_batchReader = new DbReader(db);
             s_batchDbPath = dbPath;
             s_batchDbPathExplicit = dbPathExplicit;
+            var capturedOutputBudget = new BatchOutputBudget(BatchMaxTotalCapturedOutputChars);
             var firstFailure = CommandExitCodes.Success;
             var lineNumber = 0;
             var commandsProcessed = 0;
@@ -109,7 +110,7 @@ public static partial class QueryCommandRunner
 
                 commandsProcessed++;
                 var exitCode = jsonSummary
-                    ? RunBatchQueryCommandWithJsonRecord(lineNumber, commandName, subArgs, jsonOptions)
+                    ? RunBatchQueryCommandWithJsonRecord(lineNumber, commandName, subArgs, capturedOutputBudget, jsonOptions)
                     : RunBatchQueryCommand(commandName, subArgs, jsonOptions);
                 if (exitCode != CommandExitCodes.Success)
                 {
@@ -120,7 +121,14 @@ public static partial class QueryCommandRunner
             }
 
             if (jsonSummary)
-                WriteBatchSummaryJson(lineNumber, commandsProcessed, lineErrors, commandFailures, firstFailure, jsonOptions);
+                WriteBatchSummaryJson(
+                    lineNumber,
+                    commandsProcessed,
+                    lineErrors,
+                    commandFailures,
+                    firstFailure,
+                    capturedOutputBudget.ConsumedChars,
+                    jsonOptions);
 
             return firstFailure;
         }
@@ -132,7 +140,14 @@ public static partial class QueryCommandRunner
         }
     }
 
-    private static void WriteBatchSummaryJson(int inputLinesRead, int commandsProcessed, int lineErrors, int commandFailures, int exitCode, JsonSerializerOptions jsonOptions)
+    private static void WriteBatchSummaryJson(
+        int inputLinesRead,
+        int commandsProcessed,
+        int lineErrors,
+        int commandFailures,
+        int exitCode,
+        int capturedOutputChars,
+        JsonSerializerOptions jsonOptions)
     {
         var payload = new JsonObject
         {
@@ -144,14 +159,21 @@ public static partial class QueryCommandRunner
             ["line_errors"] = lineErrors,
             ["command_failures"] = commandFailures,
             ["exit_code"] = exitCode,
+            ["captured_output_chars"] = capturedOutputChars,
+            ["captured_output_char_limit"] = BatchMaxTotalCapturedOutputChars,
         };
 
         CommandOutputWriter.WriteJsonNode(payload, jsonOptions);
     }
 
-    private static int RunBatchQueryCommandWithJsonRecord(int lineNumber, string commandName, string[] subArgs, JsonSerializerOptions jsonOptions)
+    private static int RunBatchQueryCommandWithJsonRecord(
+        int lineNumber,
+        string commandName,
+        string[] subArgs,
+        BatchOutputBudget capturedOutputBudget,
+        JsonSerializerOptions jsonOptions)
     {
-        using var capture = new BatchCommandOutputCapture();
+        using var capture = new BatchCommandOutputCapture(capturedOutputBudget);
         int exitCode;
         BatchOutputCaptureLimitExceededException? captureLimitExceeded = null;
         try
@@ -172,13 +194,17 @@ public static partial class QueryCommandRunner
         JsonObject? error = null;
         if (captureLimitExceeded is not null)
         {
+            var message = captureLimitExceeded.Scope == BatchOutputLimitScope.Batch
+                ? $"batch captured output exceeded the {captureLimitExceeded.MaxChars} character limit."
+                : $"batch command {captureLimitExceeded.StreamName} exceeded {captureLimitExceeded.MaxChars} captured characters.";
             error = new JsonObject
             {
-                ["message"] = $"batch command {captureLimitExceeded.StreamName} exceeded {captureLimitExceeded.MaxChars} captured characters.",
+                ["message"] = message,
                 ["hint"] = "Reduce the result set or run cdidx batch without --json-summary for streaming output.",
                 ["error_code"] = CommandErrorCodes.UsageError,
                 ["max_chars"] = captureLimitExceeded.MaxChars,
                 ["stream"] = captureLimitExceeded.StreamName,
+                ["scope"] = captureLimitExceeded.Scope == BatchOutputLimitScope.Batch ? "batch" : "command",
             };
         }
 
@@ -213,14 +239,70 @@ public static partial class QueryCommandRunner
             ["command"] = commandName,
             ["arguments"] = ToJsonStringArray(subArgs),
             ["exit_code"] = exitCode,
-            ["stdout"] = stdout,
             ["stderr"] = stderr,
         };
+
+        if (exitCode == CommandExitCodes.Success
+            && TryParseBatchStructuredOutput(stdout, out var resultField, out var structuredOutput))
+        {
+            payload[resultField] = structuredOutput;
+        }
+        else
+        {
+            payload["stdout"] = stdout;
+        }
 
         if (error is not null)
             payload["error"] = error;
 
         CommandOutputWriter.WriteJsonNode(payload, jsonOptions);
+    }
+
+    private static bool TryParseBatchStructuredOutput(
+        string stdout,
+        out string resultField,
+        out JsonNode? structuredOutput)
+    {
+        resultField = string.Empty;
+        structuredOutput = null;
+        if (string.IsNullOrWhiteSpace(stdout))
+            return false;
+
+        var maxUtf8Bytes = BatchMaxCapturedOutputChars * 4;
+        try
+        {
+            structuredOutput = BoundedJson.ParseNode(stdout, maxUtf8Bytes, BatchMaxJsonDepth);
+            resultField = "result";
+            return true;
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
+        {
+            // A complete JSON document did not parse. Try JSON Lines before retaining
+            // the original text; every non-blank line must be valid JSON.
+        }
+
+        var results = new JsonArray();
+        using var reader = new StringReader(stdout);
+        while (reader.ReadLine() is { } line)
+        {
+            if (string.IsNullOrWhiteSpace(line))
+                continue;
+            try
+            {
+                results.Add(BoundedJson.ParseNode(line, maxUtf8Bytes, BatchMaxJsonDepth));
+            }
+            catch (Exception ex) when (ex is JsonException or InvalidDataException)
+            {
+                return false;
+            }
+        }
+
+        if (results.Count == 0)
+            return false;
+
+        resultField = "results";
+        structuredOutput = results;
+        return true;
     }
 
     private static void WriteBatchLineErrorJson(int lineNumber, BatchLineError error, JsonSerializerOptions jsonOptions)
@@ -412,10 +494,17 @@ public static partial class QueryCommandRunner
             ErrorCode: CommandErrorCodes.UsageError);
 
     private static int RunBatchQueryCommand(string commandName, string[] subArgs, JsonSerializerOptions jsonOptions)
-        => commandName switch
+    {
+        if (!CliCommandCatalog.IsBatchReadOnlyCommand(commandName))
+            return WriteBatchUnsupportedCommand(commandName);
+
+        return commandName switch
         {
             "search" => RunSearch(subArgs, jsonOptions),
+            "recipes" => RunRecipes(subArgs, jsonOptions),
+            "audit" => RunAudit(subArgs, jsonOptions),
             "definition" => RunDefinition(subArgs, jsonOptions),
+            "goto" => RunGoto(subArgs, jsonOptions),
             "references" => RunReferences(subArgs, jsonOptions),
             "callers" => RunCallers(subArgs, jsonOptions),
             "callees" => RunCallees(subArgs, jsonOptions),
@@ -429,26 +518,18 @@ public static partial class QueryCommandRunner
             "status" => RunStatus(subArgs, jsonOptions),
             "validate" => RunValidate(subArgs, jsonOptions),
             "languages" => RunLanguages(subArgs, jsonOptions),
-            "recipes" => RunBatchRecipesCommand(subArgs, jsonOptions),
             "impact" => RunImpact(subArgs, jsonOptions),
             "deps" => RunDeps(subArgs, jsonOptions),
             "unused" => RunUnused(subArgs, jsonOptions),
             "hotspots" => RunHotspots(subArgs, jsonOptions),
-            _ => WriteBatchUnsupportedCommand(commandName),
+            _ => throw new InvalidOperationException($"Batch schema command '{commandName}' has no dispatcher."),
         };
-
-    private static int RunBatchRecipesCommand(string[] subArgs, JsonSerializerOptions jsonOptions)
-    {
-        var searchArgs = new string[subArgs.Length + 1];
-        searchArgs[0] = "--list-recipes";
-        Array.Copy(subArgs, 0, searchArgs, 1, subArgs.Length);
-        return RunSearch(searchArgs, jsonOptions);
     }
 
     private static int WriteBatchUnsupportedCommand(string commandName)
     {
         CommandErrorWriter.WriteStderr($"Error: batch only supports query and read-only discovery commands; '{commandName}' is not supported.");
-        CommandErrorWriter.WriteStderr("Hint: use one of search, definition, references, callers, callees, symbols, files, find, excerpt, map, inspect, outline, status, validate, languages, recipes, impact, deps, unused, or hotspots.");
+        CommandErrorWriter.WriteStderr($"Hint: use one of {string.Join(", ", CliCommandCatalog.BatchReadOnlyCommands)}.");
         return CommandExitCodes.UsageError;
     }
 
@@ -464,10 +545,16 @@ public static partial class QueryCommandRunner
     {
         private readonly TextWriter _originalOut = Console.Out;
         private readonly TextWriter _originalError = Console.Error;
-        private readonly BatchBoundedStringWriter _stdout = new(BatchMaxCapturedOutputChars, "stdout");
-        private readonly BatchBoundedStringWriter _stderr = new(BatchMaxCapturedOutputChars, "stderr");
+        private readonly BatchBoundedStringWriter _stdout;
+        private readonly BatchBoundedStringWriter _stderr;
         private bool _started;
         private bool _stopped;
+
+        public BatchCommandOutputCapture(BatchOutputBudget outputBudget)
+        {
+            _stdout = new BatchBoundedStringWriter(BatchMaxCapturedOutputChars, "stdout", outputBudget);
+            _stderr = new BatchBoundedStringWriter(BatchMaxCapturedOutputChars, "stderr", outputBudget);
+        }
 
         public string Stdout => _stdout.ToString();
         public string Stderr => _stderr.ToString();
@@ -498,7 +585,10 @@ public static partial class QueryCommandRunner
         }
     }
 
-    private sealed class BatchBoundedStringWriter(int maxChars, string streamName) : StringWriter
+    private sealed class BatchBoundedStringWriter(
+        int maxChars,
+        string streamName,
+        BatchOutputBudget outputBudget) : StringWriter
     {
         private int _writtenChars;
 
@@ -533,14 +623,46 @@ public static partial class QueryCommandRunner
         private void EnsureCapacity(int charCount)
         {
             if (charCount < 0 || _writtenChars > maxChars - charCount)
-                throw new BatchOutputCaptureLimitExceededException(maxChars, streamName);
+                throw new BatchOutputCaptureLimitExceededException(
+                    maxChars,
+                    streamName,
+                    BatchOutputLimitScope.Command);
+            outputBudget.Consume(charCount, streamName);
             _writtenChars += charCount;
         }
     }
 
-    private sealed class BatchOutputCaptureLimitExceededException(int maxChars, string streamName) : Exception
+    private sealed class BatchOutputBudget(int maxChars)
+    {
+        public int ConsumedChars { get; private set; }
+
+        public void Consume(int charCount, string streamName)
+        {
+            if (charCount < 0 || ConsumedChars > maxChars - charCount)
+            {
+                throw new BatchOutputCaptureLimitExceededException(
+                    maxChars,
+                    streamName,
+                    BatchOutputLimitScope.Batch);
+            }
+
+            ConsumedChars += charCount;
+        }
+    }
+
+    private enum BatchOutputLimitScope
+    {
+        Command,
+        Batch,
+    }
+
+    private sealed class BatchOutputCaptureLimitExceededException(
+        int maxChars,
+        string streamName,
+        BatchOutputLimitScope scope) : Exception
     {
         public int MaxChars { get; } = maxChars;
         public string StreamName { get; } = streamName;
+        public BatchOutputLimitScope Scope { get; } = scope;
     }
 }
