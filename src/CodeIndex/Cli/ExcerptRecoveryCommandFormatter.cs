@@ -1,6 +1,5 @@
 using CodeIndex.Database;
 using System.Globalization;
-using System.Reflection;
 
 namespace CodeIndex.Cli;
 
@@ -45,7 +44,7 @@ internal static class ExcerptRecoveryCommandFormatter
 
     internal static IDisposable UseCurrentProcessInvocation()
     {
-        var prefix = ResolveInvocationPrefix(Environment.ProcessPath, Assembly.GetEntryAssembly()?.Location);
+        var prefix = ResolveInvocationPrefix(Environment.ProcessPath, Environment.GetCommandLineArgs().FirstOrDefault());
         var previous = ScopedInvocation.Value;
         ScopedInvocation.Value = new RecoveryInvocation(prefix, ResolveCurrentShell());
         return new InvocationScope(previous);
