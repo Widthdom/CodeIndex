@@ -810,18 +810,19 @@ files 1──N symbol_references
 
 ### Reference taxonomy
 
-`symbol_references.reference_kind` stores raw extractor labels. Default call-graph surfaces (`callers`, `callees`, inspect/analyze caller and callee bundles, and their JSON/MCP fields) expose logical labels so downstream grouping does not mix collapsed and raw event kinds. Use `--raw-kinds` on `callers` / `callees`, or `references --kind <raw-kind>`, when debugging raw extractor output.
+`symbol_references.reference_kind` stores raw extractor labels. Default call-graph surfaces (`callers`, `callees`, inspect/analyze caller and callee bundles, and their JSON/MCP fields) expose the canonical public vocabulary `call`, `instantiate`, and `subscribe`. The primary `reference_kind`, `reference_kinds`, and `reference_kind_counts` keys use that same vocabulary. Use `--raw-kinds` on `callers` / `callees`, or `references --kind <raw-kind>`, when debugging raw extractor output.
 
 Reference extraction deduplicates only within the same indexed file and language context. When adding extractor paths, include the file id and language hint in shared `seen` keys so same line/column/name edges from polyglot workspaces do not collapse across Java, Rust, C#, SQL, or other language-specific normalization contexts.
 
 | Raw kind | Logical graph kind | Notes |
 |---|---|---|
-| `call`, `instantiate` | `invoke` | Executable invocation edges. |
+| `call` | `call` | Direct executable invocation edges. |
+| `instantiate` | `instantiate` | Constructor / construction edges. |
 | `goroutine_spawn` | `goroutine_spawn` | Go `go f()` async spawn edges; the ordinary `call` edge is also emitted for the invoked function. |
 | `channel_send`, `channel_receive` | raw label | Go channel communication edges for send and receive expressions; excluded from default invocation graphs. |
-| `razor_event_binding` | `event` | Razor `@on...="Handler"` event bindings from markup to C# handler names. |
-| `subscribe`, `unsubscribe` | `event` | Event wiring edges kept visible in call-graph queries. |
-| `friend` | `friend` | C++ friend access/coupling edges kept visible in dependency-oriented graph queries. |
+| `razor_event_binding` | `subscribe` | Razor `@on...="Handler"` event bindings from markup to C# handler names. |
+| `subscribe`, `unsubscribe` | `subscribe` | Event wiring edges kept visible in default call-graph queries. |
+| `generic_type_argument`, `friend`, `capture`, `consumes_hook`, `project_reference` | raw label | Dependency/metadata edges excluded from default `callers` / `callees`; available through `references`, an explicit kind filter, and the applicable dependency/impact surfaces. |
 | `system_variable` | raw label | SQL execution-context variables such as T-SQL `@@ROWCOUNT` / `@@IDENTITY` and MySQL `@@session.sql_mode` / `@@global.max_connections`; intrinsic variables have no definition site. |
 | `attribute`, `annotation`, `type_reference`, `implicit_implementation` | raw label | Dependency/reference-only metadata, type-position edges, and compiler-synthesized implementation edges such as C# async iterator `GetAsyncEnumerator` / `MoveNextAsync`; excluded from default call-graph rows. |
 
@@ -1504,18 +1505,18 @@ Process exit codes are coarse (`0` success including valid zero-row queries, `1`
 
 ## Reference-kind filtering matrix
 
-Different graph entry points walk different `reference_kind` subsets by design. The split mirrors **call graph vs. dependency graph**: `callers`, `callees`, `hotspots`, and `impact`'s BFS layer model the runtime call graph plus closure dependency edges (`capture`) and exclude metadata-only edges (`attribute` / `annotation`), while keeping explicit generic invocation type-argument edges (`generic_type_argument`) such as `Process<IFoo>(value)` because they bind a concrete type into an invoked method; `deps` and `impact`'s heuristic file-level fallback model the compile-time dependency graph and include metadata edges so that `[JsonConverter(typeof(User))]` and `@Inject(User.class)` still surface as real dependencies of `User`. Both directions of `deps` share the same SQL function (`DbReader.GetFileDependencies`), so forward and reverse walks always emit the same kind set.
+Different graph entry points walk different `reference_kind` subsets by design. The split mirrors **call graph vs. dependency graph**: default `callers` and `callees` are restricted to executable call, construction, and subscription semantics; `hotspots` and `impact` retain their broader dependency-oriented traversal, including closure and generic-invocation edges. `deps` and `impact`'s heuristic file-level fallback model the compile-time dependency graph and include metadata edges so that `[JsonConverter(typeof(User))]` and `@Inject(User.class)` still surface as real dependencies of `User`. Both directions of `deps` share the same SQL function (`DbReader.GetFileDependencies`), so forward and reverse walks always emit the same kind set.
 
 | Entry point | Direction | Reference kinds walked | Backing function |
 | --- | --- | --- | --- |
 | `references` (CLI / MCP) | symbol-centric | all `reference_kind` rows; narrowed by `--kind` when provided | `DbReader.GetReferences` |
-| `callers` / `callees` (default) | source ↔ container | `('augmentation', 'call', 'instantiate', 'generic_type_argument', 'subscribe', 'unsubscribe', 'razor_event_binding', 'friend', 'consumes_hook', 'capture', 'project_reference')` (= `CallGraphReferenceKindsSql`); metadata kinds rejected at CLI / MCP `--kind` boundary | `DbReader.GetCallers` / `DbReader.GetCallees` |
+| `callers` / `callees` (default) | source ↔ container | `('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')` (= `CallableReferenceKindsSql`); public rows canonicalize event variants to `subscribe` | `DbReader.GetCallers` / `DbReader.GetCallees` |
 | `impact` callers mode | transitive forward (BFS) | `('augmentation', 'call', 'instantiate', 'generic_type_argument', 'subscribe', 'unsubscribe', 'razor_event_binding', 'friend', 'consumes_hook', 'capture', 'project_reference')` via `GetCallersExact`; solution project paths also match their project container names | `DbReader.GetTransitiveCallers` |
 | `impact` file-hint fallback | reverse (definition file → dependent files) | all kinds; metadata-only rows gated by `IsMetadataTargetUnambiguous` + structured-type evidence | `DbReader.GetFileDependencyHintsToResolvedType` |
 | `deps` (default = forward) | source file → target file | all kinds; metadata rows require class-like + metadata-eligible targets (`has_metadata_target_kind`) and a unique resolution (`target_ambiguity`); MSBuild imports/project references resolve paths relative to the declaring project instead of matching shared package names | `DbReader.GetFileDependencies` |
 | `deps --reverse` | target file → source file | same as forward `deps` (same SQL) | `DbReader.GetFileDependencies` |
 
-Practical consequence: `impact <ClassName>` on a class-like symbol returns the heuristic file-dependency-hint fallback (with metadata edges) when no member-level callers exist, whereas `callers <ClassName>` returns the call-graph subset (without metadata). Both are correct under their own contracts; counts will not match. To reconcile, run `references <ClassName> --kind attribute` (or `annotation`) to surface the metadata-only edges that the call-graph commands intentionally drop.
+Practical consequence: `impact <ClassName>` on a class-like symbol returns the heuristic file-dependency-hint fallback (with metadata edges) when no member-level callers exist, whereas default `callers <ClassName>` returns only executable edges. Both are correct under their own contracts; counts will not match. To reconcile, run `references <ClassName> --kind attribute` (or `annotation`), or pass an explicitly supported non-default kind to `callers` / `callees`, to surface edges that the default call graph intentionally drops.
 
 `impact --json` and MCP `impact_analysis` expose zero-result diagnostics as structured routing fields. `zero_result_reason` remains the compact terminal reason; `impact_failure_chain` lists failed preconditions or traversal states in order, using values such as `definition_not_found`, `callable_filter_fails`, `multiple_definitions`, `multiple_definition_files`, `graph_unavailable`, `depth_requested_zero`, and `no_callers`. `suggestion_type` classifies the prose `suggestion` as `resolution`, `traversal`, or `precondition`. CLI `impact --strict` exits with `FeatureUnavailable` when the chain contains a resolution or precondition failure, but still treats a genuine `no_callers` traversal result as success.
 
@@ -2091,7 +2092,7 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   `notice`, `warning`, `error`, `critical`, `alert`, and `emergency`.
 - `protocolVersion` is **negotiated**, not hardcoded (#1554). The server
   maintains `McpServer.SupportedProtocolVersions` (newest first:
-  `2025-03-26`, `2024-11-05`), reads the client's requested
+  `2025-06-18`, `2025-03-26`, `2024-11-05`), reads the client's requested
   `protocolVersion` from `initialize` params, and either echoes the
   supported version back (handshake success), falls back to the newest
   supported version when the client omits or sends a non-string value,
@@ -2099,7 +2100,10 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   carries `requestedVersion` and `supportedVersions`. This keeps future
   MCP spec bumps visible as actionable handshake failures instead of
   silently desynced wire formats. Bump the array deliberately and keep
-  `ProtocolVersion` aligned with its first entry. Client identity, caller,
+  `ProtocolVersion` aligned with its first entry. The lifecycle transport
+  regression test sends the Codex `2025-06-18` handshake through
+  `notifications/initialized` and `tools/list`, rather than testing version
+  echoing alone. Client identity, caller,
   roots, and capabilities are parsed into a detached initialize draft and
   committed only after negotiation and complete success-response serialization
   finish (#4540); a rejected handshake, `CDIDX_MCP_RESPONSE_MAX_BYTES`
@@ -3533,16 +3537,17 @@ files 1──N symbol_references
 
 ### 参照 taxonomy
 
-`symbol_references.reference_kind` には extractor が出力した raw label を保存する。既定の call-graph 表示（`callers`、`callees`、inspect/analyze の caller / callee bundle、および JSON/MCP フィールド）は logical label を返し、下流の集計で collapse 済み kind と raw event kind が混在しないようにする。raw extractor 出力を調べる場合は、`callers` / `callees` の `--raw-kinds`、または `references --kind <raw-kind>` を使う。
+`symbol_references.reference_kind` には extractor が出力した raw label を保存する。既定の call-graph 表示（`callers`、`callees`、inspect/analyze の caller / callee bundle、および JSON/MCP フィールド）は、公開 canonical 語彙 `call`、`instantiate`、`subscribe` を返す。primary `reference_kind`、`reference_kinds`、`reference_kind_counts` の key はすべて同じ語彙を使う。raw extractor 出力を調べる場合は、`callers` / `callees` の `--raw-kinds`、または `references --kind <raw-kind>` を使う。
 
 | Raw kind | Logical graph kind | 備考 |
 |---|---|---|
-| `call`, `instantiate` | `invoke` | 実行される呼び出しエッジ。 |
+| `call` | `call` | 直接実行される呼び出しエッジ。 |
+| `instantiate` | `instantiate` | constructor / construction エッジ。 |
 | `goroutine_spawn` | `goroutine_spawn` | Go の `go f()` による非同期 spawn edge。呼び出し先には通常の `call` edge も併せて出力する。 |
 | `channel_send`, `channel_receive` | raw label | Go の channel send / receive 式を表す通信エッジ。既定の invocation graph からは除外する。 |
-| `razor_event_binding` | `event` | Razor の `@on...="Handler"` event binding から C# handler 名への edge。 |
-| `subscribe`, `unsubscribe` | `event` | call-graph query で可視化するイベント配線エッジ。 |
-| `friend` | `friend` | C++ friend の access/coupling edge。依存関係寄りの graph query で可視化する。 |
+| `razor_event_binding` | `subscribe` | Razor の `@on...="Handler"` event binding から C# handler 名への edge。 |
+| `subscribe`, `unsubscribe` | `subscribe` | 既定の call-graph query で可視化するイベント配線エッジ。 |
+| `generic_type_argument`, `friend`, `capture`, `consumes_hook`, `project_reference` | raw label | 既定の `callers` / `callees` から除外する依存関係 / metadata edge。`references`、明示 kind filter、対応する dependency / impact surface では利用できる。 |
 | `system_variable` | raw label | T-SQL `@@ROWCOUNT` / `@@IDENTITY` や MySQL `@@session.sql_mode` / `@@global.max_connections` など、SQL 実行 context variable。intrinsic variable なので definition site は持たない。 |
 | `attribute`, `annotation`, `type_reference`, `implicit_implementation` | raw label | 依存関係 / reference 専用の metadata、型位置エッジ、および C# async iterator の `GetAsyncEnumerator` / `MoveNextAsync` のようなコンパイラ合成の実装エッジ。既定の call-graph 行からは除外する。 |
 
@@ -4226,18 +4231,18 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
 
 ## reference_kind フィルタの対応表
 
-グラフ系エントリポイントは、用途別に意図的に異なる `reference_kind` の部分集合だけを辿る。設計上の分割は **呼び出しグラフ vs 依存グラフ** に対応する: `callers`、`callees`、`hotspots`、`impact` の BFS 層は実行時の呼び出し・グラフ可視な結合とクロージャ依存 (`capture`) をモデル化するため metadata 専用エッジ (`attribute` / `annotation`) を除外し、`Process<IFoo>(value)` のように呼び出し済みメソッドへ具体型を束縛する明示的 generic 呼び出し型引数 (`generic_type_argument`) と TypeScript merged interface 用の `augmentation` は dependency edge として含める。`deps` と `impact` の heuristic file-level fallback はコンパイル時の依存グラフをモデル化するため、`[JsonConverter(typeof(User))]` や `@Inject(User.class)` も `User` への本物の依存として metadata エッジを含める。`deps` は forward / reverse とも同じ SQL 関数 (`DbReader.GetFileDependencies`) を共有するため、両方向で常に同じ kind 集合を出す。
+グラフ系エントリポイントは、用途別に意図的に異なる `reference_kind` の部分集合だけを辿る。設計上の分割は **呼び出しグラフ vs 依存グラフ** に対応する。既定の `callers` / `callees` は実行可能な call、construction、subscription semantics に限定する一方、`hotspots` と `impact` は closure や generic invocation edge を含む、より広い依存関係寄りの traversal を維持する。`deps` と `impact` の heuristic file-level fallback はコンパイル時の依存グラフをモデル化するため、`[JsonConverter(typeof(User))]` や `@Inject(User.class)` も `User` への本物の依存として metadata エッジを含める。`deps` は forward / reverse とも同じ SQL 関数 (`DbReader.GetFileDependencies`) を共有するため、両方向で常に同じ kind 集合を出す。
 
 | エントリポイント | 方向 | 辿る reference_kind | 実装 |
 | --- | --- | --- | --- |
 | `references` (CLI / MCP) | symbol 中心 | すべての `reference_kind` 行 (`--kind` 指定時は絞り込み) | `DbReader.GetReferences` |
-| `callers` / `callees` (デフォルト) | source ↔ container | `('augmentation', 'call', 'instantiate', 'generic_type_argument', 'subscribe', 'unsubscribe', 'razor_event_binding', 'friend', 'consumes_hook', 'capture', 'project_reference')` (= `CallGraphReferenceKindsSql`)。metadata 種別は CLI / MCP `--kind` 境界で拒否 | `DbReader.GetCallers` / `DbReader.GetCallees` |
+| `callers` / `callees` (デフォルト) | source ↔ container | `('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')` (= `CallableReferenceKindsSql`)。公開 row では event variant を `subscribe` に canonicalize | `DbReader.GetCallers` / `DbReader.GetCallees` |
 | `impact` callers mode | 推移的 forward (BFS) | `GetCallersExact` 経由で `('augmentation', 'call', 'instantiate', 'generic_type_argument', 'subscribe', 'unsubscribe', 'razor_event_binding', 'friend', 'consumes_hook', 'capture', 'project_reference')`。solution の project path は project container 名とも照合 | `DbReader.GetTransitiveCallers` |
 | `impact` file-hint fallback | reverse (定義ファイル → 依存先) | 全 kind。metadata 専用行は `IsMetadataTargetUnambiguous` と structured-type evidence で gating | `DbReader.GetFileDependencyHintsToResolvedType` |
 | `deps` (デフォルト = forward) | source file → target file | 全 kind。metadata 行は class-like かつ metadata-eligible な target (`has_metadata_target_kind`) と一意解決 (`target_ambiguity`) を要求。MSBuild の import / project reference は共有 package 名との一致ではなく、宣言元 project 相対の path として解決 | `DbReader.GetFileDependencies` |
 | `deps --reverse` | target file → source file | forward `deps` と同じ SQL を共有 | `DbReader.GetFileDependencies` |
 
-実運用上の帰結: クラスのようなシンボルに対する `impact <ClassName>` は、member-level の caller が存在しない場合 heuristic file-dependency-hint fallback (metadata エッジを含む) を返し、一方の `callers <ClassName>` は call-graph 部分集合 (metadata 無し) を返す。両方とも個々の契約上は正しいが、件数は一致しない。差分を埋めるには `references <ClassName> --kind attribute`（または `annotation`）で、call-graph コマンドが意図的に落としている metadata エッジだけを別途確認する。
+実運用上の帰結: クラスのようなシンボルに対する `impact <ClassName>` は、member-level の caller が存在しない場合 heuristic file-dependency-hint fallback (metadata エッジを含む) を返し、一方の既定 `callers <ClassName>` は実行可能 edge だけを返す。両方とも個々の契約上は正しいが、件数は一致しない。差分を埋めるには `references <ClassName> --kind attribute`（または `annotation`）を使うか、`callers` / `callees` に明示的に対応する非既定 kind を渡し、既定 call graph が意図的に落としている edge を確認する。
 
 `impact --json` と MCP `impact_analysis` は、0 件診断を structured routing field として返します。`zero_result_reason` は端末向けの短い理由のまま残し、`impact_failure_chain` は `definition_not_found`、`callable_filter_fails`、`multiple_definitions`、`multiple_definition_files`、`graph_unavailable`、`depth_requested_zero`、`no_callers` などの失敗前提や traversal 状態を順序付きで列挙します。`suggestion_type` は prose の `suggestion` を `resolution`、`traversal`、`precondition` に分類します。CLI `impact --strict` は chain に resolution / precondition failure が含まれる場合は `FeatureUnavailable` で終了しますが、真正な `no_callers` traversal 結果は成功として扱います。
 
@@ -4529,7 +4534,24 @@ sequenceDiagram
 - すべての request frame は厳密な `"jsonrpc":"2.0"` member を持つ必要があり、`initialize` 以外の応答対象 method は初期化成功まで拒否される（#4468）。stdio の EOF、不正 UTF-8、oversized input は、grace period、cancellation、post-cancel deadline の共通 bounded teardown を使う（#4543）。不正入力の protocol-error write と非同期 shutdown-cancellation callback も同じ deadline に含めるため、writer、write gate、callback の停止で teardown が無期限に残らない。`notifications/shutdown` は read と request action を cancel するが、起点の transport completion（HTTP では `204 No Content`）は cancel しない。初回 drain snapshot 後に開始した callback と concurrent loop の全終了経路も bounded drain に含める。stdio input は速やかに close し、output dispose は response writer に到達し得る accepted task の完了まで defer する。最終 diagnostic には未完了カテゴリごとの状態を記録し、外部 transport または process cancellation はどちらの cleanup window も中断できる。
 - 独立した stdio request と HTTP POST は、設定された MCP request 上限まで並行実行する（#4536）。実行 slot が全て使用中でも read loop は cancellation/client-response frame を受け続ける。accepted-frame backlog は execution 上限 + 64 に別途制限し、超過 request には retry-safe な `-32003` / `server_busy` を返す。request id は protocol/gate 待機前に登録し、execution timeout は slot 取得後に開始し、timeout 後も cancellation を無視して動く action は実際に drain するまで slot を保持する。initialize など session mutation の受信順は protocol barrier で維持し、可変な request state は `AsyncLocal` または request-scoped snapshot に置き、shared writer tool は直列化する。JSON-RPC batch の各 item も同じ global execution slot を個別に消費する（#4545）。基本 `IMcpTransport` loop は outer frame slot を確保しないため、`maxConcurrency: 1` の single request は `_concurrencyGate` を1回だけ取得し、single request と batch item は dispatch 時だけ slot を消費する。
 - advertised capability には `tools`、`resources`、`prompts`、`logging` が含まれる。`resources/list` はインデックス済みファイルを `cdidx://file/<path>` URI としてページングし、世代対応の不透明 keyset cursor を返す。ページ間でインデックス済みファイルが変わった場合は、再開必須の stale-index error を明示的に返す。任意の `maxBytes`（4,096〜1,000,000、既定 1,000,000）で JSON-RPC envelope 全体を制限し、省略件数と継続理由を `_meta.response_controls` に有界な形で返す。`resources/read` は inclusive な `startLine` / `endLine` と UTF-8 本文の `maxBytes`（最小 4 byte、既定 64 KiB、最大 128 KiB）を任意指定として受け付ける。各ページは論理行 1,000 行でも上限化される。成功レスポンスは標準の `contents` item を維持し、`result._meta` に実効範囲、返却 byte 数、切り詰め理由、不透明な `nextCursor` を追加する。継続時は行境界を再送せず、その cursor と任意の新しい `maxBytes` を渡す。cursor は index 済みファイル版に結び付くため、resource 変更後は stale として失敗する。database reader は長い単一行を含め、managed response string を構築する前に incremental SQLite BLOB read で範囲と byte 上限を適用する。server は MCP レスポンス上限と active transport のレスポンス上限のうち小さい方から実効本文 budget を算出し、JSON-RPC envelope と最悪ケースの JSON escape に必要な領域を確保する。1 つの JSON-RPC batch に複数の `resources/read` call がある場合は aggregate frame 上限を共有し、各 item を frame の残り領域に合わせて budget 化する。page 化できない item が割当内に収まらない場合は、元の request ID を保持した構造化 `batch_response_budget_too_small` error に置換する。file metadata の取得、cursor 検証、chunk BLOB 読み取りは単一の deferred SQLite read snapshot 内で実行するため、並行 reindex によって異なる resource 版が混在しない。実際に空の index 済みファイルは空の成功レスポンスを返すが、非空 resource の content 欠落、chunk coverage の不足、安全上限を超える chunk topology は部分的または空の成功として返さず、構造化された `index_missing`、`index_stale`、`index_corrupted` error として失敗する。専用の range partial index がない read-only または immutable な legacy database では、既存の `idx_chunks_file` index を使い、SQLite VM-step budget 内で metadata-only の predecessor / candidate query を実行する。budget 超過時は無制限に scan せず、構造化された `resource_bounded_read_index_unavailable` を返す。stable reason には `resource_content_unavailable`、`resource_bounded_read_index_unavailable`、`resource_chunk_coverage_incomplete`、`chunk_limit_exceeded`、`chunk_candidate_scan_limit_exceeded`、`resource_file_metadata_inconsistent`、`resource_chunk_topology_invalid`、`scan_limit_exceeded` がある。`logging` は MCP `notifications/message` を示し、`logging/setLevel` は `debug`、`info`、`notice`、`warning`、`error`、`critical`、`alert`、`emergency` を受け付ける。
-- `protocolVersion` は**ハードコードではなく交渉**で決まる（#1554）。サーバーは `McpServer.SupportedProtocolVersions`（新しい順: `2025-03-26`, `2024-11-05`）を保持し、`initialize` パラメータからクライアント要求バージョンを読み取って、対応集合にあればそれを返し（合意）、未指定／非文字列なら既定の最新バージョンに fallback し、対応外なら `error.data` に `requestedVersion` と `supportedVersions` を入れた JSON-RPC `-32602` で拒否する。これにより将来 MCP 仕様が改訂されても、wire format が黙ってずれるのではなく actionable な handshake 失敗として表面化する。配列を新バージョンで更新する際は `ProtocolVersion` を先頭エントリと揃えて意図的に bump する。client identity、caller、roots、capabilities は切り離した initialize draft へ解析し、protocol 交渉と success response の serialization が完了した後だけ commit する（#4540）。拒否された handshake、`CDIDX_MCP_RESPONSE_MAX_BYTES` fallback、serializer failure は確立済み session state を変更しない。成功時は lifecycle とすべての metadata を単一の immutable snapshot として同時に公開し、進行中の古い `roots/list` response は新しい initialize を上書きできない。この保証は server-side JSON-RPC serialization の境界に適用され、HTTP 配送には別の fail-closed 境界がある。
+- `protocolVersion` は**ハードコードではなく交渉**で決まる（#1554）。サーバーは
+  `McpServer.SupportedProtocolVersions`（新しい順: `2025-06-18`,
+  `2025-03-26`, `2024-11-05`）を保持し、`initialize` パラメータから
+  クライアント要求バージョンを読み取って、対応集合にあればそれを返し（合意）、
+  未指定／非文字列なら既定の最新バージョンに fallback し、対応外なら
+  `error.data` に `requestedVersion` と `supportedVersions` を入れた JSON-RPC
+  `-32602` で拒否する。これにより将来 MCP 仕様が改訂されても、wire format が
+  黙ってずれるのではなく actionable な handshake 失敗として表面化する。配列を
+  新バージョンで更新する際は `ProtocolVersion` を先頭エントリと揃えて意図的に
+  bump する。lifecycle transport の回帰テストは version echo だけでなく、Codex の
+  `2025-06-18` handshake から `notifications/initialized`、`tools/list` までを通す。
+  client identity、caller、roots、capabilities は切り離した initialize draft へ解析し、
+  protocol 交渉と success response の serialization が完了した後だけ commit する
+  （#4540）。拒否された handshake、`CDIDX_MCP_RESPONSE_MAX_BYTES` fallback、
+  serializer failure は確立済み session state を変更しない。成功時は lifecycle と
+  すべての metadata を単一の immutable snapshot として同時に公開し、進行中の古い
+  `roots/list` response は新しい initialize を上書きできない。この保証は server-side
+  JSON-RPC serialization の境界に適用され、HTTP 配送には別の fail-closed 境界がある。
 - **認証ミドルウェア**（#1559）。`McpServer` はパース済み JSON-RPC リクエストごとに、メソッド抽出 *後*・dispatch *前* で `IMcpAuthenticator` を呼ぶ。既定の `LocalStdioAuthenticator` は permissive で（従来の stdio 動作を維持し、呼び出し元を `stdio` / `local` でタグ付けする）、stdio では `CDIDX_MCP_AUTH_TOKEN` を設定すると `TokenMcpAuthenticator` に切り替わる。未設定または空文字の token だけが permissive で、空白のみ・空白文字入り・制御文字入り・4096 文字超の token は設定値として拒否する。`TokenMcpAuthenticator` は応答が必要な全リクエストに対し、`params.auth.token` が一致することを要求し、比較は `CryptographicOperations.FixedTimeEquals` による定数時間比較で行う。HTTP はこの body token ゲートを重ねず、`ProgramRunner` が `CDIDX_MCP_HTTP_TOKEN` を優先し、未設定なら `CDIDX_MCP_AUTH_TOKEN` を fallback として bearer secret に解決して、`Authorization: Bearer ...` の transport check に一本化する（#3156）。HTTP bearer 値は `Bearer ` の後ろを trim せず完全一致で扱い、空白文字・制御文字・4096 文字超は hash 前に拒否する。JSON-RPC body token ゲートの失敗は統一された JSON-RPC `-32001 "Unauthorized"` を返し（#1530 の sanitization 方針に従い、ワイヤでは未提示と不一致を区別しない）、`BuildAuthFailureLog` が詳細を stderr に書き出す。副作用のない `notifications/initialized` は認証せず short-circuit できる。一方、state-changing notification（`$/cancelRequest`、`notifications/cancelled`、`notifications/roots/list_changed`、`notifications/shutdown`、`notifications/exit`）は cancellation / roots / lifecycle state を変更する前に認証する。認証失敗時も notification は応答を返さず、bounded な stderr 診断だけを残す（#4537）。このミドルウェアが将来 transport の差し替え seam になる — ネットワーク listener は別の `IMcpAuthenticator` を提供しつつ、`McpCallerIdentity`（`Source` + `Subject`）の形を保ち、監査ログ（#1562）から再利用できる。
 
 MCP は独立したシリアライズ戦略（オブジェクトを JSON などの転送形式に変換する方式のこと。CLI の `--json` 側は .NET 標準の `JsonSerializer` に任せる方式、MCP 側は `JsonObject` を手で組み立てる方式と、別の手段を採っている）を採るため、「そもそもバイナリは走るのか?」を確かめる最も頑健なスモークテスト（デプロイや起動直後に行う、基本動作だけを短時間で確認する簡易テストのこと。詳細な正しさではなく「煙が出ていないか＝致命的に壊れていないか」を見るためこの名で呼ばれる）となる — .NET ホスト、`Program.Main`、CLI ルーティング、`ConsoleUi.LoadVersion()` に負荷をかけるが、SQLite には触れない（`search` など MCP の*ツール呼び出し*は SQLite に触れるが、`initialize` 単独では触れない）。

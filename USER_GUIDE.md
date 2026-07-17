@@ -1402,6 +1402,8 @@ These commands use the indexed reference graph. The canonical graph-supported la
 
 When you pass `--lang` for an unsupported language, human-readable graph commands now say so explicitly, and MCP graph tools expose `graph_language`, `graph_supported`, and `graph_support_reason` alongside the empty result list.
 
+By default, `callers` and `callees` return only executable call, construction, and subscription edges. Their public `reference_kind`, `reference_kinds`, and `reference_kind_counts` fields use one canonical vocabulary: `call`, `instantiate`, and `subscribe`. Type and metadata edges such as `generic_type_argument`, `capture`, `friend`, and `project_reference` remain available through `references` or an explicit kind filter; use `--raw-kinds` when you need extractor labels such as `unsubscribe` or `razor_event_binding`.
+
 `callers` and `callees` rank results by weighted structural importance by default: `instantiate` edges count as `3.0`, direct `call` edges as `1.0`, and event `subscribe` edges as `0.1`. This keeps factory or composition-root constructor use from being buried under noisy event subscriptions. Use `--rank-by count` to restore raw `reference_count` ordering, or `--rank-by kind` to group `instantiate`, `call`, then `subscribe` before count. JSON rows keep the raw `reference_count` and add `reference_kind_counts` plus `reference_weight_score` so consumers can re-rank without losing the source counts; MCP structured rows expose the same data as `referenceKindCounts` and `referenceWeightScore`.
 
 ### Outline a single file
@@ -2648,18 +2650,29 @@ GitHub Copilot (VS Code — `.vscode/mcp.json`):
 }
 ```
 
-OpenAI Codex CLI (`codex.json` or `~/.codex/config.json`):
+OpenAI Codex CLI, desktop app, and IDE extension share TOML MCP configuration.
+For a trusted repository, add this to `.codex/config.toml` (or use
+`~/.codex/config.toml` for a global default):
 
-```json
-{
-  "mcpServers": {
-    "cdidx": {
-      "command": "cdidx",
-      "args": ["mcp", "--db", ".cdidx/codeindex.db"]
-    }
-  }
-}
+```toml
+[mcp_servers.cdidx]
+command = "cdidx"
+args = ["mcp", "--db", ".cdidx/codeindex.db"]
+required = true # fail startup instead of silently running without cdidx
 ```
+
+Alternatively, register the stdio server from the command line:
+
+```bash
+codex mcp add cdidx -- cdidx mcp --db .cdidx/codeindex.db
+codex mcp list
+```
+
+Codex does not auto-discover cdidx merely because the binary is installed or an
+agent guide mentions it. Restart Codex (or start a new session) after changing
+MCP configuration, then use `/mcp` to confirm that the server and tools are
+active. cdidx negotiates MCP `2025-06-18` for current Codex clients while
+retaining `2025-03-26` and `2024-11-05` compatibility.
 
 Once configured, the AI can directly call these tools:
 
@@ -4340,6 +4353,8 @@ cdidx callees AddToGitExclude --exclude-tests
 
 未対応言語を `--lang` で指定した場合、人間向けの graph コマンドはその旨を明示し、MCP の graph ツールは空結果に加えて `graph_language`、`graph_supported`、`graph_support_reason` を返します。
 
+既定の `callers` / `callees` は、実行可能な call、construction、subscription edge だけを返します。公開される `reference_kind`、`reference_kinds`、`reference_kind_counts` は、`call`、`instantiate`、`subscribe` という 1 つの canonical 語彙を共有します。`generic_type_argument`、`capture`、`friend`、`project_reference` などの型 / metadata edge は `references` または明示 kind filter で引き続き利用できます。`unsubscribe` や `razor_event_binding` のような extractor label が必要な場合は `--raw-kinds` を使ってください。
+
 `callers` と `callees` は既定で構造的重要度の weighted 順に並びます。`instantiate` は `3.0`、直接 `call` は `1.0`、event `subscribe` は `0.1` として数えるため、factory や composition root の constructor 利用が大量の event subscription に埋もれにくくなります。従来どおり生の `reference_count` で並べたい場合は `--rank-by count`、reference kind を優先して `instantiate`、`call`、`subscribe` の順でまとめたい場合は `--rank-by kind` を使ってください。JSON の各行は生の `reference_count` を維持し、`reference_kind_counts` と `reference_weight_score` も追加で返します。MCP structured row では同じ情報を `referenceKindCounts` と `referenceWeightScore` として返すため、consumer 側で再ランキングできます。
 
 ### 1ファイルのアウトラインを見る
@@ -5553,18 +5568,29 @@ GitHub Copilot (VS Code — `.vscode/mcp.json`):
 }
 ```
 
-OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
+OpenAI Codex CLI、desktop app、IDE extension は TOML の MCP 設定を共有します。
+trusted repository では `.codex/config.toml`（global の既定にする場合は
+`~/.codex/config.toml`）に次を追加します:
 
-```json
-{
-  "mcpServers": {
-    "cdidx": {
-      "command": "cdidx",
-      "args": ["mcp", "--db", ".cdidx/codeindex.db"]
-    }
-  }
-}
+```toml
+[mcp_servers.cdidx]
+command = "cdidx"
+args = ["mcp", "--db", ".cdidx/codeindex.db"]
+required = true # cdidx なしで黙って開始せず startup を失敗させる
 ```
+
+または command line から stdio server を登録します:
+
+```bash
+codex mcp add cdidx -- cdidx mcp --db .cdidx/codeindex.db
+codex mcp list
+```
+
+Codex は cdidx binary がインストール済みである、または agent guide に記載があるという
+理由だけでは cdidx MCP を自動検出しません。MCP 設定変更後は Codex を再起動するか
+新しい session を開き、`/mcp` で server と tool が active であることを確認してください。
+cdidx は現行 Codex client 向けに MCP `2025-06-18` を交渉し、`2025-03-26` と
+`2024-11-05` の互換性も維持します。
 
 設定するだけで、AIが以下のツールを直接呼び出せます:
 

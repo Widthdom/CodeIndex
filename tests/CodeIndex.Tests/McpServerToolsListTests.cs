@@ -466,7 +466,7 @@ public partial class McpServerTests
             var tool = tools.First(t => t!["name"]!.GetValue<string>() == name)!;
             var kindDescription = tool["inputSchema"]!["properties"]!["kind"]!["description"]!.GetValue<string>();
 
-            Assert.Contains("call-graph", kindDescription);
+            Assert.Contains("canonical", kindDescription);
             Assert.Contains("call, instantiate, subscribe", kindDescription);
             Assert.Contains("rejected", kindDescription);
             Assert.Contains("references", kindDescription);
