@@ -101,6 +101,11 @@ cdidx mcp
 cdidx lsp --db .cdidx/codeindex.db
 ```
 
+Codex does not auto-discover installed MCP servers. Register cdidx explicitly
+with `codex mcp add cdidx -- cdidx mcp --db .cdidx/codeindex.db` or a trusted
+project `.codex/config.toml`, then restart Codex or start a new session. See the
+[Codex setup](USER_GUIDE.md#ai-integration) for the fail-loud project configuration.
+
 The first index does the expensive scan once. After edits, branch switches, or
 CI checkouts, refresh with `cdidx .`, `--files`, `--commits`, or
 `--changed-between` as appropriate. See the [User Guide quick start](USER_GUIDE.md#quick-start)
@@ -389,6 +394,11 @@ AI tool や editor から使います。
 cdidx mcp
 cdidx lsp --db .cdidx/codeindex.db
 ```
+
+Codex はインストール済み MCP server を自動検出しません。
+`codex mcp add cdidx -- cdidx mcp --db .cdidx/codeindex.db` または trusted project の
+`.codex/config.toml` で明示登録し、Codex を再起動するか新しい session を開いてください。
+MCP が無いまま開始しない fail-loud 設定は [Codex セットアップ](USER_GUIDE.md#aiとの連携) を参照してください。
 
 初回 index が重い scan を一度だけ行います。編集後、ブランチ切り替え後、CI checkout 後は、
 状況に応じて `cdidx .`、`--files`、`--commits`、`--changed-between` で更新します。

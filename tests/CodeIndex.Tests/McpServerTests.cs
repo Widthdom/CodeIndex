@@ -3461,7 +3461,8 @@ public sealed class Caller
         // 既定の優先バージョンは先頭でなければならない。クライアントが「先頭が最新」と
         // して扱う可能性があるため、順序の保証は明示的に必要。
         Assert.NotEmpty(McpServer.SupportedProtocolVersions);
-        Assert.Equal("2025-03-26", McpServer.SupportedProtocolVersions[0]);
+        Assert.Equal("2025-06-18", McpServer.SupportedProtocolVersions[0]);
+        Assert.Contains("2025-03-26", McpServer.SupportedProtocolVersions);
         Assert.Contains("2024-11-05", McpServer.SupportedProtocolVersions);
     }
 

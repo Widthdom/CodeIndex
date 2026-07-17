@@ -170,17 +170,18 @@ public partial class McpServer : IDisposable
     // newest entry in `SupportedProtocolVersions` and must stay in lockstep with that array.
     // 既定の MCP プロトコルバージョン。クライアントが指定しなかった場合に返す値で、
     // `SupportedProtocolVersions` の先頭（最新）と一致させる。
-    private const string ProtocolVersion = "2025-03-26";
+    private const string ProtocolVersion = "2025-06-18";
     // MCP protocol versions this server can speak, newest first. Issue #1554: the
     // `initialize` response used to advertise a single hardcoded version and ignored the
     // client's requested `protocolVersion`, so any spec bump silently desynced clients and
-    // servers. Negotiation walks this set so older clients on `2024-11-05` keep working and
-    // unknown future versions surface as a structured `-32602` instead of a misleading echo.
+    // servers. Negotiation walks this set so Codex clients on `2025-06-18` can initialize,
+    // older clients keep working, and unknown future versions surface as a structured `-32602`
+    // instead of a misleading echo.
     // このサーバーが話せる MCP プロトコルバージョン（新しい順）。Issue #1554: 旧実装は
     // ハードコードした 1 つのバージョンだけを返し、クライアントが要求した `protocolVersion`
-    // を無視していたため、仕様改訂のたびに無言で互換が崩れていた。`2024-11-05` の旧クライアント
-    // を引き続きサポートしつつ、未知バージョンは構造化された `-32602` で明示的に拒否する。
-    internal static readonly string[] SupportedProtocolVersions = { "2025-03-26", "2024-11-05" };
+    // を無視していたため、仕様改訂のたびに無言で互換が崩れていた。`2025-06-18` を使う Codex と
+    // 旧クライアントの両方をサポートしつつ、未知バージョンは構造化された `-32602` で明示的に拒否する。
+    internal static readonly string[] SupportedProtocolVersions = { "2025-06-18", "2025-03-26", "2024-11-05" };
     private const int MaxLimit = 200;
     // Upper bound on the `impact_analysis` `maxHops` argument. Deep monorepos can have
     // legitimate caller chains exceeding 10 hops (e.g. DI container → factory → service →
