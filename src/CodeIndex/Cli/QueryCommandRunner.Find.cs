@@ -98,7 +98,7 @@ public static partial class QueryCommandRunner
         }
         if (options.OutputFormat == OutputFormatCompact && HasFindContextOption(normalizedFindArgs))
         {
-            CommandErrorWriter.WriteStderr("Error: find --format compact does not include snippets, so it cannot be combined with --before, --after, or --snippet-lines");
+            CommandErrorWriter.WriteStderr("Error: find --format compact does not include snippets, so it cannot be combined with --context, --before, --after, or --snippet-lines");
             CommandErrorWriter.WriteStderr("Hint: use default text or JSON output when you need context, or omit context flags for compact locations.");
             CommandErrorWriter.WriteStderr(FindUsage);
             return CommandExitCodes.UsageError;
@@ -370,9 +370,9 @@ public static partial class QueryCommandRunner
                     return BuildNonNegativeIntegerError(arg, ConsoleUi.FormatBoundedValue(value));
                 if (arg == "--max-line-width" && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var widthCeil) && widthCeil > LineWidthFormatter.MaxAllowedLineWidth)
                     return BuildNonNegativeIntegerUpperBoundError("--max-line-width", ConsoleUi.FormatBoundedValue(value), LineWidthFormatter.MaxAllowedLineWidth);
-                if ((arg == "--before" || arg == "--after") && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var context) || context < 0))
+                if ((arg == "--context" || arg == "--before" || arg == "--after") && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var context) || context < 0))
                     return BuildNonNegativeIntegerError(arg, ConsoleUi.FormatBoundedValue(value));
-                if ((arg == "--before" || arg == "--after")
+                if ((arg == "--context" || arg == "--before" || arg == "--after")
                     && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var contextCeil)
                     && NumericFlagUpperBounds.TryGetValue(arg, out var contextMax)
                     && contextCeil > contextMax)
@@ -493,9 +493,9 @@ public static partial class QueryCommandRunner
     {
         var snippetLines = HasOption(preparedFindArgs, "--snippet-lines") ? options.SnippetLines : (int?)null;
         var surroundingLines = snippetLines.HasValue ? Math.Max(0, snippetLines.Value - 1) : 0;
-        var symmetricContext = GetLastFindContextOptionValue(preparedFindArgs, "--context");
-        var explicitBefore = GetLastFindContextOptionValue(preparedFindArgs, "--before");
-        var explicitAfter = GetLastFindContextOptionValue(preparedFindArgs, "--after");
+        var symmetricContext = options.SymmetricContext;
+        var explicitBefore = options.ExplicitContextBefore;
+        var explicitAfter = options.ExplicitContextAfter;
 
         var before = explicitBefore
             ?? symmetricContext
@@ -505,28 +505,6 @@ public static partial class QueryCommandRunner
             ?? (snippetLines.HasValue ? Math.Max(0, surroundingLines - before) : 0);
 
         return (before, after, snippetLines);
-    }
-
-    private static int? GetLastFindContextOptionValue(string[] args, string option)
-    {
-        int? value = null;
-        var inlinePrefix = option + "=";
-        for (var i = 0; i < args.Length; i++)
-        {
-            string? candidate = null;
-            if (string.Equals(args[i], option, StringComparison.Ordinal) && i + 1 < args.Length)
-                candidate = args[++i];
-            else if (args[i].StartsWith(inlinePrefix, StringComparison.Ordinal))
-                candidate = args[i][inlinePrefix.Length..];
-
-            if (candidate != null
-                && int.TryParse(candidate, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
-            {
-                value = parsed;
-            }
-        }
-
-        return value;
     }
 
     private static string[] PrepareFindArgs(string[] args, out string? error)

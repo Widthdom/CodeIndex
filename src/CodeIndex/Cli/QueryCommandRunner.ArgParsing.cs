@@ -82,6 +82,9 @@ public static partial class QueryCommandRunner
         bool endLineExplicit = false;
         int contextBefore = 0;
         int contextAfter = 0;
+        int? symmetricContext = null;
+        int? explicitContextBefore = null;
+        int? explicitContextAfter = null;
         int? focusLine = null;
         int? focusColumn = null;
         int focusLength = 1;
@@ -1387,6 +1390,7 @@ public static partial class QueryCommandRunner
                         contextBefore = parsedContext;
                         contextAfter = parsedContext;
                         contextAfterExplicit = true;
+                        symmetricContext = parsedContext;
                     }
                     else
                         AddParseError(contextError!);
@@ -1398,6 +1402,7 @@ public static partial class QueryCommandRunner
                     {
                         WarnIfDuplicateSingleValueOption("--before", beforeValue!);
                         contextBefore = parsedBefore;
+                        explicitContextBefore = parsedBefore;
                     }
                     else
                         AddParseError(beforeError!);
@@ -1409,6 +1414,7 @@ public static partial class QueryCommandRunner
                     {
                         WarnIfDuplicateSingleValueOption("--after", afterValue!);
                         contextAfter = parsedAfter;
+                        explicitContextAfter = parsedAfter;
                     }
                     else
                         AddParseError(afterError!);
@@ -1616,6 +1622,9 @@ public static partial class QueryCommandRunner
             ContextBefore = contextBefore,
             ContextAfter = contextAfter,
             ContextAfterExplicit = contextAfterExplicit,
+            SymmetricContext = symmetricContext,
+            ExplicitContextBefore = explicitContextBefore,
+            ExplicitContextAfter = explicitContextAfter,
             ImpactDeprecatedDepthUsed = impactDeprecatedDepthUsed,
             FocusLine = focusLine,
             FocusColumn = focusColumn,

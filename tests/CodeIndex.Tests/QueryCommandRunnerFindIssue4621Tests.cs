@@ -63,6 +63,54 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunFind_OptionShapedLiteralQueryDoesNotEnableContext_Issue4621()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_find_literal_context_4621");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/context.cs",
+            "csharp",
+            "line1\n--context=2\nline3\n");
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            ["--db", dbPath, "--path", "src/context.cs", "--json", "--", "--context=2"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = JsonDocument.Parse(stdout.Trim().Split('\n')[0]);
+        Assert.Equal(2, document.RootElement.GetProperty("start_line").GetInt32());
+        Assert.Equal(2, document.RootElement.GetProperty("end_line").GetInt32());
+    }
+
+    [Theory]
+    [InlineData("1001")]
+    [InlineData("2147483647")]
+    public void RunFind_ContextRejectsValuesAboveDocumentedLimit_Issue4621(string value)
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            ["needle", "--path", "src/**", "--context", value],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--context", stderr, StringComparison.Ordinal);
+        Assert.Contains("1000", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("E008", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunFind_CompactContextErrorNamesSymmetricFlag_Issue4621()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            ["needle", "--path", "src/**", "--format", "compact", "--context", "1"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--context", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void FindContextAppearsInSharedHelpAndEveryCompletion_Issue4621()
     {
         Assert.Contains(CliFlagSchema.GetCompletionFlagsForCommand("find"), flag => flag.Name == "--context");
