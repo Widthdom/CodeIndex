@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Cli;
 
@@ -38,7 +39,7 @@ public static partial class IndexCommandRunner
         if (dbUriValidationExitCode != null)
             return dbUriValidationExitCode.Value;
 
-        if (DbPathResolver.UriRequestsReadOnly(options.DbPath))
+        if (!options.DryRun && DbPathResolver.UriRequestsReadOnly(options.DbPath))
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
@@ -47,11 +48,24 @@ public static partial class IndexCommandRunner
                 "Point `--db` at a writable filesystem path, or omit read-only URI parameters such as `immutable=1` / `mode=ro`.",
                 CommandErrorCodes.DbNotWritable);
 
-        return RunOptimizeFtsForDb(Path.GetFullPath(DbPathResolver.NormalizeDbPath(options.DbPath)), options.Json, jsonOptions, projectPath: null);
+        return RunOptimizeFtsForDb(
+            Path.GetFullPath(DbPathResolver.NormalizeDbPath(options.DbPath)),
+            options.Json,
+            jsonOptions,
+            projectPath: null,
+            options.DryRun);
     }
 
-    private static int RunOptimizeFtsForDb(string dbPath, bool json, JsonSerializerOptions jsonOptions, string? projectPath)
+    private static int RunOptimizeFtsForDb(
+        string dbPath,
+        bool json,
+        JsonSerializerOptions jsonOptions,
+        string? projectPath,
+        bool dryRun = false)
     {
+        if (dryRun)
+            return RunOptimizeFtsPreviewForDb(dbPath, json, jsonOptions);
+
         if (!DbContext.TryValidateExistingCodeIndexDb(dbPath, out var validationMessage, out var isNotFound))
             return WriteCommandError(
                 json,
@@ -80,7 +94,16 @@ public static partial class IndexCommandRunner
             {
                 var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
                 Console.WriteLine(JsonSerializer.Serialize(
-                    new OptimizeFtsJsonResult("success", dbPath, before, after, stopwatch.ElapsedMilliseconds),
+                    new OptimizeFtsJsonResult
+                    {
+                        Status = "success",
+                        DryRun = false,
+                        DbPath = dbPath,
+                        WritesSinceOptimizeBefore = before,
+                        WritesSinceOptimizeAfter = after,
+                        ElapsedMs = stopwatch.ElapsedMilliseconds,
+                        SourceDatabaseUnchanged = false,
+                    },
                     jsonContext.OptimizeFtsJsonResult));
             }
             else
@@ -120,6 +143,273 @@ public static partial class IndexCommandRunner
                 CommandExitCodes.DatabaseError,
                 "Ensure no other writer is holding the database lock, then retry `cdidx optimize`.",
                 CommandErrorCodes.DbError);
+        }
+    }
+
+    private static int RunOptimizeFtsPreviewForDb(
+        string dbPath,
+        bool json,
+        JsonSerializerOptions jsonOptions)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        if (!File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
+        {
+            return WriteCommandError(
+                json,
+                jsonOptions,
+                $"database not found: {dbPath}",
+                CommandExitCodes.NotFound,
+                "Point `--db` at an existing `codeindex.db`, or run `cdidx index <projectPath>` first to create one.",
+                CommandErrorCodes.DbNotFound);
+        }
+
+        try
+        {
+            var (lockState, lockHolder) = IndexLock.ProbeReadOnly(IndexLock.GetLockPath(dbPath));
+            using var db = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+            if (!db.TryValidateIsCodeIndexDb(out var validationReason))
+            {
+                return WriteCommandError(
+                    json,
+                    jsonOptions,
+                    $"database is not an existing CodeIndex DB: {dbPath}",
+                    CommandExitCodes.DatabaseError,
+                    string.IsNullOrWhiteSpace(validationReason)
+                        ? "Point `--db` at an existing CodeIndex database created by `cdidx index`, then retry `cdidx optimize --dry-run`."
+                        : "The database failed CodeIndex validation; rebuild it with `cdidx index <projectPath> --rebuild` before optimizing.",
+                    CommandErrorCodes.DbError);
+            }
+
+            var status = new DbReader(db).GetStatus();
+            var objectSizes = ReadOptimizeObjectSizes(
+                db,
+                out var objectSizesMeasurement,
+                out var objectSizesUnavailableReason);
+            var writesSinceOptimize = ParseNonNegativeLong(
+                db.GetMetaString(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey));
+            var estimatedDurationMs = ParseNullableNonNegativeLong(
+                db.GetMetaString(DbWriter.FtsLastOptimizeDurationMsMetaKey));
+            var coreTableSizeBytes = SumObjectSizes(
+                objectSizes,
+                "files",
+                "chunks",
+                "symbols",
+                "reference_lines",
+                "symbol_references",
+                "file_issues",
+                "codeindex_meta");
+            var ftsSizeBytes = SumObjectSizes(
+                objectSizes,
+                "fts_chunks_data",
+                "fts_chunks_idx",
+                "fts_chunks_content",
+                "fts_chunks_docsize",
+                "fts_chunks_config");
+            var optimizationRecommended = writesSinceOptimize >= DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold;
+            stopwatch.Stop();
+
+            var result = new OptimizeFtsJsonResult
+            {
+                Status = "dry_run",
+                DryRun = true,
+                DbPath = dbPath,
+                WritesSinceOptimizeBefore = checked((int)Math.Min(writesSinceOptimize, int.MaxValue)),
+                WritesSinceOptimizeAfter = checked((int)Math.Min(writesSinceOptimize, int.MaxValue)),
+                ElapsedMs = stopwatch.ElapsedMilliseconds,
+                EstimatedDurationMs = estimatedDurationMs,
+                DbSizeBytes = TryGetFileSize(dbPath),
+                WalSizeBytes = TryGetFileSize(dbPath + "-wal") ?? 0,
+                PageCount = status.DbPragmaSettings?.PageCount,
+                FreelistCount = status.DbPragmaSettings?.FreelistCount,
+                PageSize = status.DbPragmaSettings?.PageSize,
+                FreelistRatio = status.MaintenanceGuidance?.FreelistRatio,
+                EstimatedBytesReclaimable = status.MaintenanceGuidance?.EstimatedBytesReclaimable,
+                CoreTableSizeBytes = objectSizes.Count > 0 ? coreTableSizeBytes : null,
+                FtsSizeBytes = objectSizes.Count > 0 ? ftsSizeBytes : null,
+                ObjectSizeBytes = objectSizes.Count > 0 ? objectSizes : null,
+                ObjectSizesAvailable = objectSizes.Count > 0,
+                ObjectSizesMeasurement = objectSizesMeasurement,
+                ObjectSizesUnavailableReason = objectSizesUnavailableReason,
+                LockState = lockState,
+                LockHolderVerification = lockHolder?.Verification.ToString().ToLowerInvariant(),
+                WouldAcquireExclusiveIndexLock = true,
+                OptimizationRecommended = optimizationRecommended,
+                RecommendationReason = optimizationRecommended
+                    ? "incremental_write_threshold_reached"
+                    : "incremental_write_threshold_not_reached",
+                Readiness = new OptimizeFtsReadinessJsonResult
+                {
+                    FoldReady = status.FoldReady,
+                    GraphTableAvailable = status.GraphTableAvailable,
+                    IssuesTableAvailable = status.IssuesTableAvailable,
+                    FileIssuesDataCurrent = status.FileIssuesDataCurrent,
+                    MigrationInProgress = status.MigrationInProgress,
+                    SqlGraphContractReady = status.SqlGraphContractReady,
+                    HotspotFamilyReady = status.HotspotFamilyReady,
+                    CsharpSymbolNameReady = status.CSharpSymbolNameReady,
+                    CsharpMetadataTargetReady = status.CSharpMetadataTargetReady,
+                    IndexNewerThanReader = status.IndexNewerThanReader,
+                },
+                PlannedOperations =
+                [
+                    "acquire_exclusive_index_lock",
+                    "merge_fts5_segments",
+                    "reset_incremental_write_counter",
+                    "stamp_last_optimized_at",
+                    "stamp_last_optimize_duration",
+                ],
+                SourceDatabaseUnchanged = true,
+            };
+
+            if (json)
+            {
+                var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
+                Console.WriteLine(JsonSerializer.Serialize(result, jsonContext.OptimizeFtsJsonResult));
+            }
+            else
+            {
+                Console.WriteLine("FTS5 optimize preview (read-only; no changes made).");
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("DB", dbPath, indent: "  "));
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("DB size", ConsoleUi.FormatBytes(result.DbSizeBytes ?? 0), indent: "  "));
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("FTS size", ConsoleUi.FormatBytes(result.FtsSizeBytes ?? 0), indent: "  "));
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("Free pages", (result.FreelistCount ?? 0).ToString("N0", System.Globalization.CultureInfo.InvariantCulture), indent: "  "));
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("FTS writes", result.WritesSinceOptimizeBefore.ToString("N0", System.Globalization.CultureInfo.InvariantCulture), indent: "  "));
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("Index lock", result.LockState, indent: "  "));
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("Recommended", result.OptimizationRecommended ? "yes" : "not yet", indent: "  "));
+            }
+
+            return CommandExitCodes.Success;
+        }
+        catch (Exception ex)
+        {
+            if (JsonOutputFailure.TryHandle(ex, out var exitCode))
+                return exitCode;
+
+            return WriteCommandError(
+                json,
+                jsonOptions,
+                $"failed to preview FTS5 optimization: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}",
+                CommandExitCodes.DatabaseError,
+                "Ensure the database and temporary snapshot storage are readable, then retry `cdidx optimize --dry-run`.",
+                CommandErrorCodes.DbError);
+        }
+    }
+
+    private static Dictionary<string, long> ReadOptimizeObjectSizes(
+        DbContext db,
+        out string? measurement,
+        out string? unavailableReason)
+    {
+        var sizes = new Dictionary<string, long>(StringComparer.Ordinal);
+        try
+        {
+            using var cmd = db.Connection.CreateCommand();
+            cmd.CommandText = """
+                SELECT name, SUM(pgsize)
+                FROM dbstat
+                WHERE name IN (
+                    'files', 'chunks', 'symbols', 'reference_lines', 'symbol_references',
+                    'file_issues', 'codeindex_meta', 'fts_chunks_data', 'fts_chunks_idx',
+                    'fts_chunks_content', 'fts_chunks_docsize', 'fts_chunks_config')
+                GROUP BY name
+                ORDER BY name
+                """;
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+                sizes[reader.GetString(0)] = reader.IsDBNull(1) ? 0 : reader.GetInt64(1);
+            measurement = "dbstat_page_bytes";
+            unavailableReason = null;
+        }
+        catch (SqliteException)
+        {
+            sizes = ReadOptimizeLogicalPayloadSizes(db);
+            measurement = sizes.Count > 0 ? "logical_payload_bytes" : null;
+            unavailableReason = sizes.Count > 0 ? null : "size_measurement_unavailable";
+        }
+
+        return sizes;
+    }
+
+    private static Dictionary<string, long> ReadOptimizeLogicalPayloadSizes(DbContext db)
+    {
+        var sizes = new Dictionary<string, long>(StringComparer.Ordinal);
+        (string Name, string Sql)[] queries =
+        [
+            ("files", "SELECT COALESCE(SUM(length(path) + length(COALESCE(lang, '')) + length(COALESCE(checksum, ''))), 0) FROM files"),
+            ("chunks", "SELECT COALESCE(SUM(length(COALESCE(content, ''))), 0) FROM chunks"),
+            ("symbols", "SELECT COALESCE(SUM(length(COALESCE(kind, '')) + length(COALESCE(sub_kind, '')) + length(COALESCE(name, '')) + length(COALESCE(signature, '')) + length(COALESCE(container_kind, '')) + length(COALESCE(container_name, '')) + length(COALESCE(container_qualified_name, '')) + length(COALESCE(family_key, '')) + length(COALESCE(visibility, '')) + length(COALESCE(return_type, '')) + length(COALESCE(metadata_target_source, '')) + length(COALESCE(name_folded, ''))), 0) FROM symbols"),
+            ("reference_lines", "SELECT COALESCE(SUM(length(context)), 0) FROM reference_lines"),
+            ("symbol_references", "SELECT COALESCE(SUM(length(COALESCE(symbol_name, '')) + length(COALESCE(reference_kind, '')) + length(COALESCE(context, '')) + length(COALESCE(container_kind, '')) + length(COALESCE(container_name, '')) + length(COALESCE(symbol_name_folded, '')) + length(COALESCE(container_name_folded, ''))), 0) FROM symbol_references"),
+            ("file_issues", "SELECT COALESCE(SUM(length(kind) + length(message) + length(COALESCE(origin, '')) + length(COALESCE(severity, ''))), 0) FROM file_issues"),
+            ("codeindex_meta", "SELECT COALESCE(SUM(length(key) + length(COALESCE(value, ''))), 0) FROM codeindex_meta"),
+            ("fts_chunks_data", "SELECT COALESCE(SUM(length(block)), 0) FROM fts_chunks_data"),
+            ("fts_chunks_idx", "SELECT COALESCE(SUM(length(term)), 0) FROM fts_chunks_idx"),
+            ("fts_chunks_content", "SELECT COALESCE(SUM(length(c0)), 0) FROM fts_chunks_content"),
+            ("fts_chunks_docsize", "SELECT COALESCE(SUM(length(sz)), 0) FROM fts_chunks_docsize"),
+            ("fts_chunks_config", "SELECT COALESCE(SUM(length(k) + length(COALESCE(v, ''))), 0) FROM fts_chunks_config"),
+        ];
+
+        foreach (var (name, sql) in queries)
+        {
+            try
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = sql;
+                sizes[name] = Convert.ToInt64(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+            }
+            catch (SqliteException)
+            {
+                // Older external-content FTS layouts can omit individual shadow/core tables.
+                // 古い external-content FTS layout では一部 shadow/core table が無い場合がある。
+            }
+        }
+
+        return sizes;
+    }
+
+    private static long SumObjectSizes(
+        IReadOnlyDictionary<string, long> objectSizes,
+        params string[] names)
+    {
+        long total = 0;
+        foreach (var name in names)
+        {
+            if (objectSizes.TryGetValue(name, out var size))
+                total = checked(total + size);
+        }
+        return total;
+    }
+
+    private static long ParseNonNegativeLong(string? value)
+        => long.TryParse(
+            value,
+            System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var parsed)
+            && parsed > 0
+                ? parsed
+                : 0;
+
+    private static long? ParseNullableNonNegativeLong(string? value)
+        => long.TryParse(
+            value,
+            System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var parsed)
+            && parsed >= 0
+                ? parsed
+                : null;
+
+    private static long? TryGetFileSize(string path)
+    {
+        try
+        {
+            var info = new FileInfo(LongPath.EnsureWindowsPrefix(path));
+            return info.Exists ? info.Length : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            return null;
         }
     }
 
@@ -302,6 +592,7 @@ public static partial class IndexCommandRunner
     {
         var dbPath = Path.Combine(".cdidx", "codeindex.db");
         bool json = false;
+        bool dryRun = false;
         string? parseError = null;
 
         for (int i = 0; i < args.Length; i++)
@@ -313,6 +604,9 @@ public static partial class IndexCommandRunner
                     break;
                 case "--json":
                     json = true;
+                    break;
+                case "--dry-run":
+                    dryRun = true;
                     break;
                 case "--help" or "-h":
                     return new OptimizeFtsCommandOptions { ShowHelp = true };
@@ -329,6 +623,7 @@ public static partial class IndexCommandRunner
         {
             DbPath = dbPath,
             Json = json,
+            DryRun = dryRun,
             ParseError = parseError,
         };
     }

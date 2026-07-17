@@ -60,6 +60,44 @@ internal sealed class IndexLock : IDisposable
     public static string GetInfoPath(string lockPath) => lockPath + ".info";
 
     /// <summary>
+    /// Probe the existing lockfile without creating, writing, or acquiring it for the
+    /// lifetime of an operation. This is intended for read-only maintenance previews.
+    /// 既存 lockfile を作成・書き込みせず、操作中の lock も取得せずに状態確認する。
+    /// read-only maintenance preview 向け。
+    /// </summary>
+    public static (string State, IndexLockInfo? Holder) ProbeReadOnly(string lockPath)
+    {
+        if (!File.Exists(LongPath.EnsureWindowsPrefix(lockPath)))
+            return ("available", null);
+
+        try
+        {
+            using var stream = new FileStream(
+                LongPath.EnsureWindowsPrefix(lockPath),
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            return ("available", TryReadHolderInfo(lockPath));
+        }
+        catch (FileNotFoundException)
+        {
+            return ("available", null);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return ("available", null);
+        }
+        catch (IOException)
+        {
+            return ("locked", TryReadHolderInfo(lockPath));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return ("unknown", TryReadHolderInfo(lockPath));
+        }
+    }
+
+    /// <summary>
     /// Try to acquire the lock. Throws <see cref="IndexLockConflictException"/> when
     /// another holder owns the lockfile. Stale lockfiles left by a crashed cdidx
     /// release the OS lock automatically, so this call recovers without manual cleanup.

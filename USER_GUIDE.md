@@ -1008,6 +1008,8 @@ This opens the database read-only, runs SQLite's `PRAGMA integrity_check`, and p
 
 `db checkpoint --dry-run` reports the DB/WAL/SHM files and total bytes that would be copied without creating the checkpoint directory. Running `db checkpoint` without `--dry-run` creates the snapshot next to the DB; `db restore <name>` replaces the DB and keeps a pre-restore backup directory. A checkpoint name must be a non-blank single file name of at most 128 characters: it cannot be `.` or `..`, contain a directory separator, or contain characters that the operating system rejects in file names. Invalid names are input errors (`E010_USAGE_ERROR`), not database or storage failures.
 
+`cdidx optimize --dry-run --json` previews FTS5 maintenance without acquiring the index lock or changing the source DB/WAL/SHM files. The result includes DB/core-table/FTS sizes, page and freelist indicators, the incremental-write recommendation, current lock and readiness state, a previous-duration estimate when available, and the operations a real optimize would perform. `object_sizes_measurement` distinguishes exact `dbstat` page bytes from the logical-payload fallback used when SQLite does not provide `dbstat`.
+
 ### Search code
 
 ```bash
@@ -3980,6 +3982,8 @@ DB を read-only で開いて SQLite の `PRAGMA integrity_check` を実行し�
 `db schema` は support bundle 向けに、既定では従来どおり full schema dump を維持します。`--summary-only` を付けると object 件数だけを返し、`--type <table|index|trigger|view>` と `--name <object>` を組み合わせると exact projection を適用できます。schema diagnostics を小さく保つには `--limit`、`--max-sql-chars`、`--exclude-internal` を使います。
 
 `db checkpoint --dry-run` は checkpoint directory を作らずに、コピー対象になる DB/WAL/SHM file と合計 byte 数を報告します。`--dry-run` なしの `db checkpoint` は DB の隣に snapshot を作り、`db restore <name>` は DB を置き換えて pre-restore backup directory を保持します。checkpoint 名は空白だけではない 128 文字以下の単一 file 名でなければならず、`.`、`..`、directory separator、または OS が file 名で拒否する文字は使用できません。不正な名前は database / storage 障害ではなく入力エラー (`E010_USAGE_ERROR`) として扱われます。
+
+`cdidx optimize --dry-run --json` は index lock を取得せず、source DB/WAL/SHM file も変更せずに FTS5 maintenance を preview します。結果には DB/core table/FTS の size、page と freelist の指標、incremental write に基づく推奨、現在の lock/readiness 状態、利用可能な場合は前回所要時間に基づく見積もり、実際の optimize が行う操作が含まれます。`object_sizes_measurement` は、正確な `dbstat` page byte と、SQLite が `dbstat` を提供しない場合の logical-payload fallback を区別します。
 
 `--json` の診断出力は自動化向けに安定した `severity` と `diagnostic_code` を含みます。`db --integrity-check --json` は `integrity_ok` / `integrity_failed` を返し、`db schema --json` は `schema_ok` / `schema_truncated` に加えて `object_type_counts` と `object_type_omitted_counts` で SQLite の table / index / trigger / view 件数と省略数を返します。
 

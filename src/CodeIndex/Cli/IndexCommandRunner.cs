@@ -189,7 +189,7 @@ public static partial class IndexCommandRunner
         }
 
         if (options.OptimizeOnly)
-            return RunOptimizeFtsForDb(resolvedDbPath, options.Json, jsonOptions, options.ProjectPath);
+            return RunOptimizeFtsForDb(resolvedDbPath, options.Json, jsonOptions, options.ProjectPath, options.DryRun);
 
         bool ignoreCase;
         string ignoreRuleRoot;
@@ -1623,5 +1623,6 @@ public sealed class OptimizeFtsCommandOptions
     public bool ShowHelp { get; init; }
     public string DbPath { get; init; } = Path.Combine(".cdidx", "codeindex.db");
     public bool Json { get; init; }
+    public bool DryRun { get; init; }
     public string? ParseError { get; init; }
 }
