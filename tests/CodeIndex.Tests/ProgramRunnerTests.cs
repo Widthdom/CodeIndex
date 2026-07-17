@@ -222,6 +222,44 @@ public class ProgramRunnerTests
         Assert.Empty(stderr);
     }
 
+    [Theory]
+    [InlineData(new[] { "help", "search" }, "cdidx search")]
+    [InlineData(new[] { "help", "db", "schema" }, "cdidx db schema")]
+    [InlineData(new[] { "help", "workspace", "use" }, "cdidx workspace <list|status|use|current|clear|deactivate>")]
+    [InlineData(new[] { "help", "suggestions", "add" }, "cdidx suggestions add")]
+    public void Run_ConventionalHelp_PrintsExistingUsageWithoutExecutingCommand_Issue4575(
+        string[] args,
+        string expectedUsage)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            args,
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Contains(expectedUsage, stdout, StringComparison.Ordinal);
+        Assert.Empty(stderr);
+    }
+
+    [Theory]
+    [InlineData(new[] { "help" }, "help requires a command name", "help_command_required")]
+    [InlineData(new[] { "help", "serch" }, "Did you mean: `cdidx help search`?", "help_command_unknown")]
+    [InlineData(new[] { "help", "db", "schem" }, "Did you mean: `cdidx help db schema`?", "help_subcommand_unknown")]
+    public void Run_ConventionalHelp_InvalidTargetReturnsUsageErrorAndSuggestion_Issue4575(
+        string[] args,
+        string expectedDiagnostic,
+        string expectedErrorCode)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            args,
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains(expectedDiagnostic, stderr, StringComparison.Ordinal);
+        Assert.Contains(expectedErrorCode, stderr, StringComparison.Ordinal);
+        Assert.Contains("Usage: cdidx help <command> [subcommand]", stderr, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void RunRecipesAlias_ListsRecipeJsonObject_Issue3893()
     {

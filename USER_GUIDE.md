@@ -294,7 +294,11 @@ sections below show examples and option details for the most common workflows.
 
 Stable since values are intentionally not repeated in this guide because the
 release changelog is the source of truth for when each command first shipped.
-Run `cdidx --help` for the full syntax line for every command.
+Run `cdidx --help` for the full syntax line for every command. For focused help,
+`cdidx help <command> [subcommand]` is equivalent to the existing
+`cdidx <command> [subcommand] --help` form and never executes that command.
+Known help targets exit `0`; missing or unknown targets return usage exit `1`
+with a bounded correction or nearest-command/subcommand suggestion.
 
 Invalid CLI input emits one command-specific `Error` / `Hint` / `Usage` diagnostic.
 Dependent validation stops after the primary invalid token, and transformed aliases
@@ -3249,7 +3253,10 @@ cdidx index . --quiet
 
 Stable since の値はこのガイドでは重複管理しません。各コマンドがいつ入ったかは
 release changelog を source of truth とします。完全な syntax line は `cdidx --help`
-を参照してください。
+を参照してください。個別の help は `cdidx help <command> [subcommand]` を使え、既存の
+`cdidx <command> [subcommand] --help` と同じ内容を command を実行せずに表示します。
+既知の help target は終了コード `0`、target の欠落・未検出は bounded な修正案または
+最も近い command / subcommand の候補とともに usage 終了コード `1` を返します。
 
 不正な CLI input は、コマンド固有の `Error` / `Hint` / `Usage` diagnostic を 1 件だけ
 出力します。primary な不正 token の後では dependent validation を打ち切り、

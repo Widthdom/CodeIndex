@@ -6,7 +6,7 @@ internal static class CliCommandCatalog
     [
         "index", "hooks", "backfill-fold", "optimize", "vacuum", "search", "recipes", "audit", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status", "workspace", "config", "upgrade", "validate-config",
-        "doctor", "db", "diff", "report", "validate", "deps", "impact", "unused", "hotspots", "suggestions", "export", "import", "languages", "batch", "mcp", "lsp", "completions", "license",
+        "doctor", "db", "diff", "report", "validate", "deps", "impact", "unused", "hotspots", "suggestions", "export", "import", "languages", "batch", "mcp", "lsp", "completions", "license", "help",
     ];
 
     /// <summary>
@@ -22,6 +22,9 @@ internal static class CliCommandCatalog
         ("workspace", ["list", "status", "use", "current", "clear", "deactivate"]),
         ("config", ["show"]),
         ("db", ["integrity", "schema", "prune", "checkpoint", "checkpoints", "restore", "restore-backups"]),
+        ("recipes", ["list"]),
+        ("suggestions", ["list", "show", "export", "add", "update", "delete"]),
+        ("export", ["ctags"]),
     ];
 
     internal static IReadOnlyList<string> GetSubcommands(string command)

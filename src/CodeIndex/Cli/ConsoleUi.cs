@@ -140,6 +140,7 @@ public static class ConsoleUi
         ("--completions", "cdidx --completions <shell>"),
         ("upgrade", "cdidx upgrade [--check-only] [--json] [--channel <stable|latest|prerelease>] [--prerelease] [--version <tag>]"),
         ("license", "cdidx license"),
+        ("help", "cdidx help <command> [subcommand]"),
     ];
 
     private static readonly (string Command, string Note)[] CommandUsageNotes =
@@ -1002,6 +1003,7 @@ public static class ConsoleUi
     private static void PrintCommandSummary()
     {
         Console.WriteLine("Commands:");
+        Console.WriteLine("  help <command> [subcommand]  Show help without running the command");
         Console.WriteLine("  index <projectPath>        Build or update the index for a project");
         Console.WriteLine("  hooks                      Install, uninstall, or inspect git hook integration");
         Console.WriteLine("  backfill-fold              Upgrade folded-name columns in an existing index DB");
