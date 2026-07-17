@@ -18,12 +18,14 @@ internal static class LogicalPartialSymbolGrouper
         var fallbackContainerSql = $"COALESCE(NULLIF(TRIM({containerQualifiedNameSql}), ''), NULLIF(TRIM({containerNameSql}), ''), '')";
         var normalizedSignatureSql = $"REPLACE(REPLACE(REPLACE(LOWER(COALESCE({signatureSql}, '')), CHAR(9), ' '), CHAR(10), ' '), CHAR(13), ' ')";
         var partialDeclarationSql = $"INSTR(' ' || {normalizedSignatureSql} || ' ', ' partial ') > 0";
+        var projectPrefixSql = $"CASE WHEN INSTR(COALESCE({persistedFamilySql}, ''), '|') > 0 THEN SUBSTR({persistedFamilySql}, 1, INSTR({persistedFamilySql}, '|')) ELSE '' END";
+        var selfFamilySql = $"{projectPrefixSql} || CASE WHEN {fallbackContainerSql} = '' THEN {nameSql} ELSE {fallbackContainerSql} || '.' || {nameSql} END";
         return $@"CASE
             WHEN {languageSql} = 'csharp'
              AND {kindSql} IN ('class', 'struct', 'interface', 'record')
-             AND ({persistedFamilySql} IS NOT NULL OR {partialDeclarationSql})
+             AND {partialDeclarationSql}
             THEN 'family:' || {languageSql} || CHAR(31) || {kindSql} || CHAR(31) ||
-                 COALESCE({persistedFamilySql}, {fallbackContainerSql} || CHAR(31) || {nameSql})
+                 {selfFamilySql}
             ELSE 'symbol:' || {symbolIdSql}
         END";
     }
@@ -68,13 +70,6 @@ internal static class LogicalPartialSymbolGrouper
 
     public static bool TryBuildKey(SymbolResult symbol, out string key)
     {
-        if (!string.IsNullOrWhiteSpace(symbol.LogicalPartialKey)
-            && symbol.LogicalPartialKey.StartsWith("family:", StringComparison.Ordinal))
-        {
-            key = symbol.LogicalPartialKey;
-            return true;
-        }
-
         if (!string.Equals(symbol.Lang, "csharp", StringComparison.OrdinalIgnoreCase)
             || !IsLogicalPartialKind(symbol.Kind)
             || string.IsNullOrWhiteSpace(symbol.Signature)
@@ -82,6 +77,13 @@ internal static class LogicalPartialSymbolGrouper
         {
             key = string.Empty;
             return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(symbol.LogicalPartialKey)
+            && symbol.LogicalPartialKey.StartsWith("family:", StringComparison.Ordinal))
+        {
+            key = symbol.LogicalPartialKey;
+            return true;
         }
 
         var containerIdentity = symbol.ContainerQualifiedName ?? symbol.ContainerName ?? string.Empty;

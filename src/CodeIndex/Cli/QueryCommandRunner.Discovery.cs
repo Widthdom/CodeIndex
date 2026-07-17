@@ -315,7 +315,7 @@ public static partial class QueryCommandRunner
                 var sortSummary = options.SymbolSortMode == SymbolSortMode.Name ? string.Empty : $"; sort={options.SymbolSortMode.ToString().ToLowerInvariant()}";
                 if (options.GroupPartials)
                 {
-                    CommandErrorWriter.WriteStderr($"({results.Count} logical symbols from {partialPhysicalCounts!.Value.Count} physical declaration sites in {partialPhysicalCounts.Value.FileCount} files{sortSummary})");
+                    CommandErrorWriter.WriteStderr($"({results.Count} of {partialLogicalCounts!.Value.Count} logical symbols shown; {partialPhysicalCounts!.Value.Count} total physical declaration sites in {partialPhysicalCounts.Value.FileCount} files{sortSummary})");
                 }
                 else
                 {

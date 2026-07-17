@@ -384,23 +384,24 @@ public static partial class QueryCommandRunner
         var definitions = BuildImpactDefinitionJsonResults(analysis.Definitions);
         var definitionLimit = Math.Max(1, options.Limit);
         var visibleDefinitions = definitions.Take(definitionLimit).ToList();
+        var logicalDefinitionCount = analysis.LogicalDefinitionCount;
+        var definitionsCollapsed = logicalDefinitionCount < analysis.DefinitionCount;
         payload["definition_count"] = analysis.DefinitionCount;
         payload["definition_file_count"] = analysis.DefinitionFileCount;
         payload["has_multiple_definitions"] = analysis.HasMultipleDefinitions;
         payload["has_class_like_definitions"] = analysis.HasClassLikeDefinitions;
         payload["has_multiple_definition_files"] = analysis.HasMultipleDefinitionFiles;
         payload["definition_output_count"] = visibleDefinitions.Count;
-        payload["definition_result_scope"] = definitions.Count == analysis.Definitions.Count
-            ? "definition_sites"
-            : "logical_partial_families";
-        payload["definitions_collapsed"] = definitions.Count != analysis.Definitions.Count;
+        payload["logical_definition_count"] = logicalDefinitionCount;
+        payload["definition_result_scope"] = definitionsCollapsed ? "logical_partial_families" : "definition_sites";
+        payload["definitions_collapsed"] = definitionsCollapsed;
         payload["definition_limit"] = definitionLimit;
         payload["definitions"] = JsonSerializer.SerializeToNode(visibleDefinitions, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolResult);
-        if (visibleDefinitions.Count >= definitions.Count)
+        if (visibleDefinitions.Count >= logicalDefinitionCount)
             return;
 
         payload["definitions_truncated"] = true;
-        payload["definitions_omitted"] = definitions.Count - visibleDefinitions.Count;
+        payload["definitions_omitted"] = logicalDefinitionCount - visibleDefinitions.Count;
         payload["definitions_hint"] = "Raise --limit or narrow with --lang, --kind, --path, or --exclude-path to inspect additional matching definitions.";
     }
 

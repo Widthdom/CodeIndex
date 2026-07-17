@@ -1061,7 +1061,8 @@ public partial class DbReader
         // 定義を通じてシンボル名を解決し、"run" → "Run" のようなケース違いを補正する。
         // 見つからなければユーザ入力をフォールバック使用。
         var resolvedName = ResolveSymbolName(symbolName, lang);
-        var rootDefinitionPaths = ResolveImpactDefinitions(resolvedName, lang, pathPatterns, excludePathPatterns, excludeTests)
+        var rootDefinitionPaths = ResolveImpactDefinitions(resolvedName, limit, lang, pathPatterns, excludePathPatterns, excludeTests)
+            .Definitions
             .Select(definition => definition.Path)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
@@ -1708,23 +1709,24 @@ public partial class DbReader
     {
         lang = NormalizeQueryLanguage(lang);
         var resolvedName = ResolveSymbolName(symbolName, lang);
-        var definitions = ResolveImpactDefinitions(resolvedName, lang, pathPatterns, excludePathPatterns, excludeTests);
+        var definitionResolution = ResolveImpactDefinitions(resolvedName, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
+        var definitions = definitionResolution.Definitions;
         var indexedPathComparer = GetIndexedPathComparer();
         var definitionPaths = definitions
             .Select(d => d.Path)
             .Distinct(indexedPathComparer)
             .ToList();
-        var hasMultipleDefinitions = definitions.Count > 1;
-        var fallbackDefinitions = definitions
-            .Where(d => IsPreciseImpactFallbackKind(d.Kind))
-            .ToList();
+        var hasMultipleDefinitions = definitionResolution.PhysicalCount > 1;
+        var fallbackDefinitions = definitionResolution.SinglePreciseDefinition != null
+            ? [definitionResolution.SinglePreciseDefinition]
+            : definitions.Where(d => IsPreciseImpactFallbackKind(d.Kind)).ToList();
         var fallbackDefinitionPaths = fallbackDefinitions
             .Select(d => d.Path)
             .Distinct(indexedPathComparer)
             .ToList();
-        var hasMultipleFallbackDefinitions = fallbackDefinitions.Count > 1;
-        var hasMultipleFallbackDefinitionFiles = fallbackDefinitionPaths.Count > 1;
-        var hasClassLikeDefinitions = fallbackDefinitions.Count > 0;
+        var hasMultipleFallbackDefinitions = definitionResolution.PreciseDefinitionCount > 1;
+        var hasMultipleFallbackDefinitionFiles = definitionResolution.PreciseDefinitionFileCount > 1;
+        var hasClassLikeDefinitions = definitionResolution.PreciseDefinitionCount > 0;
 
         if (maxDepth <= 0)
         {
@@ -1735,12 +1737,13 @@ public partial class DbReader
                 ImpactMode = "none",
                 Heuristic = false,
                 MaxDepth = maxDepth,
-                DefinitionCount = definitions.Count,
-                DefinitionFileCount = definitionPaths.Count,
+                DefinitionCount = definitionResolution.PhysicalCount,
+                DefinitionFileCount = definitionResolution.PhysicalFileCount,
+                LogicalDefinitionCount = definitionResolution.LogicalCount,
                 HintCount = 0,
                 HasClassLikeDefinitions = hasClassLikeDefinitions,
                 HasMultipleDefinitions = hasMultipleDefinitions,
-                HasMultipleDefinitionFiles = definitionPaths.Count > 1,
+                HasMultipleDefinitionFiles = definitionResolution.PhysicalFileCount > 1,
                 Definitions = definitions,
                 Callers = [],
                 FileImpacts = [],
@@ -1750,12 +1753,12 @@ public partial class DbReader
                 CycleDetected = false,
                 Cycles = null,
                 GraphTableAvailable = _hasReferencesTable,
-                ZeroResultReason = definitions.Count == 0 ? "no_matching_definition" : "depth_requested_zero",
-                ImpactFailureChain = definitions.Count == 0
+                ZeroResultReason = definitionResolution.PhysicalCount == 0 ? "no_matching_definition" : "depth_requested_zero",
+                ImpactFailureChain = definitionResolution.PhysicalCount == 0
                     ? ["definition_not_found", "depth_requested_zero"]
                     : ["depth_requested_zero"],
-                SuggestionType = definitions.Count == 0 ? "resolution" : "precondition",
-                Suggestion = definitions.Count == 0
+                SuggestionType = definitionResolution.PhysicalCount == 0 ? "resolution" : "precondition",
+                Suggestion = definitionResolution.PhysicalCount == 0
                     ? "Try `cdidx definition <symbol>` to confirm the indexed name."
                     : "Use `cdidx impact <symbol> --max-hops 1` or higher to traverse callers.",
             };
@@ -1785,7 +1788,8 @@ public partial class DbReader
             }
             else
             {
-                if (definitions.Count > 0 && definitions.All(d => IsNonCallableImpactKind(d.Kind)))
+                if (definitionResolution.PhysicalCount > 0
+                    && definitionResolution.NonCallableDefinitionCount == definitionResolution.PhysicalCount)
                 {
                     zeroResultReason = "non_callable_symbol_kind";
                     impactFailureChain.Add("callable_filter_fails");
@@ -1831,12 +1835,12 @@ public partial class DbReader
                 }
                 else if (hasMultipleDefinitions)
                 {
-                    zeroResultReason = definitionPaths.Count > 1 ? "multiple_definition_files" : "multiple_definitions";
+                    zeroResultReason = definitionResolution.PhysicalFileCount > 1 ? "multiple_definition_files" : "multiple_definitions";
                     impactFailureChain.Add(zeroResultReason);
                     suggestionType = "resolution";
-                    suggestion = BuildImpactSuggestion(definitionPaths, hasClassLikeDefinitions, hasMultipleDefinitions: true, hasMultipleDefinitionFiles: definitionPaths.Count > 1, lang);
+                    suggestion = BuildImpactSuggestion(definitionPaths, hasClassLikeDefinitions, hasMultipleDefinitions: true, hasMultipleDefinitionFiles: definitionResolution.PhysicalFileCount > 1, lang);
                 }
-                else if (definitions.Count == 0)
+                else if (definitionResolution.PhysicalCount == 0)
                 {
                     zeroResultReason = "no_matching_definition";
                     impactFailureChain.Add("definition_not_found");
@@ -1858,12 +1862,13 @@ public partial class DbReader
             ImpactMode = impactMode,
             Heuristic = heuristic,
             MaxDepth = maxDepth,
-            DefinitionCount = definitions.Count,
-            DefinitionFileCount = definitionPaths.Count,
+            DefinitionCount = definitionResolution.PhysicalCount,
+            DefinitionFileCount = definitionResolution.PhysicalFileCount,
+            LogicalDefinitionCount = definitionResolution.LogicalCount,
             HintCount = fileImpacts.Count,
             HasClassLikeDefinitions = hasClassLikeDefinitions,
             HasMultipleDefinitions = hasMultipleDefinitions,
-            HasMultipleDefinitionFiles = definitionPaths.Count > 1,
+            HasMultipleDefinitionFiles = definitionResolution.PhysicalFileCount > 1,
             Definitions = definitions,
             Callers = callers,
             FileImpacts = fileImpacts,
@@ -1880,7 +1885,23 @@ public partial class DbReader
         };
     }
 
-    private List<SymbolResult> ResolveImpactDefinitions(string resolvedName, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    private sealed record ImpactDefinitionResolution(
+        List<SymbolResult> Definitions,
+        int PhysicalCount,
+        int PhysicalFileCount,
+        int LogicalCount,
+        int PreciseDefinitionCount,
+        int PreciseDefinitionFileCount,
+        int NonCallableDefinitionCount,
+        SymbolResult? SinglePreciseDefinition);
+
+    private ImpactDefinitionResolution ResolveImpactDefinitions(
+        string resolvedName,
+        int representativeLimit,
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests)
     {
         var normalizedName = SqlNameResolver.NormalizeQualifiedName(resolvedName);
         var leafName = SqlNameResolver.GetLeafName(resolvedName);
@@ -1904,7 +1925,15 @@ public partial class DbReader
             : allowLeafFallback
                 ? "(s.name = @resolvedName COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name(s.name) = @resolvedNameNormalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @resolvedNameLeaf COLLATE NOCASE)))"
                 : "(s.name = @resolvedName COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name(s.name) = @resolvedNameNormalized COLLATE NOCASE))";
-        var sql = $@"
+        var matchOrderSql = @"CASE
+                     WHEN s.name = @resolvedName THEN 0
+                     WHEN f.lang = 'sql' AND sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name(s.name) = @resolvedNameNormalized THEN 1
+                     WHEN f.lang = 'sql' AND sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name_folded(s.name) = @resolvedNameNormalizedFolded THEN 2
+                     WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name(s.name) = @resolvedNameLeaf THEN 3
+                     WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name_folded(s.name) = @resolvedNameLeafFolded THEN 4
+                     ELSE 5
+                   END";
+        var matchingSql = $@"
             SELECT f.path, f.lang, s.kind, s.name, s.line,
                    {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
                    {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
@@ -1916,23 +1945,94 @@ public partial class DbReader
                    {GetSymbolColumnSql("visibility")} AS visibility,
                    {GetSymbolColumnSql("return_type")} AS return_type,
                    {GetSymbolColumnSql("container_qualified_name")} AS container_qualified_name,
-                   {logicalPartialKeySql} AS logical_partial_key
+                   {logicalPartialKeySql} AS logical_partial_key,
+                   s.id AS symbol_id,
+                   {matchOrderSql} AS match_order,
+                   {PathBucketOrder} AS path_bucket,
+                   {VisibilityOrder} AS visibility_rank,
+                   CASE WHEN s.kind IN ('class', 'struct', 'interface') THEN 1 ELSE 0 END AS is_precise,
+                   CASE WHEN s.kind IN ('namespace', 'import') THEN 1 ELSE 0 END AS is_non_callable
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE {nameCondition}
               AND {supportedLangFilter}";
 
         if (lang != null)
-            sql += " AND f.lang = @lang";
-        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += @" ORDER BY CASE
-                     WHEN s.name = @resolvedName THEN 0
-                     WHEN f.lang = 'sql' AND sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name(s.name) = @resolvedNameNormalized THEN 1
-                     WHEN f.lang = 'sql' AND sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name_folded(s.name) = @resolvedNameNormalizedFolded THEN 2
-                     WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name(s.name) = @resolvedNameLeaf THEN 3
-                     WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name_folded(s.name) = @resolvedNameLeafFolded THEN 4
-                     ELSE 5
-                   END, " + $"{PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line";
+            matchingSql += " AND f.lang = @lang";
+        AppendPathFilters(ref matchingSql, pathPatterns, excludePathPatterns, excludeTests);
+        var pathDistinctSql = ReferenceEquals(GetIndexedPathComparer(), StringComparer.Ordinal)
+            ? "COUNT(DISTINCT path)"
+            : "COUNT(DISTINCT path COLLATE NOCASE)";
+        var precisePathDistinctSql = ReferenceEquals(GetIndexedPathComparer(), StringComparer.Ordinal)
+            ? "COUNT(DISTINCT CASE WHEN is_precise = 1 THEN path END)"
+            : "COUNT(DISTINCT CASE WHEN is_precise = 1 THEN path END COLLATE NOCASE)";
+        const string representativeOrder = "match_order, path_bucket, visibility_rank, name, path COLLATE BINARY, line, symbol_id";
+        var sql = $@"
+            WITH matching_definitions AS (
+                {matchingSql}
+            ),
+            ranked_definitions AS (
+                SELECT matching_definitions.*,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY logical_partial_key
+                           ORDER BY {representativeOrder}
+                       ) AS logical_row_number,
+                       COUNT(*) OVER (PARTITION BY logical_partial_key) AS logical_definition_sites
+                FROM matching_definitions
+            ),
+            logical_definitions AS (
+                SELECT *
+                FROM ranked_definitions
+                WHERE logical_row_number = 1
+            ),
+            requested_definitions AS (
+                SELECT logical_partial_key, 1 AS requested_row
+                FROM logical_definitions
+                ORDER BY {representativeOrder}
+                LIMIT @definitionLimit
+            ),
+            single_precise_definition AS (
+                SELECT logical_partial_key, 0 AS requested_row
+                FROM logical_definitions
+                WHERE is_precise = 1
+                ORDER BY {representativeOrder}
+                LIMIT 1
+            ),
+            selected_definition_keys AS (
+                SELECT logical_partial_key, requested_row
+                FROM requested_definitions
+                UNION ALL
+                SELECT precise.logical_partial_key, precise.requested_row
+                FROM single_precise_definition precise
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM requested_definitions requested
+                    WHERE requested.logical_partial_key = precise.logical_partial_key
+                )
+            ),
+            definition_stats AS (
+                SELECT COUNT(*) AS physical_count,
+                       {pathDistinctSql} AS physical_file_count,
+                       COUNT(DISTINCT logical_partial_key) AS logical_count,
+                       SUM(is_precise) AS precise_count,
+                       {precisePathDistinctSql} AS precise_file_count,
+                       SUM(is_non_callable) AS non_callable_count
+                FROM matching_definitions
+            )
+            SELECT logical.path, logical.lang, logical.kind, logical.name, logical.line,
+                   logical.start_line, logical.end_line,
+                   logical.body_start_line, logical.body_end_line, logical.signature,
+                   logical.container_kind, logical.container_name,
+                   logical.visibility, logical.return_type,
+                   logical.container_qualified_name, logical.logical_partial_key,
+                   logical.logical_definition_sites, selected.requested_row,
+                   stats.physical_count, stats.physical_file_count, stats.logical_count,
+                   stats.precise_count, stats.precise_file_count, stats.non_callable_count
+            FROM selected_definition_keys selected
+            JOIN logical_definitions logical
+              ON logical.logical_partial_key = selected.logical_partial_key
+            CROSS JOIN definition_stats stats
+            ORDER BY {representativeOrder}";
 
         cmd.CommandText = sql;
         SqliteCommandPolicy.Add(cmd, "@resolvedName", resolvedName);
@@ -1946,12 +2046,21 @@ public partial class DbReader
             SqliteCommandPolicy.Add(cmd, "@resolvedNameFolded", NameFold.Fold(resolvedName) ?? resolvedName);
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", lang);
+        SqliteCommandPolicy.Add(cmd, "@definitionLimit", Math.Max(1, representativeLimit));
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         var results = new List<SymbolResult>();
+        SymbolResult? preciseDefinition = null;
+        var physicalCount = 0;
+        var physicalFileCount = 0;
+        var logicalCount = 0;
+        var preciseCount = 0;
+        var preciseFileCount = 0;
+        var nonCallableCount = 0;
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
-            results.Add(new SymbolResult
+            var definitionSites = reader.GetInt32(16);
+            var result = new SymbolResult
             {
                 Path = reader.GetString(0),
                 Lang = reader.GetString(1),
@@ -1969,10 +2078,29 @@ public partial class DbReader
                 LogicalPartialKey = !reader.IsDBNull(15) ? reader.GetString(15) : null,
                 Visibility = !reader.IsDBNull(12) ? reader.GetString(12) : null,
                 ReturnType = !reader.IsDBNull(13) ? reader.GetString(13) : null,
-            });
+                DefinitionSites = definitionSites > 1 ? definitionSites : null,
+            };
+            physicalCount = reader.GetInt32(18);
+            physicalFileCount = reader.GetInt32(19);
+            logicalCount = reader.GetInt32(20);
+            preciseCount = reader.GetInt32(21);
+            preciseFileCount = reader.GetInt32(22);
+            nonCallableCount = reader.GetInt32(23);
+            if (IsPreciseImpactFallbackKind(result.Kind))
+                preciseDefinition ??= result;
+            if (reader.GetInt32(17) == 1)
+                results.Add(result);
         }
 
-        return results;
+        return new ImpactDefinitionResolution(
+            results,
+            physicalCount,
+            physicalFileCount,
+            logicalCount,
+            preciseCount,
+            preciseFileCount,
+            nonCallableCount,
+            preciseCount == 1 ? preciseDefinition : null);
     }
 
     // C# convention: a class `FooAttribute` is used in source as `[Foo]`, so the reference

@@ -151,6 +151,9 @@ public static partial class QueryCommandRunner
             var physicalCountsForResults = options.GroupPartials
                 ? reader.CountDefinitionsTotal(options.Query, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters)
                 : (QueryCountResult?)null;
+            var logicalCountsForResults = options.GroupPartials
+                ? reader.CountDefinitionsTotal(options.Query, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters, groupPartials: true)
+                : (QueryCountResult?)null;
             var results = reader.GetDefinitions(
                 options.Query,
                 options.Limit,
@@ -245,7 +248,7 @@ public static partial class QueryCommandRunner
                 }
                 if (physicalCountsForResults.HasValue)
                 {
-                    CommandErrorWriter.WriteStderr($"({results.Count} logical definitions from {physicalCountsForResults.Value.Count} physical declaration sites in {physicalCountsForResults.Value.FileCount} files)");
+                    CommandErrorWriter.WriteStderr($"({results.Count} of {logicalCountsForResults!.Value.Count} logical definitions shown; {physicalCountsForResults.Value.Count} total physical declaration sites in {physicalCountsForResults.Value.FileCount} files)");
                 }
                 else
                 {

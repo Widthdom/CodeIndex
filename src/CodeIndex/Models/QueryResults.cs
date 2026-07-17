@@ -822,6 +822,8 @@ public class ImpactAnalysisResult
     public int MaxDepth { get; set; }
     public int DefinitionCount { get; set; }
     public int DefinitionFileCount { get; set; }
+    [JsonIgnore]
+    public int LogicalDefinitionCount { get; set; }
     public int HintCount { get; set; }
     public bool HasClassLikeDefinitions { get; set; }
     public bool HasMultipleDefinitions { get; set; }

@@ -70,6 +70,22 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("logical_partial_families", groupedCount.GetProperty("count_kind").GetString());
             Assert.True(groupedCount.GetProperty("partials_grouped").GetBoolean());
 
+            var (definitionSummaryExitCode, definitionSummaryStdout, definitionSummaryStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Widget", "--db", dbPath, "--exact-name", "--lang", "csharp", "--group-partials", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, definitionSummaryExitCode);
+            Assert.Contains("src/A.Widget.cs", definitionSummaryStdout);
+            Assert.Contains("1 of 2 logical definitions shown; 3 total physical declaration sites", definitionSummaryStderr);
+
+            var (symbolSummaryExitCode, symbolSummaryStdout, symbolSummaryStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Widget", "--db", dbPath, "--exact-name", "--lang", "csharp", "--group-partials", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, symbolSummaryExitCode);
+            Assert.Contains("src/A.Widget.cs", symbolSummaryStdout);
+            Assert.Contains("1 of 2 logical symbols shown; 3 total physical declaration sites", symbolSummaryStderr);
+
             var (bareCountExitCode, bareCountStdout, bareCountStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
                 ["@", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp", "--group-partials", "--count"],
                 _jsonOptions));
@@ -147,7 +163,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(2, inspect.GetProperty("definitions").GetArrayLength());
 
             var (impactExitCode, impactStdout, impactStderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
-                ["Widget", "--db", dbPath, "--json", "--lang", "csharp", "--max-hops", "0", "--limit", "2"],
+                ["Widget", "--db", dbPath, "--json", "--lang", "csharp", "--max-hops", "0", "--limit", "1"],
                 _jsonOptions));
             using var impactDocument = ParseJsonOutput(impactStdout);
             var impact = impactDocument.RootElement;
@@ -155,9 +171,13 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, impactExitCode);
             Assert.Equal(string.Empty, impactStderr);
             Assert.Equal(3, impact.GetProperty("definition_count").GetInt32());
-            Assert.Equal(2, impact.GetProperty("definition_output_count").GetInt32());
+            Assert.Equal(2, impact.GetProperty("logical_definition_count").GetInt32());
+            Assert.Equal(1, impact.GetProperty("definition_output_count").GetInt32());
             Assert.True(impact.GetProperty("definitions_collapsed").GetBoolean());
             Assert.Equal("logical_partial_families", impact.GetProperty("definition_result_scope").GetString());
+            Assert.True(impact.GetProperty("definitions_truncated").GetBoolean());
+            Assert.Equal(1, impact.GetProperty("definitions_omitted").GetInt32());
+            Assert.Equal(2, impact.GetProperty("definitions")[0].GetProperty("definition_sites").GetInt32());
 
             var (pathModeExitCode, pathModeStdout, pathModeStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
                 ["--path", "src/A.Widget.cs", "--line", "3", "--db", dbPath, "--group-partials"],
@@ -222,6 +242,28 @@ public partial class QueryCommandRunnerTests
                 """);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
+                "src/A.PartialHost.cs",
+                "csharp",
+                """
+                namespace Demo.Nested;
+                public partial class PartialHost
+                {
+                    private class FirstNested { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.PartialHost.cs",
+                "csharp",
+                """
+                namespace Demo.Nested;
+                public partial class PartialHost
+                {
+                    private class SecondNested { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
                 "src/B.Ranked.cs",
                 "csharp",
                 """
@@ -260,6 +302,19 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, nestedStderr);
             Assert.Equal(2, nestedRows.Count);
             Assert.All(nestedRows, row => Assert.False(row.TryGetProperty("definition_sites", out _)));
+
+            var (partialHostExitCode, partialHostStdout, partialHostStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json=array", "--lang", "csharp", "--kind", "class", "--path", "src/*.PartialHost.cs", "--group-partials", "--limit", "10"],
+                _jsonOptions));
+            using var partialHostDocument = ParseJsonOutput(partialHostStdout);
+            var partialHostRows = partialHostDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, partialHostExitCode);
+            Assert.Equal(string.Empty, partialHostStderr);
+            Assert.Equal(3, partialHostRows.Count);
+            Assert.Contains(partialHostRows, row => row.GetProperty("name").GetString() == "FirstNested" && !row.TryGetProperty("definition_sites", out _));
+            Assert.Contains(partialHostRows, row => row.GetProperty("name").GetString() == "SecondNested" && !row.TryGetProperty("definition_sites", out _));
+            Assert.Contains(partialHostRows, row => row.GetProperty("name").GetString() == "PartialHost" && row.GetProperty("definition_sites").GetInt32() == 2);
 
             foreach (var (sort, field) in new[]
             {
@@ -315,8 +370,10 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, impactExitCode);
             Assert.Equal(string.Empty, impactStderr);
             Assert.Equal(51, impact.GetProperty("definition_count").GetInt32());
+            Assert.Equal(1, impact.GetProperty("logical_definition_count").GetInt32());
             Assert.Equal(1, impact.GetProperty("definition_output_count").GetInt32());
             Assert.Equal(51, impact.GetProperty("definitions")[0].GetProperty("definition_sites").GetInt32());
+            Assert.False(impact.TryGetProperty("definitions_truncated", out _));
         }
         finally
         {
