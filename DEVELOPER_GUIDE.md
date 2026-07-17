@@ -844,6 +844,14 @@ run refreshes reference resolution and stamps the marker atomically. C# referenc
 unqualified name receive a global candidate only when that name is unique in the applicable
 symbol set. Otherwise they remain `ambiguous` or `unresolved`, and dependency queries do not
 fall back to a same-name edge.
+
+`inspect` / MCP `analyze_symbol` treats each returned definition as a separate identity
+bundle. Candidate selectors expose the persisted symbol ID plus qualified/container name,
+signature, language, kind, path, and line. Identity-scoped reference/caller/callee queries
+join `symbol_reference_candidates` or `source_symbol_id`; with multiple candidates,
+top-level graph arrays are labeled `primary_candidate` and mirror only the first prioritized
+bundle, never an unlabeled aggregate across definitions.
+
 ### Reference taxonomy
 
 `symbol_references.reference_kind` stores raw extractor labels. Default call-graph surfaces (`callers`, `callees`, inspect/analyze caller and callee bundles, and their JSON/MCP fields) expose the canonical public vocabulary `call`, `instantiate`, and `subscribe`. The primary `reference_kind`, `reference_kinds`, and `reference_kind_counts` keys use that same vocabulary. Use `--raw-kinds` on `callers` / `callees`, or `references --kind <raw-kind>`, when debugging raw extractor output.
@@ -3606,6 +3614,15 @@ identity-aware read は、`codeindex_meta` の `reference_identity_contract_vers
 resolution を再構築し、同じ transaction で marker を設定します。C# の無修飾名 reference は、
 対象となる symbol 集合で名前が一意の場合だけ global candidate を持ちます。それ以外は
 `ambiguous` または `unresolved` のままとし、dependency query は同名 edge へ fallback しません。
+
+`inspect` / MCP `analyze_symbol` は返された各定義を別々の identity bundle として
+扱います。candidate selector は永続化した symbol ID に加え、qualified/container name、
+signature、language、kind、path、line を公開します。identity-scoped な
+reference/caller/callee query は `symbol_reference_candidates` または
+`source_symbol_id` を join します。複数 candidate の top-level graph 配列は
+`primary_candidate` と明示して優先順位1位の bundle だけを反映し、複数定義を
+未ラベルで集約しません。
+
 ### 参照 taxonomy
 
 `symbol_references.reference_kind` には extractor が出力した raw label を保存する。既定の call-graph 表示（`callers`、`callees`、inspect/analyze の caller / callee bundle、および JSON/MCP フィールド）は、公開 canonical 語彙 `call`、`instantiate`、`subscribe` を返す。primary `reference_kind`、`reference_kinds`、`reference_kind_counts` の key はすべて同じ語彙を使う。raw extractor 出力を調べる場合は、`callers` / `callees` の `--raw-kinds`、または `references --kind <raw-kind>` を使う。

@@ -225,6 +225,10 @@ public static partial class QueryCommandRunner
                     Console.WriteLine($"Graph Supported      : {analysis.GraphSupported}");
                 if (analysis.GraphSupportReason != null)
                     Console.WriteLine($"Graph Note           : {analysis.GraphSupportReason}");
+                if (analysis.GraphScope != null)
+                    Console.WriteLine($"Graph Scope          : {analysis.GraphScope}");
+                if (analysis.SelectionRequired)
+                    Console.WriteLine("Selection Required   : true — use a candidate selector/path before trusting graph sections.");
                 if (analysis.UnsupportedSymbolKind != null)
                     Console.WriteLine($"Graph Limitation     : unsupported symbol kind '{analysis.UnsupportedSymbolKind}'");
                 if (!analysis.GraphTableAvailable)
@@ -256,6 +260,17 @@ public static partial class QueryCommandRunner
                 WriteRepoMapSection("References", analysis.References.Select(item => $"{item.Path}:{item.Line}:{item.Column}  {item.Context}"));
                 WriteRepoMapSection("Callers", analysis.Callers.Select(item => $"{item.CallerName ?? "<top-level>"} -> {item.CalleeName}  ({item.ReferenceCount} refs)"));
                 WriteRepoMapSection("Callees", analysis.Callees.Select(item => $"{item.CallerName ?? "<top-level>"} -> {item.CalleeName}  ({item.ReferenceCount} refs)"));
+                if (analysis.CandidateBundles is { Count: > 1 })
+                {
+                    foreach (var bundle in analysis.CandidateBundles)
+                    {
+                        var title = $"Candidate {bundle.Selector.Selector} ({bundle.Selector.QualifiedName})";
+                        WriteRepoMapSection(title, [$"{bundle.Definition.Kind,-10} {bundle.Definition.Path}:{bundle.Definition.StartLine}-{bundle.Definition.EndLine}"]);
+                        WriteRepoMapSection($"{title} references", bundle.References.Select(item => $"{item.Path}:{item.Line}:{item.Column}  {item.Context}"));
+                        WriteRepoMapSection($"{title} callers", bundle.Callers.Select(item => $"{item.CallerName ?? "<top-level>"} -> {item.CalleeName}  ({item.ReferenceCount} refs)"));
+                        WriteRepoMapSection($"{title} callees", bundle.Callees.Select(item => $"{item.CallerName ?? "<top-level>"} -> {item.CalleeName}  ({item.ReferenceCount} refs)"));
+                    }
+                }
             }
 
             return IsEmptySymbolAnalysis(analysis) && sourceExcerpt == null ? ZeroResultExitCode(options) : CommandExitCodes.Success;
@@ -302,6 +317,13 @@ public static partial class QueryCommandRunner
 
     private static void AddInspectFieldProperties(HashSet<string> keep, string field)
     {
+        if (field is "graph" or "definitions" or "references" or "callers" or "callees" or "candidates")
+        {
+            keep.Add("candidate_count");
+            keep.Add("graph_scope");
+            keep.Add("selection_required");
+        }
+
         switch (field)
         {
             case "file":
@@ -348,6 +370,9 @@ public static partial class QueryCommandRunner
             case "callees":
                 keep.Add("callees");
                 break;
+            case "candidates":
+                keep.Add("candidate_bundles");
+                break;
         }
     }
 
@@ -364,7 +389,11 @@ public static partial class QueryCommandRunner
         var keepSections = inspectFields
             .Where(IsInspectListField)
             .ToHashSet(StringComparer.Ordinal);
-        foreach (var sectionName in sections.Select(section => section.Key).Where(section => !keepSections.Contains(section)).ToList())
+        var keepCandidateSections = inspectFields.Contains("candidates", StringComparer.Ordinal);
+        foreach (var sectionName in sections.Select(section => section.Key)
+                     .Where(section => !keepSections.Contains(section)
+                                       && !(keepCandidateSections && section.StartsWith("candidate_bundles[", StringComparison.Ordinal)))
+                     .ToList())
             sections.Remove(sectionName);
     }
 

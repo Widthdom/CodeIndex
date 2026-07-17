@@ -218,16 +218,28 @@ public static partial class QueryCommandRunner
 
     private static void ApplyInspectDefinitionContentPolicy(JsonObject payload, QueryCommandOptions options)
     {
-        if (!payload.TryGetPropertyValue("definitions", out var definitionsNode) || definitionsNode is not JsonArray definitions)
-            return;
-
         var reason = options.IncludeBody ? "body_content_field" : "inspect_body_not_requested";
-        foreach (var definition in definitions.OfType<JsonObject>())
+        if (payload.TryGetPropertyValue("definitions", out var definitionsNode) && definitionsNode is JsonArray definitions)
         {
-            OmitDefinitionContent(definition, reason);
-            if (!options.IncludeBody)
-                OmitDefinitionBodyContent(definition);
+            foreach (var definition in definitions.OfType<JsonObject>())
+                ApplyInspectDefinitionContentPolicy(definition, options, reason);
         }
+
+        if (payload.TryGetPropertyValue("candidate_bundles", out var bundlesNode) && bundlesNode is JsonArray bundles)
+        {
+            foreach (var bundle in bundles.OfType<JsonObject>())
+            {
+                if (bundle.TryGetPropertyValue("definition", out var definitionNode) && definitionNode is JsonObject definition)
+                    ApplyInspectDefinitionContentPolicy(definition, options, reason);
+            }
+        }
+    }
+
+    private static void ApplyInspectDefinitionContentPolicy(JsonObject definition, QueryCommandOptions options, string reason)
+    {
+        OmitDefinitionContent(definition, reason);
+        if (!options.IncludeBody)
+            OmitDefinitionBodyContent(definition);
     }
 
     private static void OmitDefinitionContent(JsonObject definition, string reason)
@@ -284,6 +296,16 @@ public static partial class QueryCommandRunner
         ApplyBodyRecoveryCommands(result.References, dbPath);
         ApplyBodyRecoveryCommands(result.Callers, dbPath);
         ApplyBodyRecoveryCommands(result.Callees, dbPath);
+        if (result.CandidateBundles != null)
+        {
+            foreach (var bundle in result.CandidateBundles)
+            {
+                ApplyBodyRecoveryCommands([bundle.Definition], dbPath);
+                ApplyBodyRecoveryCommands(bundle.References, dbPath);
+                ApplyBodyRecoveryCommands(bundle.Callers, dbPath);
+                ApplyBodyRecoveryCommands(bundle.Callees, dbPath);
+            }
+        }
     }
 
     private static void WriteOptionalBodyExcerpt(int? startLine, string? content, string indent = "")

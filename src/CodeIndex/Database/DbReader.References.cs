@@ -266,6 +266,16 @@ public partial class DbReader
             sql += " AND r.reference_kind = @referenceKind";
         if (excludeSelfReferences)
             sql += $" AND {selfReferenceSql} = 0";
+        if (targetSymbolId != null && HasTable("symbol_reference_candidates"))
+        {
+            sql += @"
+                AND EXISTS (
+                    SELECT 1
+                    FROM symbol_reference_candidates AS identity_candidate
+                    WHERE identity_candidate.reference_id = r.id
+                      AND identity_candidate.symbol_id = @targetSymbolId
+                )";
+        }
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
@@ -324,6 +334,8 @@ public partial class DbReader
             SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", NormalizeQueryLanguage(lang));
+        if (targetSymbolId != null && HasTable("symbol_reference_candidates"))
+            SqliteCommandPolicy.Add(cmd, "@targetSymbolId", targetSymbolId.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         if (includeOrdering)
         {

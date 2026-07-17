@@ -594,23 +594,26 @@ public partial class McpServer
     {
         var rows = new JsonArray();
         foreach (var result in results)
-        {
-            var row = new JsonObject
-            {
-                ["file"] = result.Path,
-                ["line"] = result.Line,
-                ["kind"] = result.Kind,
-                ["name"] = result.Name,
-            };
-            if (result.Lang != null)
-                row["lang"] = result.Lang;
-            if (result.Visibility != null)
-                row["visibility"] = result.Visibility;
-            if (result.ContainerName != null)
-                row["container"] = result.ContainerName;
-            rows.Add(row);
-        }
+            rows.Add(BuildCompactSymbolRow(result));
         return rows;
+    }
+
+    private static JsonObject BuildCompactSymbolRow(SymbolResult result)
+    {
+        var row = new JsonObject
+        {
+            ["file"] = result.Path,
+            ["line"] = result.Line,
+            ["kind"] = result.Kind,
+            ["name"] = result.Name,
+        };
+        if (result.Lang != null)
+            row["lang"] = result.Lang;
+        if (result.Visibility != null)
+            row["visibility"] = result.Visibility;
+        if (result.ContainerName != null)
+            row["container"] = result.ContainerName;
+        return row;
     }
 
     private static JsonArray BuildCompactReferenceRows(IEnumerable<ReferenceResult> results)
@@ -689,10 +692,15 @@ public partial class McpServer
 
     private JsonObject BuildAnalyzeSymbolCountPayload(SymbolAnalysisResult analysis, string? lang, JsonNode? pathEcho, bool excludeTests, int maxLineWidth)
     {
-        var paths = analysis.Definitions.Select(definition => definition.Path)
-            .Concat(analysis.References.Select(reference => reference.Path))
-            .Concat(analysis.Callers.Select(caller => caller.Path))
-            .Concat(analysis.Callees.Select(callee => callee.Path));
+        var graphPaths = analysis.CandidateBundles is { Count: > 0 }
+            ? analysis.CandidateBundles
+                .SelectMany(bundle => bundle.References.Select(reference => reference.Path)
+                    .Concat(bundle.Callers.Select(caller => caller.Path))
+                    .Concat(bundle.Callees.Select(callee => callee.Path)))
+            : analysis.References.Select(reference => reference.Path)
+                .Concat(analysis.Callers.Select(caller => caller.Path))
+                .Concat(analysis.Callees.Select(callee => callee.Path));
+        var paths = analysis.Definitions.Select(definition => definition.Path).Concat(graphPaths);
         var payload = new JsonObject
         {
             ["format"] = "count",
@@ -708,6 +716,13 @@ public partial class McpServer
             ["reference_count"] = analysis.References.Count,
             ["caller_count"] = analysis.Callers.Count,
             ["callee_count"] = analysis.Callees.Count,
+            ["candidate_count"] = analysis.CandidateCount,
+            ["candidate_reference_count"] = analysis.CandidateBundles?.Sum(bundle => bundle.References.Count) ?? 0,
+            ["candidate_caller_count"] = analysis.CandidateBundles?.Sum(bundle => bundle.Callers.Count) ?? 0,
+            ["candidate_callee_count"] = analysis.CandidateBundles?.Sum(bundle => bundle.Callees.Count) ?? 0,
+            ["candidate_bundles"] = BuildCompactCandidateBundles(analysis.CandidateBundles),
+            ["graph_scope"] = analysis.GraphScope,
+            ["selection_required"] = analysis.SelectionRequired,
             ["graph_language"] = analysis.GraphLanguage,
             ["graph_supported"] = analysis.GraphSupported,
             ["graph_support_reason"] = analysis.GraphSupportReason,
@@ -755,11 +770,15 @@ public partial class McpServer
             ["reference_count"] = analysis.References.Count,
             ["caller_count"] = analysis.Callers.Count,
             ["callee_count"] = analysis.Callees.Count,
+            ["candidate_count"] = analysis.CandidateCount,
+            ["graph_scope"] = analysis.GraphScope,
+            ["selection_required"] = analysis.SelectionRequired,
             ["definitions"] = BuildCompactSymbolRows(analysis.Definitions),
             ["nearby_symbols"] = BuildCompactSymbolRows(analysis.NearbySymbols),
             ["references"] = BuildCompactReferenceRows(analysis.References),
             ["callers"] = BuildCompactCallerRows(analysis.Callers),
             ["callees"] = BuildCompactCalleeRows(analysis.Callees),
+            ["candidate_bundles"] = BuildCompactCandidateBundles(analysis.CandidateBundles),
         };
         if (analysis.ExactIndexAvailable.HasValue)
             payload["exact_index_available"] = analysis.ExactIndexAvailable.Value;
@@ -788,6 +807,10 @@ public partial class McpServer
             ["references"] = ToJsonArray(analysis.References),
             ["callers"] = ToJsonArray(analysis.Callers),
             ["callees"] = ToJsonArray(analysis.Callees),
+            ["candidate_count"] = analysis.CandidateCount,
+            ["graph_scope"] = analysis.GraphScope,
+            ["selection_required"] = analysis.SelectionRequired,
+            ["candidate_bundles"] = JsonSerializer.SerializeToNode(analysis.CandidateBundles, _jsonOptions),
             ["graph_table_available"] = analysis.GraphTableAvailable,
         };
         if (analysis.IndexedHeadCommit != null)
@@ -809,6 +832,30 @@ public partial class McpServer
         if (analysis.DegradedReason != null)
             payload["degraded_reason"] = analysis.DegradedReason;
         return payload;
+    }
+
+    private JsonArray BuildCompactCandidateBundles(List<SymbolCandidateBundle>? bundles)
+    {
+        var result = new JsonArray();
+        if (bundles == null)
+            return result;
+
+        foreach (var bundle in bundles)
+        {
+            result.Add(new JsonObject
+            {
+                ["selector"] = JsonSerializer.SerializeToNode(bundle.Selector, _jsonOptions),
+                ["definition"] = BuildCompactSymbolRow(bundle.Definition),
+                ["identity_scoped"] = bundle.IdentityScoped,
+                ["graph_supported"] = bundle.GraphSupported,
+                ["graph_support_reason"] = bundle.GraphSupportReason,
+                ["nearby_symbol_count"] = bundle.NearbySymbols.Count,
+                ["reference_count"] = bundle.References.Count,
+                ["caller_count"] = bundle.Callers.Count,
+                ["callee_count"] = bundle.Callees.Count,
+            });
+        }
+        return result;
     }
 
     /// <summary>

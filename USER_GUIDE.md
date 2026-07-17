@@ -314,6 +314,15 @@ become same-name dependency edges. An `impact`
 query that still resolves to multiple definitions reports those definitions and does not
 traverse a combined identity graph; narrow it with language or path filters.
 
+`inspect` and MCP `analyze_symbol` return `candidate_bundles` when a name resolves to
+indexed definitions. Each bundle is labeled with a stable selector containing the symbol ID,
+qualified/container name, signature, language, kind, path, and line, and its graph sections
+are scoped to that candidate identity. When multiple candidates are returned, the top-level
+`references`, `callers`, and `callees` arrays are explicitly labeled
+`graph_scope: primary_candidate` and mirror only the first prioritized bundle instead of
+merging unrelated definitions; consume the corresponding bundle for every other candidate.
+Use `--fields candidates` to project these bundles explicitly.
+
 Invalid CLI input emits one command-specific `Error` / `Hint` / `Usage` diagnostic.
 Dependent validation stops after the primary invalid token, and transformed aliases
 such as `recipes list` retain the command name and usage shape the user invoked.
@@ -3305,6 +3314,15 @@ no-op や削除のみの update でもこの修復を行います。C# の無修
 `impact` query が複数定義へ
 解決される場合は、それらの定義を報告し、identity graph を結合して走査しません。
 language または path filter で対象を絞り込んでください。
+
+`inspect` と MCP `analyze_symbol` は、名前が index 済み定義へ解決される場合に
+`candidate_bundles` を返します。各 bundle は symbol ID、qualified/container name、
+signature、language、kind、path、line を含む安定 selector で識別され、graph section は
+その candidate identity に限定されます。複数 candidate が返る場合、top-level の
+`references`、`callers`、`callees` 配列は `graph_scope: primary_candidate` と
+明示され、無関係な定義を結合せず優先順位1位の bundle だけを反映します。それ以外は
+対応する bundle を利用してください。`--fields candidates` で bundle を明示的に
+projection できます。
 
 不正な CLI input は、コマンド固有の `Error` / `Hint` / `Usage` diagnostic を 1 件だけ
 出力します。primary な不正 token の後では dependent validation を打ち切り、

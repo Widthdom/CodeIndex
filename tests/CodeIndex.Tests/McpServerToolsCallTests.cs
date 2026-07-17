@@ -159,6 +159,18 @@ public partial class McpServerTests
         Assert.Equal("compact", analyzeStructured["format"]!.GetValue<string>());
         Assert.True(analyzeStructured["definition_count"]!.GetValue<int>() >= 1);
         Assert.NotNull(analyzeStructured["definitions"]);
+        var compactCandidateDefinition = analyzeStructured["candidate_bundles"]![0]!["definition"]!;
+        Assert.Null(compactCandidateDefinition["content"]);
+        Assert.Null(compactCandidateDefinition["body_content"]);
+
+        var analyzeCountRequest = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"RunVisible","format":"count"}}}""")!;
+        var analyzeCountResponse = _server.HandleMessage(analyzeCountRequest)!;
+        var analyzeCountStructured = analyzeCountResponse["result"]!["structuredContent"]!;
+        var countCandidateDefinition = analyzeCountStructured["candidate_bundles"]![0]!["definition"]!;
+        Assert.True(analyzeCountStructured["count_only"]!.GetValue<bool>());
+        Assert.Null(countCandidateDefinition["content"]);
+        Assert.Null(countCandidateDefinition["body_content"]);
     }
 
     [Fact]

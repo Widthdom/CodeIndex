@@ -24,6 +24,17 @@ public static partial class QueryCommandRunner
         TruncateCompactSection(analysis.References, sectionLimit, sections, "references");
         TruncateCompactSection(analysis.Callers, sectionLimit, sections, "callers");
         TruncateCompactSection(analysis.Callees, sectionLimit, sections, "callees");
+        if (analysis.CandidateBundles != null)
+        {
+            for (var i = 0; i < analysis.CandidateBundles.Count; i++)
+            {
+                var bundle = analysis.CandidateBundles[i];
+                TruncateCompactSection(bundle.NearbySymbols, sectionLimit, sections, $"candidate_bundles[{i}].nearby_symbols");
+                TruncateCompactSection(bundle.References, sectionLimit, sections, $"candidate_bundles[{i}].references");
+                TruncateCompactSection(bundle.Callers, sectionLimit, sections, $"candidate_bundles[{i}].callers");
+                TruncateCompactSection(bundle.Callees, sectionLimit, sections, $"candidate_bundles[{i}].callees");
+            }
+        }
         return BuildCompactTruncationMetadata(sectionLimit, sections);
     }
 

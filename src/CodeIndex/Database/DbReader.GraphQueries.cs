@@ -212,6 +212,8 @@ public partial class DbReader
             SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", NormalizeQueryLanguage(lang));
+        if (targetSymbolId != null && HasTable("symbol_reference_candidates"))
+            SqliteCommandPolicy.Add(cmd, "@targetSymbolId", targetSymbolId.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         SqliteCommandPolicy.Add(cmd, "@limit", limit);
         SqliteCommandPolicy.Add(cmd, "@offset", Math.Max(0, offset));
@@ -590,6 +592,8 @@ public partial class DbReader
             SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", lang);
+        if (sourceSymbolId != null && _referenceColumns.Contains("source_symbol_id"))
+            SqliteCommandPolicy.Add(cmd, "@sourceSymbolId", sourceSymbolId.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         SqliteCommandPolicy.Add(cmd, "@limit", limit);
         SqliteCommandPolicy.Add(cmd, "@offset", Math.Max(0, offset));
