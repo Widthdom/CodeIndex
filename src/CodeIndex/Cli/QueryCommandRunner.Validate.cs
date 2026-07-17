@@ -54,18 +54,21 @@ public static partial class QueryCommandRunner
             var issueLimit = HasOption(cmdArgs, "--limit") || HasOption(cmdArgs, "--top")
                 ? options.Limit
                 : (int?)null;
-            var issues = reader.GetIssues(
+            var allIssues = reader.GetIssues(
                 options.Kind,
                 options.PathPatterns,
                 options.ExcludePaths,
                 options.ExcludeTests,
-                issueLimit,
+                limit: null,
                 options.Severity);
-            AnnotateValidateIssues(issues);
+            AnnotateValidateIssues(allIssues);
+            var issues = issueLimit.HasValue
+                ? allIssues.Take(issueLimit.Value).ToList()
+                : allIssues;
             var issuesAvailable = reader._hasIssuesTable;
             if (options.CountOnly || options.OutputFormat == OutputFormatCount)
             {
-                WriteFormattedCount(issues.Count, jsonOptions);
+                WriteFormattedCount(allIssues.Count, jsonOptions);
                 return CommandExitCodes.Success;
             }
             if (issues.Count == 0)
@@ -74,7 +77,7 @@ public static partial class QueryCommandRunner
                 {
                     if (options.OutputFormat == OutputFormatCompact)
                     {
-                        WriteValidateCompactJson(issues, issuesAvailable, jsonOptions);
+                        WriteValidateCompactJson(issues, allIssues, issuesAvailable, jsonOptions);
                         return CommandExitCodes.Success;
                     }
                     if (options.OutputFormat == OutputFormatJson && options.JsonOutputFormat == JsonOutputFormatArray)
@@ -85,9 +88,16 @@ public static partial class QueryCommandRunner
                             jsonOptions));
                         return CommandExitCodes.Success;
                     }
+                    if (options.OutputFormat == OutputFormatSarif)
+                    {
+                        var runProperties = new JsonObject();
+                        AddValidatePaginationMetadata(runProperties, returned: 0, total: 0);
+                        WriteSarif(Array.Empty<SarifLocation>(), jsonOptions, runProperties: runProperties);
+                        return CommandExitCodes.Success;
+                    }
                     if (TryWriteEmptyFormattedResult(options, jsonOptions))
                         return CommandExitCodes.Success;
-                    var payload = BuildValidateJsonPayload(issues, issuesAvailable, jsonOptions);
+                    var payload = BuildValidateJsonPayload(issues, allIssues, issuesAvailable, jsonOptions);
                     AddActiveSqliteDiagnostics(payload);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
@@ -105,7 +115,7 @@ public static partial class QueryCommandRunner
             {
                 if (options.OutputFormat == OutputFormatCompact)
                 {
-                    WriteValidateCompactJson(issues, issuesAvailable, jsonOptions);
+                    WriteValidateCompactJson(issues, allIssues, issuesAvailable, jsonOptions);
                     return CommandExitCodes.Success;
                 }
                 if (TryWriteFormattedLocations(
@@ -125,7 +135,9 @@ public static partial class QueryCommandRunner
                 }
                 if (options.OutputFormat == OutputFormatSarif)
                 {
-                    WriteSarif(issues.Select(i => (i.Path, i.Line, 1, i.Message, i.Kind)), jsonOptions);
+                    var runProperties = new JsonObject();
+                    AddValidatePaginationMetadata(runProperties, issues.Count, allIssues.Count);
+                    WriteSarif(issues.Select(ToValidateSarifLocation), jsonOptions, runProperties: runProperties);
                     return CommandExitCodes.Success;
                 }
                 if (options.OutputFormat == OutputFormatJson && options.JsonOutputFormat == JsonOutputFormatArray)
@@ -136,7 +148,7 @@ public static partial class QueryCommandRunner
                         jsonOptions));
                     return CommandExitCodes.Success;
                 }
-                var payload = BuildValidateJsonPayload(issues, issuesAvailable, jsonOptions);
+                var payload = BuildValidateJsonPayload(issues, allIssues, issuesAvailable, jsonOptions);
                 AddActiveSqliteDiagnostics(payload);
                 Console.WriteLine(payload.ToJsonString(jsonOptions));
             }
@@ -148,9 +160,13 @@ public static partial class QueryCommandRunner
                     var metadata = FormatValidateIssueMetadata(issue);
                     Console.WriteLine($"  {issue.Kind,-20} {issue.Path}{location}  {metadata}{issue.Message}");
                 }
-                var kindCounts = issues.GroupBy(i => i.Kind).Select(g => $"{g.Key}: {g.Count()}");
-                CommandErrorWriter.WriteStderr($"\n({issues.Count} issues: {string.Join(", ", kindCounts)})");
-                WriteValidateHumanSummary(issues);
+                var kindCounts = allIssues.GroupBy(i => i.Kind).Select(g => $"{g.Key}: {g.Count()}");
+                var omitted = allIssues.Count - issues.Count;
+                var pageSummary = omitted > 0
+                    ? $"{issues.Count} returned of {allIssues.Count} issues; {omitted} omitted"
+                    : $"{issues.Count} issues";
+                CommandErrorWriter.WriteStderr($"\n({pageSummary}: {string.Join(", ", kindCounts)})");
+                WriteValidateHumanSummary(allIssues);
             }
             return CommandExitCodes.Success;
         });
@@ -187,32 +203,80 @@ public static partial class QueryCommandRunner
         };
     }
 
-    private static JsonObject BuildValidateJsonPayload(IReadOnlyList<FileIssue> issues, bool issuesAvailable, JsonSerializerOptions jsonOptions)
+    private static JsonObject BuildValidateJsonPayload(
+        IReadOnlyList<FileIssue> issues,
+        IReadOnlyList<FileIssue> allIssues,
+        bool issuesAvailable,
+        JsonSerializerOptions jsonOptions)
     {
-        return new JsonObject
+        var payload = new JsonObject
         {
             ["count"] = issues.Count,
-            ["summary"] = BuildValidateIssueSummary(issues),
+            ["summary"] = BuildValidateIssueSummary(allIssues),
             ["issues"] = JsonSerializer.SerializeToNode(issues, CliJsonSerializerContextFactory.Create(jsonOptions).ListFileIssue),
             ["issues_table_available"] = issuesAvailable,
             ["degraded"] = !issuesAvailable,
         };
+        AddValidatePaginationMetadata(payload, issues.Count, allIssues.Count);
+        return payload;
     }
 
-    private static void WriteValidateCompactJson(IReadOnlyList<FileIssue> issues, bool issuesAvailable, JsonSerializerOptions jsonOptions)
+    private static void WriteValidateCompactJson(
+        IReadOnlyList<FileIssue> issues,
+        IReadOnlyList<FileIssue> allIssues,
+        bool issuesAvailable,
+        JsonSerializerOptions jsonOptions)
     {
         var payload = new JsonObject
         {
             ["format"] = OutputFormatCompact,
             ["count"] = issues.Count,
-            ["summary"] = BuildValidateIssueSummary(issues),
+            ["summary"] = BuildValidateIssueSummary(allIssues),
             ["issues"] = BuildCompactValidateIssues(issues),
             ["issues_table_available"] = issuesAvailable,
             ["degraded"] = !issuesAvailable,
         };
+        AddValidatePaginationMetadata(payload, issues.Count, allIssues.Count);
         AddActiveSqliteDiagnostics(payload);
         Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
+
+    private static void AddValidatePaginationMetadata(JsonObject payload, int returned, int total)
+    {
+        var omitted = Math.Max(0, total - returned);
+        payload["returned"] = returned;
+        payload["total"] = total;
+        payload["omitted"] = omitted;
+        payload["truncated"] = omitted > 0;
+    }
+
+    private static SarifLocation ToValidateSarifLocation(FileIssue issue)
+    {
+        var properties = new JsonObject
+        {
+            ["severity"] = issue.Severity,
+            ["origin"] = issue.Origin,
+            ["category"] = issue.Category,
+            ["actionable"] = issue.Actionable,
+        };
+        return new SarifLocation(
+            issue.Path,
+            issue.Line,
+            1,
+            null,
+            issue.Message,
+            issue.Kind,
+            MapValidateSeverityToSarifLevel(issue.Severity),
+            properties);
+    }
+
+    private static string MapValidateSeverityToSarifLevel(string? severity)
+        => severity switch
+        {
+            FileIssue.SeverityInfo => "note",
+            "error" => "error",
+            _ => "warning",
+        };
 
     private static JsonArray BuildCompactValidateIssues(IEnumerable<FileIssue> issues)
     {

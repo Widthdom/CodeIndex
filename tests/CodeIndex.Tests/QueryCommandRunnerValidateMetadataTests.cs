@@ -83,7 +83,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunValidate_JsonSummaryClassifiesExpectedFixtureAndDecodingRisk_Issue4138()
+    public void RunValidate_CrossFormatMetadataPreservesTotalsActionabilityAndSeverity_Issues4138And4583()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_validate_summary_4138");
         var projectRoot = project.Root;
@@ -114,17 +114,46 @@ public partial class QueryCommandRunnerTests
         var (compactExitCode, compactStdout, compactStderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
             ["--db", dbPath, "--format", "compact", "--kind", "replacement_char"],
             _jsonOptions));
+        var (limitedJsonExitCode, limitedJsonStdout, limitedJsonStderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+            ["--db", dbPath, "--json", "--kind", "replacement_char", "--limit", "1"],
+            _jsonOptions));
+        var (limitedCompactExitCode, limitedCompactStdout, limitedCompactStderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+            ["--db", dbPath, "--format", "compact", "--kind", "replacement_char", "--limit", "1"],
+            _jsonOptions));
+        var (sarifExitCode, sarifStdout, sarifStderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+            ["--db", dbPath, "--format", "sarif", "--kind", "replacement_char"],
+            _jsonOptions));
+        var (limitedSarifExitCode, limitedSarifStdout, limitedSarifStderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+            ["--db", dbPath, "--format", "sarif", "--kind", "replacement_char", "--limit", "1"],
+            _jsonOptions));
+        var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+            ["--db", dbPath, "--format", "count", "--kind", "replacement_char", "--limit", "1"],
+            _jsonOptions));
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(CommandExitCodes.Success, arrayExitCode);
         Assert.Equal(CommandExitCodes.Success, compactExitCode);
+        Assert.Equal(CommandExitCodes.Success, limitedJsonExitCode);
+        Assert.Equal(CommandExitCodes.Success, limitedCompactExitCode);
+        Assert.Equal(CommandExitCodes.Success, sarifExitCode);
+        Assert.Equal(CommandExitCodes.Success, limitedSarifExitCode);
+        Assert.Equal(CommandExitCodes.Success, countExitCode);
         Assert.Equal(string.Empty, stderr);
         Assert.Equal(string.Empty, arrayStderr);
         Assert.Equal(string.Empty, compactStderr);
+        Assert.Equal(string.Empty, limitedJsonStderr);
+        Assert.Equal(string.Empty, limitedCompactStderr);
+        Assert.Equal(string.Empty, sarifStderr);
+        Assert.Equal(string.Empty, limitedSarifStderr);
+        Assert.Equal(string.Empty, countStderr);
 
         using var document = ParseJsonOutput(stdout);
         var root = document.RootElement;
         var summary = root.GetProperty("summary");
+        Assert.Equal(2, root.GetProperty("returned").GetInt32());
+        Assert.Equal(2, root.GetProperty("total").GetInt32());
+        Assert.Equal(0, root.GetProperty("omitted").GetInt32());
+        Assert.False(root.GetProperty("truncated").GetBoolean());
         Assert.Equal(2, summary.GetProperty("total").GetInt32());
         Assert.Equal(1, summary.GetProperty("actionable").GetInt32());
         Assert.Equal(1, summary.GetProperty("informational").GetInt32());
@@ -151,6 +180,48 @@ public partial class QueryCommandRunnerTests
         Assert.Equal("compact", compactDocument.RootElement.GetProperty("format").GetString());
         Assert.Equal("mixed", compactDocument.RootElement.GetProperty("summary").GetProperty("actionability").GetString());
         Assert.Equal(2, compactDocument.RootElement.GetProperty("issues").GetArrayLength());
+
+        using var limitedJsonDocument = ParseJsonOutput(limitedJsonStdout);
+        AssertValidatePageMetadata(limitedJsonDocument.RootElement, returned: 1, total: 2, omitted: 1, truncated: true);
+        Assert.Equal(2, limitedJsonDocument.RootElement.GetProperty("summary").GetProperty("total").GetInt32());
+        Assert.Equal(1, limitedJsonDocument.RootElement.GetProperty("issues").GetArrayLength());
+
+        using var limitedCompactDocument = ParseJsonOutput(limitedCompactStdout);
+        AssertValidatePageMetadata(limitedCompactDocument.RootElement, returned: 1, total: 2, omitted: 1, truncated: true);
+        Assert.Equal(2, limitedCompactDocument.RootElement.GetProperty("summary").GetProperty("total").GetInt32());
+        Assert.Equal(1, limitedCompactDocument.RootElement.GetProperty("issues").GetArrayLength());
+
+        using var sarifDocument = ParseJsonOutput(sarifStdout);
+        var sarifResults = sarifDocument.RootElement.GetProperty("runs")[0].GetProperty("results").EnumerateArray().ToList();
+        Assert.Contains(sarifResults, result =>
+            result.GetProperty("level").GetString() == "note"
+            && result.GetProperty("properties").GetProperty("severity").GetString() == FileIssue.SeverityInfo
+            && !result.GetProperty("properties").GetProperty("actionable").GetBoolean());
+        Assert.Contains(sarifResults, result =>
+            result.GetProperty("level").GetString() == "warning"
+            && result.GetProperty("properties").GetProperty("severity").GetString() == FileIssue.SeverityWarning
+            && result.GetProperty("properties").GetProperty("actionable").GetBoolean());
+
+        using var limitedSarifDocument = ParseJsonOutput(limitedSarifStdout);
+        var limitedSarifRun = limitedSarifDocument.RootElement.GetProperty("runs")[0];
+        AssertValidatePageMetadata(limitedSarifRun.GetProperty("properties"), returned: 1, total: 2, omitted: 1, truncated: true);
+        Assert.Equal(1, limitedSarifRun.GetProperty("results").GetArrayLength());
+
+        using var countDocument = ParseJsonOutput(countStdout);
+        Assert.Equal(2, countDocument.RootElement.GetProperty("count").GetInt32());
+    }
+
+    private static void AssertValidatePageMetadata(
+        JsonElement payload,
+        int returned,
+        int total,
+        int omitted,
+        bool truncated)
+    {
+        Assert.Equal(returned, payload.GetProperty("returned").GetInt32());
+        Assert.Equal(total, payload.GetProperty("total").GetInt32());
+        Assert.Equal(omitted, payload.GetProperty("omitted").GetInt32());
+        Assert.Equal(truncated, payload.GetProperty("truncated").GetBoolean());
     }
 
     [Fact]
