@@ -49,6 +49,7 @@ public sealed class DocumentationDriftTests
         "files",
         "find",
         "goto",
+        "help",
         "hooks",
         "hotspots",
         "impact",

@@ -93,6 +93,9 @@ public sealed class QueryCommandOptions
     public int ContextBefore { get; init; }
     public int ContextAfter { get; init; }
     public bool ContextAfterExplicit { get; init; }
+    public int? SymmetricContext { get; init; }
+    public int? ExplicitContextBefore { get; init; }
+    public int? ExplicitContextAfter { get; init; }
     public bool ImpactDeprecatedDepthUsed { get; init; }
     public int? FocusLine { get; init; }
     public int? FocusColumn { get; init; }
