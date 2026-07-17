@@ -198,7 +198,8 @@ git status --short -- '**/packages.lock.json'
 | DTOs | `Models/FileRecord.cs`, `Models/ChunkRecord.cs`, `Models/SymbolRecord.cs`, `Models/ReferenceRecord.cs` | Records shared by indexing, storage, query, and MCP layers. |
 | Tests | `tests/CodeIndex.Tests/*Tests.cs`, `TestProjectHelper.cs`, `TestConsoleLock.cs` | Focused unit/integration coverage for chunking, extraction, DB reads/writes, CLI behavior, MCP behavior, git helpers, and shared test harness utilities. |
 
-`CliCommandCatalog` owns command and nested-subcommand names, while
+`CliCommandCatalog` owns command and nested-subcommand names, including whether
+a nested verb is optional and parent flags must remain available, while
 `CliFlagSchema` owns primary flags, aliases, placeholders, descriptions, and
 command applicability. Every shell completion renderer consumes those shared
 definitions, and `ConsoleUi.PrintCommandUsage` uses them when the shared parser is
@@ -2864,7 +2865,8 @@ git status --short -- '**/packages.lock.json'
 | DTO | `Models/FileRecord.cs`, `Models/ChunkRecord.cs`, `Models/SymbolRecord.cs`, `Models/ReferenceRecord.cs` | indexing、storage、query、MCP layers で共有する record。 |
 | テスト | `tests/CodeIndex.Tests/*Tests.cs`, `TestProjectHelper.cs`, `TestConsoleLock.cs` | chunking、extraction、DB read/write、CLI、MCP、git helper、共有 test harness の focused unit / integration coverage。 |
 
-command と nested subcommand の名前は `CliCommandCatalog`、primary flag、alias、
+command と nested subcommand の名前、および nested verb が optional で親 command の
+flag も維持するかは `CliCommandCatalog`、primary flag、alias、
 placeholder、description、command applicability は `CliFlagSchema` が管理します。
 全 shell completion renderer はこの共有定義を参照し、共有 parser が option 一覧の
 正本である場合は `ConsoleUi.PrintCommandUsage` も参照します。専用 parser / nested parser

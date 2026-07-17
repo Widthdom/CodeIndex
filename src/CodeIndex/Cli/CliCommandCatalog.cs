@@ -44,6 +44,16 @@ internal static class CliCommandCatalog
         ("export", ["ctags"]),
     ];
 
+    // These command families accept their parent form as the default operation, so completion
+    // must offer parent flags alongside nested verbs at the first argument.
+    // 親 command 自体が default operation として有効な family。最初の引数では nested verb
+    // だけでなく親 command の flag も同時に補完する。
+    internal static readonly IReadOnlySet<string> OptionalSubcommandCommands =
+        new HashSet<string>(["recipes", "suggestions"], StringComparer.Ordinal);
+
+    internal static bool HasOptionalSubcommand(string command) =>
+        OptionalSubcommandCommands.Contains(command);
+
     internal static IReadOnlyList<string> GetSubcommands(string command)
     {
         foreach (var (candidate, subcommands) in CommandSubcommands)

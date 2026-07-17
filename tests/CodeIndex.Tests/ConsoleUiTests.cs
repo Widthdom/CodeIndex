@@ -1156,6 +1156,37 @@ public class ConsoleUiTests
         Assert.Contains("'db' = @('integrity', 'schema', 'prune', 'checkpoint', 'checkpoints', 'restore', 'restore-backups')", powershell);
     }
 
+    [Fact]
+    public void CompletionRenderer_OptionalSubcommandsKeepParentFlags_Issue4571()
+    {
+        var bash = ConsoleCompletionRenderer.GetCompletionScript("bash");
+        foreach (var command in new[] { "recipes", "suggestions" })
+        {
+            var branch = bash.Split('\n').Single(line =>
+                line.TrimStart().StartsWith(command + ") COMPREPLY", StringComparison.Ordinal)
+                && line.Contains("return ;;", StringComparison.Ordinal));
+            Assert.Contains("--json", branch, StringComparison.Ordinal);
+        }
+
+        var zsh = ConsoleCompletionRenderer.GetCompletionScript("zsh");
+        foreach (var command in new[] { "recipes", "suggestions" })
+        {
+            var start = zsh.IndexOf($"if [[ $subcmd == {command} &&", StringComparison.Ordinal);
+            var end = zsh.IndexOf("return\n            fi", start, StringComparison.Ordinal);
+            Assert.True(start >= 0 && end > start, $"Missing zsh optional-subcommand branch for {command}.");
+            Assert.Contains("--json", zsh[start..end], StringComparison.Ordinal);
+        }
+
+        var powershell = ConsoleCompletionRenderer.GetCompletionScript("powershell");
+        var optionalFlagsStart = powershell.IndexOf("$optionalSubcommandFlags = @{", StringComparison.Ordinal);
+        var optionalFlagsEnd = powershell.IndexOf("    }", optionalFlagsStart, StringComparison.Ordinal);
+        Assert.True(optionalFlagsStart >= 0 && optionalFlagsEnd > optionalFlagsStart);
+        var optionalFlags = powershell[optionalFlagsStart..optionalFlagsEnd];
+        Assert.Contains("'recipes'", optionalFlags, StringComparison.Ordinal);
+        Assert.Contains("'suggestions'", optionalFlags, StringComparison.Ordinal);
+        Assert.Contains("--json", optionalFlags, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("bash", "# cdidx bash completions generated for version")]
     [InlineData("zsh", "# cdidx zsh completions generated for version")]
