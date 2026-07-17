@@ -1169,7 +1169,7 @@ public class ConsoleUiTests
             # cdidx bash completions generated for version <version>
             # Regenerate this script after upgrading cdidx.
             _cdidx() {
-            commands="index hooks backfill-fold optimize vacuum search recipes audit definition goto references callers callees symbols files find excerpt map inspect outline status workspace config upgrade validate-config doctor db diff report validate deps impact unused hotspots suggestions export import languages batch mcp lsp completions license"
+            commands="index hooks backfill-fold optimize vacuum search recipes audit definition goto references callers callees symbols files find excerpt map inspect outline status workspace config upgrade validate-config doctor db diff report validate deps impact unused hotspots suggestions export import languages batch mcp lsp completions license help"
             COMPREPLY=($(compgen -W "$commands --help --version --license --pretty --quiet -q --silent --color --palette --ascii --metrics --debug-unsafe --strict-version --log-format --log-retain-count --log-max-size-mb --no-progress" -- "$cur"))
             elif [ "$cmd" = "search" ]; then
             complete -F _cdidx cdidx
@@ -1206,7 +1206,7 @@ public class ConsoleUiTests
             # cdidx PowerShell completions generated for version <version>
             # Regenerate this script after upgrading cdidx.
             Register-ArgumentCompleter -Native -CommandName cdidx -ScriptBlock {
-            $commands = @('index', 'hooks', 'backfill-fold', 'optimize', 'vacuum', 'search', 'recipes', 'audit', 'definition', 'goto', 'references', 'callers', 'callees', 'symbols', 'files', 'find', 'excerpt', 'map', 'inspect', 'outline', 'status', 'workspace', 'config', 'upgrade', 'validate-config', 'doctor', 'db', 'diff', 'report', 'validate', 'deps', 'impact', 'unused', 'hotspots', 'suggestions', 'export', 'import', 'languages', 'batch', 'mcp', 'lsp', 'completions', 'license')
+            $commands = @('index', 'hooks', 'backfill-fold', 'optimize', 'vacuum', 'search', 'recipes', 'audit', 'definition', 'goto', 'references', 'callers', 'callees', 'symbols', 'files', 'find', 'excerpt', 'map', 'inspect', 'outline', 'status', 'workspace', 'config', 'upgrade', 'validate-config', 'doctor', 'db', 'diff', 'report', 'validate', 'deps', 'impact', 'unused', 'hotspots', 'suggestions', 'export', 'import', 'languages', 'batch', 'mcp', 'lsp', 'completions', 'license', 'help')
             $topLevelFlags = @('--pretty', '--quiet', '-q', '--silent', '--color', '--palette', '--ascii', '--metrics', '--debug-unsafe', '--strict-version', '--log-format', '--log-retain-count', '--log-max-size-mb', '--no-progress')
             switch ($subcmd) {
             'search' { $flags = @(...) }
