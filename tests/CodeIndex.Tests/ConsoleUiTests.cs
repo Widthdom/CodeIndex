@@ -308,8 +308,9 @@ public class ConsoleUiTests
         Assert.Contains("stdin is JSON Lines", batchStdout);
         Assert.Contains("--json-summary embeds typed child JSON plus a final summary", batchStdout);
         Assert.Contains("batch_result or batch_error envelope", batchStdout);
-        Assert.Contains("JSON is embedded as result, NDJSON as results", batchStdout);
-        Assert.Contains("captured child output is capped", batchStdout);
+        Assert.Contains("JSON is embedded as result, NDJSON as stable results", batchStdout);
+        Assert.Contains("full serialized stream is capped", batchStdout);
+        Assert.Contains("input lines", batchStdout);
         Assert.Contains("batch_summary record", batchStdout);
     }
 

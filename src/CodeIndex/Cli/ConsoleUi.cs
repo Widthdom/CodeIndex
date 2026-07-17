@@ -171,7 +171,7 @@ public static class ConsoleUi
         ("backfill-fold", "`fold` is a compatibility alias for `backfill-fold`; prefer `backfill-fold` in scripts and documentation."),
         ("batch", "Each stdin line must be a JSON string array such as [\"search\",\"Needle\",\"--json\"]; blank lines are skipped."),
         ("batch", "By default child commands stream their normal stdout/stderr; with --json-summary each non-blank line writes a batch_result or batch_error envelope."),
-        ("batch", $"Successful child JSON is embedded as result, NDJSON as results, and non-JSON or failed output remains raw stdout; captured child output is capped at {QueryCommandRunner.BatchMaxTotalCapturedOutputChars} characters across the batch."),
+        ("batch", $"Successful child JSON is embedded as result, NDJSON as stable results, and text or failed output remains raw stdout; the full serialized stream is capped at {QueryCommandRunner.BatchMaxTotalOutputChars} characters and {QueryCommandRunner.BatchMaxInputLines} input lines."),
         ("batch", "Malformed lines and failed commands set a non-zero exit status after draining stdin; --json-summary still appends a batch_summary record."),
         ("hooks", "install writes `.git/hooks/pre-commit`; run `cdidx hooks status` first to inspect the current hook state."),
         ("hooks-install", "Writes `.git/hooks/pre-commit`; use `cdidx hooks status` first and --force only when replacing an unmanaged hook is intended."),
