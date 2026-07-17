@@ -80,6 +80,17 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(0, bareCountDocument.RootElement.GetProperty("logical_count").GetInt32());
             Assert.Equal(0, bareCountDocument.RootElement.GetProperty("physical_count").GetInt32());
 
+            var (bareSymbolCountExitCode, bareSymbolCountStdout, bareSymbolCountStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["@", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp", "--group-partials", "--count"],
+                _jsonOptions));
+            using var bareSymbolCountDocument = ParseJsonOutput(bareSymbolCountStdout);
+
+            Assert.Equal(CommandExitCodes.Success, bareSymbolCountExitCode);
+            Assert.Equal(string.Empty, bareSymbolCountStderr);
+            Assert.True(bareSymbolCountDocument.RootElement.GetProperty("group_partials").GetBoolean());
+            Assert.Equal(0, bareSymbolCountDocument.RootElement.GetProperty("logical_count").GetInt32());
+            Assert.Equal(0, bareSymbolCountDocument.RootElement.GetProperty("physical_count").GetInt32());
+
             var (definitionExitCode, definitionStdout, definitionStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
                 ["Widget", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp", "--group-partials", "--limit", "2"],
                 _jsonOptions));
@@ -155,6 +166,157 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.UsageError, pathModeExitCode);
             Assert.Equal(string.Empty, pathModeStdout);
             Assert.Contains("--group-partials is only supported for symbol-mode inspect queries", pathModeStderr);
+
+            var (positionalPathExitCode, positionalPathStdout, positionalPathStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["src/A.Widget.cs", "--db", dbPath, "--json", "--group-partials"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, positionalPathExitCode);
+            Assert.Equal(string.Empty, positionalPathStdout);
+            Assert.Contains("--group-partials is only supported for symbol-mode inspect queries", positionalPathStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void GroupPartials_UsesQualifiedPartialIdentityAndPreservesTotalsAndSorts_Issue4566()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_grouping_adversarial_issue4566");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/One.NativeMethods.cs",
+                "csharp",
+                """
+                namespace Demo.One;
+                public class Host
+                {
+                    private static class NativeMethods { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Two.NativeMethods.cs",
+                "csharp",
+                """
+                namespace Demo.Two;
+                public class Host
+                {
+                    private static class NativeMethods { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Ranked.cs",
+                "csharp",
+                """
+                namespace Demo.Ranking;
+                public partial class Ranked
+                {
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.Ranked.cs",
+                "csharp",
+                """
+                namespace Demo.Ranking;
+                public partial class Ranked
+                {
+                    public void One() { }
+                    public void Two() { }
+                    public void Three() { }
+                    public void Four() { }
+                    public void Five() { }
+                }
+                """);
+            for (var i = 0; i < 51; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"src/Wide.{i:D2}.cs",
+                    "csharp",
+                    """
+                    namespace Demo.Wide;
+                    public partial class Wide
+                    {
+                    }
+                    """);
+            }
+            MarkGraphAndFoldReady(dbPath);
+
+            var (nestedExitCode, nestedStdout, nestedStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["NativeMethods", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--group-partials", "--limit", "10"],
+                _jsonOptions));
+            using var nestedDocument = ParseJsonOutput(nestedStdout);
+            var nestedRows = nestedDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, nestedExitCode);
+            Assert.Equal(string.Empty, nestedStderr);
+            Assert.Equal(2, nestedRows.Count);
+            Assert.All(nestedRows, row => Assert.False(row.TryGetProperty("definition_sites", out _)));
+
+            foreach (var (sort, field) in new[]
+            {
+                ("hotspot", "hotspot_score"),
+                ("references", "reference_count"),
+                ("size", "size_lines"),
+                ("complexity", "complexity_score"),
+            })
+            {
+                var (sortExitCode, sortStdout, sortStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                    ["--db", dbPath, "--json=array", "--lang", "csharp", "--kind", "class", "--group-partials", "--sort", sort, "--limit", "200"],
+                    _jsonOptions));
+                using var sortDocument = ParseJsonOutput(sortStdout);
+                var values = sortDocument.RootElement.EnumerateArray()
+                    .Select(row => row.GetProperty(field).GetDouble())
+                    .ToList();
+
+                Assert.Equal(CommandExitCodes.Success, sortExitCode);
+                Assert.Equal(string.Empty, sortStderr);
+                Assert.Equal(values.OrderByDescending(value => value), values);
+            }
+
+            var (pathSortExitCode, pathSortStdout, pathSortStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json=array", "--lang", "csharp", "--kind", "class", "--group-partials", "--sort", "path", "--limit", "200"],
+                _jsonOptions));
+            using var pathSortDocument = ParseJsonOutput(pathSortStdout);
+            var paths = pathSortDocument.RootElement.EnumerateArray()
+                .Select(row => row.GetProperty("path").GetString()!)
+                .ToList();
+
+            Assert.Equal(CommandExitCodes.Success, pathSortExitCode);
+            Assert.Equal(string.Empty, pathSortStderr);
+            Assert.Equal(paths.OrderBy(path => path, StringComparer.Ordinal), paths);
+
+            var (rankedExitCode, rankedStdout, rankedStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Ranked", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--group-partials", "--sort", "size", "--limit", "1"],
+                _jsonOptions));
+            using var rankedDocument = ParseJsonOutput(rankedStdout);
+            var ranked = Assert.Single(rankedDocument.RootElement.EnumerateArray().ToList());
+
+            Assert.Equal(CommandExitCodes.Success, rankedExitCode);
+            Assert.Equal(string.Empty, rankedStderr);
+            Assert.Equal("src/A.Ranked.cs", ranked.GetProperty("path").GetString());
+            Assert.Equal(2, ranked.GetProperty("definition_sites").GetInt32());
+            Assert.True(ranked.GetProperty("size_lines").GetInt32() > ranked.GetProperty("end_line").GetInt32() - ranked.GetProperty("start_line").GetInt32() + 1);
+
+            var (impactExitCode, impactStdout, impactStderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["Wide", "--db", dbPath, "--json", "--lang", "csharp", "--max-hops", "0", "--limit", "1"],
+                _jsonOptions));
+            using var impactDocument = ParseJsonOutput(impactStdout);
+            var impact = impactDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, impactExitCode);
+            Assert.Equal(string.Empty, impactStderr);
+            Assert.Equal(51, impact.GetProperty("definition_count").GetInt32());
+            Assert.Equal(1, impact.GetProperty("definition_output_count").GetInt32());
+            Assert.Equal(51, impact.GetProperty("definitions")[0].GetProperty("definition_sites").GetInt32());
         }
         finally
         {

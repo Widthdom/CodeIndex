@@ -243,6 +243,8 @@ public class SymbolResult
     public int? SignatureOriginalLength { get; set; }
     public string? ContainerKind { get; set; }
     public string? ContainerName { get; set; }
+    internal string? ContainerQualifiedName { get; set; }
+    internal string? LogicalPartialKey { get; set; }
     public string? Visibility { get; set; }
     public string? ReturnType { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

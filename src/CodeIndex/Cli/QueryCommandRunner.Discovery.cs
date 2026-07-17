@@ -56,9 +56,12 @@ public static partial class QueryCommandRunner
                 var countQuery = options.Query ?? string.Join(" ", options.ExtraNames);
                 if (options.Json)
                 {
-                    var json = JsonSerializer.Serialize(
+                    var payload = JsonSerializer.SerializeToNode(
                         new QueryCountFilesJsonResult(0, 0, countQuery),
-                        CliJsonSerializerContextFactory.Create(jsonOptions).QueryCountFilesJsonResult);
+                        CliJsonSerializerContextFactory.Create(jsonOptions).QueryCountFilesJsonResult)!.AsObject();
+                    if (options.GroupPartials)
+                        AddLogicalPartialCountJsonFields(payload, logicalCount: 0, physicalCount: 0, physicalFileCount: 0);
+                    var json = payload.ToJsonString(jsonOptions);
                     return WriteJsonObjectWithOptionalByteLimit(
                         json,
                         options,
@@ -87,25 +90,11 @@ public static partial class QueryCommandRunner
         return WithDb(options, jsonOptions, reader =>
         {
             QueryCountResult? partialPhysicalCounts = null;
-            List<SymbolResult>? logicalPartialSymbols = null;
+            QueryCountResult? partialLogicalCounts = null;
             if (options.GroupPartials)
             {
                 partialPhysicalCounts = reader.CountSearchSymbolsTotal(symbolQueries, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
-                logicalPartialSymbols = partialPhysicalCounts.Value.Count == 0
-                    ? []
-                    : LogicalPartialSymbolGrouper.Group(reader.SearchSymbols(
-                        symbolQueries,
-                        partialPhysicalCounts.Value.Count,
-                        options.Kind,
-                        options.Lang,
-                        options.PathPatterns,
-                        options.ExcludePaths,
-                        options.ExcludeTests,
-                        options.Since,
-                        exact,
-                        visibilityFilters: options.VisibilityFilters,
-                        excludeVisibilityFilters: options.ExcludeVisibilityFilters,
-                        sortMode: options.SymbolSortMode));
+                partialLogicalCounts = reader.CountSearchSymbolsTotal(symbolQueries, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters, groupPartials: true);
             }
 
             if (options.CountOnly)
@@ -113,7 +102,7 @@ public static partial class QueryCommandRunner
                 var physicalCounts = partialPhysicalCounts
                     ?? reader.CountSearchSymbolsTotal(symbolQueries, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
                 var counts = options.GroupPartials
-                    ? new QueryCountResult(logicalPartialSymbols!.Count, physicalCounts.FileCount)
+                    ? partialLogicalCounts!.Value
                     : physicalCounts;
                 var hasExactPredicateForCount = exact && symbolQueries is { Count: > 0 };
                 var exactSignalForCount = reader.GetSymbolsExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
@@ -189,7 +178,7 @@ public static partial class QueryCommandRunner
             }
 
             var results = options.GroupPartials
-                ? logicalPartialSymbols!.Take(options.Limit).ToList()
+                ? reader.SearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters, sortMode: options.SymbolSortMode, groupPartials: true)
                 : reader.SearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters, sortMode: options.SymbolSortMode);
             var hasExactPredicate = exact && symbolQueries is { Count: > 0 };
             var exactSignal = reader.GetSymbolsExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
@@ -249,7 +238,7 @@ public static partial class QueryCommandRunner
             if (IsDiscoveryNdjson(options))
             {
                 var counts = options.GroupPartials
-                    ? new QueryCountResult(logicalPartialSymbols!.Count, partialPhysicalCounts!.Value.FileCount)
+                    ? partialLogicalCounts!.Value
                     : reader.CountSearchSymbolsTotal(symbolQueries, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
                 var stream = WriteDiscoveryNdjson(
                     reader,
@@ -267,7 +256,7 @@ public static partial class QueryCommandRunner
             if (ShouldWriteBoundedDiscoveryJsonPayload(options))
             {
                 var counts = options.GroupPartials
-                    ? new QueryCountResult(logicalPartialSymbols!.Count, partialPhysicalCounts!.Value.FileCount)
+                    ? partialLogicalCounts!.Value
                     : reader.CountSearchSymbolsTotal(symbolQueries, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
                 return WriteBoundedDiscoveryJsonPayload(
                     reader,

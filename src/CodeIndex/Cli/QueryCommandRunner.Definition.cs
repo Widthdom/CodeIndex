@@ -74,25 +74,9 @@ public static partial class QueryCommandRunner
             if (options.CountOnly)
             {
                 var physicalCounts = reader.CountDefinitionsTotal(options.Query, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
-                var counts = physicalCounts;
-                if (options.GroupPartials && physicalCounts.Count > 0)
-                {
-                    var groupedDefinitions = reader.GetDefinitions(
-                        options.Query,
-                        physicalCounts.Count,
-                        options.Kind,
-                        options.Lang,
-                        includeBody: false,
-                        options.PathPatterns,
-                        options.ExcludePaths,
-                        options.ExcludeTests,
-                        options.Since,
-                        exact,
-                        visibilityFilters: options.VisibilityFilters,
-                        excludeVisibilityFilters: options.ExcludeVisibilityFilters,
-                        groupPartials: true);
-                    counts = new QueryCountResult(groupedDefinitions.Count, physicalCounts.FileCount);
-                }
+                var counts = options.GroupPartials
+                    ? reader.CountDefinitionsTotal(options.Query, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters, groupPartials: true)
+                    : physicalCounts;
                 var exactSignalForCount = reader.GetDefinitionExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
                 var exactZeroHintForCount = BuildExactZeroHint(
                     exact,

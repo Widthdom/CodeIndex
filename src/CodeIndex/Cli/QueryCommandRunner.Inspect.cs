@@ -90,6 +90,14 @@ public static partial class QueryCommandRunner
 
             var fileInspectMode = inspectPath != null;
             var coordinateExplicit = options.StartLine.HasValue || options.EndLine.HasValue;
+            if (fileInspectMode && options.GroupPartials)
+            {
+                WriteUsageError(
+                    "--group-partials is only supported for symbol-mode inspect queries.",
+                    GetUsageLineOrThrow("inspect"),
+                    "Inspect a symbol name instead of a file path, or remove --group-partials to keep physical file navigation.");
+                return CommandExitCodes.UsageError;
+            }
             if (fileInspectMode && indexedFile == null)
             {
                 return CommandErrorWriter.WriteJsonOrHuman(

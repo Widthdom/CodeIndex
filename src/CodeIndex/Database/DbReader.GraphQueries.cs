@@ -1888,6 +1888,15 @@ public partial class DbReader
         var allowLeafFallback = !SqlNameResolver.HasQualifier(resolvedName);
         using var cmd = _conn.CreateCommand();
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "impactDefLang");
+        var logicalPartialKeySql = LogicalPartialSymbolGrouper.BuildSqlKeyExpression(
+            "f.lang",
+            "s.kind",
+            "s.name",
+            "s.id",
+            GetSymbolColumnSql("signature"),
+            GetSymbolColumnSql("container_name"),
+            GetSymbolColumnSql("container_qualified_name"),
+            GetSymbolColumnSql("family_key"));
         var nameCondition = _foldReady
             ? allowLeafFallback
                 ? "(s.name_folded = @resolvedNameFolded OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name_folded(s.name) = @resolvedNameNormalizedFolded) OR sql_leaf_name_folded(s.name) = @resolvedNameLeafFolded)))"
@@ -1905,7 +1914,9 @@ public partial class DbReader
                    {GetSymbolColumnSql("container_kind")} AS container_kind,
                    {GetSymbolColumnSql("container_name")} AS container_name,
                    {GetSymbolColumnSql("visibility")} AS visibility,
-                   {GetSymbolColumnSql("return_type")} AS return_type
+                   {GetSymbolColumnSql("return_type")} AS return_type,
+                   {GetSymbolColumnSql("container_qualified_name")} AS container_qualified_name,
+                   {logicalPartialKeySql} AS logical_partial_key
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE {nameCondition}
@@ -1921,7 +1932,7 @@ public partial class DbReader
                      WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name(s.name) = @resolvedNameLeaf THEN 3
                      WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name_folded(s.name) = @resolvedNameLeafFolded THEN 4
                      ELSE 5
-                   END, " + $"{PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
+                   END, " + $"{PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line";
 
         cmd.CommandText = sql;
         SqliteCommandPolicy.Add(cmd, "@resolvedName", resolvedName);
@@ -1936,8 +1947,6 @@ public partial class DbReader
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", lang);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-        SqliteCommandPolicy.Add(cmd, "@limit", 50);
-
         var results = new List<SymbolResult>();
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
@@ -1956,6 +1965,8 @@ public partial class DbReader
                 Signature = !reader.IsDBNull(9) ? reader.GetString(9) : null,
                 ContainerKind = !reader.IsDBNull(10) ? reader.GetString(10) : null,
                 ContainerName = !reader.IsDBNull(11) ? reader.GetString(11) : null,
+                ContainerQualifiedName = !reader.IsDBNull(14) ? reader.GetString(14) : null,
+                LogicalPartialKey = !reader.IsDBNull(15) ? reader.GetString(15) : null,
                 Visibility = !reader.IsDBNull(12) ? reader.GetString(12) : null,
                 ReturnType = !reader.IsDBNull(13) ? reader.GetString(13) : null,
             });
