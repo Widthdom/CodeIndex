@@ -4054,6 +4054,11 @@ public partial class McpServerTests
         var recovery = structured["contentRecovery"]!;
         Assert.Equal(1, recovery["startLine"]!.GetValue<int>());
         Assert.Equal(1, recovery["endLine"]!.GetValue<int>());
+        Assert.Equal(
+            ["cdidx", "excerpt", "dist/data.txt", "--db", Path.GetFullPath(_dbPath), "--start", "1", "--end", "1", "--max-line-width", "0", "--json"],
+            recovery["argv"]!.AsArray().Select(argument => argument!.GetValue<string>()).ToArray());
+        Assert.Equal(OperatingSystem.IsWindows() ? "powershell" : "posix-sh", recovery["commandShell"]!.GetValue<string>());
+        Assert.True(recovery["commandDisplayOnly"]!.GetValue<bool>());
         var recoveryCommand = recovery["command"]!.GetValue<string>();
         Assert.Contains("cdidx excerpt dist/data.txt", recoveryCommand);
         Assert.Contains("--db", recoveryCommand);
