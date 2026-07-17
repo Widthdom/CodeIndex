@@ -948,6 +948,14 @@ public static class DbCommandRunner
 
         if (apply)
         {
+            if (orphanSymbolReferences > 0 || orphanSymbols > 0)
+            {
+                Execute(
+                    connection,
+                    transaction,
+                    $"DELETE FROM codeindex_meta WHERE key = '{DbContext.ReferenceIdentityContractVersionMetaKey}'",
+                    cancellationToken);
+            }
             if (orphanSymbolReferences > 0)
             {
                 var userVersion = Count(connection, transaction, "PRAGMA user_version", cancellationToken);

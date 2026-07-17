@@ -5,6 +5,7 @@ namespace CodeIndex.Database;
 
 public partial class DbWriter
 {
+    internal static Action? HotspotAggregateRefreshExecutingForTesting { get; set; }
     private const string NonTypeReceiverQualifierPrefix = "\u001freceiver:";
 
     private const string MutualRecursionValueSql = """
@@ -540,11 +541,26 @@ public partial class DbWriter
             return;
 
         using var transaction = BeginTransaction(cancellationToken, "refresh hotspot reference counts");
+        var refreshCheckpoint = HotspotAggregateRefreshExecutingForTesting;
+        if (refreshCheckpoint != null)
+        {
+            var invoked = false;
+            _conn.CreateFunction("hotspot_refresh_test_checkpoint", () =>
+            {
+                if (!invoked)
+                {
+                    invoked = true;
+                    refreshCheckpoint();
+                }
+                return 0;
+            });
+        }
         var cmd = RentCommand(
-            HotspotReferenceAggregateSql.BuildRefreshSql(singleFile: true),
+            HotspotReferenceAggregateSql.BuildRefreshSql(singleFile: true, includeTestCheckpoint: refreshCheckpoint != null),
             static command => command.Parameters.Add("@file_id", SqliteType.Integer));
         try
         {
+            using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
             var completed = 0;
             foreach (var fileId in fileIds)
             {
@@ -554,7 +570,18 @@ public partial class DbWriter
                     fileIds.Count,
                     cancellationToken);
                 cmd.Parameters["@file_id"].Value = fileId;
-                cmd.ExecuteNonQuery();
+                try
+                {
+                    cmd.ExecuteNonQuery();
+                }
+                catch (SqliteException ex) when (IsSqliteInterruptCancellation(ex, cancellationToken))
+                {
+                    throw new OperationCanceledException(
+                        "Hotspot reference aggregate refresh was interrupted.",
+                        ex,
+                        cancellationToken);
+                }
+                cancellationToken.ThrowIfCancellationRequested();
                 completed++;
             }
         }

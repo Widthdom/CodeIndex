@@ -171,6 +171,7 @@ public class DbContext : IDisposable
         "idx_hotspot_reference_counts_global",
         "idx_hotspot_reference_counts_file",
         "idx_hotspot_reference_counts_leaf",
+        "idx_hotspot_reference_counts_rank",
         "idx_symbol_refs_source_symbol",
         "idx_symbol_refs_target_symbol",
         "idx_symbol_ref_candidates_symbol",
@@ -214,6 +215,7 @@ public class DbContext : IDisposable
     private readonly DbOpenIntent _openIntent;
     private readonly DatabasePermissionPolicyMode _databasePermissionPolicy;
     private readonly IDatabaseFileModeProvider _databaseFileModeProvider;
+    private readonly CancellationToken _cancellation;
     private readonly List<StatusDatabasePermissionDiagnostic> _databasePermissionDiagnostics = [];
 
     private static readonly AsyncLocal<Action<string>?> ScopedOptimizePragmaExecutedForTesting = new();
@@ -654,6 +656,7 @@ public class DbContext : IDisposable
 
         _databasePermissionPolicy = databasePermissionPolicy;
         _databaseFileModeProvider = databaseFileModeProvider ?? throw new ArgumentNullException(nameof(databaseFileModeProvider));
+        _cancellation = cancellationToken;
         cancellationToken.ThrowIfCancellationRequested();
         _openIntent = openIntent;
         _schemaCacheKey = TryCreateSchemaCacheKey(dbPath);
@@ -3253,7 +3256,25 @@ public class DbContext : IDisposable
         if (_activeMigrationTransaction != null)
             cmd.Transaction = _activeMigrationTransaction;
         cmd.CommandText = sql;
-        cmd.ExecuteNonQuery();
+        using var cancellationRegistration = _cancellation.CanBeCanceled
+            ? _cancellation.UnsafeRegister(
+                static state => SQLitePCL.raw.sqlite3_interrupt(((SqliteConnection)state!).Handle),
+                _connection)
+            : default;
+        _cancellation.ThrowIfCancellationRequested();
+        try
+        {
+            cmd.ExecuteNonQuery();
+        }
+        catch (SqliteException exception) when (
+            _cancellation.IsCancellationRequested && exception.SqliteErrorCode == 9)
+        {
+            throw new OperationCanceledException(
+                "SQLite schema or aggregate maintenance was interrupted.",
+                exception,
+                _cancellation);
+        }
+        _cancellation.ThrowIfCancellationRequested();
         MarkWriteWork(walCheckpointable: false);
     }
 

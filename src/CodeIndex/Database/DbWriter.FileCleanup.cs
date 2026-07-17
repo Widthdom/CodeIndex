@@ -160,6 +160,12 @@ public partial class DbWriter
 
     private void DeleteFileIdBatch(IReadOnlyList<long> fileIds)
     {
+        // Removing either definitions or cross-file references can change candidate
+        // cardinality for retained references. Demote the identity contract inside the
+        // same transaction, before any direct deletion becomes visible.
+        // definition / cross-file reference の削除は retained reference の candidate
+        // cardinality を変え得るため、削除前に同一 transaction 内で contract を降格する。
+        InvalidateReferenceIdentityContractForMutation();
         DeleteCrossFileReferencesToSymbolsDefinedOnlyByFiles(fileIds);
         DeleteFileRowsByIdBatch(fileIds, offset: 0, batchCount: fileIds.Count);
     }

@@ -36,14 +36,18 @@ internal static class HotspotReferenceAggregateSql
         "CREATE INDEX IF NOT EXISTS idx_hotspot_reference_counts_global ON hotspot_reference_counts(lang, symbol_name, symbol_segment_count)",
         "CREATE INDEX IF NOT EXISTS idx_hotspot_reference_counts_file ON hotspot_reference_counts(lang, file_id, symbol_name, symbol_segment_count)",
         "CREATE INDEX IF NOT EXISTS idx_hotspot_reference_counts_leaf ON hotspot_reference_counts(lang, file_id, raw_symbol_name, allow_leaf_fallback) WHERE allow_leaf_fallback = 1",
+        "CREATE INDEX IF NOT EXISTS idx_hotspot_reference_counts_rank ON hotspot_reference_counts(reference_score DESC, reference_count DESC, lang, symbol_name, symbol_segment_count)",
     ];
 
-    internal static string BuildRefreshSql(bool singleFile)
+    internal static string BuildRefreshSql(bool singleFile, bool includeTestCheckpoint = false)
     {
         var deletePredicate = singleFile ? " WHERE file_id = @file_id" : string.Empty;
         var referencePredicate = singleFile ? " AND sr.file_id = @file_id" : string.Empty;
         var logicalReferenceKindSql = DbReader.GetLogicalReferenceKindSql("sr.reference_kind");
         var referenceWeightSql = DbReader.GetHotspotReferenceWeightSql("sr.reference_kind");
+        var testCheckpointPredicate = includeTestCheckpoint
+            ? " AND hotspot_refresh_test_checkpoint() = 0"
+            : string.Empty;
         return $"""
             DELETE FROM hotspot_reference_counts{deletePredicate};
 
@@ -57,7 +61,7 @@ internal static class HotspotReferenceAggregateSql
                 reference_count,
                 reference_score
             )
-            WITH non_sql_logical_sites AS (
+            WITH non_sql_raw_sites AS (
                 SELECT sr.file_id,
                        f.lang,
                        sr.symbol_name AS raw_symbol_name,
@@ -77,18 +81,30 @@ internal static class HotspotReferenceAggregateSql
                 WHERE sr.reference_kind IN {ReferenceKindsSql}
                   AND sr.symbol_name IS NOT NULL
                   AND sr.symbol_name <> ''
-                  AND f.lang != 'sql'{referencePredicate}
-                GROUP BY f.lang,
-                         sr.file_id,
-                         raw_symbol_name,
+                  AND f.lang != 'sql'{referencePredicate}{testCheckpointPredicate}
+            ),
+            non_sql_logical_sites AS (
+                SELECT file_id,
+                       lang,
+                       MIN(raw_symbol_name) AS raw_symbol_name,
+                       symbol_name,
+                       symbol_segment_count,
+                       allow_leaf_fallback,
+                       line,
+                       column_number,
+                       logical_reference_kind,
+                       MAX(reference_weight) AS reference_weight
+                FROM non_sql_raw_sites
+                GROUP BY file_id,
+                         lang,
                          symbol_name,
                          symbol_segment_count,
                          allow_leaf_fallback,
-                         sr.line,
-                         sr.column_number,
+                         line,
+                         column_number,
                          logical_reference_kind
             ),
-            sql_logical_sites AS (
+            sql_raw_sites AS (
                 SELECT sr.file_id,
                        f.lang,
                        sr.symbol_name AS raw_symbol_name,
@@ -117,15 +133,26 @@ internal static class HotspotReferenceAggregateSql
                 WHERE sr.reference_kind IN {ReferenceKindsSql}
                   AND sr.symbol_name IS NOT NULL
                   AND sr.symbol_name <> ''
-                  AND f.lang = 'sql'{referencePredicate}
-                GROUP BY f.lang,
-                         sr.file_id,
-                         raw_symbol_name,
+                  AND f.lang = 'sql'{referencePredicate}{testCheckpointPredicate}
+            ),
+            sql_logical_sites AS (
+                SELECT file_id,
+                       lang,
+                       MIN(raw_symbol_name) AS raw_symbol_name,
+                       symbol_name,
+                       symbol_segment_count,
+                       MAX(allow_leaf_fallback) AS allow_leaf_fallback,
+                       line,
+                       column_number,
+                       logical_reference_kind,
+                       MAX(reference_weight) AS reference_weight
+                FROM sql_raw_sites
+                GROUP BY file_id,
+                         lang,
                          symbol_name,
                          symbol_segment_count,
-                         allow_leaf_fallback,
-                         sr.line,
-                         sr.column_number,
+                         line,
+                         column_number,
                          logical_reference_kind
             ),
             logical_sites AS (
