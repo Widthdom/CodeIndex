@@ -405,7 +405,7 @@ internal static class CliFlagSchema
             new() { Name = "--rebuild", Description = "Delete existing DB and rebuild from scratch", Commands = Set("index") },
             new() { Name = "--optimize", Description = "Optimize the existing FTS5 table without scanning files", Commands = Set("index") },
             new() { Name = "--symbols-only", Description = "Build chunks and symbols while skipping reference graph extraction", Commands = Set("index") },
-            new() { Name = "--dry-run", Description = "Preview without writing", Commands = Set("index", "backfill-fold", "vacuum") },
+            new() { Name = "--dry-run", Description = "Preview without writing", Commands = Set("index", "backfill-fold", "optimize", "vacuum") },
             new() { Name = "--dry-run-path-limit", ValuePlaceholder = "<n>", Description = "Dry run only: candidate path processing limit before truncated lower-bound estimates", Commands = Set("index") },
             new() { Name = "--no-checkpoint", Description = "Skip the automatic DB checkpoint before maintenance", Commands = Set("backfill-fold") },
             new() { Name = "--force", Description = "Bypass the per-database index lock", Commands = Set("index") },

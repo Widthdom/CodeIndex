@@ -78,7 +78,7 @@ public static class ConsoleUi
         ("index", "cdidx index <projectPath> [--db <path>] [--rebuild] [--optimize] [--symbols-only] [--verbose] [--dry-run [--dry-run-path-limit <n>]] [--force] [--quiet] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--notify <auto|bell|osc9|desktop|none>] [--max-file-bytes <bytes>] [--max-symbols-per-file <n>] [--max-references-per-file <n>] [--follow-symlinks <none|internal|all>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]] [--watch [--debounce <ms>] [--watch-pending-path-limit <n>]]"),
         ("hooks", "cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--json]"),
         ("backfill-fold", "cdidx backfill-fold [--db <path>] [--dry-run] [--no-checkpoint] [--json]"),
-        ("optimize", "cdidx optimize [--db <path>] [--json]"),
+        ("optimize", "cdidx optimize [--db <path>] [--dry-run] [--json]"),
         ("vacuum", "cdidx vacuum [--db <path>] [--dry-run] [--json]"),
         ("index-commits", "cdidx index <projectPath> --commits <commit-ref> [commit-ref ...] [--db <path>] [--verbose] [--dry-run [--dry-run-path-limit <n>]] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
         ("index-changed-between", "cdidx index <projectPath> --changed-between <old-ref> <new-ref> [--db <path>] [--verbose] [--dry-run [--dry-run-path-limit <n>]] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
@@ -1185,6 +1185,7 @@ public static class ConsoleUi
         Console.WriteLine("Examples:");
         Console.WriteLine("  cdidx ./myproject                             Index a project");
         Console.WriteLine("  cdidx backfill-fold                           Upgrade folded-name columns in an existing DB");
+        Console.WriteLine("  cdidx optimize --dry-run --json               Preview FTS5 optimization work without writing");
         Console.WriteLine("  cdidx optimize                                Optimize FTS5 segments in an existing DB");
         Console.WriteLine("  cdidx vacuum --dry-run --json                 Estimate DB free pages and maintenance guidance");
         Console.WriteLine("  cdidx index ./myproject --commits abc123      Update DB from one commit");
