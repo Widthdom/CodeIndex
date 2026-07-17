@@ -6,7 +6,11 @@ public class DbSymbolReaderSqlTests
     public void HotspotFilteredCandidates_UseExplicitProjection()
     {
         var source = RepositoryTestPaths.ReadText("src", "CodeIndex", "Database", "DbSymbolReader.Hotspots.cs");
-        var filteredBlocks = source.Split("filtered_candidates AS (", StringSplitOptions.None).Skip(1).ToList();
+        var filteredBlocks = source
+            .Replace("filtered_candidates AS MATERIALIZED (", "filtered_candidates AS (", StringComparison.Ordinal)
+            .Split("filtered_candidates AS (", StringSplitOptions.None)
+            .Skip(1)
+            .ToList();
 
         Assert.Equal(2, filteredBlocks.Count);
         foreach (var block in filteredBlocks)

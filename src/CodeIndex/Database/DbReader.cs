@@ -92,6 +92,7 @@ public partial class DbReader : IDisposable
     private HashSet<string>? _csharpGlobalUsingNamespaces;
     private Dictionary<string, CSharpUsingAliasScope>? _csharpGlobalUsingAliasesByName;
     internal readonly bool _hasReferencesTable;
+    internal readonly bool _hasHotspotReferenceCountsTable;
     internal readonly bool _hasIssuesTable;
     internal readonly bool _hasIssuesPhysicalTable;
     internal readonly bool _hasChunksTable;
@@ -328,7 +329,7 @@ public partial class DbReader : IDisposable
             WHEN instr(lower(c.content), lower(@rankingQuery)) > 0 THEN 0
             ELSE 1
         END";
-    private static string GetLogicalReferenceKindSql(string referenceKindSql)
+    internal static string GetLogicalReferenceKindSql(string referenceKindSql)
         => $"CASE WHEN {referenceKindSql} IN {EventReferenceKindsSql} THEN 'subscribe' " +
            $"ELSE {referenceKindSql} END";
 
@@ -566,6 +567,8 @@ public partial class DbReader : IDisposable
         }
         _hasChunksTable = HasTable("chunks");
         _hasReferencesTable = HasTable("symbol_references") && (userVersion & DbContext.GraphReadyFlag) != 0;
+        _hasHotspotReferenceCountsTable = HasTable(HotspotReferenceAggregateSql.TableName)
+            && (userVersion & DbContext.HotspotReferenceAggregateReadyFlag) != 0;
         _hasIssuesPhysicalTable = HasTable("file_issues");
         _issueColumns = _hasIssuesPhysicalTable
             ? LoadColumns("file_issues")

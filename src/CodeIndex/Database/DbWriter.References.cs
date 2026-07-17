@@ -5,6 +5,7 @@ namespace CodeIndex.Database;
 
 public partial class DbWriter
 {
+    internal static Action? HotspotAggregateRefreshExecutingForTesting { get; set; }
     private const string NonTypeReceiverQualifierPrefix = "\u001freceiver:";
 
     private const string MutualRecursionValueSql = """
@@ -442,6 +443,11 @@ public partial class DbWriter
         if (references.Count == 0) return;
         InvalidateReferenceIdentityContractForMutation();
 
+        // If a chunk commits but aggregate refresh is cancelled, readers must fall back to
+        // raw references until InitializeSchema performs a complete backfill.
+        // aggregate refresh 前に中断した場合は trust bit を残さず raw fallback に降格する。
+        var aggregateWasReady = ClearHotspotReferenceAggregateReady();
+
         int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 14);
         var foldedNameCache = CreateFoldedNameCache(
             Math.Min(references.Count, rowsPerStatement),
@@ -507,11 +513,84 @@ public partial class DbWriter
         }
 
         CheckBatchCancellationAndReportProgress("insert_references", references.Count, references.Count, cancellationToken);
+        RefreshHotspotReferenceCounts(references, cancellationToken);
+        RestoreHotspotReferenceAggregateReady(aggregateWasReady);
         if (refreshMutualRecursionFlags)
         {
             cancellationToken.ThrowIfCancellationRequested();
             RefreshMutualRecursionFlags(cancellationToken);
         }
+    }
+
+    private void RefreshHotspotReferenceCounts(
+        IReadOnlyList<ReferenceRecord> references,
+        CancellationToken cancellationToken)
+    {
+        var fileIds = new HashSet<long>();
+        foreach (var reference in references)
+            fileIds.Add(reference.FileId);
+
+        RefreshHotspotReferenceCounts(fileIds, cancellationToken);
+    }
+
+    private void RefreshHotspotReferenceCounts(
+        IReadOnlyCollection<long> fileIds,
+        CancellationToken cancellationToken)
+    {
+        if (fileIds.Count == 0)
+            return;
+
+        using var transaction = BeginTransaction(cancellationToken, "refresh hotspot reference counts");
+        var refreshCheckpoint = HotspotAggregateRefreshExecutingForTesting;
+        if (refreshCheckpoint != null)
+        {
+            var invoked = false;
+            _conn.CreateFunction("hotspot_refresh_test_checkpoint", () =>
+            {
+                if (!invoked)
+                {
+                    invoked = true;
+                    refreshCheckpoint();
+                }
+                return 0;
+            });
+        }
+        var cmd = RentCommand(
+            HotspotReferenceAggregateSql.BuildRefreshSql(singleFile: true, includeTestCheckpoint: refreshCheckpoint != null),
+            static command => command.Parameters.Add("@file_id", SqliteType.Integer));
+        try
+        {
+            using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
+            var completed = 0;
+            foreach (var fileId in fileIds)
+            {
+                CheckBatchCancellationAndReportProgress(
+                    "refresh_hotspot_reference_counts",
+                    completed,
+                    fileIds.Count,
+                    cancellationToken);
+                cmd.Parameters["@file_id"].Value = fileId;
+                try
+                {
+                    cmd.ExecuteNonQuery();
+                }
+                catch (SqliteException ex) when (IsSqliteInterruptCancellation(ex, cancellationToken))
+                {
+                    throw new OperationCanceledException(
+                        "Hotspot reference aggregate refresh was interrupted.",
+                        ex,
+                        cancellationToken);
+                }
+                cancellationToken.ThrowIfCancellationRequested();
+                completed++;
+            }
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+
+        transaction.Commit();
     }
 
     private Dictionary<(long FileId, int Line, string Context), long> UpsertReferenceLines(IReadOnlyList<ReferenceRecord> references, int start, int end, CancellationToken cancellationToken)

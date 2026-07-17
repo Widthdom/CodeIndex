@@ -1112,10 +1112,12 @@ public class PreparedCommandCacheTests : IDisposable
 
             Assert.Equal(fileCount, writer.PurgeStaleFiles(projectRoot));
 
-            // One scan SQL, one 500-ID SQL reused for the second full batch, and one
-            // 201-ID remainder SQL. A per-file delete would add 1,201 command leases.
-            // scan、500 ID（2 batch目で再利用）、201 ID remainderの3 SQLだけを使う。
-            Assert.Equal(missesBeforePurge + 3, _db.PreparedCommands.MissCount);
+            // One scan SQL, two contract-invalidation SQL statements, one 500-ID SQL
+            // reused for the second full batch, and one 201-ID remainder SQL. A per-file
+            // delete would add 1,201 command leases.
+            // scan、contract invalidation 2 SQL、500 ID（2 batch目で再利用）、
+            // 201 ID remainderの5 SQLだけを使う。
+            Assert.Equal(missesBeforePurge + 5, _db.PreparedCommands.MissCount);
             Assert.Equal(hitsBeforePurge + 1, _db.PreparedCommands.HitCount);
             using var countCommand = _db.Connection.CreateCommand();
             countCommand.CommandText = "SELECT COUNT(*) FROM files";

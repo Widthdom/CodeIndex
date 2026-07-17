@@ -27,6 +27,15 @@ must refuse writes that could silently discard newer data.
 | `1` | `graph_table_available` / graph readiness | `symbol_references` has been fully populated for graph queries. |
 | `2` | `issues_table_available` / issue readiness | `file_issues` has been populated for validation results. |
 | `4` | `fold_ready` | Folded-name columns are current for Unicode-aware exact-name matching. |
+| `8` | hotspot reference aggregate storage contract | The database uses `hotspot_reference_counts`; this permanent downgrade guard is preserved while other readiness bits are cleared. |
+| `16` | hotspot reference aggregate readiness | `hotspot_reference_counts` is synchronized with raw reference rows. Writers clear this bit before reference mutations and restore it only after updating the aggregate. |
+
+The storage-contract bit is a downgrade guard: binaries that predate the
+maintained aggregate see an unknown bit and refuse write-capable opens instead
+of leaving hotspot counts stale. It remains set while the separate readiness
+bit is transiently cleared during reference mutations. Current query readers
+fall back to raw reference rows when readiness is absent; older query-only
+readers may still use their normal forward-compatibility degradation behavior.
 
 Additional per-feature contract versions live in `codeindex_meta`, including
 folded-key metadata, C# symbol-name and metadata-target versions, SQL graph
@@ -90,6 +99,14 @@ degrade しなければなりません。古い binary が新しい database を
 | `1` | `graph_table_available` / graph readiness | graph query 用の `symbol_references` が完全に作成済み。 |
 | `2` | `issues_table_available` / issue readiness | validation result 用の `file_issues` が作成済み。 |
 | `4` | `fold_ready` | Unicode-aware exact-name matching 用の folded-name column が最新。 |
+| `8` | hotspot reference aggregate storage contract | database が `hotspot_reference_counts` を使用することを示す永続 downgrade guard。他の readiness bit のクリア時にも保持される。 |
+| `16` | hotspot reference aggregate readiness | `hotspot_reference_counts` と raw reference row が同期済み。writer は reference の変更前にこの bit をクリアし、aggregate 更新後だけ復元する。 |
+
+storage-contract bit は downgrade guard です。maintained aggregate 導入前の binary は
+この未知 bit を検知し、hotspot count を stale にする write-capable open を拒否します。
+reference 更新中に別の readiness bit が一時的にクリアされても、この bit は保持されます。
+現行の query reader は readiness が無い場合に raw reference row へフォールバックし、
+旧 query-only reader は通常の forward-compatibility degradation を継続できます。
 
 追加の feature contract version は `codeindex_meta` に保存されます。これには
 folded-key metadata、C# symbol-name / metadata-target version、SQL graph
