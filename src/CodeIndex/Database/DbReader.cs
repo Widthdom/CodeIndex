@@ -1428,7 +1428,7 @@ public partial class DbReader : IDisposable
         return input.TrimEnd('/');
     }
 
-    private static bool PathLikePatternHasWildcard(string input)
+    internal static bool PathLikePatternHasWildcard(string input)
     {
         var escaped = false;
         foreach (var ch in NormalizePathLikePatternInput(input))

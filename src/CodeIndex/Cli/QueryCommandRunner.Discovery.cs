@@ -359,7 +359,8 @@ public static partial class QueryCommandRunner
             jsonDefault: false,
             allowNamedQuery: true,
             validateDefaultSnippetLines: false,
-            validateDefaultMaxLineWidth: false);
+            validateDefaultMaxLineWidth: false,
+            positionalGlobAsPath: true);
         if (TryWriteUnsupportedOptionError("files", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("files"), options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedOutputFormat("files", options, FilesOutputFormats, "Use `--format json` for file rows, `--format compact` for bounded compact rows, or `--format count` for file totals."))
