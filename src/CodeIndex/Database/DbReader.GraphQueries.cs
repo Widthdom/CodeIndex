@@ -69,8 +69,7 @@ public partial class DbReader
         var groupedReferenceKindGroupSql = rawKinds
             ? GetRawReferenceKindSql("r.reference_kind")
             : GetLogicalReferenceKindSql("r.reference_kind");
-        var sql = referenceKind == null
-            ? @"
+        var sql = @"
             WITH logical_references AS (
                 SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
                        " + groupedReferenceKindSql + @" AS reference_kind,
@@ -84,29 +83,8 @@ public partial class DbReader
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id" + referenceLineJoin + @"
                 WHERE " + callerContainerPredicate + @"
-                  AND r.reference_kind IN " + CallableReferenceKindsSql + @"
-                  AND " + supportedLangPredicate
-            : @"
-            SELECT f.path, f.lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, r.symbol_name,
-                   r.reference_kind,
-                   (MIN(CAST(r.line AS INTEGER) * 4294967296 + r.column_number) / 4294967296) AS first_line,
-                   (MIN(CAST(r.line AS INTEGER) * 4294967296 + r.column_number) % 4294967296) AS first_column,
-                   COUNT(*) AS reference_count,
-                   GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds,
-                   r.reference_kind || ':' || COUNT(*) AS reference_kind_counts,
-                   " + ReferenceWeightedScoreSql("r.reference_kind") + @" AS weighted_score,
-                   MAX(" + selfReferenceSql + @") AS is_self_reference,
-                   MAX(" + mutualRecursionSql + @") AS is_mutual_recursion
-            FROM symbol_references r
-            JOIN files f ON r.file_id = f.id" + referenceLineJoin + @"
-            WHERE " + BuildCallerContainerPredicate("f", "r");
-        if (referenceKind != null)
-            sql += " AND " + supportedLangPredicate;
-
-        if (referenceKind != null)
-            sql += " AND r.reference_kind = @referenceKind";
-        else
-            sql += NonInvocationReferenceKindsExclusion;
+                  AND " + GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind) + @"
+                  AND " + supportedLangPredicate;
         if (excludeSelfReferences)
             sql += $" AND {selfReferenceSql} = 0";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
@@ -166,9 +144,7 @@ public partial class DbReader
             sql += " AND f.lang = @lang";
         sql += BuildCSharpBareMemberGraphReferenceFilter(query, lang, exact, contextSql, "f", "r");
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        if (referenceKind == null)
-        {
-            sql += @"
+        sql += @"
             GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, " + groupedReferenceKindGroupSql + @", r.reference_kind
             )
             SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, symbol_name,
@@ -183,12 +159,7 @@ public partial class DbReader
                    MAX(r.is_mutual_recursion) AS is_mutual_recursion
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name";
-        }
-        else
-        {
-            sql += " GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name";
-        }
-        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {(referenceKind == null ? GetPathBucketOrderSql("r.path") : PathBucketOrder)}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, {BuildReferenceRankOrderSql(rankMode)}, {(referenceKind == null ? "r.path" : "f.path")}, first_line LIMIT @limit OFFSET @offset";
+        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {GetPathBucketOrderSql("r.path")}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, {BuildReferenceRankOrderSql(rankMode)}, r.path, first_line LIMIT @limit OFFSET @offset";
 
         cmd.CommandText = sql;
         string callersQueryParam;
@@ -212,7 +183,7 @@ public partial class DbReader
         SqliteCommandPolicy.Add(cmd, "@preferExactCase", exact ? 1 : 0);
         SqliteCommandPolicy.Add(cmd, "@rawQuery", exact ? query : string.Empty);
         SqliteCommandPolicy.Add(cmd, "@rankingQuery", query.Trim());
-        if (referenceKind != null)
+        if (RequiresReferenceKindParameter(referenceKind))
             SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", NormalizeQueryLanguage(lang));
@@ -272,10 +243,7 @@ public partial class DbReader
             WHERE " + BuildCallerContainerPredicate("f", "r");
         groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
-        if (referenceKind != null)
-            groupedSql += " AND r.reference_kind = @referenceKind";
-        else
-            groupedSql += $" AND r.reference_kind IN {CallableReferenceKindsSql}";
+        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind)}";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
         var allowCSharpQualifiedContextMatch = SqlNameResolver.HasQualifier(query)
             && !HasQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
@@ -333,8 +301,7 @@ public partial class DbReader
             groupedSql += " AND f.lang = @lang";
         groupedSql += BuildCSharpBareMemberGraphReferenceFilter(query, lang, exact, contextSql, "f", "r");
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
-        if (referenceKind == null)
-            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {(rawKinds ? GetRawReferenceKindSql("r.reference_kind") : GetLogicalReferenceKindSql("r.reference_kind"))}";
+        groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {(rawKinds ? GetRawReferenceKindSql("r.reference_kind") : GetLogicalReferenceKindSql("r.reference_kind"))}";
         groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name LIMIT @limit";
 
         cmd.CommandText = $"SELECT COUNT(*) FROM ({groupedSql})";
@@ -354,7 +321,7 @@ public partial class DbReader
                 : cssScssVariableAlias;
             SqliteCommandPolicy.Add(cmd, "@queryCssScssVariableAlias", aliasParam);
         }
-        if (referenceKind != null)
+        if (RequiresReferenceKindParameter(referenceKind))
             SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", NormalizeQueryLanguage(lang));
@@ -387,10 +354,7 @@ public partial class DbReader
                 WHERE " + BuildCallerContainerPredicate("f", "r");
         groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
-        if (referenceKind != null)
-            groupedSql += " AND r.reference_kind = @referenceKind";
-        else
-            groupedSql += $" AND r.reference_kind IN {CallableReferenceKindsSql}";
+        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind)}";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
         var allowCSharpQualifiedContextMatch = SqlNameResolver.HasQualifier(query)
             && !HasQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
@@ -444,8 +408,7 @@ public partial class DbReader
             groupedSql += " AND f.lang = @lang";
         groupedSql += BuildCSharpBareMemberGraphReferenceFilter(query, lang, exact, contextSql, "f", "r");
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
-        if (referenceKind == null)
-            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {(rawKinds ? GetRawReferenceKindSql("r.reference_kind") : GetLogicalReferenceKindSql("r.reference_kind"))}";
+        groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {(rawKinds ? GetRawReferenceKindSql("r.reference_kind") : GetLogicalReferenceKindSql("r.reference_kind"))}";
         groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name";
 
         cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path), MAX(CASE WHEN lang = 'sql' THEN 1 ELSE 0 END) FROM ({groupedSql})";
@@ -465,7 +428,7 @@ public partial class DbReader
                 : cssScssVariableAlias;
             SqliteCommandPolicy.Add(cmd, "@queryCssScssVariableAlias", aliasParam);
         }
-        if (referenceKind != null)
+        if (RequiresReferenceKindParameter(referenceKind))
             SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", NormalizeQueryLanguage(lang));
@@ -493,8 +456,7 @@ public partial class DbReader
         var calleeGroupKindSql = rawKinds
             ? GetRawReferenceKindSql("r.reference_kind")
             : GetLogicalReferenceKindSql("r.reference_kind");
-        var sql = referenceKind == null
-            ? $@"
+        var sql = $@"
             WITH logical_references AS (
                 SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
                        {preferredCalleeKindSql} AS reference_kind,
@@ -506,24 +468,8 @@ public partial class DbReader
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 WHERE r.container_name IS NOT NULL
-                  AND r.reference_kind IN {CallableReferenceKindsSql}
-                  AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
-            : @"
-            SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
-                   r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count,
-                   GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds,
-                   r.reference_kind || ':' || COUNT(*) AS reference_kind_counts,
-                   " + ReferenceWeightedScoreSql("r.reference_kind") + @" AS weighted_score
-            FROM symbol_references r
-            JOIN files f ON r.file_id = f.id
-            WHERE r.container_name IS NOT NULL";
-        if (referenceKind != null)
-            sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
-
-        if (referenceKind != null)
-            sql += " AND r.reference_kind = @referenceKind";
-        else
-            sql += NonInvocationReferenceKindsExclusion;
+                  AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind)}
+                  AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
         var allowQualifiedLeafFallback = HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
         var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
@@ -570,9 +516,7 @@ public partial class DbReader
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        if (referenceKind == null)
-        {
-            sql += @"
+        sql += @"
                 GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, r.reference_kind
             )
             SELECT path, lang, container_kind, container_name, symbol_name,
@@ -582,12 +526,7 @@ public partial class DbReader
                    SUM(r.weighted_score) AS weighted_score
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
-        }
-        else
-        {
-            sql += " GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind";
-        }
-        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.container_name = @rawQuery THEN 0 ELSE 1 END, {(referenceKind == null ? GetPathBucketOrderSql("r.path") : PathBucketOrder)}, CASE WHEN lower(r.container_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, {BuildReferenceRankOrderSql(rankMode)}, {(referenceKind == null ? "r.path" : "f.path")}, first_line LIMIT @limit OFFSET @offset";
+        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.container_name = @rawQuery THEN 0 ELSE 1 END, {GetPathBucketOrderSql("r.path")}, CASE WHEN lower(r.container_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, {BuildReferenceRankOrderSql(rankMode)}, r.path, first_line LIMIT @limit OFFSET @offset";
 
         cmd.CommandText = sql;
         string calleesQueryParam;
@@ -614,7 +553,7 @@ public partial class DbReader
         SqliteCommandPolicy.Add(cmd, "@rawQuery", exact ? query : string.Empty);
         SqliteCommandPolicy.Add(cmd, "@rankingQuery", query.Trim());
         AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback);
-        if (referenceKind != null)
+        if (RequiresReferenceKindParameter(referenceKind))
             SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", lang);
@@ -664,18 +603,13 @@ public partial class DbReader
             FROM (
                 SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
                        r.container_name AS container_name, r.symbol_name AS symbol_name,
-                       " + (referenceKind == null
-                           ? (rawKinds ? GetPreferredReferenceKindSql("r.reference_kind") : GetPreferredLogicalReferenceKindSql("r.reference_kind"))
-                           : "r.reference_kind") + @" AS reference_kind
+                       " + (rawKinds ? GetPreferredReferenceKindSql("r.reference_kind") : GetPreferredLogicalReferenceKindSql("r.reference_kind")) + @" AS reference_kind
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             WHERE r.container_name IS NOT NULL";
         groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
-        if (referenceKind != null)
-            groupedSql += " AND r.reference_kind = @referenceKind";
-        else
-            groupedSql += $" AND r.reference_kind IN {CallableReferenceKindsSql}";
+        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind)}";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
         var allowQualifiedLeafFallback = HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
         var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
@@ -722,8 +656,7 @@ public partial class DbReader
         if (lang != null)
             groupedSql += " AND f.lang = @lang";
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
-        if (referenceKind == null)
-            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {(rawKinds ? GetRawReferenceKindSql("r.reference_kind") : GetLogicalReferenceKindSql("r.reference_kind"))}";
+        groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {(rawKinds ? GetRawReferenceKindSql("r.reference_kind") : GetLogicalReferenceKindSql("r.reference_kind"))}";
         groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind LIMIT @limit";
 
         cmd.CommandText = $"SELECT COUNT(*) FROM ({groupedSql})";
@@ -746,7 +679,7 @@ public partial class DbReader
                 : cssScssVariableAlias;
             SqliteCommandPolicy.Add(cmd, "@queryCssScssVariableAlias", aliasParam);
         }
-        if (referenceKind != null)
+        if (RequiresReferenceKindParameter(referenceKind))
             SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", lang);
@@ -769,18 +702,13 @@ public partial class DbReader
             FROM (
                 SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
                        r.container_name AS container_name, r.symbol_name AS symbol_name,
-                       " + (referenceKind == null
-                           ? (rawKinds ? GetPreferredReferenceKindSql("r.reference_kind") : GetPreferredLogicalReferenceKindSql("r.reference_kind"))
-                           : "r.reference_kind") + @" AS reference_kind
+                       " + (rawKinds ? GetPreferredReferenceKindSql("r.reference_kind") : GetPreferredLogicalReferenceKindSql("r.reference_kind")) + @" AS reference_kind
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 WHERE r.container_name IS NOT NULL";
         groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
-        if (referenceKind != null)
-            groupedSql += " AND r.reference_kind = @referenceKind";
-        else
-            groupedSql += $" AND r.reference_kind IN {CallableReferenceKindsSql}";
+        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind)}";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
         var allowQualifiedLeafFallback = HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
         var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
@@ -827,8 +755,7 @@ public partial class DbReader
         if (lang != null)
             groupedSql += " AND f.lang = @lang";
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
-        if (referenceKind == null)
-            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {(rawKinds ? GetRawReferenceKindSql("r.reference_kind") : GetLogicalReferenceKindSql("r.reference_kind"))}";
+        groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {(rawKinds ? GetRawReferenceKindSql("r.reference_kind") : GetLogicalReferenceKindSql("r.reference_kind"))}";
         groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
 
         cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path), MAX(CASE WHEN lang = 'sql' THEN 1 ELSE 0 END) FROM ({groupedSql})";
@@ -851,7 +778,7 @@ public partial class DbReader
                 : cssScssVariableAlias;
             SqliteCommandPolicy.Add(cmd, "@queryCssScssVariableAlias", aliasParam);
         }
-        if (referenceKind != null)
+        if (RequiresReferenceKindParameter(referenceKind))
             SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", lang);
@@ -866,6 +793,8 @@ public partial class DbReader
             WHEN 'generic_type_argument' THEN 0.5
             WHEN 'call' THEN 1.0
             WHEN 'subscribe' THEN 0.1
+            WHEN 'unsubscribe' THEN 0.1
+            WHEN 'razor_event_binding' THEN 0.1
             ELSE 0.0
         END)";
 

@@ -1579,7 +1579,7 @@ public static partial class ReferenceExtractor
                     ref pendingCSharpMultiLineTypePattern);
             }
 
-            bool ShouldSuppressDefinitionCall(string resolvedName, int callIndex)
+            bool ShouldSuppressDefinitionCall(string resolvedName, string rawName, int callIndex)
             {
                 if (definitionNames == null)
                     return false;
@@ -1588,6 +1588,20 @@ public static partial class ReferenceExtractor
                 {
                     if (context.Contains("when", StringComparison.Ordinal))
                         return false;
+
+                    // A verbatim definition such as `void @static()` normalizes to `static`.
+                    // Looking up only the normalized name can find an earlier modifier token on
+                    // the same line, so compare the raw declaration token before the shared path.
+                    // `void @static()` のような verbatim 定義は `static` に正規化される。
+                    // normalized name だけでは同じ行の先行 modifier を拾うため、共通処理より
+                    // 先に raw declaration token の位置を比較する。
+                    if (rawName.Length > 1
+                        && rawName[0] == '@'
+                        && definitionNames.Contains(resolvedName)
+                        && preparedLine.IndexOf(rawName, StringComparison.Ordinal) == callIndex)
+                    {
+                        return true;
+                    }
                 }
 
                 if (language != "sql")
@@ -1997,7 +2011,7 @@ public static partial class ReferenceExtractor
                     sqlState!,
                     ResolveContainerForCall,
                     name => IsIgnoredCallName(language, name),
-                    ShouldSuppressDefinitionCall)
+                    (resolvedName, callIndex) => ShouldSuppressDefinitionCall(resolvedName, resolvedName, callIndex))
                 : null;
 
             if (language == "css")
@@ -2300,7 +2314,7 @@ public static partial class ReferenceExtractor
                 // `private static (int Value, string Error) Resolve(...)` のような tuple return 宣言では
                 // CallRegex が modifier を `static(` と誤認する。C# keyword は呼び出し対象にならないため、
                 // graph に入る前に phantom edge を除外する。
-                if (language == "csharp" && normalizedName == "static")
+                if (language == "csharp" && name == "static")
                     return false;
 
                 if (language == "rust" && RustReferenceExtractor.IsFunctionDeclarationCallSite(preparedLine, callIndex))
@@ -2335,7 +2349,7 @@ public static partial class ReferenceExtractor
                     return false;
                 if (language == "typescript" && TypeScriptReferenceExtractor.IsSatisfiesTypeOperand(preparedLine, callIndex))
                     return false;
-                if (ShouldSuppressDefinitionCall(normalizedName, callIndex))
+                if (ShouldSuppressDefinitionCall(normalizedName, name, callIndex))
                     return false;
 
                 var callContainer = ResolveContainerForCall(callIndex);

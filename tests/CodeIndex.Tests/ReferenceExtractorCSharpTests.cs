@@ -4604,14 +4604,22 @@ public partial class ReferenceExtractorTests
                 }
 
                 private static (int Value, string? Error) Parse(string input) => (0, null);
+
+                private static void @static() { }
+                private void InvokeEscapedKeyword() { @static(); }
             }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.DoesNotContain(references, r => r.SymbolName == "static" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "static" && r.ReferenceKind == "call" && r.ContainerName != "InvokeEscapedKeyword");
         Assert.Contains(references, r => r.SymbolName == "Parse" && r.ReferenceKind == "call" && r.ContainerName == "Resolve");
+        // `@static` is a legal verbatim identifier; normalizing its public symbol name must not
+        // make the keyword-only suppression remove the real invocation.
+        // `@static` は合法な verbatim identifier。公開 symbol 名の正規化後も、keyword 用の
+        // 抑止によって実呼び出しを失ってはならない。
+        Assert.Contains(references, r => r.SymbolName == "static" && r.ReferenceKind == "call" && r.ContainerName == "InvokeEscapedKeyword");
     }
 
     [Fact]

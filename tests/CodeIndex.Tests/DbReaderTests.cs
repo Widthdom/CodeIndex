@@ -4122,7 +4122,7 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void GetCallers_RawKindsKeepsUnsubscribeVisible()
+    public void GraphQueries_ExplicitEventKindFiltersSeparateCanonicalAndRawKinds()
     {
         var fileId = _writer.UpsertFile(new FileRecord
         {
@@ -4137,10 +4137,32 @@ public partial class DbReaderTests : IDisposable
             {
                 FileId = fileId,
                 SymbolName = "Changed",
+                ReferenceKind = "subscribe",
+                Line = 1,
+                Column = 21,
+                Context = "Changed += Handler;",
+                ContainerKind = "function",
+                ContainerName = "Cleanup",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Changed",
                 ReferenceKind = "unsubscribe",
                 Line = 1,
                 Column = 41,
                 Context = "Changed -= Handler;",
+                ContainerKind = "function",
+                ContainerName = "Cleanup",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Changed",
+                ReferenceKind = "razor_event_binding",
+                Line = 1,
+                Column = 51,
+                Context = "@onclick=\"Changed\"",
                 ContainerKind = "function",
                 ContainerName = "Cleanup",
             },
@@ -4162,8 +4184,65 @@ public partial class DbReaderTests : IDisposable
         Assert.Equal("subscribe", logicalCaller.ReferenceKind);
 
         var rawCaller = Assert.Single(_reader.GetCallers("Changed", lang: "csharp", exact: true, pathPatterns: ["src/*unsubscribe_kind_caller*"], rawKinds: true));
-        Assert.Equal(new[] { "call", "unsubscribe" }, rawCaller.ReferenceKinds);
-        Assert.Equal("unsubscribe", rawCaller.ReferenceKind);
+        Assert.Equal(new[] { "call", "razor_event_binding", "subscribe", "unsubscribe" }, rawCaller.ReferenceKinds);
+        Assert.Equal("subscribe", rawCaller.ReferenceKind);
+
+        var canonicalFilteredCaller = Assert.Single(_reader.GetCallers(
+            "Changed",
+            lang: "csharp",
+            referenceKind: "subscribe",
+            exact: true,
+            pathPatterns: ["src/*unsubscribe_kind_caller*"]));
+        Assert.Equal("subscribe", canonicalFilteredCaller.ReferenceKind);
+        Assert.Equal(new[] { "subscribe" }, canonicalFilteredCaller.ReferenceKinds);
+        Assert.Equal(3, canonicalFilteredCaller.ReferenceCount);
+        Assert.Equal(3, canonicalFilteredCaller.ReferenceKindCounts["subscribe"]);
+
+        var explicitRawKindCanonicalOutput = Assert.Single(_reader.GetCallers(
+            "Changed",
+            lang: "csharp",
+            referenceKind: "unsubscribe",
+            exact: true,
+            pathPatterns: ["src/*unsubscribe_kind_caller*"]));
+        Assert.Equal("subscribe", explicitRawKindCanonicalOutput.ReferenceKind);
+        Assert.Equal(new[] { "subscribe" }, explicitRawKindCanonicalOutput.ReferenceKinds);
+
+        var rawFilteredCaller = Assert.Single(_reader.GetCallers(
+            "Changed",
+            lang: "csharp",
+            referenceKind: "subscribe",
+            exact: true,
+            pathPatterns: ["src/*unsubscribe_kind_caller*"],
+            rawKinds: true));
+        Assert.Equal(new[] { "razor_event_binding", "subscribe", "unsubscribe" }, rawFilteredCaller.ReferenceKinds);
+        Assert.Equal(1, rawFilteredCaller.ReferenceKindCounts["razor_event_binding"]);
+        Assert.Equal(1, rawFilteredCaller.ReferenceKindCounts["subscribe"]);
+        Assert.Equal(1, rawFilteredCaller.ReferenceKindCounts["unsubscribe"]);
+
+        var canonicalFilteredCallee = Assert.Single(_reader.GetCallees(
+            "Cleanup",
+            lang: "csharp",
+            referenceKind: "subscribe",
+            exact: true,
+            pathPatterns: ["src/*unsubscribe_kind_caller*"]));
+        Assert.Equal("subscribe", canonicalFilteredCallee.ReferenceKind);
+        Assert.Equal(3, canonicalFilteredCallee.ReferenceCount);
+        Assert.Equal(3, canonicalFilteredCallee.ReferenceKindCounts["subscribe"]);
+
+        var rawFilteredCallees = _reader.GetCallees(
+            "Cleanup",
+            lang: "csharp",
+            referenceKind: "subscribe",
+            exact: true,
+            pathPatterns: ["src/*unsubscribe_kind_caller*"],
+            rawKinds: true);
+        Assert.Equal(new[] { "razor_event_binding", "subscribe", "unsubscribe" }, rawFilteredCallees.Select(callee => callee.ReferenceKind).Order().ToArray());
+
+        Assert.Equal(1, _reader.CountCallers("Changed", lang: "csharp", referenceKind: "subscribe", exact: true, pathPatterns: ["src/*unsubscribe_kind_caller*"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("Changed", lang: "csharp", referenceKind: "subscribe", exact: true, pathPatterns: ["src/*unsubscribe_kind_caller*"]));
+        Assert.Equal(1, _reader.CountCallees("Cleanup", lang: "csharp", referenceKind: "subscribe", exact: true, pathPatterns: ["src/*unsubscribe_kind_caller*"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCalleesTotal("Cleanup", lang: "csharp", referenceKind: "subscribe", exact: true, pathPatterns: ["src/*unsubscribe_kind_caller*"]));
+        Assert.Equal(3, _reader.CountCallees("Cleanup", lang: "csharp", referenceKind: "subscribe", exact: true, pathPatterns: ["src/*unsubscribe_kind_caller*"], rawKinds: true));
     }
 
     [Fact]

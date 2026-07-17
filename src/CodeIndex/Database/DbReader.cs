@@ -331,6 +331,23 @@ public partial class DbReader : IDisposable
         => $"CASE WHEN {referenceKindSql} IN {EventReferenceKindsSql} THEN 'subscribe' " +
            $"ELSE {referenceKindSql} END";
 
+    // Keep filter semantics independent from output projection. The canonical `subscribe`
+    // filter selects every raw event variant, while explicitly named raw variants still select
+    // only themselves; callers decide separately whether to expose canonical or raw labels.
+    // filter semantics と output projection を分離する。canonical `subscribe` filter は raw event
+    // variant 全体を選び、明示された raw variant はその kind だけを選ぶ。公開 label を
+    // canonical / raw のどちらにするかは呼び出し側で別途決める。
+    private static string GetCallableReferenceKindPredicateSql(string referenceKindSql, string? referenceKind)
+        => referenceKind switch
+        {
+            null => $"{referenceKindSql} IN {CallableReferenceKindsSql}",
+            "subscribe" => $"{referenceKindSql} IN {EventReferenceKindsSql}",
+            _ => $"{referenceKindSql} = @referenceKind",
+        };
+
+    private static bool RequiresReferenceKindParameter(string? referenceKind)
+        => referenceKind is not null and not "subscribe";
+
     private static string GetRawReferenceKindSql(string referenceKindSql)
         => referenceKindSql;
 

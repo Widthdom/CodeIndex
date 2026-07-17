@@ -374,6 +374,89 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void GraphCommands_AcceptExplicitCaptureAndProjectReferenceKinds()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_graph_explicit_dependency_kinds");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                var csharpFileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/Capture.cs",
+                    Lang = "csharp",
+                    Size = 64,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                var solutionFileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "CodeIndex.sln",
+                    Lang = "solution",
+                    Size = 64,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertReferences([
+                    new ReferenceRecord
+                    {
+                        FileId = csharpFileId,
+                        SymbolName = "seed",
+                        ReferenceKind = "capture",
+                        Line = 1,
+                        Column = 20,
+                        Context = "Action read = () => seed;",
+                        ContainerKind = "lambda",
+                        ContainerName = "ReadSeed",
+                    },
+                    new ReferenceRecord
+                    {
+                        FileId = solutionFileId,
+                        SymbolName = "src/App/App.csproj",
+                        ReferenceKind = "project_reference",
+                        Line = 1,
+                        Column = 1,
+                        Context = "Project(src/App/App.csproj)",
+                        ContainerKind = "project",
+                        ContainerName = "App",
+                    },
+                ]);
+                writer.MarkGraphReady();
+            }
+
+            foreach (var (query, kind, lang) in new[]
+            {
+                ("seed", "capture", "csharp"),
+                ("src/App/App.csproj", "project_reference", "solution"),
+            })
+            {
+                var (referencesExitCode, referencesStdout, referencesStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                    [query, "--db", dbPath, "--kind", kind, "--lang", lang, "--exact", "--json"],
+                    _jsonOptions));
+                using var referencesDocument = ParseJsonOutput(referencesStdout);
+
+                var (callersExitCode, callersStdout, callersStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                    [query, "--db", dbPath, "--kind", kind, "--lang", lang, "--exact", "--json"],
+                    _jsonOptions));
+                using var callersDocument = ParseJsonOutput(callersStdout);
+
+                Assert.Equal(CommandExitCodes.Success, referencesExitCode);
+                Assert.Equal(string.Empty, referencesStderr);
+                Assert.Equal(kind, referencesDocument.RootElement.GetProperty("reference_kind").GetString());
+                Assert.Equal(CommandExitCodes.Success, callersExitCode);
+                Assert.Equal(string.Empty, callersStderr);
+                Assert.Equal(kind, callersDocument.RootElement.GetProperty("reference_kind").GetString());
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_JsonZeroResults_WithMissingGraphTable_ReturnsDegradedPayload()
     {
         var (projectRoot, readOnlyUri) = CreateReadOnlyMissingGraphTableDb("cdidx_references_zero_json_missing_graph");
@@ -1639,6 +1722,22 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("HandleClick", json.GetProperty("callee_name").GetString());
             Assert.Equal("subscribe", json.GetProperty("reference_kind").GetString());
+
+            var (canonicalFilterExitCode, canonicalFilterStdout, canonicalFilterStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["HandleClick", "--db", dbPath, "--kind", "subscribe", "--json", "--lang", "csharp", "--exact"],
+                _jsonOptions));
+            using var canonicalFilterDocument = ParseJsonOutput(canonicalFilterStdout);
+            Assert.Equal(CommandExitCodes.Success, canonicalFilterExitCode);
+            Assert.Equal(string.Empty, canonicalFilterStderr);
+            Assert.Equal("subscribe", canonicalFilterDocument.RootElement.GetProperty("reference_kind").GetString());
+
+            var (rawFilterExitCode, rawFilterStdout, rawFilterStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["HandleClick", "--db", dbPath, "--kind", "razor_event_binding", "--raw-kinds", "--json", "--lang", "csharp", "--exact"],
+                _jsonOptions));
+            using var rawFilterDocument = ParseJsonOutput(rawFilterStdout);
+            Assert.Equal(CommandExitCodes.Success, rawFilterExitCode);
+            Assert.Equal(string.Empty, rawFilterStderr);
+            Assert.Equal("razor_event_binding", rawFilterDocument.RootElement.GetProperty("reference_kind").GetString());
 
             var (referencesExitCode, referencesStdout, referencesStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
                 ["HandleClick", "--db", dbPath, "--kind", "razor_event_binding", "--lang", "csharp", "--exact"],
