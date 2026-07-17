@@ -44,7 +44,7 @@ public static partial class QueryCommandRunner
                 return CommandErrorWriter.WriteJsonOrHuman(
                     options.Json,
                     jsonOptions,
-                    "status --config cannot be combined with --check, --log-path, or --explain.",
+                    "status --config cannot be combined with --check, --stale-after, --log-path, or --explain.",
                     CommandExitCodes.UsageError,
                     "Run status --config by itself, or remove --config to use the other status mode.",
                     GetUsageLineOrThrow("status"),
@@ -59,7 +59,7 @@ public static partial class QueryCommandRunner
         {
             if (options.CheckWorkspace)
             {
-                CommandErrorWriter.WriteStderr("Error: status --log-path cannot be combined with --check.");
+                CommandErrorWriter.WriteStderr("Error: status --log-path cannot be combined with --check or --stale-after.");
                 return CommandExitCodes.UsageError;
             }
 
@@ -74,6 +74,11 @@ public static partial class QueryCommandRunner
         }
         if (options.StatusExplainField != null)
         {
+            if (options.StaleAfter.HasValue)
+            {
+                CommandErrorWriter.WriteStderr("Error: status --explain cannot be combined with --stale-after.");
+                return CommandExitCodes.UsageError;
+            }
             if (options.Json)
                 return WriteStatusReadinessExplanationJson(options.StatusExplainField, jsonOptions);
             return WriteStatusReadinessExplanation(options.StatusExplainField);
@@ -117,6 +122,11 @@ public static partial class QueryCommandRunner
                     ? status.WorkspaceCheck.MatchesWorkspace
                     : null;
                 status.StaleAfterSeconds = (long)Math.Round(staleAfter.Value.TotalSeconds, MidpointRounding.AwayFromZero);
+                status.QueryContext = new StatusQueryContext
+                {
+                    CheckMode = options.StatusCheckMode ?? StatusCheckModeExplicit,
+                    StaleAfterSeconds = status.StaleAfterSeconds.Value,
+                };
                 if (status.IndexedAt.HasValue)
                     status.IndexAgeSeconds = Math.Max(0, (long)Math.Round((GetUtcNow() - status.IndexedAt.Value).TotalSeconds, MidpointRounding.AwayFromZero));
             }

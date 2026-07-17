@@ -346,7 +346,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void JsonEnvelopeSeparatesZeroResultControlRecordsFromRows_Issue4561()
+    public void JsonEnvelopePreservesSearchTerminalAndEmptyDiscoveryShape_Issues4561And4563()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_envelope_controls_4561");
         try
@@ -354,24 +354,37 @@ public partial class QueryCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/needle.cs", "csharp", "Issue4561Envelope();\n");
 
-            foreach (var args in new[]
-            {
-                new[] { "search", "NoSuchIssue4561Match", "--db", dbPath, "--json-envelope" },
-                new[] { "files", "--path", "NoSuchIssue4561Path", "--db", dbPath, "--json-envelope" },
-            })
-            {
-                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(args, _jsonOptions, "test"));
+            var (searchExitCode, searchStdout, searchStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "NoSuchIssue4561Match", "--db", dbPath, "--json-envelope"],
+                _jsonOptions,
+                "test"));
 
-                Assert.Equal(CommandExitCodes.Success, exitCode);
-                Assert.Equal(string.Empty, stderr);
-                using var document = JsonDocument.Parse(stdout);
-                var root = document.RootElement;
-                Assert.Equal(0, root.GetProperty("results").GetArrayLength());
-                var metadata = root.GetProperty("metadata");
-                Assert.Equal(0, metadata.GetProperty("result_count").GetInt32());
-                Assert.Single(metadata.GetProperty("stream_control_records").EnumerateArray());
-                Assert.True(metadata.GetProperty("stream_terminal").GetProperty("terminal_record").GetBoolean());
+            Assert.Equal(CommandExitCodes.Success, searchExitCode);
+            Assert.Equal(string.Empty, searchStderr);
+            using (var searchDocument = JsonDocument.Parse(searchStdout))
+            {
+                var searchRoot = searchDocument.RootElement;
+                Assert.Equal(0, searchRoot.GetProperty("results").GetArrayLength());
+                var searchMetadata = searchRoot.GetProperty("metadata");
+                Assert.Equal(0, searchMetadata.GetProperty("result_count").GetInt32());
+                Assert.Single(searchMetadata.GetProperty("stream_control_records").EnumerateArray());
+                Assert.True(searchMetadata.GetProperty("stream_terminal").GetProperty("terminal_record").GetBoolean());
             }
+
+            var (filesExitCode, filesStdout, filesStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["files", "--path", "NoSuchIssue4561Path", "--db", dbPath, "--json-envelope"],
+                _jsonOptions,
+                "test"));
+
+            Assert.Equal(CommandExitCodes.Success, filesExitCode);
+            Assert.Equal(string.Empty, filesStderr);
+            using var filesDocument = JsonDocument.Parse(filesStdout);
+            var filesRoot = filesDocument.RootElement;
+            Assert.Equal(0, filesRoot.GetProperty("results").GetArrayLength());
+            var filesMetadata = filesRoot.GetProperty("metadata");
+            Assert.Equal(0, filesMetadata.GetProperty("result_count").GetInt32());
+            Assert.False(filesMetadata.TryGetProperty("stream_control_records", out _));
+            Assert.False(filesMetadata.TryGetProperty("stream_terminal", out _));
         }
         finally
         {
@@ -386,15 +399,4 @@ public partial class QueryCommandRunnerTests
         return JsonDocument.Parse(lines[^1]);
     }
 
-    private static void AssertEmptyDiscoveryTerminal(string stdout)
-    {
-        using var terminal = ParseLastNdjsonRecord(stdout);
-        var json = terminal.RootElement;
-        Assert.True(json.GetProperty("terminal_record").GetBoolean());
-        Assert.True(json.GetProperty("done").GetBoolean());
-        Assert.Equal(0, json.GetProperty("count").GetInt32());
-        Assert.Equal(0, json.GetProperty("total_count").GetInt32());
-        Assert.False(json.GetProperty("truncated").GetBoolean());
-        Assert.False(json.GetProperty("has_more").GetBoolean());
-    }
 }

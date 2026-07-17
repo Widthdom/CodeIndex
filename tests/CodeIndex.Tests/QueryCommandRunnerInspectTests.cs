@@ -354,6 +354,39 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_InvalidFieldsEmitsOnlyPrimaryDiagnostic_Issue4574()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+            ["QueryCommandRunner", "--fields", "nope"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains("unsupported --fields value 'nope'", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("--fields requires at least one field name", stderr, StringComparison.Ordinal);
+        Assert.Single(stderr.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries), line => line.StartsWith("Error:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RunInspect_LineAndEndLineDoNotTreatDerivedEndAsDuplicate_Issue4574()
+    {
+        QueryCommandOptions? parsed = null;
+        var (_, _, stderr) = CaptureConsole(() =>
+        {
+            parsed = QueryCommandRunner.ParseArgs(
+                ["--path", "src/app.cs", "--line", "1", "--end-line", "2"],
+                jsonDefault: false,
+                allowNamedQuery: true);
+            return CommandExitCodes.Success;
+        });
+
+        Assert.NotNull(parsed);
+        Assert.Equal(1, parsed.StartLine);
+        Assert.Equal(2, parsed.EndLine);
+        Assert.Empty(stderr);
+    }
+
+    [Fact]
     public void RunInspect_ParseOutlineOnly_ImplyJsonAndOutlineFields_Issue4067()
     {
         var options = QueryCommandRunner.ParseArgs(

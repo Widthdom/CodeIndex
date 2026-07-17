@@ -911,6 +911,14 @@ public sealed class StatusDatabasePermissionDiagnostic
     public string RecommendedAction { get; set; } = "";
 }
 
+public sealed class StatusQueryContext
+{
+    [JsonPropertyName("check_mode")]
+    public string CheckMode { get; set; } = "";
+    [JsonPropertyName("stale_after_seconds")]
+    public long StaleAfterSeconds { get; set; }
+}
+
 public class StatusResult
 {
     [JsonPropertyName("api_version")]
@@ -1159,6 +1167,13 @@ public class StatusResult
     [JsonPropertyName("repair_commands")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<StatusRepairCommand>? RepairCommands { get; set; }
+    /// <summary>
+    /// Effective status-check invocation mode and threshold. Null for ordinary status output.
+    /// status check の有効な呼び出し mode としきい値。通常の status 出力では null。
+    /// </summary>
+    [JsonPropertyName("query_context")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public StatusQueryContext? QueryContext { get; set; }
     /// <summary>
     /// Effective age threshold, in seconds, used by `status --check` to explain stale-index
     /// warnings. Null when `--check` was not requested.
