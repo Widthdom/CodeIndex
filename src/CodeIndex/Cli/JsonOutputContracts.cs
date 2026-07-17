@@ -33,6 +33,53 @@ internal sealed record OptimizeFtsJsonResult(
     [property: JsonPropertyName("elapsed_ms")] long ElapsedMs,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
+internal sealed class OptimizeFtsPreviewJsonResult : IVersionedJsonResult
+{
+    public string ApiVersion { get; init; } = JsonOutputContract.ApiVersion;
+    public string Status { get; init; } = string.Empty;
+    public bool DryRun { get; init; }
+    public string DbPath { get; init; } = string.Empty;
+    public int WritesSinceOptimizeBefore { get; init; }
+    public int WritesSinceOptimizeAfter { get; init; }
+    public long ElapsedMs { get; init; }
+    public long? EstimatedDurationMs { get; init; }
+    public long? DbSizeBytes { get; init; }
+    public long? WalSizeBytes { get; init; }
+    public long? PageCount { get; init; }
+    public long? FreelistCount { get; init; }
+    public long? PageSize { get; init; }
+    public double? FreelistRatio { get; init; }
+    public long? EstimatedBytesReclaimable { get; init; }
+    public long? CoreTableSizeBytes { get; init; }
+    public long? FtsSizeBytes { get; init; }
+    public Dictionary<string, long>? ObjectSizeBytes { get; init; }
+    public bool ObjectSizesAvailable { get; init; }
+    public string? ObjectSizesMeasurement { get; init; }
+    public string? ObjectSizesUnavailableReason { get; init; }
+    public string LockState { get; init; } = "unknown";
+    public string? LockHolderVerification { get; init; }
+    public bool WouldAcquireExclusiveIndexLock { get; init; }
+    public bool OptimizationRecommended { get; init; }
+    public string RecommendationReason { get; init; } = string.Empty;
+    public OptimizeFtsReadinessJsonResult? Readiness { get; init; }
+    public List<string>? PlannedOperations { get; init; }
+    public bool SourceDatabaseUnchanged { get; init; }
+}
+
+internal sealed class OptimizeFtsReadinessJsonResult
+{
+    public bool FoldReady { get; init; }
+    public bool GraphTableAvailable { get; init; }
+    public bool IssuesTableAvailable { get; init; }
+    public bool FileIssuesDataCurrent { get; init; }
+    public bool MigrationInProgress { get; init; }
+    public bool SqlGraphContractReady { get; init; }
+    public bool HotspotFamilyReady { get; init; }
+    public bool CsharpSymbolNameReady { get; init; }
+    public bool CsharpMetadataTargetReady { get; init; }
+    public bool IndexNewerThanReader { get; init; }
+}
+
 internal sealed record CommandErrorJsonResult(
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("message")] string Message,
@@ -533,6 +580,7 @@ internal sealed class IndexDryRunJsonResult : IVersionedJsonResult
     public List<CliJsonMessage>? Errors { get; init; }
     public bool ErrorsTruncated { get; init; }
     public int ErrorLimit { get; init; }
+    public IndexMemoryTimelineJsonResult? MemoryTimeline { get; init; }
 }
 
 internal sealed class IndexWatchEventJsonResult : IVersionedJsonResult
@@ -869,6 +917,7 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(OutlineResult))]
 [JsonSerializable(typeof(OutlineSymbol))]
 [JsonSerializable(typeof(OptimizeFtsJsonResult))]
+[JsonSerializable(typeof(OptimizeFtsPreviewJsonResult))]
 [JsonSerializable(typeof(QueryCountResult))]
 [JsonSerializable(typeof(ReferenceResult))]
 [JsonSerializable(typeof(RepoEntrypointResult))]

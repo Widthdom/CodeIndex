@@ -10,10 +10,13 @@ public partial class DbWriter
     /// </summary>
     public void OptimizeFts()
     {
+        var stopwatch = Stopwatch.StartNew();
         Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')");
+        stopwatch.Stop();
         SetMetaValues(
             (FtsIncrementalWritesSinceOptimizeMetaKey, "0"),
-            (FtsLastOptimizedAtMetaKey, DateTimeOffset.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture)));
+            (FtsLastOptimizedAtMetaKey, DateTimeOffset.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture)),
+            (FtsLastOptimizeDurationMsMetaKey, stopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture)));
     }
 
     /// <summary>

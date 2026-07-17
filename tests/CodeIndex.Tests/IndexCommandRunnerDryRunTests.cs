@@ -42,6 +42,65 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRunWithRebuildAndMemoryTrace_SkipsConfirmationAndPreservesWorkspace_Issue4580()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            SqliteConnection.ClearAllPools();
+            var before = Directory
+                .EnumerateFiles(projectRoot, "*", SearchOption.AllDirectories)
+                .OrderBy(static path => path, StringComparer.Ordinal)
+                .ToDictionary(
+                    static path => path,
+                    static path => File.ReadAllBytes(path),
+                    StringComparer.Ordinal);
+
+            IndexCommandRunner.IsInputRedirectedForTesting = () => true;
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--rebuild",
+                "--dry-run",
+                "--memory-trace",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            var timeline = json.GetProperty("memory_timeline");
+            var samples = timeline.GetProperty("samples").EnumerateArray().ToArray();
+            Assert.Equal(["start", "snapshot", "scan", "finalize"], samples.Select(sample => sample.GetProperty("phase").GetString()));
+            Assert.All(samples, sample =>
+            {
+                Assert.True(sample.GetProperty("elapsed_ms").GetInt64() >= 0);
+                Assert.True(sample.GetProperty("heap_bytes").GetInt64() >= 0);
+                Assert.True(sample.GetProperty("working_set_bytes").GetInt64() > 0);
+            });
+            Assert.True(timeline.GetProperty("peak_working_set_bytes").GetInt64() > 0);
+            Assert.True(timeline.GetProperty("peak_heap_bytes").GetInt64() >= 0);
+
+            SqliteConnection.ClearAllPools();
+            var afterPaths = Directory
+                .EnumerateFiles(projectRoot, "*", SearchOption.AllDirectories)
+                .OrderBy(static path => path, StringComparer.Ordinal)
+                .ToArray();
+            Assert.Equal(before.Keys, afterPaths);
+            foreach (var (path, bytes) in before)
+                Assert.Equal(bytes, File.ReadAllBytes(path));
+        }
+        finally
+        {
+            IndexCommandRunner.IsInputRedirectedForTesting = () => Console.IsInputRedirected;
+            IndexCommandRunner.ReadLineForTesting = Console.ReadLine;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DryRun_WithChangedBetweenMissingRef_ReturnsUsageError()
     {
         var projectRoot = CreateTempProject();
