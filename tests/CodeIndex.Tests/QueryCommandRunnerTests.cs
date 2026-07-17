@@ -527,7 +527,35 @@ public partial class QueryCommandRunnerTests
             allowStatusCheck: true);
 
         Assert.True(options.CheckWorkspace);
+        Assert.Equal(QueryCommandRunner.StatusCheckModeExplicit, options.StatusCheckMode);
         Assert.Equal(TimeSpan.FromHours(2), options.StaleAfter);
+    }
+
+    [Fact]
+    public void ParseArgs_StatusStaleAfterImpliesCheck_Issue4576()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["--stale-after=2h"],
+            jsonDefault: false,
+            allowStatusCheck: true);
+
+        Assert.True(options.CheckWorkspace);
+        Assert.Equal(QueryCommandRunner.StatusCheckModeImpliedByStaleAfter, options.StatusCheckMode);
+        Assert.Equal(TimeSpan.FromHours(2), options.StaleAfter);
+    }
+
+    [Fact]
+    public void RunStatus_InvalidCheckScopeEmitsOnlyPrimaryDiagnostic_Issue4574()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--check=nope"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains("unsupported --check scope 'nope'", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("--check scope list cannot be empty", stderr, StringComparison.Ordinal);
+        Assert.Single(stderr.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries), line => line.StartsWith("Error:", StringComparison.Ordinal));
     }
 
     [Fact]

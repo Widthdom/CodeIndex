@@ -1576,8 +1576,7 @@ public class ConsoleUiTests
         using var capture = ConsoleCapture.Start(captureError: true);
 
         Assert.False(ConsoleUi.PrintCompletions("nu"));
-        Assert.Contains("Unknown shell", capture.Error!.ToString());
-        Assert.Contains("powershell", capture.Error!.ToString());
+        Assert.True(string.IsNullOrEmpty(capture.Error?.ToString()));
     }
 
     [Fact]

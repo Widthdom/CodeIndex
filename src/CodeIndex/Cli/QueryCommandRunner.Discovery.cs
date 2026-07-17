@@ -161,19 +161,7 @@ public static partial class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (IsDiscoveryNdjson(options))
-                {
-                    var stream = WriteDiscoveryNdjson(
-                        reader,
-                        options,
-                        GetCompactJsonOptions(jsonOptions),
-                        "symbols",
-                        results,
-                        totalCount: 0,
-                        rowFactory: result => ToSymbolDiscoveryJsonNode(result, jsonOptions, compact: false),
-                        exactSignal: hasExactPredicate ? exactSignal : null);
-                    ndjsonTerminalLine = stream.TerminalLine;
-                    return stream.ExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : stream.ExitCode;
-                }
+                    return ZeroResultExitCode(options);
                 if (ShouldWriteBoundedDiscoveryJsonPayload(options))
                 {
                     var payloadExitCode = WriteBoundedDiscoveryJsonPayload(
@@ -427,19 +415,7 @@ public static partial class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (IsDiscoveryNdjson(options))
-                {
-                    var stream = WriteDiscoveryNdjson(
-                        reader,
-                        options,
-                        GetCompactJsonOptions(jsonOptions),
-                        "files",
-                        results,
-                        totalCount: 0,
-                        rowFactory: result => ToFileDiscoveryJsonNode(result, jsonOptions, compact: false),
-                        prelude: BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "files", queryOptions: options));
-                    ndjsonTerminalLine = stream.TerminalLine;
-                    return stream.ExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : stream.ExitCode;
-                }
+                    return ZeroResultExitCode(options);
                 if (options.Json)
                 {
                     if (ShouldWriteBoundedDiscoveryJsonPayload(options))
@@ -664,8 +640,12 @@ public static partial class QueryCommandRunner
         foreach (var result in results)
         {
             var row = rowFactory(result);
-            if (row is JsonObject payload && exactSignal.HasValue)
-                AddExactJsonFields(payload, exactSignal.Value);
+            if (row is JsonObject payload)
+            {
+                if (exactSignal.HasValue)
+                    AddExactJsonFields(payload, exactSignal.Value);
+                AddActiveSqliteDiagnostics(payload);
+            }
             records.Add(new((row ?? new JsonObject()).ToJsonString(jsonOptions)));
         }
 
