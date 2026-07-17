@@ -1611,16 +1611,16 @@ cdidx report --output report.tgz
 cdidx report --output report.tgz --json
 ```
 
-`cdidx report --output <path>` packages a redacted gzip-compressed tar archive you can attach to a GitHub issue. Use `.tgz` or `.tar.gz`; if the output path has a misleading extension such as `.json`, the command still writes the archive but warns on stderr and records the warning in JSON summary metadata. `--json` only changes the command summary written to stdout; it does not make the output artifact JSON. The bundle includes the cdidx version, .NET runtime, OS / process architecture, and a `schema.txt` with a capped SQLite table list plus bounded row counts (no table row contents). It also tails the recent cdidx lifecycle log (`stderr-yyyyMMdd.log`), with the database path, lifecycle-log source directory, `process_path=`, `base_dir=`, `cwd=`, `db=`, `path=`, and `args=` lines replaced by `[redacted]` so local filesystem paths and literal query strings never leave your machine. Tar entry modification times are fixed for reproducible archive metadata; the actual generation timestamp is recorded inside `metadata.json`, `env.txt`, and `support-manifest.json`.
+`cdidx report --output <path>` packages a redacted gzip-compressed tar archive you can attach to a GitHub issue. Use `.tgz` or `.tar.gz`; if the output path has a misleading extension such as `.json`, the command still writes the archive but warns on stderr and records the warning in JSON summary metadata. `--json` only changes the command summary written to stdout; it does not make the output artifact JSON. The bundle includes the cdidx version, .NET runtime, OS / process architecture, and a `schema.txt` with a capped SQLite table list plus bounded row counts (no table row contents). When an unhandled command failure tells you to run `cdidx report`, cdidx first saves a bounded, redacted event and the next bundle includes it as `last-failure.json`, even when lifecycle logging is disabled. That event records the failure timestamp, binary version and sanitized path, command category, exit code, exception category/type, and sanitized diagnostics; it never records literal command arguments. The bundle also tails the recent cdidx lifecycle log (`stderr-yyyyMMdd.log`), with the database path, lifecycle-log source directory, `process_path=`, `base_dir=`, `cwd=`, `db=`, `path=`, and `args=` lines replaced by `[redacted]` so local filesystem paths and literal query strings never leave your machine. Tar entry modification times are fixed for reproducible archive metadata; the actual generation timestamp is recorded inside `metadata.json`, `env.txt`, and `support-manifest.json`.
 
 | Flag | Default | Effect |
 |---|---|---|
 | `--output <path>` / `-o <path>` | (required) | Destination gzip-compressed tar bundle; `.tgz` or `.tar.gz` is recommended. The directory is created if missing; on POSIX, the archive and tar entries are owner-readable/writable only. |
 | `--db <path>` | `.cdidx/codeindex.db` | Override the database whose schema is summarized. If absent, `schema.txt` records that no DB was found. Schema summaries cap table entries at 64, displayed table names at 96 characters, and row-count scans at 1000 rows per table. |
 | `--log-lines <n>` | `200` | How many trailing lifecycle-log lines to include (`0` disables the tail; values above `2000` are clamped). Report collection considers at most the 32 newest lifecycle log files; each file contributes from a bounded 1,048,576-byte tail window instead of being loaded fully. |
-| `--no-log` | | Skip the lifecycle log entirely. |
+| `--no-log` | | Skip the lifecycle log entirely. A valid saved `last-failure.json` event is still included because it is independent of lifecycle logging. |
 | `--include-args` | | Keep literal `cwd=` and `args=` values in the log tail (opt-in; share only with trusted recipients). |
-| `--json` | | Print a stable stdout summary envelope (`output_path`, `version`, `artifact_format`, `artifact_media_type`, `recommended_extensions`, `json_metadata_stdout_only`, `warnings`, `files`, `schema_tables`, `log_lines_included`, `log_included`, `db_included`, `db_path`) instead of the human-friendly output. |
+| `--json` | | Print a stable stdout summary envelope (`output_path`, `version`, `artifact_format`, `artifact_media_type`, `recommended_extensions`, `json_metadata_stdout_only`, `warnings`, `files`, `schema_tables`, `log_lines_included`, `log_included`, `last_failure_included`, `db_included`, `db_path`) instead of the human-friendly output. |
 
 ## Search query syntax
 
@@ -4598,16 +4598,16 @@ cdidx report --output report.tgz
 cdidx report --output report.tgz --json
 ```
 
-`cdidx report --output <path>` は GitHub Issue に添付できる匿名化済みの gzip 圧縮 tar archive を生成します。`.tgz` または `.tar.gz` を使ってください。出力先が `.json` のような誤解を招く拡張子でも archive は書き出されますが、stderr に warning が出力され、JSON summary metadata の `warnings` にも記録されます。`--json` は stdout に出す command summary だけを JSON にし、出力 artifact 自体を JSON にするものではありません。バンドルには cdidx のバージョン、.NET ランタイム、OS / プロセスアーキテクチャ、上限付きの SQLite テーブル一覧と bounded な行数を記録した `schema.txt`（table の行内容は含まれません）が入ります。さらに直近のライフサイクルログ（`stderr-yyyyMMdd.log`）の末尾も含まれますが、DB パス、ライフサイクルログの source directory、`process_path=`、`base_dir=`、`cwd=`、`db=`、`path=`、`args=` 行は `[redacted]` に置換されるため、ローカルファイルシステムのパスや具体的なクエリ文字列が端末から外に出ることはありません。tar entry の modification time は再現性のある archive metadata にするため固定され、実際の生成時刻は `metadata.json`、`env.txt`、`support-manifest.json` に記録されます。
+`cdidx report --output <path>` は GitHub Issue に添付できる匿名化済みの gzip 圧縮 tar archive を生成します。`.tgz` または `.tar.gz` を使ってください。出力先が `.json` のような誤解を招く拡張子でも archive は書き出されますが、stderr に warning が出力され、JSON summary metadata の `warnings` にも記録されます。`--json` は stdout に出す command summary だけを JSON にし、出力 artifact 自体を JSON にするものではありません。バンドルには cdidx のバージョン、.NET ランタイム、OS / プロセスアーキテクチャ、上限付きの SQLite テーブル一覧と bounded な行数を記録した `schema.txt`（table の行内容は含まれません）が入ります。想定外の command failure が `cdidx report` の実行を案内する場合、cdidx はその案内より先に上限付き・匿名化済みのイベントを保存し、ライフサイクルログが無効でも次のバンドルへ `last-failure.json` として含めます。このイベントには失敗時刻、binary version と匿名化済み path、command category、exit code、exception category / type、匿名化済み diagnostics を記録し、具体的な command 引数は記録しません。さらに直近のライフサイクルログ（`stderr-yyyyMMdd.log`）の末尾も含まれますが、DB パス、ライフサイクルログの source directory、`process_path=`、`base_dir=`、`cwd=`、`db=`、`path=`、`args=` 行は `[redacted]` に置換されるため、ローカルファイルシステムのパスや具体的なクエリ文字列が端末から外に出ることはありません。tar entry の modification time は再現性のある archive metadata にするため固定され、実際の生成時刻は `metadata.json`、`env.txt`、`support-manifest.json` に記録されます。
 
 | フラグ | 既定値 | 効果 |
 |---|---|---|
 | `--output <path>` / `-o <path>` | （必須） | 出力先の gzip 圧縮 tar bundle。`.tgz` または `.tar.gz` を推奨します。親ディレクトリが無ければ作成します。POSIX では archive と tar entry は owner の読み書きのみになります。 |
 | `--db <path>` | `.cdidx/codeindex.db` | スキーマ要約対象の DB を上書きします。存在しなければ `schema.txt` に「DB が見つからなかった」旨が記録されます。スキーマ要約は table entry を 64 件、表示 table 名を 96 文字、行数 scan を table ごとに 1000 行までに制限します。 |
 | `--log-lines <n>` | `200` | ライフサイクルログ末尾を何行含めるか（`0` で末尾を含めません。`2000` を超える値は clamp されます）。report 収集は最新 32 件までの lifecycle log file を対象にし、各ログファイルは全体を読み込まず、末尾 1,048,576 byte の範囲から収集します。 |
-| `--no-log` | | ライフサイクルログを完全に省略します。 |
+| `--no-log` | | ライフサイクルログを完全に省略します。有効な保存済み `last-failure.json` イベントはライフサイクルログと独立しているため、引き続き同梱されます。 |
 | `--include-args` | | ログ末尾の `cwd=` / `args=` 値を伏字化せずそのまま含めます（信頼できる相手にだけ使用してください）。 |
-| `--json` | | 人間向け出力の代わりに、安定した stdout summary JSON（`output_path` / `version` / `artifact_format` / `artifact_media_type` / `recommended_extensions` / `json_metadata_stdout_only` / `warnings` / `files` / `schema_tables` / `log_lines_included` / `log_included` / `db_included` / `db_path`）を出力します。 |
+| `--json` | | 人間向け出力の代わりに、安定した stdout summary JSON（`output_path` / `version` / `artifact_format` / `artifact_media_type` / `recommended_extensions` / `json_metadata_stdout_only` / `warnings` / `files` / `schema_tables` / `log_lines_included` / `log_included` / `last_failure_included` / `db_included` / `db_path`）を出力します。 |
 
 ## 検索クエリ構文
 
