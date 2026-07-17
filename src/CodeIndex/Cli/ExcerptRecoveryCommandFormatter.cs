@@ -80,9 +80,11 @@ internal static class ExcerptRecoveryCommandFormatter
         string dbPath,
         IReadOnlyList<string> invocationPrefix)
     {
-        var argv = new List<string>(invocationPrefix.Count + 11);
+        var argv = new List<string>(invocationPrefix.Count + 12);
         argv.AddRange(invocationPrefix);
         argv.Add("excerpt");
+        if (path.StartsWith("-", StringComparison.Ordinal))
+            argv.Add("--");
         argv.Add(path);
         if (!string.IsNullOrWhiteSpace(dbPath))
         {

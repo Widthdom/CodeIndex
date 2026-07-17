@@ -17,20 +17,21 @@ namespace CodeIndex.Tests;
 public class ProgramCliTests
 {
     [ProductionRuntimeFact]
-    public void ExcerptRecovery_PreservesDotnetPrefixAndMetacharacterArgv_Issue4567()
+    public void ExcerptRecovery_PreservesPrefixAndReplaysOptionLikeMetacharacterArgv_Issue4567()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_recovery_argv_4567");
         try
         {
             var dbRoot = TestProjectHelper.CreateDirectory(projectRoot, "db space 'quote' $dollar &meta");
             var dbPath = TestProjectHelper.CreateProjectDb(dbRoot);
-            const string indexedPath = "src/space 'quote' $dollar &meta.py";
+            const string indexedPath = "--space 'quote' $dollar &meta.py";
             var longLine = new string('a', 320) + "TARGET" + new string('b', 320);
             var focusColumn = longLine.IndexOf("TARGET", StringComparison.Ordinal) + 1;
             TestProjectHelper.InsertIndexedFile(dbPath, indexedPath, "python", longLine);
 
             var (exitCode, stdout, stderr) = RunCliInSubprocess([
                 "excerpt",
+                "--",
                 indexedPath,
                 "--db",
                 dbPath,
@@ -47,28 +48,36 @@ public class ProgramCliTests
                 "--json",
             ]);
 
-            using var document = JsonDocument.Parse(stdout);
-            var recovery = document.RootElement.GetProperty("content_recovery");
-            var argv = recovery.GetProperty("argv").EnumerateArray().Select(item => item.GetString()!).ToArray();
-
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.True(document.RootElement.TryGetProperty("content_recovery", out var recovery), stdout);
+            var argv = recovery.GetProperty("argv").EnumerateArray().Select(item => item.GetString()!).ToArray();
+
             Assert.Equal("dotnet", Path.GetFileNameWithoutExtension(argv[0]), ignoreCase: true);
             Assert.Equal(Path.GetFullPath(GetBuiltCliDllPath()), argv[1]);
             Assert.Equal("excerpt", argv[2]);
-            Assert.Equal(indexedPath, argv[3]);
-            Assert.Equal("--db", argv[4]);
-            Assert.Equal(Path.GetFullPath(dbPath), argv[5]);
-            Assert.Equal("--start", argv[6]);
-            Assert.Equal("1", argv[7]);
-            Assert.Equal("--end", argv[8]);
-            Assert.Equal("1", argv[9]);
-            Assert.Equal("--max-line-width", argv[10]);
-            Assert.Equal("0", argv[11]);
-            Assert.Equal("--json", argv[12]);
+            Assert.Equal("--", argv[3]);
+            Assert.Equal(indexedPath, argv[4]);
+            Assert.Equal("--db", argv[5]);
+            Assert.Equal(Path.GetFullPath(dbPath), argv[6]);
+            Assert.Equal("--start", argv[7]);
+            Assert.Equal("1", argv[8]);
+            Assert.Equal("--end", argv[9]);
+            Assert.Equal("1", argv[10]);
+            Assert.Equal("--max-line-width", argv[11]);
+            Assert.Equal("0", argv[12]);
+            Assert.Equal("--json", argv[13]);
             Assert.Equal(OperatingSystem.IsWindows() ? "powershell" : "posix-sh", recovery.GetProperty("command_shell").GetString());
             Assert.True(recovery.GetProperty("command_display_only").GetBoolean());
             Assert.False(recovery.GetProperty("command").GetString()!.StartsWith("cdidx ", StringComparison.Ordinal));
+
+            var (replayExitCode, replayStdout, replayStderr) = RunCliInSubprocess(argv.Skip(2).ToArray());
+
+            Assert.Equal(CommandExitCodes.Success, replayExitCode);
+            Assert.Equal(string.Empty, replayStderr);
+            using var replayDocument = JsonDocument.Parse(replayStdout);
+            Assert.Equal(indexedPath, replayDocument.RootElement.GetProperty("path").GetString());
         }
         finally
         {

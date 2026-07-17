@@ -53,7 +53,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 
 - `ChunkSplitterTests.cs`, `SymbolExtractorTests.cs`, `ReferenceExtractorTests.cs`, `SearchSnippetFormatterTests.cs`, `DbPathResolverTests.cs`, `ExcerptRecoveryCommandFormatterTests.cs`, `ConsoleUiTests.cs`
   Pure or mostly pure behavior tests with in-memory inputs.
-  Recovery-command coverage asserts structured argv, current `dotnet`/apphost prefix preservation, and display-only escaping for both POSIX sh and PowerShell, including spaces, quotes, dollar signs, and shell metacharacters.
+  Recovery-command coverage asserts structured argv, current `dotnet`/apphost prefix preservation, replay of option-like paths, and display-only escaping for both POSIX sh and PowerShell, including spaces, quotes, dollar signs, and shell metacharacters.
   Console writer synchronization coverage yields between character writes instead of sleeping per character; use enough whole-line iterations to expose interleaving without adding wall-clock delay.
 - `SymbolExtractor*Tests.cs` and `ReferenceExtractor*Tests.cs`
   Extractor coverage is split by language or feature area with partial test classes, while shared helpers remain on the root `SymbolExtractorTests` / `ReferenceExtractorTests` parts.
@@ -719,7 +719,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 
 - `ChunkSplitterTests.cs`、`SymbolExtractorTests.cs`、`ReferenceExtractorTests.cs`、`SearchSnippetFormatterTests.cs`、`DbPathResolverTests.cs`、`ExcerptRecoveryCommandFormatterTests.cs`、`ConsoleUiTests.cs`
   インメモリ入力中心の、純粋またはほぼ純粋な振る舞いのテスト。
-  recovery command の coverage では構造化 argv、現在の `dotnet` / apphost prefix の維持、POSIX sh と PowerShell 双方の表示専用 escaping を、空白、quote、dollar sign、shell metacharacter を含めて検証します。
+  recovery command の coverage では構造化 argv、現在の `dotnet` / apphost prefix の維持、option と紛らわしい path の再実行、POSIX sh と PowerShell 双方の表示専用 escaping を、空白、quote、dollar sign、shell metacharacter を含めて検証します。
   console writer synchronization coverageは文字writeごとのsleepではなくyieldを使い、wall-clock delayを追加せずinterleavingを露出できる十分なwhole-line iterationを維持してください。
 - `SymbolExtractor*Tests.cs` と `ReferenceExtractor*Tests.cs`
   extractor のカバレッジは言語または機能領域ごとの partial test class に分割し、共有 helper は root 側の `SymbolExtractorTests` / `ReferenceExtractorTests` に残します。
