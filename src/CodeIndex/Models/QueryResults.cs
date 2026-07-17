@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Serialization;
 using CodeIndex.Diagnostics;
 using CodeIndex.Indexer.Extensibility;
@@ -364,19 +365,19 @@ public class FileExcerptResult
         {
             StartLine = startLine,
             EndLine = endLine,
-            Command = $"cdidx excerpt {QuoteCliArgument(path)} --start {startLine} --end {endLine} --max-line-width 0 --json",
+            Argv = [
+                "cdidx",
+                "excerpt",
+                path,
+                "--start",
+                startLine.ToString(CultureInfo.InvariantCulture),
+                "--end",
+                endLine.ToString(CultureInfo.InvariantCulture),
+                "--max-line-width",
+                "0",
+                "--json",
+            ],
         };
-
-    private static string QuoteCliArgument(string value)
-    {
-        if (!string.IsNullOrEmpty(value) && value.All(IsSafeCliArgumentChar))
-            return value;
-
-        return "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
-    }
-
-    private static bool IsSafeCliArgumentChar(char c)
-        => char.IsLetterOrDigit(c) || c is '/' or '.' or '_' or '-' or ':';
 }
 
 /// <summary>
@@ -441,7 +442,10 @@ public class ExcerptRecoveryHint
 {
     public int StartLine { get; set; }
     public int EndLine { get; set; }
+    public List<string> Argv { get; set; } = [];
     public string Command { get; set; } = string.Empty;
+    public string CommandShell { get; set; } = string.Empty;
+    public bool CommandDisplayOnly { get; set; } = true;
 }
 
 public class FileFindResult

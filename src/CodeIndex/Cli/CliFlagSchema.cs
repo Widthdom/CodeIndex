@@ -81,7 +81,7 @@ internal static class CliFlagSchema
     // クエリ先頭が `-` で始まる場合に `--` end-of-options を受け付けるコマンド集合。
     private static readonly string[] PassthroughCommands =
     [
-        "search", "definition", "goto", "references", "callers", "callees", "symbols", "files", "inspect", "impact",
+        "search", "definition", "goto", "references", "callers", "callees", "symbols", "files", "excerpt", "inspect", "impact",
     ];
 
     private static readonly string[] QueryCommands =

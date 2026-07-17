@@ -121,6 +121,7 @@ internal static partial class ProgramRunner
         if (PostExtractionHookCallbackWorker.TryRunCommand(args, Console.In, Console.Out, Console.Error, out var hookWorkerExitCode))
             return hookWorkerExitCode;
 
+        using var recoveryInvocationScope = ExcerptRecoveryCommandFormatter.UseCurrentProcessInvocation();
         appVersion ??= ConsoleUi.LoadVersion();
 
         // Load project-local `.cdidxrc.json` before anything else reads env vars so log
