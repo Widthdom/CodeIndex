@@ -7330,11 +7330,31 @@ public partial class McpServerTests
             Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
             Assert.Equal(1, refreshCount);
 
-            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
-            db.TryMigrateForRead();
-            using var command = db.Connection.CreateCommand();
-            command.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE is_mutual_recursion = 1";
-            Assert.Equal(2L, (long)command.ExecuteScalar()!);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                db.TryMigrateForRead();
+                var writer = new DbWriter(db.Connection);
+                Assert.True(writer.ReferenceIdentityContractMatchesCurrent());
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE is_mutual_recursion = 1";
+                Assert.Equal(2L, (long)command.ExecuteScalar()!);
+
+                writer.ClearReferenceIdentityContractReady();
+                command.CommandText = "DELETE FROM symbol_reference_candidates";
+                command.ExecuteNonQuery();
+            }
+
+            refreshCount = 0;
+            var repairResponse = CallIndex(server, fixtureDir);
+            Assert.False(repairResponse["result"]?["isError"]?.GetValue<bool>() ?? false, repairResponse.ToJsonString());
+            Assert.Equal(1, refreshCount);
+
+            using var verification = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            var verificationWriter = new DbWriter(verification.Connection);
+            Assert.True(verificationWriter.ReferenceIdentityContractMatchesCurrent());
+            using var candidateCommand = verification.Connection.CreateCommand();
+            candidateCommand.CommandText = "SELECT COUNT(*) FROM symbol_reference_candidates";
+            Assert.True((long)candidateCommand.ExecuteScalar()! > 0);
         }
         finally
         {

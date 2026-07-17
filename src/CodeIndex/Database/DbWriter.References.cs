@@ -5,44 +5,408 @@ namespace CodeIndex.Database;
 
 public partial class DbWriter
 {
+    private const string NonTypeReceiverQualifierPrefix = "\u001freceiver:";
+
     private const string MutualRecursionValueSql = """
         CASE
-            WHEN r.is_self_reference = 0
-             AND r.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
-             AND r.container_name IS NOT NULL
-             AND r.container_name <> ''
-             AND r.symbol_name IS NOT NULL
-             AND r.symbol_name <> ''
+            WHEN r.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
              AND (
                 (
-                    r.container_name_folded IS NOT NULL
-                    AND r.container_name_folded <> ''
-                    AND r.symbol_name_folded IS NOT NULL
-                    AND r.symbol_name_folded <> ''
+                    r.source_symbol_id IS NOT NULL
+                    AND r.target_symbol_id IS NOT NULL
+                    AND r.source_symbol_id <> r.target_symbol_id
                     AND EXISTS (
                         SELECT 1
                         FROM symbol_references AS reverse
-                        WHERE reverse.is_self_reference = 0
+                        WHERE reverse.source_symbol_id = r.target_symbol_id
+                          AND reverse.target_symbol_id = r.source_symbol_id
                           AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
-                          AND reverse.container_name_folded = r.symbol_name_folded
-                          AND reverse.symbol_name_folded = r.container_name_folded
                     )
                 )
                 OR (
-                    (r.container_name_folded IS NULL OR r.symbol_name_folded IS NULL)
-                    AND EXISTS (
-                        SELECT 1
-                        FROM symbol_references AS reverse
-                        WHERE reverse.is_self_reference = 0
-                          AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
-                          AND reverse.container_name = r.symbol_name COLLATE NOCASE
-                          AND reverse.symbol_name = r.container_name COLLATE NOCASE
+                    r.source_symbol_id IS NULL
+                    AND r.target_symbol_id IS NULL
+                    AND r.is_self_reference = 0
+                    AND r.container_name IS NOT NULL
+                    AND r.container_name <> ''
+                    AND r.symbol_name IS NOT NULL
+                    AND r.symbol_name <> ''
+                    AND (
+                        (
+                            r.container_name_folded IS NOT NULL
+                            AND r.container_name_folded <> ''
+                            AND r.symbol_name_folded IS NOT NULL
+                            AND r.symbol_name_folded <> ''
+                            AND EXISTS (
+                                SELECT 1
+                                FROM symbol_references AS reverse
+                                WHERE reverse.source_symbol_id IS NULL
+                                  AND reverse.target_symbol_id IS NULL
+                                  AND reverse.is_self_reference = 0
+                                  AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
+                                  AND reverse.container_name_folded = r.symbol_name_folded
+                                  AND reverse.symbol_name_folded = r.container_name_folded
+                            )
+                        )
+                        OR (
+                            (r.container_name_folded IS NULL OR r.symbol_name_folded IS NULL)
+                            AND EXISTS (
+                                SELECT 1
+                                FROM symbol_references AS reverse
+                                WHERE reverse.source_symbol_id IS NULL
+                                  AND reverse.target_symbol_id IS NULL
+                                  AND reverse.is_self_reference = 0
+                                  AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
+                                  AND reverse.container_name = r.symbol_name COLLATE NOCASE
+                                  AND reverse.symbol_name = r.container_name COLLATE NOCASE
+                            )
+                        )
                     )
                 )
              )
             THEN 1
             ELSE 0
         END
+        """;
+
+    private const string RefreshReferenceSourceSymbolsSql = """
+        UPDATE symbol_references AS r
+        SET source_symbol_id = (
+            SELECT s.id
+            FROM symbols AS s
+            WHERE s.file_id = r.file_id
+              AND r.container_name IS NOT NULL
+              AND r.container_name <> ''
+              AND (s.name_folded = r.container_name_folded
+                   OR (s.name_folded IS NULL AND s.name = r.container_name COLLATE NOCASE))
+              AND r.line BETWEEN COALESCE(s.start_line, s.line) AND COALESCE(s.end_line, s.line)
+            ORDER BY (COALESCE(s.end_line, s.line) - COALESCE(s.start_line, s.line)),
+                     COALESCE(s.start_line, s.line) DESC,
+                     s.id
+            LIMIT 1
+        )
+        """;
+
+    private const string RefreshReferenceCandidatesSql = """
+        DELETE FROM symbol_reference_candidates;
+
+        INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
+        SELECT r.id, s.id, 0
+        FROM symbol_references AS r
+        JOIN files AS source_file ON source_file.id = r.file_id
+        JOIN symbols AS s
+          ON s.name_folded IN (
+              r.symbol_name_folded,
+              CASE WHEN source_file.lang = 'csharp' AND r.reference_kind = 'attribute'
+                   THEN r.symbol_name_folded || 'attribute' END
+          )
+        JOIN files AS target_file ON target_file.id = s.file_id
+        WHERE source_file.lang = target_file.lang
+          AND r.target_qualifier IS NOT NULL
+          AND r.target_qualifier NOT LIKE char(31) || 'receiver:%'
+          AND (
+              s.container_name = r.target_qualifier COLLATE NOCASE
+              OR s.container_qualified_name = r.target_qualifier COLLATE NOCASE
+              OR s.container_qualified_name LIKE '%.' || r.target_qualifier COLLATE NOCASE
+          );
+
+        INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
+        SELECT r.id, s.id, 0
+        FROM symbol_references AS r
+        JOIN files AS source_file ON source_file.id = r.file_id
+        JOIN symbols AS source ON source.id = r.source_symbol_id
+        JOIN symbols AS s
+          ON s.name_folded IN (
+              r.symbol_name_folded,
+              CASE WHEN source_file.lang = 'csharp' AND r.reference_kind = 'attribute'
+                   THEN r.symbol_name_folded || 'attribute' END
+          )
+        JOIN files AS target_file ON target_file.id = s.file_id
+        WHERE source_file.lang = 'csharp'
+          AND target_file.lang = 'csharp'
+          AND r.target_qualifier LIKE char(31) || 'receiver:%'
+          AND source.signature IS NOT NULL
+          AND source.signature <> ''
+          AND (
+              source.signature LIKE '%(' || COALESCE(s.container_qualified_name, s.container_name, '') || ' ' ||
+                  substr(r.target_qualifier, length(char(31) || 'receiver:') + 1) || '%'
+              OR source.signature LIKE '%, ' || COALESCE(s.container_qualified_name, s.container_name, '') || ' ' ||
+                  substr(r.target_qualifier, length(char(31) || 'receiver:') + 1) || '%'
+              OR source.signature LIKE '%(' || COALESCE(s.container_name, '') || ' ' ||
+                  substr(r.target_qualifier, length(char(31) || 'receiver:') + 1) || '%'
+              OR source.signature LIKE '%, ' || COALESCE(s.container_name, '') || ' ' ||
+                  substr(r.target_qualifier, length(char(31) || 'receiver:') + 1) || '%'
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM symbol_reference_candidates AS existing
+              WHERE existing.reference_id = r.id
+          );
+
+        INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
+        SELECT r.id, s.id, 1
+        FROM symbol_references AS r
+        JOIN files AS source_file ON source_file.id = r.file_id
+        JOIN symbols AS s
+          ON s.name_folded IN (
+              r.symbol_name_folded,
+              CASE WHEN source_file.lang = 'csharp' AND r.reference_kind = 'attribute'
+                   THEN r.symbol_name_folded || 'attribute' END
+          )
+        JOIN files AS target_file ON target_file.id = s.file_id
+        JOIN symbols AS source ON source.id = r.source_symbol_id
+        WHERE source_file.lang = target_file.lang
+          AND r.target_qualifier IS NULL
+          AND s.file_id = r.file_id
+          AND source.container_name IS NOT NULL
+          AND source.container_name <> ''
+          AND (
+              s.container_name = source.container_name COLLATE NOCASE
+              OR s.container_qualified_name = source.container_qualified_name COLLATE NOCASE
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM symbol_reference_candidates AS existing
+              WHERE existing.reference_id = r.id
+          );
+
+        INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
+        SELECT r.id, s.id, 2
+        FROM symbol_references AS r
+        JOIN files AS source_file ON source_file.id = r.file_id
+        JOIN symbols AS s
+          ON s.name_folded IN (
+              r.symbol_name_folded,
+              CASE WHEN source_file.lang = 'csharp' AND r.reference_kind = 'attribute'
+                   THEN r.symbol_name_folded || 'attribute' END
+          )
+        JOIN files AS target_file ON target_file.id = s.file_id
+        JOIN symbols AS source ON source.id = r.source_symbol_id
+        WHERE source_file.lang = target_file.lang
+          AND r.target_qualifier IS NULL
+          AND source.container_qualified_name IS NOT NULL
+          AND source.container_qualified_name <> ''
+          AND s.container_qualified_name = source.container_qualified_name COLLATE NOCASE
+          AND NOT EXISTS (
+              SELECT 1 FROM symbol_reference_candidates AS existing
+              WHERE existing.reference_id = r.id
+          );
+
+        INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
+        SELECT r.id, s.id, 3
+        FROM symbol_references AS r
+        JOIN files AS source_file ON source_file.id = r.file_id
+        JOIN symbols AS s
+          ON s.name_folded IN (
+              r.symbol_name_folded,
+              CASE WHEN source_file.lang = 'csharp' AND r.reference_kind = 'attribute'
+                   THEN r.symbol_name_folded || 'attribute' END
+          )
+        JOIN files AS target_file ON target_file.id = s.file_id
+        WHERE source_file.lang = target_file.lang
+          AND r.target_qualifier IS NULL
+          AND s.file_id = r.file_id
+          AND NOT EXISTS (
+              SELECT 1 FROM symbol_reference_candidates AS existing
+              WHERE existing.reference_id = r.id
+          );
+
+        INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
+        SELECT r.id, s.id, 4
+        FROM symbol_references AS r
+        JOIN files AS source_file ON source_file.id = r.file_id
+        JOIN symbols AS s
+          ON s.name_folded IN (
+              r.symbol_name_folded,
+              CASE WHEN source_file.lang = 'csharp' AND r.reference_kind = 'attribute'
+                   THEN r.symbol_name_folded || 'attribute' END
+          )
+        JOIN files AS target_file ON target_file.id = s.file_id
+        JOIN symbols AS source ON source.id = r.source_symbol_id
+        WHERE source_file.lang = target_file.lang
+          AND r.target_qualifier IS NULL
+          AND source.container_name IS NOT NULL
+          AND source.container_name <> ''
+          AND s.container_name = source.container_name COLLATE NOCASE
+          AND NOT EXISTS (
+              SELECT 1 FROM symbol_reference_candidates AS existing
+              WHERE existing.reference_id = r.id
+          );
+
+        INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
+        SELECT r.id, target.id, 5
+        FROM symbol_references AS r
+        JOIN files AS source_file ON source_file.id = r.file_id
+        JOIN (
+            SELECT target_file.lang,
+                   s.name_folded,
+                   MIN(target_file.path || char(31) ||
+                       COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                       COALESCE(s.name, '')) AS family_key
+            FROM symbols AS s
+            JOIN files AS target_file ON target_file.id = s.file_id
+            WHERE target_file.lang <> 'csharp'
+              AND s.name_folded IS NOT NULL
+            GROUP BY target_file.lang, s.name_folded
+            HAVING COUNT(DISTINCT target_file.path || char(31) ||
+                                  COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                                  COALESCE(s.name, '')) = 1
+        ) AS unique_family
+          ON unique_family.lang = source_file.lang
+         AND unique_family.name_folded = r.symbol_name_folded
+        JOIN symbols AS target ON target.name_folded = unique_family.name_folded
+        JOIN files AS target_file
+          ON target_file.id = target.file_id
+         AND target_file.lang = unique_family.lang
+         AND target_file.path || char(31) ||
+             COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
+             COALESCE(target.name, '') = unique_family.family_key
+        WHERE source_file.lang <> 'csharp'
+          AND r.target_qualifier IS NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM symbol_reference_candidates AS existing
+              WHERE existing.reference_id = r.id
+          );
+
+        INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
+        SELECT r.id, target.id, 5
+        FROM symbol_references AS r
+        JOIN files AS source_file ON source_file.id = r.file_id
+        JOIN (
+            SELECT s.name_folded,
+                   MIN(target_file.path || char(31) ||
+                       COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                       COALESCE(s.name, '')) AS family_key
+            FROM symbols AS s
+            JOIN files AS target_file ON target_file.id = s.file_id
+            WHERE target_file.lang = 'csharp'
+              AND s.name_folded IS NOT NULL
+            GROUP BY s.name_folded
+            HAVING COUNT(DISTINCT target_file.path || char(31) ||
+                                  COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                                  COALESCE(s.name, '')) = 1
+        ) AS unique_family ON unique_family.name_folded = r.symbol_name_folded
+        JOIN symbols AS target ON target.name_folded = unique_family.name_folded
+        JOIN files AS target_file
+          ON target_file.id = target.file_id
+         AND target_file.lang = 'csharp'
+         AND target_file.path || char(31) ||
+             COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
+             COALESCE(target.name, '') = unique_family.family_key
+        WHERE source_file.lang = 'csharp'
+          AND r.target_qualifier IS NULL
+          AND r.reference_kind <> 'instantiate'
+          AND NOT EXISTS (
+              SELECT 1 FROM symbol_reference_candidates AS existing
+              WHERE existing.reference_id = r.id
+          );
+
+        INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
+        SELECT r.id, target.id, 5
+        FROM symbol_references AS r
+        JOIN files AS source_file ON source_file.id = r.file_id
+        JOIN (
+            SELECT s.name_folded,
+                   MIN(target_file.path || char(31) ||
+                       COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                       COALESCE(s.name, '')) AS family_key
+            FROM symbols AS s
+            JOIN files AS target_file ON target_file.id = s.file_id
+            WHERE target_file.lang = 'csharp'
+              AND s.name_folded IS NOT NULL
+            GROUP BY s.name_folded
+            HAVING COUNT(DISTINCT target_file.path || char(31) ||
+                                  COALESCE(s.container_qualified_name, s.container_name, '') || char(31) ||
+                                  COALESCE(s.name, '')) = 1
+        ) AS unique_family ON unique_family.name_folded = r.symbol_name_folded || 'attribute'
+        JOIN symbols AS target ON target.name_folded = unique_family.name_folded
+        JOIN files AS target_file
+          ON target_file.id = target.file_id
+         AND target_file.lang = 'csharp'
+         AND target_file.path || char(31) ||
+             COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
+             COALESCE(target.name, '') = unique_family.family_key
+        WHERE source_file.lang = 'csharp'
+          AND r.target_qualifier IS NULL
+          AND r.reference_kind = 'attribute'
+          AND NOT EXISTS (
+              SELECT 1 FROM symbol_reference_candidates AS existing
+              WHERE existing.reference_id = r.id
+                AND existing.scope_rank < 5
+          );
+
+        INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
+        SELECT r.id, unique_target.symbol_id, 5
+        FROM symbol_references AS r
+        JOIN files AS source_file ON source_file.id = r.file_id
+        JOIN (
+            SELECT MIN(s.id) AS symbol_id, s.name_folded
+            FROM symbols AS s
+            JOIN files AS target_file ON target_file.id = s.file_id
+            WHERE target_file.lang = 'csharp'
+              AND s.name_folded IS NOT NULL
+              AND s.kind IN ('class', 'struct', 'record')
+            GROUP BY s.name_folded
+            HAVING COUNT(*) = 1
+        ) AS unique_target ON unique_target.name_folded = r.symbol_name_folded
+        WHERE source_file.lang = 'csharp'
+          AND r.target_qualifier IS NULL
+          AND r.reference_kind = 'instantiate'
+          AND NOT EXISTS (
+              SELECT 1 FROM symbol_reference_candidates AS existing
+              WHERE existing.reference_id = r.id
+          );
+        """;
+
+    private const string RefreshReferenceResolutionSql = """
+        UPDATE symbol_references AS r
+        SET target_symbol_id = (
+                SELECT MIN(c.symbol_id)
+                FROM symbol_reference_candidates AS c
+                WHERE c.reference_id = r.id
+                HAVING COUNT(*) = 1
+            ),
+            target_symbol_key = (
+                SELECT CASE WHEN COUNT(DISTINCT target_file.lang || char(31) || target_file.path || char(31) ||
+                                               COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
+                                               COALESCE(target.name, '')) = 1
+                            THEN MIN(target_file.lang || char(31) || target_file.path || char(31) ||
+                                     COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
+                                     COALESCE(target.name, ''))
+                       END
+                FROM symbol_reference_candidates AS c
+                JOIN symbols AS target ON target.id = c.symbol_id
+                JOIN files AS target_file ON target_file.id = target.file_id
+                WHERE c.reference_id = r.id
+            ),
+            resolution_candidate_count = (
+                SELECT COUNT(*)
+                FROM symbol_reference_candidates AS c
+                WHERE c.reference_id = r.id
+            ),
+            resolution_state = CASE
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM symbol_reference_candidates AS c WHERE c.reference_id = r.id
+                ) THEN 'unresolved'
+                WHEN (SELECT COUNT(*) FROM symbol_reference_candidates AS c WHERE c.reference_id = r.id) = 1
+                    THEN 'resolved'
+                WHEN (
+                    SELECT COUNT(DISTINCT target_file.lang || char(31) || target_file.path || char(31) ||
+                                          COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
+                                          COALESCE(target.name, ''))
+                    FROM symbol_reference_candidates AS c
+                    JOIN symbols AS target ON target.id = c.symbol_id
+                    JOIN files AS target_file ON target_file.id = target.file_id
+                    WHERE c.reference_id = r.id
+                ) = 1 THEN 'resolved_group'
+                ELSE 'ambiguous'
+            END;
+
+        UPDATE symbol_references
+        SET is_self_reference = CASE
+                WHEN source_symbol_id IS NOT NULL
+                 AND target_symbol_id IS NOT NULL
+                 AND source_symbol_id = target_symbol_id THEN 1
+                ELSE 0
+            END;
         """;
 
     private static readonly string RefreshMutualRecursionFlagsSql = $"""
@@ -76,8 +440,9 @@ public partial class DbWriter
         bool referenceLinesAreNew)
     {
         if (references.Count == 0) return;
+        InvalidateReferenceIdentityContractForMutation();
 
-        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 13);
+        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 14);
         var foldedNameCache = CreateFoldedNameCache(
             Math.Min(references.Count, rowsPerStatement),
             namesPerRow: 2);
@@ -129,6 +494,7 @@ public partial class DbWriter
                     cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(reference.ContainerName, foldedNameCache);
                     cmd.Parameters[parameterIndex++].Value = reference.IsSelfReference ? 1 : 0;
                     cmd.Parameters[parameterIndex++].Value = reference.IsMutualRecursion ? 1 : 0;
+                    cmd.Parameters[parameterIndex++].Value = (object?)ExtractTargetQualifier(reference) ?? DBNull.Value;
                 }
 
                 cmd.ExecuteNonQuery();
@@ -297,13 +663,25 @@ public partial class DbWriter
         cancellationToken.ThrowIfCancellationRequested();
         MutualRecursionRefreshForTesting?.Invoke();
         cancellationToken.ThrowIfCancellationRequested();
-        var cmd = RentCommand(RefreshMutualRecursionFlagsSql, static _ => { });
+        using var transaction = BeginTransaction(cancellationToken, "refresh reference identities");
+        var cmd = RentCommand(
+            RefreshReferenceSourceSymbolsSql + ";\n" +
+            RefreshReferenceCandidatesSql + "\n" +
+            RefreshReferenceResolutionSql + "\n" +
+            RefreshMutualRecursionFlagsSql,
+            static _ => { });
         try
         {
             using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
+            // Stamp inside the same transaction, but before the graph refresh so the
+            // public SQLite changes() result continues to describe recursion updates.
+            // 同一トランザクション内で先に marker を設定し、公開 changes() は再帰更新件数を維持する。
+            MarkReferenceIdentityContractReady();
+            cancellationToken.ThrowIfCancellationRequested();
             cmd.ExecuteNonQuery();
             cancellationToken.ThrowIfCancellationRequested();
+            transaction.Commit();
         }
         catch (SqliteException ex) when (IsSqliteInterruptCancellation(ex, cancellationToken))
         {
@@ -313,5 +691,67 @@ public partial class DbWriter
         {
             ReleaseCommand(cmd);
         }
+    }
+
+    private static string? ExtractTargetQualifier(ReferenceRecord reference)
+    {
+        if (!string.IsNullOrWhiteSpace(reference.TargetQualifier))
+        {
+            var explicitQualifier = reference.TargetQualifier.Trim();
+            return explicitQualifier.StartsWith("global::", StringComparison.Ordinal)
+                ? explicitQualifier["global::".Length..]
+                : explicitQualifier;
+        }
+        if (string.IsNullOrWhiteSpace(reference.Context) || string.IsNullOrWhiteSpace(reference.SymbolName))
+            return null;
+
+        var context = reference.Context;
+        var occurrence = -1;
+        var bestDistance = int.MaxValue;
+        for (var searchAt = 0; searchAt <= context.Length - reference.SymbolName.Length;)
+        {
+            var found = context.IndexOf(reference.SymbolName, searchAt, StringComparison.Ordinal);
+            if (found < 0)
+                break;
+            var distance = Math.Abs((found + 1) - reference.Column);
+            if (distance < bestDistance)
+            {
+                occurrence = found;
+                bestDistance = distance;
+            }
+            searchAt = found + Math.Max(1, reference.SymbolName.Length);
+        }
+
+        if (occurrence <= 0)
+            return null;
+        var dot = occurrence - 1;
+        while (dot >= 0 && char.IsWhiteSpace(context[dot]))
+            dot--;
+        if (dot < 0 || context[dot] != '.')
+            return null;
+        var end = dot - 1;
+        while (end >= 0 && char.IsWhiteSpace(context[end]))
+            end--;
+        var start = end;
+        while (start >= 0 && (char.IsLetterOrDigit(context[start]) || context[start] is '_' or '@'))
+            start--;
+        var qualifier = context[(start + 1)..(end + 1)].TrimStart('@');
+        if (qualifier.Length == 0)
+            return null;
+        // `this.Member()` is genuinely unqualified with respect to the current container.
+        // Other lowercase receivers (for example `service.Process()`) need a non-null marker
+        // so the global fallback stays disabled. The resolver may recover a target container
+        // only from an explicit `Type receiver` pair in the enclosing symbol signature; the
+        // receiver text alone must not participate in type matching because a variable named
+        // `worker` is not evidence for type `Worker`.
+        // `this.Member()` は現在の container に対して実質 unqualified として扱える。
+        // それ以外の小文字 receiver（例: `service.Process()`）は global fallback を無効化する
+        // non-null marker として保持する。enclosing symbol signature に明示的な `Type receiver`
+        // がある場合だけ container を復元し、変数 `worker` 自体を型 `Worker` の根拠にはしない。
+        if (string.Equals(qualifier, "this", StringComparison.Ordinal))
+            return null;
+        return char.IsUpper(qualifier[0])
+            ? qualifier
+            : NonTypeReceiverQualifierPrefix + qualifier;
     }
 }

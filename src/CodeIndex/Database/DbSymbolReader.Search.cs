@@ -743,6 +743,7 @@ public partial class DbReader
                 DefinitionSites = includeRankingMetadata || (groupPartials && definitionSites > 1) ? definitionSites : null,
                 SizeLines = includeRankingMetadata ? Convert.ToInt32(reader.GetInt64(23)) : null,
                 ComplexityScore = includeRankingMetadata ? Math.Round(reader.GetDouble(24), 3) : null,
+                SymbolId = reader.GetInt64(27),
             });
         }
         return results;

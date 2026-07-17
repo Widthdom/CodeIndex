@@ -30,6 +30,13 @@ public class ReferenceRecord
     /// <summary>Enclosing symbol name when known / 親シンボル名</summary>
     public string? ContainerName { get; set; }
 
+    /// <summary>
+    /// Receiver/type qualifier immediately before the referenced name when it is a stable
+    /// type-like identifier (for example <c>FileShare</c> in <c>FileShare.ReadWrite</c>).
+    /// 参照名直前の安定した型相当修飾子（例: <c>FileShare.ReadWrite</c> の <c>FileShare</c>）。
+    /// </summary>
+    public string? TargetQualifier { get; set; }
+
     /// <summary>True when the enclosing symbol references itself / 親シンボル自身への参照なら true</summary>
     public bool IsSelfReference { get; set; }
 

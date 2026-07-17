@@ -224,6 +224,9 @@ public class SymbolResult
     [JsonPropertyName("api_version")]
     public string ApiVersion { get; set; } = JsonOutputContract.ApiVersion;
     public string Path { get; set; } = string.Empty;
+    [JsonPropertyName("symbol_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? SymbolId { get; set; }
     public string? Lang { get; set; }
     public string Kind { get; set; } = string.Empty;
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -623,6 +626,14 @@ public class ReferenceResult
     public string? ContainerName { get; set; }
     public bool IsSelfReference { get; set; }
     public bool IsMutualRecursion { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? TargetSymbolId { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TargetSymbolKey { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ResolutionState { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int ResolutionCandidateCount { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? BodyContent { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

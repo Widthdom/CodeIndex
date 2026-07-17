@@ -13,13 +13,39 @@ public partial class DbWriter
     /// </summary>
     public bool DeleteFileByPath(string relativePath)
     {
+        using var transaction = !IsInTransaction() ? BeginTransaction() : null;
+        var fileIdCmd = RentCommand(
+            "SELECT id FROM files WHERE path = @path",
+            static c => c.Parameters.Add("@path", SqliteType.Text));
+        long? fileId;
+        try
+        {
+            fileIdCmd.Parameters["@path"].Value = relativePath;
+            var value = fileIdCmd.ExecuteScalar();
+            fileId = value == null || value == DBNull.Value ? null : Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
+        }
+        finally
+        {
+            ReleaseCommand(fileIdCmd);
+        }
+
+        if (fileId is not long existingFileId)
+        {
+            transaction?.Commit();
+            return false;
+        }
+        if (HasReferenceIdentityRowsForFile(existingFileId))
+            InvalidateReferenceIdentityContractForMutation();
+
         var cmd = RentCommand(
             "DELETE FROM files WHERE path = @path",
             static c => c.Parameters.Add("@path", SqliteType.Text));
         try
         {
             cmd.Parameters["@path"].Value = relativePath;
-            return cmd.ExecuteNonQuery() > 0;
+            var deleted = cmd.ExecuteNonQuery() > 0;
+            transaction?.Commit();
+            return deleted;
         }
         finally
         {
