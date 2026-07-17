@@ -12,6 +12,10 @@
   "container_name": "Match",
   "is_self_reference": false,
   "is_mutual_recursion": false,
+  "target_symbol_id": 2,
+  "target_symbol_key": "csharp\u001Fsrc/Refs.cs\u001FDemo\u001FTargetType",
+  "resolution_state": "resolved",
+  "resolution_candidate_count": 1,
   "exact_index_available": true
 }
 {
@@ -28,5 +32,9 @@
   "container_name": "Use",
   "is_self_reference": false,
   "is_mutual_recursion": false,
+  "target_symbol_id": 2,
+  "target_symbol_key": "csharp\u001Fsrc/Refs.cs\u001FDemo\u001FTargetType",
+  "resolution_state": "resolved",
+  "resolution_candidate_count": 1,
   "exact_index_available": true
 }

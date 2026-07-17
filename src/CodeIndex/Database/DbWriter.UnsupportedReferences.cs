@@ -64,6 +64,8 @@ public partial class DbWriter
         {
             BindSupportedLanguageParameterValues(cmd, values);
             cmd.ExecuteNonQuery();
+            if (deleted > 0)
+                InvalidateReferenceIdentityContractForMutation();
             transaction?.Commit();
             return deleted;
         }
@@ -103,6 +105,8 @@ public partial class DbWriter
         {
             ReleaseCommand(referenceCmd);
         }
+        if (deletedReferences > 0)
+            InvalidateReferenceIdentityContractForMutation();
 
         var lineCmd = RentCommand("DELETE FROM reference_lines", static _ => { });
         try

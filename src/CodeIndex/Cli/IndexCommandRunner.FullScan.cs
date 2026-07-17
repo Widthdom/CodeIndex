@@ -1005,7 +1005,10 @@ public static partial class IndexCommandRunner
         writer.ClearReadyFlags();
         writer.ClearHotspotFamilyReady();
         if (options.SymbolsOnly)
+        {
             writer.ClearSqlGraphContractReady();
+            writer.ClearReferenceIdentityContractReady();
+        }
         writer.ClearMetadataTargetReady();
         FullScanWritePhaseStartedForTesting?.Invoke();
         ThrowIfFullScanCancelled(0, files.Count);
@@ -1115,7 +1118,8 @@ public static partial class IndexCommandRunner
         int processed = 0, skipped = 0, warnings = warningList.Count, errors = errorList.Count;
         var ftsMutated = purged > 0;
         var symbolsDroppedByKindFilter = 0;
-        var mutualRecursionRefreshNeeded = false;
+        var mutualRecursionRefreshNeeded = !options.SymbolsOnly
+            && (!writer.ReferenceIdentityContractMatchesCurrent() || purged > 0 || purgedRefs > 0);
 
         var interactiveIndexSpinner = !options.Json && !options.Quiet && ConsoleUi.ShouldUseInteractiveConsole();
         var redirectedIndexingMessagePrinted = false;
@@ -2114,7 +2118,7 @@ public static partial class IndexCommandRunner
                             writer.InsertReferencesForNewFiles(references, refreshMutualRecursionFlags: false, cancellationToken);
                         else
                             writer.InsertReferences(references, refreshMutualRecursionFlags: false, cancellationToken);
-                        if (references.Count > 0)
+                        if (!options.SymbolsOnly)
                             mutualRecursionRefreshNeeded = true;
                         currentJsonIndexFile = FormatIndexPhasePath(record.Path, "validating");
                         var issues = RequireWorkItemIssues(item);

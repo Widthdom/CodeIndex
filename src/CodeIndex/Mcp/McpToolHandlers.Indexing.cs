@@ -321,6 +321,7 @@ public partial class McpServer
         // First mutation point — demote readiness just before any write.
         // 実書き込み直前で readiness をクリア。
         writer.ClearReadyFlags();
+        writer.ClearReferenceIdentityContractReady();
         writer.ClearHotspotFamilyReady();
         writer.ClearMetadataTargetReady();
         var useFullRunBatchMarker = rebuild || startedWithNoIndexedFiles;
@@ -342,8 +343,9 @@ public partial class McpServer
         }
 
         // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
-        if (!startedWithNoIndexedFiles)
-            writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
+        var purgedRefs = startedWithNoIndexedFiles
+            ? 0
+            : writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
 
         // Scan and index / スキャン・インデックス
         var scanResult = indexer.ScanFilesDetailed(cancellationToken: requestToken);
@@ -456,7 +458,9 @@ public partial class McpServer
         HashSet<string>? reusedHotspotFamilyLanguages = null;
         var indexedSymbolExtractorLanguages = new HashSet<string>(languageCounts.Count, StringComparer.Ordinal);
         var symbolsDroppedByKindFilter = 0;
-        var mutualRecursionRefreshNeeded = false;
+        var mutualRecursionRefreshNeeded = !writer.ReferenceIdentityContractMatchesCurrent()
+            || purged > 0
+            || purgedRefs > 0;
         var freshCountFiles = 0L;
         var freshCountChunks = 0L;
         var freshCountSymbols = 0L;
@@ -660,8 +664,7 @@ public partial class McpServer
                         writer.InsertReferencesForNewFiles(references, refreshMutualRecursionFlags: false, requestToken);
                     else
                         writer.InsertReferences(references, refreshMutualRecursionFlags: false, requestToken);
-                    if (references.Count > 0)
-                        mutualRecursionRefreshNeeded = true;
+                    mutualRecursionRefreshNeeded = true;
                     committedChunkCount = chunks.Count;
                     committedSymbolCount = symbols.Count;
                     committedReferenceCount = references.Count;

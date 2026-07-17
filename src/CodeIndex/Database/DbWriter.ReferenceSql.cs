@@ -12,7 +12,7 @@ public partial class DbWriter
                     file_id, symbol_name, reference_kind, line, column_number,
                     context, reference_line_id, container_kind, container_name,
                     symbol_name_folded, container_name_folded, is_self_reference,
-                    is_mutual_recursion
+                    is_mutual_recursion, target_qualifier
                 )
                 VALUES ");
         var parameterIndex = 0;
@@ -20,7 +20,7 @@ public partial class DbWriter
         {
             if (row > 0)
                 sql.Append(", ");
-            AppendBatchParameterTuple(sql, ref parameterIndex, columnCount: 13);
+            AppendBatchParameterTuple(sql, ref parameterIndex, columnCount: 14);
         }
         return sql.ToString();
     }
@@ -43,6 +43,7 @@ public partial class DbWriter
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
         }
     }
 

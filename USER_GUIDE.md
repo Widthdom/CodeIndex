@@ -301,6 +301,28 @@ Known public command targets and supported command or nested aliases exit `0`;
 internal usage keys are not help targets. Missing or unknown targets return usage
 exit `1` with a bounded correction or nearest-command/subcommand suggestion.
 
+Fresh indexes resolve reference edges against symbol identity instead of joining folded
+names alone. `references --json` reports `target_symbol_id`, `target_symbol_key`,
+`resolution_state`, and `resolution_candidate_count` when available. `resolved` identifies
+one definition, `resolved_group` identifies one overload family, and `ambiguous` /
+`unresolved` keep the edge explicit without letting C# `callers`, `callees`, or `deps`
+silently connect it to an unrelated same-named definition. Legacy databases keep the
+name-based read fallback until an indexing run refreshes this metadata and stamps its
+contract version; even no-op and deletion-only updates perform that repair. Unqualified C#
+names are linked globally only when unique, so ambiguous or dynamic-looking calls do not
+become same-name dependency edges. An `impact`
+query that still resolves to multiple definitions reports those definitions and does not
+traverse a combined identity graph; narrow it with language or path filters.
+
+`inspect` and MCP `analyze_symbol` return `candidate_bundles` when a name resolves to
+indexed definitions. Each bundle is labeled with a stable selector containing the symbol ID,
+qualified/container name, signature, language, kind, path, and line, and its graph sections
+are scoped to that candidate identity. When multiple candidates are returned, the top-level
+`references`, `callers`, and `callees` arrays are explicitly labeled
+`graph_scope: primary_candidate` and mirror only the first prioritized bundle instead of
+merging unrelated definitions; consume the corresponding bundle for every other candidate.
+Use `--fields candidates` to project these bundles explicitly.
+
 Invalid CLI input emits one command-specific `Error` / `Hint` / `Usage` diagnostic.
 Dependent validation stops after the primary invalid token, and transformed aliases
 such as `recipes list` retain the command name and usage shape the user invoked.
@@ -3285,6 +3307,28 @@ release changelog を source of truth とします。完全な syntax line は `
 既知の公開 command target と対応する command / nested alias は終了コード `0` を返し、
 内部 usage key は help target として受理しません。target の欠落・未検出は bounded な
 修正案または最も近い command / subcommand の候補とともに usage 終了コード `1` を返します。
+
+新しい index は、folded name だけを結合せず symbol identity に対して reference edge を
+解決します。`references --json` は利用可能な場合に `target_symbol_id`、
+`target_symbol_key`、`resolution_state`、`resolution_candidate_count` を返します。
+`resolved` は単一定義、`resolved_group` は単一 overload family を示し、`ambiguous` /
+`unresolved` は edge を明示したまま、C# の `callers`、`callees`、`deps` が無関係な
+同名定義へ暗黙に接続することを防ぎます。legacy DB は、次回の index 実行でこの metadata
+を再構築して contract version を記録するまで name-based read fallback を維持します。
+no-op や削除のみの update でもこの修復を行います。C# の無修飾名は一意な場合だけ global に
+接続するため、曖昧または dynamic に見える call を同名 dependency edge にしません。
+`impact` query が複数定義へ
+解決される場合は、それらの定義を報告し、identity graph を結合して走査しません。
+language または path filter で対象を絞り込んでください。
+
+`inspect` と MCP `analyze_symbol` は、名前が index 済み定義へ解決される場合に
+`candidate_bundles` を返します。各 bundle は symbol ID、qualified/container name、
+signature、language、kind、path、line を含む安定 selector で識別され、graph section は
+その candidate identity に限定されます。複数 candidate が返る場合、top-level の
+`references`、`callers`、`callees` 配列は `graph_scope: primary_candidate` と
+明示され、無関係な定義を結合せず優先順位1位の bundle だけを反映します。それ以外は
+対応する bundle を利用してください。`--fields candidates` で bundle を明示的に
+projection できます。
 
 不正な CLI input は、コマンド固有の `Error` / `Hint` / `Usage` diagnostic を 1 件だけ
 出力します。primary な不正 token の後では dependent validation を打ち切り、

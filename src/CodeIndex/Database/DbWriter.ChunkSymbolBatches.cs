@@ -53,6 +53,7 @@ public partial class DbWriter
     public void InsertSymbols(IReadOnlyList<SymbolRecord> symbols, CancellationToken cancellationToken)
     {
         if (symbols.Count == 0) return;
+        InvalidateReferenceIdentityContractForMutation();
 
         int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 20);
         var foldedNameCache = CreateFoldedNameCache(

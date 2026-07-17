@@ -49,6 +49,12 @@ public partial class DbReader
     /// 指定シンボルを呼び出している呼び出し元を探す。
     /// </summary>
     public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, ReferenceRankMode rankMode = ReferenceRankMode.Weighted, bool excludeSelfReferences = false, int offset = 0)
+        => GetCallersCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, rawKinds, rankMode, excludeSelfReferences, offset, targetSymbolId: null);
+
+    private List<CallerResult> GetCallersForCandidate(DefinitionResult definition, int limit, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+        => GetCallersCore(definition.Name, limit, definition.Lang, referenceKind: null, pathPatterns, excludePathPatterns, excludeTests, exact: true, rawKinds: false, ReferenceRankMode.Weighted, excludeSelfReferences: false, offset: 0, definition.SymbolId);
+
+    private List<CallerResult> GetCallersCore(string query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, bool rawKinds, ReferenceRankMode rankMode, bool excludeSelfReferences, int offset, long? targetSymbolId)
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return new List<CallerResult>();
@@ -85,6 +91,25 @@ public partial class DbReader
                 WHERE " + callerContainerPredicate + @"
                   AND " + GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind) + @"
                   AND " + supportedLangPredicate;
+        if (targetSymbolId != null && HasTable("symbol_reference_candidates"))
+        {
+            // Candidate membership alone is not an edge: an ambiguous reference can list
+            // several possible targets. Only authoritative resolution states may contribute
+            // callers to a candidate-specific inspect bundle.
+            // candidate membership だけでは edge ではない。ambiguous reference は複数の
+            // 候補を持ち得るため、candidate 別 inspect bundle の callers には authoritative
+            // な resolution state だけを採用する。
+            sql += _referenceColumns.Contains("resolution_state")
+                ? " AND r.resolution_state IN ('resolved', 'resolved_group')"
+                : " AND 1 = 0";
+            sql += @"
+                AND EXISTS (
+                    SELECT 1
+                    FROM symbol_reference_candidates AS identity_candidate
+                    WHERE identity_candidate.reference_id = r.id
+                      AND identity_candidate.symbol_id = @targetSymbolId
+                )";
+        }
         if (excludeSelfReferences)
             sql += $" AND {selfReferenceSql} = 0";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
@@ -187,6 +212,8 @@ public partial class DbReader
             SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", NormalizeQueryLanguage(lang));
+        if (targetSymbolId != null && HasTable("symbol_reference_candidates"))
+            SqliteCommandPolicy.Add(cmd, "@targetSymbolId", targetSymbolId.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         SqliteCommandPolicy.Add(cmd, "@limit", limit);
         SqliteCommandPolicy.Add(cmd, "@offset", Math.Max(0, offset));
@@ -442,6 +469,12 @@ public partial class DbReader
     /// 呼び出し元シンボルが使っている呼び出し先を探す。
     /// </summary>
     public List<CalleeResult> GetCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, ReferenceRankMode rankMode = ReferenceRankMode.Weighted, int offset = 0)
+        => GetCalleesCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, rawKinds, rankMode, offset, sourceSymbolId: null);
+
+    private List<CalleeResult> GetCalleesForCandidate(DefinitionResult definition, int limit, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+        => GetCalleesCore(definition.Name, limit, definition.Lang, referenceKind: null, pathPatterns, excludePathPatterns, excludeTests, exact: true, rawKinds: false, ReferenceRankMode.Weighted, offset: 0, definition.SymbolId);
+
+    private List<CalleeResult> GetCalleesCore(string query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, bool rawKinds, ReferenceRankMode rankMode, int offset, long? sourceSymbolId)
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return new List<CalleeResult>();
@@ -470,6 +503,8 @@ public partial class DbReader
                 WHERE r.container_name IS NOT NULL
                   AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind)}
                   AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+        if (sourceSymbolId != null && _referenceColumns.Contains("source_symbol_id"))
+            sql += " AND r.source_symbol_id = @sourceSymbolId";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
         var allowQualifiedLeafFallback = HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
         var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
@@ -557,6 +592,8 @@ public partial class DbReader
             SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", lang);
+        if (sourceSymbolId != null && _referenceColumns.Contains("source_symbol_id"))
+            SqliteCommandPolicy.Add(cmd, "@sourceSymbolId", sourceSymbolId.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         SqliteCommandPolicy.Add(cmd, "@limit", limit);
         SqliteCommandPolicy.Add(cmd, "@offset", Math.Max(0, offset));
@@ -896,6 +933,12 @@ public partial class DbReader
     /// materialize しないようにする。
     /// </summary>
     private List<CallerResult> GetCallersExact(string symbolName, int limit, int offset = 0, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+        => GetCallersExactCore(symbolName, limit, offset, lang, pathPatterns, excludePathPatterns, excludeTests, targetSymbolId: null);
+
+    private List<CallerResult> GetCallersExactForTarget(string symbolName, long targetSymbolId, int limit, int offset, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+        => GetCallersExactCore(symbolName, limit, offset, lang, pathPatterns, excludePathPatterns, excludeTests, targetSymbolId);
+
+    private List<CallerResult> GetCallersExactCore(string symbolName, int limit, int offset, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, long? targetSymbolId)
     {
         if (!_hasReferencesTable) return new List<CallerResult>();
         using var cmd = _conn.CreateCommand();
@@ -935,7 +978,18 @@ public partial class DbReader
               AND (r.symbol_name = @symbolName COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@symbolName) COLLATE NOCASE)" + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))"
                 : @"
               AND (((f.lang = 'sql') AND sql_context_has_name_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @symbolName COLLATE NOCASE) OR " + BuildCSharpQualifiedContextFallbackSql(BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: false)) + " OR " + BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false) + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))";
-
+        var targetCondition = targetSymbolId != null && HasTable("symbol_reference_candidates")
+            ? @"
+              AND (
+                  EXISTS (
+                      SELECT 1
+                      FROM symbol_reference_candidates identity_candidate
+                      WHERE identity_candidate.reference_id = r.id
+                        AND identity_candidate.symbol_id = @targetSymbolId
+                        AND r.resolution_state IN ('resolved', 'resolved_group')
+                  )" + polymorphicNameCondition + @"
+              )"
+            : nameCondition;
         // impact BFS must share the call-graph contract with `callers`/`callees`/`hotspots`,
         // so event subscriptions (`Click += OnClick`) also participate in the transitive
         // caller chain. Metadata edges (`attribute`, `annotation`) stay excluded.
@@ -954,7 +1008,7 @@ public partial class DbReader
                   AND r.reference_kind IN {CallGraphReferenceKindsSql}
                   AND {selfReferenceSql} = 0
                   AND {supportedLangFilter}
-                  {nameCondition}";
+                  {targetCondition}";
         if (lang != null)
             sql += " AND f.lang = @lang";
         sql += BuildCSharpBareMemberGraphReferenceFilter(symbolName, lang, exact: true, contextSql, "f", "r");
@@ -990,6 +1044,8 @@ public partial class DbReader
         }
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", lang);
+        if (targetSymbolId != null && HasTable("symbol_reference_candidates"))
+            SqliteCommandPolicy.Add(cmd, "@targetSymbolId", targetSymbolId.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         SqliteCommandPolicy.Add(cmd, "@limit", limit);
         SqliteCommandPolicy.Add(cmd, "@offset", offset);
@@ -1061,10 +1117,27 @@ public partial class DbReader
         // 定義を通じてシンボル名を解決し、"run" → "Run" のようなケース違いを補正する。
         // 見つからなければユーザ入力をフォールバック使用。
         var resolvedName = ResolveSymbolName(symbolName, lang);
-        var rootDefinitionPaths = ResolveImpactDefinitions(resolvedName, limit, lang, pathPatterns, excludePathPatterns, excludeTests)
-            .Definitions
+        var rootDefinitionResolution = ResolveImpactDefinitions(symbolName, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
+        if (rootDefinitionResolution.Definitions.Count == 0
+            && !string.Equals(symbolName, resolvedName, StringComparison.Ordinal))
+        {
+            rootDefinitionResolution = ResolveImpactDefinitions(resolvedName, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
+        }
+        var rootDefinitions = rootDefinitionResolution.Definitions;
+        var rootDefinitionPaths = rootDefinitions
             .Select(definition => definition.Path)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var hasResolvedIdentityGraph = _referenceIdentityContractCurrent;
+        if (hasResolvedIdentityGraph && rootDefinitionPaths.Count > 1)
+        {
+            return ([], false, null, ImpactTerminationReasons.Completed, []);
+        }
+        var qualifiedRootSymbolId = hasResolvedIdentityGraph
+                                    && SqlNameResolver.HasQualifier(symbolName)
+                                    && rootDefinitions.Count == 1
+                                    && rootDefinitions[0].Lang == "csharp"
+            ? rootDefinitions[0].SymbolId
+            : null;
 
         var results = new List<ImpactResult>();
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1124,7 +1197,9 @@ public partial class DbReader
             while (results.Count < limit && fetchIterations < maxFetchIterations && !graphStateBudgetHit && !boundaryProbeBudgetHit)
             {
                 fetchIterations++;
-                var page = GetCallersExact(currentSymbol, pageSize, offset, lang, pathPatterns, excludePathPatterns, excludeTests);
+                var page = depth == 0 && qualifiedRootSymbolId is long targetSymbolId
+                    ? GetCallersExactForTarget(currentSymbol, targetSymbolId, pageSize, offset, lang, pathPatterns, excludePathPatterns, excludeTests)
+                    : GetCallersExact(currentSymbol, pageSize, offset, lang, pathPatterns, excludePathPatterns, excludeTests);
 
                 if (page.Count == 0)
                     break; // No more callers for this symbol / このシンボルの caller は尽きた
@@ -1709,7 +1784,12 @@ public partial class DbReader
     {
         lang = NormalizeQueryLanguage(lang);
         var resolvedName = ResolveSymbolName(symbolName, lang);
-        var definitionResolution = ResolveImpactDefinitions(resolvedName, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
+        var definitionResolution = ResolveImpactDefinitions(symbolName, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
+        if (definitionResolution.Definitions.Count == 0
+            && !string.Equals(symbolName, resolvedName, StringComparison.Ordinal))
+        {
+            definitionResolution = ResolveImpactDefinitions(resolvedName, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
+        }
         var definitions = definitionResolution.Definitions;
         var indexedPathComparer = GetIndexedPathComparer();
         var definitionPaths = definitions
@@ -1925,6 +2005,15 @@ public partial class DbReader
             : allowLeafFallback
                 ? "(s.name = @resolvedName COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name(s.name) = @resolvedNameNormalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @resolvedNameLeaf COLLATE NOCASE)))"
                 : "(s.name = @resolvedName COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name(s.name) = @resolvedNameNormalized COLLATE NOCASE))";
+        if (SqlNameResolver.HasQualifier(resolvedName))
+        {
+            var containerNameSql = GetSymbolColumnSql("container_name", "''");
+            var containerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name", containerNameSql);
+            var csharpLeafCondition = _foldReady
+                ? "s.name_folded = @resolvedNameLeafFolded"
+                : "s.name = @resolvedNameLeaf COLLATE NOCASE";
+            nameCondition = $"({nameCondition} OR (f.lang = 'csharp' AND {csharpLeafCondition} AND ({containerNameSql} = @resolvedNameContainer COLLATE NOCASE OR {containerQualifiedNameSql} = @resolvedNameContainer COLLATE NOCASE OR {containerQualifiedNameSql} COLLATE NOCASE LIKE @resolvedNameContainerSuffix ESCAPE '\\')))";
+        }
         var matchOrderSql = @"CASE
                      WHEN s.name = @resolvedName THEN 0
                      WHEN f.lang = 'sql' AND sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name(s.name) = @resolvedNameNormalized THEN 1
@@ -2025,7 +2114,7 @@ public partial class DbReader
                    logical.container_kind, logical.container_name,
                    logical.visibility, logical.return_type,
                    logical.container_qualified_name, logical.logical_partial_key,
-                   logical.logical_definition_sites, selected.requested_row,
+                   logical.symbol_id, logical.logical_definition_sites, selected.requested_row,
                    stats.physical_count, stats.physical_file_count, stats.logical_count,
                    stats.precise_count, stats.precise_file_count, stats.non_callable_count
             FROM selected_definition_keys selected
@@ -2042,6 +2131,12 @@ public partial class DbReader
         SqliteCommandPolicy.Add(cmd, "@resolvedNameLeafFolded", NameFold.Fold(leafName) ?? leafName);
         SqliteCommandPolicy.Add(cmd, "@resolvedNameSegmentCount", segmentCount);
         SqliteCommandPolicy.Add(cmd, "@allowLeafFallback", allowLeafFallback ? 1 : 0);
+        if (SqlNameResolver.HasQualifier(resolvedName))
+        {
+            var container = GetQualifiedQueryContainer(resolvedName);
+            SqliteCommandPolicy.Add(cmd, "@resolvedNameContainer", container);
+            SqliteCommandPolicy.Add(cmd, "@resolvedNameContainerSuffix", $"%.{EscapeLikeQuery(container)}");
+        }
         if (_foldReady)
             SqliteCommandPolicy.Add(cmd, "@resolvedNameFolded", NameFold.Fold(resolvedName) ?? resolvedName);
         if (lang != null)
@@ -2059,7 +2154,7 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
-            var definitionSites = reader.GetInt32(16);
+            var definitionSites = reader.GetInt32(17);
             var result = new SymbolResult
             {
                 Path = reader.GetString(0),
@@ -2078,17 +2173,18 @@ public partial class DbReader
                 LogicalPartialKey = !reader.IsDBNull(15) ? reader.GetString(15) : null,
                 Visibility = !reader.IsDBNull(12) ? reader.GetString(12) : null,
                 ReturnType = !reader.IsDBNull(13) ? reader.GetString(13) : null,
+                SymbolId = reader.GetInt64(16),
                 DefinitionSites = definitionSites > 1 ? definitionSites : null,
             };
-            physicalCount = reader.GetInt32(18);
-            physicalFileCount = reader.GetInt32(19);
-            logicalCount = reader.GetInt32(20);
-            preciseCount = reader.GetInt32(21);
-            preciseFileCount = reader.GetInt32(22);
-            nonCallableCount = reader.GetInt32(23);
+            physicalCount = reader.GetInt32(19);
+            physicalFileCount = reader.GetInt32(20);
+            logicalCount = reader.GetInt32(21);
+            preciseCount = reader.GetInt32(22);
+            preciseFileCount = reader.GetInt32(23);
+            nonCallableCount = reader.GetInt32(24);
             if (IsPreciseImpactFallbackKind(result.Kind))
                 preciseDefinition ??= result;
-            if (reader.GetInt32(17) == 1)
+            if (reader.GetInt32(18) == 1)
                 results.Add(result);
         }
 

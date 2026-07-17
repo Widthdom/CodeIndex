@@ -108,6 +108,7 @@ public class DbContext : IDisposable
         "reference_lines",
         "symbol_references",
         HotspotReferenceAggregateSql.TableName,
+        "symbol_reference_candidates",
         "file_issues",
         "codeindex_meta",
     ];
@@ -119,6 +120,12 @@ public class DbContext : IDisposable
         ("symbol_references", "symbol_name_folded"),
         ("symbol_references", "container_name_folded"),
         ("files", "lang"),
+        ("symbol_references", "source_symbol_id"),
+        ("symbol_references", "target_symbol_id"),
+        ("symbol_references", "target_symbol_key"),
+        ("symbol_references", "target_qualifier"),
+        ("symbol_references", "resolution_state"),
+        ("symbol_references", "resolution_candidate_count"),
         ("files", "checksum"),
         ("files", "modified"),
         ("files", "indexed_at"),
@@ -164,6 +171,9 @@ public class DbContext : IDisposable
         "idx_hotspot_reference_counts_global",
         "idx_hotspot_reference_counts_file",
         "idx_hotspot_reference_counts_leaf",
+        "idx_symbol_refs_source_symbol",
+        "idx_symbol_refs_target_symbol",
+        "idx_symbol_ref_candidates_symbol",
     ];
     internal static readonly string[] ResourceListGenerationTriggerNames =
     [
@@ -1990,6 +2000,8 @@ public class DbContext : IDisposable
     public const string CSharpSymbolNameContractVersionMetaKey = "csharp_symbol_name_contract_version";
     public const int SqlGraphContractVersion = 1;
     public const string SqlGraphContractVersionMetaKey = "sql_graph_contract_version";
+    public const int ReferenceIdentityContractVersion = 1;
+    public const string ReferenceIdentityContractVersionMetaKey = "reference_identity_contract_version";
     public const string SymbolsOnlyGraphOmittedMetaKey = "symbols_only_graph_omitted";
     public const string IndexedProjectRootMetaKey = "indexed_project_root";
     public const string IndexedFollowSymlinksPolicyMetaKey = "indexed_follow_symlinks_policy";
@@ -2391,7 +2403,13 @@ public class DbContext : IDisposable
                 context         TEXT,
                 reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
                 container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN (" + symbolKindCheck + @")),
-                container_name  TEXT
+                container_name  TEXT,
+                source_symbol_id INTEGER,
+                target_symbol_id INTEGER,
+                target_symbol_key TEXT,
+                target_qualifier TEXT,
+                resolution_state TEXT,
+                resolution_candidate_count INTEGER NOT NULL DEFAULT 0
             )");
 
                 var backfillHotspotReferenceCounts = !TableExists(HotspotReferenceAggregateSql.TableName)
@@ -2459,6 +2477,12 @@ public class DbContext : IDisposable
                 EnsureColumn("symbol_references", "container_name_folded", "TEXT");
                 EnsureColumn("symbol_references", "is_self_reference", "INTEGER NOT NULL DEFAULT 0");
                 EnsureColumn("symbol_references", "is_mutual_recursion", "INTEGER NOT NULL DEFAULT 0");
+                EnsureColumn("symbol_references", "source_symbol_id", "INTEGER");
+                EnsureColumn("symbol_references", "target_symbol_id", "INTEGER");
+                EnsureColumn("symbol_references", "target_symbol_key", "TEXT");
+                EnsureColumn("symbol_references", "target_qualifier", "TEXT");
+                EnsureColumn("symbol_references", "resolution_state", "TEXT");
+                EnsureColumn("symbol_references", "resolution_candidate_count", "INTEGER NOT NULL DEFAULT 0");
                 foreach (var indexSql in HotspotReferenceAggregateSql.CreateIndexSql)
                     Execute(indexSql);
                 if (backfillHotspotReferenceCounts)
@@ -2470,6 +2494,13 @@ public class DbContext : IDisposable
                 EnforceReferenceLineSetNullConstraint();
                 EnsureReferenceLinesContextKey();
                 EnsureKindCheckConstraintsCurrent();
+                Execute(@"
+            CREATE TABLE IF NOT EXISTS symbol_reference_candidates (
+                reference_id INTEGER NOT NULL,
+                symbol_id    INTEGER NOT NULL,
+                scope_rank   INTEGER NOT NULL,
+                PRIMARY KEY(reference_id, symbol_id)
+            )");
 
                 // Indexes / インデックス
                 Execute("CREATE INDEX IF NOT EXISTS idx_files_lang     ON files(lang)");
@@ -2522,6 +2553,9 @@ public class DbContext : IDisposable
                 Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_name_folded_kind ON symbol_references(symbol_name_folded, reference_kind)");
                 Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_name_folded_file ON symbol_references(symbol_name_folded, file_id)");
                 Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_name_folded_kind ON symbol_references(container_name_folded, reference_kind)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_source_symbol ON symbol_references(source_symbol_id)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_target_symbol ON symbol_references(target_symbol_id)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbol_ref_candidates_symbol ON symbol_reference_candidates(symbol_id, reference_id)");
 
                 // Full-text search / 全文検索
                 Execute(@"
@@ -2685,10 +2719,16 @@ public class DbContext : IDisposable
                 symbol_name_folded TEXT,
                 container_name_folded TEXT,
                 is_self_reference INTEGER NOT NULL DEFAULT 0,
-                is_mutual_recursion INTEGER NOT NULL DEFAULT 0
+                is_mutual_recursion INTEGER NOT NULL DEFAULT 0,
+                source_symbol_id INTEGER,
+                target_symbol_id INTEGER,
+                target_symbol_key TEXT,
+                target_qualifier TEXT,
+                resolution_state TEXT,
+                resolution_candidate_count INTEGER NOT NULL DEFAULT 0
             )
             """;
-        const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion";
+        const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion, source_symbol_id, target_symbol_id, target_symbol_key, target_qualifier, resolution_state, resolution_candidate_count";
 
         const string oldReferenceLines = "_reference_lines_nullable_file_id";
         const string oldSymbolReferences = "_symbol_references_nullable_file_id";
@@ -2731,10 +2771,16 @@ public class DbContext : IDisposable
                 symbol_name_folded TEXT,
                 container_name_folded TEXT,
                 is_self_reference INTEGER NOT NULL DEFAULT 0,
-                is_mutual_recursion INTEGER NOT NULL DEFAULT 0
+                is_mutual_recursion INTEGER NOT NULL DEFAULT 0,
+                source_symbol_id INTEGER,
+                target_symbol_id INTEGER,
+                target_symbol_key TEXT,
+                target_qualifier TEXT,
+                resolution_state TEXT,
+                resolution_candidate_count INTEGER NOT NULL DEFAULT 0
             )
             """;
-        const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion";
+        const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion, source_symbol_id, target_symbol_id, target_symbol_key, target_qualifier, resolution_state, resolution_candidate_count";
         const string oldSymbolReferences = "_symbol_references_reference_line_delete";
         var quotedOldSymbolReferences = SqliteIdentifier.Quote(oldSymbolReferences);
 
@@ -2811,10 +2857,16 @@ public class DbContext : IDisposable
                 symbol_name_folded TEXT,
                 container_name_folded TEXT,
                 is_self_reference INTEGER NOT NULL DEFAULT 0,
-                is_mutual_recursion INTEGER NOT NULL DEFAULT 0
+                is_mutual_recursion INTEGER NOT NULL DEFAULT 0,
+                source_symbol_id INTEGER,
+                target_symbol_id INTEGER,
+                target_symbol_key TEXT,
+                target_qualifier TEXT,
+                resolution_state TEXT,
+                resolution_candidate_count INTEGER NOT NULL DEFAULT 0
             )
             """;
-        const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion";
+        const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion, source_symbol_id, target_symbol_id, target_symbol_key, target_qualifier, resolution_state, resolution_candidate_count";
 
         const string oldReferenceLines = "_reference_lines_file_line_key";
         const string oldSymbolReferences = "_symbol_references_file_line_key";
@@ -2915,10 +2967,16 @@ public class DbContext : IDisposable
                 symbol_name_folded TEXT,
                 container_name_folded TEXT,
                 is_self_reference INTEGER NOT NULL DEFAULT 0,
-                is_mutual_recursion INTEGER NOT NULL DEFAULT 0
+                is_mutual_recursion INTEGER NOT NULL DEFAULT 0,
+                source_symbol_id INTEGER,
+                target_symbol_id INTEGER,
+                target_symbol_key TEXT,
+                target_qualifier TEXT,
+                resolution_state TEXT,
+                resolution_candidate_count INTEGER NOT NULL DEFAULT 0
             )
             """;
-        const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion";
+        const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion, source_symbol_id, target_symbol_id, target_symbol_key, target_qualifier, resolution_state, resolution_candidate_count";
 
         var rebuilt = false;
         RunWithForeignKeysDisabledForMigration("EnsureKindCheckConstraintsCurrent", () =>
@@ -3379,6 +3437,25 @@ public class DbContext : IDisposable
             () => Execute(HotspotReferenceAggregateSql.CreateTableSql));
         foreach (var indexSql in HotspotReferenceAggregateSql.CreateIndexSql)
             yield return ("CREATE INDEX hotspot_reference_counts", () => Execute(indexSql));
+        yield return ("EnsureColumn symbol_references.source_symbol_id",
+            () => EnsureColumn("symbol_references", "source_symbol_id", "INTEGER"));
+        yield return ("EnsureColumn symbol_references.target_symbol_id",
+            () => EnsureColumn("symbol_references", "target_symbol_id", "INTEGER"));
+        yield return ("EnsureColumn symbol_references.target_symbol_key",
+            () => EnsureColumn("symbol_references", "target_symbol_key", "TEXT"));
+        yield return ("EnsureColumn symbol_references.target_qualifier",
+            () => EnsureColumn("symbol_references", "target_qualifier", "TEXT"));
+        yield return ("EnsureColumn symbol_references.resolution_state",
+            () => EnsureColumn("symbol_references", "resolution_state", "TEXT"));
+        yield return ("EnsureColumn symbol_references.resolution_candidate_count",
+            () => EnsureColumn("symbol_references", "resolution_candidate_count", "INTEGER NOT NULL DEFAULT 0"));
+        yield return ("CREATE TABLE symbol_reference_candidates", () => Execute(@"
+            CREATE TABLE IF NOT EXISTS symbol_reference_candidates (
+                reference_id INTEGER NOT NULL,
+                symbol_id    INTEGER NOT NULL,
+                scope_rank   INTEGER NOT NULL,
+                 PRIMARY KEY(reference_id, symbol_id)
+             )"));
         yield return ("CREATE INDEX idx_symbol_refs_name",
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name      ON symbol_references(symbol_name)"));
         yield return ("CREATE INDEX idx_symbol_refs_file",
@@ -3405,6 +3482,12 @@ public class DbContext : IDisposable
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_nocase_file ON symbol_references(symbol_name COLLATE NOCASE, file_id)"));
         yield return ("CREATE INDEX idx_symbol_refs_container_nocase_kind",
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_nocase_kind ON symbol_references(container_name COLLATE NOCASE, reference_kind)"));
+        yield return ("CREATE INDEX idx_symbol_refs_source_symbol",
+            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_source_symbol ON symbol_references(source_symbol_id)"));
+        yield return ("CREATE INDEX idx_symbol_refs_target_symbol",
+            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_target_symbol ON symbol_references(target_symbol_id)"));
+        yield return ("CREATE INDEX idx_symbol_ref_candidates_symbol",
+            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_ref_candidates_symbol ON symbol_reference_candidates(symbol_id, reference_id)"));
 
         yield return ("EnsureColumn files.lang", () => EnsureColumn("files", "lang", "TEXT"));
         yield return ("EnsureColumn files.checksum", () => EnsureColumn("files", "checksum", "TEXT"));

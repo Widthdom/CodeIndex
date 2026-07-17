@@ -138,7 +138,8 @@ public static partial class IndexCommandRunner
             && (!projectRootWritten || !typeScriptAugmentationVersionMatchesCurrent);
         var typeScriptAugmentationReadyCleared = !typeScriptAugmentationVersionMatchesCurrent;
         var ftsMutated = false;
-        var mutualRecursionRefreshNeeded = false;
+        var mutualRecursionRefreshNeeded = !options.SymbolsOnly
+            && !writer.ReferenceIdentityContractMatchesCurrent();
         var purgedRefs = 0;
         var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages();
         using var postExtractionHooks = new LazyDisposable<PostExtractionHookRunner>(
@@ -170,6 +171,7 @@ public static partial class IndexCommandRunner
             writer.ClearReadyFlags();
             writer.ClearHotspotFamilyReady();
             writer.ClearMetadataTargetReady();
+            writer.ClearReferenceIdentityContractReady();
             readinessDemoted = true;
         }
 
@@ -1112,6 +1114,7 @@ public static partial class IndexCommandRunner
         }
 
         ThrowIfUpdateCancelled();
+        mutualRecursionRefreshNeeded |= !options.SymbolsOnly && (removed > 0 || purgedRefs > 0);
         if (mutualRecursionRefreshNeeded)
             writer.RefreshMutualRecursionFlags(cancellationToken);
         ThrowIfUpdateCancelled();

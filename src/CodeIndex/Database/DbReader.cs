@@ -177,6 +177,7 @@ public partial class DbReader : IDisposable
     internal readonly bool _csharpMetadataTargetReady;
     internal readonly string? _csharpMetadataTargetDegradedReason;
     internal readonly bool _sqlGraphContractCurrent;
+    internal readonly bool _referenceIdentityContractCurrent;
     // Tracks which languages have authoritative cross-file hotspot family semantics.
     // Mixed legacy/update states can therefore degrade only the affected language instead of
     // globally disabling families for unrelated marker types.
@@ -612,6 +613,12 @@ public partial class DbReader : IDisposable
             TryGetMetaString(_conn, DbContext.SqlGraphContractVersionMetaKey),
             DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
             StringComparison.Ordinal);
+        _referenceIdentityContractCurrent = _referenceColumns.Contains("resolution_state")
+            && HasTable("symbol_reference_candidates")
+            && string.Equals(
+                TryGetMetaString(_conn, DbContext.ReferenceIdentityContractVersionMetaKey),
+                DbContext.ReferenceIdentityContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                StringComparison.Ordinal);
         _hotspotFamilyReadyLanguages = LoadHotspotFamilyReadyLanguages(connection);
         // NOTE: row presence is intentionally NOT used as a fallback. A legacy DB or an
         // interrupted first-time / partial backfill can have one row while the rest of the
@@ -716,6 +723,7 @@ public partial class DbReader : IDisposable
         AppendIfStoredGreater(conn, DbContext.TypeScriptAugmentationVersionMetaKey, DbContext.TypeScriptAugmentationVersion, "typescript_augmentation_version", newerContracts);
         AppendIfStoredGreater(conn, DbContext.CSharpSymbolNameContractVersionMetaKey, DbContext.CSharpSymbolNameContractVersion, "csharp_symbol_name_contract_version", newerContracts);
         AppendIfStoredGreater(conn, DbContext.SqlGraphContractVersionMetaKey, DbContext.SqlGraphContractVersion, "sql_graph_contract_version", newerContracts);
+        AppendIfStoredGreater(conn, DbContext.ReferenceIdentityContractVersionMetaKey, DbContext.ReferenceIdentityContractVersion, "reference_identity_contract_version", newerContracts);
         AppendIfStoredGreater(conn, "fold_key_version", NameFold.Version, "fold_key_version", newerContracts);
         foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
             AppendIfStoredGreater(conn, DbContext.GetHotspotFamilyVersionMetaKey(lang), DbContext.HotspotFamilyVersion, $"hotspot_family_version_{lang}", newerContracts);
