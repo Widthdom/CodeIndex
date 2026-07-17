@@ -1399,13 +1399,7 @@ public static class ConsoleUi
     }
 
     private static string NormalizeCommandUsageName(string command) =>
-        command switch
-        {
-            "refs" => "references",
-            "stats" => "status",
-            "fold" => "backfill-fold",
-            _ => command,
-        };
+        CliCommandCatalog.NormalizePublicCommandName(command);
 
     // --- Did-you-mean / もしかして ---
 

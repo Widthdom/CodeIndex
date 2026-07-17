@@ -92,17 +92,17 @@ internal static partial class ProgramRunner
                 errorCode: "help_command_required");
         }
 
-        var command = helpArgs[0];
-        if (ConsoleUi.GetUsageLine(command) is null)
+        var requestedCommand = helpArgs[0];
+        if (!CliCommandCatalog.TryResolvePublicCommand(requestedCommand, out var command))
         {
-            var suggestion = ConsoleUi.FindClosestCommand(command);
+            var suggestion = ConsoleUi.FindClosestCommand(requestedCommand);
             var hint = suggestion is null
                 ? "run `cdidx --help` to list available commands."
                 : $"Did you mean: `cdidx help {suggestion}`?";
             return CommandErrorWriter.WriteJsonOrHuman(
                 wantsJson,
                 jsonOptions,
-                $"unknown help command `{ConsoleUi.FormatBoundedValue(command)}`.",
+                $"unknown help command `{ConsoleUi.FormatBoundedValue(requestedCommand)}`.",
                 CommandExitCodes.UsageError,
                 hint,
                 usage,

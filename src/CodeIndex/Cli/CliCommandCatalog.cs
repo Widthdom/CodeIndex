@@ -9,6 +9,23 @@ internal static class CliCommandCatalog
         "doctor", "db", "diff", "report", "validate", "deps", "impact", "unused", "hotspots", "suggestions", "export", "import", "languages", "batch", "mcp", "lsp", "completions", "license", "help",
     ];
 
+    internal static readonly IReadOnlyDictionary<string, string> CommandAliases =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["refs"] = "references",
+            ["stats"] = "status",
+            ["fold"] = "backfill-fold",
+        };
+
+    internal static string NormalizePublicCommandName(string command) =>
+        CommandAliases.TryGetValue(command, out var canonical) ? canonical : command;
+
+    internal static bool TryResolvePublicCommand(string input, out string command)
+    {
+        command = NormalizePublicCommandName(input);
+        return Commands.Contains(command, StringComparer.Ordinal);
+    }
+
     /// <summary>
     /// Authoritative nested-command inventory shared by help routing and every shell
     /// completion renderer. Keep nested command discovery here instead of duplicating

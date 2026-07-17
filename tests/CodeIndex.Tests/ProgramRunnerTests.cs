@@ -227,6 +227,9 @@ public class ProgramRunnerTests
     [InlineData(new[] { "help", "db", "schema" }, "cdidx db schema")]
     [InlineData(new[] { "help", "workspace", "use" }, "cdidx workspace <list|status|use|current|clear|deactivate>")]
     [InlineData(new[] { "help", "suggestions", "add" }, "cdidx suggestions add")]
+    [InlineData(new[] { "help", "refs" }, "cdidx references")]
+    [InlineData(new[] { "help", "stats" }, "cdidx status")]
+    [InlineData(new[] { "help", "fold" }, "cdidx backfill-fold")]
     public void Run_ConventionalHelp_PrintsExistingUsageWithoutExecutingCommand_Issue4575(
         string[] args,
         string expectedUsage)
@@ -243,6 +246,8 @@ public class ProgramRunnerTests
     [Theory]
     [InlineData(new[] { "help" }, "help requires a command name", "help_command_required")]
     [InlineData(new[] { "help", "serch" }, "Did you mean: `cdidx help search`?", "help_command_unknown")]
+    [InlineData(new[] { "help", "index-files" }, "unknown help command `index-files`", "help_command_unknown")]
+    [InlineData(new[] { "help", "db-schema" }, "unknown help command `db-schema`", "help_command_unknown")]
     [InlineData(new[] { "help", "db", "schem" }, "Did you mean: `cdidx help db schema`?", "help_subcommand_unknown")]
     public void Run_ConventionalHelp_InvalidTargetReturnsUsageErrorAndSuggestion_Issue4575(
         string[] args,
