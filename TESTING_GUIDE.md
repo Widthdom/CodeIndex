@@ -258,7 +258,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   When one policy test checks several step-level rules, parse workflow step blocks once and filter the retained blocks for each rule instead of rerunning the multiline step regex for every assertion family.
 - `IndexCommandRunnerTests.Run_CancelDuringFreshIndex_ReturnsInterruptedJson`, `Run_CancelDuringDryRunScan_ReturnsInterruptedJson`, and `Run_CancelBeforeFreshScan_ReturnsInterruptedJson`
   exercise the same in-process cancellation paths used after Ctrl-C/SIGINT wiring, including scan-time cancellation, so interrupted index runs keep returning the canonical JSON error contract.
-- `IndexCommandRunnerTests.RunOptimizeFts_DryRunPreviewsWithoutWritingThenOptimizeMutates_Issue4577`, `RunOptimizeFts_LockHeld_ReturnsStructuredErrorWithoutMutation`, and `RunOptimizeFts_ReadOnlyUri_ReturnsStructuredErrorWithoutMutation`
+- `IndexCommandRunnerTests.RunOptimizeFts_DryRunPreviewsWithoutWritingThenOptimizeMutates_Issue4577`, `RunOptimizeFts_LockHeld_ReportsDbLocked`, and `RunOptimizeFts_ReadOnlyUri_ReturnsDbNotWritable`
   share seeded databases to verify that optimize dry-run reports sizes, readiness, lock state, recommendations, and planned work while preserving the source bytes and creating no lock artifacts; the same fixtures retain the writable optimize and lock/read-only URI mutation guards.
   `ConsoleUiTests.PrintUsage_WithoutBanner_HidesAsciiArtAndEasterEggFlags` keeps the optimize dry-run flag visible in full CLI usage.
 - `IndexCommandRunnerTests.Run_DryRunWithRebuildAndMemoryTrace_SkipsConfirmationAndPreservesWorkspace_Issue4580`
@@ -932,7 +932,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   1つの policy test が複数の step-level rule を検証する場合は、workflow step block を一度だけ解析して保持し、assertion family ごとに multiline step regex を再実行せず保持済み block を絞り込みます。
 - `IndexCommandRunnerTests.Run_CancelDuringFreshIndex_ReturnsInterruptedJson`、`Run_CancelDuringDryRunScan_ReturnsInterruptedJson`、`Run_CancelBeforeFreshScan_ReturnsInterruptedJson`
   Ctrl-C/SIGINT 配線後に使われる in-process cancellation 経路を、scan 中のキャンセルも含めて検証し、interrupted index run が標準の JSON error contract を返し続けることを固定する。
-- `IndexCommandRunnerTests.RunOptimizeFts_DryRunPreviewsWithoutWritingThenOptimizeMutates_Issue4577`、`RunOptimizeFts_LockHeld_ReturnsStructuredErrorWithoutMutation`、`RunOptimizeFts_ReadOnlyUri_ReturnsStructuredErrorWithoutMutation`
+- `IndexCommandRunnerTests.RunOptimizeFts_DryRunPreviewsWithoutWritingThenOptimizeMutates_Issue4577`、`RunOptimizeFts_LockHeld_ReportsDbLocked`、`RunOptimizeFts_ReadOnlyUri_ReturnsDbNotWritable`
   seed 済み database を共有し、optimize dry-run が size、readiness、lock state、推奨、planned work を報告しつつ source byte を保持し、lock artifact を作成しないことを検証する。同じ fixture で、書き込み版 optimize と lock/read-only URI の mutation guard も維持する。
   `ConsoleUiTests.PrintUsage_WithoutBanner_HidesAsciiArtAndEasterEggFlags` は、full CLI usage に optimize dry-run flag が表示され続けることを固定します。
 - `IndexCommandRunnerTests.Run_DryRunWithRebuildAndMemoryTrace_SkipsConfirmationAndPreservesWorkspace_Issue4580`

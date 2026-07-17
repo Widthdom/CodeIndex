@@ -277,11 +277,27 @@ public static partial class IndexCommandRunner
                 Console.WriteLine("FTS5 optimize preview (read-only; no changes made).");
                 Console.WriteLine(ConsoleUi.FormatSummaryLine("DB", dbPath, indent: "  "));
                 Console.WriteLine(ConsoleUi.FormatSummaryLine("DB size", ConsoleUi.FormatBytes(result.DbSizeBytes ?? 0), indent: "  "));
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("Core size", ConsoleUi.FormatBytes(result.CoreTableSizeBytes ?? 0), indent: "  "));
                 Console.WriteLine(ConsoleUi.FormatSummaryLine("FTS size", ConsoleUi.FormatBytes(result.FtsSizeBytes ?? 0), indent: "  "));
                 Console.WriteLine(ConsoleUi.FormatSummaryLine("Free pages", (result.FreelistCount ?? 0).ToString("N0", System.Globalization.CultureInfo.InvariantCulture), indent: "  "));
                 Console.WriteLine(ConsoleUi.FormatSummaryLine("FTS writes", result.WritesSinceOptimizeBefore.ToString("N0", System.Globalization.CultureInfo.InvariantCulture), indent: "  "));
                 Console.WriteLine(ConsoleUi.FormatSummaryLine("Index lock", result.LockState, indent: "  "));
+                Console.WriteLine(ConsoleUi.FormatSummaryLine(
+                    "Readiness",
+                    result.Readiness == null
+                        ? "unavailable"
+                        : $"fold={(result.Readiness.FoldReady ? "ready" : "not-ready")}, graph={(result.Readiness.GraphTableAvailable ? "ready" : "not-ready")}, issues={(result.Readiness.IssuesTableAvailable ? "ready" : "not-ready")}, migration={(result.Readiness.MigrationInProgress ? "in-progress" : "idle")}",
+                    indent: "  "));
+                Console.WriteLine(ConsoleUi.FormatSummaryLine(
+                    "Est. duration",
+                    result.EstimatedDurationMs is { } durationEstimateMs
+                        ? ConsoleUi.FormatDuration(TimeSpan.FromMilliseconds(durationEstimateMs))
+                        : "unavailable",
+                    indent: "  "));
                 Console.WriteLine(ConsoleUi.FormatSummaryLine("Recommended", result.OptimizationRecommended ? "yes" : "not yet", indent: "  "));
+                Console.WriteLine("  Planned operations:");
+                foreach (var operation in result.PlannedOperations ?? [])
+                    Console.WriteLine($"    - {operation}");
             }
 
             return CommandExitCodes.Success;
@@ -347,28 +363,36 @@ public static partial class IndexCommandRunner
     private static Dictionary<string, long> ReadOptimizeLogicalPayloadSizes(DbContext db)
     {
         var sizes = new Dictionary<string, long>(StringComparer.Ordinal);
-        (string Name, string Sql)[] queries =
+        (string Name, string[] Columns)[] objects =
         [
-            ("files", "SELECT COALESCE(SUM(length(CAST(path AS BLOB)) + length(CAST(COALESCE(lang, '') AS BLOB)) + length(CAST(COALESCE(checksum, '') AS BLOB))), 0) FROM files"),
-            ("chunks", "SELECT COALESCE(SUM(length(CAST(COALESCE(content, '') AS BLOB))), 0) FROM chunks"),
-            ("symbols", "SELECT COALESCE(SUM(length(CAST(COALESCE(kind, '') AS BLOB)) + length(CAST(COALESCE(sub_kind, '') AS BLOB)) + length(CAST(COALESCE(name, '') AS BLOB)) + length(CAST(COALESCE(signature, '') AS BLOB)) + length(CAST(COALESCE(container_kind, '') AS BLOB)) + length(CAST(COALESCE(container_name, '') AS BLOB)) + length(CAST(COALESCE(container_qualified_name, '') AS BLOB)) + length(CAST(COALESCE(family_key, '') AS BLOB)) + length(CAST(COALESCE(visibility, '') AS BLOB)) + length(CAST(COALESCE(return_type, '') AS BLOB)) + length(CAST(COALESCE(metadata_target_source, '') AS BLOB)) + length(CAST(COALESCE(name_folded, '') AS BLOB))), 0) FROM symbols"),
-            ("reference_lines", "SELECT COALESCE(SUM(length(CAST(context AS BLOB))), 0) FROM reference_lines"),
-            ("symbol_references", "SELECT COALESCE(SUM(length(CAST(COALESCE(symbol_name, '') AS BLOB)) + length(CAST(COALESCE(reference_kind, '') AS BLOB)) + length(CAST(COALESCE(context, '') AS BLOB)) + length(CAST(COALESCE(container_kind, '') AS BLOB)) + length(CAST(COALESCE(container_name, '') AS BLOB)) + length(CAST(COALESCE(symbol_name_folded, '') AS BLOB)) + length(CAST(COALESCE(container_name_folded, '') AS BLOB))), 0) FROM symbol_references"),
-            ("file_issues", "SELECT COALESCE(SUM(length(CAST(kind AS BLOB)) + length(CAST(message AS BLOB)) + length(CAST(COALESCE(origin, '') AS BLOB)) + length(CAST(COALESCE(severity, '') AS BLOB))), 0) FROM file_issues"),
-            ("codeindex_meta", "SELECT COALESCE(SUM(length(CAST(key AS BLOB)) + length(CAST(COALESCE(value, '') AS BLOB))), 0) FROM codeindex_meta"),
-            ("fts_chunks_data", "SELECT COALESCE(SUM(length(block)), 0) FROM fts_chunks_data"),
-            ("fts_chunks_idx", "SELECT COALESCE(SUM(length(CAST(term AS BLOB))), 0) FROM fts_chunks_idx"),
-            ("fts_chunks_content", "SELECT COALESCE(SUM(length(CAST(c0 AS BLOB))), 0) FROM fts_chunks_content"),
-            ("fts_chunks_docsize", "SELECT COALESCE(SUM(length(sz)), 0) FROM fts_chunks_docsize"),
-            ("fts_chunks_config", "SELECT COALESCE(SUM(length(CAST(k AS BLOB)) + length(CAST(COALESCE(v, '') AS BLOB))), 0) FROM fts_chunks_config"),
+            ("files", ["path", "lang", "checksum"]),
+            ("chunks", ["content"]),
+            ("symbols", ["kind", "sub_kind", "name", "signature", "container_kind", "container_name", "container_qualified_name", "family_key", "visibility", "return_type", "metadata_target_source", "name_folded"]),
+            ("reference_lines", ["context"]),
+            ("symbol_references", ["symbol_name", "reference_kind", "context", "container_kind", "container_name", "symbol_name_folded", "container_name_folded"]),
+            ("file_issues", ["kind", "message", "origin", "severity"]),
+            ("codeindex_meta", ["key", "value"]),
+            ("fts_chunks_data", ["block"]),
+            ("fts_chunks_idx", ["term"]),
+            ("fts_chunks_content", ["c0"]),
+            ("fts_chunks_docsize", ["sz"]),
+            ("fts_chunks_config", ["k", "v"]),
         ];
 
-        foreach (var (name, sql) in queries)
+        foreach (var (name, candidateColumns) in objects)
         {
             try
             {
+                var presentColumns = ReadOptimizeObjectColumns(db, name);
+                var measuredColumns = candidateColumns.Where(presentColumns.Contains).ToArray();
+                if (measuredColumns.Length == 0)
+                    continue;
+
+                var byteExpressions = measuredColumns.Select(column =>
+                    $"length(CAST(COALESCE({QuoteOptimizeIdentifier(column)}, X'') AS BLOB))");
                 using var cmd = db.Connection.CreateCommand();
-                cmd.CommandText = sql;
+                cmd.CommandText =
+                    $"SELECT COALESCE(SUM({string.Join(" + ", byteExpressions)}), 0) FROM {QuoteOptimizeIdentifier(name)}";
                 sizes[name] = Convert.ToInt64(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
             }
             catch (SqliteException)
@@ -380,6 +404,21 @@ public static partial class IndexCommandRunner
 
         return sizes;
     }
+
+    private static HashSet<string> ReadOptimizeObjectColumns(DbContext db, string objectName)
+    {
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT name FROM pragma_table_info(@object_name)";
+        cmd.Parameters.AddWithValue("@object_name", objectName);
+        using var reader = cmd.ExecuteReader();
+        var columns = new HashSet<string>(StringComparer.Ordinal);
+        while (reader.Read())
+            columns.Add(reader.GetString(0));
+        return columns;
+    }
+
+    private static string QuoteOptimizeIdentifier(string identifier) =>
+        $"\"{identifier.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
 
     private static long SumObjectSizes(
         IReadOnlyDictionary<string, long> objectSizes,
