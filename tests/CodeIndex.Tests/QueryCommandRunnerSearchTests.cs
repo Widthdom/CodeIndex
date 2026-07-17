@@ -8716,6 +8716,11 @@ jobs:
             var recovery = json.GetProperty("content_recovery");
             Assert.Equal(1, recovery.GetProperty("start_line").GetInt32());
             Assert.Equal(1, recovery.GetProperty("end_line").GetInt32());
+            Assert.Equal(
+                ["cdidx", "excerpt", "dist/data.txt", "--db", Path.GetFullPath(dbPath), "--start", "1", "--end", "1", "--max-line-width", "0", "--json"],
+                recovery.GetProperty("argv").EnumerateArray().Select(argument => argument.GetString()!).ToArray());
+            Assert.Equal(OperatingSystem.IsWindows() ? "powershell" : "posix-sh", recovery.GetProperty("command_shell").GetString());
+            Assert.True(recovery.GetProperty("command_display_only").GetBoolean());
             var recoveryCommand = recovery.GetProperty("command").GetString();
             Assert.Contains("cdidx excerpt dist/data.txt", recoveryCommand);
             Assert.Contains("--db", recoveryCommand);
