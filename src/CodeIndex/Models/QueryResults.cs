@@ -1789,6 +1789,8 @@ public class RepoMapResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StatusHeadFreshness? HeadFreshness => StatusHeadFreshness.FromMap(this);
     [JsonIgnore]
+    internal RepoMapIndexedHeadSnapshot? IndexedHeadSnapshot { get; set; }
+    [JsonIgnore]
     internal int IssueDraftCandidateCount { get; set; }
     [JsonIgnore]
     internal List<RepoFileSummaryResult> IssueDraftCandidates { get; set; } = [];
@@ -1808,6 +1810,15 @@ public class RepoMapResult
     /// </summary>
     public bool GraphTableAvailable { get; set; } = true;
 }
+
+internal sealed record RepoMapIndexedHeadSnapshot(
+    string? LegacyFullScanHead,
+    string? LatestIndexHead,
+    string? LatestIndexBranch,
+    DateTimeOffset? LatestIndexTimestamp,
+    bool LatestIndexBranchStampPresent,
+    string? LegacyFullScanBranch,
+    bool LegacyFullScanBranchStampPresent);
 
 public class RepoLanguageResult
 {

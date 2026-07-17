@@ -231,7 +231,8 @@ public partial class QueryCommandRunnerTests
             var draft = Assert.Single(json.GetProperty("issue_drafts").EnumerateArray());
             var candidate = draft.GetProperty("candidate");
             var oversizedGroup = json.GetProperty("groups").GetProperty("oversized_file");
-            var largestFiles = json.GetProperty("truncation").GetProperty("largest_files");
+            var candidateTruncation = json.GetProperty("truncation").GetProperty("issue_draft_candidates");
+            var legacyTruncationAlias = json.GetProperty("truncation").GetProperty("largest_files");
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
@@ -240,21 +241,25 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, json.GetProperty("emitted_count").GetInt32());
             Assert.Equal(2, json.GetProperty("omitted_count").GetInt32());
             Assert.Equal(2, json.GetProperty("limit_omitted_count").GetInt32());
+            Assert.Equal("evaluated_scoped_candidates", json.GetProperty("candidate_source").GetString());
             Assert.Equal("limit", Assert.Single(json.GetProperty("omitted_by").EnumerateArray().ToList()).GetString());
             Assert.Equal(3, oversizedGroup.GetProperty("count").GetInt32());
+            Assert.Equal("issue_draft_candidates", oversizedGroup.GetProperty("source_section").GetString());
             Assert.Equal("src/LargeOne.cs", oversizedGroup.GetProperty("representative_paths").EnumerateArray().Single().GetString());
             Assert.True(oversizedGroup.GetProperty("representative_paths_truncated").GetBoolean());
             Assert.Equal("oversized_file", draft.GetProperty("kind").GetString());
             Assert.Contains("src/LargeOne.cs", draft.GetProperty("title").GetString(), StringComparison.Ordinal);
             Assert.Contains("## Checklist", draft.GetProperty("body").GetString(), StringComparison.Ordinal);
             Assert.Equal("src/LargeOne.cs", candidate.GetProperty("path").GetString());
+            Assert.Equal("issue_draft_candidates", candidate.GetProperty("source_section").GetString());
             Assert.True(candidate.GetProperty("line_threshold_exceeded").GetBoolean());
             Assert.Equal(QueryCommandRunner.MapIssueDraftLineThreshold, candidate.GetProperty("line_threshold").GetInt32());
             Assert.Equal(QueryCommandRunner.MapIssueDraftByteThreshold, candidate.GetProperty("byte_threshold").GetInt64());
-            Assert.Equal(1, largestFiles.GetProperty("source_limit").GetInt32());
-            Assert.Equal(4, largestFiles.GetProperty("total_files").GetInt32());
-            Assert.Equal(3, largestFiles.GetProperty("total_candidates").GetInt32());
-            Assert.True(largestFiles.GetProperty("truncated").GetBoolean());
+            Assert.Equal(1, candidateTruncation.GetProperty("source_limit").GetInt32());
+            Assert.Equal(4, candidateTruncation.GetProperty("total_files").GetInt32());
+            Assert.Equal(3, candidateTruncation.GetProperty("total_candidates").GetInt32());
+            Assert.True(candidateTruncation.GetProperty("truncated").GetBoolean());
+            Assert.Equal("issue_draft_candidates", legacyTruncationAlias.GetProperty("compatibility_alias_for").GetString());
 
             var (allExitCode, allStdout, allStderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
                 ["--db", dbPath, "--format", "issue-drafts", "--limit", "3"],
@@ -284,7 +289,7 @@ public partial class QueryCommandRunnerTests
             Assert.False(summary.GetProperty("truncated").GetBoolean());
             Assert.False(summary.TryGetProperty("row_limit_reached", out _));
             Assert.False(summary.TryGetProperty("limit_omitted_count", out _));
-            Assert.True(summary.GetProperty("truncation").GetProperty("largest_files").GetProperty("truncated").GetBoolean());
+            Assert.True(summary.GetProperty("truncation").GetProperty("issue_draft_candidates").GetProperty("truncated").GetBoolean());
         }
         finally
         {
@@ -602,7 +607,10 @@ public partial class QueryCommandRunnerTests
             var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
             var expectedBranch = TestProjectHelper.RunGit(projectRoot, "rev-parse", "--abbrev-ref", "HEAD").Trim();
             var legacyHead = new string('a', 40);
+            var nextLegacyHead = new string('b', 40);
+            var nextIndexedHead = new string('c', 40);
             var indexedHeadTimestamp = DateTimeOffset.Parse("2026-07-17T01:02:03Z", CultureInfo.InvariantCulture);
+            var nextIndexedHeadTimestamp = indexedHeadTimestamp.AddMinutes(1);
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
@@ -614,6 +622,15 @@ public partial class QueryCommandRunnerTests
                     (DbContext.IndexedHeadBranchMetaKey, expectedBranch),
                     (DbContext.IndexedHeadTimestampMetaKey, indexedHeadTimestamp.ToString("O", CultureInfo.InvariantCulture)));
             }
+            RepoMapBuilder.HeadMetadataCapturedForTesting.Value = () =>
+            {
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                var writer = new DbWriter(db.Connection);
+                writer.SetMetaValues(
+                    (DbContext.IndexedHeadCommitMetaKey, nextLegacyHead),
+                    (DbContext.IndexedHeadShaMetaKey, nextIndexedHead),
+                    (DbContext.IndexedHeadTimestampMetaKey, nextIndexedHeadTimestamp.ToString("O", CultureInfo.InvariantCulture)));
+            };
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
                 ["--db", dbPath, "--json", "--summary-only"],
@@ -640,6 +657,7 @@ public partial class QueryCommandRunnerTests
         }
         finally
         {
+            RepoMapBuilder.HeadMetadataCapturedForTesting.Value = null;
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }

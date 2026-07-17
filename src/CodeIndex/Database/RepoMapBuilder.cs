@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Database;
@@ -10,6 +11,8 @@ namespace CodeIndex.Database;
 /// </summary>
 internal sealed class RepoMapBuilder
 {
+    internal static AsyncLocal<Action?> HeadMetadataCapturedForTesting { get; } = new();
+
     private readonly SqliteConnection _conn;
     private readonly IReadOnlySet<string> _fileColumns;
     private readonly Func<StringComparer> _getIndexedPathComparer;
@@ -109,6 +112,8 @@ internal sealed class RepoMapBuilder
             oversizedLineThreshold,
             oversizedByteThreshold);
         var freshness = getFreshness();
+        var indexedHeadSnapshot = LoadIndexedHeadSnapshot();
+        HeadMetadataCapturedForTesting.Value?.Invoke();
         var result = new RepoMapResult
         {
             FileCount = aggregate.FileCount,
@@ -127,6 +132,7 @@ internal sealed class RepoMapBuilder
             ReferenceRichFiles = BuildReferenceRichFileResults(aggregate.ReferenceRichFiles),
             Entrypoints = GetEntrypoints(aggregate.EntrypointFallbacks, limit, lang, pathPatterns, excludePathPatterns, excludeTests, minEntrypointConfidence, indexedPathComparer),
             GraphTableAvailable = _hasReferencesTable,
+            IndexedHeadSnapshot = indexedHeadSnapshot,
             IssueDraftCandidateCount = aggregate.IssueDraftCandidateCount,
             IssueDraftCandidates = BuildLargestFileResults(aggregate.IssueDraftCandidates),
         };
@@ -510,6 +516,82 @@ internal sealed class RepoMapBuilder
     {
         return _fileColumns.Contains(columnName) ? $"f.{columnName}" : "NULL";
     }
+
+    private RepoMapIndexedHeadSnapshot LoadIndexedHeadSnapshot()
+    {
+        string? legacyHead = null;
+        string? latestHead = null;
+        string? latestBranch = null;
+        string? latestTimestamp = null;
+        string? legacyBranch = null;
+        var latestBranchStampPresent = false;
+        var legacyBranchStampPresent = false;
+
+        try
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT key, value
+                FROM codeindex_meta
+                WHERE key IN (@legacyHead, @latestHead, @latestBranch, @latestTimestamp, @legacyBranch)
+                """;
+            SqliteCommandPolicy.Add(cmd, "@legacyHead", DbContext.IndexedHeadCommitMetaKey);
+            SqliteCommandPolicy.Add(cmd, "@latestHead", DbContext.IndexedHeadShaMetaKey);
+            SqliteCommandPolicy.Add(cmd, "@latestBranch", DbContext.IndexedHeadBranchMetaKey);
+            SqliteCommandPolicy.Add(cmd, "@latestTimestamp", DbContext.IndexedHeadTimestampMetaKey);
+            SqliteCommandPolicy.Add(cmd, "@legacyBranch", DbContext.IndexedHeadCommitBranchMetaKey);
+
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                var key = reader.GetString(0);
+                var value = reader.IsDBNull(1) ? null : reader.GetString(1);
+                switch (key)
+                {
+                    case DbContext.IndexedHeadCommitMetaKey:
+                        legacyHead = value;
+                        break;
+                    case DbContext.IndexedHeadShaMetaKey:
+                        latestHead = value;
+                        break;
+                    case DbContext.IndexedHeadBranchMetaKey:
+                        latestBranch = value;
+                        latestBranchStampPresent = true;
+                        break;
+                    case DbContext.IndexedHeadTimestampMetaKey:
+                        latestTimestamp = value;
+                        break;
+                    case DbContext.IndexedHeadCommitBranchMetaKey:
+                        legacyBranch = value;
+                        legacyBranchStampPresent = true;
+                        break;
+                }
+            }
+        }
+        catch (SqliteException)
+        {
+            // Legacy databases without metadata remain queryable.
+            // metadata table を持たない legacy DB も引き続き query 可能にする。
+        }
+
+        return new RepoMapIndexedHeadSnapshot(
+            legacyHead,
+            latestHead,
+            latestBranch,
+            ParseIndexedHeadTimestamp(latestTimestamp),
+            latestBranchStampPresent,
+            legacyBranch,
+            legacyBranchStampPresent);
+    }
+
+    private static DateTimeOffset? ParseIndexedHeadTimestamp(string? raw)
+        => DateTimeOffset.TryParse(
+            raw,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+            out var value)
+            ? value.ToUniversalTime()
+            : null;
 
     private static RepoFileSummaryResult CreateScoredFileSummary(RepoFileStat file)
     {

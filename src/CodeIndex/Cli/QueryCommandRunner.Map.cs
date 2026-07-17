@@ -367,6 +367,17 @@ public static partial class QueryCommandRunner
         var limitOmittedCount = summaryOnly ? 0 : Math.Max(0, candidateCount - candidates.Length);
         var omittedCount = Math.Max(0, candidateCount - emittedCount);
         var rowLimitReached = limitOmittedCount > 0;
+        var candidateTruncation = new JsonObject
+        {
+            ["source_section"] = "issue_draft_candidates",
+            ["returned"] = candidates.Length,
+            ["source_limit"] = sourceLimit,
+            ["total_files"] = map.FileCount,
+            ["total_candidates"] = candidateCount,
+            ["truncated"] = candidateDetailsTruncated,
+        };
+        var legacyLargestFilesTruncationAlias = candidateTruncation.DeepClone().AsObject();
+        legacyLargestFilesTruncationAlias["compatibility_alias_for"] = "issue_draft_candidates";
         var payload = new JsonObject
         {
             ["api_version"] = JsonOutputContract.ApiVersion,
@@ -375,6 +386,7 @@ public static partial class QueryCommandRunner
             ["emitted_count"] = emittedCount,
             ["omitted_count"] = omittedCount,
             ["truncated"] = rowLimitReached,
+            ["candidate_source"] = "evaluated_scoped_candidates",
             ["issue_drafts"] = summaryOnly ? new JsonArray() : new JsonArray(candidates),
             ["groups"] = BuildRepoMapIssueDraftGroupsJson(candidates, candidateCount),
             ["thresholds"] = new JsonObject
@@ -384,15 +396,8 @@ public static partial class QueryCommandRunner
             },
             ["truncation"] = new JsonObject
             {
-                ["largest_files"] = new JsonObject
-                {
-                    ["source_section"] = "largest_files",
-                    ["returned"] = candidates.Length,
-                    ["source_limit"] = sourceLimit,
-                    ["total_files"] = map.FileCount,
-                    ["total_candidates"] = candidateCount,
-                    ["truncated"] = candidateDetailsTruncated,
-                },
+                ["issue_draft_candidates"] = candidateTruncation,
+                ["largest_files"] = legacyLargestFilesTruncationAlias,
             },
             ["query_context"] = BuildQueryContextJson(options, jsonOptions),
             ["duplicate_preflight"] = new JsonObject
@@ -464,7 +469,7 @@ public static partial class QueryCommandRunner
             {
                 ["kind"] = "oversized_file",
                 ["count"] = candidateCount,
-                ["source_section"] = "largest_files",
+                ["source_section"] = "issue_draft_candidates",
                 ["representative_paths"] = representativePaths,
                 ["representative_paths_truncated"] = candidateCount > representativePaths.Count,
             },
@@ -502,7 +507,7 @@ public static partial class QueryCommandRunner
                 ["line_threshold_exceeded"] = file.Lines >= MapIssueDraftLineThreshold,
                 ["byte_threshold_exceeded"] = file.Size >= MapIssueDraftByteThreshold,
                 ["reason_tags"] = reasonTags.DeepClone(),
-                ["source_section"] = "largest_files",
+                ["source_section"] = "issue_draft_candidates",
             },
         };
     }
