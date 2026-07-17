@@ -55,14 +55,25 @@ internal sealed record CliFlag
 
 internal static class CliFlagSchema
 {
-    // Authoritative list of subcommands. Mirrored by ConsoleUi.Commands; tests guard parity.
-    // サブコマンド一覧の正本。ConsoleUi.Commands と一致することをテストで確認する。
-    public static IReadOnlyList<string> AllCommands { get; } =
-    [
-        "index", "hooks", "backfill-fold", "optimize", "vacuum", "search", "recipes", "audit", "definition", "goto", "references", "callers", "callees",
-        "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status", "workspace", "config", "upgrade", "validate-config",
-        "doctor", "db", "diff", "report", "validate", "deps", "impact", "unused", "hotspots", "suggestions", "export", "import", "languages", "batch", "mcp", "lsp", "completions", "license",
-    ];
+    // Authoritative top-level command inventory comes from the shared command catalog.
+    // top-level command 一覧の正本は共有 command catalog に置く。
+    public static IReadOnlyList<string> AllCommands { get; } = CliCommandCatalog.Commands;
+
+    // These commands use the shared flag parser as the authoritative source for their
+    // per-command option inventory. Command families with dedicated/nested parsers keep
+    // their exact syntax in CommandUsageLines until their subcommand metadata is complete;
+    // emitting a partial parent-command flag list would be actively misleading.
+    // 共有 flag parser が command ごとの option 一覧の正本になっている command 集合。
+    // 専用 parser / nested parser を持つ command family は subcommand metadata が揃うまで
+    // CommandUsageLines の正確な構文を使い、誤解を招く不完全な親 command の一覧は出さない。
+    private static readonly IReadOnlySet<string> AuthoritativeHelpOptionCommands = Set(
+        "index", "backfill-fold", "optimize", "vacuum",
+        "search", "recipes", "audit", "definition", "goto", "references", "callers", "callees",
+        "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
+        "validate", "deps", "impact", "unused", "hotspots", "languages");
+
+    public static bool HasAuthoritativeHelpOptions(string command) =>
+        AuthoritativeHelpOptionCommands.Contains(command);
 
     // Commands that accept the `--` end-of-options marker so a user can pass a literal
     // query token starting with `-`. `find` reroutes through `ValidateFindArgs`; everything
@@ -363,7 +374,7 @@ internal static class CliFlagSchema
             new() { Name = "--no-dedup", Description = "Show duplicate chunks", Commands = Set("search") },
             new() { Name = "--no-visibility-rank", Description = "Keep legacy search ranking without symbol visibility weighting", Commands = Set("search") },
             new() { Name = "--line", ValuePlaceholder = "<line>", Description = "Inspect/excerpt: include one source line as source_excerpt or excerpt window", Commands = Set(InspectSourceExcerptCommands) },
-            new() { Name = "--context", ValuePlaceholder = "<n|text>", Description = "Inspect/excerpt context lines, or suggestions add context text", Commands = Set(InspectSourceExcerptCommands), AlsoAcceptedBy = Set("suggestions") },
+            new() { Name = "--context", ValuePlaceholder = "<n>", Description = "Find/inspect/excerpt: symmetric context lines; explicit --before/--after override the corresponding find side", Commands = Set(InspectSourceExcerptCommands.Concat(new[] { "find" }).ToArray()), AlsoAcceptedBy = Set("suggestions") },
             new() { Name = "--before", ValuePlaceholder = "<n>", Description = "Context lines before", Commands = Set("find", "excerpt", "inspect") },
             new() { Name = "--after", ValuePlaceholder = "<n>", Description = "Context lines after", Commands = Set("find", "excerpt", "inspect") },
             new() { Name = "--start", ValuePlaceholder = "<line>", Description = "Start line", Commands = Set("excerpt") },
@@ -448,6 +459,27 @@ internal static class CliFlagSchema
     public static IReadOnlyList<CliFlag> GetCompletionFlagsForCommand(string command)
     {
         return All.Where(f => f.AppliesTo(command)).ToList();
+    }
+
+    /// <summary>
+    /// Render a next-step/help token from the same flag metadata used by parsing and
+    /// completion. Callers may narrow a generic placeholder for their recovery context.
+    /// parser / completion と同じ flag metadata から next-step / help token を生成する。
+    /// recovery 文脈に応じて generic placeholder を狭めてもよい。
+    /// </summary>
+    public static string GetUsageTokenForCommand(
+        string command,
+        string flagName,
+        string? valuePlaceholderOverride = null)
+    {
+        var flag = All.FirstOrDefault(candidate =>
+            string.Equals(candidate.Name, flagName, StringComparison.Ordinal)
+            && candidate.AppliesTo(command));
+        if (flag is null)
+            throw new ArgumentException($"{flagName} is not a documented option for {command}.", nameof(flagName));
+
+        var placeholder = valuePlaceholderOverride ?? flag.ValuePlaceholder;
+        return placeholder is null ? flag.Name : $"{flag.Name} {placeholder}";
     }
 
     /// <summary>

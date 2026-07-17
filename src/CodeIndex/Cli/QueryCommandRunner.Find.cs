@@ -10,7 +10,7 @@ namespace CodeIndex.Cli;
 public static partial class QueryCommandRunner
 {
     internal const int MaxFindLineScanLimit = 10_000_000;
-    private const string FindUsage = "Usage: cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--line-scan-limit <n>] [--allow-partial] [--exact] [--regex] [--count]\n       cdidx find --query <query> (--path <glob>|--all) [...]\n       cdidx find [options] -- <query>";
+    private const string FindUsage = "Usage: cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--context <n>] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--line-scan-limit <n>] [--allow-partial] [--exact] [--regex] [--count]\n       cdidx find --query <query> (--path <glob>|--all) [...]\n       cdidx find [options] -- <query>";
 
     public static int RunFind(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -98,7 +98,7 @@ public static partial class QueryCommandRunner
         }
         if (options.OutputFormat == OutputFormatCompact && HasFindContextOption(normalizedFindArgs))
         {
-            CommandErrorWriter.WriteStderr("Error: find --format compact does not include snippets, so it cannot be combined with --before, --after, or --snippet-lines");
+            CommandErrorWriter.WriteStderr("Error: find --format compact does not include snippets, so it cannot be combined with --context, --before, --after, or --snippet-lines");
             CommandErrorWriter.WriteStderr("Hint: use default text or JSON output when you need context, or omit context flags for compact locations.");
             CommandErrorWriter.WriteStderr(FindUsage);
             return CommandExitCodes.UsageError;
@@ -370,9 +370,9 @@ public static partial class QueryCommandRunner
                     return BuildNonNegativeIntegerError(arg, ConsoleUi.FormatBoundedValue(value));
                 if (arg == "--max-line-width" && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var widthCeil) && widthCeil > LineWidthFormatter.MaxAllowedLineWidth)
                     return BuildNonNegativeIntegerUpperBoundError("--max-line-width", ConsoleUi.FormatBoundedValue(value), LineWidthFormatter.MaxAllowedLineWidth);
-                if ((arg == "--before" || arg == "--after") && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var context) || context < 0))
+                if ((arg == "--context" || arg == "--before" || arg == "--after") && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var context) || context < 0))
                     return BuildNonNegativeIntegerError(arg, ConsoleUi.FormatBoundedValue(value));
-                if ((arg == "--before" || arg == "--after")
+                if ((arg == "--context" || arg == "--before" || arg == "--after")
                     && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var contextCeil)
                     && NumericFlagUpperBounds.TryGetValue(arg, out var contextMax)
                     && contextCeil > contextMax)
@@ -484,21 +484,27 @@ public static partial class QueryCommandRunner
     }
 
     private static bool HasFindContextOption(string[] preparedFindArgs) =>
-        HasOption(preparedFindArgs, "--before")
+        HasOption(preparedFindArgs, "--context")
+        || HasOption(preparedFindArgs, "--before")
         || HasOption(preparedFindArgs, "--after")
         || HasOption(preparedFindArgs, "--snippet-lines");
 
     private static (int Before, int After, int? SnippetLines) ResolveFindContext(QueryCommandOptions options, string[] preparedFindArgs)
     {
-        if (!HasOption(preparedFindArgs, "--snippet-lines"))
-            return (options.ContextBefore, options.ContextAfter, null);
+        var snippetLines = HasOption(preparedFindArgs, "--snippet-lines") ? options.SnippetLines : (int?)null;
+        var surroundingLines = snippetLines.HasValue ? Math.Max(0, snippetLines.Value - 1) : 0;
+        var symmetricContext = options.SymmetricContext;
+        var explicitBefore = options.ExplicitContextBefore;
+        var explicitAfter = options.ExplicitContextAfter;
 
-        var explicitBefore = HasOption(preparedFindArgs, "--before");
-        var explicitAfter = HasOption(preparedFindArgs, "--after");
-        var surroundingLines = Math.Max(0, options.SnippetLines - 1);
-        var before = explicitBefore ? options.ContextBefore : surroundingLines / 2;
-        var after = explicitAfter ? options.ContextAfter : surroundingLines - before;
-        return (before, after, options.SnippetLines);
+        var before = explicitBefore
+            ?? symmetricContext
+            ?? (snippetLines.HasValue ? surroundingLines / 2 : 0);
+        var after = explicitAfter
+            ?? symmetricContext
+            ?? (snippetLines.HasValue ? Math.Max(0, surroundingLines - before) : 0);
+
+        return (before, after, snippetLines);
     }
 
     private static string[] PrepareFindArgs(string[] args, out string? error)

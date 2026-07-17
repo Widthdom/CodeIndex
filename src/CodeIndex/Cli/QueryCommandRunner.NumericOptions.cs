@@ -25,6 +25,7 @@ public static partial class QueryCommandRunner
             ["--body-line-count"] = DbReader.DefinitionBodyMaxRequestedLines,
             ["--max-hops"] = 64,
             ["--depth"] = 64,
+            ["--context"] = 1_000,
             ["--before"] = 1_000,
             ["--after"] = 1_000,
             ["--start"] = 10_000_000,

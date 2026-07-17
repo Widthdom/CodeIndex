@@ -83,7 +83,7 @@ public static class ConsoleUi
         ("index-commits", "cdidx index <projectPath> --commits <commit-ref> [commit-ref ...] [--db <path>] [--verbose] [--dry-run [--dry-run-path-limit <n>]] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
         ("index-changed-between", "cdidx index <projectPath> --changed-between <old-ref> <new-ref> [--db <path>] [--verbose] [--dry-run [--dry-run-path-limit <n>]] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
         ("index-files", "cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run [--dry-run-path-limit <n>]] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
-        ("search", "cdidx search <query>|--query <query>|-- <query>|--recipe <name|name/query>|--list-recipes [--query <filter>] [--names|--summary-only]|--named-query <name>=<query> [--named-query <name>=<query> ...] [--include-query <name>] [--exclude-query <name>] [--cursor <cursor>] [--audit-scope <source|all>] [--source-only] [--show-excluded] [--db <path>] [--json[=ndjson|array]] [--pretty] [--format <text|json|count|compact|grouped|csv|tsv|lsp|qf|sarif|issue-drafts>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>] [--issue-title <title>] [--issue-label <label>] [--verbose] [--limit <n>|--top <n>|--max-results <n>] [--total-limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exclude-comments] [--exclude-strings] [--exclude-fixtures] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring|--token-boundary] [--prefix] [--count] [--group-by <file|symbol|origin|return-type|subsystem>] [--since <datetime>] [--no-dedup] [--no-visibility-rank] [--require-before <query>] [--require-after <query>] [--reject-before <query>] [--reject-after <query>] [--guard-window <n>] [--guard-scope <window|same-line>] [--unique <path|file|symbol|origin|return-type|subsystem>] [--count-by <path|file|symbol|origin|return-type|subsystem>] [--origin <origin>] [--match-origin <origin>] [--exclude-origin <origin>] [--result-kind <kind>] [--search-fields <csv>] [--results-only] [--first-per-file] [--sample <n>] [--per-file-limit <n>] [--max-json-bytes <n>] [--allow-partial] [--next-steps]"),
+        ("search", "cdidx search <query>|--query <query>|-- <query>|--named-query <name>=<query> [--named-query <name>=<query> ...]|--recipe <name|name/query> [--include-query <name>] [--exclude-query <name>]|--list-recipes [--query <filter>] [--names|--summary-only] [--cursor <cursor>] [--audit-scope <source|all>] [--source-only] [--show-excluded] [--db <path>] [--json[=ndjson|array]] [--pretty] [--format <text|json|count|compact|grouped|csv|tsv|lsp|qf|sarif|issue-drafts>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>] [--issue-title <title>] [--issue-label <label>] [--verbose] [--limit <n>|--top <n>|--max-results <n>] [--total-limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exclude-comments] [--exclude-strings] [--exclude-fixtures] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring|--token-boundary] [--prefix] [--count] [--group-by <file|symbol|origin|return-type|subsystem>] [--since <datetime>] [--no-dedup] [--no-visibility-rank] [--require-before <query>] [--require-after <query>] [--reject-before <query>] [--reject-after <query>] [--guard-window <n>] [--guard-scope <window|same-line>] [--unique <path|file|symbol|origin|return-type|subsystem>] [--count-by <path|file|symbol|origin|return-type|subsystem>] [--origin <origin>] [--match-origin <origin>] [--exclude-origin <origin>] [--result-kind <kind>] [--search-fields <csv>] [--results-only] [--first-per-file] [--sample <n>] [--per-file-limit <n>] [--max-json-bytes <n>] [--allow-partial] [--next-steps]"),
         ("recipes", "cdidx recipes [list] [--query <filter>] [--names|--summary-only] [--json] [--pretty] [--format <text|json|compact>] [--max-json-bytes <n>]"),
         ("audit", "cdidx audit <recipe|recipe/query> [search filters] [--json[=ndjson]] [--format <text|json|count|compact|issue-drafts>] [--summary-only] [--limit <n>] [--total-limit <n>] [--results-only] [--search-fields <csv>] [--per-file-limit <n>] [--max-json-bytes <n>] [--snippet-lines <n>]"),
         ("definition", "cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--group-partials] [--since <datetime>]"),
@@ -93,7 +93,7 @@ public static class ConsoleUi
         ("callees", "cdidx callees <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--rank-by <weighted|count|kind>] [--raw-kinds] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
         ("symbols", "cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json[=ndjson|array]] [--compact] [--format <text|json|count|compact|lsp|qf|sarif>] [--summary-only] [--max-json-bytes <n>] [--allow-partial] [--verbose] [--limit <n>|--top <n>] [--sort <hotspot|references|size|complexity|path>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--group-partials] [--since <datetime>]"),
         ("files", "cdidx files [query|<glob>|--query <query>|-- <query>] [--db <path>] [--json[=ndjson|array]] [--format <text|json|count|compact>] [--summary-only] [--max-json-bytes <n>] [--allow-partial] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]"),
-        ("find", "cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--line-scan-limit <n>] [--allow-partial] [--exact] [--regex] [--count]"),
+        ("find", "cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--context <n>] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--line-scan-limit <n>] [--allow-partial] [--exact] [--regex] [--count]"),
         ("excerpt", "cdidx excerpt <path[:line|:start-end]> [--line <line>|--start <line>|--start-line <line>] [--end <line>|--end-line <line>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json] [--no-semantic-tokens] [--max-json-bytes <n>] [--verbose]"),
         ("map", "cdidx map [--db <path>] [--json] [--format <text|json|compact|issue-drafts>] [--pretty] [--compact] [--summary-only] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes] [--sections <summary,tree,languages,hotspots,metrics|list>] [--depth <n>] [--min-entrypoint-confidence <0.0..1.0>] [--max-json-bytes <n>]"),
         ("inspect", "cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|compact>] [--pretty] [--compact] [--fields <csv>] [--outline-only] [--body-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--body-start <line>] [--body-lines <n>|--body-line-count <n>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>] [--exact|--exact-name] [--group-partials]"),
@@ -140,6 +140,7 @@ public static class ConsoleUi
         ("--completions", "cdidx --completions <shell>"),
         ("upgrade", "cdidx upgrade [--check-only] [--json] [--channel <stable|latest|prerelease>] [--prerelease] [--version <tag>]"),
         ("license", "cdidx license"),
+        ("help", "cdidx help <command> [subcommand]"),
     ];
 
     private static readonly (string Command, string Note)[] CommandUsageNotes =
@@ -155,6 +156,7 @@ public static class ConsoleUi
         ("symbols", "Default NDJSON ends with a terminal record; --max-json-bytes covers the entire stream and partial output exits 11 unless --allow-partial is set."),
         ("files", "Default NDJSON ends with a terminal record; --max-json-bytes covers the entire stream and partial output exits 11 unless --allow-partial is set."),
         ("find", "With --all, default JSON rows end with scan metadata and capped partial scans exit 11 unless --allow-partial is set. Count JSON carries the same scan state in its single result object."),
+        ("find", "--context sets both sides symmetrically; explicit --before or --after overrides only that side regardless of option order, and these explicit context controls take precedence over --snippet-lines."),
         ("search", "Default NDJSON ends with a terminal record; --max-json-bytes covers the entire stream and partial output exits 11 unless --allow-partial is set. --json=array rejects the whole output when it does not fit."),
         ("inspect", "With --max-json-bytes, JSON output rejects the whole response when it does not fit."),
         ("map", "With --max-json-bytes, JSON and issue-drafts output reject the whole response when it does not fit."),
@@ -1002,6 +1004,7 @@ public static class ConsoleUi
     private static void PrintCommandSummary()
     {
         Console.WriteLine("Commands:");
+        Console.WriteLine("  help <command> [subcommand]  Show help without running the command");
         Console.WriteLine("  index <projectPath>        Build or update the index for a project");
         Console.WriteLine("  hooks                      Install, uninstall, or inspect git hook integration");
         Console.WriteLine("  backfill-fold              Upgrade folded-name columns in an existing index DB");
@@ -1328,6 +1331,23 @@ public static class ConsoleUi
         Console.WriteLine("Usage:");
         foreach (var usage in usages)
             Console.WriteLine($"  {usage}");
+        var schemaCommand = GetFlagSchemaCommandName(command);
+        var helpFlags = string.Equals(command, schemaCommand, StringComparison.Ordinal)
+            && CliFlagSchema.HasAuthoritativeHelpOptions(schemaCommand)
+                ? CliFlagSchema.GetCompletionFlagsForCommand(schemaCommand)
+                : [];
+        if (helpFlags.Count > 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine("Options:");
+            foreach (var flag in helpFlags)
+            {
+                var names = flag.ShortName is null ? flag.Name : $"{flag.Name}, {flag.ShortName}";
+                var token = flag.ValuePlaceholder is null ? names : $"{names} {flag.ValuePlaceholder}";
+                Console.WriteLine($"  {token}");
+                Console.WriteLine($"      {flag.Description}");
+            }
+        }
         var notes = GetCommandUsageNotes(command);
         if (notes.Count > 0)
         {
@@ -1370,14 +1390,17 @@ public static class ConsoleUi
         return notes;
     }
 
+    private static string GetFlagSchemaCommandName(string command)
+    {
+        if (command.StartsWith("db-", StringComparison.Ordinal))
+            return "db";
+        if (command.StartsWith("hooks-", StringComparison.Ordinal))
+            return "hooks";
+        return command == "--completions" ? "completions" : command;
+    }
+
     private static string NormalizeCommandUsageName(string command) =>
-        command switch
-        {
-            "refs" => "references",
-            "stats" => "status",
-            "fold" => "backfill-fold",
-            _ => command,
-        };
+        CliCommandCatalog.NormalizePublicCommandName(command);
 
     // --- Did-you-mean / もしかして ---
 

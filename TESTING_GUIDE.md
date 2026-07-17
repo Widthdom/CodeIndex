@@ -609,11 +609,14 @@ For background log or metrics sinks, use explicit writer-entry/release signals a
 - Capture stdout and stderr explicitly.
 - Prefer `ConsoleCapture` for simple stdout/stderr capture, and lock direct console mutations with `TestConsoleLock.Gate`.
 - Assert exit codes with `CommandExitCodes`.
+- When command, subcommand, or flag metadata changes, assert that every accepted primary flag appears in shell completions and in command help when the shared parser is authoritative. Dedicated or nested parsers must instead prove their exact usage syntax is complete and does not emit a misleading partial parent-command option list; nested command families still use the shared catalog, and optional-subcommand families retain parent flag candidates alongside nested verbs.
+- Immediate help-routing tests must assert both rendered usage and exit code, use a nested command whose normal execution would require additional input so the test proves help does not dispatch it, accept supported public aliases, and reject internal usage keys.
 - For JSON output, parse it with `JsonDocument` instead of asserting raw strings.
 - JSON failure-contract tests must assert that stdout contains one parseable versioned error object, stderr is empty, the documented exit code is preserved, and `status` / `error_code` identify the failure.
 - `inspect` file-coordinate coverage must prove that an exact indexed positional path wins over symbol lookup and that missing paths or out-of-range lines fail before nearest-symbol resolution.
 - For bounded NDJSON streams, include plain and recipe/audit search paths, parse the final `terminal_record`, verify authoritative-versus-lower-bound totals (including per-query and total-limit omissions) and selection reasons/counts before result-limit trimming, count UTF-8 bytes including newlines, and assert partial exit `11` plus the explicit `--allow-partial` exit-`0` opt-in. Also assert that capped profile/verbose/envelope combinations fail before stdout.
 - For `find --all`, cover row-terminal, count-object, and human scan metadata together: assert active file/line caps, `scan_complete` / authority fields, stable continuation/recovery guidance, the same partial-exit opt-in, option-order handling, and rejection of every row format that cannot carry terminal metadata. Envelope tests must keep row terminals in `metadata.stream_terminal` and preserve count objects as results.
+- For `find` context controls, cover separated and inline `--context`, both relative orders with `--before` / `--after`, and a JSON-lines batch invocation; assert that explicit asymmetric sides win independently of order.
 - For rejected checkpoint names, assert the usage exit/error code and syntax hint together, and verify that no checkpoint directory was created.
 
 ### JSON `--json` output snapshots
@@ -1264,11 +1267,14 @@ background の log / metrics sink は、sleep や狭い stopwatch 閾値では�
 - stdout と stderr を明示的にキャプチャする。
 - 単純な stdout/stderr capture では `ConsoleCapture` を優先し、直接コンソールを差し替える場合は `TestConsoleLock.Gate` で直列化する。
 - 終了コードは `CommandExitCodes` で検証する。
+- command、subcommand、flag metadata を変更した場合は、受理される全 primary flag が shell completion に現れ、共有 parser が正本の場合は command help にも現れることを検証する。専用 parser / nested parser では代わりに、正確な usage 構文が完全で、誤解を招く不完全な親 command の option 一覧を出さないことを証明し、nested command family が共有 catalog を使い、optional-subcommand family では nested verb と親 command の flag 候補を併せて維持することも確認する。
+- immediate help routing の test は rendered usage と終了コードを併せて検証し、通常実行なら追加入力を必要とする nested command を含めて help が dispatch しないことを証明し、対応する公開 alias の受理と内部 usage key の拒否も確認する。
 - JSON 出力は生文字列比較ではなく `JsonDocument` で解析して検証する。
 - JSON failure contract のテストでは、stdout に parse 可能な version 付き error object が 1 件だけあること、stderr が空であること、documented exit code が維持されること、`status` / `error_code` が失敗を識別することを検証する。
 - `inspect` の file-coordinate coverage では、indexed positional path の完全一致が symbol lookup より優先されることと、path 未検出・line 範囲外が nearest-symbol 解決前に失敗することを検証する。
 - 上限付き NDJSON stream は plain search と recipe / audit search の両経路を含め、最後の `terminal_record` を解析し、query ごとおよび total-limit の省略を含む authoritative / lower-bound の総件数、result-limit 適用前の selection 理由 / 件数、改行を含む UTF-8 byte 数、partial 終了コード `11`、明示的な `--allow-partial` による終了コード `0` の opt-in を検証する。上限付き profile / verbose / envelope の組み合わせが stdout 前に失敗することも確認する。
 - `find --all` は row 終端、count object、human scan metadata を併せて検証し、有効な file / line cap、`scan_complete` / authority field、安定した continuation / recovery 案内、同じ partial-exit opt-in、option 順序の扱い、終端 metadata を持てない全 row format の拒否を確認する。envelope test では row 終端を `metadata.stream_terminal` に入れ、count object を result として保持することを検証する。
+- `find` の context control は、separated / inline の `--context`、`--before` / `--after` との両方の相対順序、JSON Lines batch invocation を検証し、明示した asymmetric side が順序に依存せず優先されることを確認する。
 - 拒否される checkpoint 名では usage の終了コード / error code と構文 hint を併せて検証し、checkpoint directory が作成されていないことも確認する。
 
 ### JSON `--json` 出力 snapshot
