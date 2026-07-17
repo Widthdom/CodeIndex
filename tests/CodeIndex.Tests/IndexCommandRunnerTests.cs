@@ -5126,8 +5126,8 @@ public sealed class Caller
             Assert.Equal(1, json.GetProperty("symbol_references").GetInt32());
             Assert.True(json.GetProperty("rewrite_all").GetBoolean());
             Assert.True(json.GetProperty("verified").GetBoolean());
-            Assert.Equal(3, json.GetProperty("user_version_before").GetInt32());
-            Assert.Equal(7, json.GetProperty("user_version_after").GetInt32());
+            Assert.Equal(27, json.GetProperty("user_version_before").GetInt32());
+            Assert.Equal(31, json.GetProperty("user_version_after").GetInt32());
             Assert.True(json.GetProperty("fold_ready").GetBoolean());
 
             using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
@@ -5269,7 +5269,9 @@ public sealed class Caller
 
             using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal("DEADBEEFDEADBEEF", verifyDb.GetMetaString("fold_key_fingerprint"));
-            Assert.Equal(DbContext.FoldReadyFlag, verifyDb.GetUserVersion());
+            Assert.Equal(
+                DbContext.FoldReadyFlag | DbContext.HotspotReferenceAggregateFlags,
+                verifyDb.GetUserVersion());
         }
         finally
         {

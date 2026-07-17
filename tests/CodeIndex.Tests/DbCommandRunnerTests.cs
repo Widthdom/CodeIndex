@@ -562,6 +562,15 @@ public class DbCommandRunnerTests
             Assert.False(applyJson.GetProperty("dry_run").GetBoolean());
             Assert.Equal(4, applyJson.GetProperty("total").GetInt32());
             Assert.True(checkpointAttempted);
+            using (var verify = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly"))
+            {
+                verify.Open();
+                using var userVersion = verify.CreateCommand();
+                userVersion.CommandText = "PRAGMA user_version";
+                var value = checked((int)(long)userVersion.ExecuteScalar()!);
+                Assert.Equal(0, value & DbContext.HotspotReferenceAggregateReadyFlag);
+                Assert.NotEqual(0, value & DbContext.HotspotReferenceAggregateStorageContractFlag);
+            }
 
             var (secondExit, secondJson) = RunAndCaptureJson(["prune", "--dry-run", "--db", dbPath, "--json"]);
             Assert.Equal(CommandExitCodes.Success, secondExit);

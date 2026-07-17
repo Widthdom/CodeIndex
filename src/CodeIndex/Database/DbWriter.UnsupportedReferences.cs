@@ -20,6 +20,37 @@ public partial class DbWriter
         using var transaction = !IsInTransaction() ? BeginTransaction() : null;
         var values = SnapshotSupportedLanguages(supportedLanguages);
         var inParams = BuildSupportedLanguageParameterNames(values.Count);
+        int deleted;
+        using (var countCmd = _conn.CreateCommand())
+        {
+            countCmd.Transaction = _activeTransaction;
+            countCmd.CommandText = $@"
+                SELECT COUNT(*)
+                FROM symbol_references
+                WHERE file_id IN (
+                    SELECT f.id FROM files f
+                    WHERE f.lang IS NOT NULL
+                      AND f.lang NOT IN ({string.Join(", ", inParams)})
+                )";
+            AddSupportedLanguageParameters(countCmd, values.Count);
+            BindSupportedLanguageParameterValues(countCmd, values);
+            deleted = checked((int)(long)countCmd.ExecuteScalar()!);
+        }
+        using (var aggregateCmd = _conn.CreateCommand())
+        {
+            aggregateCmd.Transaction = _activeTransaction;
+            aggregateCmd.CommandText = $@"
+                DELETE FROM hotspot_reference_counts
+                WHERE file_id IN (
+                    SELECT f.id FROM files f
+                    WHERE f.lang IS NOT NULL
+                      AND f.lang NOT IN ({string.Join(", ", inParams)})
+                )";
+            AddSupportedLanguageParameters(aggregateCmd, values.Count);
+            BindSupportedLanguageParameterValues(aggregateCmd, values);
+            aggregateCmd.ExecuteNonQuery();
+        }
+
         var cmd = RentCommand(
             $@"
             DELETE FROM symbol_references
@@ -32,7 +63,7 @@ public partial class DbWriter
         try
         {
             BindSupportedLanguageParameterValues(cmd, values);
-            var deleted = cmd.ExecuteNonQuery();
+            cmd.ExecuteNonQuery();
             if (deleted > 0)
                 InvalidateReferenceIdentityContractForMutation();
             transaction?.Commit();
@@ -51,11 +82,24 @@ public partial class DbWriter
     public int PurgeAllReferences()
     {
         using var transaction = !IsInTransaction() ? BeginTransaction() : null;
-        var referenceCmd = RentCommand("DELETE FROM symbol_references", static _ => { });
         int deletedReferences;
+        using (var countCmd = _conn.CreateCommand())
+        {
+            countCmd.Transaction = _activeTransaction;
+            countCmd.CommandText = "SELECT COUNT(*) FROM symbol_references";
+            deletedReferences = checked((int)(long)countCmd.ExecuteScalar()!);
+        }
+        using (var aggregateCmd = _conn.CreateCommand())
+        {
+            aggregateCmd.Transaction = _activeTransaction;
+            aggregateCmd.CommandText = "DELETE FROM hotspot_reference_counts";
+            aggregateCmd.ExecuteNonQuery();
+        }
+
+        var referenceCmd = RentCommand("DELETE FROM symbol_references", static _ => { });
         try
         {
-            deletedReferences = referenceCmd.ExecuteNonQuery();
+            referenceCmd.ExecuteNonQuery();
         }
         finally
         {

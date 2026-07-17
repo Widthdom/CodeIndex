@@ -168,6 +168,7 @@ public partial class DbWriter
         // CASCADE on chunks/symbols + FTS triggers handle all cleanup automatically.
         // chunks/symbolsのCASCADE + FTSトリガーが全クリーンアップを自動処理する。
         using var txn = BeginTransaction();
+        InvalidateReferenceIdentityContractForMutation();
         DeleteFileRowsByIdBatched(fileIds);
         beforeCommit?.Invoke();
         txn.Commit();

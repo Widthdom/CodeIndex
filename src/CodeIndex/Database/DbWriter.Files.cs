@@ -178,16 +178,19 @@ public partial class DbWriter
     public void DeleteFileData(long fileId)
     {
         using var transaction = !IsInTransaction() ? BeginTransaction() : null;
+        var dependentReferenceFileIds = GetReferenceFilesDependingOnLinesOwnedBy(fileId);
         var hasIdentityRows = HasReferenceIdentityRowsForFile(fileId);
-        if (hasIdentityRows)
+        if (hasIdentityRows || dependentReferenceFileIds.Count > 0)
             InvalidateReferenceIdentityContractForMutation();
 
         // FTS cleanup is handled automatically by fts_chunks_ad trigger on chunk deletion
         // FTSクリーンアップはチャンク削除時にfts_chunks_adトリガーで自動処理される
+        var aggregateWasReady = ClearHotspotReferenceAggregateReady();
         var cmd = RentCommand(
             """
             DELETE FROM chunks WHERE file_id = @fid;
             DELETE FROM symbols WHERE file_id = @fid;
+            DELETE FROM hotspot_reference_counts WHERE file_id = @fid;
             DELETE FROM symbol_references WHERE file_id = @fid;
             DELETE FROM reference_lines WHERE file_id = @fid;
             """,
@@ -201,7 +204,32 @@ public partial class DbWriter
         {
             ReleaseCommand(cmd);
         }
+        // ON DELETE SET NULL can change COALESCE(sr.context, rl.context) for references
+        // owned by another file. Refresh those source files before restoring aggregate trust.
+        // 別 file 所有の reference は reference_line 削除で effective context が変わるため、
+        // aggregate trust 復元前に依存元 file を再集計する。
+        RefreshHotspotReferenceCounts(dependentReferenceFileIds, CancellationToken.None);
+        RestoreHotspotReferenceAggregateReady(aggregateWasReady);
         transaction?.Commit();
+    }
+
+    private HashSet<long> GetReferenceFilesDependingOnLinesOwnedBy(long fileId)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.Transaction = _activeTransaction;
+        cmd.CommandText = """
+            SELECT DISTINCT sr.file_id
+            FROM symbol_references sr
+            JOIN reference_lines rl ON rl.id = sr.reference_line_id
+            WHERE rl.file_id = @fid
+              AND sr.file_id <> @fid
+            """;
+        cmd.Parameters.Add("@fid", SqliteType.Integer).Value = fileId;
+        var fileIds = new HashSet<long>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            fileIds.Add(reader.GetInt64(0));
+        return fileIds;
     }
 
     private bool HasReferenceIdentityRowsForFile(long fileId)

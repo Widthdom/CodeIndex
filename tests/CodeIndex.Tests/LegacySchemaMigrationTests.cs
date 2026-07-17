@@ -1077,10 +1077,10 @@ public class LegacySchemaMigrationTests : IDisposable
     {
         // An index run that creates the schema (InitializeSchema) but is killed before
         // MarkIndexComplete runs must NOT be trusted as authoritative. PRAGMA user_version
-        // should remain 0 until the very end of a successful index, so downstream reads see
-        // the empty graph/issues tables as degraded rather than "clean".
+        // should retain only the aggregate contract bits until the very end of a successful index,
+        // so downstream reads see the empty graph/issues tables as degraded rather than "clean".
         // InitializeSchema だけ走って MarkIndexComplete に到達しなかった index は、
-        // user_version=0 のまま残り、readers は空テーブルを縮退扱いにしなければならない。
+        // user_version は aggregate contract bit のみ残り、readers は空テーブルを縮退扱いにしなければならない。
         var interruptedDir = TestProjectHelper.CreateTempProject("codeindex_interrupted");
         var interruptedDb = Path.Combine(interruptedDir, "codeindex.db");
         try
@@ -1090,7 +1090,7 @@ public class LegacySchemaMigrationTests : IDisposable
                 db.InitializeSchema();
                 // simulate interruption: no writes, no MarkIndexComplete.
                 // 中断シミュレーション: 書き込みも MarkIndexComplete も走らない。
-                Assert.Equal(0, db.GetUserVersion());
+                Assert.Equal(DbContext.HotspotReferenceAggregateFlags, db.GetUserVersion());
             }
 
             SqliteConnection.ClearAllPools();
@@ -1163,10 +1163,10 @@ public class LegacySchemaMigrationTests : IDisposable
                 Assert.Equal(DbContext.CurrentSchemaVersion, db.GetUserVersion());
 
                 // Simulate the start of a refresh: clear readiness. An interrupted refresh
-                // would leave it at 0 — trust is correctly demoted.
+                // leaves only the aggregate contract bits — graph/issues trust is correctly demoted.
                 // refresh 開始を模擬。中断されればここで止まり、縮退のまま残る。
                 db.ClearReadyFlags();
-                Assert.Equal(0, db.GetUserVersion());
+                Assert.Equal(DbContext.HotspotReferenceAggregateFlags, db.GetUserVersion());
 
                 var reader = new DbReader(db.Connection);
                 var status = reader.GetStatus();
@@ -1427,12 +1427,12 @@ public class LegacySchemaMigrationTests : IDisposable
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
-                Assert.Equal(0, db.GetUserVersion());
+                Assert.Equal(DbContext.HotspotReferenceAggregateFlags, db.GetUserVersion());
             }
 
             // Simulate RunIndex entry: capture wasFullyReady BEFORE clearing. Since the
-            // starting user_version is 0, wasFullyReady is false, so canStampReadiness is
-            // false in update mode — MarkReady must not fire.
+            // starting user_version carries only the aggregate contract bits, wasFullyReady is false,
+            // so canStampReadiness is false in update mode — MarkReady must not fire.
             // RunIndex を模擬: wasFullyReady=false のため update モードでは stamp しない。
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
@@ -1441,7 +1441,7 @@ public class LegacySchemaMigrationTests : IDisposable
                 db.ClearReadyFlags();
                 // pretend RunUpdateMode ran with errors==0 but canStampReadiness=!isUpdate||wasFullyReady = false
                 // so neither MarkGraphReady nor MarkIssuesReady fires.
-                Assert.Equal(0, db.GetUserVersion());
+                Assert.Equal(DbContext.HotspotReferenceAggregateFlags, db.GetUserVersion());
 
                 var reader = new DbReader(db.Connection);
                 var status = reader.GetStatus();
@@ -1525,15 +1525,17 @@ public class LegacySchemaMigrationTests : IDisposable
             SqliteConnection.ClearAllPools();
 
             // Simulate the production rebuild sequence: open → ClearReadyFlags → DropAll →
-            // InitializeSchema. Interrupt before any writes or MarkReady. Bits must be 0.
-            // 本番の rebuild 順序を模擬し、stamp 前に中断。readiness は 0 でなければならない。
+            // InitializeSchema. Interrupt before any writes or MarkReady. Only the aggregate
+            // contract bits may remain.
+            // 本番の rebuild 順序を模擬し、stamp 前に中断。aggregate の contract bit 以外の
+            // readiness は 0 でなければならない。
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.ClearReadyFlags();
                 db.DropAll();
                 db.InitializeSchema();
                 // intentionally no writes, no MarkGraphReady / MarkIssuesReady
-                Assert.Equal(0, db.GetUserVersion());
+                Assert.Equal(DbContext.HotspotReferenceAggregateFlags, db.GetUserVersion());
 
                 var reader = new DbReader(db.Connection);
                 var status = reader.GetStatus();

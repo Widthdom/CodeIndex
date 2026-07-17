@@ -606,6 +606,12 @@ scopes default to symbol grouping and should use `--group-by symbol` or
 returned symbols, files, SQL statements, or is ignored by `--count`. If
 `status --json` reports `hotspot_family_ready: false`, duplicate-name grouping
 uses a conservative fallback until you re-index with a current binary.
+Current indexes maintain compact per-file logical-reference totals for hotspot
+ranking. Limited symbol, file, and name-group queries aggregate, order, and
+apply `--limit` from those totals instead of regrouping the complete raw
+reference graph. Writable legacy databases are backfilled during migration;
+immutable legacy databases keep the compatible raw-reference fallback until
+they are re-indexed with a current binary.
 
 ### Trace impact
 
@@ -3598,6 +3604,11 @@ grouping が既定で、`--group-by symbol` または `--group-by file` を使�
 適用されるか、または `--count` で無視されるかを判別できます。`status --json` が
 `hotspot_family_ready: false` を返す場合、current binary で再 index するまで
 duplicate-name grouping は保守的な fallback になります。
+current index は hotspot ranking 用に file 単位の compact な logical-reference totals を
+維持します。limit 付きの symbol / file / name-group query は complete raw reference graph を
+毎回 regroup せず、その totals から集約・ordering・`--limit` 適用を行います。writable な
+legacy database は migration 時に backfill され、immutable な legacy database は current
+binary で再 index されるまで互換性のある raw-reference fallback を使います。
 
 ### Impact を追跡する
 
