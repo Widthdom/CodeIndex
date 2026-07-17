@@ -258,6 +258,11 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   When one policy test checks several step-level rules, parse workflow step blocks once and filter the retained blocks for each rule instead of rerunning the multiline step regex for every assertion family.
 - `IndexCommandRunnerTests.Run_CancelDuringFreshIndex_ReturnsInterruptedJson`, `Run_CancelDuringDryRunScan_ReturnsInterruptedJson`, and `Run_CancelBeforeFreshScan_ReturnsInterruptedJson`
   exercise the same in-process cancellation paths used after Ctrl-C/SIGINT wiring, including scan-time cancellation, so interrupted index runs keep returning the canonical JSON error contract.
+- `IndexCommandRunnerTests.RunOptimizeFts_DryRunPreviewsWithoutWritingThenOptimizeMutates_Issue4577`, `RunOptimizeFts_LockHeld_ReportsDbLocked`, and `RunOptimizeFts_ReadOnlyUri_ReturnsDbNotWritable`
+  share seeded databases to verify that optimize dry-run reports sizes, readiness, lock state, recommendations, and planned work while preserving the source bytes and creating no lock artifacts; the same fixtures retain the writable optimize and lock/read-only URI mutation guards.
+  `ConsoleUiTests.PrintUsage_WithoutBanner_HidesAsciiArtAndEasterEggFlags` keeps the optimize dry-run flag visible in full CLI usage.
+- `IndexCommandRunnerTests.Run_DryRunWithRebuildAndMemoryTrace_SkipsConfirmationAndPreservesWorkspace_Issue4580`
+  runs a rebuild preview as redirected input without `--yes`, verifies live memory phases and samples, and byte-compares the complete project file set before and after so source, DB, WAL, SHM, and other workspace artifacts cannot be changed silently.
 - `IndexCommandRunnerTests.SymbolExtractionWorker_LegacyEnvironmentHooksAreIgnored_Issue3398`
   launches the isolated symbol worker to prove legacy worker environment variables are ignored. Its callback budget includes process startup and is intentionally wider than ordinary in-process checks so local process load does not turn the legacy-env regression check into a timeout flake (#3863).
 - `IndexCommandRunnerTests` and `FileIndexerTests` also cover `CSharpStaticInterfacePrepass` text, raw-byte, chunked raw-token, and streaming file contract probes. Keep byte-array, chunked, and file-level probe coverage aligned so the prepass can avoid whole-file allocation without losing UTF-8 / UTF-16 static-interface contract candidates.
@@ -927,6 +932,11 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   1つの policy test が複数の step-level rule を検証する場合は、workflow step block を一度だけ解析して保持し、assertion family ごとに multiline step regex を再実行せず保持済み block を絞り込みます。
 - `IndexCommandRunnerTests.Run_CancelDuringFreshIndex_ReturnsInterruptedJson`、`Run_CancelDuringDryRunScan_ReturnsInterruptedJson`、`Run_CancelBeforeFreshScan_ReturnsInterruptedJson`
   Ctrl-C/SIGINT 配線後に使われる in-process cancellation 経路を、scan 中のキャンセルも含めて検証し、interrupted index run が標準の JSON error contract を返し続けることを固定する。
+- `IndexCommandRunnerTests.RunOptimizeFts_DryRunPreviewsWithoutWritingThenOptimizeMutates_Issue4577`、`RunOptimizeFts_LockHeld_ReportsDbLocked`、`RunOptimizeFts_ReadOnlyUri_ReturnsDbNotWritable`
+  seed 済み database を共有し、optimize dry-run が size、readiness、lock state、推奨、planned work を報告しつつ source byte を保持し、lock artifact を作成しないことを検証する。同じ fixture で、書き込み版 optimize と lock/read-only URI の mutation guard も維持する。
+  `ConsoleUiTests.PrintUsage_WithoutBanner_HidesAsciiArtAndEasterEggFlags` は、full CLI usage に optimize dry-run flag が表示され続けることを固定します。
+- `IndexCommandRunnerTests.Run_DryRunWithRebuildAndMemoryTrace_SkipsConfirmationAndPreservesWorkspace_Issue4580`
+  redirect input で `--yes` なしの rebuild preview を実行し、live memory phase/sample を検証します。実行前後の project file set 全体を byte 比較し、source、DB、WAL、SHM、その他 workspace artifact が暗黙に変更されないことも固定します。
 - `IndexCommandRunnerTests.SymbolExtractionWorker_LegacyEnvironmentHooksAreIgnored_Issue3398`
   isolated symbol worker を起動し、legacy worker 環境変数が無視されることを検証します。この callback budget はプロセス起動時間も含むため、通常の in-process チェックより意図的に広く取り、ローカル負荷で legacy-env 回帰テストが timeout flake にならないようにします（#3863）。
 - `IndexCommandRunnerTests` と `FileIndexerTests` は `CSharpStaticInterfacePrepass` のテキスト判定、raw-byte、chunked raw-token、streaming file 契約 probe も扱います。prepass がファイル全体の割り当てを避けても UTF-8 / UTF-16 の static-interface 契約候補を落とさないよう、byte-array、chunked、file-level probe のカバレッジを揃えてください。

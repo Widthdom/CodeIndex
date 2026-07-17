@@ -4593,7 +4593,7 @@ public sealed class Caller
     }
 
     [Fact]
-    public void RunOptimizeFts_ExistingDb_ResetsCounterAndEmitsJson()
+    public void RunOptimizeFts_DryRunPreviewsWithoutWritingThenOptimizeMutates_Issue4577()
     {
         var dbPath = CreateTempDbPath("cdidx_optimize_fts");
         try
@@ -4602,9 +4602,109 @@ public sealed class Caller
             {
                 db.InitializeSchema();
                 var writer = new DbWriter(db);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/Preview.cs",
+                    Lang = "csharp",
+                    Size = 25,
+                    Lines = 1,
+                    Checksum = "preview-checksum",
+                    Modified = DateTime.UtcNow,
+                });
+                writer.InsertChunks([
+                    new ChunkRecord
+                    {
+                        FileId = fileId,
+                        ChunkIndex = 0,
+                        StartLine = 1,
+                        EndLine = 1,
+                        Content = "public sealed class Preview; // 日本語",
+                    },
+                ]);
                 writer.RecordFtsIncrementalWrite();
                 writer.RecordFtsIncrementalWrite();
             }
+
+            SqliteConnection.ClearAllPools();
+            var dbBytesBeforePreview = File.ReadAllBytes(dbPath);
+            int previewExitCode;
+            JsonElement previewJson;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                try
+                {
+                    using var stdout = new StringWriter();
+                    Console.SetOut(stdout);
+                    previewExitCode = IndexCommandRunner.RunOptimizeFts(
+                        ["--db", dbPath, "--dry-run", "--json"],
+                        _jsonOptions,
+                        forceLogicalObjectSizeFallbackForTesting: true);
+                    using var document = JsonDocument.Parse(stdout.ToString());
+                    previewJson = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, previewExitCode);
+            Assert.Equal("dry_run", previewJson.GetProperty("status").GetString());
+            Assert.True(previewJson.GetProperty("dry_run").GetBoolean());
+            Assert.Equal(dbPath, previewJson.GetProperty("db_path").GetString());
+            Assert.Equal(2, previewJson.GetProperty("writes_since_optimize_before").GetInt32());
+            Assert.Equal(2, previewJson.GetProperty("writes_since_optimize_after").GetInt32());
+            Assert.True(previewJson.GetProperty("db_size_bytes").GetInt64() > 0);
+            Assert.True(previewJson.GetProperty("page_count").GetInt64() > 0);
+            Assert.True(previewJson.GetProperty("object_sizes_available").GetBoolean());
+            Assert.Equal("logical_payload_bytes", previewJson.GetProperty("object_sizes_measurement").GetString());
+            Assert.True(
+                previewJson.GetProperty("object_size_bytes").GetProperty("chunks").GetInt64()
+                >= Encoding.UTF8.GetByteCount("public sealed class Preview; // 日本語"));
+            Assert.True(previewJson.GetProperty("fts_size_bytes").GetInt64() > 0);
+            Assert.Equal("available", previewJson.GetProperty("lock_state").GetString());
+            Assert.True(previewJson.GetProperty("would_acquire_exclusive_index_lock").GetBoolean());
+            Assert.True(previewJson.GetProperty("source_database_unchanged").GetBoolean());
+            Assert.False(previewJson.GetProperty("readiness").GetProperty("fold_ready").GetBoolean());
+            Assert.Contains(
+                previewJson.GetProperty("planned_operations").EnumerateArray().Select(item => item.GetString()),
+                operation => operation == "merge_fts5_segments");
+            Assert.Contains(
+                previewJson.GetProperty("planned_operations").EnumerateArray().Select(item => item.GetString()),
+                operation => operation == "initialize_or_migrate_schema");
+            Assert.Equal(dbBytesBeforePreview, File.ReadAllBytes(dbPath));
+            Assert.False(File.Exists(IndexLock.GetLockPath(dbPath)));
+            Assert.False(File.Exists(IndexLock.GetInfoPath(IndexLock.GetLockPath(dbPath))));
+
+            int humanPreviewExitCode;
+            string humanPreviewOutput;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                try
+                {
+                    using var stdout = new StringWriter();
+                    Console.SetOut(stdout);
+                    humanPreviewExitCode = IndexCommandRunner.RunOptimizeFts(
+                        ["--db", dbPath, "--dry-run"],
+                        _jsonOptions,
+                        forceLogicalObjectSizeFallbackForTesting: true);
+                    humanPreviewOutput = stdout.ToString();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, humanPreviewExitCode);
+            Assert.Contains("Core size", humanPreviewOutput, StringComparison.Ordinal);
+            Assert.Contains("Readiness", humanPreviewOutput, StringComparison.Ordinal);
+            Assert.Contains("Est. duration", humanPreviewOutput, StringComparison.Ordinal);
+            Assert.Contains("Planned operations", humanPreviewOutput, StringComparison.Ordinal);
+            Assert.Contains("initialize_or_migrate_schema", humanPreviewOutput, StringComparison.Ordinal);
+            Assert.Equal(dbBytesBeforePreview, File.ReadAllBytes(dbPath));
 
             int exitCode;
             JsonElement json;
@@ -4629,10 +4729,104 @@ public sealed class Caller
             Assert.Equal("success", json.GetProperty("status").GetString());
             Assert.Equal(2, json.GetProperty("writes_since_optimize_before").GetInt32());
             Assert.Equal(0, json.GetProperty("writes_since_optimize_after").GetInt32());
+            Assert.Equal(6, json.EnumerateObject().Count());
+            Assert.False(json.TryGetProperty("dry_run", out _));
+            Assert.False(json.TryGetProperty("planned_operations", out _));
 
             using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal("0", verifyDb.GetMetaString(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey));
             Assert.False(string.IsNullOrWhiteSpace(verifyDb.GetMetaString(DbWriter.FtsLastOptimizedAtMetaKey)));
+            Assert.False(string.IsNullOrWhiteSpace(verifyDb.GetMetaString(DbWriter.FtsLastOptimizeDurationMsMetaKey)));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteFile(dbPath);
+        }
+    }
+
+    [Fact]
+    public void RunOptimizeFts_DryRunLogicalFallbackMeasuresLegacySchema_Issue4577()
+    {
+        var dbPath = CreateTempDbPath("cdidx_optimize_legacy_preview");
+        try
+        {
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString()))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = $"""
+                    PRAGMA application_id={DbContext.ApplicationId};
+                    CREATE TABLE files (
+                        id INTEGER PRIMARY KEY,
+                        path TEXT NOT NULL,
+                        lang TEXT,
+                        size INTEGER,
+                        lines INTEGER,
+                        checksum TEXT,
+                        modified TEXT,
+                        indexed_at TEXT
+                    );
+                    CREATE TABLE chunks (
+                        id INTEGER PRIMARY KEY,
+                        file_id INTEGER,
+                        chunk_index INTEGER,
+                        start_line INTEGER,
+                        end_line INTEGER,
+                        content TEXT
+                    );
+                    CREATE TABLE symbols (
+                        id INTEGER PRIMARY KEY,
+                        file_id INTEGER,
+                        kind TEXT,
+                        name TEXT,
+                        line INTEGER,
+                        signature TEXT
+                    );
+                    INSERT INTO files (id, path, lang, size, lines, checksum, modified, indexed_at)
+                    VALUES (1, 'src/Legacy.cs', 'csharp', 12, 1, 'legacy', '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z');
+                    INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content)
+                    VALUES (1, 0, 1, 1, '古いチャンク');
+                    INSERT INTO symbols (file_id, kind, name, line, signature)
+                    VALUES (1, 'class', '旧型', 1, 'class 旧型');
+                    """;
+                command.ExecuteNonQuery();
+            }
+
+            SqliteConnection.ClearAllPools();
+            var bytesBefore = File.ReadAllBytes(dbPath);
+            int exitCode;
+            JsonElement json;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                try
+                {
+                    using var stdout = new StringWriter();
+                    Console.SetOut(stdout);
+                    exitCode = IndexCommandRunner.RunOptimizeFts(
+                        ["--db", dbPath, "--dry-run", "--json"],
+                        _jsonOptions,
+                        forceLogicalObjectSizeFallbackForTesting: true);
+                    using var document = JsonDocument.Parse(stdout.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("logical_payload_bytes", json.GetProperty("object_sizes_measurement").GetString());
+            Assert.True(
+                json.GetProperty("object_size_bytes").GetProperty("symbols").GetInt64()
+                >= Encoding.UTF8.GetByteCount("class旧型class 旧型"));
+            Assert.Contains(
+                json.GetProperty("planned_operations").EnumerateArray().Select(item => item.GetString()),
+                operation => operation == "initialize_or_migrate_schema");
+            Assert.Equal(bytesBefore, File.ReadAllBytes(dbPath));
+            Assert.False(File.Exists(IndexLock.GetLockPath(dbPath)));
         }
         finally
         {
@@ -4654,6 +4848,29 @@ public sealed class Caller
             Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
             using (var holder = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
             {
+                int previewExitCode;
+                JsonElement previewJson;
+                lock (TestConsoleLock.Gate)
+                {
+                    var originalOut = Console.Out;
+                    try
+                    {
+                        using var stdout = new StringWriter();
+                        Console.SetOut(stdout);
+                        previewExitCode = IndexCommandRunner.RunOptimizeFts(["--db", dbPath, "--dry-run", "--json"], _jsonOptions);
+                        using var document = JsonDocument.Parse(stdout.ToString());
+                        previewJson = document.RootElement.Clone();
+                    }
+                    finally
+                    {
+                        Console.SetOut(originalOut);
+                    }
+                }
+
+                Assert.Equal(CommandExitCodes.Success, previewExitCode);
+                Assert.Equal("locked", previewJson.GetProperty("lock_state").GetString());
+                Assert.True(previewJson.GetProperty("source_database_unchanged").GetBoolean());
+
                 int exitCode;
                 JsonElement json;
                 lock (TestConsoleLock.Gate)
@@ -4703,6 +4920,29 @@ public sealed class Caller
             }
 
             var dbUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            int previewExitCode;
+            JsonElement previewJson;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                try
+                {
+                    using var stdout = new StringWriter();
+                    Console.SetOut(stdout);
+                    previewExitCode = IndexCommandRunner.RunOptimizeFts(["--db", dbUri, "--dry-run", "--json"], _jsonOptions);
+                    using var document = JsonDocument.Parse(stdout.ToString());
+                    previewJson = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, previewExitCode);
+            Assert.Equal("dry_run", previewJson.GetProperty("status").GetString());
+            Assert.True(previewJson.GetProperty("source_database_unchanged").GetBoolean());
+
             int exitCode;
             JsonElement json;
             lock (TestConsoleLock.Gate)
@@ -4777,7 +5017,7 @@ public sealed class Caller
     }
 
     [Fact]
-    public void Run_IndexOptimizeWithDryRun_ReturnsUsageErrorWithoutWriting()
+    public void Run_IndexOptimizeWithDryRun_PreviewsWithoutWriting_Issue4577()
     {
         var projectRoot = CreateTempProject();
         try
@@ -4797,10 +5037,10 @@ public sealed class Caller
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--optimize", "--dry-run", "--json"]);
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal("error", json.GetProperty("status").GetString());
-            Assert.Equal(CommandErrorCodes.UsageError, json.GetProperty("error_code").GetString());
-            Assert.Contains("--optimize cannot be combined", json.GetProperty("message").GetString());
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.True(json.GetProperty("dry_run").GetBoolean());
+            Assert.True(json.GetProperty("source_database_unchanged").GetBoolean());
 
             using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal("1", verifyDb.GetMetaString(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey));

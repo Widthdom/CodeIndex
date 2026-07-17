@@ -20,6 +20,7 @@ public partial class DbWriter
 {
     public const string FtsIncrementalWritesSinceOptimizeMetaKey = "fts_incremental_writes_since_optimize";
     public const string FtsLastOptimizedAtMetaKey = "fts_last_optimized_at";
+    public const string FtsLastOptimizeDurationMsMetaKey = "fts_last_optimize_duration_ms";
     public const string FtsBulkLoadInProgressMetaKey = "fts_bulk_load_in_progress";
     public const int DefaultFtsOptimizeIncrementalWriteThreshold = 25;
 

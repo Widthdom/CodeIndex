@@ -19,14 +19,14 @@ public static partial class IndexCommandRunner
                 return watchConflictExitCode.Value;
         }
 
-        if (options.OptimizeOnly && (options.DryRun || options.Watch || options.Rebuild || isUpdateMode))
+        if (options.OptimizeOnly && (options.Watch || options.Rebuild || isUpdateMode))
         {
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
-                "--optimize cannot be combined with --dry-run, --watch, --rebuild, --commits, --changed-between, or --files",
+                "--optimize cannot be combined with --watch, --rebuild, --commits, --changed-between, or --files",
                 CommandExitCodes.UsageError,
-                "Use `cdidx optimize --db <path>` or `cdidx index <projectPath> --optimize` by itself.",
+                "Use `cdidx optimize --db <path> [--dry-run]` or `cdidx index <projectPath> --optimize [--dry-run]`.",
                 CommandErrorCodes.UsageError);
         }
 
@@ -199,7 +199,7 @@ public static partial class IndexCommandRunner
         string dbPath,
         JsonSerializerOptions jsonOptions)
     {
-        if (!options.Rebuild || options.Yes || options.Force)
+        if (!options.Rebuild || options.DryRun || options.Yes || options.Force)
             return null;
 
         var resolvedPreviewDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(dbPath));
