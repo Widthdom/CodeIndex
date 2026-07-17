@@ -810,18 +810,19 @@ files 1──N symbol_references
 
 ### Reference taxonomy
 
-`symbol_references.reference_kind` stores raw extractor labels. Default call-graph surfaces (`callers`, `callees`, inspect/analyze caller and callee bundles, and their JSON/MCP fields) expose logical labels so downstream grouping does not mix collapsed and raw event kinds. Use `--raw-kinds` on `callers` / `callees`, or `references --kind <raw-kind>`, when debugging raw extractor output.
+`symbol_references.reference_kind` stores raw extractor labels. Default call-graph surfaces (`callers`, `callees`, inspect/analyze caller and callee bundles, and their JSON/MCP fields) expose the canonical public vocabulary `call`, `instantiate`, and `subscribe`. The primary `reference_kind`, `reference_kinds`, and `reference_kind_counts` keys use that same vocabulary. Use `--raw-kinds` on `callers` / `callees`, or `references --kind <raw-kind>`, when debugging raw extractor output.
 
 Reference extraction deduplicates only within the same indexed file and language context. When adding extractor paths, include the file id and language hint in shared `seen` keys so same line/column/name edges from polyglot workspaces do not collapse across Java, Rust, C#, SQL, or other language-specific normalization contexts.
 
 | Raw kind | Logical graph kind | Notes |
 |---|---|---|
-| `call`, `instantiate` | `invoke` | Executable invocation edges. |
+| `call` | `call` | Direct executable invocation edges. |
+| `instantiate` | `instantiate` | Constructor / construction edges. |
 | `goroutine_spawn` | `goroutine_spawn` | Go `go f()` async spawn edges; the ordinary `call` edge is also emitted for the invoked function. |
 | `channel_send`, `channel_receive` | raw label | Go channel communication edges for send and receive expressions; excluded from default invocation graphs. |
-| `razor_event_binding` | `event` | Razor `@on...="Handler"` event bindings from markup to C# handler names. |
-| `subscribe`, `unsubscribe` | `event` | Event wiring edges kept visible in call-graph queries. |
-| `friend` | `friend` | C++ friend access/coupling edges kept visible in dependency-oriented graph queries. |
+| `razor_event_binding` | `subscribe` | Razor `@on...="Handler"` event bindings from markup to C# handler names. |
+| `subscribe`, `unsubscribe` | `subscribe` | Event wiring edges kept visible in default call-graph queries. |
+| `generic_type_argument`, `friend`, `capture`, `consumes_hook`, `project_reference` | raw label | Dependency/metadata edges excluded from default `callers` / `callees`; available through `references`, an explicit kind filter, and the applicable dependency/impact surfaces. |
 | `system_variable` | raw label | SQL execution-context variables such as T-SQL `@@ROWCOUNT` / `@@IDENTITY` and MySQL `@@session.sql_mode` / `@@global.max_connections`; intrinsic variables have no definition site. |
 | `attribute`, `annotation`, `type_reference`, `implicit_implementation` | raw label | Dependency/reference-only metadata, type-position edges, and compiler-synthesized implementation edges such as C# async iterator `GetAsyncEnumerator` / `MoveNextAsync`; excluded from default call-graph rows. |
 
@@ -1504,18 +1505,18 @@ Process exit codes are coarse (`0` success including valid zero-row queries, `1`
 
 ## Reference-kind filtering matrix
 
-Different graph entry points walk different `reference_kind` subsets by design. The split mirrors **call graph vs. dependency graph**: `callers`, `callees`, `hotspots`, and `impact`'s BFS layer model the runtime call graph plus closure dependency edges (`capture`) and exclude metadata-only edges (`attribute` / `annotation`), while keeping explicit generic invocation type-argument edges (`generic_type_argument`) such as `Process<IFoo>(value)` because they bind a concrete type into an invoked method; `deps` and `impact`'s heuristic file-level fallback model the compile-time dependency graph and include metadata edges so that `[JsonConverter(typeof(User))]` and `@Inject(User.class)` still surface as real dependencies of `User`. Both directions of `deps` share the same SQL function (`DbReader.GetFileDependencies`), so forward and reverse walks always emit the same kind set.
+Different graph entry points walk different `reference_kind` subsets by design. The split mirrors **call graph vs. dependency graph**: default `callers` and `callees` are restricted to executable call, construction, and subscription semantics; `hotspots` and `impact` retain their broader dependency-oriented traversal, including closure and generic-invocation edges. `deps` and `impact`'s heuristic file-level fallback model the compile-time dependency graph and include metadata edges so that `[JsonConverter(typeof(User))]` and `@Inject(User.class)` still surface as real dependencies of `User`. Both directions of `deps` share the same SQL function (`DbReader.GetFileDependencies`), so forward and reverse walks always emit the same kind set.
 
 | Entry point | Direction | Reference kinds walked | Backing function |
 | --- | --- | --- | --- |
 | `references` (CLI / MCP) | symbol-centric | all `reference_kind` rows; narrowed by `--kind` when provided | `DbReader.GetReferences` |
-| `callers` / `callees` (default) | source ↔ container | `('augmentation', 'call', 'instantiate', 'generic_type_argument', 'subscribe', 'unsubscribe', 'razor_event_binding', 'friend', 'consumes_hook', 'capture', 'project_reference')` (= `CallGraphReferenceKindsSql`); metadata kinds rejected at CLI / MCP `--kind` boundary | `DbReader.GetCallers` / `DbReader.GetCallees` |
+| `callers` / `callees` (default) | source ↔ container | `('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')` (= `CallableReferenceKindsSql`); public rows canonicalize event variants to `subscribe` | `DbReader.GetCallers` / `DbReader.GetCallees` |
 | `impact` callers mode | transitive forward (BFS) | `('augmentation', 'call', 'instantiate', 'generic_type_argument', 'subscribe', 'unsubscribe', 'razor_event_binding', 'friend', 'consumes_hook', 'capture', 'project_reference')` via `GetCallersExact`; solution project paths also match their project container names | `DbReader.GetTransitiveCallers` |
 | `impact` file-hint fallback | reverse (definition file → dependent files) | all kinds; metadata-only rows gated by `IsMetadataTargetUnambiguous` + structured-type evidence | `DbReader.GetFileDependencyHintsToResolvedType` |
 | `deps` (default = forward) | source file → target file | all kinds; metadata rows require class-like + metadata-eligible targets (`has_metadata_target_kind`) and a unique resolution (`target_ambiguity`); MSBuild imports/project references resolve paths relative to the declaring project instead of matching shared package names | `DbReader.GetFileDependencies` |
 | `deps --reverse` | target file → source file | same as forward `deps` (same SQL) | `DbReader.GetFileDependencies` |
 
-Practical consequence: `impact <ClassName>` on a class-like symbol returns the heuristic file-dependency-hint fallback (with metadata edges) when no member-level callers exist, whereas `callers <ClassName>` returns the call-graph subset (without metadata). Both are correct under their own contracts; counts will not match. To reconcile, run `references <ClassName> --kind attribute` (or `annotation`) to surface the metadata-only edges that the call-graph commands intentionally drop.
+Practical consequence: `impact <ClassName>` on a class-like symbol returns the heuristic file-dependency-hint fallback (with metadata edges) when no member-level callers exist, whereas default `callers <ClassName>` returns only executable edges. Both are correct under their own contracts; counts will not match. To reconcile, run `references <ClassName> --kind attribute` (or `annotation`), or pass an explicitly supported non-default kind to `callers` / `callees`, to surface edges that the default call graph intentionally drops.
 
 `impact --json` and MCP `impact_analysis` expose zero-result diagnostics as structured routing fields. `zero_result_reason` remains the compact terminal reason; `impact_failure_chain` lists failed preconditions or traversal states in order, using values such as `definition_not_found`, `callable_filter_fails`, `multiple_definitions`, `multiple_definition_files`, `graph_unavailable`, `depth_requested_zero`, and `no_callers`. `suggestion_type` classifies the prose `suggestion` as `resolution`, `traversal`, or `precondition`. CLI `impact --strict` exits with `FeatureUnavailable` when the chain contains a resolution or precondition failure, but still treats a genuine `no_callers` traversal result as success.
 
@@ -3533,16 +3534,17 @@ files 1──N symbol_references
 
 ### 参照 taxonomy
 
-`symbol_references.reference_kind` には extractor が出力した raw label を保存する。既定の call-graph 表示（`callers`、`callees`、inspect/analyze の caller / callee bundle、および JSON/MCP フィールド）は logical label を返し、下流の集計で collapse 済み kind と raw event kind が混在しないようにする。raw extractor 出力を調べる場合は、`callers` / `callees` の `--raw-kinds`、または `references --kind <raw-kind>` を使う。
+`symbol_references.reference_kind` には extractor が出力した raw label を保存する。既定の call-graph 表示（`callers`、`callees`、inspect/analyze の caller / callee bundle、および JSON/MCP フィールド）は、公開 canonical 語彙 `call`、`instantiate`、`subscribe` を返す。primary `reference_kind`、`reference_kinds`、`reference_kind_counts` の key はすべて同じ語彙を使う。raw extractor 出力を調べる場合は、`callers` / `callees` の `--raw-kinds`、または `references --kind <raw-kind>` を使う。
 
 | Raw kind | Logical graph kind | 備考 |
 |---|---|---|
-| `call`, `instantiate` | `invoke` | 実行される呼び出しエッジ。 |
+| `call` | `call` | 直接実行される呼び出しエッジ。 |
+| `instantiate` | `instantiate` | constructor / construction エッジ。 |
 | `goroutine_spawn` | `goroutine_spawn` | Go の `go f()` による非同期 spawn edge。呼び出し先には通常の `call` edge も併せて出力する。 |
 | `channel_send`, `channel_receive` | raw label | Go の channel send / receive 式を表す通信エッジ。既定の invocation graph からは除外する。 |
-| `razor_event_binding` | `event` | Razor の `@on...="Handler"` event binding から C# handler 名への edge。 |
-| `subscribe`, `unsubscribe` | `event` | call-graph query で可視化するイベント配線エッジ。 |
-| `friend` | `friend` | C++ friend の access/coupling edge。依存関係寄りの graph query で可視化する。 |
+| `razor_event_binding` | `subscribe` | Razor の `@on...="Handler"` event binding から C# handler 名への edge。 |
+| `subscribe`, `unsubscribe` | `subscribe` | 既定の call-graph query で可視化するイベント配線エッジ。 |
+| `generic_type_argument`, `friend`, `capture`, `consumes_hook`, `project_reference` | raw label | 既定の `callers` / `callees` から除外する依存関係 / metadata edge。`references`、明示 kind filter、対応する dependency / impact surface では利用できる。 |
 | `system_variable` | raw label | T-SQL `@@ROWCOUNT` / `@@IDENTITY` や MySQL `@@session.sql_mode` / `@@global.max_connections` など、SQL 実行 context variable。intrinsic variable なので definition site は持たない。 |
 | `attribute`, `annotation`, `type_reference`, `implicit_implementation` | raw label | 依存関係 / reference 専用の metadata、型位置エッジ、および C# async iterator の `GetAsyncEnumerator` / `MoveNextAsync` のようなコンパイラ合成の実装エッジ。既定の call-graph 行からは除外する。 |
 
@@ -4226,18 +4228,18 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
 
 ## reference_kind フィルタの対応表
 
-グラフ系エントリポイントは、用途別に意図的に異なる `reference_kind` の部分集合だけを辿る。設計上の分割は **呼び出しグラフ vs 依存グラフ** に対応する: `callers`、`callees`、`hotspots`、`impact` の BFS 層は実行時の呼び出し・グラフ可視な結合とクロージャ依存 (`capture`) をモデル化するため metadata 専用エッジ (`attribute` / `annotation`) を除外し、`Process<IFoo>(value)` のように呼び出し済みメソッドへ具体型を束縛する明示的 generic 呼び出し型引数 (`generic_type_argument`) と TypeScript merged interface 用の `augmentation` は dependency edge として含める。`deps` と `impact` の heuristic file-level fallback はコンパイル時の依存グラフをモデル化するため、`[JsonConverter(typeof(User))]` や `@Inject(User.class)` も `User` への本物の依存として metadata エッジを含める。`deps` は forward / reverse とも同じ SQL 関数 (`DbReader.GetFileDependencies`) を共有するため、両方向で常に同じ kind 集合を出す。
+グラフ系エントリポイントは、用途別に意図的に異なる `reference_kind` の部分集合だけを辿る。設計上の分割は **呼び出しグラフ vs 依存グラフ** に対応する。既定の `callers` / `callees` は実行可能な call、construction、subscription semantics に限定する一方、`hotspots` と `impact` は closure や generic invocation edge を含む、より広い依存関係寄りの traversal を維持する。`deps` と `impact` の heuristic file-level fallback はコンパイル時の依存グラフをモデル化するため、`[JsonConverter(typeof(User))]` や `@Inject(User.class)` も `User` への本物の依存として metadata エッジを含める。`deps` は forward / reverse とも同じ SQL 関数 (`DbReader.GetFileDependencies`) を共有するため、両方向で常に同じ kind 集合を出す。
 
 | エントリポイント | 方向 | 辿る reference_kind | 実装 |
 | --- | --- | --- | --- |
 | `references` (CLI / MCP) | symbol 中心 | すべての `reference_kind` 行 (`--kind` 指定時は絞り込み) | `DbReader.GetReferences` |
-| `callers` / `callees` (デフォルト) | source ↔ container | `('augmentation', 'call', 'instantiate', 'generic_type_argument', 'subscribe', 'unsubscribe', 'razor_event_binding', 'friend', 'consumes_hook', 'capture', 'project_reference')` (= `CallGraphReferenceKindsSql`)。metadata 種別は CLI / MCP `--kind` 境界で拒否 | `DbReader.GetCallers` / `DbReader.GetCallees` |
+| `callers` / `callees` (デフォルト) | source ↔ container | `('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')` (= `CallableReferenceKindsSql`)。公開 row では event variant を `subscribe` に canonicalize | `DbReader.GetCallers` / `DbReader.GetCallees` |
 | `impact` callers mode | 推移的 forward (BFS) | `GetCallersExact` 経由で `('augmentation', 'call', 'instantiate', 'generic_type_argument', 'subscribe', 'unsubscribe', 'razor_event_binding', 'friend', 'consumes_hook', 'capture', 'project_reference')`。solution の project path は project container 名とも照合 | `DbReader.GetTransitiveCallers` |
 | `impact` file-hint fallback | reverse (定義ファイル → 依存先) | 全 kind。metadata 専用行は `IsMetadataTargetUnambiguous` と structured-type evidence で gating | `DbReader.GetFileDependencyHintsToResolvedType` |
 | `deps` (デフォルト = forward) | source file → target file | 全 kind。metadata 行は class-like かつ metadata-eligible な target (`has_metadata_target_kind`) と一意解決 (`target_ambiguity`) を要求。MSBuild の import / project reference は共有 package 名との一致ではなく、宣言元 project 相対の path として解決 | `DbReader.GetFileDependencies` |
 | `deps --reverse` | target file → source file | forward `deps` と同じ SQL を共有 | `DbReader.GetFileDependencies` |
 
-実運用上の帰結: クラスのようなシンボルに対する `impact <ClassName>` は、member-level の caller が存在しない場合 heuristic file-dependency-hint fallback (metadata エッジを含む) を返し、一方の `callers <ClassName>` は call-graph 部分集合 (metadata 無し) を返す。両方とも個々の契約上は正しいが、件数は一致しない。差分を埋めるには `references <ClassName> --kind attribute`（または `annotation`）で、call-graph コマンドが意図的に落としている metadata エッジだけを別途確認する。
+実運用上の帰結: クラスのようなシンボルに対する `impact <ClassName>` は、member-level の caller が存在しない場合 heuristic file-dependency-hint fallback (metadata エッジを含む) を返し、一方の既定 `callers <ClassName>` は実行可能 edge だけを返す。両方とも個々の契約上は正しいが、件数は一致しない。差分を埋めるには `references <ClassName> --kind attribute`（または `annotation`）を使うか、`callers` / `callees` に明示的に対応する非既定 kind を渡し、既定 call graph が意図的に落としている edge を確認する。
 
 `impact --json` と MCP `impact_analysis` は、0 件診断を structured routing field として返します。`zero_result_reason` は端末向けの短い理由のまま残し、`impact_failure_chain` は `definition_not_found`、`callable_filter_fails`、`multiple_definitions`、`multiple_definition_files`、`graph_unavailable`、`depth_requested_zero`、`no_callers` などの失敗前提や traversal 状態を順序付きで列挙します。`suggestion_type` は prose の `suggestion` を `resolution`、`traversal`、`precondition` に分類します。CLI `impact --strict` は chain に resolution / precondition failure が含まれる場合は `FeatureUnavailable` で終了しますが、真正な `no_callers` traversal 結果は成功として扱います。
 

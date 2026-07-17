@@ -5127,7 +5127,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("Hook", callee.GetProperty("caller_name").GetString());
             Assert.Equal("Changed", callee.GetProperty("callee_name").GetString());
-            Assert.Equal("event", callee.GetProperty("reference_kind").GetString());
+            Assert.Equal("subscribe", callee.GetProperty("reference_kind").GetString());
         }
         finally
         {

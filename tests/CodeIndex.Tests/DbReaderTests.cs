@@ -278,14 +278,21 @@ public partial class DbReaderTests : IDisposable
             }
             """);
 
-        var defaultCaller = Assert.Single(_reader.GetCallers(
+        var defaultCallers = _reader.GetCallers(
             "IFoo",
             lang: "csharp",
             exact: true,
-            pathPatterns: ["src/*generic_type_argument_fixture*"]));
+            pathPatterns: ["src/*generic_type_argument_fixture*"]);
 
-        Assert.Equal("Run", defaultCaller.CallerName);
-        Assert.Equal("generic_type_argument", defaultCaller.ReferenceKind);
+        Assert.Empty(defaultCallers);
+
+        var reference = Assert.Single(_reader.SearchReferences(
+            "IFoo",
+            lang: "csharp",
+            referenceKind: "generic_type_argument",
+            exact: true,
+            pathPatterns: ["src/*generic_type_argument_fixture*"]));
+        Assert.Equal("Run", reference.ContainerName);
 
         var caller = Assert.Single(_reader.GetCallers(
             "IFoo",
@@ -299,7 +306,7 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void GetCallers_SolutionProjectReference_ParticipatesInGraph_Issue3662()
+    public void GetCallers_SolutionProjectReference_RequiresExplicitKind_Issue3662()
     {
         InsertManualReference(
             "CodeIndex.sln",
@@ -309,7 +316,13 @@ public partial class DbReaderTests : IDisposable
             "src/App/App.csproj",
             "project_reference");
 
-        var caller = Assert.Single(_reader.GetCallers("src/App/App.csproj", lang: "solution", exact: true));
+        Assert.Empty(_reader.GetCallers("src/App/App.csproj", lang: "solution", exact: true));
+
+        var caller = Assert.Single(_reader.GetCallers(
+            "src/App/App.csproj",
+            lang: "solution",
+            referenceKind: "project_reference",
+            exact: true));
 
         Assert.Equal("CodeIndex.sln", caller.Path);
         Assert.Equal("App", caller.CallerName);
@@ -1783,11 +1796,11 @@ public partial class DbReaderTests : IDisposable
         Assert.Equal("src/session.py", callee.Path);
         Assert.Equal("login", callee.CallerName);
         Assert.Equal("authenticate", callee.CalleeName);
-        Assert.Equal("invoke", callee.ReferenceKind);
+        Assert.Equal("call", callee.ReferenceKind);
     }
 
     [Fact]
-    public void GetCallers_CppFriendReferenceParticipatesInGraphQueries()
+    public void GetCallers_CppFriendReferenceRequiresExplicitKind()
     {
         InsertIndexedFile("src/widget.cpp", "cpp",
             """
@@ -1799,7 +1812,14 @@ public partial class DbReaderTests : IDisposable
             };
             """);
 
-        var callers = _reader.GetCallers("Inspector", lang: "cpp", exact: true, pathPatterns: ["src/*widget.cpp*"]);
+        Assert.Empty(_reader.GetCallers("Inspector", lang: "cpp", exact: true, pathPatterns: ["src/*widget.cpp*"]));
+
+        var callers = _reader.GetCallers(
+            "Inspector",
+            lang: "cpp",
+            referenceKind: "friend",
+            exact: true,
+            pathPatterns: ["src/*widget.cpp*"]);
 
         var caller = Assert.Single(callers);
         Assert.Equal("src/widget.cpp", caller.Path);
@@ -2669,7 +2689,7 @@ public partial class DbReaderTests : IDisposable
 
         var callee = Assert.Single(_reader.GetCallees("Run", lang: "csharp", exact: true, pathPatterns: ["src/*constructor_fixture*"]));
         Assert.Equal("Target", callee.CalleeName);
-        Assert.Equal("invoke", callee.ReferenceKind);
+        Assert.Equal("instantiate", callee.ReferenceKind);
         Assert.Equal(1, callee.ReferenceCount);
 
         var (impact, truncated, truncatedReason, _, _) = _reader.GetTransitiveCallers("Target", maxDepth: 1, limit: 10, lang: "csharp", pathPatterns: ["src/*constructor_fixture*"]);
@@ -2970,7 +2990,7 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void ReferenceKindMatrix_CallersIncludesReactHookConsumption()
+    public void ReferenceKindMatrix_ReactHookConsumptionRequiresExplicitKind()
     {
         InsertIndexedFile("src/hooks.tsx", "typescript",
             """
@@ -2987,7 +3007,13 @@ public partial class DbReaderTests : IDisposable
             }
             """);
 
-        var callers = _reader.GetCallers("useSharedValue", lang: "typescript", exact: true);
+        Assert.Empty(_reader.GetCallers("useSharedValue", lang: "typescript", exact: true));
+
+        var callers = _reader.GetCallers(
+            "useSharedValue",
+            lang: "typescript",
+            referenceKind: "consumes_hook",
+            exact: true);
 
         Assert.Contains(callers, caller =>
             caller.CallerName == "Widget"
@@ -2995,7 +3021,7 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void ReferenceKindMatrix_CallersIncludesCSharpLambdaCaptures()
+    public void ReferenceKindMatrix_CSharpLambdaCapturesRequireExplicitKind()
     {
         InsertIndexedFile("src/CaptureDemo.cs", "csharp",
             """
@@ -3009,7 +3035,13 @@ public partial class DbReaderTests : IDisposable
             }
             """);
 
-        var callers = _reader.GetCallers("seed", lang: "csharp", exact: true);
+        Assert.Empty(_reader.GetCallers("seed", lang: "csharp", exact: true));
+
+        var callers = _reader.GetCallers(
+            "seed",
+            lang: "csharp",
+            referenceKind: "capture",
+            exact: true);
 
         Assert.Contains(callers, caller =>
             caller.CallerName == "Run"
@@ -3863,7 +3895,7 @@ public partial class DbReaderTests : IDisposable
         var callee = Assert.Single(_reader.GetCallees("Hook", lang: "csharp", exact: true, pathPatterns: ["src/*event_*"]));
         Assert.Equal("Hook", callee.CallerName);
         Assert.Equal("Changed", callee.CalleeName);
-        Assert.Equal("event", callee.ReferenceKind);
+        Assert.Equal("subscribe", callee.ReferenceKind);
         Assert.Equal(1, callee.ReferenceCount);
         Assert.Equal(1, _reader.CountCallees("Hook", lang: "csharp", exact: true, pathPatterns: ["src/*event_*"]));
 
@@ -3879,7 +3911,7 @@ public partial class DbReaderTests : IDisposable
         var bundledCallee = Assert.Single(callerAnalysis.Callees);
         Assert.Equal("Hook", bundledCallee.CallerName);
         Assert.Equal("Changed", bundledCallee.CalleeName);
-        Assert.Equal("event", bundledCallee.ReferenceKind);
+        Assert.Equal("subscribe", bundledCallee.ReferenceKind);
     }
 
     [Fact]
@@ -4061,10 +4093,10 @@ public partial class DbReaderTests : IDisposable
         Assert.Equal("Changed", caller.CalleeName);
         Assert.Equal(6, caller.ReferenceCount);
         Assert.True(caller.HasMixedReferenceKinds);
-        Assert.Equal(new[] { "event", "invoke" }, caller.ReferenceKinds);
+        Assert.Equal(new[] { "call", "subscribe" }, caller.ReferenceKinds);
         Assert.Equal(5, caller.ReferenceKindCounts["call"]);
         Assert.Equal(1, caller.ReferenceKindCounts["subscribe"]);
-        Assert.Equal("event", caller.ReferenceKind);
+        Assert.Equal("subscribe", caller.ReferenceKind);
 
         // `callees` rows are already split per kind, so each grouped row stays
         // single-kind with `has_mixed_reference_kinds = false`.
@@ -4073,14 +4105,14 @@ public partial class DbReaderTests : IDisposable
             .OrderBy(c => c.ReferenceKind, StringComparer.Ordinal)
             .ToList();
         Assert.Equal(2, callees.Count);
-        Assert.Equal("event", callees[0].ReferenceKind);
+        Assert.Equal("call", callees[0].ReferenceKind);
         Assert.False(callees[0].HasMixedReferenceKinds);
-        Assert.Equal(new[] { "event" }, callees[0].ReferenceKinds);
-        Assert.Equal(1, callees[0].ReferenceKindCounts["subscribe"]);
-        Assert.Equal("invoke", callees[1].ReferenceKind);
+        Assert.Equal(new[] { "call" }, callees[0].ReferenceKinds);
+        Assert.Equal(5, callees[0].ReferenceKindCounts["call"]);
+        Assert.Equal("subscribe", callees[1].ReferenceKind);
         Assert.False(callees[1].HasMixedReferenceKinds);
-        Assert.Equal(new[] { "invoke" }, callees[1].ReferenceKinds);
-        Assert.Equal(5, callees[1].ReferenceKindCounts["call"]);
+        Assert.Equal(new[] { "subscribe" }, callees[1].ReferenceKinds);
+        Assert.Equal(1, callees[1].ReferenceKindCounts["subscribe"]);
 
         var rawCaller = Assert.Single(_reader.GetCallers("Changed", lang: "csharp", exact: true, pathPatterns: ["src/*mixed_kind_caller*"], rawKinds: true));
         Assert.Equal(new[] { "call", "subscribe" }, rawCaller.ReferenceKinds);
@@ -4126,8 +4158,8 @@ public partial class DbReaderTests : IDisposable
         ]);
 
         var logicalCaller = Assert.Single(_reader.GetCallers("Changed", lang: "csharp", exact: true, pathPatterns: ["src/*unsubscribe_kind_caller*"]));
-        Assert.Equal(new[] { "event", "invoke" }, logicalCaller.ReferenceKinds);
-        Assert.Equal("event", logicalCaller.ReferenceKind);
+        Assert.Equal(new[] { "call", "subscribe" }, logicalCaller.ReferenceKinds);
+        Assert.Equal("subscribe", logicalCaller.ReferenceKind);
 
         var rawCaller = Assert.Single(_reader.GetCallers("Changed", lang: "csharp", exact: true, pathPatterns: ["src/*unsubscribe_kind_caller*"], rawKinds: true));
         Assert.Equal(new[] { "call", "unsubscribe" }, rawCaller.ReferenceKinds);

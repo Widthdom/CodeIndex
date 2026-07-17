@@ -2294,6 +2294,15 @@ public static partial class ReferenceExtractor
                         ? RustReferenceExtractor.NormalizeIdentifier(name)
                         : NormalizeAtPrefixedIdentifier(name);
 
+                // In tuple-return declarations such as `private static (int Value, string Error)
+                // Resolve(...)`, CallRegex sees the modifier token as `static(`. It is a C# keyword,
+                // never a callable identifier, so suppress the phantom edge before graph ingestion.
+                // `private static (int Value, string Error) Resolve(...)` のような tuple return 宣言では
+                // CallRegex が modifier を `static(` と誤認する。C# keyword は呼び出し対象にならないため、
+                // graph に入る前に phantom edge を除外する。
+                if (language == "csharp" && normalizedName == "static")
+                    return false;
+
                 if (language == "rust" && RustReferenceExtractor.IsFunctionDeclarationCallSite(preparedLine, callIndex))
                     return false;
                 if (language == "rust" && RustReferenceExtractor.IsDeriveAttributeCallSite(preparedLine, normalizedName, callIndex))

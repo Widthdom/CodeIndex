@@ -1578,7 +1578,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("Hook", json.GetProperty("caller_name").GetString());
             Assert.Equal("Changed", json.GetProperty("callee_name").GetString());
-            Assert.Equal("event", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("subscribe", json.GetProperty("reference_kind").GetString());
             Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
             // #501: every grouped caller row carries `reference_kinds` +
             // `has_mixed_reference_kinds`, even when the row is single-kind, so AI
@@ -1587,7 +1587,7 @@ public partial class QueryCommandRunnerTests
             // `has_mixed_reference_kinds` を返すため、AI クライアントは「未出力」と
             // 「空配列」を判別せずに済む。
             var kinds = json.GetProperty("reference_kinds").EnumerateArray().Select(k => k.GetString()).ToArray();
-            Assert.Equal(new[] { "event" }, kinds);
+            Assert.Equal(new[] { "subscribe" }, kinds);
             Assert.False(json.GetProperty("has_mixed_reference_kinds").GetBoolean());
 
             var (rawExitCode, rawStdout, rawStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
@@ -1638,7 +1638,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("HandleClick", json.GetProperty("callee_name").GetString());
-            Assert.Equal("event", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("subscribe", json.GetProperty("reference_kind").GetString());
 
             var (referencesExitCode, referencesStdout, referencesStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
                 ["HandleClick", "--db", dbPath, "--kind", "razor_event_binding", "--lang", "csharp", "--exact"],
@@ -1703,10 +1703,10 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(2, json.GetProperty("reference_count").GetInt32());
             Assert.True(json.GetProperty("has_mixed_reference_kinds").GetBoolean());
             var kinds = json.GetProperty("reference_kinds").EnumerateArray().Select(k => k.GetString()).ToArray();
-            Assert.Equal(new[] { "event", "invoke" }, kinds);
+            Assert.Equal(new[] { "call", "subscribe" }, kinds);
             Assert.Equal(1, json.GetProperty("reference_kind_counts").GetProperty("call").GetInt32());
             Assert.Equal(1, json.GetProperty("reference_kind_counts").GetProperty("subscribe").GetInt32());
-            Assert.Equal("event", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("subscribe", json.GetProperty("reference_kind").GetString());
 
             var (humanExitCode, humanStdout, humanStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
                 ["Changed", "--db", dbPath, "--lang", "csharp", "--exact"],
@@ -1913,7 +1913,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("Hook", json.GetProperty("caller_name").GetString());
             Assert.Equal("Changed", json.GetProperty("callee_name").GetString());
-            Assert.Equal("event", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("subscribe", json.GetProperty("reference_kind").GetString());
             Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
         }
         finally
@@ -2418,7 +2418,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("src/cases.cs", json.GetProperty("path").GetString());
             Assert.Equal("A", json.GetProperty("caller_name").GetString());
             Assert.Equal("B", json.GetProperty("callee_name").GetString());
-            Assert.Equal("invoke", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
             Assert.True(json.GetProperty("exact_index_available").GetBoolean());
             Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
         }

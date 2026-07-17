@@ -75,6 +75,7 @@ public partial class DbReader
                 SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
                        " + groupedReferenceKindSql + @" AS reference_kind,
                        r.reference_kind AS raw_reference_kind,
+                       " + groupedReferenceKindGroupSql + @" AS count_reference_kind,
                        COUNT(*) AS reference_count,
                        " + ReferenceWeightedScoreSql("r.reference_kind") + @" AS weighted_score,
                        (CAST(r.line AS INTEGER) * 4294967296 + r.column_number) AS location_key,
@@ -83,7 +84,7 @@ public partial class DbReader
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id" + referenceLineJoin + @"
                 WHERE " + callerContainerPredicate + @"
-                  AND r.reference_kind IN " + CallGraphReferenceKindsSql + @"
+                  AND r.reference_kind IN " + CallableReferenceKindsSql + @"
                   AND " + supportedLangPredicate
             : @"
             SELECT f.path, f.lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, r.symbol_name,
@@ -171,12 +172,12 @@ public partial class DbReader
             GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, " + groupedReferenceKindGroupSql + @", r.reference_kind
             )
             SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, symbol_name,
-                   " + (rawKinds ? GetGroupedCallerReferenceKindSql("r.reference_kind") : "MIN(r.reference_kind)") + @" AS reference_kind,
+                   " + (rawKinds ? GetGroupedCallerReferenceKindSql("r.reference_kind") : GetPreferredLogicalReferenceKindSql("r.reference_kind")) + @" AS reference_kind,
                    (MIN(location_key) / 4294967296) AS first_line,
                    (MIN(location_key) % 4294967296) AS first_column,
                    SUM(r.reference_count) AS reference_count,
                    GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds,
-                   GROUP_CONCAT(r.raw_reference_kind || ':' || r.reference_count) AS reference_kind_counts,
+                   GROUP_CONCAT(r.count_reference_kind || ':' || r.reference_count) AS reference_kind_counts,
                    SUM(r.weighted_score) AS weighted_score,
                    MAX(r.is_self_reference) AS is_self_reference,
                    MAX(r.is_mutual_recursion) AS is_mutual_recursion
@@ -274,7 +275,7 @@ public partial class DbReader
         if (referenceKind != null)
             groupedSql += " AND r.reference_kind = @referenceKind";
         else
-            groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
+            groupedSql += $" AND r.reference_kind IN {CallableReferenceKindsSql}";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
         var allowCSharpQualifiedContextMatch = SqlNameResolver.HasQualifier(query)
             && !HasQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
@@ -389,7 +390,7 @@ public partial class DbReader
         if (referenceKind != null)
             groupedSql += " AND r.reference_kind = @referenceKind";
         else
-            groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
+            groupedSql += $" AND r.reference_kind IN {CallableReferenceKindsSql}";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
         var allowCSharpQualifiedContextMatch = SqlNameResolver.HasQualifier(query)
             && !HasQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
@@ -498,13 +499,14 @@ public partial class DbReader
                 SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
                        {preferredCalleeKindSql} AS reference_kind,
                        r.reference_kind AS raw_reference_kind,
+                       {calleeGroupKindSql} AS count_reference_kind,
                        COUNT(*) AS reference_count,
                        {ReferenceWeightedScoreSql("r.reference_kind")} AS weighted_score,
                        r.line
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 WHERE r.container_name IS NOT NULL
-                  AND r.reference_kind IN {CallGraphReferenceKindsSql}
+                  AND r.reference_kind IN {CallableReferenceKindsSql}
                   AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
             : @"
             SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
@@ -576,7 +578,7 @@ public partial class DbReader
             SELECT path, lang, container_kind, container_name, symbol_name,
                    reference_kind, MIN(line) AS first_line, SUM(r.reference_count) AS reference_count,
                    GROUP_CONCAT(DISTINCT reference_kind) AS reference_kinds,
-                   GROUP_CONCAT(r.raw_reference_kind || ':' || r.reference_count) AS reference_kind_counts,
+                   GROUP_CONCAT(r.count_reference_kind || ':' || r.reference_count) AS reference_kind_counts,
                    SUM(r.weighted_score) AS weighted_score
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
@@ -673,7 +675,7 @@ public partial class DbReader
         if (referenceKind != null)
             groupedSql += " AND r.reference_kind = @referenceKind";
         else
-            groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
+            groupedSql += $" AND r.reference_kind IN {CallableReferenceKindsSql}";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
         var allowQualifiedLeafFallback = HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
         var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
@@ -778,7 +780,7 @@ public partial class DbReader
         if (referenceKind != null)
             groupedSql += " AND r.reference_kind = @referenceKind";
         else
-            groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
+            groupedSql += $" AND r.reference_kind IN {CallableReferenceKindsSql}";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
         var allowQualifiedLeafFallback = HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
         var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
@@ -870,7 +872,7 @@ public partial class DbReader
     private static string BuildReferenceRankOrderSql(ReferenceRankMode rankMode) => rankMode switch
     {
         ReferenceRankMode.Count => "reference_count DESC",
-        ReferenceRankMode.Kind => "CASE reference_kind WHEN 'instantiate' THEN 0 WHEN 'invoke' THEN 0 WHEN 'call' THEN 1 WHEN 'generic_type_argument' THEN 2 WHEN 'subscribe' THEN 3 WHEN 'event' THEN 3 ELSE 4 END, reference_count DESC",
+        ReferenceRankMode.Kind => "CASE reference_kind WHEN 'instantiate' THEN 0 WHEN 'call' THEN 1 WHEN 'generic_type_argument' THEN 2 WHEN 'subscribe' THEN 3 ELSE 4 END, reference_count DESC",
         _ => "weighted_score DESC, reference_count DESC",
     };
 
