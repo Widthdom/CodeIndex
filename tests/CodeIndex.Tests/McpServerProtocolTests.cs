@@ -80,24 +80,62 @@ public partial class McpServerTests
         Assert.Equal(requestAt.ToString("O", CultureInfo.InvariantCulture), result["last_request_at"]!.GetValue<string>());
     }
 
-    [Fact]
-    public void Initialize_ReturnsProtocolVersion()
+    [Theory]
+    [InlineData("2025-06-18")]
+    [InlineData("2025-03-26")]
+    [InlineData("2024-11-05")]
+    public void Initialize_ReturnsSupportedProtocolVersion(string protocolVersion)
     {
         // Issue #1554: negotiation echoes back the client's requested protocolVersion when
-        // it is in the server's supported set, instead of hardcoding the server's preferred
-        // version. The legacy `2024-11-05` client is still supported, so the response should
-        // mirror what the client asked for.
+        // it is in the server's supported set, including the version used by current Codex
+        // clients and both legacy versions.
         // Issue #1554: 交渉ロジックはサーバー対応集合にあるクライアント要求バージョンを
-        // そのまま返すようにした。レガシー `2024-11-05` クライアントは引き続きサポートする
-        // ため、レスポンスは要求された値と一致する。
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test"}}}""")!;
+        // そのまま返す。現行 Codex が使うバージョンと旧バージョンを同じ fixture で検証する。
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject
+            {
+                ["protocolVersion"] = protocolVersion,
+                ["clientInfo"] = new JsonObject { ["name"] = "test", ["version"] = "1" },
+                ["capabilities"] = new JsonObject(),
+            },
+        };
         var response = _server.HandleMessage(request)!;
 
         Assert.Equal("2.0", response["jsonrpc"]!.GetValue<string>());
         Assert.Equal(1, response["id"]!.GetValue<int>());
-        Assert.Equal("2024-11-05", response["result"]!["protocolVersion"]!.GetValue<string>());
+        Assert.Equal(protocolVersion, response["result"]!["protocolVersion"]!.GetValue<string>());
         Assert.Equal("cdidx", response["result"]!["serverInfo"]!["name"]!.GetValue<string>());
         Assert.Equal(ConsoleUi.LoadVersion(), response["result"]!["serverInfo"]!["version"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Initialize_CodexProtocolVersion_AllowsToolsList()
+    {
+        // Codex 0.144.5 requests MCP 2025-06-18. Exercise the lifecycle-enforcing transport
+        // path so a compatible initialize cannot regress into the reported tools/list failure.
+        // Codex 0.144.5 は MCP 2025-06-18 を要求する。lifecycle を強制する transport
+        // 経路で initialize から tools/list まで成功することを検証する。
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        var transport = new QueueMcpTransport(
+            prependInitialize: false,
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"codex-mcp-client","version":"0.144.5"},"capabilities":{}}}""",
+            """{"jsonrpc":"2.0","method":"notifications/initialized"}""",
+            """{"jsonrpc":"2.0","id":2,"method":"tools/list"}"""
+        );
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        Assert.Equal(2, transport.WrittenFrames.Count);
+        var initializeResponse = JsonNode.Parse(transport.WrittenFrames[0])!;
+        Assert.Equal("2025-06-18", initializeResponse["result"]!["protocolVersion"]!.GetValue<string>());
+        var toolsResponse = JsonNode.Parse(transport.WrittenFrames[1])!;
+        Assert.Null(toolsResponse["error"]);
+        Assert.Contains(toolsResponse["result"]!["tools"]!.AsArray(),
+            tool => tool!["name"]!.GetValue<string>() == "search");
     }
 
     [Fact]
@@ -364,19 +402,6 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void Initialize_RequestedCurrentProtocolVersion_EchoesBack()
-    {
-        // Issue #1554: when the client pins the current preferred version, the server
-        // must echo it (the client and server agree, no fallback needed).
-        // Issue #1554: クライアントが現行の優先バージョンを指定した場合、サーバーは
-        // そのまま返す（合意済みなので fallback 不要）。
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}""")!;
-        var response = _server.HandleMessage(request)!;
-
-        Assert.Equal("2025-03-26", response["result"]!["protocolVersion"]!.GetValue<string>());
-    }
-
-    [Fact]
     public void Initialize_NoProtocolVersion_UsesPreferred()
     {
         // Issue #1554: empty params still works — the negotiation falls back to the server's
@@ -387,7 +412,7 @@ public partial class McpServerTests
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.Equal("2025-03-26", response["result"]!["protocolVersion"]!.GetValue<string>());
+        Assert.Equal("2025-06-18", response["result"]!["protocolVersion"]!.GetValue<string>());
     }
 
     [Fact]
@@ -407,7 +432,7 @@ public partial class McpServerTests
         var error = response["error"]!;
         Assert.Equal(-32602, error["code"]!.GetValue<int>());
         Assert.Contains("2099-01-01", error["message"]!.GetValue<string>());
-        Assert.Contains("2025-03-26", error["message"]!.GetValue<string>());
+        Assert.Contains("2025-06-18", error["message"]!.GetValue<string>());
 
         var data = error["data"]!;
         Assert.Equal("2099-01-01", data["requestedVersion"]!.GetValue<string>());
@@ -843,7 +868,7 @@ public partial class McpServerTests
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":42}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.Equal("2025-03-26", response["result"]!["protocolVersion"]!.GetValue<string>());
+        Assert.Equal("2025-06-18", response["result"]!["protocolVersion"]!.GetValue<string>());
     }
 
     [Fact]
@@ -930,7 +955,7 @@ public partial class McpServerTests
 
         Assert.Equal(JsonValueKind.Null, root.GetProperty("id").ValueKind);
         Assert.Equal("2.0", root.GetProperty("jsonrpc").GetString());
-        Assert.Equal("2025-03-26", root.GetProperty("result").GetProperty("protocolVersion").GetString());
+        Assert.Equal("2025-06-18", root.GetProperty("result").GetProperty("protocolVersion").GetString());
     }
 
     [Fact]
