@@ -1125,14 +1125,14 @@ public static partial class QueryCommandRunner
         {
             case "candidate_edge_limit":
                 AddHigherLimitFlag(flags, candidateEdgeLimit);
-                flags.Add("--suppress-noise");
-                flags.Add("--symbol <name>");
-                flags.Add("--symbol-family <prefix>");
-                flags.Add("--path <narrower-glob>");
+                flags.Add(CliFlagSchema.GetUsageTokenForCommand("deps", "--suppress-noise"));
+                flags.Add(CliFlagSchema.GetUsageTokenForCommand("deps", "--symbol"));
+                flags.Add(CliFlagSchema.GetUsageTokenForCommand("deps", "--symbol-family"));
+                flags.Add(CliFlagSchema.GetUsageTokenForCommand("deps", "--path", "<narrower-glob>"));
                 break;
             case "display_limit":
                 AddHigherLimitFlag(flags, displayLimit);
-                flags.Add("--path <narrower-glob>");
+                flags.Add(CliFlagSchema.GetUsageTokenForCommand("deps", "--path", "<narrower-glob>"));
                 break;
         }
 

@@ -200,6 +200,8 @@ public class ConsoleUiTests
         {
             Assert.Contains(flag, output);
         }
+
+        Assert.Contains("--named-query <name>=<query> [--named-query <name>=<query> ...]|--recipe <name|name/query> [--include-query <name>] [--exclude-query <name>]", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1120,19 +1122,19 @@ public class ConsoleUiTests
         var fish = ConsoleCompletionRenderer.GetCompletionScript("fish");
         var powershell = ConsoleCompletionRenderer.GetCompletionScript("powershell");
 
-        foreach (var expected in new[] { "hooks) COMPREPLY=($(compgen -W \"install uninstall status\"", "workspace) COMPREPLY=($(compgen -W \"list status use current\"", "config) COMPREPLY=($(compgen -W \"show\"", "db) COMPREPLY=($(compgen -W \"integrity schema prune checkpoint checkpoints restore restore-backups\"" })
+        foreach (var expected in new[] { "hooks) COMPREPLY=($(compgen -W \"install uninstall status\"", "workspace) COMPREPLY=($(compgen -W \"list status use current clear deactivate\"", "config) COMPREPLY=($(compgen -W \"show\"", "db) COMPREPLY=($(compgen -W \"integrity schema prune checkpoint checkpoints restore restore-backups\"" })
             Assert.Contains(expected, bash);
 
-        foreach (var expected in new[] { "'install:install subcommand'", "'list:list subcommand'", "'show:show subcommand'", "'schema:schema subcommand'", "'prune:prune subcommand'" })
+        foreach (var expected in new[] { "'install:install subcommand'", "'list:list subcommand'", "'clear:clear subcommand'", "'deactivate:deactivate subcommand'", "'show:show subcommand'", "'schema:schema subcommand'", "'prune:prune subcommand'" })
             Assert.Contains(expected, zsh);
 
         Assert.Contains("complete -c cdidx -n '__fish_seen_subcommand_from hooks' -a 'install uninstall status' -d 'hooks subcommand'", fish);
-        Assert.Contains("complete -c cdidx -n '__fish_seen_subcommand_from workspace' -a 'list status use current' -d 'workspace subcommand'", fish);
+        Assert.Contains("complete -c cdidx -n '__fish_seen_subcommand_from workspace' -a 'list status use current clear deactivate' -d 'workspace subcommand'", fish);
         Assert.Contains("complete -c cdidx -n '__fish_seen_subcommand_from config' -a 'show' -d 'config subcommand'", fish);
         Assert.Contains("complete -c cdidx -n '__fish_seen_subcommand_from db' -a 'integrity schema prune checkpoint checkpoints restore restore-backups' -d 'db subcommand'", fish);
 
         Assert.Contains("'hooks' = @('install', 'uninstall', 'status')", powershell);
-        Assert.Contains("'workspace' = @('list', 'status', 'use', 'current')", powershell);
+        Assert.Contains("'workspace' = @('list', 'status', 'use', 'current', 'clear', 'deactivate')", powershell);
         Assert.Contains("'config' = @('show')", powershell);
         Assert.Contains("'db' = @('integrity', 'schema', 'prune', 'checkpoint', 'checkpoints', 'restore', 'restore-backups')", powershell);
     }

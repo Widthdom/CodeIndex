@@ -6,9 +6,10 @@ namespace CodeIndex.Tests;
 
 /// <summary>
 /// Guards the single-source-of-truth contract introduced by #1570: <see cref="CliFlagSchema"/>
-/// drives both the per-command parser allowlists (`TryWriteUnsupportedOptionError` /
-/// `ValidateFindArgs`) and the bash / zsh / fish completion generators in <see cref="ConsoleCompletionRenderer"/>.
-/// These tests fail fast when the schema and the generated completion scripts drift apart,
+/// drives the per-command parser allowlists (`TryWriteUnsupportedOptionError` /
+/// `ValidateFindArgs`), command help inventory, next-step tokens, and the bash / zsh / fish
+/// completion generators in <see cref="ConsoleCompletionRenderer"/>.
+/// These tests fail fast when the schema, help, and generated completion scripts drift apart,
 /// or when a flag's <c>Commands</c> / <c>AlsoAcceptedBy</c> sets reference unknown subcommands.
 /// #1570 で導入した「フラグ単一情報源」の契約を守るためのテスト群。スキーマと
 /// 補完スクリプト、コマンド一覧、parser-vs-completion の許容差分がずれた瞬間に失敗する。
@@ -281,7 +282,7 @@ public class CliFlagSchemaTests
     }
 
     [Fact]
-    public void EveryFlagInSchemaForEnumeratedBranch_AppearsInBashCompletionForThatBranch()
+    public void EveryFlagInSchemaForEnumeratedBranch_AppearsInBashCompletionAndCommandHelpForThatBranch_Issue4571()
     {
         // Inverse direction: every flag the schema declares for a per-command branch must
         // surface in that branch's bash completion list. Otherwise users can't tab-complete
@@ -291,9 +292,16 @@ public class CliFlagSchemaTests
         foreach (var command in EnumeratedBashBranches)
         {
             var flags = ExtractBashSubcommandFlags(script, command);
+            var (printed, helpOutput, _) = ConsoleCapture.Capture(() =>
+                ConsoleUi.PrintCommandUsage(command) ? 1 : 0);
+            Assert.Equal(1, printed);
             foreach (var schemaFlag in CliFlagSchema.GetCompletionFlagsForCommand(command))
+            {
+                Assert.Contains(schemaFlag.Name, CliFlagSchema.GetAcceptedFlagNamesForCommand(command));
                 Assert.True(flags.Contains(schemaFlag.Name),
                     $"bash completion for {command} is missing schema flag {schemaFlag.Name}.");
+                Assert.Contains(schemaFlag.Name, helpOutput, StringComparison.Ordinal);
+            }
         }
     }
 

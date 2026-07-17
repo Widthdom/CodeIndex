@@ -921,6 +921,8 @@ public sealed class StatusQueryContext
 
 public class StatusResult
 {
+    internal const string SqliteConnectionPolicyJsonFieldName = "sqlite_connection_policy";
+
     [JsonPropertyName("api_version")]
     public string ApiVersion { get; set; } = JsonOutputContract.ApiVersion;
     public long Files { get; set; }
@@ -1023,7 +1025,7 @@ public class StatusResult
     [JsonPropertyName("wal_stale_snapshot_reason")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? WalStaleSnapshotReason { get; set; }
-    [JsonPropertyName("sqlite_connection_policy")]
+    [JsonPropertyName(SqliteConnectionPolicyJsonFieldName)]
     public StatusSqliteConnectionPolicy SqliteConnectionPolicy { get; set; } = new();
     public string? GitHead { get; set; }
     public bool? GitIsDirty { get; set; }

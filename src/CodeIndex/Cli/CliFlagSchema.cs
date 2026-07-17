@@ -55,14 +55,9 @@ internal sealed record CliFlag
 
 internal static class CliFlagSchema
 {
-    // Authoritative list of subcommands. Mirrored by ConsoleUi.Commands; tests guard parity.
-    // サブコマンド一覧の正本。ConsoleUi.Commands と一致することをテストで確認する。
-    public static IReadOnlyList<string> AllCommands { get; } =
-    [
-        "index", "hooks", "backfill-fold", "optimize", "vacuum", "search", "recipes", "audit", "definition", "goto", "references", "callers", "callees",
-        "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status", "workspace", "config", "upgrade", "validate-config",
-        "doctor", "db", "diff", "report", "validate", "deps", "impact", "unused", "hotspots", "suggestions", "export", "import", "languages", "batch", "mcp", "lsp", "completions", "license",
-    ];
+    // Authoritative top-level command inventory comes from the shared command catalog.
+    // top-level command 一覧の正本は共有 command catalog に置く。
+    public static IReadOnlyList<string> AllCommands { get; } = CliCommandCatalog.Commands;
 
     // Commands that accept the `--` end-of-options marker so a user can pass a literal
     // query token starting with `-`. `find` reroutes through `ValidateFindArgs`; everything
@@ -447,6 +442,27 @@ internal static class CliFlagSchema
     public static IReadOnlyList<CliFlag> GetCompletionFlagsForCommand(string command)
     {
         return All.Where(f => f.AppliesTo(command)).ToList();
+    }
+
+    /// <summary>
+    /// Render a next-step/help token from the same flag metadata used by parsing and
+    /// completion. Callers may narrow a generic placeholder for their recovery context.
+    /// parser / completion と同じ flag metadata から next-step / help token を生成する。
+    /// recovery 文脈に応じて generic placeholder を狭めてもよい。
+    /// </summary>
+    public static string GetUsageTokenForCommand(
+        string command,
+        string flagName,
+        string? valuePlaceholderOverride = null)
+    {
+        var flag = All.FirstOrDefault(candidate =>
+            string.Equals(candidate.Name, flagName, StringComparison.Ordinal)
+            && candidate.AppliesTo(command));
+        if (flag is null)
+            throw new ArgumentException($"{flagName} is not a documented option for {command}.", nameof(flagName));
+
+        var placeholder = valuePlaceholderOverride ?? flag.ValuePlaceholder;
+        return placeholder is null ? flag.Name : $"{flag.Name} {placeholder}";
     }
 
     /// <summary>

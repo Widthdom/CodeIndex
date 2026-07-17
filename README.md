@@ -175,7 +175,9 @@ the [Developer Guide](DEVELOPER_GUIDE.md#ai-integration); README keeps the field
 names visible so documentation and tests stay synchronized.
 Use `cdidx status --explain <field>` for concise explanations of visible status
 fields, including readiness fields and runtime diagnostics such as
-`path_case_sensitive`.
+`path_case_sensitive`. `cdidx status --explain sqlite_connection_policy`
+describes the active SQLite open mode, immutable-URI choice, timeout,
+cancellation, and WAL snapshot-risk diagnostics.
 
 | Field group | Fields |
 |---|---|
@@ -467,6 +469,8 @@ freshness、compatibility、remediation field を返します。詳細な意味�
 同期するため field 名を明示します。
 visible な status field の簡潔な説明は `cdidx status --explain <field>` で確認できます。
 readiness field に加えて、`path_case_sensitive` などの runtime diagnostic field も対象です。
+`cdidx status --explain sqlite_connection_policy` は、有効な SQLite open mode、
+immutable URI の選択、timeout、cancellation、WAL snapshot risk の diagnostic を説明します。
 
 | field group | fields |
 |---|---|

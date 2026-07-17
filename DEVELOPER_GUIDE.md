@@ -184,7 +184,7 @@ git status --short -- '**/packages.lock.json'
 |---|---|---|
 | CLI entry | `Program.cs` | Thin command entry point and routing. |
 | CLI runners | `Cli/IndexCommandRunner.cs`, `Cli/QueryCommandRunner.cs` | Indexing commands, search/definition/reference/caller/callee/symbol/file/map/inspect/outline/status commands, and argument parsing. |
-| CLI support | `Cli/ConsoleUi.cs`, `Cli/CommandExitCodes.cs`, `Cli/SearchSnippetFormatter.cs`, `Cli/LineWidthFormatter.cs` | User-facing output, exit codes, focused snippet formatting, and line-width clamping. |
+| CLI support | `Cli/CliCommandCatalog.cs`, `Cli/CliFlagSchema.cs`, `Cli/ConsoleCompletionRenderer.cs`, `Cli/ConsoleUi.cs`, `Cli/CommandExitCodes.cs`, `Cli/SearchSnippetFormatter.cs`, `Cli/LineWidthFormatter.cs` | Shared command, subcommand, and flag metadata; generated command help and completions; user-facing output, exit codes, focused snippet formatting, and line-width clamping. |
 | Workspace resolution | `Cli/DbPathResolver.cs`, `Cli/GitHelper.cs`, `Cli/IndexFreshnessChecker.cs`, `Cli/WorkspaceMetadataEnricher.cs`, `Cli/GlobalToolLog.cs` | DB path resolution, git-aware refresh inputs, DB/worktree freshness checks, workspace metadata, and persistent install logs. |
 | SQLite storage | `Database/DbContext.cs`, `Database/DbConnectionFactory.cs`, `Database/DbPragmaPolicy.cs`, `Database/SqliteConnectionPolicy.cs`, `Database/SqliteCommandPolicy.cs`, `Database/SqliteIdentifier.cs`, `Database/DbWriter.cs`, `Database/DbReader.cs` | WAL-backed SQLite schema, shared connection-string/read-only URI/command-timeout policy, retry and pragma policy, typed SQLite parameter/scalar helpers, quoted identifier SQL helpers, batch writes, stale-file cleanup, FTS5 search, symbol/reference lookups, excerpts, outlines, inspect bundles, status, and dependency queries. |
 | Repository map | `Database/RepoMapBuilder.cs` | Repo-level overview for `map`: file stats, likely entrypoints, hotspots, and module grouping. |
@@ -197,6 +197,12 @@ git status --short -- '**/packages.lock.json'
 | MCP transports | `Mcp/IMcpTransport.cs`, `Mcp/StdioMcpTransport.cs`, `Mcp/HttpMcpTransport.cs` | Stdio (default) and optional HTTP `POST /` transports for the MCP server (#1558). |
 | DTOs | `Models/FileRecord.cs`, `Models/ChunkRecord.cs`, `Models/SymbolRecord.cs`, `Models/ReferenceRecord.cs` | Records shared by indexing, storage, query, and MCP layers. |
 | Tests | `tests/CodeIndex.Tests/*Tests.cs`, `TestProjectHelper.cs`, `TestConsoleLock.cs` | Focused unit/integration coverage for chunking, extraction, DB reads/writes, CLI behavior, MCP behavior, git helpers, and shared test harness utilities. |
+
+`CliCommandCatalog` owns command and nested-subcommand names, while
+`CliFlagSchema` owns primary flags, aliases, placeholders, descriptions, and
+command applicability. `ConsoleUi.PrintCommandUsage` and every shell completion
+renderer consume those shared definitions. Add new CLI metadata there first so
+parser validation, help, completion, and generated next-step flags stay aligned.
 
 Full-scan resume checkpoints live at `.cdidx/scan-checkpoint.json`. The internal JSON schema is versioned (`Version` is currently `1`) and binds `GitHead` to a bounded `Directories` array; malformed, stale, future-version, oversized, or over-depth payloads are ignored with a bounded warning and a full scan.
 
@@ -2841,7 +2847,7 @@ git status --short -- '**/packages.lock.json'
 |---|---|---|
 | CLI 入口 | `Program.cs` | 薄いコマンド入口とルーティング。 |
 | CLI ランナー | `Cli/IndexCommandRunner.cs`, `Cli/QueryCommandRunner.cs` | index と search / definition / reference / caller / callee / symbol / file / map / inspect / outline / status 系コマンド、引数解析。 |
-| CLI サポート | `Cli/ConsoleUi.cs`, `Cli/CommandExitCodes.cs`, `Cli/SearchSnippetFormatter.cs`, `Cli/LineWidthFormatter.cs` | ユーザー向け出力、終了コード、一致中心スニペット、行幅クランプ。 |
+| CLI サポート | `Cli/CliCommandCatalog.cs`, `Cli/CliFlagSchema.cs`, `Cli/ConsoleCompletionRenderer.cs`, `Cli/ConsoleUi.cs`, `Cli/CommandExitCodes.cs`, `Cli/SearchSnippetFormatter.cs`, `Cli/LineWidthFormatter.cs` | command / subcommand / flag の共有 metadata、生成される command help と completion、ユーザー向け出力、終了コード、一致中心スニペット、行幅クランプ。 |
 | ワークスペース解決 | `Cli/DbPathResolver.cs`, `Cli/GitHelper.cs`, `Cli/IndexFreshnessChecker.cs`, `Cli/WorkspaceMetadataEnricher.cs`, `Cli/GlobalToolLog.cs` | DB パス解決、git-aware な更新入力、DB/作業ツリー鮮度確認、workspace metadata、install log。 |
 | SQLite ストレージ | `Database/DbContext.cs`, `Database/DbConnectionFactory.cs`, `Database/DbPragmaPolicy.cs`, `Database/SqliteConnectionPolicy.cs`, `Database/SqliteCommandPolicy.cs`, `Database/SqliteIdentifier.cs`, `Database/DbWriter.cs`, `Database/DbReader.cs` | WAL 付き SQLite schema、共有 connection string / read-only URI / command timeout policy、retry と pragma policy、型付き SQLite parameter / scalar helper、quoted identifier SQL helper、batch write、古い file の cleanup、FTS5 search、symbol/reference lookup、excerpt、outline、inspect bundle、status、dependency query。 |
 | リポジトリマップ | `Database/RepoMapBuilder.cs` | `map` 用の repo overview: file stats、entrypoint 候補、hotspot、module grouping。 |
@@ -2854,6 +2860,12 @@ git status --short -- '**/packages.lock.json'
 | MCP トランスポート | `Mcp/IMcpTransport.cs`, `Mcp/StdioMcpTransport.cs`, `Mcp/HttpMcpTransport.cs` | MCP サーバー向けの stdio（既定）と任意の HTTP `POST /` トランスポート（#1558）。 |
 | DTO | `Models/FileRecord.cs`, `Models/ChunkRecord.cs`, `Models/SymbolRecord.cs`, `Models/ReferenceRecord.cs` | indexing、storage、query、MCP layers で共有する record。 |
 | テスト | `tests/CodeIndex.Tests/*Tests.cs`, `TestProjectHelper.cs`, `TestConsoleLock.cs` | chunking、extraction、DB read/write、CLI、MCP、git helper、共有 test harness の focused unit / integration coverage。 |
+
+command と nested subcommand の名前は `CliCommandCatalog`、primary flag、alias、
+placeholder、description、command applicability は `CliFlagSchema` が管理します。
+`ConsoleUi.PrintCommandUsage` と全 shell completion renderer は、この共有定義を参照します。
+新しい CLI metadata はまず共有定義へ追加し、parser validation、help、completion、
+生成される next-step flag の同期を維持してください。
 
 大きな command / extractor file については
 [docs/large-file-decomposition-plan.md](docs/large-file-decomposition-plan.md)
