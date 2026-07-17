@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Database;
@@ -10,6 +11,8 @@ namespace CodeIndex.Database;
 /// </summary>
 internal sealed class RepoMapBuilder
 {
+    internal static AsyncLocal<Action?> HeadMetadataCapturedForTesting { get; } = new();
+
     private readonly SqliteConnection _conn;
     private readonly IReadOnlySet<string> _fileColumns;
     private readonly Func<StringComparer> _getIndexedPathComparer;
@@ -79,7 +82,8 @@ internal sealed class RepoMapBuilder
     /// </summary>
     public RepoMapResult Build(int limit, string? lang, IReadOnlyList<string>? pathPatterns,
         IReadOnlyList<string>? excludePathPatterns, bool excludeTests, double minEntrypointConfidence,
-        Func<(DateTime? IndexedAt, DateTime? LatestModified)> getFreshness)
+        Func<(DateTime? IndexedAt, DateTime? LatestModified)> getFreshness,
+        int? moduleDepth = null, int? oversizedLineThreshold = null, long? oversizedByteThreshold = null)
     {
         // Query file stats first, then workspace freshness — preserves original
         // ordering so concurrent indexing cannot make workspace timestamps older
@@ -103,8 +107,13 @@ internal sealed class RepoMapBuilder
         var aggregate = BuildAggregate(
             EnumerateFileStats(lang, pathPatterns, excludePathPatterns, excludeTests),
             Math.Max(limit, 0),
-            javaModuleDescriptors);
+            javaModuleDescriptors,
+            moduleDepth,
+            oversizedLineThreshold,
+            oversizedByteThreshold);
         var freshness = getFreshness();
+        var indexedHeadSnapshot = LoadIndexedHeadSnapshot();
+        HeadMetadataCapturedForTesting.Value?.Invoke();
         var result = new RepoMapResult
         {
             FileCount = aggregate.FileCount,
@@ -123,6 +132,9 @@ internal sealed class RepoMapBuilder
             ReferenceRichFiles = BuildReferenceRichFileResults(aggregate.ReferenceRichFiles),
             Entrypoints = GetEntrypoints(aggregate.EntrypointFallbacks, limit, lang, pathPatterns, excludePathPatterns, excludeTests, minEntrypointConfidence, indexedPathComparer),
             GraphTableAvailable = _hasReferencesTable,
+            IndexedHeadSnapshot = indexedHeadSnapshot,
+            IssueDraftCandidateCount = aggregate.IssueDraftCandidateCount,
+            IssueDraftCandidates = BuildLargestFileResults(aggregate.IssueDraftCandidates),
         };
         txn.Commit();
         return result;
@@ -176,7 +188,10 @@ internal sealed class RepoMapBuilder
     private static RepoMapAggregate BuildAggregate(
         IEnumerable<RepoFileStat> fileStats,
         int limit,
-        IReadOnlyDictionary<string, string> moduleByDescriptorPath)
+        IReadOnlyDictionary<string, string> moduleByDescriptorPath,
+        int? moduleDepth,
+        int? oversizedLineThreshold,
+        long? oversizedByteThreshold)
     {
         var languages = new Dictionary<string, RepoLanguageResult>(StringComparer.Ordinal);
         var modules = new Dictionary<string, RepoModuleResult>(StringComparer.Ordinal);
@@ -189,6 +204,7 @@ internal sealed class RepoMapBuilder
             SymbolRichFiles = [],
             ReferenceRichFiles = [],
             EntrypointFallbacks = [],
+            IssueDraftCandidates = [],
         };
 
         foreach (var file in fileStats)
@@ -216,7 +232,7 @@ internal sealed class RepoMapBuilder
 
             AddFileStats(language, file);
 
-            var moduleKey = GetModuleKey(file);
+            var moduleKey = GetModuleKey(file, moduleDepth);
             if (!modules.TryGetValue(moduleKey, out var module))
             {
                 module = new RepoModuleResult { Module = moduleKey };
@@ -230,6 +246,17 @@ internal sealed class RepoMapBuilder
             AddBounded(aggregate.LargestFiles, scoredSummary, limit, CompareLargestFiles);
             AddBounded(aggregate.SymbolRichFiles, scoredSummary, limit, CompareSymbolRichFiles);
             AddBounded(aggregate.ReferenceRichFiles, scoredSummary, limit, CompareReferenceRichFiles);
+
+            if ((oversizedLineThreshold.HasValue && file.Lines >= oversizedLineThreshold.Value)
+                || (oversizedByteThreshold.HasValue && file.Size >= oversizedByteThreshold.Value))
+            {
+                aggregate.IssueDraftCandidateCount++;
+                AddBounded(
+                    aggregate.IssueDraftCandidates,
+                    CreateUnscoredFileSummary(file),
+                    limit,
+                    CompareLargestFiles);
+            }
 
             var fallback = ScoreEntrypointFileFallback(file.Path, file.Lang, file.SymbolCount, file.ReferenceCount);
             if (fallback.Score > 0)
@@ -490,6 +517,82 @@ internal sealed class RepoMapBuilder
         return _fileColumns.Contains(columnName) ? $"f.{columnName}" : "NULL";
     }
 
+    private RepoMapIndexedHeadSnapshot LoadIndexedHeadSnapshot()
+    {
+        string? legacyHead = null;
+        string? latestHead = null;
+        string? latestBranch = null;
+        string? latestTimestamp = null;
+        string? legacyBranch = null;
+        var latestBranchStampPresent = false;
+        var legacyBranchStampPresent = false;
+
+        try
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT key, value
+                FROM codeindex_meta
+                WHERE key IN (@legacyHead, @latestHead, @latestBranch, @latestTimestamp, @legacyBranch)
+                """;
+            SqliteCommandPolicy.Add(cmd, "@legacyHead", DbContext.IndexedHeadCommitMetaKey);
+            SqliteCommandPolicy.Add(cmd, "@latestHead", DbContext.IndexedHeadShaMetaKey);
+            SqliteCommandPolicy.Add(cmd, "@latestBranch", DbContext.IndexedHeadBranchMetaKey);
+            SqliteCommandPolicy.Add(cmd, "@latestTimestamp", DbContext.IndexedHeadTimestampMetaKey);
+            SqliteCommandPolicy.Add(cmd, "@legacyBranch", DbContext.IndexedHeadCommitBranchMetaKey);
+
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                var key = reader.GetString(0);
+                var value = reader.IsDBNull(1) ? null : reader.GetString(1);
+                switch (key)
+                {
+                    case DbContext.IndexedHeadCommitMetaKey:
+                        legacyHead = value;
+                        break;
+                    case DbContext.IndexedHeadShaMetaKey:
+                        latestHead = value;
+                        break;
+                    case DbContext.IndexedHeadBranchMetaKey:
+                        latestBranch = value;
+                        latestBranchStampPresent = true;
+                        break;
+                    case DbContext.IndexedHeadTimestampMetaKey:
+                        latestTimestamp = value;
+                        break;
+                    case DbContext.IndexedHeadCommitBranchMetaKey:
+                        legacyBranch = value;
+                        legacyBranchStampPresent = true;
+                        break;
+                }
+            }
+        }
+        catch (SqliteException)
+        {
+            // Legacy databases without metadata remain queryable.
+            // metadata table を持たない legacy DB も引き続き query 可能にする。
+        }
+
+        return new RepoMapIndexedHeadSnapshot(
+            legacyHead,
+            latestHead,
+            latestBranch,
+            ParseIndexedHeadTimestamp(latestTimestamp),
+            latestBranchStampPresent,
+            legacyBranch,
+            legacyBranchStampPresent);
+    }
+
+    private static DateTimeOffset? ParseIndexedHeadTimestamp(string? raw)
+        => DateTimeOffset.TryParse(
+            raw,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+            out var value)
+            ? value.ToUniversalTime()
+            : null;
+
     private static RepoFileSummaryResult CreateScoredFileSummary(RepoFileStat file)
     {
         var summary = CreateUnscoredFileSummary(file);
@@ -523,12 +626,24 @@ internal sealed class RepoMapBuilder
         };
     }
 
-    private static string GetModuleKey(RepoFileStat file)
+    private static string GetModuleKey(RepoFileStat file, int? moduleDepth)
+    {
+        var moduleKey = GetNaturalModuleKey(file);
+        if (!moduleDepth.HasValue)
+            return moduleKey;
+        if (moduleDepth.Value <= 0)
+            return ".";
+
+        var segments = moduleKey.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length <= moduleDepth.Value
+            ? moduleKey
+            : string.Join('/', segments.Take(moduleDepth.Value));
+    }
+
+    private static string GetNaturalModuleKey(RepoFileStat file)
     {
         if (!string.IsNullOrWhiteSpace(file.ModuleName))
-        {
             return file.ModuleName;
-        }
 
         var segments = file.Path.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (segments.Length == 0)
@@ -855,5 +970,7 @@ internal sealed class RepoMapBuilder
         public required List<RepoFileSummaryResult> SymbolRichFiles { get; init; }
         public required List<RepoFileSummaryResult> ReferenceRichFiles { get; init; }
         public required List<RepoEntrypointResult> EntrypointFallbacks { get; init; }
+        public int IssueDraftCandidateCount { get; set; }
+        public required List<RepoFileSummaryResult> IssueDraftCandidates { get; init; }
     }
 }

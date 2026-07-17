@@ -1358,6 +1358,8 @@ public class StatusResult
 public sealed class StatusHeadFreshness
 {
     public string State { get; init; } = "unchecked";
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Scope { get; init; }
     [JsonPropertyName("state_reason")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? StateReason { get; init; }
@@ -1405,6 +1407,7 @@ public sealed class StatusHeadFreshness
         return new StatusHeadFreshness
         {
             State = ResolveState(status, workspaceCheck),
+            Scope = "workspace",
             StateReason = ResolveStateReason(status, workspaceCheck),
             RuntimeHead = NullIfWhiteSpace(status.GitHead),
             IndexedHead = indexedHead,
@@ -1417,6 +1420,50 @@ public sealed class StatusHeadFreshness
             WorkspaceMatchesIndex = status.IndexMatchesWorkspace ?? workspaceCheck?.MatchesWorkspace,
             WorktreeHeadChanged = status.WorktreeHeadChanged,
             CommitsAheadOfIndexedHead = status.CommitsAheadOfIndexedHead,
+        };
+    }
+
+    internal static StatusHeadFreshness? FromMap(RepoMapResult map)
+    {
+        if (string.IsNullOrWhiteSpace(map.GitHead)
+            && string.IsNullOrWhiteSpace(map.IndexedHeadSha)
+            && string.IsNullOrWhiteSpace(map.IndexedHeadCommit)
+            && string.IsNullOrWhiteSpace(map.IndexedHeadBranch)
+            && !map.IndexedHeadTimestamp.HasValue
+            && !map.WorktreeHeadChanged.HasValue
+            && !map.CommitsAheadOfIndexedHead.HasValue)
+        {
+            return null;
+        }
+
+        var indexedHead = NullIfWhiteSpace(map.IndexedHeadSha) ?? NullIfWhiteSpace(map.IndexedHeadCommit);
+        return new StatusHeadFreshness
+        {
+            State = map.WorktreeHeadChanged switch
+            {
+                true => "head_changed",
+                false => "head_current",
+                _ => "unchecked",
+            },
+            Scope = "workspace",
+            StateReason = map.WorktreeHeadChanged switch
+            {
+                true => "worktree_head_changed",
+                false => "head_current",
+                _ => null,
+            },
+            RuntimeHead = NullIfWhiteSpace(map.GitHead),
+            IndexedHead = indexedHead,
+            IndexedHeadSource = !string.IsNullOrWhiteSpace(map.IndexedHeadSha)
+                ? "latest_index"
+                : !string.IsNullOrWhiteSpace(map.IndexedHeadCommit)
+                    ? "legacy_full_scan"
+                    : "unavailable",
+            LegacyFullScanHead = NullIfWhiteSpace(map.IndexedHeadCommit),
+            IndexedHeadBranch = NullIfWhiteSpace(map.IndexedHeadBranch),
+            IndexedHeadTimestamp = map.IndexedHeadTimestamp,
+            WorktreeHeadChanged = map.WorktreeHeadChanged,
+            CommitsAheadOfIndexedHead = map.CommitsAheadOfIndexedHead,
         };
     }
 
@@ -1725,9 +1772,30 @@ public class RepoMapResult
     [JsonPropertyName("indexed_head_commit")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? IndexedHeadCommit { get; set; }
+    [JsonPropertyName("indexed_head_sha")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IndexedHeadSha { get; set; }
+    [JsonPropertyName("indexed_head_branch")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IndexedHeadBranch { get; set; }
+    [JsonPropertyName("indexed_head_timestamp")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? IndexedHeadTimestamp { get; set; }
+    [JsonPropertyName("commits_ahead_of_indexed_head")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? CommitsAheadOfIndexedHead { get; set; }
     [JsonPropertyName("worktree_head_changed")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? WorktreeHeadChanged { get; set; }
+    [JsonPropertyName("head_freshness")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public StatusHeadFreshness? HeadFreshness => StatusHeadFreshness.FromMap(this);
+    [JsonIgnore]
+    internal RepoMapIndexedHeadSnapshot? IndexedHeadSnapshot { get; set; }
+    [JsonIgnore]
+    internal int IssueDraftCandidateCount { get; set; }
+    [JsonIgnore]
+    internal List<RepoFileSummaryResult> IssueDraftCandidates { get; set; } = [];
     public List<RepoLanguageResult> Languages { get; set; } = [];
     public List<RepoModuleResult> Modules { get; set; } = [];
     public List<RepoFileSummaryResult> TopFiles { get; set; } = [];
@@ -1744,6 +1812,15 @@ public class RepoMapResult
     /// </summary>
     public bool GraphTableAvailable { get; set; } = true;
 }
+
+internal sealed record RepoMapIndexedHeadSnapshot(
+    string? LegacyFullScanHead,
+    string? LatestIndexHead,
+    string? LatestIndexBranch,
+    DateTimeOffset? LatestIndexTimestamp,
+    bool LatestIndexBranchStampPresent,
+    string? LegacyFullScanBranch,
+    bool LegacyFullScanBranchStampPresent);
 
 public class RepoLanguageResult
 {

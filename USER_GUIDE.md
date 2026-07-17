@@ -1552,10 +1552,18 @@ cdidx map --format issue-drafts --limit 10
 ```
 
 `map` is the fastest way to orient both a human and an AI agent before deeper queries. Use it to get languages, modules, hot files, and likely entrypoints, then narrow with `inspect`, `search`, or `definition`. Use `--summary-only` when only aggregate counts and freshness metadata are needed, or `--sections <tree,languages,hotspots,metrics>` to request only selected detail sections. For the full freshness and metadata contract of `status --json`, `map --json`, `inspect --json`, and MCP `analyze_symbol`, see [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md).
+`--depth <n>` reaggregates modules by the requested path-prefix depth after all
+path, language, test, generated-code, and exclusion filters are applied. Scoped
+maps omit the workspace-global decomposition plan. Their HEAD freshness remains
+available under `head_freshness`, where `scope=workspace`,
+`indexed_head_source`, and `legacy_full_scan_head` distinguish current index
+stamps from the legacy full-scan stamp.
 Use `--format issue-drafts` when maintenance triage needs oversized-file issue
-draft candidates instead of the full map. The payload is built from the bounded
-`largest_files` section, groups candidates by kind, and includes thresholds,
-source-limit metadata, and the active `query_context`.
+draft candidates instead of the full map. Candidate `count`, emitted/omitted
+counts, grouping totals, and limit truncation are computed from every file in
+the same applied scope; only the candidate details are retained up to the
+requested source limit. The payload also includes thresholds and the active
+`query_context`.
 
 ### Build a bug-report bundle
 
@@ -2289,7 +2297,7 @@ CLI JSON and MCP compatibility:
 | MCP metadata | MCP tools return JSON-RPC tool results with camelCase field names and may include MCP-specific metadata. |
 | Grouped graph rows | Graph tools that group reference rows (`callers`, `callees`, and bundled `analyze_symbol` caller/callee rows) expose a backward-compatible scalar summary kind plus a sorted kind array and mixed-kind flag. CLI JSON uses `reference_kind` / `reference_kinds` / `has_mixed_reference_kinds`, while MCP uses `referenceKind` / `referenceKinds` / `hasMixedReferenceKinds`. |
 | Project filters | When `--project` / MCP `project` expansion cannot resolve the indexed project root and uses the process current directory, structured payloads expose `project_filter_root` and `project_filter_root_fallback_reason`. |
-| Issue-draft map output | `cdidx map --format issue-drafts` returns `api_version`, `format`, `count`, `groups`, `issue_drafts`, `thresholds`, `truncation.largest_files`, and `query_context`; consumers should treat drafts as candidates from the bounded `largest_files` section. |
+| Issue-draft map output | `cdidx map --format issue-drafts` returns `api_version`, `format`, `candidate_source=evaluated_scoped_candidates`, exact scoped candidate `count`, emitted/omitted counts, `groups`, bounded `issue_drafts`, `thresholds`, `truncation.issue_draft_candidates`, and `query_context`. `limit_omitted_count` counts omitted candidates, not unrelated indexed files. `truncation.largest_files` remains only as a compatibility alias and names its canonical target. |
 | Consumer guidance | Consumers that need every underlying kind should read the array for the surface they call and ignore unknown future fields. See [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#cli-json-and-mcp-response-compatibility) for the CLI/MCP compatibility table. |
 | Slow search profiling | Add `--profile` to read commands to append one JSON object after the normal results. It contains `profile.phases` (`name`, `elapsed_ms`, `rows_scanned`), `profile.query_plan` (`EXPLAIN QUERY PLAN` rows), and `profile.queries` (SQL text). With `--slow-query-ms <n>`, profiled SQL at or above the threshold is written to the persistent tool log. |
 
@@ -4503,9 +4511,9 @@ cdidx map --format issue-drafts --limit 10
 ```
 
 `map` は、人と AI のどちらにも最短で全体像を渡すための入口です。言語、モジュール、ホットなファイル、推定エントリポイントを把握したら、`inspect`、`search`、`definition` に進んでください。集計値と freshness メタデータだけが必要な場合は `--summary-only`、必要な詳細セクションだけを取りたい場合は `--sections <tree,languages,hotspots,metrics>` を使えます。`status --json`、`map --json`、`inspect --json`、MCP `analyze_symbol` の詳細なメタデータ契約は [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md#開発者ガイド) にまとめています。
+`--depth <n>` は path、language、test、generated-code、除外条件をすべて適用した後、指定した path prefix の深さで module を再集計します。scope を絞った map では workspace 全体向けの decomposition plan を省略します。HEAD freshness は `head_freshness` に残り、`scope=workspace`、`indexed_head_source`、`legacy_full_scan_head` により、現在の index stamp と legacy full-scan stamp を区別できます。
 保守作業の triage で full map ではなく巨大ファイルの Issue 下書き候補が必要な場合は
-`--format issue-drafts` を使います。payload は上限付きの `largest_files` section から作られ、
-候補を kind ごとに group 化し、閾値、取得元上限 metadata、現在の `query_context` を含みます。
+`--format issue-drafts` を使います。candidate の `count`、出力数、省略数、group 合計、limit による truncation は、同じ scope 内の全 file を評価して算出し、candidate の詳細だけを指定された取得元上限まで保持します。payload には閾値と現在の `query_context` も含まれます。
 
 ### バグ報告用バンドルを作る
 
@@ -5220,7 +5228,7 @@ CLI JSON と MCP compatibility:
 | CLI metadata | CLI command は `api_version` や command result field など CLI 向け metadata を保持します。 |
 | MCP metadata | MCP tool は JSON-RPC tool result と camelCase field name、および MCP 固有 metadata を返す場合があります。 |
 | grouped graph row | 参照行を group 化する graph tool（`callers`、`callees`、bundled `analyze_symbol` の caller/callee 行）は、後方互換の scalar summary kind、sort 済み kind array、mixed-kind flag を返します。CLI JSON は `reference_kind` / `reference_kinds` / `has_mixed_reference_kinds`、MCP は `referenceKind` / `referenceKinds` / `hasMixedReferenceKinds` を使います。 |
-| Issue 下書き map 出力 | `cdidx map --format issue-drafts` は `api_version`、`format`、`count`、`groups`、`issue_drafts`、`thresholds`、`truncation.largest_files`、`query_context` を返します。consumer は draft を上限付きの `largest_files` section 由来の candidate として扱ってください。 |
+| Issue 下書き map 出力 | `cdidx map --format issue-drafts` は `api_version`、`candidate_source=evaluated_scoped_candidates`、scope 適用後の正確な candidate `count`、出力数、省略数、`groups`、上限付きの `issue_drafts`、`thresholds`、`truncation.issue_draft_candidates`、`query_context` を返します。`limit_omitted_count` は無関係な indexed file ではなく、省略された candidate 数を示します。`truncation.largest_files` は canonical target を明記した互換 alias としてのみ残ります。 |
 | consumer guidance | すべての underlying kind が必要な consumer は、呼び出した surface の array field を読み、将来追加される未知の field は無視してください。CLI/MCP compatibility table は [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#cli-json-and-mcp-response-compatibility) を参照してください。 |
 | slow search profiling | 遅い検索を調べる場合は、read 系 command に `--profile` を追加してください。通常結果の後に `profile.phases`（`name`、`elapsed_ms`、`rows_scanned`）、`profile.query_plan`（`EXPLAIN QUERY PLAN` 行）、`profile.queries`（SQL text）を含む JSON object を 1 行追加します。`--slow-query-ms <n>` を併用すると、閾値以上の profiled SQL を persistent tool log に記録します。 |
 
