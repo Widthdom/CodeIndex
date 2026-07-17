@@ -39,23 +39,19 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("batch_result", filesRecord.GetProperty("record").GetString());
             Assert.Equal("ok", filesRecord.GetProperty("status").GetString());
             Assert.Equal("files", filesRecord.GetProperty("command").GetString());
-            using (var filesOutputDocument = ParseJsonOutput(filesRecord.GetProperty("stdout").GetString()!))
-            {
-                var filesOutput = filesOutputDocument.RootElement;
-                Assert.Equal(1, filesOutput.GetProperty("count").GetInt32());
-                Assert.Equal(1, filesOutput.GetProperty("files").GetInt32());
-            }
+            Assert.False(filesRecord.TryGetProperty("stdout", out _));
+            var filesOutput = filesRecord.GetProperty("result");
+            Assert.Equal(1, filesOutput.GetProperty("count").GetInt32());
+            Assert.Equal(1, filesOutput.GetProperty("files").GetInt32());
 
             var statusRecord = statusRecordDocument.RootElement;
             Assert.Equal("batch_result", statusRecord.GetProperty("record").GetString());
             Assert.Equal("ok", statusRecord.GetProperty("status").GetString());
             Assert.Equal("status", statusRecord.GetProperty("command").GetString());
-            using (var statusOutputDocument = ParseJsonOutput(statusRecord.GetProperty("stdout").GetString()!))
-            {
-                var statusOutput = statusOutputDocument.RootElement;
-                Assert.Equal(1, statusOutput.GetProperty("files").GetInt32());
-                Assert.Equal(Path.GetFullPath(childRoot), statusOutput.GetProperty("project_root").GetString());
-            }
+            Assert.False(statusRecord.TryGetProperty("stdout", out _));
+            var statusOutput = statusRecord.GetProperty("result");
+            Assert.Equal(1, statusOutput.GetProperty("files").GetInt32());
+            Assert.Equal(Path.GetFullPath(childRoot), statusOutput.GetProperty("project_root").GetString());
 
             var summary = summaryDocument.RootElement;
             Assert.Equal("batch_summary", summary.GetProperty("record").GetString());

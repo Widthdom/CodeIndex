@@ -912,6 +912,13 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(0, summary.GetProperty("line_errors").GetInt32());
         Assert.Equal(0, summary.GetProperty("command_failures").GetInt32());
         Assert.Equal(CommandExitCodes.Success, summary.GetProperty("exit_code").GetInt32());
+        Assert.Equal(stdout.Length, summary.GetProperty("output_chars").GetInt32());
+        Assert.Equal(
+            QueryCommandRunner.BatchMaxTotalOutputChars,
+            summary.GetProperty("output_char_limit").GetInt32());
+        Assert.False(summary.GetProperty("output_limit_reached").GetBoolean());
+        Assert.Equal(QueryCommandRunner.BatchMaxInputLines, summary.GetProperty("input_line_limit").GetInt32());
+        Assert.False(summary.GetProperty("input_limit_reached").GetBoolean());
     }
 
     [Fact]
@@ -946,10 +953,8 @@ public partial class QueryCommandRunnerTests
         Assert.Equal("status", statusRecord.GetProperty("command").GetString());
         Assert.Equal(CommandExitCodes.Success, statusRecord.GetProperty("exit_code").GetInt32());
         Assert.Equal(string.Empty, statusRecord.GetProperty("stderr").GetString());
-        using (var statusOutputDocument = ParseJsonOutput(statusRecord.GetProperty("stdout").GetString()!))
-        {
-            Assert.True(statusOutputDocument.RootElement.TryGetProperty("files", out _));
-        }
+        Assert.False(statusRecord.TryGetProperty("stdout", out _));
+        Assert.True(statusRecord.GetProperty("result").TryGetProperty("files", out _));
 
         var lineError = lineErrorDocument.RootElement;
         Assert.Equal("batch_error", lineError.GetProperty("record").GetString());
@@ -1033,14 +1038,21 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunBatch_JsonSummaryAllowsReadOnlyDiscoveryCommands_Issue4317()
+    public void RunBatch_JsonSummaryAllowsSchemaReadOnlyCommandsAndStructuresJson_Issues4317_4582()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_discovery_commands");
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
         TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "public class App { }\n");
         var input = """
-        ["languages","--format","count"]
+        ["languages","--format","COUNT"]
         ["recipes","--names"]
+        ["files","--count"]
+        ["goto","App"]
+        ["audit","resource-materialization-audit","--summary-only"]
+        ["deps","--format","JSON-GRAPH","--limit","1"]
+        ["references","App","--json","--limit","1"]
+        ["search","App","--json=ndjson","--exact"]
+        ["search","App","--json=ARRAY","--exact","--limit","1"]
 
         """;
 
@@ -1051,20 +1063,26 @@ public partial class QueryCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(string.Empty, stderr);
-        Assert.Equal(3, lines.Count);
+        Assert.Equal(10, lines.Count);
         using var languagesRecordDocument = lines[0];
         using var recipesRecordDocument = lines[1];
-        using var summaryDocument = lines[2];
+        using var filesRecordDocument = lines[2];
+        using var gotoRecordDocument = lines[3];
+        using var auditRecordDocument = lines[4];
+        using var depsRecordDocument = lines[5];
+        using var referencesRecordDocument = lines[6];
+        using var searchRecordDocument = lines[7];
+        using var searchArrayRecordDocument = lines[8];
+        using var summaryDocument = lines[9];
 
         var languagesRecord = languagesRecordDocument.RootElement;
         Assert.Equal("batch_result", languagesRecord.GetProperty("record").GetString());
         Assert.Equal("ok", languagesRecord.GetProperty("status").GetString());
         Assert.Equal("languages", languagesRecord.GetProperty("command").GetString());
-        using (var languagesOutput = ParseJsonOutput(languagesRecord.GetProperty("stdout").GetString()!))
-        {
-            Assert.Equal("count", languagesOutput.RootElement.GetProperty("format").GetString());
-            Assert.True(languagesOutput.RootElement.GetProperty("language_count").GetInt32() > 0);
-        }
+        Assert.False(languagesRecord.TryGetProperty("stdout", out _));
+        var languagesResult = languagesRecord.GetProperty("result");
+        Assert.Equal("count", languagesResult.GetProperty("format").GetString());
+        Assert.True(languagesResult.GetProperty("language_count").GetInt32() > 0);
 
         var recipesRecord = recipesRecordDocument.RootElement;
         Assert.Equal("batch_result", recipesRecord.GetProperty("record").GetString());
@@ -1072,9 +1090,56 @@ public partial class QueryCommandRunnerTests
         Assert.Equal("recipes", recipesRecord.GetProperty("command").GetString());
         Assert.NotEqual(string.Empty, recipesRecord.GetProperty("stdout").GetString());
 
+        var filesRecord = filesRecordDocument.RootElement;
+        Assert.Equal("ok", filesRecord.GetProperty("status").GetString());
+        Assert.Equal("files", filesRecord.GetProperty("command").GetString());
+        Assert.False(filesRecord.TryGetProperty("result", out _));
+        Assert.False(filesRecord.TryGetProperty("results", out _));
+        Assert.Equal("1", filesRecord.GetProperty("stdout").GetString()!.Trim());
+
+        var gotoRecord = gotoRecordDocument.RootElement;
+        Assert.Equal("ok", gotoRecord.GetProperty("status").GetString());
+        Assert.Equal("goto", gotoRecord.GetProperty("command").GetString());
+        Assert.False(gotoRecord.TryGetProperty("stdout", out _));
+        Assert.True(gotoRecord.GetProperty("result").TryGetProperty("uri", out _));
+
+        var auditRecord = auditRecordDocument.RootElement;
+        Assert.Equal("ok", auditRecord.GetProperty("status").GetString());
+        Assert.Equal("audit", auditRecord.GetProperty("command").GetString());
+        Assert.False(auditRecord.TryGetProperty("stdout", out _));
+        Assert.Equal(
+            "resource-materialization-audit",
+            auditRecord.GetProperty("result").GetProperty("recipe").GetString());
+
+        var depsRecord = depsRecordDocument.RootElement;
+        Assert.Equal("ok", depsRecord.GetProperty("status").GetString());
+        Assert.Equal("deps", depsRecord.GetProperty("command").GetString());
+        Assert.False(depsRecord.TryGetProperty("stdout", out _));
+        Assert.True(depsRecord.GetProperty("result").TryGetProperty("nodes", out _));
+
+        var referencesRecord = referencesRecordDocument.RootElement;
+        Assert.Equal("ok", referencesRecord.GetProperty("status").GetString());
+        Assert.Equal("references", referencesRecord.GetProperty("command").GetString());
+        Assert.False(referencesRecord.TryGetProperty("result", out _));
+        Assert.False(referencesRecord.TryGetProperty("stdout", out _));
+        Assert.Single(referencesRecord.GetProperty("results").EnumerateArray());
+
+        var searchRecord = searchRecordDocument.RootElement;
+        Assert.Equal("ok", searchRecord.GetProperty("status").GetString());
+        Assert.Equal("search", searchRecord.GetProperty("command").GetString());
+        Assert.False(searchRecord.TryGetProperty("stdout", out _));
+        Assert.NotEmpty(searchRecord.GetProperty("results").EnumerateArray());
+
+        var searchArrayRecord = searchArrayRecordDocument.RootElement;
+        Assert.Equal("ok", searchArrayRecord.GetProperty("status").GetString());
+        Assert.Equal("search", searchArrayRecord.GetProperty("command").GetString());
+        Assert.False(searchArrayRecord.TryGetProperty("stdout", out _));
+        Assert.False(searchArrayRecord.TryGetProperty("results", out _));
+        Assert.Single(searchArrayRecord.GetProperty("result").EnumerateArray());
+
         var summary = summaryDocument.RootElement;
         Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
-        Assert.Equal(2, summary.GetProperty("commands_processed").GetInt32());
+        Assert.Equal(9, summary.GetProperty("commands_processed").GetInt32());
         Assert.Equal(0, summary.GetProperty("command_failures").GetInt32());
     }
 
@@ -1112,12 +1177,94 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(CommandErrorCodes.UsageError, error.GetProperty("error_code").GetString());
         Assert.Equal(JsonEnvelopeWrapper.MaxCapturedOutputChars, error.GetProperty("max_chars").GetInt32());
         Assert.Equal("stdout", error.GetProperty("stream").GetString());
+        Assert.Equal("command", error.GetProperty("scope").GetString());
 
         var summary = summaryDocument.RootElement;
         Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
         Assert.Equal(1, summary.GetProperty("commands_processed").GetInt32());
         Assert.Equal(1, summary.GetProperty("command_failures").GetInt32());
         Assert.Equal(CommandExitCodes.InvalidArgument, summary.GetProperty("exit_code").GetInt32());
+    }
+
+    [Fact]
+    public void RunBatch_JsonSummaryBoundsSerializedOutputIncludingEscaping_Issue4582()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_summary_total_output_limit");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var largeLine = new string('"', QueryCommandRunner.BatchMaxTotalOutputChars * 3 / 5);
+        TestProjectHelper.InsertIndexedFile(dbPath, "docs/large.txt", "text", largeLine);
+        var input = """
+        ["excerpt","docs/large.txt","--start","1","--max-line-width","0"]
+
+        """;
+
+        var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+            input,
+            () => QueryCommandRunner.RunBatch(["--db", dbPath, "--json-summary"], _jsonOptions));
+        var lines = ParseJsonLines(stdout);
+
+        Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(2, lines.Count);
+        using var limitedRecordDocument = lines[0];
+        using var summaryDocument = lines[1];
+
+        var limitedRecord = limitedRecordDocument.RootElement;
+        Assert.Equal("error", limitedRecord.GetProperty("status").GetString());
+        Assert.Equal(CommandExitCodes.InvalidArgument, limitedRecord.GetProperty("exit_code").GetInt32());
+        var error = limitedRecord.GetProperty("error");
+        Assert.Equal("batch", error.GetProperty("scope").GetString());
+        Assert.Equal("batch_output_limit", error.GetProperty("category").GetString());
+        Assert.Equal(
+            QueryCommandRunner.BatchMaxTotalOutputChars,
+            error.GetProperty("max_chars").GetInt32());
+
+        var summary = summaryDocument.RootElement;
+        Assert.Equal(1, summary.GetProperty("commands_processed").GetInt32());
+        Assert.Equal(1, summary.GetProperty("command_failures").GetInt32());
+        Assert.True(summary.GetProperty("output_limit_reached").GetBoolean());
+        Assert.Equal(stdout.Length, summary.GetProperty("output_chars").GetInt32());
+        Assert.InRange(stdout.Length, 1, QueryCommandRunner.BatchMaxTotalOutputChars);
+        Assert.Equal(
+            QueryCommandRunner.BatchMaxTotalOutputChars,
+            summary.GetProperty("output_char_limit").GetInt32());
+    }
+
+    [Fact]
+    public void RunBatch_JsonSummaryBoundsInputLinesAndMalformedRecords_Issue4582()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_summary_input_line_limit");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var input = string.Concat(Enumerable.Repeat("[]\n", QueryCommandRunner.BatchMaxInputLines + 1));
+
+        var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+            input,
+            () => QueryCommandRunner.RunBatch(["--db", dbPath, "--json-summary"], _jsonOptions));
+        var lines = ParseJsonLines(stdout);
+        try
+        {
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(QueryCommandRunner.BatchMaxInputLines + 2, lines.Count);
+            var limitRecord = lines[^2].RootElement;
+            Assert.Equal("batch_error", limitRecord.GetProperty("record").GetString());
+            Assert.Equal(
+                "batch_input_line_limit",
+                limitRecord.GetProperty("error").GetProperty("category").GetString());
+
+            var summary = lines[^1].RootElement;
+            Assert.Equal(QueryCommandRunner.BatchMaxInputLines + 1, summary.GetProperty("input_lines_read").GetInt32());
+            Assert.Equal(QueryCommandRunner.BatchMaxInputLines + 1, summary.GetProperty("line_errors").GetInt32());
+            Assert.True(summary.GetProperty("input_limit_reached").GetBoolean());
+            Assert.False(summary.GetProperty("output_limit_reached").GetBoolean());
+            Assert.Equal(stdout.Length, summary.GetProperty("output_chars").GetInt32());
+            Assert.InRange(stdout.Length, 1, QueryCommandRunner.BatchMaxTotalOutputChars);
+        }
+        finally
+        {
+            foreach (var document in lines)
+                document.Dispose();
+        }
     }
 
     [Fact]
