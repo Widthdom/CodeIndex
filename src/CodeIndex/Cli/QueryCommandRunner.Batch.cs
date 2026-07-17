@@ -391,15 +391,15 @@ public static partial class QueryCommandRunner
             else if (arg.StartsWith("--json=", StringComparison.Ordinal))
             {
                 jsonRequested = true;
-                jsonMode = arg["--json=".Length..];
+                jsonMode = arg["--json=".Length..].ToLowerInvariant();
             }
             else if (arg == "--format" && i + 1 < args.Length)
             {
-                outputFormat = args[++i];
+                outputFormat = args[++i].ToLowerInvariant();
             }
             else if (arg.StartsWith("--format=", StringComparison.Ordinal))
             {
-                outputFormat = arg["--format=".Length..];
+                outputFormat = arg["--format=".Length..].ToLowerInvariant();
             }
             else if (arg == "--compact")
             {
@@ -407,14 +407,28 @@ public static partial class QueryCommandRunner
             }
         }
 
-        if (compactRequested
-            || outputFormat is "compact" or "count" or "grouped" or "issue-drafts" or "lsp" or "sarif")
+        if (compactRequested)
+            return BatchOutputKind.JsonDocument;
+
+        if (outputFormat == "json")
+            jsonRequested = true;
+        else if (outputFormat is not null
+                 && CliOutputFormatCapabilities.TryGet(outputFormat, out var formatCapability)
+                 && formatCapability.IsJsonContract)
         {
             return BatchOutputKind.JsonDocument;
         }
 
-        if (outputFormat == "json")
-            jsonRequested = true;
+        // `audit --summary-only` injects `--format compact` before dispatch, so its
+        // effective output contract is JSON even though the original batch argv does
+        // not contain an explicit format flag.
+        if (commandName == "audit"
+            && outputFormat is null
+            && HasBatchArgument(args, "--summary-only"))
+        {
+            return BatchOutputKind.JsonDocument;
+        }
+
         if (!jsonRequested)
             return BatchOutputKind.Text;
         if (jsonMode == "array")

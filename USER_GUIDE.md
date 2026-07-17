@@ -1309,7 +1309,7 @@ printf '%s\n' \
 
 ```bash
 printf '' | cdidx batch --db .cdidx/codeindex.db --json-summary
-# {"api_version":"1","record":"batch_summary","command":"batch","input_lines_read":0,"commands_processed":0,"line_errors":0,"command_failures":0,"exit_code":0}
+# Emits one batch_summary object; output_chars equals the complete serialized stream length.
 ```
 
 Output:
@@ -4313,7 +4313,7 @@ printf '%s\n' \
 
 ```bash
 printf '' | cdidx batch --db .cdidx/codeindex.db --json-summary
-# {"api_version":"1","record":"batch_summary","command":"batch","input_lines_read":0,"commands_processed":0,"line_errors":0,"command_failures":0,"exit_code":0}
+# batch_summary object を 1 件出力し、output_chars は serialized stream 全体の実際の長さと一致します。
 ```
 
 出力:

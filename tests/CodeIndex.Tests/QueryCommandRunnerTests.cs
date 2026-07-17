@@ -1044,13 +1044,15 @@ public partial class QueryCommandRunnerTests
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
         TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "public class App { }\n");
         var input = """
-        ["languages","--format","count"]
+        ["languages","--format","COUNT"]
         ["recipes","--names"]
         ["files","--count"]
         ["goto","App"]
-        ["audit","resource-materialization-audit","--json","--summary-only"]
+        ["audit","resource-materialization-audit","--summary-only"]
+        ["deps","--format","JSON-GRAPH","--limit","1"]
         ["references","App","--json","--limit","1"]
         ["search","App","--json=ndjson","--exact"]
+        ["search","App","--json=ARRAY","--exact","--limit","1"]
 
         """;
 
@@ -1061,15 +1063,17 @@ public partial class QueryCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(string.Empty, stderr);
-        Assert.Equal(8, lines.Count);
+        Assert.Equal(10, lines.Count);
         using var languagesRecordDocument = lines[0];
         using var recipesRecordDocument = lines[1];
         using var filesRecordDocument = lines[2];
         using var gotoRecordDocument = lines[3];
         using var auditRecordDocument = lines[4];
-        using var referencesRecordDocument = lines[5];
-        using var searchRecordDocument = lines[6];
-        using var summaryDocument = lines[7];
+        using var depsRecordDocument = lines[5];
+        using var referencesRecordDocument = lines[6];
+        using var searchRecordDocument = lines[7];
+        using var searchArrayRecordDocument = lines[8];
+        using var summaryDocument = lines[9];
 
         var languagesRecord = languagesRecordDocument.RootElement;
         Assert.Equal("batch_result", languagesRecord.GetProperty("record").GetString());
@@ -1107,6 +1111,12 @@ public partial class QueryCommandRunnerTests
             "resource-materialization-audit",
             auditRecord.GetProperty("result").GetProperty("recipe").GetString());
 
+        var depsRecord = depsRecordDocument.RootElement;
+        Assert.Equal("ok", depsRecord.GetProperty("status").GetString());
+        Assert.Equal("deps", depsRecord.GetProperty("command").GetString());
+        Assert.False(depsRecord.TryGetProperty("stdout", out _));
+        Assert.True(depsRecord.GetProperty("result").TryGetProperty("nodes", out _));
+
         var referencesRecord = referencesRecordDocument.RootElement;
         Assert.Equal("ok", referencesRecord.GetProperty("status").GetString());
         Assert.Equal("references", referencesRecord.GetProperty("command").GetString());
@@ -1120,9 +1130,16 @@ public partial class QueryCommandRunnerTests
         Assert.False(searchRecord.TryGetProperty("stdout", out _));
         Assert.NotEmpty(searchRecord.GetProperty("results").EnumerateArray());
 
+        var searchArrayRecord = searchArrayRecordDocument.RootElement;
+        Assert.Equal("ok", searchArrayRecord.GetProperty("status").GetString());
+        Assert.Equal("search", searchArrayRecord.GetProperty("command").GetString());
+        Assert.False(searchArrayRecord.TryGetProperty("stdout", out _));
+        Assert.False(searchArrayRecord.TryGetProperty("results", out _));
+        Assert.Single(searchArrayRecord.GetProperty("result").EnumerateArray());
+
         var summary = summaryDocument.RootElement;
         Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
-        Assert.Equal(7, summary.GetProperty("commands_processed").GetInt32());
+        Assert.Equal(9, summary.GetProperty("commands_processed").GetInt32());
         Assert.Equal(0, summary.GetProperty("command_failures").GetInt32());
     }
 
