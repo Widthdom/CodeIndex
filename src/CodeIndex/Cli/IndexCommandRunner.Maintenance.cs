@@ -17,7 +17,13 @@ public static partial class IndexCommandRunner
     public static int RunBackfillFold(string[] cmdArgs, JsonSerializerOptions jsonOptions) =>
         RunBackfillFold(cmdArgs, jsonOptions, cancellationForTesting: null);
 
-    public static int RunOptimizeFts(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    public static int RunOptimizeFts(string[] cmdArgs, JsonSerializerOptions jsonOptions) =>
+        RunOptimizeFts(cmdArgs, jsonOptions, forceLogicalObjectSizeFallbackForTesting: false);
+
+    internal static int RunOptimizeFts(
+        string[] cmdArgs,
+        JsonSerializerOptions jsonOptions,
+        bool forceLogicalObjectSizeFallbackForTesting)
     {
         var options = ParseOptimizeFtsArgs(cmdArgs);
         if (options.ShowHelp)
@@ -53,7 +59,8 @@ public static partial class IndexCommandRunner
             options.Json,
             jsonOptions,
             projectPath: null,
-            options.DryRun);
+            options.DryRun,
+            forceLogicalObjectSizeFallbackForTesting);
     }
 
     private static int RunOptimizeFtsForDb(
@@ -61,10 +68,15 @@ public static partial class IndexCommandRunner
         bool json,
         JsonSerializerOptions jsonOptions,
         string? projectPath,
-        bool dryRun = false)
+        bool dryRun = false,
+        bool forceLogicalObjectSizeFallbackForTesting = false)
     {
         if (dryRun)
-            return RunOptimizeFtsPreviewForDb(dbPath, json, jsonOptions);
+            return RunOptimizeFtsPreviewForDb(
+                dbPath,
+                json,
+                jsonOptions,
+                forceLogicalObjectSizeFallbackForTesting);
 
         if (!DbContext.TryValidateExistingCodeIndexDb(dbPath, out var validationMessage, out var isNotFound))
             return WriteCommandError(
@@ -94,16 +106,7 @@ public static partial class IndexCommandRunner
             {
                 var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
                 Console.WriteLine(JsonSerializer.Serialize(
-                    new OptimizeFtsJsonResult
-                    {
-                        Status = "success",
-                        DryRun = false,
-                        DbPath = dbPath,
-                        WritesSinceOptimizeBefore = before,
-                        WritesSinceOptimizeAfter = after,
-                        ElapsedMs = stopwatch.ElapsedMilliseconds,
-                        SourceDatabaseUnchanged = false,
-                    },
+                    new OptimizeFtsJsonResult("success", dbPath, before, after, stopwatch.ElapsedMilliseconds),
                     jsonContext.OptimizeFtsJsonResult));
             }
             else
@@ -149,7 +152,8 @@ public static partial class IndexCommandRunner
     private static int RunOptimizeFtsPreviewForDb(
         string dbPath,
         bool json,
-        JsonSerializerOptions jsonOptions)
+        JsonSerializerOptions jsonOptions,
+        bool forceLogicalObjectSizeFallbackForTesting)
     {
         var stopwatch = Stopwatch.StartNew();
         if (!File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
@@ -183,6 +187,7 @@ public static partial class IndexCommandRunner
             var status = new DbReader(db).GetStatus();
             var objectSizes = ReadOptimizeObjectSizes(
                 db,
+                forceLogicalObjectSizeFallbackForTesting,
                 out var objectSizesMeasurement,
                 out var objectSizesUnavailableReason);
             var writesSinceOptimize = ParseNonNegativeLong(
@@ -208,7 +213,7 @@ public static partial class IndexCommandRunner
             var optimizationRecommended = writesSinceOptimize >= DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold;
             stopwatch.Stop();
 
-            var result = new OptimizeFtsJsonResult
+            var result = new OptimizeFtsPreviewJsonResult
             {
                 Status = "dry_run",
                 DryRun = true,
@@ -253,6 +258,7 @@ public static partial class IndexCommandRunner
                 PlannedOperations =
                 [
                     "acquire_exclusive_index_lock",
+                    "initialize_or_migrate_schema",
                     "merge_fts5_segments",
                     "reset_incremental_write_counter",
                     "stamp_last_optimized_at",
@@ -264,7 +270,7 @@ public static partial class IndexCommandRunner
             if (json)
             {
                 var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
-                Console.WriteLine(JsonSerializer.Serialize(result, jsonContext.OptimizeFtsJsonResult));
+                Console.WriteLine(JsonSerializer.Serialize(result, jsonContext.OptimizeFtsPreviewJsonResult));
             }
             else
             {
@@ -297,35 +303,43 @@ public static partial class IndexCommandRunner
 
     private static Dictionary<string, long> ReadOptimizeObjectSizes(
         DbContext db,
+        bool forceLogicalObjectSizeFallbackForTesting,
         out string? measurement,
         out string? unavailableReason)
     {
         var sizes = new Dictionary<string, long>(StringComparer.Ordinal);
-        try
+        if (!forceLogicalObjectSizeFallbackForTesting)
         {
-            using var cmd = db.Connection.CreateCommand();
-            cmd.CommandText = """
-                SELECT name, SUM(pgsize)
-                FROM dbstat
-                WHERE name IN (
-                    'files', 'chunks', 'symbols', 'reference_lines', 'symbol_references',
-                    'file_issues', 'codeindex_meta', 'fts_chunks_data', 'fts_chunks_idx',
-                    'fts_chunks_content', 'fts_chunks_docsize', 'fts_chunks_config')
-                GROUP BY name
-                ORDER BY name
-                """;
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
-                sizes[reader.GetString(0)] = reader.IsDBNull(1) ? 0 : reader.GetInt64(1);
-            measurement = "dbstat_page_bytes";
-            unavailableReason = null;
+            try
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = """
+                    SELECT name, SUM(pgsize)
+                    FROM dbstat
+                    WHERE name IN (
+                        'files', 'chunks', 'symbols', 'reference_lines', 'symbol_references',
+                        'file_issues', 'codeindex_meta', 'fts_chunks_data', 'fts_chunks_idx',
+                        'fts_chunks_content', 'fts_chunks_docsize', 'fts_chunks_config')
+                    GROUP BY name
+                    ORDER BY name
+                    """;
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                    sizes[reader.GetString(0)] = reader.IsDBNull(1) ? 0 : reader.GetInt64(1);
+                measurement = "dbstat_page_bytes";
+                unavailableReason = null;
+                return sizes;
+            }
+            catch (SqliteException)
+            {
+                // Fall through to the portable logical-payload measurement.
+                // portable な logical-payload 計測へフォールバックする。
+            }
         }
-        catch (SqliteException)
-        {
-            sizes = ReadOptimizeLogicalPayloadSizes(db);
-            measurement = sizes.Count > 0 ? "logical_payload_bytes" : null;
-            unavailableReason = sizes.Count > 0 ? null : "size_measurement_unavailable";
-        }
+
+        sizes = ReadOptimizeLogicalPayloadSizes(db);
+        measurement = sizes.Count > 0 ? "logical_payload_bytes" : null;
+        unavailableReason = sizes.Count > 0 ? null : "size_measurement_unavailable";
 
         return sizes;
     }
@@ -335,18 +349,18 @@ public static partial class IndexCommandRunner
         var sizes = new Dictionary<string, long>(StringComparer.Ordinal);
         (string Name, string Sql)[] queries =
         [
-            ("files", "SELECT COALESCE(SUM(length(path) + length(COALESCE(lang, '')) + length(COALESCE(checksum, ''))), 0) FROM files"),
-            ("chunks", "SELECT COALESCE(SUM(length(COALESCE(content, ''))), 0) FROM chunks"),
-            ("symbols", "SELECT COALESCE(SUM(length(COALESCE(kind, '')) + length(COALESCE(sub_kind, '')) + length(COALESCE(name, '')) + length(COALESCE(signature, '')) + length(COALESCE(container_kind, '')) + length(COALESCE(container_name, '')) + length(COALESCE(container_qualified_name, '')) + length(COALESCE(family_key, '')) + length(COALESCE(visibility, '')) + length(COALESCE(return_type, '')) + length(COALESCE(metadata_target_source, '')) + length(COALESCE(name_folded, ''))), 0) FROM symbols"),
-            ("reference_lines", "SELECT COALESCE(SUM(length(context)), 0) FROM reference_lines"),
-            ("symbol_references", "SELECT COALESCE(SUM(length(COALESCE(symbol_name, '')) + length(COALESCE(reference_kind, '')) + length(COALESCE(context, '')) + length(COALESCE(container_kind, '')) + length(COALESCE(container_name, '')) + length(COALESCE(symbol_name_folded, '')) + length(COALESCE(container_name_folded, ''))), 0) FROM symbol_references"),
-            ("file_issues", "SELECT COALESCE(SUM(length(kind) + length(message) + length(COALESCE(origin, '')) + length(COALESCE(severity, ''))), 0) FROM file_issues"),
-            ("codeindex_meta", "SELECT COALESCE(SUM(length(key) + length(COALESCE(value, ''))), 0) FROM codeindex_meta"),
+            ("files", "SELECT COALESCE(SUM(length(CAST(path AS BLOB)) + length(CAST(COALESCE(lang, '') AS BLOB)) + length(CAST(COALESCE(checksum, '') AS BLOB))), 0) FROM files"),
+            ("chunks", "SELECT COALESCE(SUM(length(CAST(COALESCE(content, '') AS BLOB))), 0) FROM chunks"),
+            ("symbols", "SELECT COALESCE(SUM(length(CAST(COALESCE(kind, '') AS BLOB)) + length(CAST(COALESCE(sub_kind, '') AS BLOB)) + length(CAST(COALESCE(name, '') AS BLOB)) + length(CAST(COALESCE(signature, '') AS BLOB)) + length(CAST(COALESCE(container_kind, '') AS BLOB)) + length(CAST(COALESCE(container_name, '') AS BLOB)) + length(CAST(COALESCE(container_qualified_name, '') AS BLOB)) + length(CAST(COALESCE(family_key, '') AS BLOB)) + length(CAST(COALESCE(visibility, '') AS BLOB)) + length(CAST(COALESCE(return_type, '') AS BLOB)) + length(CAST(COALESCE(metadata_target_source, '') AS BLOB)) + length(CAST(COALESCE(name_folded, '') AS BLOB))), 0) FROM symbols"),
+            ("reference_lines", "SELECT COALESCE(SUM(length(CAST(context AS BLOB))), 0) FROM reference_lines"),
+            ("symbol_references", "SELECT COALESCE(SUM(length(CAST(COALESCE(symbol_name, '') AS BLOB)) + length(CAST(COALESCE(reference_kind, '') AS BLOB)) + length(CAST(COALESCE(context, '') AS BLOB)) + length(CAST(COALESCE(container_kind, '') AS BLOB)) + length(CAST(COALESCE(container_name, '') AS BLOB)) + length(CAST(COALESCE(symbol_name_folded, '') AS BLOB)) + length(CAST(COALESCE(container_name_folded, '') AS BLOB))), 0) FROM symbol_references"),
+            ("file_issues", "SELECT COALESCE(SUM(length(CAST(kind AS BLOB)) + length(CAST(message AS BLOB)) + length(CAST(COALESCE(origin, '') AS BLOB)) + length(CAST(COALESCE(severity, '') AS BLOB))), 0) FROM file_issues"),
+            ("codeindex_meta", "SELECT COALESCE(SUM(length(CAST(key AS BLOB)) + length(CAST(COALESCE(value, '') AS BLOB))), 0) FROM codeindex_meta"),
             ("fts_chunks_data", "SELECT COALESCE(SUM(length(block)), 0) FROM fts_chunks_data"),
-            ("fts_chunks_idx", "SELECT COALESCE(SUM(length(term)), 0) FROM fts_chunks_idx"),
-            ("fts_chunks_content", "SELECT COALESCE(SUM(length(c0)), 0) FROM fts_chunks_content"),
+            ("fts_chunks_idx", "SELECT COALESCE(SUM(length(CAST(term AS BLOB))), 0) FROM fts_chunks_idx"),
+            ("fts_chunks_content", "SELECT COALESCE(SUM(length(CAST(c0 AS BLOB))), 0) FROM fts_chunks_content"),
             ("fts_chunks_docsize", "SELECT COALESCE(SUM(length(sz)), 0) FROM fts_chunks_docsize"),
-            ("fts_chunks_config", "SELECT COALESCE(SUM(length(k) + length(COALESCE(v, ''))), 0) FROM fts_chunks_config"),
+            ("fts_chunks_config", "SELECT COALESCE(SUM(length(CAST(k AS BLOB)) + length(CAST(COALESCE(v, '') AS BLOB))), 0) FROM fts_chunks_config"),
         ];
 
         foreach (var (name, sql) in queries)

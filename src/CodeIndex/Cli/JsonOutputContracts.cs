@@ -25,7 +25,15 @@ internal sealed record BackfillFoldJsonResult(
     [property: JsonPropertyName("fold_ready")] bool FoldReady,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
-internal sealed class OptimizeFtsJsonResult : IVersionedJsonResult
+internal sealed record OptimizeFtsJsonResult(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("db_path")] string DbPath,
+    [property: JsonPropertyName("writes_since_optimize_before")] int WritesSinceOptimizeBefore,
+    [property: JsonPropertyName("writes_since_optimize_after")] int WritesSinceOptimizeAfter,
+    [property: JsonPropertyName("elapsed_ms")] long ElapsedMs,
+    [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
+
+internal sealed class OptimizeFtsPreviewJsonResult : IVersionedJsonResult
 {
     public string ApiVersion { get; init; } = JsonOutputContract.ApiVersion;
     public string Status { get; init; } = string.Empty;
@@ -909,6 +917,7 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(OutlineResult))]
 [JsonSerializable(typeof(OutlineSymbol))]
 [JsonSerializable(typeof(OptimizeFtsJsonResult))]
+[JsonSerializable(typeof(OptimizeFtsPreviewJsonResult))]
 [JsonSerializable(typeof(QueryCountResult))]
 [JsonSerializable(typeof(ReferenceResult))]
 [JsonSerializable(typeof(RepoEntrypointResult))]

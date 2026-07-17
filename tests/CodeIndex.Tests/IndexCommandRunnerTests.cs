@@ -4618,7 +4618,7 @@ public sealed class Caller
                         ChunkIndex = 0,
                         StartLine = 1,
                         EndLine = 1,
-                        Content = "public sealed class Preview;",
+                        Content = "public sealed class Preview; // 日本語",
                     },
                 ]);
                 writer.RecordFtsIncrementalWrite();
@@ -4636,7 +4636,10 @@ public sealed class Caller
                 {
                     using var stdout = new StringWriter();
                     Console.SetOut(stdout);
-                    previewExitCode = IndexCommandRunner.RunOptimizeFts(["--db", dbPath, "--dry-run", "--json"], _jsonOptions);
+                    previewExitCode = IndexCommandRunner.RunOptimizeFts(
+                        ["--db", dbPath, "--dry-run", "--json"],
+                        _jsonOptions,
+                        forceLogicalObjectSizeFallbackForTesting: true);
                     using var document = JsonDocument.Parse(stdout.ToString());
                     previewJson = document.RootElement.Clone();
                 }
@@ -4655,7 +4658,10 @@ public sealed class Caller
             Assert.True(previewJson.GetProperty("db_size_bytes").GetInt64() > 0);
             Assert.True(previewJson.GetProperty("page_count").GetInt64() > 0);
             Assert.True(previewJson.GetProperty("object_sizes_available").GetBoolean());
-            Assert.True(previewJson.GetProperty("object_size_bytes").GetProperty("chunks").GetInt64() > 0);
+            Assert.Equal("logical_payload_bytes", previewJson.GetProperty("object_sizes_measurement").GetString());
+            Assert.True(
+                previewJson.GetProperty("object_size_bytes").GetProperty("chunks").GetInt64()
+                >= Encoding.UTF8.GetByteCount("public sealed class Preview; // 日本語"));
             Assert.True(previewJson.GetProperty("fts_size_bytes").GetInt64() > 0);
             Assert.Equal("available", previewJson.GetProperty("lock_state").GetString());
             Assert.True(previewJson.GetProperty("would_acquire_exclusive_index_lock").GetBoolean());
@@ -4664,6 +4670,9 @@ public sealed class Caller
             Assert.Contains(
                 previewJson.GetProperty("planned_operations").EnumerateArray().Select(item => item.GetString()),
                 operation => operation == "merge_fts5_segments");
+            Assert.Contains(
+                previewJson.GetProperty("planned_operations").EnumerateArray().Select(item => item.GetString()),
+                operation => operation == "initialize_or_migrate_schema");
             Assert.Equal(dbBytesBeforePreview, File.ReadAllBytes(dbPath));
             Assert.False(File.Exists(IndexLock.GetLockPath(dbPath)));
             Assert.False(File.Exists(IndexLock.GetInfoPath(IndexLock.GetLockPath(dbPath))));
@@ -4691,6 +4700,9 @@ public sealed class Caller
             Assert.Equal("success", json.GetProperty("status").GetString());
             Assert.Equal(2, json.GetProperty("writes_since_optimize_before").GetInt32());
             Assert.Equal(0, json.GetProperty("writes_since_optimize_after").GetInt32());
+            Assert.Equal(6, json.EnumerateObject().Count());
+            Assert.False(json.TryGetProperty("dry_run", out _));
+            Assert.False(json.TryGetProperty("planned_operations", out _));
 
             using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal("0", verifyDb.GetMetaString(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey));
