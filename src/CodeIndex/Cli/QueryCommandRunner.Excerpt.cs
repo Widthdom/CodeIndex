@@ -22,6 +22,8 @@ public static partial class QueryCommandRunner
             validateDefaultSnippetLines: false);
         if (TryWriteUnsupportedOptionError("excerpt", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("excerpt")))
             return CommandExitCodes.UsageError;
+        if (TryWriteNonPositiveCoordinateJsonError(options, jsonOptions, "--line", "--start", "--start-line", "--end", "--end-line"))
+            return CommandExitCodes.InvalidArgument;
         if (TryWriteParseError(options, "excerpt"))
             return CommandExitCodes.UsageError;
         if (options.Query == null)
@@ -80,18 +82,39 @@ public static partial class QueryCommandRunner
         var filePath = DbPathResolver.ResolveQueryFilePath(options.DbPath, filePathArgument, options.DbPathExplicit);
         return WithDb(options, jsonOptions, reader =>
         {
+            var indexedFile = reader.GetFileByPath(filePath);
+            if (indexedFile == null)
+            {
+                return CommandErrorWriter.WriteJsonOrHuman(
+                    options.Json,
+                    jsonOptions,
+                    $"indexed file not found: {filePath}",
+                    CommandExitCodes.NotFound,
+                    "Use `cdidx files --json` to confirm the indexed path, then retry with that exact path.",
+                    errorCode: CommandErrorCodes.FileNotFound,
+                    category: "not_found");
+            }
+
+            if (startLineValue > indexedFile.Lines || endLineValue > indexedFile.Lines)
+            {
+                return CommandErrorWriter.WriteJsonOrHuman(
+                    options.Json,
+                    jsonOptions,
+                    $"requested excerpt range {startLineValue}-{endLineValue} is outside {filePath} (1-{indexedFile.Lines}).",
+                    CommandExitCodes.InvalidArgument,
+                    $"Use a line range between 1 and {indexedFile.Lines}.",
+                    errorCode: CommandErrorCodes.LineOutOfRange,
+                    category: "range");
+            }
+
             if (options.FocusLine.HasValue)
             {
-                var file = reader.GetFileByPath(filePath);
-                if (file != null)
+                var requestedStart = Math.Max(1, startLineValue - options.ContextBefore);
+                var requestedEnd = Math.Min(indexedFile.Lines, endLineValue + options.ContextAfter);
+                if (options.FocusLine.Value < requestedStart || options.FocusLine.Value > requestedEnd)
                 {
-                    var requestedStart = Math.Max(1, startLineValue - options.ContextBefore);
-                    var requestedEnd = Math.Min(file.Lines, endLineValue + options.ContextAfter);
-                    if (options.FocusLine.Value < requestedStart || options.FocusLine.Value > requestedEnd)
-                    {
-                        CommandErrorWriter.WriteStderr($"Error: --focus-line ({options.FocusLine.Value}) must be within the returned excerpt range ({requestedStart}-{requestedEnd}).");
-                        return CommandExitCodes.UsageError;
-                    }
+                    CommandErrorWriter.WriteStderr($"Error: --focus-line ({options.FocusLine.Value}) must be within the returned excerpt range ({requestedStart}-{requestedEnd}).");
+                    return CommandExitCodes.UsageError;
                 }
             }
             if (options.FocusColumn.HasValue)

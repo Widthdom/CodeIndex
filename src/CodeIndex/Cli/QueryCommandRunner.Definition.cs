@@ -243,9 +243,14 @@ public static partial class QueryCommandRunner
             var results = reader.GetDefinitions(options.Query, limit, options.Kind, options.Lang, includeBody: false, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
             if (results.Count == 0)
             {
-                if (!options.Json)
-                    CommandErrorWriter.WriteStderr(BuildZeroResultLine("No definitions found", options));
-                return CommandExitCodes.NotFound;
+                return CommandErrorWriter.WriteJsonOrHuman(
+                    options.Json,
+                    jsonOptions,
+                    BuildZeroResultLine("No definitions found", options),
+                    CommandExitCodes.NotFound,
+                    "Check the symbol spelling or narrow/adjust --kind, --lang, and --path filters.",
+                    errorCode: CommandErrorCodes.QueryNotFound,
+                    category: "not_found");
             }
 
             if (all)

@@ -3099,7 +3099,8 @@ public partial class QueryCommandRunnerTests
     // Regression lock for #161: valid integers that fail the positive / non-negative
     // range check used to be swallowed silently, leaving the command to run with the
     // default value and write real results to stdout with exit 0. Every case below
-    // MUST abort with UsageError and leak NO stdout output.
+    // MUST abort; excerpt line coordinates in JSON mode use the structured range-error
+    // contract, while the other numeric options retain their usage-error contract.
     // Uses a real indexed DB + real file on disk so that if ParseArgs ever regresses to
     // "swallow invalid value and continue with default", the stdout-empty invariant has
     // real teeth — the command could actually produce results, and the test would catch
@@ -3107,7 +3108,8 @@ public partial class QueryCommandRunnerTests
     // DB / missing file making the command fail at a later stage).
     // #161 の回帰ロック: 数値として parse できるが positive / non-negative 制約を満たさない値は、
     // かつて parseError を立てずにデフォルトへ差し替えられ、本物の結果を stdout に出して exit 0 にしていた。
-    // 各ケースは UsageError で停止し、stdout に 1 バイトも漏らしてはならない。
+    // 各ケースは必ず停止し、JSON mode の excerpt line coordinate は structured range error、
+    // それ以外の数値 option は従来の UsageError contract を維持する。
     // 実在の index 済み DB と実在ファイルを用意することで、ParseArgs が「不正値を既定値に差し替えて続行」へ
     // 退行した場合に本当に stdout へ結果が漏れる経路を作り、stdout 空のアサーションが偶然通ってしまう逃げ道を塞ぐ。
     [Theory]
@@ -3186,17 +3188,29 @@ public partial class QueryCommandRunnerTests
             _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
         });
 
-        Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        // The #161 bug was exactly this: real results on stdout alongside the stderr Error.
-        // stdout must stay empty so callers that branch on exit code alone cannot consume
-        // silently-defaulted output as if it were valid data.
-        // #161 の本質はここ。exit code だけを見る呼び出し元がデフォルト差し替えの出力を
-        // 正当な結果として消費しないよう、stdout は空でなければならない。
-        Assert.Equal(string.Empty, stdout);
-        Assert.Contains(expectedErrorFragment, stderr);
-        Assert.Contains($"got '{value}'", stderr);
-        Assert.Contains("Hint: fix the invalid or missing option value", stderr);
-        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
+        var expectsStructuredRangeError = command == "excerpt" && option is "--start" or "--end";
+        if (expectsStructuredRangeError)
+        {
+            Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal(CommandErrorCodes.LineOutOfRange, document.RootElement.GetProperty("error_code").GetString());
+        }
+        else
+        {
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            // The #161 bug was exactly this: real results on stdout alongside the stderr Error.
+            // stdout must stay empty so callers that branch on exit code alone cannot consume
+            // silently-defaulted output as if it were valid data.
+            // #161 の本質はここ。exit code だけを見る呼び出し元がデフォルト差し替えの出力を
+            // 正当な結果として消費しないよう、stdout は空でなければならない。
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains(expectedErrorFragment, stderr);
+            Assert.Contains($"got '{value}'", stderr);
+            Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+            Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
+        }
     }
 
     [Fact]
@@ -5633,7 +5647,7 @@ public partial class QueryCommandRunnerTests
         var (exitCode, _, stderr) = CaptureConsole(() => RunQueryCommand(commandName, []));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains($"Error: {expectedMessage}", stderr);
+        Assert.Contains(expectedMessage, stderr);
         Assert.DoesNotContain("query cannot be empty or whitespace-only", stderr);
     }
 

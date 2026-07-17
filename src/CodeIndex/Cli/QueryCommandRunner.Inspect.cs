@@ -21,6 +21,8 @@ public static partial class QueryCommandRunner
             validateDefaultSnippetLines: false);
         if (TryWriteUnsupportedOptionError("inspect", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("inspect"), options.Query))
             return CommandExitCodes.UsageError;
+        if (TryWriteNonPositiveCoordinateJsonError(options, jsonOptions, "--line", "--start", "--start-line", "--end", "--end-line"))
+            return CommandExitCodes.InvalidArgument;
         if (TryWriteParseError(options, "inspect"))
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedOutputFormat("inspect", options, InspectOutputFormats, "Use `--format json` or `--format compact` for inspect bundles; count output is not meaningful for one inspect bundle."))
@@ -64,13 +66,54 @@ public static partial class QueryCommandRunner
             var compactLimit = GetCompactSectionLimit(options);
             var inspectLimit = options.Compact ? GetCompactSourceLimit(compactLimit) : options.Limit;
             var inspectPath = pathLineInspectMode ? GetSingleSpecificPathPattern(options.PathPatterns) : null;
-            var inspectQuery = pathLineInspectMode
-                ? $"{inspectPath}:{options.StartLine!.Value}"
+            var inspectLine = pathLineInspectMode ? options.StartLine!.Value : options.StartLine ?? 1;
+            FileResult? indexedFile = null;
+            if (inspectPath != null)
+            {
+                indexedFile = reader.GetFileByPath(inspectPath);
+            }
+            else if (options.Query != null)
+            {
+                var resolvedQueryPath = DbPathResolver.ResolveQueryFilePath(options.DbPath, options.Query, options.DbPathExplicit);
+                indexedFile = reader.GetFileByPath(resolvedQueryPath);
+                if (indexedFile != null)
+                    inspectPath = resolvedQueryPath;
+            }
+
+            var fileInspectMode = inspectPath != null;
+            var coordinateExplicit = options.StartLine.HasValue || options.EndLine.HasValue;
+            if (fileInspectMode && indexedFile == null)
+            {
+                return CommandErrorWriter.WriteJsonOrHuman(
+                    options.Json,
+                    jsonOptions,
+                    $"indexed file not found: {inspectPath}",
+                    CommandExitCodes.NotFound,
+                    "Use `cdidx files --json` to confirm the indexed path, then retry with that exact path.",
+                    errorCode: CommandErrorCodes.FileNotFound,
+                    category: "not_found");
+            }
+
+            if (fileInspectMode && coordinateExplicit && (inspectLine > indexedFile!.Lines || (options.EndLine.HasValue && options.EndLine.Value > indexedFile.Lines)))
+            {
+                var requestedEndLine = options.EndLine ?? inspectLine;
+                return CommandErrorWriter.WriteJsonOrHuman(
+                    options.Json,
+                    jsonOptions,
+                    $"requested inspect range {inspectLine}-{requestedEndLine} is outside {inspectPath} (1-{indexedFile.Lines}).",
+                    CommandExitCodes.InvalidArgument,
+                    $"Use a line range between 1 and {indexedFile.Lines}.",
+                    errorCode: CommandErrorCodes.LineOutOfRange,
+                    category: "range");
+            }
+
+            var inspectQuery = fileInspectMode
+                ? $"{inspectPath}:{inspectLine}"
                 : options.Query!;
-            var analysis = pathLineInspectMode
+            var analysis = fileInspectMode
                 ? reader.AnalyzeFileLine(
                     inspectPath!,
-                    options.StartLine!.Value,
+                    inspectLine,
                     inspectLimit,
                     options.Lang,
                     options.IncludeBody,

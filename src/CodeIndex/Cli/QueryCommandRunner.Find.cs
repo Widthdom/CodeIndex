@@ -57,9 +57,15 @@ public static partial class QueryCommandRunner
         }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
-            CommandErrorWriter.WriteStderr("Error: find requires a query argument");
-            CommandErrorWriter.WriteStderr(FindUsage);
-            return CommandExitCodes.UsageError;
+            return CommandErrorWriter.WriteJsonOrHuman(
+                options.Json,
+                jsonOptions,
+                "find requires a query argument",
+                CommandExitCodes.UsageError,
+                "Pass the text to find after the command and scope it with --path <glob> or --all.",
+                FindUsage,
+                CommandErrorCodes.UsageError,
+                category: "usage");
         }
         if (options.Query.Length > QueryLimits.MaxQueryLength)
         {

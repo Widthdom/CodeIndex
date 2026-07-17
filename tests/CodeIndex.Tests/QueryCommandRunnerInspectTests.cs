@@ -10,6 +10,89 @@ namespace CodeIndex.Tests;
 public partial class QueryCommandRunnerTests
 {
     [Fact]
+    public void RunInspect_ExactFilePathAndCoordinatesAreStrict_Issue4572()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_file_strict_issue4572");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "docs/Target.md",
+                "markdown",
+                "# Target\n\nDetails\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "docs/Empty.md", "markdown", string.Empty);
+
+            var (fileExitCode, fileStdout, fileStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["docs/Target.md", "--db", dbPath, "--json", "--limit", "2"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, fileExitCode);
+            Assert.Equal(string.Empty, fileStderr);
+            using (var fileDocument = ParseJsonOutput(fileStdout))
+            {
+                var root = fileDocument.RootElement;
+                Assert.Equal("docs/Target.md:1", root.GetProperty("query").GetString());
+                Assert.Equal("docs/Target.md", root.GetProperty("file").GetProperty("path").GetString());
+            }
+
+            var (emptyExitCode, emptyStdout, emptyStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["docs/Empty.md", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, emptyExitCode);
+            Assert.Equal(string.Empty, emptyStderr);
+            using (var emptyDocument = ParseJsonOutput(emptyStdout))
+            {
+                var file = emptyDocument.RootElement.GetProperty("file");
+                Assert.Equal("docs/Empty.md", file.GetProperty("path").GetString());
+                Assert.Equal(0, file.GetProperty("lines").GetInt32());
+            }
+
+            var cases = new (string Name, int ExpectedExitCode, string ExpectedErrorCode, string[] Args)[]
+            {
+                (
+                    "missing file",
+                    CommandExitCodes.NotFound,
+                    CommandErrorCodes.FileNotFound,
+                    ["--path", "NOPE.md", "--line", "1", "--db", dbPath, "--json"]),
+                (
+                    "line beyond eof",
+                    CommandExitCodes.InvalidArgument,
+                    CommandErrorCodes.LineOutOfRange,
+                    ["--path", "docs/Target.md", "--line", "99", "--db", dbPath, "--json"]),
+                (
+                    "empty file coordinate",
+                    CommandExitCodes.InvalidArgument,
+                    CommandErrorCodes.LineOutOfRange,
+                    ["--path", "docs/Empty.md", "--line", "1", "--db", dbPath, "--json"]),
+                (
+                    "non-positive coordinate",
+                    CommandExitCodes.InvalidArgument,
+                    CommandErrorCodes.LineOutOfRange,
+                    ["--path", "docs/Target.md", "--line", "0", "--db", dbPath, "--json"]),
+            };
+
+            foreach (var testCase in cases)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(testCase.Args, _jsonOptions));
+
+                Assert.Equal(testCase.ExpectedExitCode, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                using var document = ParseJsonOutput(stdout);
+                Assert.Equal("1", document.RootElement.GetProperty("api_version").GetString());
+                Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+                Assert.Equal(testCase.ExpectedErrorCode, document.RootElement.GetProperty("error_code").GetString());
+                Assert.False(string.IsNullOrWhiteSpace(document.RootElement.GetProperty("message").GetString()), testCase.Name);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_PathLineJson_ReturnsExactAndEnclosingSymbols_Issue3915()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_path_line_symbol");

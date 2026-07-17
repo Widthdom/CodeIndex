@@ -65,4 +65,13 @@ internal static class CommandErrorCodes
 
     /// <summary>Workspace manifest JSON was found but failed schema or safety validation.</summary>
     public const string WorkspaceManifestInvalid = "E017_WORKSPACE_MANIFEST_INVALID";
+
+    /// <summary>A query that requires at least one result did not match an indexed entity.</summary>
+    public const string QueryNotFound = "E018_QUERY_NOT_FOUND";
+
+    /// <summary>The requested indexed file path does not exist in the active index.</summary>
+    public const string FileNotFound = "E019_FILE_NOT_FOUND";
+
+    /// <summary>A requested source line falls outside the indexed file's 1-based line range.</summary>
+    public const string LineOutOfRange = "E020_LINE_OUT_OF_RANGE";
 }
