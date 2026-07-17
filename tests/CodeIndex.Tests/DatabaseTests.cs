@@ -1292,7 +1292,7 @@ public class DatabaseTests : IDisposable
 
         using var repairDb = new DbContext(DbOpenIntent.Repair, _dbPath);
         Assert.True(repairDb.RepairIncompleteBatchReadiness());
-        Assert.Equal(0, repairDb.GetUserVersion());
+        Assert.Equal(DbContext.HotspotReferenceAggregateFlags, repairDb.GetUserVersion());
     }
 
     [Fact]
@@ -3170,6 +3170,20 @@ public class DatabaseTests : IDisposable
                 new() { FileId = staleId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "stale" },
                 new() { FileId = duplicateId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "duplicate" },
             ]);
+            _writer.InsertSymbols([
+                new() { FileId = staleId, Kind = "function", Name = "removed_target", Line = 1 },
+            ]);
+            _writer.InsertReferences([
+                new()
+                {
+                    FileId = currentId,
+                    SymbolName = "removed_target",
+                    ReferenceKind = "call",
+                    Line = 1,
+                    Column = 1,
+                    Context = "removed_target()",
+                },
+            ]);
 
             var purged = _writer.PurgeStaleFilesSharingChecksum(projectRoot, "src/current.py", "same_checksum");
 
@@ -3180,6 +3194,10 @@ public class DatabaseTests : IDisposable
             using var cmd = _db.Connection.CreateCommand();
             cmd.CommandText = "SELECT COUNT(*) FROM chunks";
             Assert.Equal(2L, (long)cmd.ExecuteScalar()!);
+            cmd.CommandText = "SELECT COUNT(*) FROM symbol_references";
+            Assert.Equal(0L, (long)cmd.ExecuteScalar()!);
+            cmd.CommandText = "SELECT COUNT(*) FROM hotspot_reference_counts";
+            Assert.Equal(0L, (long)cmd.ExecuteScalar()!);
         }
         finally
         {
@@ -3785,16 +3803,22 @@ public class DatabaseTests : IDisposable
             GROUP BY symbol_name, container_kind
             ORDER BY symbol_name, container_kind";
 
-            using var reader = cmd.ExecuteReader();
-            Assert.True(reader.Read());
-            Assert.Equal("Request", reader.GetString(0));
-            Assert.Equal("interface", reader.GetString(1));
-            Assert.Equal(2, reader.GetInt32(2));
-            Assert.True(reader.Read());
-            Assert.Equal("Widget", reader.GetString(0));
-            Assert.Equal("interface", reader.GetString(1));
-            Assert.Equal(2, reader.GetInt32(2));
-            Assert.False(reader.Read());
+            using (var reader = cmd.ExecuteReader())
+            {
+                Assert.True(reader.Read());
+                Assert.Equal("Request", reader.GetString(0));
+                Assert.Equal("interface", reader.GetString(1));
+                Assert.Equal(2, reader.GetInt32(2));
+                Assert.True(reader.Read());
+                Assert.Equal("Widget", reader.GetString(0));
+                Assert.Equal("interface", reader.GetString(1));
+                Assert.Equal(2, reader.GetInt32(2));
+                Assert.False(reader.Read());
+            }
+
+            Assert.Equal(4, _writer.RebuildTypeScriptAugmentationReferences(projectRoot));
+            cmd.CommandText = "SELECT SUM(reference_count) FROM hotspot_reference_counts WHERE lang = 'typescript'";
+            Assert.Equal(4L, (long)Assert.IsType<long>(cmd.ExecuteScalar()));
         }
         finally
         {

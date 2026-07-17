@@ -179,10 +179,12 @@ public partial class DbWriter
     {
         // FTS cleanup is handled automatically by fts_chunks_ad trigger on chunk deletion
         // FTSクリーンアップはチャンク削除時にfts_chunks_adトリガーで自動処理される
+        var aggregateWasReady = ClearHotspotReferenceAggregateReady();
         var cmd = RentCommand(
             """
             DELETE FROM chunks WHERE file_id = @fid;
             DELETE FROM symbols WHERE file_id = @fid;
+            DELETE FROM hotspot_reference_counts WHERE file_id = @fid;
             DELETE FROM symbol_references WHERE file_id = @fid;
             DELETE FROM reference_lines WHERE file_id = @fid;
             """,
@@ -196,5 +198,6 @@ public partial class DbWriter
         {
             ReleaseCommand(cmd);
         }
+        RestoreHotspotReferenceAggregateReady(aggregateWasReady);
     }
 }

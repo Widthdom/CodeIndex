@@ -948,6 +948,19 @@ public static class DbCommandRunner
 
         if (apply)
         {
+            if (orphanSymbolReferences > 0)
+            {
+                var userVersion = Count(connection, transaction, "PRAGMA user_version", cancellationToken);
+                var nextUserVersion = userVersion & ~DbContext.HotspotReferenceAggregateReadyFlag;
+                if (nextUserVersion != userVersion)
+                {
+                    Execute(
+                        connection,
+                        transaction,
+                        $"PRAGMA user_version = {nextUserVersion}",
+                        cancellationToken);
+                }
+            }
             ReportMaintenanceProgress("prune", "delete_symbol_references", dbPath);
             Execute(connection, transaction, @"
                 DELETE FROM symbol_references

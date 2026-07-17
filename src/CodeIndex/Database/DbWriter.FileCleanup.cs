@@ -167,6 +167,7 @@ public partial class DbWriter
     private void DeleteCrossFileReferencesToSymbolsDefinedOnlyByFiles(IReadOnlyList<long> fileIds)
     {
         using var deleteCmd = _conn.CreateCommand();
+        deleteCmd.Transaction = _activeTransaction;
         var parameters = SqliteDynamicSql.AddParameters(deleteCmd, "id", fileIds, SqliteType.Integer, "cross-file reference delete batch");
         var idList = string.Join(", ", parameters);
         deleteCmd.CommandText = $@"
@@ -185,8 +186,15 @@ public partial class DbWriter
                   FROM symbols retained_symbols
                   WHERE retained_symbols.file_id NOT IN ({idList})
                     AND retained_symbols.name = symbol_references.symbol_name
-              )";
-        deleteCmd.ExecuteNonQuery();
+              )
+            RETURNING file_id";
+        var affectedFileIds = new HashSet<long>();
+        using (var reader = deleteCmd.ExecuteReader())
+        {
+            while (reader.Read())
+                affectedFileIds.Add(reader.GetInt64(0));
+        }
+        RefreshHotspotReferenceCounts(affectedFileIds, CancellationToken.None);
     }
 
     private static string GetRelativeDirectory(string relativePath)

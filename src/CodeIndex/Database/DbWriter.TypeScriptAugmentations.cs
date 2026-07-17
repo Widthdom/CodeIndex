@@ -9,12 +9,15 @@ public partial class DbWriter
     {
         using var transaction = BeginTransaction();
 
+        var affectedFileIds = new HashSet<long>();
         var deleteCmd = RentCommand(
-            "DELETE FROM symbol_references WHERE reference_kind = 'augmentation'",
+            "DELETE FROM symbol_references WHERE reference_kind = 'augmentation' RETURNING file_id",
             static _ => { });
         try
         {
-            deleteCmd.ExecuteNonQuery();
+            using var reader = deleteCmd.ExecuteReader();
+            while (reader.Read())
+                affectedFileIds.Add(reader.GetInt64(0));
         }
         finally
         {
@@ -87,6 +90,9 @@ public partial class DbWriter
         }
 
         InsertReferences(references);
+        foreach (var reference in references)
+            affectedFileIds.Remove(reference.FileId);
+        RefreshHotspotReferenceCounts(affectedFileIds, CancellationToken.None);
         MarkTypeScriptAugmentationReady();
         transaction.Commit();
         return references.Count;

@@ -9,11 +9,13 @@ public partial class DbWriter
     //   bit 0 (GraphReadyFlag)  — symbol_references fully backfilled
     //   bit 1 (IssuesReadyFlag) — file_issues produced by ValidateContent
     //   bit 2 (FoldReadyFlag)   — name_folded columns populated for Unicode --exact (#86)
+    //   bit 3 (HotspotReferenceAggregateStorageContractFlag) — permanent downgrade guard
+    //   bit 4 (HotspotReferenceAggregateReadyFlag) — maintained aggregate synchronized
     // CLI and MCP full-scan indexing set graph + fold; CLI additionally sets issues (MCP
     // now persists file_issues too after bdbb2bd, so both can stamp it). The index runner
     // ClearReadyFlags() first so partial / aborted runs demote trust until a successful
-    // end-of-run commit. Fold is only stamped after a full scan because a partial update
-    // leaves legacy rows without folded values.
+    // end-of-run commit; the aggregate contract bits are preserved. Fold is only stamped after a
+    // full scan because a partial update leaves legacy rows without folded values.
     // CLI / MCP 共に full-scan で graph + fold を立てる。fold は部分更新では立てない。
     public void MarkGraphReady() => SetReadyBit(DbContext.GraphReadyFlag);
     public void MarkIssuesReady() => SetReadyBit(DbContext.IssuesReadyFlag);
@@ -111,7 +113,39 @@ public partial class DbWriter
             : FoldReadyStampResult.NonCurrentFoldValues;
     }
 
-    public void ClearReadyFlags() => Execute("PRAGMA user_version = 0");
+    public void ClearReadyFlags()
+    {
+        using var read = _conn.CreateCommand();
+        read.Transaction = _activeTransaction;
+        read.CommandText = "PRAGMA user_version";
+        var raw = read.ExecuteScalar();
+        var current = raw is long l ? (int)l : (raw is int i ? i : 0);
+        var aggregateContractBits = current & DbContext.HotspotReferenceAggregateFlags;
+        Execute($"PRAGMA user_version = {aggregateContractBits}", _activeTransaction);
+    }
+
+    private bool ClearHotspotReferenceAggregateReady()
+    {
+        using var read = _conn.CreateCommand();
+        read.Transaction = _activeTransaction;
+        read.CommandText = "PRAGMA user_version";
+        var raw = read.ExecuteScalar();
+        var current = raw is long l ? (int)l : (raw is int i ? i : 0);
+        var wasReady = (current & DbContext.HotspotReferenceAggregateReadyFlag) != 0;
+        var next = current & ~DbContext.HotspotReferenceAggregateReadyFlag;
+        if (next != current)
+            Execute($"PRAGMA user_version = {next}", _activeTransaction);
+        return wasReady;
+    }
+
+    private void RestoreHotspotReferenceAggregateReady(bool wasReady)
+    {
+        if (wasReady)
+            MarkHotspotReferenceAggregateReady();
+    }
+
+    private void MarkHotspotReferenceAggregateReady()
+        => SetReadyBit(DbContext.HotspotReferenceAggregateFlags);
 
     private void SetReadyBit(int flag)
     {

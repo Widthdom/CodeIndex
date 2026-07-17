@@ -50,7 +50,7 @@ public partial class DbReader
             : string.Empty;
         var graphLangs = ReferenceExtractor.GetSupportedLanguages().ToList();
         var sql = $@"
-            WITH all_candidate_symbols AS (
+            WITH all_candidate_symbols AS MATERIALIZED (
                 SELECT s.id, s.file_id, s.name, s.kind, f.path, f.lang, s.line,
                        {GetSymbolColumnSql("visibility")} AS visibility,
                        {containerNameSql} AS container_name,
@@ -86,7 +86,7 @@ public partial class DbReader
                 FROM all_candidate_symbols
                 GROUP BY lang, name
             ),
-            filtered_candidates AS (
+            filtered_candidates AS MATERIALIZED (
                 SELECT id,
                        file_id,
                        name,
@@ -115,27 +115,26 @@ public partial class DbReader
             sql += $" AND NOT {TestPathCondition.Replace("f.path", "path")}";
         sql += @"
             ),
-            logical_references AS (
-                SELECT sr.file_id,
-                       rf.lang,
-                       " + BuildLogicalReferenceNameExpr("rf.lang", "sr.symbol_name", ReferenceContextSql("sr"), "sr.container_name", "sr.column_number") + @" AS symbol_name,
-                       " + BuildLogicalReferenceSegmentCountExpr("rf.lang", "sr.symbol_name", ReferenceContextSql("sr"), "sr.container_name", "sr.column_number") + @" AS symbol_segment_count,
-                       sr.line,
-                       sr.column_number,
-                       " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_reference_kind,
-                       " + GetHotspotReferenceWeightSql("sr.reference_kind") + @" AS reference_weight
-                FROM symbol_references sr
-                JOIN files rf ON rf.id = sr.file_id" + ReferenceLineJoinSql("sr") + @"
-                WHERE sr.reference_kind IN " + CallGraphReferenceKindsSql + @"
-                GROUP BY rf.lang, sr.file_id, symbol_name, symbol_segment_count, sr.line, sr.column_number, logical_reference_kind
+            logical_references AS MATERIALIZED (
+                " + BuildHotspotLogicalReferenceRowsSql(includeLeafMetadata: false) + @"
+            ),
+            file_reference_counts AS MATERIALIZED (
+                SELECT lang,
+                       file_id,
+                       symbol_name,
+                       symbol_segment_count,
+                       SUM(reference_count) AS ref_count,
+                       SUM(reference_score) AS ref_score
+                FROM logical_references
+                GROUP BY lang, file_id, symbol_name, symbol_segment_count
             ),
             global_reference_counts AS (
                 SELECT lang,
                        symbol_name,
                        symbol_segment_count,
-                       COUNT(*) AS ref_count,
-                       SUM(reference_weight) AS ref_score
-                FROM logical_references
+                       SUM(ref_count) AS ref_count,
+                       SUM(ref_score) AS ref_score
+                FROM file_reference_counts
                 GROUP BY lang, symbol_name, symbol_segment_count
             ),
             file_target_cardinality AS (
@@ -155,22 +154,18 @@ public partial class DbReader
                        logical_target_key
                 FROM filtered_candidates
             ),
-            file_reference_counts AS (
-                SELECT lang,
-                       file_id,
-                       symbol_name,
-                       symbol_segment_count,
-                       COUNT(*) AS ref_count,
-                       SUM(reference_weight) AS ref_score
-                FROM logical_references
-                GROUP BY lang, file_id, symbol_name, symbol_segment_count
-            ),
             conservative_reference_counts AS (
                 SELECT ctf.logical_target_key,
                        ctf.name,
                        ctf.kind,
-                       SUM(COALESCE(frc.ref_count, 0)) AS ref_count,
-                       SUM(COALESCE(frc.ref_score, 0.0)) AS ref_score
+                       SUM(
+                           COALESCE(frc_non_sql.ref_count, 0)
+                           + COALESCE(frc_sql_exact.ref_count, 0)
+                           + COALESCE(frc_sql_leaf.ref_count, 0)) AS ref_count,
+                       SUM(
+                           COALESCE(frc_non_sql.ref_score, 0.0)
+                           + COALESCE(frc_sql_exact.ref_score, 0.0)
+                           + COALESCE(frc_sql_leaf.ref_score, 0.0)) AS ref_score
                 FROM conservative_target_files ctf
                 JOIN file_target_cardinality ftc
                   ON ftc.lang = ctf.lang
@@ -178,16 +173,24 @@ public partial class DbReader
                  AND ftc.name = ctf.name
                  AND ftc.kind = ctf.kind
                  AND ftc.target_count = 1
-                LEFT JOIN file_reference_counts frc
-                  ON frc.lang = ctf.lang
-                 AND frc.file_id = ctf.file_id
-                 AND (
-                        (ctf.lang != 'sql' AND frc.symbol_name = ctf.name)
-                     OR (ctf.lang = 'sql' AND (
-                            (frc.symbol_segment_count = sql_segment_count(ctf.name) AND frc.symbol_name = sql_normalize_name(ctf.name) COLLATE NOCASE)
-                         OR (frc.symbol_segment_count = 1 AND frc.symbol_name = sql_leaf_name(ctf.name) COLLATE NOCASE)
-                     ))
-                 )
+                LEFT JOIN file_reference_counts frc_non_sql
+                  ON ctf.lang != 'sql'
+                 AND frc_non_sql.lang = ctf.lang
+                 AND frc_non_sql.file_id = ctf.file_id
+                 AND frc_non_sql.symbol_name = ctf.name
+                LEFT JOIN file_reference_counts frc_sql_exact
+                  ON ctf.lang = 'sql'
+                 AND frc_sql_exact.lang = ctf.lang
+                 AND frc_sql_exact.file_id = ctf.file_id
+                 AND frc_sql_exact.symbol_segment_count = sql_segment_count(ctf.name)
+                 AND frc_sql_exact.symbol_name = sql_normalize_name(ctf.name) COLLATE NOCASE
+                LEFT JOIN file_reference_counts frc_sql_leaf
+                  ON ctf.lang = 'sql'
+                 AND sql_segment_count(ctf.name) > 1
+                 AND frc_sql_leaf.lang = ctf.lang
+                 AND frc_sql_leaf.file_id = ctf.file_id
+                 AND frc_sql_leaf.symbol_segment_count = 1
+                 AND frc_sql_leaf.symbol_name = sql_leaf_name(ctf.name) COLLATE NOCASE
                 GROUP BY ctf.logical_target_key, ctf.name, ctf.kind
             ),
             site_reference_counts AS (
@@ -198,7 +201,9 @@ public partial class DbReader
                                  nc.defs = 1
                                  OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
                              )
-                               THEN COALESCE(grc.ref_count, 0)
+                               THEN COALESCE(grc_non_sql.ref_count, 0)
+                                  + COALESCE(grc_sql_exact.ref_count, 0)
+                                  + COALESCE(grc_sql_leaf.ref_count, 0)
                            ELSE COALESCE(crc.ref_count, 0)
                        END AS ref_count,
                        CASE
@@ -207,22 +212,30 @@ public partial class DbReader
                                  nc.defs = 1
                                  OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
                              )
-                               THEN COALESCE(grc.ref_score, 0.0)
+                               THEN COALESCE(grc_non_sql.ref_score, 0.0)
+                                  + COALESCE(grc_sql_exact.ref_score, 0.0)
+                                  + COALESCE(grc_sql_leaf.ref_score, 0.0)
                            ELSE COALESCE(crc.ref_score, 0.0)
                        END AS ref_score
                 FROM filtered_candidates fc
                 JOIN name_cardinality nc
                   ON nc.lang = fc.lang
                  AND nc.name = fc.name
-                LEFT JOIN global_reference_counts grc
-                  ON grc.lang = fc.lang
-                 AND (
-                        (fc.lang != 'sql' AND grc.symbol_name = fc.name)
-                     OR (fc.lang = 'sql' AND (
-                            (grc.symbol_segment_count = sql_segment_count(fc.name) AND grc.symbol_name = sql_normalize_name(fc.name) COLLATE NOCASE)
-                         OR (grc.symbol_segment_count = 1 AND grc.symbol_name = sql_leaf_name(fc.name) COLLATE NOCASE)
-                     ))
-                 )
+                LEFT JOIN global_reference_counts grc_non_sql
+                  ON fc.lang != 'sql'
+                 AND grc_non_sql.lang = fc.lang
+                 AND grc_non_sql.symbol_name = fc.name
+                LEFT JOIN global_reference_counts grc_sql_exact
+                  ON fc.lang = 'sql'
+                 AND grc_sql_exact.lang = fc.lang
+                 AND grc_sql_exact.symbol_segment_count = sql_segment_count(fc.name)
+                 AND grc_sql_exact.symbol_name = sql_normalize_name(fc.name) COLLATE NOCASE
+                LEFT JOIN global_reference_counts grc_sql_leaf
+                  ON fc.lang = 'sql'
+                 AND sql_segment_count(fc.name) > 1
+                 AND grc_sql_leaf.lang = fc.lang
+                 AND grc_sql_leaf.symbol_segment_count = 1
+                 AND grc_sql_leaf.symbol_name = sql_leaf_name(fc.name) COLLATE NOCASE
                 LEFT JOIN conservative_reference_counts crc
                   ON crc.logical_target_key = fc.logical_target_key
                  AND crc.name = fc.name
@@ -441,7 +454,7 @@ public partial class DbReader
 
     private const int GroupedHotspotPathSampleLimit = 20;
 
-    private static string GetHotspotReferenceWeightSql(string referenceKindSql) => $@"
+    internal static string GetHotspotReferenceWeightSql(string referenceKindSql) => $@"
         CASE {referenceKindSql}
             WHEN 'call' THEN 1.0
             WHEN 'instantiate' THEN 1.0
@@ -453,6 +466,93 @@ public partial class DbReader
 
     private static string GetGenericHotspotNamePenaltySql(string nameSql)
         => $"CASE WHEN lower({nameSql}) IN {GenericHotspotNamesSql} THEN {GenericHotspotNamePenaltySqlLiteral} ELSE 1.0 END";
+
+    private string BuildHotspotLogicalReferenceRowsSql(bool includeLeafMetadata)
+    {
+        if (_hasHotspotReferenceCountsTable)
+        {
+            return includeLeafMetadata
+                ? @"SELECT file_id,
+                           lang,
+                           raw_symbol_name,
+                           symbol_name,
+                           symbol_segment_count,
+                           allow_leaf_fallback,
+                           reference_count,
+                           reference_score
+                    FROM hotspot_reference_counts"
+                : @"SELECT file_id,
+                           lang,
+                           symbol_name,
+                           symbol_segment_count,
+                           reference_count,
+                           reference_score
+                    FROM hotspot_reference_counts";
+        }
+
+        var nonSqlNameSql = @"CASE
+                WHEN rf.lang = 'markdown' AND instr(sr.symbol_name, '#') > 0
+                    THEN substr(sr.symbol_name, 1, instr(sr.symbol_name, '#') - 1)
+                ELSE sr.symbol_name
+            END";
+        var contextSql = ReferenceContextSql("sr");
+        var referenceLineJoinSql = ReferenceLineJoinSql("sr");
+        var logicalKindSql = GetLogicalReferenceKindSql("sr.reference_kind");
+        var referenceWeightSql = GetHotspotReferenceWeightSql("sr.reference_kind");
+        var rawNameProjection = includeLeafMetadata ? "sr.symbol_name AS raw_symbol_name," : string.Empty;
+        var nonSqlLeafProjection = includeLeafMetadata ? "0 AS allow_leaf_fallback," : string.Empty;
+        var sqlLeafProjection = includeLeafMetadata
+            ? BuildLogicalReferenceLeafFallbackAllowedExpr("rf.lang", "sr.symbol_name", contextSql, "sr.container_name", "sr.column_number") + " AS allow_leaf_fallback,"
+            : string.Empty;
+        var leafGroupBy = includeLeafMetadata ? ", raw_symbol_name, allow_leaf_fallback" : string.Empty;
+
+        return $@"
+            SELECT sr.file_id,
+                   rf.lang,
+                   {rawNameProjection}
+                   {nonSqlNameSql} AS symbol_name,
+                   1 AS symbol_segment_count,
+                   {nonSqlLeafProjection}
+                   1 AS reference_count,
+                   {referenceWeightSql} AS reference_score
+            FROM symbol_references sr
+            JOIN files rf ON rf.id = sr.file_id
+            WHERE sr.reference_kind IN {CallGraphReferenceKindsSql}
+              AND sr.symbol_name IS NOT NULL
+              AND sr.symbol_name <> ''
+              AND rf.lang != 'sql'
+            GROUP BY rf.lang,
+                     sr.file_id,
+                     symbol_name,
+                     symbol_segment_count,
+                     sr.line,
+                     sr.column_number,
+                     {logicalKindSql}{leafGroupBy}
+
+            UNION ALL
+
+            SELECT sr.file_id,
+                   rf.lang,
+                   {rawNameProjection}
+                   {BuildLogicalReferenceNameExpr("rf.lang", "sr.symbol_name", contextSql, "sr.container_name", "sr.column_number")} AS symbol_name,
+                   {BuildLogicalReferenceSegmentCountExpr("rf.lang", "sr.symbol_name", contextSql, "sr.container_name", "sr.column_number")} AS symbol_segment_count,
+                   {sqlLeafProjection}
+                   1 AS reference_count,
+                   {referenceWeightSql} AS reference_score
+            FROM symbol_references sr
+            JOIN files rf ON rf.id = sr.file_id{referenceLineJoinSql}
+            WHERE sr.reference_kind IN {CallGraphReferenceKindsSql}
+              AND sr.symbol_name IS NOT NULL
+              AND sr.symbol_name <> ''
+              AND rf.lang = 'sql'
+            GROUP BY rf.lang,
+                     sr.file_id,
+                     symbol_name,
+                     symbol_segment_count,
+                     sr.line,
+                     sr.column_number,
+                     {logicalKindSql}{leafGroupBy}";
+    }
 
     /// <summary>
     /// Find symbols with the most references (hotspots — heavily used code).
@@ -675,7 +775,7 @@ public partial class DbReader
         // same-container overload は保守的な target として扱いつつ、codebase-wide 集計への
         // 昇格は一意名か authoritative family のみに限定する。
         var sql = $@"
-            WITH all_candidate_symbols AS (
+            WITH all_candidate_symbols AS MATERIALIZED (
                 SELECT s.id, s.file_id, s.name, s.kind, f.path, f.lang, s.line,
                        {GetSymbolColumnSql("visibility")} AS visibility,
                        {containerNameSql} AS container_name,
@@ -712,7 +812,7 @@ public partial class DbReader
                 FROM all_candidate_symbols
                 GROUP BY lang, name
             ),
-            filtered_candidates AS (
+            filtered_candidates AS MATERIALIZED (
                 SELECT id,
                        file_id,
                        name,
@@ -781,40 +881,48 @@ public partial class DbReader
                  AND gm.name = gc.name
                  AND gm.kind = gc.kind
             ),
-            logical_references AS (
-                SELECT sr.file_id,
-                       rf.lang,
-                       sr.symbol_name AS raw_symbol_name,
-                       " + BuildLogicalReferenceNameExpr("rf.lang", "sr.symbol_name", ReferenceContextSql("sr"), "sr.container_name", "sr.column_number") + @" AS symbol_name,
-                       " + BuildLogicalReferenceSegmentCountExpr("rf.lang", "sr.symbol_name", ReferenceContextSql("sr"), "sr.container_name", "sr.column_number") + @" AS symbol_segment_count,
-                       " + BuildLogicalReferenceLeafFallbackAllowedExpr("rf.lang", "sr.symbol_name", ReferenceContextSql("sr"), "sr.container_name", "sr.column_number") + @" AS allow_leaf_fallback,
-                       sr.line,
-                       sr.column_number,
-                       " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_reference_kind,
-                       " + GetHotspotReferenceWeightSql("sr.reference_kind") + @" AS reference_weight
-                FROM symbol_references sr
-                JOIN files rf ON rf.id = sr.file_id" + ReferenceLineJoinSql("sr") + @"
-                WHERE sr.reference_kind IN " + CallGraphReferenceKindsSql + @"
-                GROUP BY rf.lang, sr.file_id, raw_symbol_name, symbol_name, symbol_segment_count, allow_leaf_fallback, sr.line, sr.column_number, logical_reference_kind
+            logical_references AS MATERIALIZED (
+                " + BuildHotspotLogicalReferenceRowsSql(includeLeafMetadata: true) + @"
+            ),
+            file_reference_counts_exact AS MATERIALIZED (
+                SELECT lang,
+                       file_id,
+                       symbol_name,
+                       symbol_segment_count,
+                       SUM(reference_count) AS ref_count,
+                       SUM(reference_score) AS ref_score
+                FROM logical_references
+                GROUP BY lang, file_id, symbol_name, symbol_segment_count
             ),
             global_exact_reference_counts AS (
                 SELECT lang,
                        symbol_name,
                        symbol_segment_count,
-                       COUNT(*) AS ref_count,
-                       SUM(reference_weight) AS ref_score
-                FROM logical_references
+                       SUM(ref_count) AS ref_count,
+                       SUM(ref_score) AS ref_score
+                FROM file_reference_counts_exact
                 GROUP BY lang, symbol_name, symbol_segment_count
+            ),
+            file_reference_counts_leaf AS MATERIALIZED (
+                SELECT lang,
+                       file_id,
+                       raw_symbol_name,
+                       symbol_name AS resolved_symbol_name,
+                       symbol_segment_count AS resolved_symbol_segment_count,
+                       SUM(reference_count) AS ref_count,
+                       SUM(reference_score) AS ref_score
+                FROM logical_references
+                WHERE allow_leaf_fallback = 1
+                GROUP BY lang, file_id, raw_symbol_name, resolved_symbol_name, resolved_symbol_segment_count
             ),
             global_leaf_reference_counts AS (
                 SELECT lang,
                        raw_symbol_name,
-                       symbol_name AS resolved_symbol_name,
-                       symbol_segment_count AS resolved_symbol_segment_count,
-                       COUNT(*) AS ref_count,
-                       SUM(reference_weight) AS ref_score
-                FROM logical_references
-                WHERE allow_leaf_fallback = 1
+                       resolved_symbol_name,
+                       resolved_symbol_segment_count,
+                       SUM(ref_count) AS ref_count,
+                       SUM(ref_score) AS ref_score
+                FROM file_reference_counts_leaf
                 GROUP BY lang, raw_symbol_name, resolved_symbol_name, resolved_symbol_segment_count
             ),
             file_target_cardinality AS (
@@ -834,34 +942,18 @@ public partial class DbReader
                        logical_target_key
                 FROM filtered_candidates
             ),
-            file_reference_counts_exact AS (
-                SELECT lang,
-                       file_id,
-                       symbol_name,
-                       symbol_segment_count,
-                       COUNT(*) AS ref_count,
-                       SUM(reference_weight) AS ref_score
-                FROM logical_references
-                GROUP BY lang, file_id, symbol_name, symbol_segment_count
-            ),
-            file_reference_counts_leaf AS (
-                SELECT lang,
-                       file_id,
-                       raw_symbol_name,
-                       symbol_name AS resolved_symbol_name,
-                       symbol_segment_count AS resolved_symbol_segment_count,
-                       COUNT(*) AS ref_count,
-                       SUM(reference_weight) AS ref_score
-                FROM logical_references
-                WHERE allow_leaf_fallback = 1
-                GROUP BY lang, file_id, raw_symbol_name, resolved_symbol_name, resolved_symbol_segment_count
-            ),
             conservative_reference_counts AS (
                 SELECT ctf.logical_target_key,
                        ctf.name,
                        ctf.kind,
-                       SUM(COALESCE(frc_exact.ref_count, 0) + COALESCE(frc_leaf.ref_count, 0)) AS ref_count,
-                       SUM(COALESCE(frc_exact.ref_score, 0.0) + COALESCE(frc_leaf.ref_score, 0.0)) AS ref_score
+                       SUM(
+                           COALESCE(frc_non_sql.ref_count, 0)
+                           + COALESCE(frc_sql_exact.ref_count, 0)
+                           + COALESCE(frc_leaf.ref_count, 0)) AS ref_count,
+                       SUM(
+                           COALESCE(frc_non_sql.ref_score, 0.0)
+                           + COALESCE(frc_sql_exact.ref_score, 0.0)
+                           + COALESCE(frc_leaf.ref_score, 0.0)) AS ref_score
                 FROM conservative_target_files ctf
                 JOIN file_target_cardinality ftc
                   ON ftc.lang = ctf.lang
@@ -869,15 +961,17 @@ public partial class DbReader
                  AND ftc.name = ctf.name
                  AND ftc.kind = ctf.kind
                  AND ftc.target_count = 1
-                LEFT JOIN file_reference_counts_exact frc_exact
-                  ON frc_exact.lang = ctf.lang
-                 AND frc_exact.file_id = ctf.file_id
-                 AND (
-                         (ctf.lang != 'sql' AND frc_exact.symbol_name = ctf.name)
-                      OR (ctf.lang = 'sql' AND (
-                             (frc_exact.symbol_segment_count = sql_segment_count(ctf.name) AND frc_exact.symbol_name = sql_normalize_name(ctf.name) COLLATE NOCASE)
-                      ))
-                  )
+                LEFT JOIN file_reference_counts_exact frc_non_sql
+                  ON ctf.lang != 'sql'
+                 AND frc_non_sql.lang = ctf.lang
+                 AND frc_non_sql.file_id = ctf.file_id
+                 AND frc_non_sql.symbol_name = ctf.name
+                LEFT JOIN file_reference_counts_exact frc_sql_exact
+                  ON ctf.lang = 'sql'
+                 AND frc_sql_exact.lang = ctf.lang
+                 AND frc_sql_exact.file_id = ctf.file_id
+                 AND frc_sql_exact.symbol_segment_count = sql_segment_count(ctf.name)
+                 AND frc_sql_exact.symbol_name = sql_normalize_name(ctf.name) COLLATE NOCASE
                 LEFT JOIN file_reference_counts_leaf frc_leaf
                   ON frc_leaf.lang = ctf.lang
                  AND frc_leaf.file_id = ctf.file_id
@@ -908,7 +1002,9 @@ public partial class DbReader
                                   nc.defs = 1
                                   OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
                               )
-                                THEN COALESCE(gerc.ref_count, 0) + COALESCE(glrc.ref_count, 0)
+                                THEN COALESCE(gerc_non_sql.ref_count, 0)
+                                   + COALESCE(gerc_sql_exact.ref_count, 0)
+                                   + COALESCE(glrc.ref_count, 0)
                             ELSE COALESCE(crc.ref_count, 0)
                         END AS ref_count,
                        CASE
@@ -917,21 +1013,24 @@ public partial class DbReader
                                   nc.defs = 1
                                   OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
                               )
-                                THEN COALESCE(gerc.ref_score, 0.0) + COALESCE(glrc.ref_score, 0.0)
+                                THEN COALESCE(gerc_non_sql.ref_score, 0.0)
+                                   + COALESCE(gerc_sql_exact.ref_score, 0.0)
+                                   + COALESCE(glrc.ref_score, 0.0)
                             ELSE COALESCE(crc.ref_score, 0.0)
                         END AS ref_score
                 FROM grouped_rows gr
                 JOIN name_cardinality nc
                   ON nc.lang = gr.lang
                   AND nc.name = gr.name
-                LEFT JOIN global_exact_reference_counts gerc
-                  ON gerc.lang = gr.lang
-                 AND (
-                         (gr.lang != 'sql' AND gerc.symbol_name = gr.name)
-                      OR (gr.lang = 'sql' AND (
-                             (gerc.symbol_segment_count = sql_segment_count(gr.name) AND gerc.symbol_name = sql_normalize_name(gr.name) COLLATE NOCASE)
-                      ))
-                  )
+                LEFT JOIN global_exact_reference_counts gerc_non_sql
+                  ON gr.lang != 'sql'
+                 AND gerc_non_sql.lang = gr.lang
+                 AND gerc_non_sql.symbol_name = gr.name
+                LEFT JOIN global_exact_reference_counts gerc_sql_exact
+                  ON gr.lang = 'sql'
+                 AND gerc_sql_exact.lang = gr.lang
+                 AND gerc_sql_exact.symbol_segment_count = sql_segment_count(gr.name)
+                 AND gerc_sql_exact.symbol_name = sql_normalize_name(gr.name) COLLATE NOCASE
                 LEFT JOIN global_leaf_reference_counts glrc
                   ON glrc.lang = gr.lang
                  AND gr.lang = 'sql'

@@ -7360,8 +7360,8 @@ public partial class McpServerTests
         Assert.False(structured["fold_ready_before"]!.GetValue<bool>());
         Assert.True(structured["fold_ready_after"]!.GetValue<bool>());
         Assert.True(structured["verified"]!.GetValue<bool>());
-        Assert.Equal(3, structured["user_version_before"]!.GetValue<int>());
-        Assert.Equal(7, structured["user_version_after"]!.GetValue<int>());
+        Assert.Equal(27, structured["user_version_before"]!.GetValue<int>());
+        Assert.Equal(31, structured["user_version_after"]!.GetValue<int>());
         Assert.True(structured["fold_ready"]!.GetValue<bool>());
         Assert.Equal(2, structured["progress"]!["rows_done"]!.GetValue<int>());
         Assert.Equal(2, structured["progress"]!["rows_total"]!.GetValue<int>());
@@ -7426,7 +7426,7 @@ public partial class McpServerTests
         Assert.False(structured["fold_ready"]!.GetValue<bool>());
 
         Assert.Equal("DEADBEEFDEADBEEF", _db.GetMetaString("fold_key_fingerprint"));
-        Assert.Equal(7, _db.GetUserVersion());
+        Assert.Equal(DbContext.CurrentSchemaVersion, _db.GetUserVersion());
     }
 
     [Fact]

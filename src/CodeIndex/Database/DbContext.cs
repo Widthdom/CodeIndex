@@ -107,6 +107,7 @@ public class DbContext : IDisposable
     [
         "reference_lines",
         "symbol_references",
+        HotspotReferenceAggregateSql.TableName,
         "file_issues",
         "codeindex_meta",
     ];
@@ -117,6 +118,7 @@ public class DbContext : IDisposable
         ("symbol_references", "is_mutual_recursion"),
         ("symbol_references", "symbol_name_folded"),
         ("symbol_references", "container_name_folded"),
+        ("files", "lang"),
         ("files", "checksum"),
         ("files", "modified"),
         ("files", "indexed_at"),
@@ -159,6 +161,9 @@ public class DbContext : IDisposable
         "idx_symbol_refs_symbol_name_folded_kind",
         "idx_symbol_refs_symbol_name_folded_file",
         "idx_symbol_refs_container_name_folded_kind",
+        "idx_hotspot_reference_counts_global",
+        "idx_hotspot_reference_counts_file",
+        "idx_hotspot_reference_counts_leaf",
     ];
     internal static readonly string[] ResourceListGenerationTriggerNames =
     [
@@ -1166,7 +1171,7 @@ public class DbContext : IDisposable
         if (!string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase))
             return false;
 
-        Execute("PRAGMA user_version = 0");
+        ClearReadyFlags();
         return true;
     }
 
@@ -1952,7 +1957,17 @@ public class DbContext : IDisposable
     // casing (Ä/ä). Legacy DBs without fold stay on the COLLATE NOCASE fallback until reindex.
     // bit 2 (FoldReadyFlag, #86): name_folded 列の完全バックフィル完了を示す。
     public const int FoldReadyFlag = 4;
-    public const int CurrentSchemaVersion = GraphReadyFlag | IssuesReadyFlag | FoldReadyFlag; // 7 — full CLI readiness
+    // bit 3 permanently protects the maintained hotspot aggregate from older writers that do not
+    // update it. bit 4 is the transient trust signal: reference mutations clear it before changing
+    // raw rows and restore it only after the aggregate is synchronized. ClearReadyFlags preserves
+    // both aggregate bits because ordinary index-run readiness changes do not invalidate the counts.
+    // bit 3 は旧 writer から maintained aggregate を永続的に保護し、bit 4 は同期状態を示す。
+    public const int HotspotReferenceAggregateStorageContractFlag = 8;
+    public const int HotspotReferenceAggregateReadyFlag = 16;
+    public const int HotspotReferenceAggregateFlags =
+        HotspotReferenceAggregateStorageContractFlag | HotspotReferenceAggregateReadyFlag;
+    public const int CurrentSchemaVersion =
+        GraphReadyFlag | IssuesReadyFlag | FoldReadyFlag | HotspotReferenceAggregateFlags; // 31
     public const int CodeIndexMetaSchemaVersion = 1;
     public const string CodeIndexMetaSchemaVersionMetaKey = "codeindex_meta_schema_version";
     // Query-semantic readiness for hotspot family grouping. Stored in codeindex_meta instead of
@@ -2191,13 +2206,20 @@ public class DbContext : IDisposable
         return result is long l ? (int)l : (result is int i ? i : 0);
     }
 
+    private void MarkHotspotReferenceAggregateReady()
+    {
+        var next = GetUserVersion() | HotspotReferenceAggregateFlags;
+        Execute($"PRAGMA user_version = {next}");
+    }
+
     // Reset readiness bits. Called at the START of every index run so an interrupted run
     // on an already-stamped DB demotes the trust signal to degraded until the end-of-run
     // stamp is written on fully successful completion.
     // index 開始時にビットをクリア。途中で落ちた場合は縮退状態のまま残す。
     public void ClearReadyFlags()
     {
-        Execute("PRAGMA user_version = 0");
+        var aggregateContractBits = GetUserVersion() & HotspotReferenceAggregateFlags;
+        Execute($"PRAGMA user_version = {aggregateContractBits}");
     }
 
     /// <summary>
@@ -2372,6 +2394,10 @@ public class DbContext : IDisposable
                 container_name  TEXT
             )");
 
+                var backfillHotspotReferenceCounts = !TableExists(HotspotReferenceAggregateSql.TableName)
+                    || (GetUserVersion() & HotspotReferenceAggregateReadyFlag) == 0;
+                Execute(HotspotReferenceAggregateSql.CreateTableSql);
+
                 // File validation issues table / ファイル検証問題テーブル
                 Execute(@"
             CREATE TABLE IF NOT EXISTS file_issues (
@@ -2385,7 +2411,7 @@ public class DbContext : IDisposable
             )");
 
                 // Key-value metadata: fold algorithm version, future per-subsystem schema markers
-                // that don't fit in PRAGMA user_version's 3-bit readiness bitmap. See
+                // that don't fit in PRAGMA user_version's readiness/storage-contract bitmap. See
                 // NameFold.Version and DbReader fold-ready gate.
                 // メタデータ用 key-value: fold のアルゴリズム版数など、user_version bitmap に収まらない情報。
                 Execute(@"
@@ -2396,6 +2422,7 @@ public class DbContext : IDisposable
                 NormalizeCodeIndexMetaKeys();
 
                 // Schema migrations for existing DBs / 既存DB向けスキーマ移行
+                EnsureColumn("files", "lang", "TEXT");
                 EnsureColumn("files", "checksum", "TEXT");
                 EnsureColumn("files", "modified", "DATETIME");
                 EnsureColumn("files", "generated", "INTEGER NOT NULL DEFAULT 0");
@@ -2432,6 +2459,13 @@ public class DbContext : IDisposable
                 EnsureColumn("symbol_references", "container_name_folded", "TEXT");
                 EnsureColumn("symbol_references", "is_self_reference", "INTEGER NOT NULL DEFAULT 0");
                 EnsureColumn("symbol_references", "is_mutual_recursion", "INTEGER NOT NULL DEFAULT 0");
+                foreach (var indexSql in HotspotReferenceAggregateSql.CreateIndexSql)
+                    Execute(indexSql);
+                if (backfillHotspotReferenceCounts)
+                {
+                    Execute(HotspotReferenceAggregateSql.BuildRefreshSql(singleFile: false));
+                    MarkHotspotReferenceAggregateReady();
+                }
                 EnforceRequiredFileIdConstraints();
                 EnforceReferenceLineSetNullConstraint();
                 EnsureReferenceLinesContextKey();
@@ -3146,6 +3180,7 @@ public class DbContext : IDisposable
         Execute(DropFtsChunksUpdateTriggerSql);
         Execute("DROP TABLE IF EXISTS fts_chunks");
         Execute("DROP TABLE IF EXISTS file_issues");
+        Execute("DROP TABLE IF EXISTS hotspot_reference_counts");
         Execute("DROP TABLE IF EXISTS symbol_references");
         Execute("DROP TABLE IF EXISTS reference_lines");
         Execute("DROP TABLE IF EXISTS symbols");
@@ -3340,6 +3375,10 @@ public class DbContext : IDisposable
             () => EnsureColumn("symbol_references", "is_self_reference", "INTEGER NOT NULL DEFAULT 0"));
         yield return ("EnsureColumn symbol_references.is_mutual_recursion",
             () => EnsureColumn("symbol_references", "is_mutual_recursion", "INTEGER NOT NULL DEFAULT 0"));
+        yield return ("CREATE TABLE hotspot_reference_counts",
+            () => Execute(HotspotReferenceAggregateSql.CreateTableSql));
+        foreach (var indexSql in HotspotReferenceAggregateSql.CreateIndexSql)
+            yield return ("CREATE INDEX hotspot_reference_counts", () => Execute(indexSql));
         yield return ("CREATE INDEX idx_symbol_refs_name",
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name      ON symbol_references(symbol_name)"));
         yield return ("CREATE INDEX idx_symbol_refs_file",
@@ -3367,6 +3406,7 @@ public class DbContext : IDisposable
         yield return ("CREATE INDEX idx_symbol_refs_container_nocase_kind",
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_nocase_kind ON symbol_references(container_name COLLATE NOCASE, reference_kind)"));
 
+        yield return ("EnsureColumn files.lang", () => EnsureColumn("files", "lang", "TEXT"));
         yield return ("EnsureColumn files.checksum", () => EnsureColumn("files", "checksum", "TEXT"));
         yield return ("EnsureColumn files.modified", () => EnsureColumn("files", "modified", "DATETIME"));
         yield return ("EnsureColumn files.indexed_at", () => EnsureColumn("files", "indexed_at", "DATETIME"));
@@ -3404,6 +3444,9 @@ public class DbContext : IDisposable
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_name_folded_file ON symbol_references(symbol_name_folded, file_id)"));
         yield return ("CREATE INDEX idx_symbol_refs_container_name_folded_kind",
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_name_folded_kind ON symbol_references(container_name_folded, reference_kind)"));
+        yield return ("Backfill hotspot_reference_counts",
+            () => Execute(HotspotReferenceAggregateSql.BuildRefreshSql(singleFile: false)));
+        yield return ("Stamp hotspot_reference_counts readiness", MarkHotspotReferenceAggregateReady);
 
         yield return ("CREATE TABLE file_issues", () => Execute(@"
             CREATE TABLE IF NOT EXISTS file_issues (
@@ -3435,6 +3478,9 @@ public class DbContext : IDisposable
 
     private bool ReadMigrationSchemaIsCurrent()
     {
+        if ((GetUserVersion() & HotspotReferenceAggregateReadyFlag) == 0)
+            return false;
+
         foreach (var table in ReadMigrationRequiredTables)
         {
             if (!TableExists(table))
