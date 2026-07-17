@@ -374,6 +374,89 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void GraphCommands_AcceptExplicitCaptureAndProjectReferenceKinds()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_graph_explicit_dependency_kinds");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                var csharpFileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/Capture.cs",
+                    Lang = "csharp",
+                    Size = 64,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                var solutionFileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "CodeIndex.sln",
+                    Lang = "solution",
+                    Size = 64,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertReferences([
+                    new ReferenceRecord
+                    {
+                        FileId = csharpFileId,
+                        SymbolName = "seed",
+                        ReferenceKind = "capture",
+                        Line = 1,
+                        Column = 20,
+                        Context = "Action read = () => seed;",
+                        ContainerKind = "lambda",
+                        ContainerName = "ReadSeed",
+                    },
+                    new ReferenceRecord
+                    {
+                        FileId = solutionFileId,
+                        SymbolName = "src/App/App.csproj",
+                        ReferenceKind = "project_reference",
+                        Line = 1,
+                        Column = 1,
+                        Context = "Project(src/App/App.csproj)",
+                        ContainerKind = "project",
+                        ContainerName = "App",
+                    },
+                ]);
+                writer.MarkGraphReady();
+            }
+
+            foreach (var (query, kind, lang) in new[]
+            {
+                ("seed", "capture", "csharp"),
+                ("src/App/App.csproj", "project_reference", "solution"),
+            })
+            {
+                var (referencesExitCode, referencesStdout, referencesStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                    [query, "--db", dbPath, "--kind", kind, "--lang", lang, "--exact", "--json"],
+                    _jsonOptions));
+                using var referencesDocument = ParseJsonOutput(referencesStdout);
+
+                var (callersExitCode, callersStdout, callersStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                    [query, "--db", dbPath, "--kind", kind, "--lang", lang, "--exact", "--json"],
+                    _jsonOptions));
+                using var callersDocument = ParseJsonOutput(callersStdout);
+
+                Assert.Equal(CommandExitCodes.Success, referencesExitCode);
+                Assert.Equal(string.Empty, referencesStderr);
+                Assert.Equal(kind, referencesDocument.RootElement.GetProperty("reference_kind").GetString());
+                Assert.Equal(CommandExitCodes.Success, callersExitCode);
+                Assert.Equal(string.Empty, callersStderr);
+                Assert.Equal(kind, callersDocument.RootElement.GetProperty("reference_kind").GetString());
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_JsonZeroResults_WithMissingGraphTable_ReturnsDegradedPayload()
     {
         var (projectRoot, readOnlyUri) = CreateReadOnlyMissingGraphTableDb("cdidx_references_zero_json_missing_graph");
@@ -1578,7 +1661,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("Hook", json.GetProperty("caller_name").GetString());
             Assert.Equal("Changed", json.GetProperty("callee_name").GetString());
-            Assert.Equal("event", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("subscribe", json.GetProperty("reference_kind").GetString());
             Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
             // #501: every grouped caller row carries `reference_kinds` +
             // `has_mixed_reference_kinds`, even when the row is single-kind, so AI
@@ -1587,7 +1670,7 @@ public partial class QueryCommandRunnerTests
             // `has_mixed_reference_kinds` を返すため、AI クライアントは「未出力」と
             // 「空配列」を判別せずに済む。
             var kinds = json.GetProperty("reference_kinds").EnumerateArray().Select(k => k.GetString()).ToArray();
-            Assert.Equal(new[] { "event" }, kinds);
+            Assert.Equal(new[] { "subscribe" }, kinds);
             Assert.False(json.GetProperty("has_mixed_reference_kinds").GetBoolean());
 
             var (rawExitCode, rawStdout, rawStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
@@ -1638,7 +1721,23 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("HandleClick", json.GetProperty("callee_name").GetString());
-            Assert.Equal("event", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("subscribe", json.GetProperty("reference_kind").GetString());
+
+            var (canonicalFilterExitCode, canonicalFilterStdout, canonicalFilterStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["HandleClick", "--db", dbPath, "--kind", "subscribe", "--json", "--lang", "csharp", "--exact"],
+                _jsonOptions));
+            using var canonicalFilterDocument = ParseJsonOutput(canonicalFilterStdout);
+            Assert.Equal(CommandExitCodes.Success, canonicalFilterExitCode);
+            Assert.Equal(string.Empty, canonicalFilterStderr);
+            Assert.Equal("subscribe", canonicalFilterDocument.RootElement.GetProperty("reference_kind").GetString());
+
+            var (rawFilterExitCode, rawFilterStdout, rawFilterStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["HandleClick", "--db", dbPath, "--kind", "razor_event_binding", "--raw-kinds", "--json", "--lang", "csharp", "--exact"],
+                _jsonOptions));
+            using var rawFilterDocument = ParseJsonOutput(rawFilterStdout);
+            Assert.Equal(CommandExitCodes.Success, rawFilterExitCode);
+            Assert.Equal(string.Empty, rawFilterStderr);
+            Assert.Equal("razor_event_binding", rawFilterDocument.RootElement.GetProperty("reference_kind").GetString());
 
             var (referencesExitCode, referencesStdout, referencesStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
                 ["HandleClick", "--db", dbPath, "--kind", "razor_event_binding", "--lang", "csharp", "--exact"],
@@ -1703,10 +1802,10 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(2, json.GetProperty("reference_count").GetInt32());
             Assert.True(json.GetProperty("has_mixed_reference_kinds").GetBoolean());
             var kinds = json.GetProperty("reference_kinds").EnumerateArray().Select(k => k.GetString()).ToArray();
-            Assert.Equal(new[] { "event", "invoke" }, kinds);
+            Assert.Equal(new[] { "call", "subscribe" }, kinds);
             Assert.Equal(1, json.GetProperty("reference_kind_counts").GetProperty("call").GetInt32());
             Assert.Equal(1, json.GetProperty("reference_kind_counts").GetProperty("subscribe").GetInt32());
-            Assert.Equal("event", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("subscribe", json.GetProperty("reference_kind").GetString());
 
             var (humanExitCode, humanStdout, humanStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
                 ["Changed", "--db", dbPath, "--lang", "csharp", "--exact"],
@@ -1913,7 +2012,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("Hook", json.GetProperty("caller_name").GetString());
             Assert.Equal("Changed", json.GetProperty("callee_name").GetString());
-            Assert.Equal("event", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("subscribe", json.GetProperty("reference_kind").GetString());
             Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
         }
         finally
@@ -2418,7 +2517,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("src/cases.cs", json.GetProperty("path").GetString());
             Assert.Equal("A", json.GetProperty("caller_name").GetString());
             Assert.Equal("B", json.GetProperty("callee_name").GetString());
-            Assert.Equal("invoke", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
             Assert.True(json.GetProperty("exact_index_available").GetBoolean());
             Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
         }

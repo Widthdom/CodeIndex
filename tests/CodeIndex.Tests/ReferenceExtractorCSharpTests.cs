@@ -4589,6 +4589,40 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpTupleReturnDeclaration_DoesNotEmitStaticCall()
+    {
+        // Issue #4568: `static (` in a tuple-return declaration is a modifier followed by the
+        // return type, not an invocation of a symbol named `static`.
+        // Issue #4568: tuple return 宣言の `static (` は modifier と return type の並びであり、
+        // `static` という symbol の呼び出しではない。
+        const string content = """
+            class Parser
+            {
+                private static (int Value, string? Error) Resolve(string input)
+                {
+                    return Parse(input);
+                }
+
+                private static (int Value, string? Error) Parse(string input) => (0, null);
+
+                private static void @static() { }
+                private void InvokeEscapedKeyword() { @static(); }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "static" && r.ReferenceKind == "call" && r.ContainerName != "InvokeEscapedKeyword");
+        Assert.Contains(references, r => r.SymbolName == "Parse" && r.ReferenceKind == "call" && r.ContainerName == "Resolve");
+        // `@static` is a legal verbatim identifier; normalizing its public symbol name must not
+        // make the keyword-only suppression remove the real invocation.
+        // `@static` は合法な verbatim identifier。公開 symbol 名の正規化後も、keyword 用の
+        // 抑止によって実呼び出しを失ってはならない。
+        Assert.Contains(references, r => r.SymbolName == "static" && r.ReferenceKind == "call" && r.ContainerName == "InvokeEscapedKeyword");
+    }
+
+    [Fact]
     public void Extract_CsharpMultilinePositionalPatterns_CaptureTypeReferences()
     {
         // issue #969: multiline positional `case` / `is` heads must behave the same as

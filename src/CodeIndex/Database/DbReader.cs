@@ -219,20 +219,25 @@ public partial class DbReader : IDisposable
                 THEN 2
             ELSE 0
         END";
-    private const string InvokeReferenceKindsSql = "('call', 'instantiate')";
     private const string EventReferenceKindsSql = "('subscribe', 'unsubscribe', 'razor_event_binding')";
     private const string ImpactAnchorReferenceKindsSql = "('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding', 'capture')";
-    // Reference kinds that participate in the call-graph (callers/callees/hotspots). Metadata
-    // kinds such as `attribute` / `annotation` are excluded so they do not inflate the graph
-    // with non-call edges (issue #293); React `consumes_hook` and C++ `friend` edges are retained
-    // because users expect them in dependency-oriented graph queries. C# closure `capture` edges
+    // Default callers/callees expose only executable edges. Broader dependency kinds remain
+    // available to impact/hotspot queries and through an explicit reference-kind filter.
+    // 既定の callers/callees は実行可能な edge だけを公開する。より広い依存 kind は
+    // impact/hotspot query と明示的な reference-kind filter から引き続き利用できる。
+    private const string CallableReferenceKindsSql = "('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')";
+    // Reference kinds that participate in dependency-oriented graph traversal and hotspot ranking.
+    // Default callers/callees use the narrower CallableReferenceKindsSql allowlist above. Metadata
+    // kinds such as `attribute` / `annotation` remain excluded here (issue #293); React
+    // `consumes_hook` and C++ `friend` edges are retained for dependency-oriented graph queries. C# closure `capture` edges
     // are dependency edges from a lambda body back to an enclosing local and participate in impact.
     // C# generic type arguments are retained only when they are attached to an explicit invocation,
     // so impact can follow `Process<IFoo>(x)` without promoting ordinary type annotations to
     // call-graph edges (#2062). Solution `project_reference` edges are retained because solution
     // files are advertised as graph-supported structural metadata (#3662).
-    // call-graph (callers/callees/hotspots) に参加する reference kind。`attribute` / `annotation`
-    // のようなメタデータ kind は非呼び出しエッジなのでここから除外する (issue #293)。
+    // dependency-oriented graph traversal と hotspot ranking に参加する reference kind。
+    // 既定 callers/callees は上の狭い CallableReferenceKindsSql allowlist を使う。
+    // `attribute` / `annotation` のようなメタデータ kind はここからも除外する (issue #293)。
     // Razor の `razor_event_binding`、React の `consumes_hook`、C++ の `friend` は依存関係 graph query に含める。
     // C# closure の `capture` は lambda 本体から外側 local への依存であり、impact に参加する。
     // C# generic invocation type arguments are included when tied to an actual call (#2062)。
@@ -323,9 +328,25 @@ public partial class DbReader : IDisposable
             ELSE 1
         END";
     private static string GetLogicalReferenceKindSql(string referenceKindSql)
-        => $"CASE WHEN {referenceKindSql} IN {InvokeReferenceKindsSql} THEN 'invoke' " +
-           $"WHEN {referenceKindSql} IN {EventReferenceKindsSql} THEN 'event' " +
+        => $"CASE WHEN {referenceKindSql} IN {EventReferenceKindsSql} THEN 'subscribe' " +
            $"ELSE {referenceKindSql} END";
+
+    // Keep filter semantics independent from output projection. The canonical `subscribe`
+    // filter selects every raw event variant, while explicitly named raw variants still select
+    // only themselves; callers decide separately whether to expose canonical or raw labels.
+    // filter semantics と output projection を分離する。canonical `subscribe` filter は raw event
+    // variant 全体を選び、明示された raw variant はその kind だけを選ぶ。公開 label を
+    // canonical / raw のどちらにするかは呼び出し側で別途決める。
+    private static string GetCallableReferenceKindPredicateSql(string referenceKindSql, string? referenceKind)
+        => referenceKind switch
+        {
+            null => $"{referenceKindSql} IN {CallableReferenceKindsSql}",
+            "subscribe" => $"{referenceKindSql} IN {EventReferenceKindsSql}",
+            _ => $"{referenceKindSql} = @referenceKind",
+        };
+
+    private static bool RequiresReferenceKindParameter(string? referenceKind)
+        => referenceKind is not null and not "subscribe";
 
     private static string GetRawReferenceKindSql(string referenceKindSql)
         => referenceKindSql;
@@ -334,8 +355,9 @@ public partial class DbReader : IDisposable
         => $"CASE WHEN SUM(CASE WHEN {referenceKindSql} = 'instantiate' THEN 1 ELSE 0 END) > 0 THEN 'instantiate' ELSE MIN({referenceKindSql}) END";
 
     private static string GetPreferredLogicalReferenceKindSql(string referenceKindSql)
-        => $"CASE WHEN SUM(CASE WHEN {referenceKindSql} IN {InvokeReferenceKindsSql} THEN 1 ELSE 0 END) > 0 THEN 'invoke' " +
-           $"WHEN SUM(CASE WHEN {referenceKindSql} IN {EventReferenceKindsSql} THEN 1 ELSE 0 END) > 0 THEN 'event' " +
+        => $"CASE WHEN SUM(CASE WHEN {referenceKindSql} = 'instantiate' THEN 1 ELSE 0 END) > 0 THEN 'instantiate' " +
+           $"WHEN SUM(CASE WHEN {referenceKindSql} IN {EventReferenceKindsSql} THEN 1 ELSE 0 END) > 0 THEN 'subscribe' " +
+           $"WHEN SUM(CASE WHEN {referenceKindSql} = 'call' THEN 1 ELSE 0 END) > 0 THEN 'call' " +
            $"ELSE MIN({referenceKindSql}) END";
 
     private static string GetGroupedCallerReferenceKindSql(string referenceKindSql)
