@@ -43,7 +43,7 @@ internal static class LastFailureEventStore
                 exitCode,
                 SanitizeField(DiagnosticRedactor.ClassifyException(exception)),
                 SanitizeField(exception.GetType().FullName ?? exception.GetType().Name),
-                DiagnosticRedactor.FormatExceptionMessage(exception, maxChars: 512, redactPaths: true),
+                SanitizeField(DiagnosticRedactor.ClassifyException(exception)),
                 SanitizeDiagnostics(GlobalToolLog.FormatExceptionChain(exception, includeStacks: true)),
                 PathsRedacted: true,
                 LiteralArgumentsIncluded: false);
@@ -136,9 +136,16 @@ internal static class LastFailureEventStore
     }
 
     private static string ResolveCommandCategory(IReadOnlyList<string> args)
-        => args.Count == 0 || string.IsNullOrWhiteSpace(args[0])
-            ? "unknown"
-            : SanitizeField(args[0]);
+    {
+        if (args.Count == 0 || string.IsNullOrWhiteSpace(args[0]))
+            return "unknown";
+
+        var firstArg = args[0];
+        if (CliCommandCatalog.TryResolvePublicCommand(firstArg, out var command))
+            return command;
+
+        return ProgramRunner.IsProjectPathArg(firstArg) ? "index" : "unknown";
+    }
 
     private static string ResolveBinaryPath()
     {

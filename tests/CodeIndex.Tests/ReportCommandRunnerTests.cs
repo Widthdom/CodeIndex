@@ -210,8 +210,8 @@ public class ReportCommandRunnerTests
         var workDir = CreateWorkDir();
         var logDir = CreateLogDir(workDir);
         var output = Path.Combine(workDir, "bundle.tgz");
-        const string secretArgument = "https://example.test/search?token=current-invocation-secret";
-        const string secretMessage = "password=current-exception-secret";
+        const string secretArgument = "clients/private-project";
+        const string secretMessage = "query=SELECT * FROM private_customer_records";
         try
         {
             using var env = EnvironmentVariableScope.Capture(
@@ -223,7 +223,7 @@ public class ReportCommandRunnerTests
             env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
 
             var (failureExitCode, _, failureStderr) = ConsoleCapture.Capture(() => ProgramRunner.Run(
-                ["search", secretArgument],
+                [secretArgument],
                 appVersion: "1.38.0-test",
                 beforeDispatchForTesting: ThrowCurrentProcessFailure));
 
@@ -256,10 +256,10 @@ public class ReportCommandRunnerTests
             Assert.True(DateTimeOffset.TryParse(failureRoot.GetProperty("occurred_at_utc").GetString(), out _));
             Assert.Equal("1.38.0-test", failureRoot.GetProperty("binary_version").GetString());
             Assert.False(string.IsNullOrWhiteSpace(failureRoot.GetProperty("binary_path").GetString()));
-            Assert.Equal("search", failureRoot.GetProperty("command_category").GetString());
+            Assert.Equal("index", failureRoot.GetProperty("command_category").GetString());
             Assert.Equal(CommandExitCodes.UnhandledException, failureRoot.GetProperty("exit_code").GetInt32());
             Assert.Equal("invalid_operation", failureRoot.GetProperty("exception_category").GetString());
-            Assert.Contains("password=", failureRoot.GetProperty("exception_message").GetString());
+            Assert.Equal("invalid_operation", failureRoot.GetProperty("exception_message").GetString());
             Assert.Contains(nameof(ThrowCurrentProcessFailure), failureRoot.GetProperty("diagnostics").GetString());
             Assert.True(failureRoot.GetProperty("paths_redacted").GetBoolean());
             Assert.False(failureRoot.GetProperty("literal_arguments_included").GetBoolean());
