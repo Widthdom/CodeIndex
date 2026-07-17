@@ -225,6 +225,7 @@ public class ProgramRunnerTests
     [Theory]
     [InlineData(new[] { "help", "search" }, "cdidx search")]
     [InlineData(new[] { "help", "db", "schema" }, "cdidx db schema")]
+    [InlineData(new[] { "help", "db", "--integrity-check" }, "cdidx db integrity|--integrity-check")]
     [InlineData(new[] { "help", "workspace", "use" }, "cdidx workspace <list|status|use|current|clear|deactivate>")]
     [InlineData(new[] { "help", "suggestions", "add" }, "cdidx suggestions add")]
     [InlineData(new[] { "help", "refs" }, "cdidx references")]

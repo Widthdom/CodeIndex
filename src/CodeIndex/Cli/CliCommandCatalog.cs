@@ -54,4 +54,9 @@ internal static class CliCommandCatalog
 
         return [];
     }
+
+    internal static string NormalizeSubcommandName(string command, string subcommand) =>
+        command == "db" && subcommand == "--integrity-check"
+            ? "integrity"
+            : subcommand;
 }

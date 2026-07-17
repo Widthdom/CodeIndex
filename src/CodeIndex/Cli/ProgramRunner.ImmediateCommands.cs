@@ -124,18 +124,19 @@ internal static partial class ProgramRunner
         var helpTarget = command;
         if (helpArgs.Length == 2)
         {
-            var subcommand = helpArgs[1];
+            var requestedSubcommand = helpArgs[1];
+            var subcommand = CliCommandCatalog.NormalizeSubcommandName(command, requestedSubcommand);
             var subcommands = CliCommandCatalog.GetSubcommands(command);
             if (!subcommands.Contains(subcommand, StringComparer.Ordinal))
             {
-                var suggestion = ConsoleUi.FindClosestMatch(subcommand, subcommands);
+                var suggestion = ConsoleUi.FindClosestMatch(requestedSubcommand, subcommands);
                 var hint = suggestion is null
                     ? $"run `cdidx help {command}` to list its accepted forms."
                     : $"Did you mean: `cdidx help {command} {suggestion}`?";
                 return CommandErrorWriter.WriteJsonOrHuman(
                     wantsJson,
                     jsonOptions,
-                    $"unknown subcommand `{ConsoleUi.FormatBoundedValue(subcommand)}` for help command `{ConsoleUi.FormatBoundedValue(command)}`.",
+                    $"unknown subcommand `{ConsoleUi.FormatBoundedValue(requestedSubcommand)}` for help command `{ConsoleUi.FormatBoundedValue(command)}`.",
                     CommandExitCodes.UsageError,
                     hint,
                     usage,
