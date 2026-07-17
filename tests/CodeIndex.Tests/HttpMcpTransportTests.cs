@@ -792,7 +792,7 @@ public class HttpMcpTransportTests : IDisposable
         {
             Assert.Equal(JsonValueKind.Null, initializeDocument.RootElement.GetProperty("id").ValueKind);
             Assert.Equal(
-                "2025-03-26",
+                "2025-06-18",
                 initializeDocument.RootElement.GetProperty("result").GetProperty("protocolVersion").GetString());
         }
 
