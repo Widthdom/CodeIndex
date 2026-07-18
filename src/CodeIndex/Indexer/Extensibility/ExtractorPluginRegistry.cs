@@ -375,7 +375,10 @@ public static partial class ExtractorPluginRegistry
             TryLoadPatternConfig(state, patternPath, "workspace");
     }
 
-    internal static void LoadPatternConfigsForPath(string? path, string? workspaceRoot)
+    internal static void LoadPatternConfigsForPath(
+        string? path,
+        string? workspaceRoot,
+        bool includeWorkspaceRoot = true)
     {
         EnsurePluginsLoaded();
         if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(workspaceRoot))
@@ -395,6 +398,9 @@ public static partial class ExtractorPluginRegistry
 
         while (PathCasing.IsFullPathEqualOrParent(fullRoot, directory))
         {
+            if (!includeWorkspaceRoot && PathCasing.PathsEqual(directory, fullRoot))
+                break;
+
             foreach (var patternPath in EnumeratePatternConfigPaths(state, directory, includeUserDirectory: false))
                 TryLoadPatternConfig(state, patternPath, "workspace");
 

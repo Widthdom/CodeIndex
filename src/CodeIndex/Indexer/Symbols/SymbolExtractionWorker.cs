@@ -695,7 +695,7 @@ internal static class SymbolExtractionWorker
                 var fullPath = Path.IsPathRooted(filePath)
                     ? Path.GetFullPath(filePath)
                     : Path.GetFullPath(Path.Combine(fullRoot, filePath));
-                ExtractorPluginRegistry.LoadPatternConfigsForPath(fullPath, fullRoot);
+                ExtractorPluginRegistry.LoadPatternConfigsForPath(fullPath, fullRoot, includeWorkspaceRoot: false);
             }
 
             return true;
