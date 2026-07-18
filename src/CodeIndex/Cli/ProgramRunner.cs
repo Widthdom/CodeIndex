@@ -122,6 +122,9 @@ internal static partial class ProgramRunner
         if (ExtractorPluginWorker.TryRunCommand(args, Console.In, Console.Out, Console.Error, out var pluginWorkerExitCode))
             return pluginWorkerExitCode;
 
+        if (PostExtractionHookDiscoveryWorker.TryRunCommand(args, Console.Out, Console.Error, out var hookDiscoveryWorkerExitCode))
+            return hookDiscoveryWorkerExitCode;
+
         if (PostExtractionHookCallbackWorker.TryRunCommand(args, Console.In, Console.Out, Console.Error, out var hookWorkerExitCode))
             return hookWorkerExitCode;
 

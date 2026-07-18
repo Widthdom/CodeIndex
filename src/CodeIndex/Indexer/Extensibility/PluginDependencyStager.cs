@@ -13,7 +13,8 @@ internal static class PluginDependencyStager
         ExecutableExtensionStagingHandle mainAssembly,
         long maxDependencyFileBytes,
         out string stagedFingerprint,
-        out ExecutableExtensionBoundaryFailure failure)
+        out ExecutableExtensionBoundaryFailure failure,
+        bool requireManagedMainMetadata = true)
     {
         stagedFingerprint = mainAssembly.Fingerprint;
         failure = default;
@@ -21,7 +22,12 @@ internal static class PluginDependencyStager
         var visitedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var stagedIdentities = new List<string> { $"{Path.GetFileName(mainAssembly.StagedPath)}:{mainAssembly.Fingerprint}" };
         if (!EnqueueReferences(mainAssembly.StagedPath, queuedNames, out failure))
-            return false;
+        {
+            if (requireManagedMainMetadata)
+                return false;
+            failure = default;
+            return true;
+        }
 
         var dependencyCount = 0;
         long dependencyBytes = 0;

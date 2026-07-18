@@ -17,6 +17,9 @@ public class PostExtractionHookTests
     internal const string StatefulHookEnvironmentVariable = "CDIDX_TEST_STATEFUL_POST_EXTRACTION_HOOK";
     internal const string ThrowingConstructorHookEnvironmentVariable = "CDIDX_TEST_THROWING_CTOR_POST_EXTRACTION_HOOK";
     internal const string ExpandingHookEnvironmentVariable = "CDIDX_TEST_EXPANDING_POST_EXTRACTION_HOOK";
+    internal const string ModuleInitializerPidPathEnvironmentVariable = "CDIDX_TEST_HOOK_MODULE_INITIALIZER_PID_PATH";
+    internal const string ModuleInitializerDelayEnvironmentVariable = "CDIDX_TEST_HOOK_MODULE_INITIALIZER_DELAY_MS";
+    internal const string SelectiveSlowHookAssemblyEnvironmentVariable = "CDIDX_TEST_SELECTIVE_SLOW_HOOK_ASSEMBLY";
     private const string TimedOutHookDelayMilliseconds = "150";
     private static readonly TimeSpan TimedOutHookLeakObservationWindow = TimeSpan.FromMilliseconds(400);
 
@@ -57,7 +60,7 @@ public class PostExtractionHookTests
     }
 
     [ProductionRuntimeFact]
-    public void Discover_LoadsHookAssemblyInCollectibleContext_3413()
+    public void Discover_UsesWorkerWithoutParentLoadContext_Issue4600()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-collectible-load");
         try
@@ -66,12 +69,134 @@ public class PostExtractionHookTests
             Directory.CreateDirectory(hooksDir);
             File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
 
-            AssertHookAssemblyLoadsInCollectibleContext(hooksDir);
+            using var runner = PostExtractionHookRunner.Discover(hooksDir);
+            Assert.Equal(0, runner.ParentLoadContextCountForTests);
+            Assert.Equal(
+                "isolated_worker_process_no_parent_load_context",
+                PostExtractionHookRunner.HookLoadContextLifecycle);
         }
         finally
         {
             CollectUnloadedHookAssemblies();
             TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [ProductionRuntimeFact]
+    public void Discover_IsolatesModuleInitializerAndSeparatesDuplicateHookIds_Issue4600()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-identities-4600");
+        lock (TestConsoleLock.Gate)
+        {
+            using var moduleInitializer = EnvironmentVariableScope.Capture(ModuleInitializerPidPathEnvironmentVariable);
+            using var selectiveSlow = EnvironmentVariableScope.Capture(SelectiveSlowHookAssemblyEnvironmentVariable);
+            var originalBudget = PostExtractionHookRunner.CallbackBudgetForTesting;
+            try
+            {
+                var hooksDir = Path.Combine(projectRoot, "hooks");
+                Directory.CreateDirectory(hooksDir);
+                var firstAssembly = Path.Combine(hooksDir, "a.dll");
+                var secondAssembly = Path.Combine(hooksDir, "b.dll");
+                File.Copy(Assembly.GetExecutingAssembly().Location, firstAssembly);
+                File.Copy(Assembly.GetExecutingAssembly().Location, secondAssembly);
+                var moduleInitializerPidPath = Path.Combine(projectRoot, "module-initializer.pid");
+                moduleInitializer.Set(ModuleInitializerPidPathEnvironmentVariable, moduleInitializerPidPath);
+                selectiveSlow.Set(SelectiveSlowHookAssemblyEnvironmentVariable, Path.GetFileName(firstAssembly));
+                PostExtractionHookRunner.CallbackBudgetForTesting = () => TimeSpan.FromMilliseconds(250);
+
+                using var runner = PostExtractionHookRunner.Discover(hooksDir);
+                var duplicateHooks = runner.Hooks
+                    .Where(hook => hook.TypeName == typeof(PathSelectivePostExtractionHook).FullName)
+                    .OrderBy(hook => hook.AssemblyPath, StringComparer.Ordinal)
+                    .ToArray();
+                Assert.Equal(2, duplicateHooks.Length);
+                Assert.Equal(2, duplicateHooks.Select(hook => hook.Id).Distinct(StringComparer.Ordinal).Count());
+                Assert.All(duplicateHooks, hook => Assert.StartsWith("hook:", hook.Id, StringComparison.Ordinal));
+                Assert.True(File.Exists(moduleInitializerPidPath));
+                Assert.NotEqual(
+                    Environment.ProcessId,
+                    int.Parse(File.ReadAllText(moduleInitializerPidPath), System.Globalization.CultureInfo.InvariantCulture));
+
+                var metadata = PostExtractionHookRunner.DiscoverMetadata(hooksDir);
+                var metadataIds = metadata.Hooks
+                    .Where(hook => hook.TypeName == typeof(PathSelectivePostExtractionHook).FullName)
+                    .ToDictionary(hook => Path.GetFileName(hook.AssemblyPath), hook => hook.Id, StringComparer.Ordinal);
+                Assert.Equal(duplicateHooks[0].Id, metadataIds[Path.GetFileName(duplicateHooks[0].AssemblyPath)]);
+                Assert.Equal(duplicateHooks[1].Id, metadataIds[Path.GetFileName(duplicateHooks[1].AssemblyPath)]);
+
+                var context = new FileContext(projectRoot, "src/App.cs", Path.Combine(projectRoot, "src", "App.cs"), "csharp");
+                var symbols = new List<SymbolRecord>();
+                runner.OnSymbolsExtracted(context, symbols);
+                Assert.Single(symbols, symbol => symbol.Name == "Selective:b.dll");
+
+                var slowHook = duplicateHooks.Single(hook => Path.GetFileName(hook.AssemblyPath) == "a.dll");
+                var timeout = Assert.Single(
+                    runner.Diagnostics,
+                    diagnostic => diagnostic.TypeName == typeof(PathSelectivePostExtractionHook).FullName
+                                  && diagnostic.Category == "callback_timeout");
+                Assert.Equal(slowHook.Id, timeout.HookId);
+
+                runner.OnSymbolsExtracted(context, symbols);
+                Assert.Equal(2, symbols.Count(symbol => symbol.Name == "Selective:b.dll"));
+                Assert.Single(
+                    runner.Diagnostics,
+                    diagnostic => diagnostic.TypeName == typeof(PathSelectivePostExtractionHook).FullName
+                                  && diagnostic.Category == "callback_timeout");
+            }
+            finally
+            {
+                PostExtractionHookRunner.CallbackBudgetForTesting = originalBudget;
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [ProductionRuntimeFact]
+    public void DiscoveryWorker_EnforcesTimeoutMemoryAndOutputBounds_Issue4600()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-discovery-bounds-4600");
+        lock (TestConsoleLock.Gate)
+        {
+            using var delay = EnvironmentVariableScope.Capture(ModuleInitializerDelayEnvironmentVariable);
+            var originalBudget = PostExtractionHookDiscoveryWorkerClient.DiscoveryBudgetForTesting;
+            try
+            {
+                var hooksDir = Path.Combine(projectRoot, "hooks");
+                Directory.CreateDirectory(hooksDir);
+                var hookPath = Path.Combine(hooksDir, "bounded.dll");
+                File.Copy(Assembly.GetExecutingAssembly().Location, hookPath);
+                delay.Set(ModuleInitializerDelayEnvironmentVariable, "30000");
+                PostExtractionHookDiscoveryWorkerClient.DiscoveryBudgetForTesting = TimeSpan.FromMilliseconds(500);
+
+                using (var runner = PostExtractionHookRunner.Discover(hooksDir))
+                {
+                    Assert.Empty(runner.Hooks);
+                    Assert.Contains(
+                        runner.Diagnostics,
+                        diagnostic => diagnostic.Category == "hook_discovery_timeout");
+                }
+
+                PostExtractionHookDiscoveryWorkerClient.DiscoveryBudgetForTesting = TimeSpan.FromSeconds(5);
+                var memoryResult = PostExtractionHookDiscoveryWorkerClient.Discover(
+                    Assembly.GetExecutingAssembly().Location,
+                    PostExtractionHookRunner.DefaultTypeInspectionLimit,
+                    memoryLimitBytes: 1);
+                Assert.False(memoryResult.Success);
+                Assert.Equal("hook_discovery_memory_limit", memoryResult.ErrorCategory);
+
+                delay.Set(ModuleInitializerDelayEnvironmentVariable, null);
+                var outputResult = PostExtractionHookDiscoveryWorkerClient.Discover(
+                    Assembly.GetExecutingAssembly().Location,
+                    PostExtractionHookRunner.DefaultTypeInspectionLimit,
+                    maxProtocolLineBytes: 256);
+                Assert.False(outputResult.Success);
+                Assert.Equal("hook_discovery_output_limit", outputResult.ErrorCategory);
+            }
+            finally
+            {
+                PostExtractionHookDiscoveryWorkerClient.DiscoveryBudgetForTesting = originalBudget;
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
         }
     }
 
@@ -778,15 +903,13 @@ public class PostExtractionHookTests
     }
 
     [ProductionRuntimeFact]
-    public void Discover_UnloadsAssemblyWithoutRetainedHooks_Issue3790()
+    public void Discover_NoHookAssemblyLeavesNoParentLoadContext_Issue4600()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-no-hook-unload-3790");
-        WeakReference? weakLoadContext;
         lock (TestConsoleLock.Gate)
         {
             try
             {
-                PostExtractionHookRunner.LastUnretainedLoadContextForTesting = null;
                 var hooksDir = Path.Combine(projectRoot, "hooks");
                 Directory.CreateDirectory(hooksDir);
                 File.Copy(typeof(PostExtractionHookRunner).Assembly.Location, Path.Combine(hooksDir, "CodeIndex.dll"));
@@ -795,16 +918,11 @@ public class PostExtractionHookTests
                 {
                     Assert.Empty(runner.Hooks);
                     Assert.Empty(runner.Diagnostics);
-                    weakLoadContext = PostExtractionHookRunner.LastUnretainedLoadContextForTesting;
-                    Assert.NotNull(weakLoadContext);
+                    Assert.Equal(0, runner.ParentLoadContextCountForTests);
                 }
-
-                CollectUnloadedHookAssemblies();
-                Assert.False(weakLoadContext!.IsAlive);
             }
             finally
             {
-                PostExtractionHookRunner.LastUnretainedLoadContextForTesting = null;
                 TestProjectHelper.DeleteDirectory(projectRoot);
             }
         }
@@ -815,19 +933,6 @@ public class PostExtractionHookTests
         GC.Collect();
         GC.WaitForPendingFinalizers();
         GC.Collect();
-    }
-
-    private static void AssertHookAssemblyLoadsInCollectibleContext(string hooksDir)
-    {
-        using var runner = PostExtractionHookRunner.Discover(hooksDir);
-
-        var loadContext = Assert.Single(
-            runner.LoadContextsForTests
-                .Where(context => context != null)
-                .Distinct());
-        Assert.True(loadContext!.IsCollectible);
-        Assert.NotSame(AssemblyLoadContext.Default, loadContext);
-        Assert.Equal("collectible_unloaded_on_runner_dispose", PostExtractionHookRunner.HookLoadContextLifecycle);
     }
 
     private static void AssertFileDoesNotAppear(string path, TimeSpan duration)
@@ -891,6 +996,34 @@ public sealed class SamplePostExtractionHook : IPostExtractionHook
             Column = 1,
             Context = context.Path,
         });
+    }
+}
+
+public sealed class PathSelectivePostExtractionHook : IPostExtractionHook
+{
+    public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols)
+    {
+        var assemblyName = Path.GetFileName(GetType().Assembly.Location);
+        if (string.Equals(
+                assemblyName,
+                Environment.GetEnvironmentVariable(PostExtractionHookTests.SelectiveSlowHookAssemblyEnvironmentVariable),
+                StringComparison.Ordinal))
+        {
+            Thread.Sleep(TimeSpan.FromSeconds(30));
+        }
+
+        symbols.Add(new SymbolRecord
+        {
+            Kind = "domain_tag",
+            Name = $"Selective:{assemblyName}",
+            Line = 1,
+            StartLine = 1,
+            EndLine = 1,
+        });
+    }
+
+    public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references)
+    {
     }
 }
 

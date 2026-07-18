@@ -1767,6 +1767,8 @@ public sealed record VacuumResult(
 
 public class PostExtractionHookStatus
 {
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public string AssemblyPath { get; set; } = string.Empty;
     public string TypeName { get; set; } = string.Empty;

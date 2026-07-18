@@ -10,12 +10,14 @@ internal static class PostExtractionHookDiagnosticFactory
         string message,
         string? callback = null,
         long? durationMs = null,
-        string category = "unspecified")
+        string category = "unspecified",
+        string? hookId = null)
         => new(
             DiagnosticSanitizer.ForPath(assemblyPath),
             DiagnosticSanitizer.ForOptionalLabel(typeName),
             DiagnosticSanitizer.ForMessage(message),
             DiagnosticSanitizer.ForOptionalLabel(callback),
             durationMs,
-            DiagnosticSanitizer.ForMessage(category));
+            DiagnosticSanitizer.ForMessage(category),
+            PostExtractionHookIdentity.ForDiagnostic(hookId));
 }

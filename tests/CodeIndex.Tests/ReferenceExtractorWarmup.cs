@@ -10,6 +10,16 @@ internal static class ReferenceExtractorWarmup
     [ModuleInitializer]
     internal static void WarmUp()
     {
+        var moduleInitializerPidPath = Environment.GetEnvironmentVariable(
+            PostExtractionHookTests.ModuleInitializerPidPathEnvironmentVariable);
+        if (!string.IsNullOrWhiteSpace(moduleInitializerPidPath))
+            File.WriteAllText(moduleInitializerPidPath, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        var moduleInitializerDelay = Environment.GetEnvironmentVariable(
+            PostExtractionHookTests.ModuleInitializerDelayEnvironmentVariable);
+        if (int.TryParse(moduleInitializerDelay, out var delayMilliseconds) && delayMilliseconds > 0)
+            Thread.Sleep(delayMilliseconds);
+
         if (!IsContinuousIntegration() || !IsNet8TestAssembly())
             return;
 

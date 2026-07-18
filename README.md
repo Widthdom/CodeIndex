@@ -268,9 +268,10 @@ Runtime diagnostics under `extractors` include `retained_load_context_count` and
 assembly load contexts are still held and why. Plugin DLL metadata is checked
 before execution, while assembly loading, construction, and extraction run in a
 deadline-, memory-, and output-bounded worker; the parent therefore retains no
-plugin load context. `hooks[]` entries include `callback_budget_ms`
-and `load_context_lifecycle` to show that hook contexts are collectible and
-unloaded when the hook runner is disposed. `extractors.diagnostics[]` and
+plugin load context. Hook assembly loading, module initialization, type discovery,
+construction, and callbacks all occur in bounded workers, so `hooks[]` entries
+include stable `id`, `callback_budget_ms`, and the worker-only
+`load_context_lifecycle`. `extractors.diagnostics[]` and
 `hook_diagnostics[]` include sanitized `category` machine codes alongside
 bounded paths and messages.
 Accepted extension trust overrides such as `CDIDX_TRUST_WORKSPACE_PLUGINS` and
@@ -570,9 +571,10 @@ workspace scan なしで runtime HEAD と `indexed_head_source` が選んだ `in
 `load_context_lifecycle` を含むため、長時間実行プロセスは保持中の plugin assembly load
 context 数とその理由を確認できます。plugin DLL metadata は実行前に検証し、assembly load、
 construction、extraction は deadline・memory・output 上限付き worker 内で実行するため、
-parent process は plugin load context を保持しません。`hooks[]` entry は `callback_budget_ms` と
-`load_context_lifecycle` を含み、hook context が collectible で hook runner の dispose 時に
-unload されることを示します。`extractors.diagnostics[]` と `hook_diagnostics[]` は、
+parent process は plugin load context を保持しません。hook assembly load、module initialization、
+type discovery、construction、callback はすべて bounded worker 内で実行するため、`hooks[]` entry は
+stable な `id`、`callback_budget_ms`、worker-only の `load_context_lifecycle` を含みます。
+`extractors.diagnostics[]` と `hook_diagnostics[]` は、
 bounded な path と message に加えて sanitization 済みの `category` machine code を含みます。
 受理された `CDIDX_TRUST_WORKSPACE_PLUGINS` や `CDIDX_HOOKS_DIR` などの
 拡張信頼境界 override は、sanitization 済みの `trust_overrides[]` entry としても報告されます。

@@ -650,7 +650,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunStatus_Json_ReportsHookCandidatesWithoutLoadingAssemblies_3142()
+    public void RunStatus_Json_ReportsBoundedHookDiscoveryFailure_Issue4600()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_hook_metadata_3142");
         lock (TestConsoleLock.Gate)
@@ -672,10 +672,45 @@ public partial class QueryCommandRunnerTests
                 Assert.Equal(CommandExitCodes.Success, exitCode);
                 Assert.Equal(string.Empty, stderr);
                 using var document = JsonDocument.Parse(stdout);
-                var hook = Assert.Single(document.RootElement.GetProperty("hooks").EnumerateArray());
-                Assert.Equal("broken", hook.GetProperty("name").GetString());
-                Assert.EndsWith("broken.dll", hook.GetProperty("assembly_path").GetString(), StringComparison.Ordinal);
-                Assert.Equal(string.Empty, hook.GetProperty("type_name").GetString());
+                Assert.False(document.RootElement.TryGetProperty("hooks", out _));
+                var diagnostic = Assert.Single(
+                    document.RootElement.GetProperty("hook_diagnostics").EnumerateArray(),
+                    item => item.GetProperty("category").GetString() == "assembly_load_failed");
+                Assert.EndsWith("broken.dll", diagnostic.GetProperty("assembly_path").GetString(), StringComparison.Ordinal);
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void RunStatus_Json_ReportsStableHookIdentityAndWorkerLifecycle_Issue4600()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_hook_identity_4600");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable);
+            try
+            {
+                var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+                var hooksDir = Path.Combine(projectRoot, "hooks");
+                Directory.CreateDirectory(hooksDir);
+                File.Copy(typeof(SamplePostExtractionHook).Assembly.Location, Path.Combine(hooksDir, "status-hook.dll"));
+                env.Set(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hooksDir);
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                    ["--db", dbPath, "--json"],
+                    _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                using var document = JsonDocument.Parse(stdout);
+                var hook = Assert.Single(
+                    document.RootElement.GetProperty("hooks").EnumerateArray(),
+                    item => item.GetProperty("type_name").GetString() == typeof(SamplePostExtractionHook).FullName);
+                Assert.StartsWith("hook:", hook.GetProperty("id").GetString(), StringComparison.Ordinal);
                 Assert.Equal(
                     PostExtractionHookRunner.HookLoadContextLifecycle,
                     hook.GetProperty("load_context_lifecycle").GetString());
@@ -714,7 +749,7 @@ public partial class QueryCommandRunnerTests
                 Assert.Equal(CommandExitCodes.Success, exitCode);
                 Assert.Equal(string.Empty, stderr);
                 using var document = JsonDocument.Parse(stdout);
-                Assert.Equal(2, document.RootElement.GetProperty("hooks").GetArrayLength());
+                Assert.False(document.RootElement.TryGetProperty("hooks", out _));
                 var diagnostic = Assert.Single(
                     document.RootElement.GetProperty("hook_diagnostics").EnumerateArray(),
                     item => item.GetProperty("message").GetString()!.Contains("candidate limit", StringComparison.Ordinal));
