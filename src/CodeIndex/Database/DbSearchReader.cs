@@ -32,7 +32,9 @@ public partial class DbReader
     private const int MaxSearchDedupMatchLinesPerFile = 8192;
     private const int MaxSearchDedupIntervalsPerFile = 4096;
     private const string SearchGuardCandidatesTruncatedDiagnosticCode = "search_guard_candidates_truncated";
+    private const string SearchContextRankingCandidatesTruncatedDiagnosticCode = "search_context_ranking_candidates_truncated";
     private const string SearchDedupStateTruncatedDiagnosticCode = "search_dedup_state_truncated";
+    private const int MaxContextRankingSymbolCandidates = 200;
 
     /// <summary>
     /// Sanitize user input for FTS5 MATCH by quoting each literal term or phrase.
@@ -117,7 +119,7 @@ public partial class DbReader
     /// Full-text search across indexed chunks using FTS5.
     /// FTS5を使ったチャンク全文検索。
     /// </summary>
-    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, SearchCursor? cursor = null, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow, int? guardRequestedLimit = null, IReadOnlyList<string>? requiredPathPatterns = null, SearchGuardScope guardScope = SearchGuardScope.Window, bool tokenBoundary = false)
+    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, SearchCursor? cursor = null, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow, int? guardRequestedLimit = null, IReadOnlyList<string>? requiredPathPatterns = null, SearchGuardScope guardScope = SearchGuardScope.Window, bool tokenBoundary = false, SearchResultRanking resultRanking = SearchResultRanking.Default)
     {
         // Guard against empty/whitespace queries that would match everything
         // 空白のみのクエリが全件マッチするのを防止
@@ -131,11 +133,19 @@ public partial class DbReader
         var normalizedQuery = rawQuery ? query : NormalizeLiteralSearchQuery(query, lang);
         var coverageTokens = exactSearch ? new List<string>() : GetSearchCoverageTokens(normalizedQuery, rawQuery);
         var hasGuardFilters = guardFilters is { Count: > 0 };
+        var hasContextRanking = resultRanking == SearchResultRanking.CredentialContext;
+        var hasCandidatePostProcessing = hasGuardFilters || tokenBoundary || hasContextRanking;
         var searchMatchLineContext = SearchMatchLineContext.Create(query, lang, exactSearch);
         var exactLiteralBoost = !exactSearch && !rawQuery && ShouldBoostExactLiteralSearch(query);
         var guardedRequestedLimit = Math.Max(0, guardRequestedLimit ?? limit);
         var guardedCandidateLimit = hasGuardFilters ? GetGuardedSearchCandidateLimit(guardedRequestedLimit, cursor) : 0;
-        var tokenBoundaryCandidateLimit = tokenBoundary && !hasGuardFilters ? int.MaxValue : 0;
+        var contextRankingCandidateLimit = hasContextRanking ? GetGuardedSearchCandidateLimit(limit, cursor) : 0;
+        var tokenBoundaryCandidateLimit = tokenBoundary && !hasGuardFilters && !hasContextRanking ? int.MaxValue : 0;
+        var candidatePostProcessingLimit = hasGuardFilters
+            ? guardedCandidateLimit
+            : hasContextRanking
+                ? contextRankingCandidateLimit
+                : tokenBoundaryCandidateLimit;
         using var cmd = _conn.CreateCommand();
         string sql;
 
@@ -178,11 +188,11 @@ public partial class DbReader
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         AppendAdditionalPathIncludeFilters(ref sql, requiredPathPatterns, "requiredPathPattern");
         sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count, exactLiteralBoost)}";
-        if (hasGuardFilters || tokenBoundary)
+        if (hasCandidatePostProcessing)
             sql += " LIMIT @candidateFetchLimit";
         else
             sql += " LIMIT @limit";
-        if (cursor is { } && !hasGuardFilters && !tokenBoundary)
+        if (cursor is { } && !hasCandidatePostProcessing)
             sql += " OFFSET @cursorOffset";
 
         cmd.CommandText = sql;
@@ -192,15 +202,15 @@ public partial class DbReader
         SqliteCommandPolicy.Add(cmd, "@rankingQueryPrefix", $"{EscapeLikeQuery(normalizedQuery.Trim())}%");
         SqliteCommandPolicy.Add(cmd, "@visibilityRank", visibilityRank ? 1 : 0);
         AddSearchCoverageParameters(cmd, coverageTokens);
-        if (!hasGuardFilters && !tokenBoundary)
+        if (!hasCandidatePostProcessing)
             SqliteCommandPolicy.Add(cmd, "@limit", limit);
         else
-            SqliteCommandPolicy.Add(cmd, "@candidateFetchLimit", AddSearchCandidateSentinel(hasGuardFilters ? guardedCandidateLimit : tokenBoundaryCandidateLimit));
+            SqliteCommandPolicy.Add(cmd, "@candidateFetchLimit", AddSearchCandidateSentinel(candidatePostProcessingLimit));
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
             SqliteCommandPolicy.Add(cmd, "@since", since.Value);
-        if (cursor is { } searchCursorParameter && !hasGuardFilters && !tokenBoundary)
+        if (cursor is { } searchCursorParameter && !hasCandidatePostProcessing)
         {
             SqliteCommandPolicy.Add(cmd, "@cursorOffset", searchCursorParameter.Offset);
         }
@@ -210,8 +220,9 @@ public partial class DbReader
         var raw = new List<SearchResult>();
         var guardMatchContext = hasGuardFilters ? SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exactSearch, lang) : null;
         var guardLineWindowCache = hasGuardFilters ? new Dictionary<SearchGuardLineWindowKey, SortedDictionary<int, string>>() : null;
-        var nextOffset = hasGuardFilters ? 0 : cursor?.Offset ?? 0;
+        var nextOffset = hasCandidatePostProcessing ? 0 : cursor?.Offset ?? 0;
         var guardCandidateLimitReached = false;
+        var contextRankingCandidateLimitReached = false;
         var guardCandidatePathCounts = hasGuardFilters ? new Dictionary<string, int>(StringComparer.Ordinal) : null;
         var guardCandidateLanguageCounts = hasGuardFilters ? new Dictionary<string, int>(StringComparer.Ordinal) : null;
         try
@@ -232,18 +243,18 @@ public partial class DbReader
                     ChunkId = reader.GetInt64(7),
                     NextOffset = nextOffset,
                 };
+                if (hasCandidatePostProcessing && nextOffset > candidatePostProcessingLimit)
+                {
+                    guardCandidateLimitReached = hasGuardFilters;
+                    contextRankingCandidateLimitReached = hasContextRanking;
+                    continue;
+                }
                 if (!hasGuardFilters)
                 {
                     if (tokenBoundary)
                         raw.AddRange(FilterSearchResultByTokenBoundary(result, searchMatchLineContext.ForResult(result)));
                     else
                         raw.Add(result);
-                    continue;
-                }
-
-                if (nextOffset > guardedCandidateLimit)
-                {
-                    guardCandidateLimitReached = true;
                     continue;
                 }
 
@@ -266,6 +277,8 @@ public partial class DbReader
         }
 
         var results = deduplicate ? DeduplicateOverlappingResults(raw, SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exactSearch, lang)) : raw;
+        if (hasContextRanking)
+            results = RankCredentialContextSearchResults(results, query, normalizedQuery, rawQuery, exactSearch, lang, searchMatchLineContext);
         if (guardCandidateLimitReached && results.Count < GetGuardedSearchRequestedPageEnd(guardedRequestedLimit, cursor))
             throw new SearchGuardCandidateLimitException(
                 guardedCandidateLimit,
@@ -274,7 +287,7 @@ public partial class DbReader
                 FormatTopGuardCandidateCounts(guardCandidatePathCounts!),
                 FormatTopGuardCandidateCounts(guardCandidateLanguageCounts!));
 
-        var pagedResults = hasGuardFilters || tokenBoundary ? PageGuardedSearchResults(results, limit, cursor) : results;
+        var pagedResults = hasCandidatePostProcessing ? PageGuardedSearchResults(results, limit, cursor) : results;
         if (guardCandidateLimitReached && pagedResults.Count > 0)
         {
             AddSearchDiagnostic(
@@ -282,6 +295,14 @@ public partial class DbReader
                 SearchGuardCandidatesTruncatedDiagnosticCode,
                 $"Guard filtering inspected the first {guardedCandidateLimit} ranked candidates before pagination; narrow the query or add path/lang filters if later matches are needed.",
                 limit: guardedCandidateLimit);
+        }
+        if (contextRankingCandidateLimitReached && pagedResults.Count > 0)
+        {
+            AddSearchDiagnostic(
+                pagedResults[0],
+                SearchContextRankingCandidatesTruncatedDiagnosticCode,
+                $"Contextual ranking inspected the first {candidatePostProcessingLimit} ranked candidates before pagination; narrow the query or add path/lang filters if later matches are needed.",
+                limit: candidatePostProcessingLimit);
         }
 
         AttachSearchEnclosingSymbols(pagedResults, searchMatchLineContext);
@@ -397,10 +418,179 @@ public partial class DbReader
         return requestedOffset + requestedLimit;
     }
 
+    private List<SearchResult> RankCredentialContextSearchResults(
+        List<SearchResult> results,
+        string query,
+        string normalizedQuery,
+        bool rawQuery,
+        bool exact,
+        string? lang,
+        SearchMatchLineContext matchLineContext)
+    {
+        if (results.Count <= 1)
+            return results;
+
+        var primaryMatchContext = SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang);
+        var candidates = results
+            .Select((result, index) => new SearchContextRankingCandidate(
+                result,
+                index,
+                ScoreCredentialContextLines(result, primaryMatchContext)))
+            .ToList();
+        var symbolCandidates = candidates
+            .OrderByDescending(candidate => candidate.LineScore)
+            .ThenBy(candidate => candidate.OriginalIndex)
+            .Take(MaxContextRankingSymbolCandidates)
+            .Select(candidate => candidate.Result)
+            .ToList();
+        AttachSearchEnclosingSymbols(symbolCandidates, matchLineContext);
+
+        return candidates
+            .OrderByDescending(candidate => candidate.LineScore + ScoreCredentialContextSymbol(candidate.Result))
+            .ThenBy(candidate => candidate.OriginalIndex)
+            .Select(candidate => candidate.Result)
+            .ToList();
+    }
+
+    private static int ScoreCredentialContextLines(SearchResult result, SearchPrimaryMatchContext matchContext)
+    {
+        var matches = FindPrimarySearchMatchLines(result, matchContext);
+        if (matches.Count == 0)
+            return ContainsStructuralTokenMarker(result.Content) ? -800 : -600;
+
+        var score = matches.Max(match => ScoreCredentialContextLine(result, matchContext, match));
+        if (matches.Any(match => ContainsRegexDefinitionSyntax(match.Text)))
+            score -= 360;
+        return score;
+    }
+
+    private static int ScoreCredentialContextLine(
+        SearchResult result,
+        SearchPrimaryMatchContext matchContext,
+        SearchPrimaryMatch match)
+    {
+        var facet = SearchMatchClassifier.Classify(
+            result.Path,
+            result.Lang,
+            match.LineNumber,
+            match.Text,
+            match.Column,
+            match.Length,
+            result.EnclosingSymbolKind);
+        var score = facet.Origin switch
+        {
+            SearchMatchClassifier.Code => 240,
+            SearchMatchClassifier.StringLiteral => 80,
+            SearchMatchClassifier.RegexLiteral => -160,
+            SearchMatchClassifier.Comment => -180,
+            SearchMatchClassifier.HelpText => -200,
+            SearchMatchClassifier.SchemaDescription => -200,
+            _ => 0,
+        };
+
+        var tightlyCoupled = matchContext.Terms.Length <= 1 ||
+                             HasTightlyCoupledCredentialTerms(match.Text, matchContext.Terms);
+        score += tightlyCoupled ? 160 : -100;
+        if (ContainsRegexDefinitionSyntax(match.Text))
+            score -= 360;
+        if (ContainsStructuralTokenMarker(match.Text))
+            score -= 420;
+        if (ContainsCredentialUseSyntax(match.Text))
+            score += 60;
+        return score;
+    }
+
+    private static int ScoreCredentialContextSymbol(SearchResult result)
+    {
+        var kindScore = result.EnclosingSymbolKind?.ToLowerInvariant() switch
+        {
+            "function" or "method" or "property" or "field" or "variable" => 40,
+            "test.method" => -40,
+            "heading" or "import" => -80,
+            "class" or "record" or "struct" => 10,
+            _ => 0,
+        };
+        var symbolText = $"{result.EnclosingSymbolName} {result.EnclosingContainerName}";
+        if (ContainsRegexDefinitionSyntax(symbolText))
+            kindScore -= 160;
+        if (ContainsStructuralTokenMarker(symbolText))
+            kindScore -= 240;
+        if (ContainsCredentialUseSyntax(symbolText))
+            kindScore += 40;
+        return kindScore;
+    }
+
+    private static bool HasTightlyCoupledCredentialTerms(string text, IReadOnlyList<string> terms)
+    {
+        if (terms.Count == 0)
+            return false;
+
+        var firstTermStart = 0;
+        while (firstTermStart < text.Length)
+        {
+            var firstIndex = text.IndexOf(terms[0], firstTermStart, StringComparison.OrdinalIgnoreCase);
+            if (firstIndex < 0)
+                return false;
+
+            var previousEnd = firstIndex + terms[0].Length;
+            var allTermsTightlyCoupled = true;
+            for (var i = 1; i < terms.Count; i++)
+            {
+                var index = text.IndexOf(terms[i], previousEnd, StringComparison.OrdinalIgnoreCase);
+                if (index < 0 || index - previousEnd > 3)
+                {
+                    allTermsTightlyCoupled = false;
+                    break;
+                }
+                previousEnd = index + terms[i].Length;
+            }
+
+            if (allTermsTightlyCoupled)
+                return true;
+            firstTermStart = firstIndex + 1;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsRegexDefinitionSyntax(string text)
+        => text.Contains("Regex", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains(".Matches(", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("RegexOptions", StringComparison.OrdinalIgnoreCase);
+
+    private static bool ContainsStructuralTokenMarker(string text)
+        => text.Contains("CancellationToken", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("SyntaxToken", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("SemanticToken", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("TokenKind", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("TokenType", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("Tokenizer", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("Lexer", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("ParserToken", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("ProtocolToken", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("LspToken", StringComparison.OrdinalIgnoreCase);
+
+    private static bool ContainsCredentialUseSyntax(string text)
+        => text.Contains("Authorization", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("Bearer", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("ApiKey", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("AccessToken", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("GitHubToken", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("TokenSecret", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("SecretProvider", StringComparison.OrdinalIgnoreCase);
+
+    private sealed record SearchContextRankingCandidate(
+        SearchResult Result,
+        int OriginalIndex,
+        int LineScore);
+
     private void AttachSearchEnclosingSymbols(IReadOnlyList<SearchResult> results, SearchMatchLineContext matchLineContext)
     {
         foreach (var result in results)
         {
+            if (!string.IsNullOrWhiteSpace(result.EnclosingSymbolKind))
+                continue;
+
             var matchLine = GetFirstSearchMatchLine(result, matchLineContext);
             if (!matchLine.HasValue)
                 continue;

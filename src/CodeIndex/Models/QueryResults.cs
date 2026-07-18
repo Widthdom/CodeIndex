@@ -124,6 +124,12 @@ public enum SearchGuardScope
     SameLine,
 }
 
+public enum SearchResultRanking
+{
+    Default,
+    CredentialContext,
+}
+
 public sealed record SearchGuardFilter(
     SearchGuardRole Role,
     SearchGuardDirection Direction,

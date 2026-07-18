@@ -324,6 +324,16 @@ internal static class SearchAuditRecipes
             })
             .ToList();
 
+    private static List<SearchAuditRecipeQuery> WithResultRanking(
+        List<SearchAuditRecipeQuery> queries,
+        SearchResultRanking resultRanking)
+        => queries
+            .Select(query => query with
+            {
+                ResultRanking = resultRanking
+            })
+            .ToList();
+
     private static SearchAuditRecipeQuery RegexTimeoutPolicyReferenceQuery() =>
         new(
             "regex-timeout-policy-reference",
@@ -1130,7 +1140,7 @@ internal static class SearchAuditRecipes
         SourceScopedRecipe(
             "auth-token-audit",
             "Audit credential and auth-token material without the parser, protocol, LSP, and cancellation-token noise from bare token searches.",
-            AddClassifiers([
+            WithResultRanking(AddClassifiers([
                 new(
                     "bearer-token",
                     "Bearer",
@@ -1215,7 +1225,7 @@ internal static class SearchAuditRecipes
                         "positive: secret providers, short-lived values, and sanitized diagnostics are safer evidence."
                     ],
                 }
-            ], SecretOriginClassifier, SourceOriginClassifier)),
+            ], SecretOriginClassifier, SourceOriginClassifier), SearchResultRanking.CredentialContext)),
         SourceScopedRecipe(
             "dogfood-risk-patterns",
             "Focused audit searches for recurring risk patterns found while dogfooding cdidx.",
@@ -4155,6 +4165,7 @@ internal sealed record SearchAuditRecipeQuery(
     public List<string> ExcludeOrigins { get; init; } = [];
     public List<string> ResultKinds { get; init; } = [];
     public List<SearchRecipeClassifierJsonResult> Classifiers { get; init; } = [];
+    public SearchResultRanking ResultRanking { get; init; }
     public SearchRecipeStringComparisonTaxonomyJsonResult? StringComparisonTaxonomy { get; init; }
     public SearchRecipeBroadCatchTaxonomyJsonResult? BroadCatchTaxonomy { get; init; }
     public SearchRecipeNullableContractTaxonomyJsonResult? NullableContractTaxonomy { get; init; }

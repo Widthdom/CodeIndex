@@ -6053,6 +6053,135 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_AuthTokenRecipeRanksCredentialContextAheadOfCommentsRegexAndStructuralTokens_Issue4590()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_auth_token_ranking");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/z-primary-credentials.cs",
+                "csharp",
+                """
+                using System.Net.Http.Headers;
+
+                public sealed class PrimaryCredentials
+                {
+                    private string GitHubToken { get; } = LoadSecret("github");
+                    private string ApiToken { get; } = LoadSecret("api");
+                    private string AccessToken { get; } = LoadSecret("access");
+                    private string TokenSecret { get; } = LoadSecret("token");
+                    private const string TokenSecretKey = "token secret";
+                    private readonly string token = secretProvider.Read("credential");
+
+                    public void Apply(HttpRequestMessage request)
+                    {
+                        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", AccessToken);
+                        Console.WriteLine(GitHubToken.Length + ApiToken.Length + TokenSecret.Length);
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/y-secondary-credentials.cs",
+                "csharp",
+                """
+                public sealed class SecondaryCredentials
+                {
+                    private readonly string github_token = ReadCredential("github");
+                    private readonly string api_token = ReadCredential("api");
+                    private readonly string access_token = ReadCredential("access");
+                    private readonly string token_secret = ReadCredential("secret");
+                    private const string TokenSecretKey = "token secret";
+                    private readonly string token = secretProvider.Read("credential");
+
+                    public void Forward(HttpRequestMessage request)
+                    {
+                        request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {access_token}");
+                        Console.WriteLine(github_token.Length + api_token.Length + token_secret.Length);
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/a-authorization-regex.cs",
+                "csharp",
+                """
+                public static class SqlAuthorizationPatterns
+                {
+                    private static readonly Regex AlterAuthorizationOptionsRegex = new("ALTER AUTHORIZATION");
+                    public static MatchCollection Read(string sql) => AlterAuthorizationOptionsRegex.Matches(sql);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/a-credential-comments.cs",
+                "csharp",
+                """
+                public sealed class CredentialComments
+                {
+                    // Bearer token documentation is generated elsewhere.
+                    // The GitHub token documentation is generated elsewhere.
+                    // The API token, access token, and token secret examples are intentionally placeholders.
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/a-structural-tokens.cs",
+                "csharp",
+                """
+                public sealed class StructuralTokens
+                {
+                    private readonly CancellationTokenSource accessTokenSource = new();
+                    private readonly CancellationTokenSource tokenSecretSource = new();
+                    private readonly SyntaxToken githubTokenSyntax;
+                    private readonly ParserToken apiTokenNode;
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "auth-token-audit", "--db", dbPath, "--json", "--limit", "2"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var queries = document.RootElement.GetProperty("queries").EnumerateArray().ToList();
+            var expectedTopPaths = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "src/y-secondary-credentials.cs",
+                "src/z-primary-credentials.cs",
+            };
+
+            foreach (var queryName in new[]
+                     {
+                         "bearer-token",
+                         "authorization-header",
+                         "github-token",
+                         "api-token",
+                         "access-token",
+                         "token-secret",
+                     })
+            {
+                var results = queries
+                    .Single(query => query.GetProperty("name").GetString() == queryName)
+                    .GetProperty("results")
+                    .EnumerateArray()
+                    .ToList();
+                Assert.Equal(2, results.Count);
+                Assert.All(results, result =>
+                    Assert.Contains(result.GetProperty("path").GetString()!, expectedTopPaths));
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_BareTokenZeroResultSuggestsAuthTokenAudit_Issue3923()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_token_zero_hint");
