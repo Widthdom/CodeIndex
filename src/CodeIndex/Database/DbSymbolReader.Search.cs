@@ -77,10 +77,10 @@ public partial class DbReader
     /// Search symbols by name pattern, optionally filtered by kind and language.
     /// シンボルを名前パターンで検索（種別・言語でフィルタ可能）。
     /// </summary>
-    public List<SymbolResult> SearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, SymbolSortMode sortMode = SymbolSortMode.Name, int? startLine = null, int? endLine = null, bool groupPartials = false)
+    public List<SymbolResult> SearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, SymbolSortMode sortMode = SymbolSortMode.Name, int? startLine = null, int? endLine = null, bool groupPartials = false, int offset = 0)
     {
         var normalizedQuery = NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact);
-        return SearchSymbols(normalizedQuery == null ? null : new[] { normalizedQuery }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters, sortMode, startLine, endLine, groupPartials);
+        return SearchSymbols(normalizedQuery == null ? null : new[] { normalizedQuery }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters, sortMode, startLine, endLine, groupPartials, offset);
     }
 
     public int CountSearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
@@ -404,7 +404,7 @@ public partial class DbReader
     /// 複数名前パターン（OR結合）でシンボルを検索。空/null なら他フィルタに一致する全シンボルを返す。
     /// <paramref name="exact"/> が true の場合、部分一致ではなく大文字小文字を無視した完全一致になる。
     /// </summary>
-    public List<SymbolResult> SearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, SymbolSortMode sortMode = SymbolSortMode.Name, int? startLine = null, int? endLine = null, bool groupPartials = false)
+    public List<SymbolResult> SearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, SymbolSortMode sortMode = SymbolSortMode.Name, int? startLine = null, int? endLine = null, bool groupPartials = false, int offset = 0)
     {
         lang = DbReader.NormalizeQueryLanguage(lang);
         // Multi-name queries: run one search per name to guarantee per-name candidate coverage
@@ -416,9 +416,10 @@ public partial class DbReader
         var validQueries = NormalizeSymbolSearchQueries(queries, lang, exact);
         if (validQueries != null && validQueries.Count > 1)
         {
+            var requestedPrefix = checked(limit + Math.Max(0, offset));
             var perName = new List<List<SymbolResult>>(validQueries.Count);
             foreach (var q in validQueries)
-                perName.Add(SearchSymbols(new[] { q! }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters, sortMode, startLine, endLine, groupPartials));
+                perName.Add(SearchSymbols(new[] { q! }, requestedPrefix, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters, sortMode, startLine, endLine, groupPartials));
 
             var seen = new HashSet<(string Path, int Line, string Name, string Kind)>();
             var merged = new List<SymbolResult>();
@@ -427,7 +428,7 @@ public partial class DbReader
             do
             {
                 advanced = false;
-                for (int i = 0; i < perName.Count && merged.Count < limit; i++)
+                for (int i = 0; i < perName.Count && merged.Count < requestedPrefix; i++)
                 {
                     while (cursors[i] < perName[i].Count)
                     {
@@ -440,8 +441,8 @@ public partial class DbReader
                         }
                     }
                 }
-            } while (advanced && merged.Count < limit);
-            return merged;
+            } while (advanced && merged.Count < requestedPrefix);
+            return merged.Skip(Math.Max(0, offset)).Take(limit).ToList();
         }
 
         using var cmd = _conn.CreateCommand();
@@ -635,7 +636,7 @@ public partial class DbReader
             sql = BuildLogicalPartialSymbolQuery(sql, sortMode);
         else
             sql += BuildSymbolSortOrderBy(sortMode, exactNameOrderSql, referenceCountSql, hotspotScoreSql, rankingReferenceScoreSql, rankingHotspotScoreSql, sizeLinesSql, complexityScoreSql, startColumnSql);
-        sql += " LIMIT @limit";
+        sql += " LIMIT @limit OFFSET @offset";
 
         cmd.CommandText = sql;
         if (effectiveQueries != null)
@@ -702,6 +703,7 @@ public partial class DbReader
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         AddVisibilityFilterParameters(cmd, visibilityFilters, excludeVisibilityFilters);
         SqliteCommandPolicy.Add(cmd, "@limit", limit);
+        SqliteCommandPolicy.Add(cmd, "@offset", Math.Max(0, offset));
 
         var includeRankingMetadata = sortMode != SymbolSortMode.Name;
         var sortModeName = sortMode.ToString().ToLowerInvariant();

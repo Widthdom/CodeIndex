@@ -10,7 +10,7 @@ public static partial class QueryCommandRunner
 {
     private const int BatchMaxCapturedOutputChars = JsonEnvelopeWrapper.MaxCapturedOutputChars;
 
-    public static int RunBatch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    public static int RunBatch(string[] cmdArgs, JsonSerializerOptions jsonOptions, string appVersion = "")
     {
         var dbPath = Path.Combine(".cdidx", "codeindex.db");
         var dbPathExplicit = false;
@@ -156,9 +156,9 @@ public static partial class QueryCommandRunner
 
                 commandsProcessed++;
                 var batchResult = jsonSummary
-                    ? RunBatchQueryCommandWithJsonRecord(lineNumber, commandName, subArgs, jsonOutput!, jsonOptions)
+                    ? RunBatchQueryCommandWithJsonRecord(lineNumber, commandName, subArgs, jsonOutput!, jsonOptions, appVersion)
                     : new BatchCommandRunResult(
-                        RunBatchQueryCommand(commandName, subArgs, jsonOptions),
+                        RunBatchQueryCommand(commandName, subArgs, jsonOptions, appVersion),
                         OutputLimitReached: false);
                 var exitCode = batchResult.ExitCode;
                 if (exitCode != CommandExitCodes.Success)
@@ -230,7 +230,8 @@ public static partial class QueryCommandRunner
         string commandName,
         string[] subArgs,
         BatchJsonOutputWriter output,
-        JsonSerializerOptions jsonOptions)
+        JsonSerializerOptions jsonOptions,
+        string appVersion)
     {
         using var capture = new BatchCommandOutputCapture();
         int exitCode;
@@ -238,7 +239,7 @@ public static partial class QueryCommandRunner
         try
         {
             capture.Start();
-            exitCode = RunBatchQueryCommand(commandName, subArgs, jsonOptions);
+            exitCode = RunBatchQueryCommand(commandName, subArgs, jsonOptions, appVersion);
         }
         catch (BatchOutputCaptureLimitExceededException ex)
         {
@@ -689,37 +690,41 @@ public static partial class QueryCommandRunner
             CommandExitCodes.UsageError,
             ErrorCode: CommandErrorCodes.UsageError);
 
-    private static int RunBatchQueryCommand(string commandName, string[] subArgs, JsonSerializerOptions jsonOptions)
+    private static int RunBatchQueryCommand(string commandName, string[] subArgs, JsonSerializerOptions jsonOptions, string appVersion)
     {
         if (!CliCommandCatalog.IsBatchReadOnlyCommand(commandName))
             return WriteBatchUnsupportedCommand(commandName);
 
-        return commandName switch
+        Func<string[], int> runner = commandName switch
         {
-            "search" => RunSearch(subArgs, jsonOptions),
-            "recipes" => RunRecipes(subArgs, jsonOptions),
-            "audit" => RunAudit(subArgs, jsonOptions),
-            "definition" => RunDefinition(subArgs, jsonOptions),
-            "goto" => RunGoto(subArgs, jsonOptions),
-            "references" => RunReferences(subArgs, jsonOptions),
-            "callers" => RunCallers(subArgs, jsonOptions),
-            "callees" => RunCallees(subArgs, jsonOptions),
-            "symbols" => RunSymbols(subArgs, jsonOptions),
-            "files" => RunFiles(subArgs, jsonOptions),
-            "find" => RunFind(subArgs, jsonOptions),
-            "excerpt" => RunExcerpt(subArgs, jsonOptions),
-            "map" => RunMap(subArgs, jsonOptions),
-            "inspect" => RunInspect(subArgs, jsonOptions),
-            "outline" => RunOutline(subArgs, jsonOptions),
-            "status" => RunStatus(subArgs, jsonOptions),
-            "validate" => RunValidate(subArgs, jsonOptions),
-            "languages" => RunLanguages(subArgs, jsonOptions),
-            "impact" => RunImpact(subArgs, jsonOptions),
-            "deps" => RunDeps(subArgs, jsonOptions),
-            "unused" => RunUnused(subArgs, jsonOptions),
-            "hotspots" => RunHotspots(subArgs, jsonOptions),
+            "search" => args => RunSearch(args, jsonOptions),
+            "recipes" => args => RunRecipes(args, jsonOptions),
+            "audit" => args => RunAudit(args, jsonOptions),
+            "definition" => args => RunDefinition(args, jsonOptions),
+            "goto" => args => RunGoto(args, jsonOptions),
+            "references" => args => RunReferences(args, jsonOptions),
+            "callers" => args => RunCallers(args, jsonOptions),
+            "callees" => args => RunCallees(args, jsonOptions),
+            "symbols" => args => RunSymbols(args, jsonOptions),
+            "files" => args => RunFiles(args, jsonOptions),
+            "find" => args => RunFind(args, jsonOptions),
+            "excerpt" => args => RunExcerpt(args, jsonOptions),
+            "map" => args => RunMap(args, jsonOptions),
+            "inspect" => args => RunInspect(args, jsonOptions),
+            "outline" => args => RunOutline(args, jsonOptions),
+            "status" => args => RunStatus(args, jsonOptions),
+            "validate" => args => RunValidate(args, jsonOptions),
+            "languages" => args => RunLanguages(args, jsonOptions),
+            "impact" => args => RunImpact(args, jsonOptions),
+            "deps" => args => RunDeps(args, jsonOptions),
+            "unused" => args => RunUnused(args, jsonOptions),
+            "hotspots" => args => RunHotspots(args, jsonOptions),
             _ => throw new InvalidOperationException($"Batch schema command '{commandName}' has no dispatcher."),
         };
+
+        return JsonEnvelopeWrapper.ShouldWrap(commandName, subArgs)
+            ? JsonEnvelopeWrapper.RunWrapped(commandName, subArgs, appVersion, jsonOptions, runner)
+            : runner(subArgs);
     }
 
     private static int WriteBatchUnsupportedCommand(string commandName)

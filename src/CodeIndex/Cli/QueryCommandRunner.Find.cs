@@ -10,7 +10,7 @@ namespace CodeIndex.Cli;
 public static partial class QueryCommandRunner
 {
     internal const int MaxFindLineScanLimit = 10_000_000;
-    private const string FindUsage = "Usage: cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--context <n>] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--line-scan-limit <n>] [--allow-partial] [--exact] [--regex] [--count]\n       cdidx find --query <query> (--path <glob>|--all) [...]\n       cdidx find [options] -- <query>";
+    private const string FindUsage = "Usage: cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--fields <csv>] [--cursor <response:v1:offset:fingerprint>] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--context <n>] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--line-scan-limit <n>] [--allow-partial] [--exact] [--regex] [--count]\n       cdidx find --query <query> (--path <glob>|--all) [...]\n       cdidx find [options] -- <query>";
 
     public static int RunFind(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -162,7 +162,7 @@ public static partial class QueryCommandRunner
             FindResults findResults;
             try
             {
-                findResults = reader.FindInFiles(options.Query, options.Limit, options.Lang, pathPatterns, options.ExcludePaths, options.ExcludeTests, contextBefore, contextAfter, options.Exact, options.MaxLineWidth, options.FocusLine, options.FocusColumn, options.Regex, candidateFileLimit, lineLimit);
+                findResults = reader.FindInFiles(options.Query, options.Limit, options.Lang, pathPatterns, options.ExcludePaths, options.ExcludeTests, contextBefore, contextAfter, options.Exact, options.MaxLineWidth, options.FocusLine, options.FocusColumn, options.Regex, candidateFileLimit, lineLimit, JsonEnvelopeWrapper.GetBoundedResponseOffset("find"));
             }
             catch (ArgumentException ex) when (options.Regex)
             {

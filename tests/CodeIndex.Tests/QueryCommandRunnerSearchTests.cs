@@ -881,7 +881,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSearch_NamedQueriesReturnGroupedCompactResults_Issue3481()
+    public void RunSearch_NamedQueriesHonorCompactProjectionAndPreserveRichJson_Issues3481_4584()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_named_queries");
         try
@@ -911,20 +911,54 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             using var document = ParseJsonOutput(stdout);
             var root = document.RootElement;
+            Assert.Equal("compact", root.GetProperty("format").GetString());
             Assert.Equal(2, root.GetProperty("query_count").GetInt32());
             Assert.Equal(2, root.GetProperty("result_count").GetInt32());
+            Assert.True(root.GetProperty("truncated").GetBoolean());
             var queries = root.GetProperty("queries").EnumerateArray().ToList();
             var pack = Assert.Single(queries, query => query.GetProperty("name").GetString() == "pack");
             Assert.Equal("dotnet pack", pack.GetProperty("query").GetString());
-            var packResult = Assert.Single(pack.GetProperty("results").EnumerateArray());
-            var packPath = packResult.GetProperty("path").GetString();
-            Assert.NotNull(packPath);
+            Assert.Equal(1, pack.GetProperty("count").GetInt32());
             Assert.True(pack.GetProperty("truncated").GetBoolean());
-            Assert.Equal(JsonValueKind.Null, pack.GetProperty("next_cursor").ValueKind);
-            Assert.Equal(packPath, pack.GetProperty("top_files")[0].GetProperty("path").GetString());
+            Assert.True(pack.GetProperty("truncation").GetProperty("limit_reached").GetBoolean());
+            var packResult = Assert.Single(pack.GetProperty("results").EnumerateArray());
+            var packPath = packResult.GetProperty("file").GetString();
+            Assert.NotNull(packPath);
             Assert.StartsWith("release/pack", packPath, StringComparison.Ordinal);
-            Assert.Contains("dotnet pack", packResult.GetProperty("snippet").GetString(), StringComparison.Ordinal);
-            Assert.NotEmpty(packResult.GetProperty("match_lines").EnumerateArray());
+            Assert.True(packResult.GetProperty("line").GetInt32() > 0);
+            Assert.False(packResult.TryGetProperty("path", out _));
+            Assert.False(packResult.TryGetProperty("snippet", out _));
+            Assert.False(pack.TryGetProperty("top_files", out _));
+            Assert.False(pack.TryGetProperty("next_cursor", out _));
+            var push = Assert.Single(queries, query => query.GetProperty("name").GetString() == "push");
+            Assert.False(push.GetProperty("truncated").GetBoolean());
+            Assert.False(push.GetProperty("truncation").GetProperty("limit_reached").GetBoolean());
+
+            var (richExitCode, richStdout, richStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--named-query=pack=dotnet pack", "--named-query=push=nuget push", "--db", dbPath, "--json", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, richExitCode);
+            Assert.Equal(string.Empty, richStderr);
+            using var richDocument = ParseJsonOutput(richStdout);
+            var richPack = Assert.Single(
+                richDocument.RootElement.GetProperty("queries").EnumerateArray(),
+                query => query.GetProperty("name").GetString() == "pack");
+            var richPackResult = Assert.Single(richPack.GetProperty("results").EnumerateArray());
+            Assert.Contains("dotnet pack", richPackResult.GetProperty("snippet").GetString(), StringComparison.Ordinal);
+            Assert.NotEmpty(richPackResult.GetProperty("match_lines").EnumerateArray());
+            Assert.NotEmpty(richPack.GetProperty("top_files").EnumerateArray());
+            Assert.Equal(JsonValueKind.Null, richPack.GetProperty("next_cursor").ValueKind);
+
+            var (boundedExitCode, boundedStdout, boundedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--named-query=pack=dotnet pack", "--named-query=push=nuget push", "--db", dbPath, "--format", "compact", "--limit", "1", "--max-json-bytes", "1600"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, boundedExitCode);
+            Assert.Equal(string.Empty, boundedStderr);
+            Assert.True(System.Text.Encoding.UTF8.GetByteCount(boundedStdout) <= 1600);
+            using var boundedDocument = ParseJsonOutput(boundedStdout);
+            Assert.Equal("compact", boundedDocument.RootElement.GetProperty("format").GetString());
 
             var (capExitCode, capStdout, capStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--named-query=pack=dotnet pack", "--db", dbPath, "--format", "compact", "--max-json-bytes", "1"],

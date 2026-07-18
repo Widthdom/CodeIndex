@@ -74,6 +74,7 @@ cdidx status --check --json
 cdidx search "handleRequest"
 cdidx search "TODO" --first-per-file --sample 25 --json=ndjson --max-json-bytes 65536
 cdidx definition UserService
+cdidx references UserService --fields path,line,reference_kind --limit 20 --max-json-bytes 16384
 cdidx inspect QueryCommandRunner --outline-only
 cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --compact --kind function --sort size --limit 10
 cdidx unused --compact --by-bucket
@@ -81,6 +82,7 @@ cdidx map --compact --max-json-bytes 65536
 cdidx map --format issue-drafts --limit 10
 cdidx search --recipe risky-code --format compact --max-json-bytes 65536
 cdidx search --recipe risky-code --format compact --summary-only --json
+cdidx search --named-query todo=TODO --named-query fixme=FIXME --format compact --limit 10
 cdidx search --named-query todo=TODO --named-query fixme=FIXME --format count --summary-only --json
 cdidx suggestions add --category output_format --description "Record a local dogfood finding" --evidence-path src/CodeIndex/Cli/SuggestionsCommandRunner.cs --json
 cdidx suggestions update <id> --description "Corrected finding" --context "Corrected context" --json
@@ -91,6 +93,10 @@ cdidx validate
 The default NDJSON output of `search`, `symbols`, and `files` always ends with a bounded `terminal_record` unless `--results-only` explicitly suppresses it; recipe/audit search row streams use the same contract. The record reports returned and observed total counts, whether that total is authoritative or a lower bound, the truncation reason, applied limits, omitted rows, and recovery guidance. `--max-json-bytes` is a hard cap over all stdout bytes, including row newlines and the terminal record. If that record cannot fit by itself, the command fails with a usage error before writing stdout. Capped output rejects `--profile`, `--verbose`, and `--json-envelope`, whose additional serialization would otherwise escape the cap.
 
 When the byte cap omits rows, these commands return partial-result exit code `11`; pass `--allow-partial` to opt into exit code `0` while retaining the same terminal metadata. Ordinary `--limit` truncation remains a successful, explicitly described stream. Array and compact outputs keep their documented whole-response behavior; check `cdidx <command> --help` before relying on partial output.
+
+High-volume `definition`, `find`, `status`, `hotspots`, `references`, `callers`, `callees`, `impact`, and `map` responses also support an opt-in bounded envelope through `--fields`, `--cursor`, compact output where advertised, and a total `--max-json-bytes` budget. Its metadata reports returned/total/omitted counts and an opaque `next_cursor`; replay that cursor with the same query, filters, and sort arguments. The response also exposes its 10,000-row safety window and reports when that window is exhausted instead of emitting an unusable cursor. Existing compact location responses retain their top-level keys and lightweight `file` / `line` rows while adding the shared metadata; `refs` / `stats` aliases and matching read-only `batch` children use the same envelope and hard cap. `hotspots` and `impact` page their active primary collection, while dotted projections such as `callers.path,callers.depth` select nested rows and report that collection's total. `map --sections` selects whole response sections; a bounded projection such as `--fields top_files.path` instead pages that section's rows and avoids building unrelated ranked sections. For `definition --body`, `body`, `body_content`, and `all` retain the explicit body; projections that exclude it avoid materializing body text.
+
+Bounded `map --compact` keeps the established top-level section arrays and compact truncation data while adding shared metadata. A map collection projection is rejected when `--summary-only` or an excluding `--sections` selection would remove that collection. Diagnostic `--profile` / `--verbose` objects are retained as metadata control records rather than projected rows, and every hard byte cap also applies to parser or capture error output; stdout stays empty when even the bounded error envelope cannot fit.
 
 `find --all --json` also makes bounded scans explicit. Default streaming JSON rows end with a terminal record containing `scan_complete`, `authoritative_rows`, scanned file/line counts, active caps, truncation reason, and recovery guidance; count JSON carries the same scan state in its single result object through `authoritative_count`. Row formats that cannot carry this metadata, including JSON array and location-only formats, are rejected with `--all`; use text, NDJSON, or count output. A candidate-file or line-scan cap returns partial-result exit code `11` unless `--allow-partial` is set. Ordinary result-limit early stops remain exit `0` but report `scan_complete=false` and `result_limit_reached=true`.
 
@@ -370,6 +376,7 @@ cdidx status --check --json
 cdidx search "handleRequest"
 cdidx search "TODO" --first-per-file --sample 25 --json=ndjson --max-json-bytes 65536
 cdidx definition UserService
+cdidx references UserService --fields path,line,reference_kind --limit 20 --max-json-bytes 16384
 cdidx inspect QueryCommandRunner --outline-only
 cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --compact --kind function --sort size --limit 10
 cdidx unused --compact --by-bucket
@@ -377,6 +384,7 @@ cdidx map --compact --max-json-bytes 65536
 cdidx map --format issue-drafts --limit 10
 cdidx search --recipe risky-code --format compact --max-json-bytes 65536
 cdidx search --recipe risky-code --format compact --summary-only --json
+cdidx search --named-query todo=TODO --named-query fixme=FIXME --format compact --limit 10
 cdidx search --named-query todo=TODO --named-query fixme=FIXME --format count --summary-only --json
 cdidx suggestions add --category output_format --description "ローカル dogfood finding を記録する" --evidence-path src/CodeIndex/Cli/SuggestionsCommandRunner.cs --json
 cdidx suggestions update <id> --description "修正した finding" --context "修正した context" --json
@@ -387,6 +395,10 @@ cdidx validate
 `search`、`symbols`、`files` の既定 NDJSON 出力は、`--results-only` で明示的に抑止しない限り、常に上限付きの `terminal_record` で終了し、recipe / audit search の row stream も同じ契約を使います。このレコードは返却件数と観測済み総件数、その総件数が authoritative か lower bound か、切り詰め理由、適用上限、省略行数、復旧案内を返します。`--max-json-bytes` は各行の改行と終端レコードを含む stdout 全体の hard cap です。終端レコード自体が収まらない場合は、stdout を書く前に usage error で失敗します。追加 serialization が cap 外へ出ることを防ぐため、上限付き出力では `--profile`、`--verbose`、`--json-envelope` を拒否します。
 
 byte cap により行を省略した場合、これらのコマンドは partial-result 終了コード `11` を返します。同じ終端 metadata を維持したまま終了コード `0` を明示的に許容するには `--allow-partial` を指定します。通常の `--limit` による切り詰めは、理由が明示された成功 stream のままです。array / compact 出力は文書化済みの whole-response 挙動を維持します。部分出力へ依存する前に `cdidx <command> --help` を確認してください。
+
+高ボリュームな `definition`、`find`、`status`、`hotspots`、`references`、`callers`、`callees`、`impact`、`map` の応答は、`--fields`、`--cursor`、対応 command の compact 出力、応答全体に対する `--max-json-bytes` により opt-in の bounded envelope も利用できます。metadata は返却 / 総 / 省略件数と opaque な `next_cursor` を返します。次ページでは同じ query、filter、sort 引数とともにその cursor を再利用してください。応答は 10,000 row の safety window も公開し、上限到達時には利用不能な cursor を返さず、window の消費完了を報告します。既存の compact location 応答はトップレベル key と軽量な `file` / `line` row を維持したまま共通 metadata を追加し、`refs` / `stats` alias と対応する read-only `batch` 子 command にも同じ envelope と hard cap を適用します。`hotspots` と `impact` は active な主要 collection をページングし、`callers.path,callers.depth` のような dotted projection は nested row とその collection の総件数を返します。`map --sections` は section 全体を選びますが、`--fields top_files.path` のような bounded projection はその section の row をページングし、無関係な ranking section を構築しません。`definition --body` では `body`、`body_content`、`all` が明示的な body を保持し、body を除外する projection では本文を取得しません。
+
+bounded な `map --compact` は、共通 metadata を追加しながら既存のトップレベル section array と compact truncation data を維持します。map collection projection と `--summary-only`、またはその collection を除外する `--sections` の組み合わせは拒否します。`--profile` / `--verbose` の diagnostic object は projected row ではなく metadata の control record として保持し、parser / capture error 出力にも hard byte cap を適用します。bounded error envelope 自体が収まらない場合、stdout は空のままです。
 
 `find --all --json` も上限付き scan を明示します。既定の streaming JSON row は `scan_complete`、`authoritative_rows`、走査 file / line 数、有効な cap、切り詰め理由、復旧案内を含む終端レコードで終了します。count JSON は単一 result object の `authoritative_count` と同じ scan 状態を返します。この metadata を表現できない JSON array や location-only 形式は `--all` との組み合わせを拒否するため、text、NDJSON、count 出力を使ってください。candidate-file cap または line-scan cap に達した場合は、`--allow-partial` を指定しない限り partial-result 終了コード `11` を返します。通常の result limit による早期停止は終了コード `0` のままですが、`scan_complete=false` と `result_limit_reached=true` を報告します。
 

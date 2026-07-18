@@ -83,7 +83,7 @@ internal static partial class ProgramRunner
             "deps" => a => QueryCommandRunner.RunDeps(a, context.JsonOptions, context.CancellationToken),
             "unused" => a => QueryCommandRunner.RunUnused(a, context.JsonOptions),
             "hotspots" => a => QueryCommandRunner.RunHotspots(a, context.JsonOptions),
-            "batch" => a => QueryCommandRunner.RunBatch(a, context.JsonOptions),
+            "batch" => a => QueryCommandRunner.RunBatch(a, context.JsonOptions, context.AppVersion),
             "suggestions" => a => SuggestionsCommandRunner.Run(a, context.JsonOptions, context.CancellationToken),
             _ => null,
         };

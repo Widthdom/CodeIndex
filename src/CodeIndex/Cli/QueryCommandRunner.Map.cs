@@ -66,7 +66,10 @@ public static partial class QueryCommandRunner
                 options.MinEntrypointConfidence,
                 moduleDepth: options.ContextAfterExplicit ? options.ContextAfter : null,
                 oversizedLineThreshold: evaluateIssueDraftCandidates ? MapIssueDraftLineThreshold : null,
-                oversizedByteThreshold: evaluateIssueDraftCandidates ? MapIssueDraftByteThreshold : null);
+                oversizedByteThreshold: evaluateIssueDraftCandidates ? MapIssueDraftByteThreshold : null,
+                offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("map"),
+                requestedCollection: JsonEnvelopeWrapper.GetBoundedMapCollection(),
+                summaryProjection: JsonEnvelopeWrapper.IsBoundedMapScalarProjection());
             var generatedFileCountExcluded = options.IncludeGenerated
                 ? 0
                 : !reader.GeneratedFileFilterAvailable
