@@ -1823,12 +1823,15 @@ public class GitHubIssueReporterTests : IDisposable
     private static SuggestionRecord MakeRecordWithKnownHash()
     {
         var description = "Idempotency retry regression for #1878";
+        var revisionHash = SuggestionStore.ComputeRevisionHash("other", null, description);
         return new SuggestionRecord
         {
             Category = "other",
             Language = null,
             Description = description,
-            Hash = SuggestionStore.ComputeHash("other", null, description),
+            Id = revisionHash,
+            RevisionHash = revisionHash,
+            Hash = revisionHash,
             CreatedAt = new DateTime(2026, 5, 15, 0, 0, 0, DateTimeKind.Utc),
             CreatedByAgent = "codex/5.0",
             SessionId = "session-123",

@@ -117,8 +117,9 @@ public partial class McpServer
             samplingDecision).ConfigureAwait(false);
         var sampling = RedactSuggestionSamplingResult(samplingAttempt.Result);
 
-        // 4. Compute dedup hash / 重複排除ハッシュを計算
-        var hash = SuggestionStore.ComputeHash(category, language, description);
+        // 4. Compute the initial immutable ID and mutable content revision.
+        //    初期の不変 ID と可変 content revision を計算。
+        var revisionHash = SuggestionStore.ComputeRevisionHash(category, language, description);
 
         // 5. Resolve .cdidx directory and create if needed
         //    .cdidx ディレクトリを解決し、必要に応じて作成
@@ -148,7 +149,9 @@ public partial class McpServer
             Language = language,
             Description = description,
             Context = context,
-            Hash = hash,
+            Id = revisionHash,
+            RevisionHash = revisionHash,
+            Hash = revisionHash,
             CreatedByAgent = ResolveSuggestionAgent(initializeState),
             SessionId = _sessionId,
             ClientVersion = _version,
@@ -172,14 +175,17 @@ public partial class McpServer
         }
 
         var result = await store.TryAddAndSubmitAsync(record, githubCallback, cancellationToken).ConfigureAwait(false);
-        var storedHash = result.StoredHash ?? hash;
+        var storedId = result.StoredHash ?? record.Id;
+        var storedRevisionHash = result.StoredRevisionHash ?? record.RevisionHash;
 
         if (!result.IsNew)
         {
             var dupPayload = new JsonObject
             {
                 ["status"] = "duplicate",
-                ["hash"] = storedHash,
+                ["id"] = storedId,
+                ["revision_hash"] = storedRevisionHash,
+                ["hash"] = storedId,
                 ["message"] = result.AlreadySubmitted
                     ? "This suggestion has already been recorded and submitted."
                     : result.UpstreamUrl != null
@@ -209,7 +215,9 @@ public partial class McpServer
         var payload = new JsonObject
         {
             ["status"] = "recorded",
-            ["hash"] = storedHash,
+            ["id"] = storedId,
+            ["revision_hash"] = storedRevisionHash,
+            ["hash"] = storedId,
             ["category"] = category,
             ["language"] = language,
             ["stored_locally"] = true,

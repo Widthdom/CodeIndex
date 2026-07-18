@@ -133,6 +133,32 @@ public class SuggestionStoreTests : IDisposable
         Assert.True(File.Exists(path + ".bak"));
     }
 
+    [Fact]
+    public void LoadAll_MigratesLegacyHashToStableIdAndRevision_Issue4588()
+    {
+        const string description = "Legacy suggestion identity";
+        var legacyHash = SuggestionStore.ComputeHash("bug", "csharp", description);
+        var path = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        File.WriteAllText(
+            path,
+            $$"""
+            [
+              {
+                "category": "bug",
+                "language": "csharp",
+                "description": "{{description}}",
+                "hash": "{{legacyHash}}"
+              }
+            ]
+            """);
+
+        var record = Assert.Single(_store.LoadAll());
+
+        Assert.Equal(legacyHash, record.Id);
+        Assert.Equal(legacyHash, record.RevisionHash);
+        Assert.Equal(legacyHash, record.Hash);
+    }
+
     private static void CreateSparseFile(string path, long length)
     {
         using var stream = File.Create(path);
@@ -672,6 +698,34 @@ public class SuggestionStoreTests : IDisposable
         Assert.Null(callbackException);
         Assert.Null(result.UpstreamUrl);
         Assert.Equal(2, _store.LoadAll().Count);
+    }
+
+    [Fact]
+    public void TryUpdate_RejectsStaleRevisionWithoutOverwritingCurrentContent_Issue4588()
+    {
+        var record = MakeRecord("bug", "csharp", "Original suggestion content");
+        Assert.True(_store.TryAdd(record));
+        var originalRevisionHash = record.RevisionHash;
+
+        var current = Assert.Single(_store.LoadAll());
+        current.Description = "Current suggestion content";
+        Assert.Equal(
+            SuggestionStore.MutationResult.Success,
+            _store.TryUpdate(current.Id, originalRevisionHash, current, out var updated));
+        Assert.NotNull(updated);
+
+        var stale = MakeRecord("bug", "csharp", "Stale overwrite content");
+        stale.Id = current.Id;
+        stale.Hash = current.Id;
+        Assert.Equal(
+            SuggestionStore.MutationResult.RevisionConflict,
+            _store.TryUpdate(current.Id, originalRevisionHash, stale, out var rejected));
+
+        Assert.Null(rejected);
+        var saved = Assert.Single(_store.LoadAll());
+        Assert.Equal(current.Id, saved.Id);
+        Assert.Equal("Current suggestion content", saved.Description);
+        Assert.Equal(updated!.RevisionHash, saved.RevisionHash);
     }
 
     [Fact]

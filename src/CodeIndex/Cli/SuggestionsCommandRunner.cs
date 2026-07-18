@@ -102,7 +102,7 @@ internal static class SuggestionsCommandRunner
 
         var records = ApplyFilters(store.LoadAll(), options)
             .OrderByDescending(s => s.CreatedAt)
-            .ThenBy(s => s.Hash, StringComparer.Ordinal)
+            .ThenBy(s => s.Id, StringComparer.Ordinal)
             .ToList();
         var outputRecords = verb is "list" or "export"
             ? ApplyOutputPage(records, options)
@@ -131,7 +131,8 @@ internal static class SuggestionsCommandRunner
             return WriteMutationNotFound(options, jsonOptions);
         if (!IsMutableDraft(record))
             return WriteMutationNotDraft(options, jsonOptions);
-        var originalHash = record.Hash;
+        var recordId = record.Id;
+        var originalRevisionHash = record.RevisionHash;
 
         if (options.DescriptionSpecified)
         {
@@ -158,12 +159,14 @@ internal static class SuggestionsCommandRunner
         if (options.EvidencePathsSpecified)
             record.EvidencePaths = options.EvidencePaths.Select(NormalizeOptional).Where(value => value != null).Cast<string>().Distinct(StringComparer.Ordinal).ToArray();
 
-        record.Hash = SuggestionStore.ComputeHash(record.Category, record.Language, record.Description);
-        var result = store.TryUpdate(originalHash, record, out var updated);
+        record.RevisionHash = SuggestionStore.ComputeRevisionHash(record.Category, record.Language, record.Description);
+        var result = store.TryUpdate(recordId, originalRevisionHash, record, out var updated);
         if (result == SuggestionStore.MutationResult.Duplicate)
             return CommandErrorWriter.WriteJsonOrHuman(options.Json, jsonOptions, "Updated suggestion would duplicate another stored suggestion.", CommandExitCodes.UsageError);
         if (result == SuggestionStore.MutationResult.NotDraft)
             return WriteMutationNotDraft(options, jsonOptions);
+        if (result == SuggestionStore.MutationResult.RevisionConflict)
+            return WriteMutationRevisionConflict(options, jsonOptions);
         if (result == SuggestionStore.MutationResult.NotFound || updated == null)
             return WriteMutationNotFound(options, jsonOptions);
 
@@ -182,7 +185,7 @@ internal static class SuggestionsCommandRunner
             return WriteMutationNotFound(options, jsonOptions);
         if (!IsMutableDraft(record))
             return WriteMutationNotDraft(options, jsonOptions);
-        var result = store.TryDelete(record.Hash, out var deleted);
+        var result = store.TryDelete(record.Id, out var deleted);
         if (result == SuggestionStore.MutationResult.NotDraft)
             return WriteMutationNotDraft(options, jsonOptions);
         if (result == SuggestionStore.MutationResult.NotFound || deleted == null)
@@ -195,7 +198,7 @@ internal static class SuggestionsCommandRunner
         if (options.Json)
             CommandOutputWriter.WriteJson(new SuggestionMutationJsonResult(JsonOutputContract.ApiVersion, action, ToDetail(record)), CliJsonSerializerContextFactory.Create(jsonOptions).SuggestionMutationJsonResult);
         else
-            Console.WriteLine($"Suggestion {action}: {ShortId(record.Hash)}");
+            Console.WriteLine($"Suggestion {action}: {ShortId(record.Id)}");
         return CommandExitCodes.Success;
     }
 
@@ -204,6 +207,15 @@ internal static class SuggestionsCommandRunner
 
     private static int WriteMutationNotDraft(Options options, JsonSerializerOptions jsonOptions)
         => CommandErrorWriter.WriteJsonOrHuman(options.Json, jsonOptions, $"Suggestion is not an editable draft: {options.Id}", CommandExitCodes.UsageError, "Only unsubmitted local drafts can be updated or deleted.");
+
+    private static int WriteMutationRevisionConflict(Options options, JsonSerializerOptions jsonOptions)
+        => CommandErrorWriter.WriteJsonOrHuman(
+            options.Json,
+            jsonOptions,
+            $"Suggestion changed before the update could be saved: {options.Id}",
+            CommandExitCodes.UsageError,
+            "Reload the suggestion and retry the edit using its current revision_hash.",
+            category: "revision_conflict");
 
     private static bool IsMutableDraft(SuggestionRecord record)
         => record.Status == SuggestionStatus.Draft
@@ -236,6 +248,7 @@ internal static class SuggestionsCommandRunner
             .Cast<string>()
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+        var revisionHash = SuggestionStore.ComputeRevisionHash(category, language, description);
         var record = new SuggestionRecord
         {
             Category = category,
@@ -243,14 +256,16 @@ internal static class SuggestionsCommandRunner
             Description = description,
             Context = context,
             Agent = agent,
-            Hash = SuggestionStore.ComputeHash(category, language, description),
+            Id = revisionHash,
+            RevisionHash = revisionHash,
+            Hash = revisionHash,
             CreatedByAgent = agent,
             SampledTitle = title,
             EvidencePaths = evidencePaths.Length == 0 ? null : evidencePaths,
         };
 
         var created = store.TryAdd(record);
-        var stored = store.LoadAll().FirstOrDefault(candidate => string.Equals(candidate.Hash, record.Hash, StringComparison.Ordinal))
+        var stored = store.LoadAll().FirstOrDefault(candidate => string.Equals(candidate.RevisionHash, record.RevisionHash, StringComparison.Ordinal))
             ?? record;
 
         if (options.Json)
@@ -266,7 +281,7 @@ internal static class SuggestionsCommandRunner
         }
 
         var action = created ? "Added suggestion" : "Suggestion already exists";
-        Console.WriteLine($"{action}: {ShortId(stored.Hash)}");
+        Console.WriteLine($"{action}: {ShortId(stored.Id)}");
         return CommandExitCodes.Success;
     }
 
@@ -302,7 +317,7 @@ internal static class SuggestionsCommandRunner
 
         foreach (var record in records)
         {
-            var id = ShortId(record.Hash);
+            var id = ShortId(record.Id);
             var status = GetStatus(record);
             var language = string.IsNullOrWhiteSpace(record.Language) ? "-" : record.Language;
             Console.WriteLine($"{id}  {record.CreatedAt:yyyy-MM-ddTHH:mm:ssZ}  {status,-11}  {record.Category,-20}  {language,-10}  {FormatTitle(record.Description, 80)}");
@@ -333,7 +348,8 @@ internal static class SuggestionsCommandRunner
             return CommandExitCodes.Success;
         }
 
-        Console.WriteLine($"id: {record.Hash}");
+        Console.WriteLine($"id: {record.Id}");
+        Console.WriteLine($"revision_hash: {record.RevisionHash}");
         Console.WriteLine($"created_at: {record.CreatedAt:O}");
         Console.WriteLine($"status: {GetStatus(record)}");
         Console.WriteLine($"category: {record.Category}");
@@ -474,10 +490,10 @@ internal static class SuggestionsCommandRunner
     private static SuggestionRecord? ResolveById(List<SuggestionRecord> records, string id)
     {
         var matches = records
-            .Where(r => r.Hash.StartsWith(id, StringComparison.OrdinalIgnoreCase))
+            .Where(r => r.Id.StartsWith(id, StringComparison.OrdinalIgnoreCase))
             .Take(2)
             .ToList();
-        return matches.Count == 1 ? matches[0] : records.FirstOrDefault(r => string.Equals(r.Hash, id, StringComparison.OrdinalIgnoreCase));
+        return matches.Count == 1 ? matches[0] : records.FirstOrDefault(r => string.Equals(r.Id, id, StringComparison.OrdinalIgnoreCase));
     }
 
     private static string GetStatus(SuggestionRecord record) => ToSnakeCase(record.Status);
@@ -544,8 +560,9 @@ internal static class SuggestionsCommandRunner
 
     private static SuggestionListItemJsonResult ToListItem(SuggestionRecord record) => new(
         JsonOutputContract.ApiVersion,
-        record.Hash,
-        ShortId(record.Hash),
+        record.Id,
+        ShortId(record.Id),
+        record.RevisionHash,
         record.CreatedAt,
         GetStatus(record),
         record.Category,
@@ -569,7 +586,8 @@ internal static class SuggestionsCommandRunner
 
     private static SuggestionDetailJsonResult ToDetail(SuggestionRecord record, bool capTextFields) => new(
         JsonOutputContract.ApiVersion,
-        record.Hash,
+        record.Id,
+        record.RevisionHash,
         record.CreatedAt,
         GetStatus(record),
         record.Category,
@@ -612,8 +630,9 @@ internal static class SuggestionsCommandRunner
             duplicateProbeBody);
         var triage = BuildSuggestionIssueDraftTriage(record, evidencePaths, preflight.Checked, duplicateMatches.Count);
         return new SuggestionIssueDraftJsonResult(
-            record.Hash,
-            ShortId(record.Hash),
+            record.Id,
+            ShortId(record.Id),
+            record.RevisionHash,
             title,
             labels,
             evidencePaths,
@@ -722,7 +741,8 @@ internal static class SuggestionsCommandRunner
         }
         sb.AppendLine();
         sb.AppendLine("## Suggestion metadata");
-        sb.AppendLine($"- suggestion_id: `{record.Hash}`");
+        sb.AppendLine($"- suggestion_id: `{record.Id}`");
+        sb.AppendLine($"- revision_hash: `{record.RevisionHash}`");
         sb.AppendLine($"- status: `{GetStatus(record)}`");
         sb.AppendLine($"- created_at: `{record.CreatedAt:O}`");
         var agent = GetAgent(record);
@@ -767,9 +787,10 @@ internal static class SuggestionsCommandRunner
         foreach (var record in records)
         {
             sb.AppendLine();
-            sb.AppendLine($"## {ShortId(record.Hash)} - {FormatTitle(record.Description, 100)}");
+            sb.AppendLine($"## {ShortId(record.Id)} - {FormatTitle(record.Description, 100)}");
             sb.AppendLine();
-            sb.AppendLine($"- id: `{record.Hash}`");
+            sb.AppendLine($"- id: `{record.Id}`");
+            sb.AppendLine($"- revision_hash: `{record.RevisionHash}`");
             sb.AppendLine($"- created_at: `{record.CreatedAt:O}`");
             sb.AppendLine($"- status: `{GetStatus(record)}`");
             sb.AppendLine($"- category: `{record.Category}`");
@@ -1225,6 +1246,7 @@ internal sealed record SuggestionListItemJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("short_id")] string ShortId,
+    [property: JsonPropertyName("revision_hash")] string RevisionHash,
     [property: JsonPropertyName("created_at")] DateTime CreatedAt,
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("category")] string Category,
@@ -1245,6 +1267,7 @@ internal sealed record SuggestionListItemJsonResult(
 internal sealed record SuggestionDetailJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
     [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("revision_hash")] string RevisionHash,
     [property: JsonPropertyName("created_at")] DateTime CreatedAt,
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("category")] string Category,
@@ -1299,6 +1322,7 @@ internal sealed record IssueDraftTriageMetadataJsonResult(
 internal sealed record SuggestionIssueDraftJsonResult(
     [property: JsonPropertyName("suggestion_id")] string SuggestionId,
     [property: JsonPropertyName("short_id")] string ShortId,
+    [property: JsonPropertyName("revision_hash")] string RevisionHash,
     [property: JsonPropertyName("title")] string Title,
     [property: JsonPropertyName("labels")] List<string> Labels,
     [property: JsonPropertyName("evidence_paths")] List<string> EvidencePaths,

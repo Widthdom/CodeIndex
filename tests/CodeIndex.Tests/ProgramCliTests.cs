@@ -1319,6 +1319,7 @@ public class ProgramCliTests
         Assert.False(second.GetProperty("created").GetBoolean());
         Assert.True(second.GetProperty("duplicate").GetBoolean());
         Assert.Equal(suggestion.GetProperty("id").GetString(), second.GetProperty("suggestion").GetProperty("id").GetString());
+        Assert.Equal(suggestion.GetProperty("id").GetString(), suggestion.GetProperty("revision_hash").GetString());
         Assert.Equal("draft", suggestion.GetProperty("status").GetString());
         Assert.Equal("output_format", suggestion.GetProperty("category").GetString());
         Assert.Equal("csharp", suggestion.GetProperty("language").GetString());
@@ -1342,28 +1343,55 @@ public class ProgramCliTests
     }
 
     [ProductionRuntimeFact]
-    public void Suggestions_UpdateCorrectsDraftAndReplacesDedupIdentity_Issue4441()
+    public void Suggestions_UpdatePreservesStableIdAcrossShowExportAndDelete_Issue4588()
     {
         using var fixture = SuggestionFixture.Create();
         var record = fixture.Add("bug", "csharp", "Malformed draft description", submitted: false, context: "bad context", sampledTitle: "Stale title");
 
-        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+        var (updateExitCode, updateStdout, updateStderr) = RunCliInSubprocess([
             "suggestions", "update", record.Hash[..12], "--db", fixture.DbPath, "--json",
             "--description", "Corrected draft description", "--context", "correct context", "--title", "Corrected title",
             "--evidence-path", "src/CodeIndex/Cli/SuggestionsCommandRunner.cs"
         ]);
+        var (showExitCode, showStdout, showStderr) = RunCliInSubprocess([
+            "suggestions", "show", record.Hash[..12], "--db", fixture.DbPath, "--json"
+        ]);
+        var (exportExitCode, exportStdout, exportStderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "json"
+        ]);
+        var (deleteExitCode, deleteStdout, deleteStderr) = RunCliInSubprocess([
+            "suggestions", "delete", record.Hash[..12], "--db", fixture.DbPath, "--json"
+        ]);
 
-        Assert.Equal(CommandExitCodes.Success, exitCode);
-        Assert.Equal(string.Empty, stderr);
-        using var doc = JsonDocument.Parse(stdout);
-        var suggestion = doc.RootElement.GetProperty("suggestion");
-        Assert.Equal("updated", doc.RootElement.GetProperty("action").GetString());
+        Assert.Equal(CommandExitCodes.Success, updateExitCode);
+        Assert.Equal(CommandExitCodes.Success, showExitCode);
+        Assert.Equal(CommandExitCodes.Success, exportExitCode);
+        Assert.Equal(CommandExitCodes.Success, deleteExitCode);
+        Assert.Equal(string.Empty, updateStderr);
+        Assert.Equal(string.Empty, showStderr);
+        Assert.Equal(string.Empty, exportStderr);
+        Assert.Equal(string.Empty, deleteStderr);
+        using var updateDoc = JsonDocument.Parse(updateStdout);
+        using var showDoc = JsonDocument.Parse(showStdout);
+        using var exportDoc = JsonDocument.Parse(exportStdout);
+        using var deleteDoc = JsonDocument.Parse(deleteStdout);
+        var suggestion = updateDoc.RootElement.GetProperty("suggestion");
+        var revisionHash = suggestion.GetProperty("revision_hash").GetString();
+        Assert.Equal("updated", updateDoc.RootElement.GetProperty("action").GetString());
         Assert.Equal("Corrected draft description", suggestion.GetProperty("description").GetString());
         Assert.Equal("correct context", suggestion.GetProperty("context").GetString());
         Assert.Equal("Corrected title", suggestion.GetProperty("sampled_title").GetString());
         Assert.Equal("src/CodeIndex/Cli/SuggestionsCommandRunner.cs", suggestion.GetProperty("evidence_paths")[0].GetString());
-        Assert.NotEqual(record.Hash, suggestion.GetProperty("id").GetString());
+        Assert.Equal(record.Hash, suggestion.GetProperty("id").GetString());
+        Assert.NotEqual(record.Hash, revisionHash);
         Assert.Equal(record.CreatedAt, suggestion.GetProperty("created_at").GetDateTime());
+        Assert.Equal(record.Hash, showDoc.RootElement.GetProperty("id").GetString());
+        Assert.Equal(revisionHash, showDoc.RootElement.GetProperty("revision_hash").GetString());
+        var exported = Assert.Single(exportDoc.RootElement.GetProperty("suggestions").EnumerateArray());
+        Assert.Equal(record.Hash, exported.GetProperty("id").GetString());
+        Assert.Equal(revisionHash, exported.GetProperty("revision_hash").GetString());
+        Assert.Equal(record.Hash, deleteDoc.RootElement.GetProperty("suggestion").GetProperty("id").GetString());
+        Assert.Equal(revisionHash, deleteDoc.RootElement.GetProperty("suggestion").GetProperty("revision_hash").GetString());
     }
 
     [ProductionRuntimeFact]

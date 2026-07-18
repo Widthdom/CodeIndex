@@ -1406,6 +1406,10 @@ The `suggest_improvement` MCP tool allows AI agents to report gaps or errors.
 - Attribution metadata: `created_by_agent`, `session_id`, `client_version`, `mcp_client_name`, `mcp_client_version`, and optional `tool_invocation_context`
 - SHA256 suggestion hash (for deduplication)
 
+### Suggestion identity and revisions
+
+`SuggestionRecord.Id` is the immutable public identity used by CLI resolution, mutation, export, MCP responses, and GitHub retry idempotency. `RevisionHash` is the SHA256 digest of the current deduplication content and changes when editable content changes; updates compare the revision read by the caller with the revision under the store lock before replacing a draft. A legacy record containing only `hash` migrates in memory by preserving that value as `Id`, computing `RevisionHash`, and continuing to persist `hash` as an alias of the stable ID. Consequently, an ID copied before migration or an edit remains valid, while exact duplicate detection follows the current revision.
+
 ### Deduplication
 
 `SuggestionStore` first checks the SHA256 hash, then compares the candidate against the most recent suggestions in the same category and language using normalized-token Jaccard similarity. The default fuzzy threshold is `0.85`; `cdidx mcp --suggestion-dedup-threshold`, `CDIDX_SUGGESTION_DEDUP_THRESHOLD`, or `.cdidxrc.json` `suggestion_dedup_threshold` can override it with a value from `0` to `1`. Fuzzy matches are returned as duplicates before GitHub submission and log the matched hash plus score to stderr for auditability.
@@ -4178,6 +4182,10 @@ Unlist しても exact version restore は不可能になりません。これ�
 - cdidx バージョン文字列
 - attribution メタデータ: `created_by_agent`、`session_id`、`client_version`、`mcp_client_name`、`mcp_client_version`、および任意の `tool_invocation_context`
 - SHA256 提案ハッシュ（重複排除用）
+
+### 提案 ID と revision
+
+`SuggestionRecord.Id` は、CLI の解決・変更・export、MCP 応答、GitHub 再試行の冪等性で使用する不変の公開 identity です。`RevisionHash` は現在の重複排除対象内容の SHA256 digest で、編集可能な内容が変わると更新されます。update は draft を置換する前に、caller が読み取った revision と store lock 内の現在の revision を比較します。`hash` しか持たない legacy record は、その値を `Id` として保持し、`RevisionHash` を計算し、stable ID の alias として `hash` を引き続き永続化することで in-memory migration されます。そのため、移行前または編集前に控えた ID は引き続き有効で、完全一致の重複排除は現在の revision に従います。
 
 ### 重複排除とローカル保持
 

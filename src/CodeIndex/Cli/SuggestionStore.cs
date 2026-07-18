@@ -135,7 +135,7 @@ public class SuggestionStore
     /// category、language（小文字化）、GitHub 表示用 title、GitHub 表示用にコード除去された
     /// description（trim + 小文字化）から導出する。
     /// </summary>
-    public static string ComputeHash(string category, string? language, string description)
+    public static string ComputeRevisionHash(string category, string? language, string description)
     {
         var externallyVisibleDescription = GitHubIssueReporter.ScrubInlineCode(description);
         var externallyVisibleTitle = GitHubIssueReporter.BuildIssueTitle(category, description);
@@ -143,6 +143,13 @@ public class SuggestionStore
         var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(normalized));
         return HexEncoding.ToLowerHexString(hashBytes);
     }
+
+    /// <summary>
+    /// Compatibility alias for callers that used the former content-hash API.
+    /// 旧 content-hash API を使用する呼び出し元向けの互換 alias。
+    /// </summary>
+    public static string ComputeHash(string category, string? language, string description)
+        => ComputeRevisionHash(category, language, description);
 
     /// <summary>
     /// Try to add a suggestion. Returns false if a suggestion with the same hash already exists.
@@ -155,6 +162,7 @@ public class SuggestionStore
     public bool TryAdd(SuggestionRecord record)
     {
         record = RedactRecordForPersistence(record);
+        NormalizeRecordIdentity(record);
         return WithFileLock(() =>
         {
             var existing = ReadUnlocked();
@@ -180,27 +188,37 @@ public class SuggestionStore
         NotFound,
         Duplicate,
         NotDraft,
+        RevisionConflict,
     }
 
     /// <summary>
     /// Atomically replaces the editable fields of a stored suggestion while preserving
-    /// its lifecycle metadata. The deduplication hash is recalculated by the caller.
+    /// its lifecycle metadata. The revision hash is recalculated by the caller.
     /// 保存済み提案の編集可能フィールドを lifecycle metadata を保持したまま原子的に置換する。
-    /// 重複排除 hash は呼び出し元が再計算する。
+    /// revision hash は呼び出し元が再計算する。
     /// </summary>
-    public MutationResult TryUpdate(string hash, SuggestionRecord replacement, out SuggestionRecord? updated)
+    public MutationResult TryUpdate(
+        string id,
+        string expectedRevisionHash,
+        SuggestionRecord replacement,
+        out SuggestionRecord? updated)
     {
         SuggestionRecord? result = null;
         var mutationResult = WithFileLock(() =>
         {
             var records = ReadUnlocked();
-            var index = records.FindIndex(record => string.Equals(record.Hash, hash, StringComparison.Ordinal));
+            var index = records.FindIndex(record => string.Equals(record.Id, id, StringComparison.Ordinal));
             if (index < 0)
                 return MutationResult.NotFound;
             if (HasUpstreamSubmission(records[index]))
                 return MutationResult.NotDraft;
+            if (!string.Equals(records[index].RevisionHash, expectedRevisionHash, StringComparison.Ordinal))
+                return MutationResult.RevisionConflict;
 
             replacement = RedactRecordForPersistence(replacement);
+            NormalizeRecordIdentity(replacement);
+            replacement.Id = records[index].Id;
+            replacement.Hash = records[index].Id;
             var otherRecords = records.Where((_, candidateIndex) => candidateIndex != index).ToList();
             if (FindDuplicate(otherRecords, replacement, ResolveDedupThreshold()).Record != null)
                 return MutationResult.Duplicate;
@@ -215,16 +233,33 @@ public class SuggestionStore
     }
 
     /// <summary>
-    /// Atomically removes a stored suggestion by its full hash.
-    /// 保存済み提案を完全な hash で原子的に削除する。
+    /// Compatibility overload for callers compiled against the pre-revision update API.
+    /// revision 導入前の update API に対する互換 overload。
     /// </summary>
-    public MutationResult TryDelete(string hash, out SuggestionRecord? deleted)
+    public MutationResult TryUpdate(string id, SuggestionRecord replacement, out SuggestionRecord? updated)
+    {
+        var expectedRevisionHash = replacement.RevisionHash;
+        if (string.IsNullOrWhiteSpace(expectedRevisionHash))
+        {
+            expectedRevisionHash = LoadAll()
+                .FirstOrDefault(record => string.Equals(record.Id, id, StringComparison.Ordinal))
+                ?.RevisionHash ?? string.Empty;
+        }
+
+        return TryUpdate(id, expectedRevisionHash, replacement, out updated);
+    }
+
+    /// <summary>
+    /// Atomically removes a stored suggestion by its immutable ID.
+    /// 保存済み提案を不変 ID で原子的に削除する。
+    /// </summary>
+    public MutationResult TryDelete(string id, out SuggestionRecord? deleted)
     {
         SuggestionRecord? result = null;
         var mutationResult = WithFileLock(() =>
         {
             var records = ReadUnlocked();
-            var index = records.FindIndex(record => string.Equals(record.Hash, hash, StringComparison.Ordinal));
+            var index = records.FindIndex(record => string.Equals(record.Id, id, StringComparison.Ordinal));
             if (index < 0)
                 return MutationResult.NotFound;
             if (HasUpstreamSubmission(records[index]))
@@ -252,7 +287,8 @@ public class SuggestionStore
         string? SubmissionError = null,
         string? DuplicateOfHash = null,
         double? DuplicateScore = null,
-        string? StoredHash = null);
+        string? StoredHash = null,
+        string? StoredRevisionHash = null);
 
     /// <summary>
     /// Result of a GitHub submission attempt.
@@ -329,6 +365,7 @@ public class SuggestionStore
     {
         cancellationToken.ThrowIfCancellationRequested();
         record = RedactRecordForPersistence(record);
+        NormalizeRecordIdentity(record);
         var reservation = WithFileLock(() =>
         {
             var existing = ReadUnlocked();
@@ -357,12 +394,13 @@ public class SuggestionStore
                 return new SubmitReservation(
                     isNew,
                     alreadySubmitted,
-                    current.Hash,
+                    current.Id,
+                    current.RevisionHash,
                     current.Status,
                     current.UpstreamUrl,
                     CloneForSubmit(current),
                     attemptedAt,
-                    isNew ? null : current.Hash,
+                    isNew ? null : current.Id,
                     isNew ? null : duplicate.Score);
             }
 
@@ -372,12 +410,13 @@ public class SuggestionStore
             return new SubmitReservation(
                 isNew,
                 alreadySubmitted,
-                current.Hash,
+                current.Id,
+                current.RevisionHash,
                 current.Status,
                 current.UpstreamUrl,
                 null,
                 null,
-                isNew ? null : current.Hash,
+                isNew ? null : current.Id,
                 isNew ? null : duplicate.Score);
         });
 
@@ -391,7 +430,8 @@ public class SuggestionStore
                 null,
                 reservation.DuplicateOfHash,
                 reservation.DuplicateScore,
-                reservation.Hash);
+                reservation.Id,
+                reservation.RevisionHash);
         }
 
         SubmitAttemptResult submitResult;
@@ -411,7 +451,7 @@ public class SuggestionStore
         return WithFileLock(() =>
         {
             var existing = ReadUnlocked();
-            var found = existing.FirstOrDefault(s => s.Hash == reservation.Hash);
+            var found = existing.FirstOrDefault(s => s.Id == reservation.Id);
             if (found == null)
             {
                 return new AddAndSubmitResult(
@@ -422,7 +462,8 @@ public class SuggestionStore
                     null,
                     reservation.DuplicateOfHash,
                     reservation.DuplicateScore,
-                    reservation.Hash);
+                    reservation.Id,
+                    reservation.RevisionHash);
             }
 
             var issueUrl = submitResult.IssueUrl;
@@ -439,7 +480,8 @@ public class SuggestionStore
                 persistedSubmitError,
                 reservation.DuplicateOfHash,
                 reservation.DuplicateScore,
-                found.Hash);
+                found.Id,
+                found.RevisionHash);
         });
     }
 
@@ -524,12 +566,12 @@ public class SuggestionStore
     /// read-modify-write 全体がファイルロックで保護される。
     /// 注: 新規送信には TryAddAndSubmit を推奨 — このメソッドは後方互換のみ。
     /// </summary>
-    public void MarkSubmitted(string hash, string issueUrl)
+    public void MarkSubmitted(string id, string issueUrl)
     {
         WithFileLock(() =>
         {
             var all = ReadUnlocked();
-            var record = all.FirstOrDefault(s => s.Hash == hash);
+            var record = all.FirstOrDefault(s => s.Id == id);
             if (record == null)
                 return;
 
@@ -615,7 +657,7 @@ public class SuggestionStore
         SuggestionRecord candidate,
         double threshold)
     {
-        var exact = existing.FirstOrDefault(s => s.Hash == candidate.Hash);
+        var exact = existing.FirstOrDefault(s => s.RevisionHash == candidate.RevisionHash);
         if (exact != null)
             return (exact, 1.0);
 
@@ -636,19 +678,19 @@ public class SuggestionStore
 
         if (best != null && bestScore >= threshold)
         {
-            WriteFuzzyDuplicateWarning(best.Hash, bestScore, threshold);
+            WriteFuzzyDuplicateWarning(best.Id, bestScore, threshold);
             return (best, bestScore);
         }
 
         return (null, null);
     }
 
-    private static void WriteFuzzyDuplicateWarning(string hash, double score, double threshold)
+    private static void WriteFuzzyDuplicateWarning(string id, double score, double threshold)
     {
         try
         {
             CommandErrorWriter.WriteStderr(
-                $"cdidx: fuzzy suggestion duplicate matched hash {hash} with score {score:0.###} (threshold {threshold:0.###})");
+                $"cdidx: fuzzy suggestion duplicate matched id {id} with score {score:0.###} (threshold {threshold:0.###})");
         }
         catch (ObjectDisposedException)
         {
@@ -1111,6 +1153,8 @@ public class SuggestionStore
         Description = record.Description,
         Context = record.Context,
         Agent = record.Agent,
+        Id = record.Id,
+        RevisionHash = record.RevisionHash,
         Hash = record.Hash,
         CreatedAt = record.CreatedAt,
         Status = record.Status,
@@ -1142,6 +1186,8 @@ public class SuggestionStore
 
     private static SuggestionRecord RedactRecordForPersistence(SuggestionRecord record)
     {
+        var identityFollowsRevision = string.IsNullOrWhiteSpace(record.Id)
+            || string.Equals(record.Id, record.RevisionHash, StringComparison.Ordinal);
         var redactedDescription = RedactNullable(record.Description, out var descriptionTypes) ?? string.Empty;
         var redactedContext = RedactNullable(record.Context, out var contextTypes);
         var redactedToolInvocationContext = RedactNullable(record.ToolInvocationContext, out var toolInvocationTypes);
@@ -1157,7 +1203,10 @@ public class SuggestionStore
             .ToArray();
 
         if (allTypes.Length == 0)
+        {
+            record.RevisionHash = ComputeRevisionHash(record.Category, record.Language, record.Description);
             return record;
+        }
 
         WriteRedactionWarning(allTypes);
         var copy = CloneForSubmit(record);
@@ -1166,7 +1215,12 @@ public class SuggestionStore
         copy.ToolInvocationContext = redactedToolInvocationContext;
         copy.SampledTitle = redactedSampledTitle;
         copy.SampledTags = redactedSampledTags;
-        copy.Hash = ComputeHash(copy.Category, copy.Language, copy.Description);
+        copy.RevisionHash = ComputeRevisionHash(copy.Category, copy.Language, copy.Description);
+        if (identityFollowsRevision)
+        {
+            copy.Id = copy.RevisionHash;
+            copy.Hash = copy.Id;
+        }
         return copy;
     }
 
@@ -1228,7 +1282,8 @@ public class SuggestionStore
     private sealed record SubmitReservation(
         bool IsNew,
         bool AlreadySubmitted,
-        string Hash,
+        string Id,
+        string RevisionHash,
         SuggestionStatus Status,
         string? UpstreamUrl,
         SuggestionRecord? RecordToSubmit,
@@ -1236,8 +1291,29 @@ public class SuggestionStore
         string? DuplicateOfHash,
         double? DuplicateScore);
 
+    private static void NormalizeRecordIdentity(SuggestionRecord record)
+    {
+        if (string.IsNullOrWhiteSpace(record.RevisionHash))
+        {
+            record.RevisionHash = ComputeRevisionHash(
+                record.Category,
+                record.Language,
+                record.Description);
+        }
+
+        if (string.IsNullOrWhiteSpace(record.Id))
+            record.Id = string.IsNullOrWhiteSpace(record.Hash) ? record.RevisionHash : record.Hash;
+
+        // Keep the legacy persisted field as an alias so older readers still resolve the
+        // record created before the stable-ID schema was introduced.
+        // stable-ID schema 導入前の record を旧 reader でも解決できるよう、legacy
+        // 永続化 field は不変 ID の alias として維持する。
+        record.Hash = record.Id;
+    }
+
     private static void NormalizeLegacyFields(SuggestionRecord record)
     {
+        NormalizeRecordIdentity(record);
         if (record.SubmittedToGitHub == true && record.Status == SuggestionStatus.Draft)
             record.Status = SuggestionStatus.SubmittedPendingTriage;
 

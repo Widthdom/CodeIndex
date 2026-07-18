@@ -8990,7 +8990,9 @@ public sealed class Caller
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal("recorded", structured["status"]!.GetValue<string>());
         Assert.Equal("draft", structured["lifecycle_status"]!.GetValue<string>());
-        Assert.NotNull(structured["hash"]);
+        var id = structured["id"]!.GetValue<string>();
+        Assert.Equal(id, structured["hash"]!.GetValue<string>());
+        Assert.Equal(id, structured["revision_hash"]!.GetValue<string>());
         Assert.True(structured["stored_locally"]!.GetValue<bool>());
         Assert.False(structured["submitted_to_github"]!.GetValue<bool>());
         Assert.Equal("token_not_configured", structured["github_submission_reason"]!.GetValue<string>());
@@ -9084,10 +9086,13 @@ public sealed class Caller
         var response = _server.HandleMessage((JsonNode)json)!;
 
         var structured = response["result"]!["structuredContent"]!;
-        var responseHash = structured["hash"]!.GetValue<string>();
+        var responseId = structured["id"]!.GetValue<string>();
+        var responseRevisionHash = structured["revision_hash"]!.GetValue<string>();
+        Assert.Equal(responseId, structured["hash"]!.GetValue<string>());
+        Assert.Equal(responseId, responseRevisionHash);
         var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
-            .Single(s => s.Hash == responseHash);
-        Assert.Equal(stored.Hash, responseHash);
+            .Single(s => s.Id == responseId);
+        Assert.Equal(stored.RevisionHash, responseRevisionHash);
         Assert.Contains("api_key=[REDACTED:credential]", stored.Description);
         Assert.DoesNotContain(secret, stored.Description);
     }

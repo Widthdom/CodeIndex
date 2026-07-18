@@ -60,10 +60,26 @@ public class SuggestionRecord
     public string? Agent { get; set; }
 
     /// <summary>
-    /// SHA256 dedup hash of (category + language + normalized description).
-    /// Prevents the same suggestion from being recorded twice.
-    /// (category + language + 正規化済み description) のSHA256重複排除ハッシュ。
-    /// 同一提案の二重記録を防ぐ。
+    /// Immutable public identifier for this stored suggestion.
+    /// 保存済み提案を識別する不変の公開 ID。
+    /// </summary>
+    public string Id { get; set; } = string.Empty;
+
+    /// <summary>
+    /// SHA256 hash of the current deduplication content. This changes when editable
+    /// content changes and can be used as an optimistic-concurrency revision token.
+    /// 現在の重複排除対象内容の SHA256 hash。編集可能な内容が変わると更新され、
+    /// optimistic concurrency 用の revision token として利用できる。
+    /// </summary>
+    public string RevisionHash { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Legacy persisted alias for <see cref="Id"/>. Stores written before stable IDs
+    /// used this content hash as the public ID; migration preserves that value as the
+    /// immutable ID so existing bookmarks and automation continue to resolve.
+    /// <see cref="Id"/> の legacy 永続化 alias。stable ID 導入前の store ではこの
+    /// content hash を公開 ID として使用していたため、移行時にその値を不変 ID として
+    /// 維持し、既存 bookmark や automation が引き続き解決できるようにする。
     /// </summary>
     public string Hash { get; set; } = string.Empty;
 
