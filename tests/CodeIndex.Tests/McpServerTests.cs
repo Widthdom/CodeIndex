@@ -8992,7 +8992,7 @@ public sealed class Caller
         Assert.Equal("draft", structured["lifecycle_status"]!.GetValue<string>());
         var id = structured["id"]!.GetValue<string>();
         Assert.Equal(id, structured["hash"]!.GetValue<string>());
-        Assert.Equal(id, structured["revision_hash"]!.GetValue<string>());
+        Assert.NotEqual(id, structured["revision_hash"]!.GetValue<string>());
         Assert.True(structured["stored_locally"]!.GetValue<bool>());
         Assert.False(structured["submitted_to_github"]!.GetValue<bool>());
         Assert.Equal("token_not_configured", structured["github_submission_reason"]!.GetValue<string>());
@@ -9091,7 +9091,7 @@ public sealed class Caller
         var responseId = structured["id"]!.GetValue<string>();
         var responseRevisionHash = structured["revision_hash"]!.GetValue<string>();
         Assert.Equal(responseId, structured["hash"]!.GetValue<string>());
-        Assert.Equal(responseId, responseRevisionHash);
+        Assert.NotEqual(responseId, responseRevisionHash);
         var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
             .Single(s => s.Id == responseId);
         Assert.Equal(stored.RevisionHash, responseRevisionHash);

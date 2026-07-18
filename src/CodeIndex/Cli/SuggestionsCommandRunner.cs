@@ -167,12 +167,14 @@ internal static class SuggestionsCommandRunner
         if (options.EvidencePathsSpecified)
             record.EvidencePaths = options.EvidencePaths.Select(NormalizeOptional).Where(value => value != null).Cast<string>().Distinct(StringComparer.Ordinal).ToArray();
 
-        record.RevisionHash = SuggestionStore.ComputeRevisionHash(record.Category, record.Language, record.Description);
+        record.RevisionHash = SuggestionStore.ComputeRevisionHash(record);
         var result = store.TryUpdate(recordId, originalRevisionHash, record, out var updated);
         if (result == SuggestionStore.MutationResult.Duplicate)
             return CommandErrorWriter.WriteJsonOrHuman(options.Json, jsonOptions, "Updated suggestion would duplicate another stored suggestion.", CommandExitCodes.UsageError);
         if (result == SuggestionStore.MutationResult.NotDraft)
             return WriteMutationNotDraft(options, jsonOptions);
+        if (result == SuggestionStore.MutationResult.SubmissionInFlight)
+            return WriteMutationSubmissionInFlight(options, jsonOptions);
         if (result == SuggestionStore.MutationResult.RevisionConflict)
             return WriteMutationRevisionConflict(options, jsonOptions);
         if (result == SuggestionStore.MutationResult.NotFound || updated == null)
@@ -196,6 +198,8 @@ internal static class SuggestionsCommandRunner
         var result = store.TryDelete(record.Id, out var deleted);
         if (result == SuggestionStore.MutationResult.NotDraft)
             return WriteMutationNotDraft(options, jsonOptions);
+        if (result == SuggestionStore.MutationResult.SubmissionInFlight)
+            return WriteMutationSubmissionInFlight(options, jsonOptions);
         if (result == SuggestionStore.MutationResult.NotFound || deleted == null)
             return WriteMutationNotFound(options, jsonOptions);
         return WriteMutationSuccess("deleted", deleted, options, jsonOptions);
@@ -224,6 +228,15 @@ internal static class SuggestionsCommandRunner
             CommandExitCodes.UsageError,
             "Reload the suggestion and retry the edit using its current revision_hash.",
             category: "revision_conflict");
+
+    private static int WriteMutationSubmissionInFlight(Options options, JsonSerializerOptions jsonOptions)
+        => CommandErrorWriter.WriteJsonOrHuman(
+            options.Json,
+            jsonOptions,
+            $"Suggestion has a GitHub submission in flight: {options.Id}",
+            CommandExitCodes.UsageError,
+            "Wait for the bounded submission attempt to finish, then reload the suggestion before editing or deleting it.",
+            category: "submission_in_flight");
 
     private static bool IsMutableDraft(SuggestionRecord record)
         => record.Status == SuggestionStatus.Draft
@@ -256,7 +269,7 @@ internal static class SuggestionsCommandRunner
             .Cast<string>()
             .Distinct(StringComparer.Ordinal)
             .ToArray();
-        var revisionHash = SuggestionStore.ComputeRevisionHash(category, language, description);
+        var id = SuggestionStore.CreateId();
         var record = new SuggestionRecord
         {
             Category = category,
@@ -264,16 +277,20 @@ internal static class SuggestionsCommandRunner
             Description = description,
             Context = context,
             Agent = agent,
-            Id = revisionHash,
-            RevisionHash = revisionHash,
-            Hash = revisionHash,
+            Id = id,
+            Hash = id,
             CreatedByAgent = agent,
             SampledTitle = title,
             EvidencePaths = evidencePaths.Length == 0 ? null : evidencePaths,
         };
+        record.RevisionHash = SuggestionStore.ComputeRevisionHash(record);
 
         var created = store.TryAdd(record);
-        var stored = store.LoadAll().FirstOrDefault(candidate => string.Equals(candidate.RevisionHash, record.RevisionHash, StringComparison.Ordinal))
+        var contentHash = SuggestionStore.ComputeHash(record.Category, record.Language, record.Description);
+        var stored = store.LoadAll().FirstOrDefault(candidate => string.Equals(
+                SuggestionStore.ComputeHash(candidate.Category, candidate.Language, candidate.Description),
+                contentHash,
+                StringComparison.Ordinal))
             ?? record;
 
         if (options.Json)

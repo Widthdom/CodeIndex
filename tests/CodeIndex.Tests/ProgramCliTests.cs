@@ -1320,7 +1320,10 @@ public class ProgramCliTests
         Assert.False(second.GetProperty("created").GetBoolean());
         Assert.True(second.GetProperty("duplicate").GetBoolean());
         Assert.Equal(suggestion.GetProperty("id").GetString(), second.GetProperty("suggestion").GetProperty("id").GetString());
-        Assert.Equal(suggestion.GetProperty("id").GetString(), suggestion.GetProperty("revision_hash").GetString());
+        Assert.NotEqual(suggestion.GetProperty("id").GetString(), suggestion.GetProperty("revision_hash").GetString());
+        Assert.NotEqual(
+            SuggestionStore.ComputeHash("output_format", "csharp", "Record local dogfood finding before opening GitHub issues"),
+            suggestion.GetProperty("id").GetString());
         Assert.Equal("draft", suggestion.GetProperty("status").GetString());
         Assert.Equal("output_format", suggestion.GetProperty("category").GetString());
         Assert.Equal("csharp", suggestion.GetProperty("language").GetString());

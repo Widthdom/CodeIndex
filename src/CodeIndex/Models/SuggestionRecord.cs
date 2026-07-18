@@ -66,10 +66,10 @@ public class SuggestionRecord
     public string Id { get; set; } = string.Empty;
 
     /// <summary>
-    /// SHA256 hash of the current deduplication content. This changes when editable
-    /// content changes and can be used as an optimistic-concurrency revision token.
-    /// 現在の重複排除対象内容の SHA256 hash。編集可能な内容が変わると更新され、
-    /// optimistic concurrency 用の revision token として利用できる。
+    /// SHA256 revision token over all editable content. This is separate from both
+    /// the immutable public ID and the normalized content used for deduplication.
+    /// 全ての編集可能内容を対象とする SHA256 revision token。不変の公開 ID および
+    /// 重複排除用の正規化 content とは分離されている。
     /// </summary>
     public string RevisionHash { get; set; } = string.Empty;
 

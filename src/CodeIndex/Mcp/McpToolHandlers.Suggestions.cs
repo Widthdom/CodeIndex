@@ -117,11 +117,7 @@ public partial class McpServer
             samplingDecision).ConfigureAwait(false);
         var sampling = RedactSuggestionSamplingResult(samplingAttempt.Result);
 
-        // 4. Compute the initial immutable ID and mutable content revision.
-        //    初期の不変 ID と可変 content revision を計算。
-        var revisionHash = SuggestionStore.ComputeRevisionHash(category, language, description);
-
-        // 5. Resolve .cdidx directory and create if needed
+        // 4. Resolve .cdidx directory and create if needed
         //    .cdidx ディレクトリを解決し、必要に応じて作成
         string cdidxDir;
         try
@@ -153,7 +149,7 @@ public partial class McpServer
             return CreateSuggestionStoreErrorResponse(id, ex);
         }
 
-        // 6. Store locally, reserve a submission attempt under the file lock,
+        // 5. Store locally, reserve a submission attempt under the file lock,
         //    then call GitHub outside the lock so slow remote I/O does not block
         //    other suggestion-store writers.
         //    ローカル保存と送信試行の予約だけをファイルロック内で行い、
@@ -163,15 +159,15 @@ public partial class McpServer
         // スコープ付き提案蓄積のため DB identity を導出。
         var dbName = Path.GetFileNameWithoutExtension(_dbPath);
         var store = new SuggestionStore(cdidxDir, dbName, _timeProvider);
+        var suggestionId = SuggestionStore.CreateId();
         var record = new SuggestionRecord
         {
             Category = category,
             Language = language,
             Description = description,
             Context = context,
-            Id = revisionHash,
-            RevisionHash = revisionHash,
-            Hash = revisionHash,
+            Id = suggestionId,
+            Hash = suggestionId,
             CreatedByAgent = ResolveSuggestionAgent(initializeState),
             SessionId = _sessionId,
             ClientVersion = _version,
@@ -182,6 +178,7 @@ public partial class McpServer
             SampledTags = sampling?.Tags,
             EvidencePaths = evidencePaths,
         };
+        record.RevisionHash = SuggestionStore.ComputeRevisionHash(record);
 
         // Build GitHub submission callback (null if no token configured).
         // GitHub 送信コールバックを構築（トークン未設定なら null）。
@@ -239,7 +236,7 @@ public partial class McpServer
             return CreateToolResult(id, "Duplicate suggestion (already recorded).", dupPayload);
         }
 
-        // 7. Return success / 成功レスポンスを返す
+        // 6. Return success / 成功レスポンスを返す
         var payload = new JsonObject
         {
             ["status"] = "recorded",
