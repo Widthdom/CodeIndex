@@ -255,7 +255,7 @@ public class ReportCommandRunnerTests
             Assert.Equal(LastFailureEventStore.SchemaVersion, failureRoot.GetProperty("schema_version").GetInt32());
             Assert.True(DateTimeOffset.TryParse(failureRoot.GetProperty("occurred_at_utc").GetString(), out _));
             Assert.Equal("1.38.0-test", failureRoot.GetProperty("binary_version").GetString());
-            Assert.False(string.IsNullOrWhiteSpace(failureRoot.GetProperty("binary_path").GetString()));
+            Assert.Equal("cdidx.dll", failureRoot.GetProperty("binary_path").GetString());
             Assert.Equal("index", failureRoot.GetProperty("command_category").GetString());
             Assert.Equal(CommandExitCodes.UnhandledException, failureRoot.GetProperty("exit_code").GetInt32());
             Assert.Equal("invalid_operation", failureRoot.GetProperty("exception_category").GetString());

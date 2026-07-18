@@ -158,9 +158,14 @@ internal static class LastFailureEventStore
 
     private static string ResolveBinaryPath()
     {
-        var assemblyPath = typeof(ProgramRunner).Assembly.Location;
+        var assemblyName = typeof(ProgramRunner).Assembly.GetName().Name;
+        var assemblyPath = string.IsNullOrWhiteSpace(assemblyName)
+            ? null
+            : Path.Combine(AppContext.BaseDirectory, assemblyName + ".dll");
         return DiagnosticSanitizer.ForPath(
-            string.IsNullOrWhiteSpace(assemblyPath) ? Environment.ProcessPath : assemblyPath);
+            !string.IsNullOrWhiteSpace(assemblyPath) && File.Exists(assemblyPath)
+                ? assemblyPath
+                : Environment.ProcessPath);
     }
 
     private static string SanitizeField(string? value)
