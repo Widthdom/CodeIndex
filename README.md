@@ -265,9 +265,10 @@ selected by `indexed_head_source` without a workspace scan.
 
 Runtime diagnostics under `extractors` include `retained_load_context_count` and
 `load_context_lifecycle` so long-running processes can see how many plugin
-assembly load contexts are still held and why. Plugin contexts are collectible
-but retained while registered extractor instances remain active; rejected or
-unretained contexts are unloaded. `hooks[]` entries include `callback_budget_ms`
+assembly load contexts are still held and why. Plugin DLL metadata is checked
+before execution, while assembly loading, construction, and extraction run in a
+deadline-, memory-, and output-bounded worker; the parent therefore retains no
+plugin load context. `hooks[]` entries include `callback_budget_ms`
 and `load_context_lifecycle` to show that hook contexts are collectible and
 unloaded when the hook runner is disposed. `extractors.diagnostics[]` and
 `hook_diagnostics[]` include sanitized `category` machine codes alongside
@@ -567,9 +568,9 @@ workspace scan なしで runtime HEAD と `indexed_head_source` が選んだ `in
 
 `extractors` の runtime diagnostics は `retained_load_context_count` と
 `load_context_lifecycle` を含むため、長時間実行プロセスは保持中の plugin assembly load
-context 数とその理由を確認できます。plugin context は collectible ですが、
-登録済み extractor instance が active な間は保持され、reject された context や保持されない
-context は unload されます。`hooks[]` entry は `callback_budget_ms` と
+context 数とその理由を確認できます。plugin DLL metadata は実行前に検証し、assembly load、
+construction、extraction は deadline・memory・output 上限付き worker 内で実行するため、
+parent process は plugin load context を保持しません。`hooks[]` entry は `callback_budget_ms` と
 `load_context_lifecycle` を含み、hook context が collectible で hook runner の dispose 時に
 unload されることを示します。`extractors.diagnostics[]` と `hook_diagnostics[]` は、
 bounded な path と message に加えて sanitization 済みの `category` machine code を含みます。

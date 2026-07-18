@@ -512,6 +512,7 @@ Use the inventory below before adding or moving a test class:
 - Golden JSON snapshot fixtures use the non-parallel console-sensitive collection because empty stderr is part of their contract, while retaining per-instance database cleanup; they should not pay a process-wide pool reset after each of the status, search, references, impact, and excerpt snapshots.
 - Extractor plugin-registry fixtures share that console-sensitive collection because rejected pattern configs emit diagnostics through the process-wide stderr writer.
 - Executable extension boundary fixtures should cover unsafe Unix directory modes, symlink ancestors, and a source rename-swap after staging; keep permission assertions Unix-only and restore staging test hooks in `finally`.
+- Plugin-worker fixtures should prove metadata rejection before process start, bounded timeout/crash/memory/output behavior, proxy extraction, and failed-fingerprint retry after file repair; use `CDIDX_TEST_` variables so the isolated-worker environment policy carries only explicit fixtures.
 - Suites that capture, replace, or intentionally close process-wide console writers use the same console-sensitive collection; removing SQLite pool cleanup does not make console mutation parallel-safe.
 - Temporary repositories and files: create them through `TestProjectHelper` when practical, and do not depend on user-level git config.
 - MCP unit fixtures that instantiate a real server should place its database inside a scoped temporary project and delete the project after server disposal instead of leaving a standalone database in the system temp directory.
@@ -1190,6 +1191,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - golden JSON snapshot fixture は空の stderr 自体が契約なので non-parallel な console-sensitive collection を使い、instance ごとの database cleanup を維持する。status、search、references、impact、excerpt の各 snapshot 後に process-wide pool reset を支払わないこと。
 - extractor plugin-registry fixture も、reject された pattern config が process-wide stderr writer 経由で診断を出すため、同じ console-sensitive collection を共有する。
 - executable extension boundary fixture は unsafe な Unix directory mode、symlink ancestor、staging 後の source rename-swap を検証する。permission assertion は Unix のみにし、staging の test hook は `finally` で必ず復元する。
+- plugin-worker fixture はprocess開始前のmetadata拒否、timeout / crash / memory / output上限、proxy extraction、file修復後のfailed-fingerprint再試行を検証する。isolated-worker environment policyが明示的なfixtureだけを渡すよう、`CDIDX_TEST_` variableを使う。
 - process-wide console writer を capture、差し替え、または意図的に close する suite は同じ console-sensitive collection を使う。SQLite pool cleanup を外しても console mutation は parallel-safe にはならない。
 - 一時 repo / file: 可能な限り `TestProjectHelper` 経由で作り、user-level の git config に依存しない。
 - real server を生成する MCP unit fixture は、system temp directory に単独 DB を残さず、scoped temporary project 内へ DB を置き、server dispose 後に project を削除する。

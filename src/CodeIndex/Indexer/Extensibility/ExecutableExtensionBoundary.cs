@@ -28,6 +28,8 @@ internal sealed class ExecutableExtensionStagingHandle : IDisposable
 
     internal string Fingerprint { get; }
 
+    internal string StagingDirectory => stagingDirectory;
+
     public void Dispose()
     {
         if (disposed)

@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Runtime.Loader;
 using CodeIndex.Cli;
 
 namespace CodeIndex.Indexer.Extensibility;
@@ -20,7 +19,7 @@ public static partial class ExtractorPluginRegistry
     internal const int MaxPluginAssemblyCandidatesTotal = 256;
     internal const long MaxPluginAssemblyBytes = 64 * 1024 * 1024;
     internal const int MaxExtensionAssemblyTypes = 4096;
-    internal const string PluginLoadContextLifecycle = "collectible_retained_while_extractors_registered";
+    internal const string PluginLoadContextLifecycle = "isolated_worker_process_no_parent_load_context";
     internal static readonly TimeSpan PatternRegexTimeout = TimeSpan.FromMilliseconds(100);
 
     private static readonly object Gate = new();
@@ -28,8 +27,9 @@ public static partial class ExtractorPluginRegistry
     private static readonly Dictionary<string, IReferenceExtractor> ReferenceExtractors = new(StringComparer.Ordinal);
     private static readonly List<string> LoadedPluginAssemblyPaths = [];
     private static readonly HashSet<string> LoadedPatternConfigPaths = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly List<AssemblyLoadContext> LoadedPluginAssemblyContexts = [];
+    private static readonly List<ExtractorPluginWorkerClient> LoadedPluginWorkers = [];
     private static readonly List<ExecutableExtensionStagingHandle> LoadedPluginStagingHandles = [];
+    private static readonly List<PluginLoadAttempt> PluginLoadAttempts = [];
     private static readonly IReadOnlyList<string> PatternConfigSearchPatterns = ["*.yaml", "*.yml"];
     private static readonly IReadOnlyDictionary<string, string> EmptyLanguageExtensions =
         new ReadOnlyDictionary<string, string>(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
@@ -42,6 +42,7 @@ public static partial class ExtractorPluginRegistry
     private static int loadedPatternRuleCount;
     private static bool pluginsLoaded;
     internal static int? TypeInspectionLimitForTesting { get; set; }
+    internal static TimeSpan? WorkerOperationBudgetForTesting { get; set; }
 
     public static IReadOnlyCollection<string> SymbolLanguages
     {
@@ -127,7 +128,7 @@ public static partial class ExtractorPluginRegistry
                 PatternConfigCount = patternConfigCount,
                 SymbolExtractorCount = SymbolExtractors.Count,
                 ReferenceExtractorCount = ReferenceExtractors.Count,
-                RetainedLoadContextCount = LoadedPluginAssemblyContexts.Count,
+                RetainedLoadContextCount = 0,
                 LoadContextLifecycle = PluginLoadContextLifecycle,
                 SkippedFileCount = skippedFileCount,
                 DiagnosticCount = diagnosticTotalCount,
@@ -162,8 +163,9 @@ public static partial class ExtractorPluginRegistry
             ReferenceExtractors.Clear();
             LoadedPluginAssemblyPaths.Clear();
             LoadedPatternConfigPaths.Clear();
-            UnloadPluginAssemblyContexts();
+            DisposePluginWorkers();
             DisposePluginStagingHandles();
+            PluginLoadAttempts.Clear();
             Diagnostics.Clear();
             pluginAssemblyCount = 0;
             patternConfigCount = 0;
@@ -172,6 +174,8 @@ public static partial class ExtractorPluginRegistry
             loadedPatternRuleCount = 0;
             pluginsLoaded = true;
             TypeInspectionLimitForTesting = null;
+            WorkerOperationBudgetForTesting = null;
+            ExtractorPluginWorkerClient.ProcessStartedForTesting = null;
         }
     }
 
@@ -183,8 +187,9 @@ public static partial class ExtractorPluginRegistry
             ReferenceExtractors.Clear();
             LoadedPluginAssemblyPaths.Clear();
             LoadedPatternConfigPaths.Clear();
-            UnloadPluginAssemblyContexts();
+            DisposePluginWorkers();
             DisposePluginStagingHandles();
+            PluginLoadAttempts.Clear();
             Diagnostics.Clear();
             pluginAssemblyCount = 0;
             patternConfigCount = 0;
@@ -193,6 +198,8 @@ public static partial class ExtractorPluginRegistry
             loadedPatternRuleCount = 0;
             pluginsLoaded = false;
             TypeInspectionLimitForTesting = null;
+            WorkerOperationBudgetForTesting = null;
+            ExtractorPluginWorkerClient.ProcessStartedForTesting = null;
         }
     }
 
@@ -208,10 +215,10 @@ public static partial class ExtractorPluginRegistry
     internal static IReadOnlyList<string> EnumeratePatternConfigPathsFromDirectoryForTests(string directory)
         => EnumeratePatternConfigPathsFromDirectory(directory, workspaceRoot: null).ToArray();
 
-    internal static IReadOnlyList<AssemblyLoadContext> PluginAssemblyLoadContextsForTests()
+    internal static int PluginWorkerCountForTests()
     {
         lock (Gate)
-            return LoadedPluginAssemblyContexts.ToList();
+            return LoadedPluginWorkers.Count;
     }
 
     internal static IReadOnlyList<string> PluginStagedAssemblyPathsForTests()
@@ -299,6 +306,8 @@ public static partial class ExtractorPluginRegistry
 
     private static int ResolveTypeInspectionLimit()
         => TypeInspectionLimitForTesting is > 0 ? TypeInspectionLimitForTesting.Value : MaxExtensionAssemblyTypes;
+
+    private sealed record PluginLoadAttempt(string Path, string Fingerprint, bool Succeeded);
 
     private static void AddLanguageExtensions(
         Dictionary<string, string> target,

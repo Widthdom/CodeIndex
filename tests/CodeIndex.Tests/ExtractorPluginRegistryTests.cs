@@ -1,5 +1,4 @@
 using System.Reflection;
-using System.Runtime.Loader;
 using CodeIndex.Cli;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
@@ -12,6 +11,8 @@ namespace CodeIndex.Tests;
 public class ExtractorPluginRegistryTests
 {
     internal const string ThrowingPluginConstructorEnvironmentVariable = "CDIDX_TEST_THROWING_PLUGIN_CTOR";
+    internal const string SlowPluginConstructorEnvironmentVariable = "CDIDX_TEST_SLOW_PLUGIN_CTOR";
+    internal const string CrashingPluginConstructorEnvironmentVariable = "CDIDX_TEST_CRASHING_PLUGIN_CTOR";
 
     [Fact]
     public void GetAcceptedTrustOverrides_ReportsWorkspacePluginTrust_3735()
@@ -341,7 +342,142 @@ public class ExtractorPluginRegistryTests
     }
 
     [Fact]
-    public void LoadPlugin_ReportsSanitizedAssemblyLoadCategory_3414()
+    public void LoadPlugin_MetadataRejectsMissingMarkerWithoutStartingWorker_Issue4598()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_metadata_4598");
+        lock (TestConsoleLock.Gate)
+        {
+            var pluginPath = Path.Combine(projectRoot, "no-marker.dll");
+            try
+            {
+                File.Copy(typeof(ExtractorPluginRegistry).Assembly.Location, pluginPath);
+                ExtractorPluginRegistry.ResetForTests();
+                var processStarts = 0;
+                ExtractorPluginWorkerClient.ProcessStartedForTesting = () => processStarts++;
+
+                ExtractorPluginRegistry.LoadPluginForTests(pluginPath);
+
+                Assert.Equal(0, processStarts);
+                Assert.Equal(0, ExtractorPluginRegistry.PluginWorkerCountForTests());
+                var diagnostic = Assert.Single(ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!);
+                Assert.Equal("missing_plugin_attribute", diagnostic.Category);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPlugin_RetriesFailedFingerprintAfterPartialCopyIsRepaired_Issue4598()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_retry_4598");
+        lock (TestConsoleLock.Gate)
+        {
+            var pluginPath = Path.Combine(projectRoot, "plugin.dll");
+            try
+            {
+                File.WriteAllText(pluginPath, "partial assembly copy");
+                ExtractorPluginRegistry.ResetForTests();
+
+                ExtractorPluginRegistry.LoadPluginForTests(pluginPath);
+                ExtractorPluginRegistry.LoadPluginForTests(pluginPath);
+                Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot().DiagnosticCount);
+                Assert.Equal(0, ExtractorPluginRegistry.PluginWorkerCountForTests());
+
+                File.Copy(Assembly.GetExecutingAssembly().Location, pluginPath, overwrite: true);
+                ExtractorPluginRegistry.LoadPluginForTests(pluginPath);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", out _));
+                Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot().PluginAssemblyCount);
+                Assert.Equal(1, ExtractorPluginRegistry.PluginWorkerCountForTests());
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPlugin_KillsTimedOutAndCrashedConstructorWorkers_Issue4598()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            using var slow = EnvironmentVariableScope.Capture(SlowPluginConstructorEnvironmentVariable);
+            using var crash = EnvironmentVariableScope.Capture(CrashingPluginConstructorEnvironmentVariable);
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.WorkerOperationBudgetForTesting = TimeSpan.FromMilliseconds(500);
+                slow.Set(SlowPluginConstructorEnvironmentVariable, "1");
+
+                ExtractorPluginRegistry.LoadPluginForTests(Assembly.GetExecutingAssembly().Location);
+
+                Assert.Contains(
+                    ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!,
+                    diagnostic => diagnostic.Category == "plugin_worker_timeout");
+                Assert.Equal(0, ExtractorPluginRegistry.PluginWorkerCountForTests());
+
+                slow.Set(SlowPluginConstructorEnvironmentVariable, null);
+                crash.Set(CrashingPluginConstructorEnvironmentVariable, "1");
+                ExtractorPluginRegistry.ResetForTests();
+                crash.Set(CrashingPluginConstructorEnvironmentVariable, "1");
+                ExtractorPluginRegistry.LoadPluginForTests(Assembly.GetExecutingAssembly().Location);
+
+                Assert.Contains(
+                    ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!,
+                    diagnostic => diagnostic.Category == "plugin_worker_exit");
+                Assert.Equal(0, ExtractorPluginRegistry.PluginWorkerCountForTests());
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+            }
+        }
+    }
+
+    [Fact]
+    public void PluginWorker_EnforcesMemoryAndOutputBudgets_Issue4598()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            using var slow = EnvironmentVariableScope.Capture(SlowPluginConstructorEnvironmentVariable);
+            try
+            {
+                slow.Set(SlowPluginConstructorEnvironmentVariable, "1");
+                using (var memoryBounded = new ExtractorPluginWorkerClient(
+                           Assembly.GetExecutingAssembly().Location,
+                           ExtractorPluginRegistry.MaxExtensionAssemblyTypes,
+                           operationBudget: TimeSpan.FromSeconds(5),
+                           memoryLimitBytes: 1))
+                {
+                    var result = memoryBounded.LoadManifest();
+                    Assert.False(result.Success);
+                    Assert.Equal("plugin_worker_memory_limit", result.ErrorCategory);
+                }
+
+                slow.Set(SlowPluginConstructorEnvironmentVariable, null);
+                using var outputBounded = new ExtractorPluginWorkerClient(
+                    Assembly.GetExecutingAssembly().Location,
+                    ExtractorPluginRegistry.MaxExtensionAssemblyTypes,
+                    maxProtocolLineBytes: 256);
+                var outputResult = outputBounded.LoadManifest();
+                Assert.False(outputResult.Success);
+                Assert.Equal("plugin_worker_output_limit", outputResult.ErrorCategory);
+            }
+            finally
+            {
+                ExtractorPluginWorkerClient.ProcessStartedForTesting = null;
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPlugin_ReportsSanitizedMetadataCategoryBeforeAssemblyLoad_Issue4598()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_plugin_load_category");
         lock (TestConsoleLock.Gate)
@@ -357,10 +493,10 @@ public class ExtractorPluginRegistryTests
 
                 Assert.Equal("plugin", diagnostic.Kind);
                 Assert.Equal("error", diagnostic.Severity);
-                Assert.Equal("assembly_load_failed", diagnostic.Category);
+                Assert.Equal("plugin_metadata_invalid", diagnostic.Category);
                 Assert.Equal("broken.dll", diagnostic.Path);
                 Assert.DoesNotContain(projectRoot, diagnostic.Path, StringComparison.Ordinal);
-                Assert.Contains("Plugin assembly load failed", diagnostic.Message, StringComparison.Ordinal);
+                Assert.Contains("Plugin metadata inspection failed", diagnostic.Message, StringComparison.Ordinal);
                 Assert.Contains(nameof(BadImageFormatException), diagnostic.Message, StringComparison.Ordinal);
             }
             finally
@@ -401,7 +537,7 @@ public class ExtractorPluginRegistryTests
     }
 
     [Fact]
-    public void LoadPlugin_LoadsExtractorAssemblyInCollectibleContext_3413()
+    public void LoadPlugin_UsesIsolatedWorkerWithoutParentLoadContext_Issue4598()
     {
         lock (TestConsoleLock.Gate)
         {
@@ -412,12 +548,22 @@ public class ExtractorPluginRegistryTests
                 ExtractorPluginRegistry.LoadPluginForTests(Assembly.GetExecutingAssembly().Location);
 
                 Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", out var extractor));
-                var loadContext = Assert.Single(ExtractorPluginRegistry.PluginAssemblyLoadContextsForTests());
-                Assert.True(loadContext.IsCollectible);
-                Assert.NotSame(AssemblyLoadContext.Default, loadContext);
-                Assert.Same(loadContext, AssemblyLoadContext.GetLoadContext(extractor.GetType().Assembly));
+                Assert.IsType<IsolatedPluginExtractorProxy>(extractor);
+                var symbols = extractor.Extract(
+                    42,
+                    "fixture",
+                    new ExtractionContext("collectibledsl", "fixture.collectible"));
+                var workerSymbol = Assert.Single(symbols);
+                Assert.Equal(42, workerSymbol.FileId);
+                Assert.Equal("worker-symbol", workerSymbol.Name);
+                Assert.Equal(1, ExtractorPluginRegistry.PluginWorkerCountForTests());
+                var stagedMainAssembly = Assert.Single(ExtractorPluginRegistry.PluginStagedAssemblyPathsForTests());
+                var stagedXunitDependency = Path.Combine(
+                    Path.GetDirectoryName(stagedMainAssembly)!,
+                    Path.GetFileName(typeof(Xunit.FactAttribute).Assembly.Location));
+                Assert.True(File.Exists(stagedXunitDependency));
                 var status = ExtractorPluginRegistry.GetStatusSnapshot();
-                Assert.Equal(1, status.RetainedLoadContextCount);
+                Assert.Equal(0, status.RetainedLoadContextCount);
                 Assert.Equal(ExtractorPluginRegistry.PluginLoadContextLifecycle, status.LoadContextLifecycle);
             }
             finally
@@ -441,12 +587,8 @@ public class ExtractorPluginRegistryTests
                 Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("dualroleplugindsl", out var symbolExtractor));
                 Assert.True(ExtractorPluginRegistry.TryGetReferenceExtractor("dualroleplugindsl", out var referenceExtractor));
                 Assert.Same(symbolExtractor, referenceExtractor);
-                var constructorCount = Assert.IsType<int>(
-                    symbolExtractor.GetType()
-                        .GetProperty(nameof(DualRolePluginExtractor.ConstructorCount), BindingFlags.Public | BindingFlags.Static)!
-                        .GetValue(null));
-                Assert.Equal(1, constructorCount);
-                Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot().RetainedLoadContextCount);
+                Assert.Equal(1, ExtractorPluginRegistry.PluginWorkerCountForTests());
+                Assert.Equal(0, ExtractorPluginRegistry.GetStatusSnapshot().RetainedLoadContextCount);
             }
             finally
             {
@@ -456,7 +598,7 @@ public class ExtractorPluginRegistryTests
     }
 
     [Fact]
-    public void ResetForTests_UnloadsRetainedPluginAssemblyContexts_Issue3971()
+    public void ResetForTests_DisposesRetainedPluginWorkers_Issue4598()
     {
         lock (TestConsoleLock.Gate)
         {
@@ -464,14 +606,14 @@ public class ExtractorPluginRegistryTests
             {
                 ExtractorPluginRegistry.ResetForTests();
                 ExtractorPluginRegistry.LoadPluginForTests(Assembly.GetExecutingAssembly().Location);
-                Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot().RetainedLoadContextCount);
+                Assert.Equal(1, ExtractorPluginRegistry.PluginWorkerCountForTests());
 
                 ExtractorPluginRegistry.ResetForTests();
 
                 var status = ExtractorPluginRegistry.GetStatusSnapshot();
                 Assert.Equal(0, status.RetainedLoadContextCount);
                 Assert.Equal(ExtractorPluginRegistry.PluginLoadContextLifecycle, status.LoadContextLifecycle);
-                Assert.Empty(ExtractorPluginRegistry.PluginAssemblyLoadContextsForTests());
+                Assert.Equal(0, ExtractorPluginRegistry.PluginWorkerCountForTests());
             }
             finally
             {
@@ -481,7 +623,7 @@ public class ExtractorPluginRegistryTests
     }
 
     [Fact]
-    public void LoadPlugin_RepeatedDiscoveryRetainsSingleContext_Issue3971()
+    public void LoadPlugin_RepeatedFingerprintRetainsSingleWorker_Issue4598()
     {
         lock (TestConsoleLock.Gate)
         {
@@ -495,8 +637,8 @@ public class ExtractorPluginRegistryTests
 
                 var status = ExtractorPluginRegistry.GetStatusSnapshot();
                 Assert.Equal(1, status.PluginAssemblyCount);
-                Assert.Equal(1, status.RetainedLoadContextCount);
-                Assert.Single(ExtractorPluginRegistry.PluginAssemblyLoadContextsForTests());
+                Assert.Equal(0, status.RetainedLoadContextCount);
+                Assert.Equal(1, ExtractorPluginRegistry.PluginWorkerCountForTests());
             }
             finally
             {
@@ -847,7 +989,33 @@ public sealed class CollectiblePluginSymbolExtractor : ISymbolExtractor
     public IReadOnlyCollection<string> FileExtensions => [".collectible"];
 
     public IReadOnlyList<SymbolRecord> Extract(long fileId, string source, ExtractionContext context)
-        => [];
+        => [new SymbolRecord { FileId = fileId, Kind = "class", Name = "worker-symbol", Line = 1 }];
+}
+
+public sealed class SlowPluginSymbolExtractor : ISymbolExtractor
+{
+    public SlowPluginSymbolExtractor()
+    {
+        if (Environment.GetEnvironmentVariable(ExtractorPluginRegistryTests.SlowPluginConstructorEnvironmentVariable) == "1")
+            Thread.Sleep(TimeSpan.FromSeconds(30));
+    }
+
+    public string Language => "slowplugindsl";
+
+    public IReadOnlyList<SymbolRecord> Extract(long fileId, string source, ExtractionContext context) => [];
+}
+
+public sealed class CrashingPluginSymbolExtractor : ISymbolExtractor
+{
+    public CrashingPluginSymbolExtractor()
+    {
+        if (Environment.GetEnvironmentVariable(ExtractorPluginRegistryTests.CrashingPluginConstructorEnvironmentVariable) == "1")
+            Environment.FailFast("plugin worker crash fixture");
+    }
+
+    public string Language => "crashingplugindsl";
+
+    public IReadOnlyList<SymbolRecord> Extract(long fileId, string source, ExtractionContext context) => [];
 }
 
 public sealed class ThrowingPluginSymbolExtractor : ISymbolExtractor

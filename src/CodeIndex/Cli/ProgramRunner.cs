@@ -11,6 +11,7 @@ using System.Text.Json.Serialization;
 using CodeIndex.Database;
 using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Indexer.Hooks;
 using CodeIndex.Lsp;
 using CodeIndex.Mcp;
@@ -117,6 +118,9 @@ internal static partial class ProgramRunner
     {
         if (SymbolExtractionWorker.TryRunCommand(args, Console.In, Console.Out, Console.Error, out var symbolWorkerExitCode, cancellationToken: cancellationToken))
             return symbolWorkerExitCode;
+
+        if (ExtractorPluginWorker.TryRunCommand(args, Console.In, Console.Out, Console.Error, out var pluginWorkerExitCode))
+            return pluginWorkerExitCode;
 
         if (PostExtractionHookCallbackWorker.TryRunCommand(args, Console.In, Console.Out, Console.Error, out var hookWorkerExitCode))
             return hookWorkerExitCode;

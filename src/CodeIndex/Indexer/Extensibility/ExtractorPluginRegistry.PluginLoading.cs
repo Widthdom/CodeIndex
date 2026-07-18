@@ -1,4 +1,3 @@
-using System.Reflection;
 using CodeIndex.Cli;
 
 namespace CodeIndex.Indexer.Extensibility;
@@ -14,17 +13,11 @@ public static partial class ExtractorPluginRegistry
     private static void TryLoadPlugin(string pluginPath)
     {
         var fullPath = pluginPath;
-        ExtensionAssemblyLoadContext? loadContext = null;
         ExecutableExtensionStagingHandle? staging = null;
+        ExtractorPluginWorkerClient? worker = null;
         try
         {
             fullPath = Path.GetFullPath(pluginPath);
-            lock (Gate)
-            {
-                if (!TryMarkPluginAssemblyPathLoaded(fullPath))
-                    return;
-            }
-
             if (!PluginAssemblyCandidateIsWithinBudget(fullPath))
                 return;
 
@@ -47,13 +40,27 @@ public static partial class ExtractorPluginRegistry
                 return;
             }
 
-            loadContext = new ExtensionAssemblyLoadContext(
-                $"cdidx-plugin:{Path.GetFileNameWithoutExtension(fullPath)}",
-                staging!.StagedPath);
-            var assembly = loadContext.LoadFromAssemblyPath(staging.StagedPath);
-            var attribute = assembly.GetCustomAttribute<CdidxPluginAttribute>();
-            if (attribute == null)
+            if (!PluginMetadataInspector.TryInspect(staging!.StagedPath, out var metadata, out var metadataError))
             {
+                if (PluginLoadAttemptIsCached(fullPath, staging.Fingerprint))
+                    return;
+                RecordPluginLoadAttempt(fullPath, staging.Fingerprint, succeeded: false);
+                RecordDiagnostic(
+                    "plugin",
+                    fullPath,
+                    typeName: null,
+                    severity: "error",
+                    metadataError,
+                    countsAsSkippedFile: true,
+                    category: "plugin_metadata_invalid");
+                return;
+            }
+
+            if (!metadata.HasMarker)
+            {
+                if (PluginLoadAttemptIsCached(fullPath, staging.Fingerprint))
+                    return;
+                RecordPluginLoadAttempt(fullPath, staging.Fingerprint, succeeded: false);
                 RecordDiagnostic(
                     "plugin",
                     fullPath,
@@ -65,55 +72,87 @@ public static partial class ExtractorPluginRegistry
                 return;
             }
 
-            if (attribute.MinApiVersion > CurrentApiVersion
-                || attribute.MaxApiVersion < CurrentApiVersion)
+            if (metadata.MinApiVersion > CurrentApiVersion
+                || metadata.MaxApiVersion < CurrentApiVersion)
             {
+                if (PluginLoadAttemptIsCached(fullPath, staging.Fingerprint))
+                    return;
+                RecordPluginLoadAttempt(fullPath, staging.Fingerprint, succeeded: false);
                 RecordDiagnostic(
                     "plugin",
                     fullPath,
                     typeName: null,
                     severity: "skipped",
-                    $"Plugin assembly skipped: API range {attribute.MinApiVersion}-{attribute.MaxApiVersion} does not include {CurrentApiVersion}.",
+                    $"Plugin assembly skipped: API range {metadata.MinApiVersion}-{metadata.MaxApiVersion} does not include {CurrentApiVersion}.",
                     countsAsSkippedFile: true,
                     category: "incompatible_plugin_api");
                 return;
             }
 
-            Type[] types;
-            try
+            if (!PluginDependencyStager.TryStageManagedDependencies(
+                    pluginDirectory,
+                    staging,
+                    MaxPluginAssemblyBytes,
+                    out var stagedFingerprint,
+                    out var dependencyFailure))
             {
-                types = assembly.GetTypes();
-            }
-            catch (ReflectionTypeLoadException ex)
-            {
-                var diagnostic = ExtensionLoadDiagnosticClassifier.ClassifyTypeLoad("Plugin assembly type inspection", ex);
                 RecordDiagnostic(
                     "plugin",
                     fullPath,
                     typeName: null,
                     severity: "error",
-                    diagnostic.Message,
+                    dependencyFailure.Message,
                     countsAsSkippedFile: true,
-                    category: diagnostic.Category);
+                    category: dependencyFailure.Category);
                 return;
             }
 
-            if (!PluginAssemblyTypesAreWithinBudget(fullPath, types))
+            if (PluginLoadAttemptIsCached(fullPath, stagedFingerprint))
                 return;
+
+            worker = new ExtractorPluginWorkerClient(
+                staging.StagedPath,
+                ResolveTypeInspectionLimit(),
+                WorkerOperationBudgetForTesting);
+            var manifestResult = worker.LoadManifest();
+            if (!manifestResult.Success || manifestResult.Response?.Manifest == null)
+            {
+                RecordPluginLoadAttempt(fullPath, stagedFingerprint, succeeded: false);
+                var typeLimitExceeded = StringComparer.Ordinal.Equals(
+                    manifestResult.ErrorCategory,
+                    "plugin_type_limit_exceeded");
+                RecordDiagnostic(
+                    "plugin",
+                    fullPath,
+                    typeName: null,
+                    severity: typeLimitExceeded ? "skipped" : "error",
+                    manifestResult.Error ?? "Plugin worker did not return a manifest.",
+                    countsAsSkippedFile: true,
+                    category: manifestResult.ErrorCategory ?? "plugin_worker_manifest_failed");
+                return;
+            }
+
+            foreach (var diagnostic in manifestResult.Response.Diagnostics ?? [])
+            {
+                RecordDiagnostic(
+                    "plugin_type",
+                    fullPath,
+                    diagnostic.TypeName,
+                    severity: "error",
+                    diagnostic.Message,
+                    countsAsSkippedFile: false,
+                    category: diagnostic.Category);
+            }
 
             lock (Gate)
             {
                 pluginAssemblyCount++;
-                LoadedPluginAssemblyContexts.Add(loadContext);
+                LoadedPluginWorkers.Add(worker);
                 LoadedPluginStagingHandles.Add(staging!);
-                loadContext = null;
+                RegisterPluginManifest(manifestResult.Response.Manifest, worker, fullPath);
+                RecordPluginLoadAttemptUnderLock(fullPath, stagedFingerprint, succeeded: true);
+                worker = null;
                 staging = null;
-            }
-
-            foreach (var type in types)
-            {
-                if (type is { IsAbstract: false, IsInterface: false } && type.GetConstructor(Type.EmptyTypes) != null)
-                    TryRegisterPluginType(type, fullPath);
             }
         }
         catch (Exception ex)
@@ -130,20 +169,17 @@ public static partial class ExtractorPluginRegistry
         }
         finally
         {
-            loadContext?.Unload();
+            worker?.Dispose();
             staging?.Dispose();
         }
     }
 
-    private static void UnloadPluginAssemblyContexts()
+    private static void DisposePluginWorkers()
     {
-        foreach (var loadContext in LoadedPluginAssemblyContexts)
-        {
-            if (loadContext.IsCollectible)
-                loadContext.Unload();
-        }
+        foreach (var worker in LoadedPluginWorkers)
+            worker.Dispose();
 
-        LoadedPluginAssemblyContexts.Clear();
+        LoadedPluginWorkers.Clear();
     }
 
     private static void DisposePluginStagingHandles()
@@ -229,50 +265,65 @@ public static partial class ExtractorPluginRegistry
         return true;
     }
 
-    private static bool PluginAssemblyTypesAreWithinBudget(string fullPath, IReadOnlyCollection<Type> types)
+    private static void RegisterPluginManifest(
+        IReadOnlyList<ExtractorPluginWorkerManifestEntry> manifest,
+        ExtractorPluginWorkerClient worker,
+        string pluginPath)
     {
-        var limit = ResolveTypeInspectionLimit();
-        if (types.Count <= limit)
-            return true;
-
-        RecordDiagnostic(
-            "plugin",
-            fullPath,
-            typeName: null,
-            severity: "skipped",
-            $"Plugin assembly skipped: too many loadable types ({types.Count}; maximum {limit}).",
-            countsAsSkippedFile: true,
-            category: "plugin_type_limit_exceeded");
-        return false;
+        foreach (var entry in manifest)
+        {
+            try
+            {
+                var proxy = new IsolatedPluginExtractorProxy(
+                    entry,
+                    worker,
+                    (typeName, category, message) => RecordDiagnostic(
+                        "plugin_type",
+                        pluginPath,
+                        typeName,
+                        severity: "error",
+                        message,
+                        countsAsSkippedFile: false,
+                        category));
+                if (entry.SupportsSymbols)
+                    Register((ISymbolExtractor)proxy);
+                if (entry.SupportsReferences)
+                    Register((IReferenceExtractor)proxy);
+            }
+            catch (Exception ex)
+            {
+                RecordDiagnostic(
+                    "plugin_type",
+                    pluginPath,
+                    entry.TypeName,
+                    severity: "error",
+                    SafeDiagnosticFormatter.FormatExceptionCategory("plugin_manifest_invalid", ex),
+                    countsAsSkippedFile: false,
+                    category: "plugin_manifest_invalid");
+            }
+        }
     }
 
-    private static void TryRegisterPluginType(Type type, string pluginPath)
+    private static void RecordPluginLoadAttempt(string path, string fingerprint, bool succeeded)
     {
-        var supportsSymbolExtraction = typeof(ISymbolExtractor).IsAssignableFrom(type);
-        var supportsReferenceExtraction = typeof(IReferenceExtractor).IsAssignableFrom(type);
-        if (!supportsSymbolExtraction && !supportsReferenceExtraction)
-            return;
+        lock (Gate)
+            RecordPluginLoadAttemptUnderLock(path, fingerprint, succeeded);
+    }
 
-        try
+    private static bool PluginLoadAttemptIsCached(string path, string fingerprint)
+    {
+        lock (Gate)
         {
-            var instance = Activator.CreateInstance(type);
-            if (supportsSymbolExtraction && instance is ISymbolExtractor symbolExtractor)
-                Register(symbolExtractor);
+            return PluginLoadAttempts.Any(
+                attempt => string.Equals(attempt.Path, path, PathCasing.ComparisonFor(path))
+                           && StringComparer.Ordinal.Equals(attempt.Fingerprint, fingerprint));
+        }
+    }
 
-            if (supportsReferenceExtraction && instance is IReferenceExtractor referenceExtractor)
-                Register(referenceExtractor);
-        }
-        catch (Exception ex)
-        {
-            var diagnostic = ExtensionLoadDiagnosticClassifier.ClassifyConstructorFailure("Plugin type constructor", ex);
-            RecordDiagnostic(
-                "plugin_type",
-                pluginPath,
-                type.FullName,
-                severity: "error",
-                diagnostic.Message,
-                countsAsSkippedFile: false,
-                category: diagnostic.Category);
-        }
+    private static void RecordPluginLoadAttemptUnderLock(string path, string fingerprint, bool succeeded)
+    {
+        PluginLoadAttempts.RemoveAll(
+            attempt => string.Equals(attempt.Path, path, PathCasing.ComparisonFor(path)));
+        PluginLoadAttempts.Add(new(path, fingerprint, succeeded));
     }
 }
