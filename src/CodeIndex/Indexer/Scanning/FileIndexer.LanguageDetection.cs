@@ -415,7 +415,7 @@ public partial class FileIndexer
 
         if (!string.IsNullOrEmpty(ext))
         {
-            ExtractorPluginRegistry.LoadPatternConfigsForPath(filePath);
+            ExtractorPluginRegistry.LoadPatternConfigsForPath(filePath, projectRoot);
             if (ExtractorPluginRegistry.TryGetLanguageForExtension(ext, out pluginLang))
                 return new LanguageDetectionResult(FileProbeStatus.Supported, pluginLang);
 

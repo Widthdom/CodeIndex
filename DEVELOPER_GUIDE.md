@@ -2675,7 +2675,13 @@ Downstream users can add lightweight language support without rebuilding
   timeout. Each sidecar is parsed, compiled, and checked against
   `SymbolKindCatalog` before its path, rules, or budget are committed. Rejected
   content is fingerprinted to suppress duplicate diagnostics, while content or
-  metadata changes and transient read recovery are retried without restarting;
+  metadata changes and transient read recovery are retried without restarting.
+  Workspace discovery requires an explicit trust root and stops after checking
+  that root; it never probes ancestors above it. Path identity follows the
+  active filesystem's case-sensitivity, so case-distinct sidecars remain
+  distinct on case-sensitive volumes. `status --json` reports accepted files in
+  `extractors.pattern_configs[]` with sanitized path, workspace/user provenance,
+  normalized language, and rule count;
 - `cdidx test-extractor --language <lang> --file <path> --json` runs symbol
   extraction without building an index, and `--expect-symbols <json>` compares
   the extracted JSON to a fixture. The source and expectation files are capped
@@ -4900,7 +4906,11 @@ cleared range を証明するテストが必要です。Bounded accumulation pat
   regex match には 100 ms の timeout が付きます。各 sidecar は path・rule・budget を commit する前に
   一時状態で parse / compile され、`SymbolKindCatalog` に対して kind が検証されます。拒否された内容は
   fingerprint によって重複診断を抑制し、内容または metadata の変更時、および一時的な read failure の
-  回復後にはプロセスを再起動せず再試行されます。
+  回復後にはプロセスを再起動せず再試行されます。workspace 探索には明示的な trust root が必要で、
+  その root を確認した時点で停止し、それより上の ancestor は探索しません。path identity は実際の
+  filesystem の case-sensitivity に従うため、case-sensitive volume では大小文字だけが異なる sidecar も
+  別々に扱われます。`status --json` の `extractors.pattern_configs[]` は、受理済み file の
+  sanitization 済み path、workspace/user provenance、正規化済み language、rule count を報告します。
 - `cdidx test-extractor --language <lang> --file <path> --json` は index を作らずに
   symbol extraction だけを実行し、`--expect-symbols <json>` で fixture JSON と比較できます。
   source と expectation file はそれぞれ 4 MiB に制限されます。

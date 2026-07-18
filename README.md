@@ -272,6 +272,10 @@ and `load_context_lifecycle` to show that hook contexts are collectible and
 unloaded when the hook runner is disposed. `extractors.diagnostics[]` and
 `hook_diagnostics[]` include sanitized `category` machine codes alongside
 bounded paths and messages.
+`extractors.pattern_configs[]` reports each accepted sidecar with a sanitized
+`path`, its `source` (`workspace` or `user`), normalized `language`, and
+`rule_count`. Workspace discovery never walks above the explicit workspace
+root, and path identity follows the active filesystem's case-sensitivity.
 Accepted extension trust overrides such as `CDIDX_TRUST_WORKSPACE_PLUGINS` and
 `CDIDX_HOOKS_DIR` are also reported in sanitized `trust_overrides[]` entries.
 
@@ -568,6 +572,10 @@ context は unload されます。`hooks[]` entry は `callback_budget_ms` と
 `load_context_lifecycle` を含み、hook context が collectible で hook runner の dispose 時に
 unload されることを示します。`extractors.diagnostics[]` と `hook_diagnostics[]` は、
 bounded な path と message に加えて sanitization 済みの `category` machine code を含みます。
+`extractors.pattern_configs[]` は、受理された各 sidecar について sanitization 済みの
+`path`、`source`（`workspace` または `user`）、正規化済み `language`、`rule_count` を
+報告します。workspace の探索は明示された workspace root より上へ進まず、path identity は
+実際の filesystem の case-sensitivity に従います。
 受理された `CDIDX_TRUST_WORKSPACE_PLUGINS` や `CDIDX_HOOKS_DIR` などの
 拡張信頼境界 override は、sanitization 済みの `trust_overrides[]` entry としても報告されます。
 

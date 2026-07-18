@@ -143,6 +143,9 @@ public sealed class ExtractorRegistryStatus
     public bool DiagnosticsTruncated { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<ExtractorRegistryDiagnostic>? Diagnostics { get; init; }
+    [JsonPropertyName("pattern_configs")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<PatternConfigStatus>? PatternConfigs { get; init; }
 }
 
 public sealed record ExtractorRegistryDiagnostic(
@@ -152,6 +155,12 @@ public sealed record ExtractorRegistryDiagnostic(
     [property: JsonPropertyName("severity")] string Severity,
     [property: JsonPropertyName("category")] string Category,
     [property: JsonPropertyName("message")] string Message);
+
+public sealed record PatternConfigStatus(
+    [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("language")] string Language,
+    [property: JsonPropertyName("rule_count")] int RuleCount);
 
 public sealed record ExtensionTrustOverride(
     [property: JsonPropertyName("kind")] string Kind,

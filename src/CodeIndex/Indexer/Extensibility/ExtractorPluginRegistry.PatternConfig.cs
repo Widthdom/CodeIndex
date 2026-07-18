@@ -12,7 +12,7 @@ namespace CodeIndex.Indexer.Extensibility;
 
 public static partial class ExtractorPluginRegistry
 {
-    private static void TryLoadPatternConfig(string path)
+    private static void TryLoadPatternConfig(string path, string source)
     {
         try
         {
@@ -24,8 +24,8 @@ public static partial class ExtractorPluginRegistry
             var fingerprint = CreatePatternConfigFingerprint(path, configText);
             lock (Gate)
             {
-                if (LoadedPatternConfigPaths.Contains(path)
-                    || (FailedPatternConfigFingerprints.TryGetValue(path, out var failedFingerprint)
+                if (PatternConfigPathIsLoaded(path)
+                    || (TryGetFailedPatternConfigFingerprint(path, out var failedFingerprint)
                         && failedFingerprint == fingerprint))
                     return;
             }
@@ -35,14 +35,14 @@ public static partial class ExtractorPluginRegistry
             {
                 lock (Gate)
                 {
-                    if (LoadedPatternConfigPaths.Contains(path)
-                        || (FailedPatternConfigFingerprints.TryGetValue(path, out var failedFingerprint)
+                    if (PatternConfigPathIsLoaded(path)
+                        || (TryGetFailedPatternConfigFingerprint(path, out var failedFingerprint)
                             && failedFingerprint == fingerprint))
                     {
                         return;
                     }
 
-                    FailedPatternConfigFingerprints[path] = fingerprint;
+                    SetFailedPatternConfigFingerprint(path, fingerprint);
                 }
 
                 if (parseResult.Incomplete)
@@ -54,13 +54,13 @@ public static partial class ExtractorPluginRegistry
 
             lock (Gate)
             {
-                if (LoadedPatternConfigPaths.Contains(path))
+                if (PatternConfigPathIsLoaded(path))
                     return;
 
                 var patterns = parseResult.Patterns!;
                 if (loadedPatternRuleCount > MaxPatternRulesTotal - patterns.Count)
                 {
-                    FailedPatternConfigFingerprints[path] = fingerprint;
+                    SetFailedPatternConfigFingerprint(path, fingerprint);
                     ReportPatternConfigRejected(path, $"too many pattern rules (maximum {MaxPatternRulesTotal})");
                     return;
                 }
@@ -71,8 +71,13 @@ public static partial class ExtractorPluginRegistry
                     patterns);
                 loadedPatternRuleCount += patterns.Count;
                 patternConfigCount++;
-                LoadedPatternConfigPaths.Add(path);
-                FailedPatternConfigFingerprints.Remove(path);
+                TryMarkPatternConfigPathLoaded(path);
+                RemoveFailedPatternConfigFingerprint(path);
+                LoadedPatternConfigs.Add(new PatternConfigStatus(
+                    DiagnosticSanitizer.ForPath(path),
+                    source,
+                    parseResult.Language!,
+                    patterns.Count));
             }
         }
         catch (Exception)

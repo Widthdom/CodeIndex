@@ -452,6 +452,43 @@ public class ExtractorPluginRegistryTests
     }
 
     [Fact]
+    public void PatternConfigPathIdentity_FollowsFilesystemCasingPolicy_Issue4597()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_pattern_path_casing_4597");
+        lock (TestConsoleLock.Gate)
+        {
+            lock (PathCasingTestLock.Gate)
+            {
+                var originalProbe = PathCasing.IgnoreCaseProbeForTesting;
+                try
+                {
+                    var upperPath = Path.Combine(projectRoot, "Patterns", "Rules.yaml");
+                    var lowerPath = Path.Combine(projectRoot, "patterns", "rules.yaml");
+
+                    ExtractorPluginRegistry.ResetForTests();
+                    PathCasing.ResetCacheForTests();
+                    PathCasing.IgnoreCaseProbeForTesting = _ => true;
+                    Assert.True(ExtractorPluginRegistry.TryMarkPatternConfigPathLoadedForTests(upperPath));
+                    Assert.False(ExtractorPluginRegistry.TryMarkPatternConfigPathLoadedForTests(lowerPath));
+
+                    ExtractorPluginRegistry.ResetForTests();
+                    PathCasing.ResetCacheForTests();
+                    PathCasing.IgnoreCaseProbeForTesting = _ => false;
+                    Assert.True(ExtractorPluginRegistry.TryMarkPatternConfigPathLoadedForTests(upperPath));
+                    Assert.True(ExtractorPluginRegistry.TryMarkPatternConfigPathLoadedForTests(lowerPath));
+                }
+                finally
+                {
+                    PathCasing.IgnoreCaseProbeForTesting = originalProbe;
+                    PathCasing.ResetCacheForTests();
+                    ExtractorPluginRegistry.ResetForTests();
+                    TestProjectHelper.DeleteDirectory(projectRoot);
+                }
+            }
+        }
+    }
+
+    [Fact]
     public void LoadPlugin_SkipsAssembliesAboveTypeInspectionLimit_Issue3790()
     {
         lock (TestConsoleLock.Gate)
@@ -494,7 +531,7 @@ public class ExtractorPluginRegistryTests
                         "language: \"broken\"\npatterns:\n  - kind: \"class\"\n    regex: \"(?<name>\"\n");
                 }
 
-                ExtractorPluginRegistry.LoadPatternConfigsForPath(Path.Combine(projectRoot, "sample.broken"));
+                ExtractorPluginRegistry.LoadPatternConfigsForPath(Path.Combine(projectRoot, "sample.broken"), projectRoot);
                 var status = ExtractorPluginRegistry.GetStatusSnapshot();
 
                 Assert.Equal(0, status.PatternConfigCount);
@@ -554,6 +591,82 @@ public class ExtractorPluginRegistryTests
                 ExtractorPluginRegistry.ResetForTests();
                 TestProjectHelper.DeleteDirectory(projectRoot);
                 TestProjectHelper.DeleteDirectory(cwdRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPatternConfigsForPath_StopsAtWorkspaceRootAndReportsProvenance_Issue4597()
+    {
+        var parentRoot = TestProjectHelper.CreateTempProject("extractor_registry_pattern_boundary_4597");
+        var workspaceRoot = Path.Combine(parentRoot, "workspace");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.Combine(workspaceRoot, "src"));
+                ExtractorPluginRegistry.ResetForTests();
+                WritePatternConfig(
+                    parentRoot,
+                    "parent.yaml",
+                    "language: \"parentdsl\"\nextensions:\n  - extension: \".parent\"\npatterns:\n  - kind: \"class\"\n    regex: \"^parent (?<name>\\\\w+)\"\n");
+                WritePatternConfig(
+                    workspaceRoot,
+                    "workspace.yaml",
+                    "language: \"workspacedsl\"\nextensions:\n  - extension: \".workspace\"\npatterns:\n  - kind: \"class\"\n    regex: \"^workspace (?<name>\\\\w+)\"\n");
+
+                ExtractorPluginRegistry.LoadPatternConfigsForPath(
+                    Path.Combine(workspaceRoot, "src", "sample.workspace"),
+                    workspaceRoot);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("workspacedsl", out _));
+                Assert.False(ExtractorPluginRegistry.TryGetSymbolExtractor("parentdsl", out _));
+                var config = Assert.Single(ExtractorPluginRegistry.GetStatusSnapshot().PatternConfigs!);
+                Assert.Equal("workspace", config.Source);
+                Assert.Equal("workspacedsl", config.Language);
+                Assert.Equal(1, config.RuleCount);
+                Assert.Equal(".cdidx/patterns/workspace.yaml", config.Path);
+                Assert.DoesNotContain(parentRoot, config.Path, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(parentRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPatternConfigsForProjectRoot_LoadsCaseDistinctFilesWhenFilesystemIsCaseSensitive_Issue4597()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_case_distinct_patterns_4597");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                if (PathCasing.IsIgnoreCase(projectRoot))
+                    return;
+
+                ExtractorPluginRegistry.ResetForTests();
+                WritePatternConfig(
+                    projectRoot,
+                    "Rules.yaml",
+                    "language: \"upperdsl\"\nextensions:\n  - extension: \".upper\"\npatterns:\n  - kind: \"class\"\n    regex: \"^upper (?<name>\\\\w+)\"\n");
+                WritePatternConfig(
+                    projectRoot,
+                    "rules.yaml",
+                    "language: \"lowerdsl\"\nextensions:\n  - extension: \".lower\"\npatterns:\n  - kind: \"class\"\n    regex: \"^lower (?<name>\\\\w+)\"\n");
+
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("upperdsl", out _));
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("lowerdsl", out _));
+                Assert.Equal(2, ExtractorPluginRegistry.GetStatusSnapshot().PatternConfigCount);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
             }
         }
     }
