@@ -224,6 +224,8 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Search language-alias coverage may place distinct language files in one database and iterate alias filters when each filter isolates one expected result.
   Named-query escaping for option-looking literals reuses one indexed Probe fixture across definition, graph, symbols, files, inspect, and impact commands.
   Multi named-query output coverage reuses one indexed fixture for compact projection, rich JSON compatibility, per-query limits/truncation, and UTF-8 byte caps so the serializer modes stay directly comparable.
+  Shared bounded-response coverage reuses one graph-ready database across definition, find, status, hotspots, references, callers/callees, impact, and map; keep cursor and UTF-8 byte-budget boundary cases in a separate minimal multi-row fixture so family parity does not multiply indexing setup. Regression coverage must also exercise aliases and read-only batch dispatch, explicit definition body projections, inactive impact collections, and row-wise map-section pagination with authoritative totals.
+  Adversarial bounded-response coverage must also lock parser-failure byte caps, impact definition-page offsets, legacy map compact sections, conflicting map shape controls, compact explicit bodies, and profile/verbose control-record extraction.
   Search alias variants for JavaScript extensions, YAML, batch, and SQL dialects each reuse one language fixture and iterate casing/spelling forms in a fact.
   Raw FTS syntax coverage reuses one indexed source for a valid control query and all invalid query/hint variants.
   Literal and raw FTS complexity bounds reuse one indexed source across length, token-count, NEAR-count, and lowercase-operator controls.
@@ -903,6 +905,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   search language-alias coverage は、各filterが期待結果を1件に分離できる場合、異なる言語fileを1 databaseに置いてalias filterを反復してください。
   option風literalのnamed-query escapingは、definition、graph、symbols、files、inspect、impact command全体で1つのindexed Probe fixtureを再利用してください。
   複数 named-query の output coverage は、compact projection、rich JSON 互換性、query ごとの limit / truncation、UTF-8 byte cap に1つの indexed fixture を再利用し、serializer mode を直接比較できるようにしてください。
+  共通 bounded-response coverage は、definition、find、status、hotspots、references、callers / callees、impact、map 全体で1つの graph-ready databaseを再利用してください。cursor と UTF-8 byte-budget の境界 case は別の最小 multi-row fixture にまとめ、family parity のために indexing setup を重複させないでください。regression coverage では alias と read-only batch dispatch、明示的な definition body projection、inactive な impact collection、authoritative な総件数を持つ map section の row 単位 pagination も確認してください。
+  adversarial な bounded-response coverage では、parser failure の byte cap、impact definition page の offset、既存 map compact section、map shape control の競合、compact と明示 body の組み合わせ、profile / verbose control record の抽出も固定してください。
   JavaScript extension、YAML、batch、SQL dialectのsearch alias variantは、それぞれ1つのlanguage fixtureを再利用し、casing/spelling形式をfact内で反復してください。
   raw FTS syntax coverage はvalid control queryと全invalid query/hint variantで1つのindexed sourceを再利用してください。
   literalとraw FTSのcomplexity boundはlength、token count、NEAR count、lowercase operator control全体で1つのindexed sourceを再利用してください。

@@ -324,14 +324,14 @@ public partial class DbReader
     /// フィルタ済みの全 definition site を見た上で、(name, kind) 単位に hotspot を集約して返す。
     /// 代表 site は決定的な順序で選ぶ。
     /// </summary>
-    public List<GroupedHotspotResult> GetGroupedSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
-        => RunInReadSnapshot(() => GetGroupedSymbolHotspotsCore(limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters));
+    public List<GroupedHotspotResult> GetGroupedSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, int offset = 0)
+        => RunInReadSnapshot(() => GetGroupedSymbolHotspotsCore(limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters, offset));
 
-    private List<GroupedHotspotResult> GetGroupedSymbolHotspotsCore(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
+    private List<GroupedHotspotResult> GetGroupedSymbolHotspotsCore(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters, int offset)
     {
         if (!_hasReferencesTable) return [];
 
-        var query = BuildGroupedSymbolHotspotRowsQuery(limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
+        var query = BuildGroupedSymbolHotspotRowsQuery(checked(limit + Math.Max(0, offset)), kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
         var genericNamePenaltySql = GetGenericHotspotNamePenaltySql("g.name");
         var sql = query.Sql + @"
             SELECT g.name, g.kind, g.ref_count, g.ref_score,
@@ -356,11 +356,12 @@ public partial class DbReader
              AND rep.kind = g.kind
              AND rep.rep_rank = 1
             ORDER BY ranking_score DESC, g.ref_score DESC, g.ref_count DESC, g.name, g.kind
-            LIMIT @limit";
+            LIMIT @limit OFFSET @offset";
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = sql;
         AddSymbolHotspotParameters(cmd, query, limit, kind, lang, pathPatterns, excludePathPatterns, visibilityFilters, excludeVisibilityFilters);
+        SqliteCommandPolicy.Add(cmd, "@offset", Math.Max(0, offset));
         SqliteCommandPolicy.Add(cmd, "@groupedPathSampleLimit", GroupedHotspotPathSampleLimit + 1);
 
         var results = new List<GroupedHotspotResult>();
@@ -657,13 +658,13 @@ public partial class DbReader
     /// 複数の logical target が同名を共有する場合は bare-name 参照で真の対象を特定できないため
     /// 保守的な in-target file 件数へフォールバックし、1 つの logical target family に収まる行は集約する。
     /// </summary>
-    public List<SymbolHotspotResult> GetSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
-        => RunInReadSnapshot(() => GetSymbolHotspotsCore(limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters));
+    public List<SymbolHotspotResult> GetSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, int offset = 0)
+        => RunInReadSnapshot(() => GetSymbolHotspotsCore(limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters, offset));
 
-    private List<SymbolHotspotResult> GetSymbolHotspotsCore(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
+    private List<SymbolHotspotResult> GetSymbolHotspotsCore(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters, int offset)
     {
         if (!_hasReferencesTable) return [];
-        var query = BuildSymbolHotspotRowsQuery(limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
+        var query = BuildSymbolHotspotRowsQuery(checked(limit + Math.Max(0, offset)), kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
         var genericNamePenaltySql = GetGenericHotspotNamePenaltySql("gr.name");
         var sql = query.Sql + @"
             SELECT gr.name, rc.ref_count, rc.ref_score,
@@ -682,11 +683,12 @@ public partial class DbReader
                      gr.name COLLATE BINARY ASC,
                      gr.kind COLLATE BINARY ASC,
                      gr.symbol_id ASC
-            LIMIT @limit";
+            LIMIT @limit OFFSET @offset";
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = sql;
         AddSymbolHotspotParameters(cmd, query, limit, kind, lang, pathPatterns, excludePathPatterns, visibilityFilters, excludeVisibilityFilters);
+        SqliteCommandPolicy.Add(cmd, "@offset", Math.Max(0, offset));
 
         var results = new List<SymbolHotspotResult>();
         using var reader = cmd.ExecuteTrackedReader();
@@ -713,13 +715,13 @@ public partial class DbReader
         return results;
     }
 
-    public List<FileHotspotResult> GetFileSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
-        => RunInReadSnapshot(() => GetFileSymbolHotspotsCore(limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters));
+    public List<FileHotspotResult> GetFileSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, int offset = 0)
+        => RunInReadSnapshot(() => GetFileSymbolHotspotsCore(limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters, offset));
 
-    private List<FileHotspotResult> GetFileSymbolHotspotsCore(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
+    private List<FileHotspotResult> GetFileSymbolHotspotsCore(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters, int offset)
     {
         if (!_hasReferencesTable) return [];
-        var query = BuildSymbolHotspotRowsQuery(limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
+        var query = BuildSymbolHotspotRowsQuery(checked(limit + Math.Max(0, offset)), kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
         var genericNamePenaltySql = GetGenericHotspotNamePenaltySql("gr.name");
         var fileSymbolCountSql = "MAX(fsc.symbol_count)";
         var structuralRankPenaltySql = GetFileHotspotStructuralRankPenaltySql("COUNT(*)");
@@ -747,11 +749,12 @@ public partial class DbReader
                      ref_score DESC,
                      ref_count DESC,
                      gr.path COLLATE BINARY ASC
-            LIMIT @limit";
+            LIMIT @limit OFFSET @offset";
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = sql;
         AddSymbolHotspotParameters(cmd, query, limit, kind, lang, pathPatterns, excludePathPatterns, visibilityFilters, excludeVisibilityFilters);
+        SqliteCommandPolicy.Add(cmd, "@offset", Math.Max(0, offset));
 
         var results = new List<FileHotspotResult>();
         using var reader = cmd.ExecuteTrackedReader();

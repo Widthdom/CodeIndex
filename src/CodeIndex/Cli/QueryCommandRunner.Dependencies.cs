@@ -57,7 +57,17 @@ public static partial class QueryCommandRunner
             var maxDepth = options.ContextAfterExplicit ? options.ContextAfter : 5; // --max-hops/--depth is parsed into ContextAfter; 0 means resolve-only
             if (!options.Json && options.ImpactDeprecatedDepthUsed)
                 CommandErrorWriter.WriteStderr("Warning: --depth is deprecated for impact; use --max-hops instead.");
-            var analysis = reader.AnalyzeImpact(options.Query, maxDepth, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.WithPaths);
+            var analysis = reader.AnalyzeImpact(
+                options.Query,
+                maxDepth,
+                options.Limit,
+                options.Lang,
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests,
+                options.WithPaths,
+                JsonEnvelopeWrapper.GetBoundedResponseOffset("impact"),
+                JsonEnvelopeWrapper.GetBoundedImpactCollection());
             if (options.IncludeBody)
                 AttachBodyExcerpts(reader, analysis.Callers, options.SnippetLines, options.MaxLineWidth);
             ApplyBodyRecoveryCommands(analysis.Callers, options.DbPath);

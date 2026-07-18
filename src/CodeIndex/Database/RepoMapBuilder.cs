@@ -83,8 +83,19 @@ internal sealed class RepoMapBuilder
     public RepoMapResult Build(int limit, string? lang, IReadOnlyList<string>? pathPatterns,
         IReadOnlyList<string>? excludePathPatterns, bool excludeTests, double minEntrypointConfidence,
         Func<(DateTime? IndexedAt, DateTime? LatestModified)> getFreshness,
-        int? moduleDepth = null, int? oversizedLineThreshold = null, long? oversizedByteThreshold = null)
+        int? moduleDepth = null, int? oversizedLineThreshold = null, long? oversizedByteThreshold = null,
+        int offset = 0, string? requestedCollection = null, bool summaryProjection = false)
     {
+        offset = Math.Max(0, offset);
+        var retainedLimit = checked(Math.Max(limit, 0) + offset);
+        var includeLanguages = IncludesMapCollection(requestedCollection, summaryProjection, "languages");
+        var includeModules = IncludesMapCollection(requestedCollection, summaryProjection, "modules");
+        var useRankedFilePage = requestedCollection is "top_files" or "largest_files" or "symbol_rich_files" or "reference_rich_files";
+        var includeTopFiles = !useRankedFilePage && IncludesMapCollection(requestedCollection, summaryProjection, "top_files");
+        var includeLargestFiles = !useRankedFilePage && IncludesMapCollection(requestedCollection, summaryProjection, "largest_files");
+        var includeSymbolRichFiles = !useRankedFilePage && IncludesMapCollection(requestedCollection, summaryProjection, "symbol_rich_files");
+        var includeReferenceRichFiles = !useRankedFilePage && IncludesMapCollection(requestedCollection, summaryProjection, "reference_rich_files");
+        var includeEntrypoints = IncludesMapCollection(requestedCollection, summaryProjection, "entrypoints");
         // Query file stats first, then workspace freshness — preserves original
         // ordering so concurrent indexing cannot make workspace timestamps older
         // than scoped timestamps.
@@ -103,17 +114,30 @@ internal sealed class RepoMapBuilder
         // ようにする。
         using var txn = _conn.BeginTransaction(deferred: true);
         var indexedPathComparer = _getIndexedPathComparer();
-        var javaModuleDescriptors = LoadJavaModuleDescriptors();
+        var javaModuleDescriptors = includeModules ? LoadJavaModuleDescriptors() : new Dictionary<string, string>(StringComparer.Ordinal);
         var aggregate = BuildAggregate(
             EnumerateFileStats(lang, pathPatterns, excludePathPatterns, excludeTests),
-            Math.Max(limit, 0),
+            retainedLimit,
             javaModuleDescriptors,
             moduleDepth,
             oversizedLineThreshold,
-            oversizedByteThreshold);
+            oversizedByteThreshold,
+            includeLanguages,
+            includeModules,
+            includeTopFiles,
+            includeLargestFiles,
+            includeSymbolRichFiles,
+            includeReferenceRichFiles,
+            includeEntrypoints);
         var freshness = getFreshness();
         var indexedHeadSnapshot = LoadIndexedHeadSnapshot();
         HeadMetadataCapturedForTesting.Value?.Invoke();
+        var entrypointPage = includeEntrypoints
+            ? GetEntrypoints(aggregate.EntrypointFallbacks, limit, offset, lang, pathPatterns, excludePathPatterns, excludeTests, minEntrypointConfidence, indexedPathComparer)
+            : (Results: new List<RepoEntrypointResult>(), TotalCount: 0);
+        var rankedFilePage = useRankedFilePage
+            ? GetRankedFilePage(requestedCollection!, limit, offset, lang, pathPatterns, excludePathPatterns, excludeTests)
+            : null;
         var result = new RepoMapResult
         {
             FileCount = aggregate.FileCount,
@@ -124,21 +148,28 @@ internal sealed class RepoMapBuilder
             LatestModified = aggregate.LatestModified,
             WorkspaceIndexedAt = freshness.IndexedAt,
             WorkspaceLatestModified = freshness.LatestModified,
-            Languages = BuildLanguageResults(aggregate.Languages, limit),
-            Modules = BuildModuleResults(aggregate.Modules, limit),
-            TopFiles = aggregate.TopFiles,
-            LargestFiles = BuildLargestFileResults(aggregate.LargestFiles),
-            SymbolRichFiles = BuildSymbolRichFileResults(aggregate.SymbolRichFiles),
-            ReferenceRichFiles = BuildReferenceRichFileResults(aggregate.ReferenceRichFiles),
-            Entrypoints = GetEntrypoints(aggregate.EntrypointFallbacks, limit, lang, pathPatterns, excludePathPatterns, excludeTests, minEntrypointConfidence, indexedPathComparer),
+            LanguageCount = includeLanguages ? aggregate.Languages.Count : null,
+            ModuleCount = includeModules ? aggregate.Modules.Count : null,
+            EntrypointCount = includeEntrypoints ? entrypointPage.TotalCount : null,
+            Languages = BuildLanguageResults(aggregate.Languages, limit, offset),
+            Modules = BuildModuleResults(aggregate.Modules, limit, offset),
+            TopFiles = requestedCollection == "top_files" ? rankedFilePage! : aggregate.TopFiles.Skip(offset).Take(limit).ToList(),
+            LargestFiles = requestedCollection == "largest_files" ? BuildLargestFileResults(rankedFilePage!) : BuildLargestFileResults(aggregate.LargestFiles.Skip(offset).Take(limit).ToList()),
+            SymbolRichFiles = requestedCollection == "symbol_rich_files" ? BuildSymbolRichFileResults(rankedFilePage!) : BuildSymbolRichFileResults(aggregate.SymbolRichFiles.Skip(offset).Take(limit).ToList()),
+            ReferenceRichFiles = requestedCollection == "reference_rich_files" ? BuildReferenceRichFileResults(rankedFilePage!) : BuildReferenceRichFileResults(aggregate.ReferenceRichFiles.Skip(offset).Take(limit).ToList()),
+            Entrypoints = entrypointPage.Results,
             GraphTableAvailable = _hasReferencesTable,
             IndexedHeadSnapshot = indexedHeadSnapshot,
             IssueDraftCandidateCount = aggregate.IssueDraftCandidateCount,
-            IssueDraftCandidates = BuildLargestFileResults(aggregate.IssueDraftCandidates),
+            IssueDraftCandidates = BuildLargestFileResults(aggregate.IssueDraftCandidates.Skip(offset).Take(limit).ToList()),
         };
         txn.Commit();
         return result;
     }
+
+    private static bool IncludesMapCollection(string? requestedCollection, bool summaryProjection, string collection)
+        => !summaryProjection
+           && (requestedCollection is null || string.Equals(requestedCollection, collection, StringComparison.Ordinal));
 
     private IEnumerable<RepoFileStat> EnumerateFileStats(string? lang, IReadOnlyList<string>? pathPatterns,
         IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
@@ -185,13 +216,87 @@ internal sealed class RepoMapBuilder
         }
     }
 
+    private List<RepoFileSummaryResult> GetRankedFilePage(
+        string collection,
+        int limit,
+        int offset,
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests)
+    {
+        using var cmd = _conn.CreateCommand();
+        var refCountExpr = _hasReferencesTable
+            ? "(SELECT COUNT(*) FROM symbol_references r WHERE r.file_id = f.id)"
+            : "0";
+        var sql = $@"
+            WITH ranked_files AS (
+                SELECT f.path,
+                       f.lang,
+                       f.size,
+                       f.lines,
+                       (SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id) AS symbol_count,
+                       {refCountExpr} AS reference_count
+                FROM files f
+                WHERE 1=1";
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        DbReader.AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += ") SELECT path, lang, size, lines, symbol_count, reference_count FROM ranked_files ORDER BY ";
+        sql += collection switch
+        {
+            "top_files" => "(lines + (symbol_count * 5) + (reference_count * 2)) DESC, reference_count DESC, symbol_count DESC, lines DESC, path COLLATE BINARY ASC",
+            "largest_files" => "lines DESC, size DESC, path COLLATE BINARY ASC",
+            "symbol_rich_files" => "symbol_count DESC, reference_count DESC, lines DESC, path COLLATE BINARY ASC",
+            "reference_rich_files" => "reference_count DESC, symbol_count DESC, lines DESC, path COLLATE BINARY ASC",
+            _ => throw new ArgumentOutOfRangeException(nameof(collection), collection, "Unsupported ranked map collection."),
+        };
+        sql += " LIMIT @limit OFFSET @offset";
+
+        cmd.CommandText = sql;
+        if (lang != null)
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
+        DbReader.AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        SqliteCommandPolicy.Add(cmd, "@limit", Math.Max(0, limit));
+        SqliteCommandPolicy.Add(cmd, "@offset", Math.Max(0, offset));
+
+        var results = new List<RepoFileSummaryResult>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var lines = reader.GetInt32(3);
+            var symbolCount = reader.GetInt32(4);
+            var referenceCount = reader.GetInt32(5);
+            results.Add(new RepoFileSummaryResult
+            {
+                Path = reader.GetString(0),
+                Lang = DbReader.GetNullableString(reader, 1),
+                Size = reader.GetInt64(2),
+                Lines = lines,
+                SymbolCount = symbolCount,
+                ReferenceCount = referenceCount,
+                Score = collection == "top_files"
+                    ? lines + (symbolCount * 5L) + (referenceCount * 2L)
+                    : null,
+            });
+        }
+        return results;
+    }
+
     private static RepoMapAggregate BuildAggregate(
         IEnumerable<RepoFileStat> fileStats,
         int limit,
         IReadOnlyDictionary<string, string> moduleByDescriptorPath,
         int? moduleDepth,
         int? oversizedLineThreshold,
-        long? oversizedByteThreshold)
+        long? oversizedByteThreshold,
+        bool includeLanguages,
+        bool includeModules,
+        bool includeTopFiles,
+        bool includeLargestFiles,
+        bool includeSymbolRichFiles,
+        bool includeReferenceRichFiles,
+        bool includeEntrypoints)
     {
         var languages = new Dictionary<string, RepoLanguageResult>(StringComparer.Ordinal);
         var modules = new Dictionary<string, RepoModuleResult>(StringComparer.Ordinal);
@@ -223,29 +328,37 @@ internal sealed class RepoMapBuilder
             aggregate.IndexedAt = MaxDateTime(aggregate.IndexedAt, file.IndexedAt);
             aggregate.LatestModified = MaxDateTime(aggregate.LatestModified, file.Modified);
 
-            var languageKey = file.Lang ?? "unknown";
-            if (!languages.TryGetValue(languageKey, out var language))
+            if (includeLanguages)
             {
-                language = new RepoLanguageResult { Lang = languageKey };
-                languages.Add(languageKey, language);
+                var languageKey = file.Lang ?? "unknown";
+                if (!languages.TryGetValue(languageKey, out var language))
+                {
+                    language = new RepoLanguageResult { Lang = languageKey };
+                    languages.Add(languageKey, language);
+                }
+                AddFileStats(language, file);
             }
 
-            AddFileStats(language, file);
-
-            var moduleKey = GetModuleKey(file, moduleDepth);
-            if (!modules.TryGetValue(moduleKey, out var module))
+            if (includeModules)
             {
-                module = new RepoModuleResult { Module = moduleKey };
-                modules.Add(moduleKey, module);
+                var moduleKey = GetModuleKey(file, moduleDepth);
+                if (!modules.TryGetValue(moduleKey, out var module))
+                {
+                    module = new RepoModuleResult { Module = moduleKey };
+                    modules.Add(moduleKey, module);
+                }
+                AddFileStats(module, file);
             }
-
-            AddFileStats(module, file);
 
             var scoredSummary = CreateScoredFileSummary(file);
-            AddBounded(aggregate.TopFiles, scoredSummary, limit, CompareTopFiles);
-            AddBounded(aggregate.LargestFiles, scoredSummary, limit, CompareLargestFiles);
-            AddBounded(aggregate.SymbolRichFiles, scoredSummary, limit, CompareSymbolRichFiles);
-            AddBounded(aggregate.ReferenceRichFiles, scoredSummary, limit, CompareReferenceRichFiles);
+            if (includeTopFiles)
+                AddBounded(aggregate.TopFiles, scoredSummary, limit, CompareTopFiles);
+            if (includeLargestFiles)
+                AddBounded(aggregate.LargestFiles, scoredSummary, limit, CompareLargestFiles);
+            if (includeSymbolRichFiles)
+                AddBounded(aggregate.SymbolRichFiles, scoredSummary, limit, CompareSymbolRichFiles);
+            if (includeReferenceRichFiles)
+                AddBounded(aggregate.ReferenceRichFiles, scoredSummary, limit, CompareReferenceRichFiles);
 
             if ((oversizedLineThreshold.HasValue && file.Lines >= oversizedLineThreshold.Value)
                 || (oversizedByteThreshold.HasValue && file.Size >= oversizedByteThreshold.Value))
@@ -258,8 +371,10 @@ internal sealed class RepoMapBuilder
                     CompareLargestFiles);
             }
 
-            var fallback = ScoreEntrypointFileFallback(file.Path, file.Lang, file.SymbolCount, file.ReferenceCount);
-            if (fallback.Score > 0)
+            var fallback = includeEntrypoints
+                ? ScoreEntrypointFileFallback(file.Path, file.Lang, file.SymbolCount, file.ReferenceCount)
+                : default;
+            if (includeEntrypoints && fallback.Score > 0)
             {
                 aggregate.EntrypointFallbacks.Add(new RepoEntrypointResult
                 {
@@ -279,22 +394,24 @@ internal sealed class RepoMapBuilder
         return aggregate;
     }
 
-    private static List<RepoLanguageResult> BuildLanguageResults(IReadOnlyDictionary<string, RepoLanguageResult> languages, int limit)
+    private static List<RepoLanguageResult> BuildLanguageResults(IReadOnlyDictionary<string, RepoLanguageResult> languages, int limit, int offset)
     {
         return languages.Values
             .OrderByDescending(group => group.Files)
             .ThenBy(group => group.Lang)
+            .Skip(offset)
             .Take(limit)
             .ToList();
     }
 
-    private static List<RepoModuleResult> BuildModuleResults(IReadOnlyDictionary<string, RepoModuleResult> modules, int limit)
+    private static List<RepoModuleResult> BuildModuleResults(IReadOnlyDictionary<string, RepoModuleResult> modules, int limit, int offset)
     {
         return modules.Values
             .OrderByDescending(group => group.References)
             .ThenByDescending(group => group.Symbols)
             .ThenByDescending(group => group.Lines)
             .ThenBy(group => group.Module)
+            .Skip(offset)
             .Take(limit)
             .ToList();
     }
@@ -436,7 +553,7 @@ internal sealed class RepoMapBuilder
         return moduleByDescriptorPath;
     }
 
-    private List<RepoEntrypointResult> GetEntrypoints(IReadOnlyList<RepoEntrypointResult> fallbackEntrypoints, int limit,
+    private (List<RepoEntrypointResult> Results, int TotalCount) GetEntrypoints(IReadOnlyList<RepoEntrypointResult> fallbackEntrypoints, int limit, int offset,
         string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
         double minConfidence, StringComparer indexedPathComparer)
     {
@@ -501,15 +618,18 @@ internal sealed class RepoMapBuilder
         }
 
         ApplyEntrypointAmbiguityPenalty(results);
-        return results
+        var ranked = results
             .Where(result => result.Confidence >= minConfidence)
             .OrderByDescending(result => result.Score)
             .ThenByDescending(result => result.Confidence)
             .ThenBy(result => result.HintRank)
             .ThenBy(result => result.Path)
             .ThenBy(result => result.Line)
-            .Take(limit)
             .ToList();
+        return (ranked
+            .Skip(offset)
+            .Take(limit)
+            .ToList(), ranked.Count);
     }
 
     private string GetFileColumnSql(string columnName)

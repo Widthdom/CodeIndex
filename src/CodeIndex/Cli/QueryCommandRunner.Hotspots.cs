@@ -106,7 +106,7 @@ public static partial class QueryCommandRunner
                     return countSummary.Count == 0 ? ZeroResultExitCode(options) : CommandExitCodes.Success;
                 }
 
-                var groupedResults = reader.GetGroupedSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
+                var groupedResults = reader.GetGroupedSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("hotspots"));
                 WriteGraphLiveness("hotspots", "write_output", options, groupBy: groupBy, rows: groupedResults.Count);
                 var effectiveSqlGraphSignal = groupedResults.Count == 0
                     ? zeroResultSqlGraphSignal
@@ -245,7 +245,7 @@ public static partial class QueryCommandRunner
                     return countSummary.Count == 0 ? ZeroResultExitCode(options) : CommandExitCodes.Success;
                 }
 
-                var fileResults = reader.GetFileSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
+                var fileResults = reader.GetFileSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("hotspots"));
                 WriteGraphLiveness("hotspots", "write_output", options, groupBy: groupBy, rows: fileResults.Count);
                 var effectiveSqlGraphSignal = fileResults.Count == 0
                     ? zeroResultSqlGraphSignal
@@ -412,7 +412,7 @@ public static partial class QueryCommandRunner
                 return countSummary.Count == 0 ? ZeroResultExitCode(options) : CommandExitCodes.Success;
             }
 
-            var results = reader.GetSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
+            var results = reader.GetSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("hotspots"));
             WriteGraphLiveness("hotspots", "write_output", options, groupBy: groupBy, rows: results.Count);
             var sqlGraphSignal = results.Count == 0
                 ? zeroResultSqlGraphSignal

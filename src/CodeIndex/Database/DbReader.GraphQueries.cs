@@ -1110,7 +1110,7 @@ public partial class DbReader
     /// <paramref name="withPaths"/> を true にすると、各 caller に対してルートからの推移経路
     /// （ダイヤモンド収束時は複数）を <paramref name="maxPathsPerResult"/> 件まで付与する（issue #1536）。
     /// </summary>
-    public (List<ImpactResult> Results, bool Truncated, string? TruncatedReason, string TerminationReason, List<ImpactCycleResult> Cycles) GetTransitiveCallers(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool withPaths = false, int maxPathsPerResult = DefaultImpactPathsPerResult)
+    public (List<ImpactResult> Results, bool Truncated, string? TruncatedReason, string TerminationReason, List<ImpactCycleResult> Cycles) GetTransitiveCallers(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool withPaths = false, int maxPathsPerResult = DefaultImpactPathsPerResult, int resultOffset = 0)
     {
         // Resolve the symbol name through definitions first so case-mismatched queries
         // like "run" find the actual "Run" symbol. Falls back to user input if not found.
@@ -1140,6 +1140,9 @@ public partial class DbReader
             : null;
 
         var results = new List<ImpactResult>();
+        resultOffset = Math.Max(0, resultOffset);
+        var resultWindowEnd = checked(resultOffset + limit);
+        var discoveredResultCount = 0;
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var queue = new Queue<(string Symbol, int Depth)>();
         queue.Enqueue((resolvedName, 0));
@@ -1156,7 +1159,7 @@ public partial class DbReader
         string? truncatedReason = null;
         // Safety cap to prevent infinite loops on pathological graphs / 病的グラフでの無限ループ防止
         const int maxFetchIterations = 1000;
-        var graphStateEntryBudget = GetImpactGraphStateEntryBudget(limit);
+        var graphStateEntryBudget = GetImpactGraphStateEntryBudget(resultWindowEnd);
         var graphStateBudgetHit = false;
         var boundaryProbeBudgetHit = false;
 
@@ -1181,7 +1184,7 @@ public partial class DbReader
         if (withPaths)
             pathNodesByName![resolvedName] = ResolveImpactPathNode(resolvedName, kind: null, lang, referencePath: null, referenceLine: null);
 
-        while (queue.Count > 0 && results.Count < limit && !graphStateBudgetHit && !boundaryProbeBudgetHit)
+        while (queue.Count > 0 && discoveredResultCount < resultWindowEnd && !graphStateBudgetHit && !boundaryProbeBudgetHit)
         {
             var (currentSymbol, depth) = queue.Dequeue();
 
@@ -1189,24 +1192,24 @@ public partial class DbReader
             // This prevents diamond graphs from hiding reachable callers behind visited duplicates.
             // ページングで caller を取得し、visited フィルタ後にカウント。
             // ダイヤモンド型グラフで到達可能な caller が visited 重複に隠れるのを防止。
-            var needed = limit - results.Count;
-            var offset = 0;
+            var needed = resultWindowEnd - discoveredResultCount;
+            var pageOffset = 0;
             var pageSize = Math.Max(1, needed + 1);
             var fetchIterations = 0;
 
-            while (results.Count < limit && fetchIterations < maxFetchIterations && !graphStateBudgetHit && !boundaryProbeBudgetHit)
+            while (discoveredResultCount < resultWindowEnd && fetchIterations < maxFetchIterations && !graphStateBudgetHit && !boundaryProbeBudgetHit)
             {
                 fetchIterations++;
                 var page = depth == 0 && qualifiedRootSymbolId is long targetSymbolId
-                    ? GetCallersExactForTarget(currentSymbol, targetSymbolId, pageSize, offset, lang, pathPatterns, excludePathPatterns, excludeTests)
-                    : GetCallersExact(currentSymbol, pageSize, offset, lang, pathPatterns, excludePathPatterns, excludeTests);
+                    ? GetCallersExactForTarget(currentSymbol, targetSymbolId, pageSize, pageOffset, lang, pathPatterns, excludePathPatterns, excludeTests)
+                    : GetCallersExact(currentSymbol, pageSize, pageOffset, lang, pathPatterns, excludePathPatterns, excludeTests);
 
                 if (page.Count == 0)
                     break; // No more callers for this symbol / このシンボルの caller は尽きた
 
                 foreach (var caller in page)
                 {
-                    if (results.Count >= limit)
+                    if (discoveredResultCount >= resultWindowEnd)
                     {
                         truncated = true;
                         truncatedReason ??= ImpactTruncatedReasons.UserLimit;
@@ -1257,20 +1260,27 @@ public partial class DbReader
                         continue;
                     }
 
-                    results.Add(new ImpactResult
+                    var includeInPage = discoveredResultCount >= resultOffset;
+                    var resultIndex = -1;
+                    if (includeInPage)
                     {
-                        Path = caller.Path,
-                        Lang = caller.Lang,
-                        CallerKind = caller.CallerKind,
-                        CallerName = caller.CallerName,
-                        CalleeName = caller.CalleeName,
-                        Depth = depth + 1,
-                        FirstLine = caller.FirstLine,
-                        ReferenceCount = caller.ReferenceCount,
-                        ReferenceKind = caller.ReferenceKind,
-                        ReferenceKinds = caller.ReferenceKinds,
-                        ReferenceKindCounts = caller.ReferenceKindCounts,
-                    });
+                        results.Add(new ImpactResult
+                        {
+                            Path = caller.Path,
+                            Lang = caller.Lang,
+                            CallerKind = caller.CallerKind,
+                            CallerName = caller.CallerName,
+                            CalleeName = caller.CalleeName,
+                            Depth = depth + 1,
+                            FirstLine = caller.FirstLine,
+                            ReferenceCount = caller.ReferenceCount,
+                            ReferenceKind = caller.ReferenceKind,
+                            ReferenceKinds = caller.ReferenceKinds,
+                            ReferenceKindCounts = caller.ReferenceKindCounts,
+                        });
+                        resultIndex = results.Count - 1;
+                    }
+                    discoveredResultCount++;
 
                     if (withPaths)
                     {
@@ -1284,12 +1294,15 @@ public partial class DbReader
                                 caller.FirstLine));
                         if (!depthByName.ContainsKey(callerName))
                             depthByName[callerName] = depth + 1;
-                        if (!resultIndicesByName!.TryGetValue(callerName, out var idxList))
+                        if (includeInPage)
                         {
-                            idxList = new List<int>();
-                            resultIndicesByName[callerName] = idxList;
+                            if (!resultIndicesByName!.TryGetValue(callerName, out var idxList))
+                            {
+                                idxList = new List<int>();
+                                resultIndicesByName[callerName] = idxList;
+                            }
+                            idxList.Add(resultIndex);
                         }
-                        idxList.Add(results.Count - 1);
                     }
                     else if (!depthByName.ContainsKey(callerName))
                     {
@@ -1348,7 +1361,7 @@ public partial class DbReader
                     }
                 }
 
-                offset += page.Count;
+                pageOffset += page.Count;
 
                 // If this page was full, there might be more — continue paging
                 // ページが満杯なら、まだある可能性 — ページングを継続
@@ -1364,7 +1377,7 @@ public partial class DbReader
             }
         }
 
-        if (queue.Count > 0 && results.Count >= limit)
+        if (queue.Count > 0 && discoveredResultCount >= resultWindowEnd)
         {
             truncated = true;
             truncatedReason ??= ImpactTruncatedReasons.UserLimit;
@@ -1780,15 +1793,16 @@ public partial class DbReader
     /// file dependency をフォールバックとして返す。<paramref name="maxDepth"/> は inclusive で
     /// N 指定時は depth 1〜N の caller を返し、<c>maxDepth: 0</c> は symbol 解決のみで終了する。
     /// </summary>
-    public ImpactAnalysisResult AnalyzeImpact(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool withPaths = false)
+    public ImpactAnalysisResult AnalyzeImpact(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool withPaths = false, int offset = 0, string? responseCollection = null)
     {
         lang = NormalizeQueryLanguage(lang);
         var resolvedName = ResolveSymbolName(symbolName, lang);
-        var definitionResolution = ResolveImpactDefinitions(symbolName, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
+        var definitionOffset = string.Equals(responseCollection, "definitions", StringComparison.Ordinal) ? offset : 0;
+        var definitionResolution = ResolveImpactDefinitions(symbolName, limit, lang, pathPatterns, excludePathPatterns, excludeTests, definitionOffset);
         if (definitionResolution.Definitions.Count == 0
             && !string.Equals(symbolName, resolvedName, StringComparison.Ordinal))
         {
-            definitionResolution = ResolveImpactDefinitions(resolvedName, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
+            definitionResolution = ResolveImpactDefinitions(resolvedName, limit, lang, pathPatterns, excludePathPatterns, excludeTests, definitionOffset);
         }
         var definitions = definitionResolution.Definitions;
         var indexedPathComparer = GetIndexedPathComparer();
@@ -1844,7 +1858,16 @@ public partial class DbReader
             };
         }
 
-        var (callers, truncated, truncatedReason, terminationReason, cycles) = GetTransitiveCallers(symbolName, maxDepth, limit, lang, pathPatterns, excludePathPatterns, excludeTests, withPaths);
+        var callerOffset = responseCollection is null || string.Equals(responseCollection, "callers", StringComparison.Ordinal)
+            ? offset
+            : 0;
+        var (callers, truncated, truncatedReason, terminationReason, cycles) = GetTransitiveCallers(symbolName, maxDepth, limit, lang, pathPatterns, excludePathPatterns, excludeTests, withPaths, resultOffset: callerOffset);
+        var callerExistsBeforeOffset = false;
+        if (callers.Count == 0 && callerOffset > 0)
+        {
+            var callerProbe = GetTransitiveCallers(symbolName, maxDepth, 1, lang, pathPatterns, excludePathPatterns, excludeTests, withPaths: false, resultOffset: 0);
+            callerExistsBeforeOffset = callerProbe.Results.Count > 0;
+        }
 
         var impactMode = "callers";
         var fileImpacts = new List<FileDependencyResult>();
@@ -1854,7 +1877,7 @@ public partial class DbReader
         string? suggestion = null;
         var heuristic = false;
 
-        if (callers.Count == 0)
+        if (callers.Count == 0 && !callerExistsBeforeOffset)
         {
             impactMode = "none";
             impactFailureChain = [];
@@ -1886,8 +1909,17 @@ public partial class DbReader
                 else if (fallbackDefinitions.Count == 1)
                 {
                     var fallbackNames = ResolveImpactFallbackNames(fallbackDefinitions[0]);
-                    var (hintResults, hintTruncated) = GetFileDependencyHintsToResolvedType(fallbackDefinitions[0], fallbackNames, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
+                    var fileImpactOffset = responseCollection is null || string.Equals(responseCollection, "file_impacts", StringComparison.Ordinal)
+                        ? offset
+                        : 0;
+                    var (hintResults, hintTruncated) = GetFileDependencyHintsToResolvedType(fallbackDefinitions[0], fallbackNames, limit, lang, pathPatterns, excludePathPatterns, excludeTests, fileImpactOffset);
                     fileImpacts = hintResults;
+                    var hintExistsBeforeOffset = false;
+                    if (fileImpacts.Count == 0 && fileImpactOffset > 0)
+                    {
+                        var hintProbe = GetFileDependencyHintsToResolvedType(fallbackDefinitions[0], fallbackNames, 1, lang, pathPatterns, excludePathPatterns, excludeTests, 0);
+                        hintExistsBeforeOffset = hintProbe.Results.Count > 0;
+                    }
                     if (hintTruncated)
                     {
                         truncated = true;
@@ -1899,7 +1931,7 @@ public partial class DbReader
                         // safety_cap が立っていればそちらを優先する (#1533)。
                         truncatedReason ??= ImpactTruncatedReasons.UserLimit;
                     }
-                    if (fileImpacts.Count > 0)
+                    if (fileImpacts.Count > 0 || hintExistsBeforeOffset)
                     {
                         impactMode = "file_dependency_hints";
                         heuristic = true;
@@ -1981,7 +2013,8 @@ public partial class DbReader
         string? lang,
         IReadOnlyList<string>? pathPatterns,
         IReadOnlyList<string>? excludePathPatterns,
-        bool excludeTests)
+        bool excludeTests,
+        int representativeOffset = 0)
     {
         var normalizedName = SqlNameResolver.NormalizeQualifiedName(resolvedName);
         var leafName = SqlNameResolver.GetLeafName(resolvedName);
@@ -2078,7 +2111,7 @@ public partial class DbReader
                 SELECT logical_partial_key, 1 AS requested_row
                 FROM logical_definitions
                 ORDER BY {representativeOrder}
-                LIMIT @definitionLimit
+                LIMIT @definitionLimit OFFSET @definitionOffset
             ),
             single_precise_definition AS (
                 SELECT logical_partial_key, 0 AS requested_row
@@ -2142,6 +2175,7 @@ public partial class DbReader
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", lang);
         SqliteCommandPolicy.Add(cmd, "@definitionLimit", Math.Max(1, representativeLimit));
+        SqliteCommandPolicy.Add(cmd, "@definitionOffset", Math.Max(0, representativeOffset));
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         var results = new List<SymbolResult>();
         SymbolResult? preciseDefinition = null;
@@ -2298,7 +2332,7 @@ public partial class DbReader
         return results;
     }
 
-    private (List<FileDependencyResult> Results, bool Truncated) GetFileDependencyHintsToResolvedType(SymbolResult definition, IReadOnlyList<string> fallbackNames, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    private (List<FileDependencyResult> Results, bool Truncated) GetFileDependencyHintsToResolvedType(SymbolResult definition, IReadOnlyList<string> fallbackNames, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int offset = 0)
     {
         if (!_hasReferencesTable || string.IsNullOrWhiteSpace(definition.Path) || fallbackNames.Count == 0)
             return (new List<FileDependencyResult>(), false);
@@ -2438,9 +2472,9 @@ public partial class DbReader
             }
         }
 
-        var truncated = filtered.Count > limit;
-        if (truncated)
-            filtered.RemoveRange(limit, filtered.Count - limit);
+        offset = Math.Max(0, offset);
+        var truncated = filtered.Count > checked(offset + limit);
+        filtered = filtered.Skip(offset).Take(limit).ToList();
 
         return (filtered, truncated);
     }
