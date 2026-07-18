@@ -41,6 +41,11 @@ public partial class DbReaderTests
         Assert.True(DbReader.ContainsRelevantStructuralTokenMarker(
             "private readonly SyntaxToken accessTokenSyntax;",
             ["access", "token"]));
+        const string headerCheck =
+            "if (!cancellationToken.IsCancellationRequested && request.Headers.Authorization != null) return;";
+        Assert.False(DbReader.ContainsRelevantStructuralTokenMarker(
+            headerCheck,
+            ["Authorization"]));
 
         InsertIndexedFile(
             "src/request-sender.cs",
@@ -82,6 +87,81 @@ public partial class DbReaderTests
         Assert.True(
             results.FindIndex(result => result.Path == "src/request-sender.cs") <
             results.FindIndex(result => result.Path == "src/structural-access-api.cs"));
+
+        InsertIndexedFile(
+            "src/request-header-check.cs",
+            "csharp",
+            $$"""
+            public sealed class RequestHeaderCheck
+            {
+                public void Apply(CancellationToken cancellationToken, HttpRequestMessage request)
+                {
+                    {{headerCheck}}
+                }
+            }
+            """);
+        InsertIndexedFile(
+            "src/header-name.cs",
+            "csharp",
+            "public static class HeaderNames { private const string HeaderName = \"Authorization\"; }\n");
+
+        var authorizationResults = _reader.Search(
+            "Authorization",
+            limit: 2,
+            resultRanking: SearchResultRanking.CredentialContext);
+
+        Assert.Equal("src/request-header-check.cs", authorizationResults[0].Path);
+    }
+
+    [Fact]
+    public void Search_CredentialContextUsesIdentifierBoundariesWhenCouplingTerms_Issue4590()
+    {
+        InsertIndexedFile(
+            "src/a-domain-token.cs",
+            "csharp",
+            "public void MergeValues() { var capitalToken = Merge(api, fallback, token); }\n");
+        InsertIndexedFile(
+            "src/z-credential.cs",
+            "csharp",
+            "public sealed class CredentialStore { private string ApiToken => ReadCredential(\"api\", \"token\"); }\n");
+
+        var results = _reader.Search(
+            "api token",
+            limit: 2,
+            resultRanking: SearchResultRanking.CredentialContext);
+
+        Assert.Equal("src/z-credential.cs", results[0].Path);
+    }
+
+    [Fact]
+    public void Search_CredentialContextScopesRegexPenaltyAndSymbolToWinningMatch_Issue4590()
+    {
+        InsertIndexedFile(
+            "src/mixed-authorization.cs",
+            "csharp",
+            """
+            public sealed class AuthorizationHandler
+            {
+                private static Regex AuthorizationRegex => new("Authorization");
+
+                public void Apply(HttpRequestMessage request, AuthenticationHeaderValue credential)
+                {
+                    request.Headers.Authorization = credential;
+                }
+            }
+            """);
+        InsertIndexedFile(
+            "src/header-string.cs",
+            "csharp",
+            "public static class HeaderStrings { private const string HeaderName = \"Authorization\"; }\n");
+
+        var results = _reader.Search(
+            "Authorization",
+            limit: 2,
+            resultRanking: SearchResultRanking.CredentialContext);
+
+        Assert.Equal("src/mixed-authorization.cs", results[0].Path);
+        Assert.Equal("Apply", results[0].EnclosingSymbolName);
     }
 
     [Fact]

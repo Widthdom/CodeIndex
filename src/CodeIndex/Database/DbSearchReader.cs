@@ -301,7 +301,7 @@ public partial class DbReader
 
         var results = deduplicate ? DeduplicateOverlappingResults(raw, SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exactSearch, lang)) : raw;
         if (hasContextRanking)
-            results = RankCredentialContextSearchResults(results, query, normalizedQuery, rawQuery, exactSearch, lang, searchMatchLineContext);
+            results = RankCredentialContextSearchResults(results, query, normalizedQuery, rawQuery, exactSearch, lang);
         if (guardCandidateLimitReached && results.Count < GetGuardedSearchRequestedPageEnd(guardedRequestedLimit, cursor))
             throw new SearchGuardCandidateLimitException(
                 guardedCandidateLimit,
@@ -447,20 +447,27 @@ public partial class DbReader
         string normalizedQuery,
         bool rawQuery,
         bool exact,
-        string? lang,
-        SearchMatchLineContext matchLineContext)
+        string? lang)
     {
-        if (results.Count <= 1)
+        if (results.Count == 0)
             return results;
 
         var primaryMatchContext = SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang);
         var candidates = results
-            .Select((result, index) => new SearchContextRankingCandidate(
-                result,
-                index,
-                ScoreCredentialContextLines(result, primaryMatchContext)))
+            .Select((result, index) =>
+            {
+                var lineScore = ScoreCredentialContextLines(result, primaryMatchContext);
+                return new SearchContextRankingCandidate(
+                    result,
+                    index,
+                    lineScore.Score,
+                    lineScore.MatchLine);
+            })
             .ToList();
-        AttachSearchEnclosingSymbols(candidates.Select(candidate => candidate.Result).ToList(), matchLineContext);
+        AttachSearchEnclosingSymbols(candidates
+            .Where(candidate => candidate.MatchLine.HasValue)
+            .Select(candidate => new SearchEnclosingSymbolRequest(candidate.Result, candidate.MatchLine!.Value))
+            .ToList());
 
         return candidates
             .OrderByDescending(candidate => candidate.LineScore + ScoreCredentialContextSymbol(candidate.Result))
@@ -469,16 +476,29 @@ public partial class DbReader
             .ToList();
     }
 
-    private static int ScoreCredentialContextLines(SearchResult result, SearchPrimaryMatchContext matchContext)
+    private static SearchCredentialContextLineScore ScoreCredentialContextLines(
+        SearchResult result,
+        SearchPrimaryMatchContext matchContext)
     {
         var matches = FindPrimarySearchMatchLines(result, matchContext);
         if (matches.Count == 0)
-            return ContainsStructuralTokenMarker(result.Content) ? -800 : -600;
+            return new SearchCredentialContextLineScore(
+                ContainsStructuralTokenMarker(result.Content) ? -800 : -600,
+                null);
 
-        var score = matches.Max(match => ScoreCredentialContextLine(result, matchContext, match));
-        if (matches.Any(match => ContainsRegexDefinitionSyntax(match.Text)))
-            score -= 360;
-        return score;
+        return matches
+            .Select((match, index) => new
+            {
+                Match = match,
+                Index = index,
+                Score = ScoreCredentialContextLine(result, matchContext, match),
+            })
+            .OrderByDescending(candidate => candidate.Score)
+            .ThenBy(candidate => candidate.Index)
+            .Select(candidate => new SearchCredentialContextLineScore(
+                candidate.Score,
+                candidate.Match.LineNumber))
+            .First();
     }
 
     private static int ScoreCredentialContextLine(
@@ -526,7 +546,7 @@ public partial class DbReader
             "function" or "method" or "property" or "field" or "variable" => 40,
             "test.method" => -40,
             "heading" or "import" => -80,
-            "class" or "record" or "struct" => 10,
+            "class" or "record" or "struct" => -80,
             _ => 0,
         };
         var symbolText = $"{result.EnclosingSymbolName} {result.EnclosingContainerName}";
@@ -558,16 +578,15 @@ public partial class DbReader
         var firstTermStart = 0;
         while (firstTermStart < text.Length)
         {
-            var firstIndex = text.IndexOf(terms[0], firstTermStart, StringComparison.OrdinalIgnoreCase);
-            if (firstIndex < 0)
+            if (!TryFindCredentialTerm(text, terms[0], firstTermStart, out var firstIndex))
                 return false;
 
             var previousEnd = firstIndex + terms[0].Length;
             var allTermsTightlyCoupled = true;
             for (var i = 1; i < terms.Count; i++)
             {
-                var index = text.IndexOf(terms[i], previousEnd, StringComparison.OrdinalIgnoreCase);
-                if (index < 0 || index - previousEnd > 3)
+                if (!TryFindCredentialTerm(text, terms[i], previousEnd, out var index) ||
+                    index - previousEnd > 3)
                 {
                     allTermsTightlyCoupled = false;
                     break;
@@ -586,6 +605,52 @@ public partial class DbReader
 
         return false;
     }
+
+    private static bool TryFindCredentialTerm(
+        string text,
+        string term,
+        int searchStart,
+        out int termStart)
+    {
+        while (searchStart < text.Length)
+        {
+            termStart = text.IndexOf(term, searchStart, StringComparison.OrdinalIgnoreCase);
+            if (termStart < 0)
+                break;
+            if (IsCredentialIdentifierBoundary(text, termStart) &&
+                IsCredentialIdentifierBoundary(text, termStart + term.Length))
+                return true;
+
+            searchStart = termStart + 1;
+        }
+
+        termStart = -1;
+        return false;
+    }
+
+    private static bool IsCredentialIdentifierBoundary(string text, int index)
+    {
+        if (index <= 0 || index >= text.Length)
+            return true;
+
+        var left = text[index - 1];
+        var right = text[index];
+        if (left == '_' || right == '_' ||
+            !IsCredentialIdentifierCharacter(left) ||
+            !IsCredentialIdentifierCharacter(right))
+            return true;
+
+        if (char.IsUpper(right) && (char.IsLower(left) || char.IsDigit(left)))
+            return true;
+
+        return char.IsUpper(left) &&
+               char.IsUpper(right) &&
+               index + 1 < text.Length &&
+               char.IsLower(text[index + 1]);
+    }
+
+    private static bool IsCredentialIdentifierCharacter(char ch)
+        => ch == '_' || char.IsLetterOrDigit(ch);
 
     internal static bool ContainsRelevantStructuralTokenMarker(
         string text,
@@ -617,7 +682,9 @@ public partial class DbReader
     {
         foreach (var ch in text)
         {
-            if (ch is ',' or ';' or '(' or ')' or '{' or '}' or '[' or ']')
+            if (ch is ',' or ';' or '(' or ')' or '{' or '}' or '[' or ']' or
+                '.' or '&' or '|' or '=' or '!' or '<' or '>' or '+' or '-' or
+                '*' or '/' or '%' or '?' or ':')
                 return true;
         }
 
@@ -655,7 +722,7 @@ public partial class DbReader
            text.Contains("StructuralTokenMarker", StringComparison.OrdinalIgnoreCase);
 
     private static bool ContainsCredentialUseSyntax(string text)
-        => text.Contains("Authorization", StringComparison.OrdinalIgnoreCase) ||
+        => ContainsAuthorizationHeaderUseSyntax(text) ||
            text.Contains("Bearer", StringComparison.OrdinalIgnoreCase) ||
            text.Contains("ApiKey", StringComparison.OrdinalIgnoreCase) ||
            text.Contains("AccessToken", StringComparison.OrdinalIgnoreCase) ||
@@ -663,10 +730,25 @@ public partial class DbReader
            text.Contains("TokenSecret", StringComparison.OrdinalIgnoreCase) ||
            text.Contains("SecretProvider", StringComparison.OrdinalIgnoreCase);
 
+    private static bool ContainsAuthorizationHeaderUseSyntax(string text)
+        => text.Contains("Headers.Authorization", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("DefaultRequestHeaders.Authorization", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("Headers[\"Authorization\"]", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("Headers['Authorization']", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("TryAddWithoutValidation(\"Authorization\"", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("AddHeader(\"Authorization\"", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("SetHeader(\"Authorization\"", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("Header(\"Authorization\"", StringComparison.OrdinalIgnoreCase);
+
     private sealed record SearchContextRankingCandidate(
         SearchResult Result,
         int OriginalIndex,
-        int LineScore);
+        int LineScore,
+        int? MatchLine);
+
+    private sealed record SearchCredentialContextLineScore(
+        int Score,
+        int? MatchLine);
 
     private void AttachSearchEnclosingSymbols(IReadOnlyList<SearchResult> results, SearchMatchLineContext matchLineContext)
     {
@@ -681,6 +763,11 @@ public partial class DbReader
                 requests.Add(new SearchEnclosingSymbolRequest(result, matchLine.Value));
         }
 
+        AttachSearchEnclosingSymbols(requests);
+    }
+
+    private void AttachSearchEnclosingSymbols(IReadOnlyList<SearchEnclosingSymbolRequest> requests)
+    {
         var startLineSql = GetSymbolColumnSql("start_line", "s.line", "s");
         var endLineSql = GetSymbolColumnSql("end_line", "s.line", "s");
         var containerNameSql = GetSymbolColumnSql("container_name", symbolAlias: "s");
