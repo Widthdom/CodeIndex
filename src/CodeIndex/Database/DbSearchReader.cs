@@ -25,6 +25,7 @@ public partial class DbReader
     internal const int MaxSearchGuardWindow = 200;
     internal const int MaxSearchGuardFilters = 8;
     internal const int MaxGuardedSearchCandidates = 1000;
+    internal const int MaxContextRankingCandidates = 10_000;
     private const int MinGuardedSearchCandidates = 200;
     private const int GuardedSearchOverFetchFactor = 50;
     private const int MaxSearchGuardLineWindowCacheEntries = 256;
@@ -34,7 +35,7 @@ public partial class DbReader
     private const string SearchGuardCandidatesTruncatedDiagnosticCode = "search_guard_candidates_truncated";
     private const string SearchContextRankingCandidatesTruncatedDiagnosticCode = "search_context_ranking_candidates_truncated";
     private const string SearchDedupStateTruncatedDiagnosticCode = "search_dedup_state_truncated";
-    private const int MaxContextRankingSymbolCandidates = 200;
+    private const int SearchEnclosingSymbolBatchSize = 100;
     private static readonly string[] CredentialStructuralTokenMarkers =
     [
         "CancellationToken",
@@ -153,7 +154,7 @@ public partial class DbReader
         var guardedRequestedLimit = Math.Max(0, guardRequestedLimit ?? limit);
         var guardedCandidateLimit = hasGuardFilters
             ? hasContextRanking
-                ? MaxGuardedSearchCandidates
+                ? MaxContextRankingCandidates
                 : GetGuardedSearchCandidateLimit(guardedRequestedLimit, cursor)
             : 0;
         // Context ranking must use the same candidate universe on every page. Growing this
@@ -161,7 +162,7 @@ public partial class DbReader
         // and cause duplicates or omissions between pages.
         // コンテキスト順位付けでは全ページで同じ候補集合を使う。カーソル位置に応じて候補数を
         // 増やすと、新たな候補がカーソルより前へ入り、ページ間の重複や欠落が発生し得る。
-        var contextRankingCandidateLimit = hasContextRanking ? MaxGuardedSearchCandidates : 0;
+        var contextRankingCandidateLimit = hasContextRanking ? MaxContextRankingCandidates : 0;
         var tokenBoundaryCandidateLimit = tokenBoundary && !hasGuardFilters && !hasContextRanking ? int.MaxValue : 0;
         var candidatePostProcessingLimit = hasGuardFilters
             ? guardedCandidateLimit
@@ -459,13 +460,7 @@ public partial class DbReader
                 index,
                 ScoreCredentialContextLines(result, primaryMatchContext)))
             .ToList();
-        var symbolCandidates = candidates
-            .OrderByDescending(candidate => candidate.LineScore)
-            .ThenBy(candidate => candidate.OriginalIndex)
-            .Take(MaxContextRankingSymbolCandidates)
-            .Select(candidate => candidate.Result)
-            .ToList();
-        AttachSearchEnclosingSymbols(symbolCandidates, matchLineContext);
+        AttachSearchEnclosingSymbols(candidates.Select(candidate => candidate.Result).ToList(), matchLineContext);
 
         return candidates
             .OrderByDescending(candidate => candidate.LineScore + ScoreCredentialContextSymbol(candidate.Result))
@@ -517,9 +512,7 @@ public partial class DbReader
             score -= 360;
         if (ContainsRelevantStructuralTokenMarker(
                 match.Text,
-                matchContext.Terms,
-                match.Column,
-                match.Length))
+                matchContext.Terms))
             score -= 420;
         if (ContainsCredentialUseSyntax(match.Text))
             score += 60;
@@ -596,9 +589,7 @@ public partial class DbReader
 
     internal static bool ContainsRelevantStructuralTokenMarker(
         string text,
-        IReadOnlyList<string> terms,
-        int matchColumn,
-        int matchLength)
+        IReadOnlyList<string> terms)
     {
         if (TryFindTightlyCoupledCredentialSpan(text, terms, out var credentialStart, out var credentialEnd))
         {
@@ -612,15 +603,25 @@ public partial class DbReader
                     var betweenStart = Math.Min(markerEnd, credentialEnd);
                     var betweenEnd = Math.Max(markerStart, credentialStart);
                     return betweenStart <= betweenEnd &&
-                           !text.AsSpan(betweenStart, betweenEnd - betweenStart).ContainsAny(',', ';');
+                           !ContainsCredentialContextBoundary(text.AsSpan(betweenStart, betweenEnd - betweenStart));
                 }));
         }
 
-        var matchStart = Math.Clamp(matchColumn - 1, 0, text.Length);
-        var matchEnd = Math.Clamp(matchStart + matchLength, matchStart, text.Length);
         return CredentialStructuralTokenMarkers.Any(marker =>
             EnumerateMarkerStarts(text, marker).Any(markerStart =>
-                markerStart < matchEnd && matchStart < markerStart + marker.Length));
+                terms.Any(term => EnumerateMarkerStarts(text, term).Any(termStart =>
+                    markerStart < termStart + term.Length && termStart < markerStart + marker.Length))));
+    }
+
+    private static bool ContainsCredentialContextBoundary(ReadOnlySpan<char> text)
+    {
+        foreach (var ch in text)
+        {
+            if (ch is ',' or ';' or '(' or ')' or '{' or '}' or '[' or ']')
+                return true;
+        }
+
+        return text.Contains("=>", StringComparison.Ordinal);
     }
 
     private static IEnumerable<int> EnumerateMarkerStarts(string text, string marker)
@@ -669,27 +670,95 @@ public partial class DbReader
 
     private void AttachSearchEnclosingSymbols(IReadOnlyList<SearchResult> results, SearchMatchLineContext matchLineContext)
     {
+        var requests = new List<SearchEnclosingSymbolRequest>();
         foreach (var result in results)
         {
             if (!string.IsNullOrWhiteSpace(result.EnclosingSymbolKind))
                 continue;
 
             var matchLine = GetFirstSearchMatchLine(result, matchLineContext);
-            if (!matchLine.HasValue)
-                continue;
+            if (matchLine.HasValue)
+                requests.Add(new SearchEnclosingSymbolRequest(result, matchLine.Value));
+        }
 
-            var symbol = GetSearchEnclosingSymbol(result.Path, matchLine.Value);
-            if (symbol == null)
-                continue;
+        var startLineSql = GetSymbolColumnSql("start_line", "s.line", "s");
+        var endLineSql = GetSymbolColumnSql("end_line", "s.line", "s");
+        var containerNameSql = GetSymbolColumnSql("container_name", symbolAlias: "s");
+        var returnTypeSql = GetSymbolColumnSql("return_type", symbolAlias: "s");
+        for (var offset = 0; offset < requests.Count; offset += SearchEnclosingSymbolBatchSize)
+        {
+            var batch = requests.Skip(offset).Take(SearchEnclosingSymbolBatchSize).ToList();
+            using var cmd = _conn.CreateCommand();
+            var requestedValues = string.Join(", ", Enumerable.Range(0, batch.Count)
+                .Select(index => $"(@symbolPath{index}, @symbolLine{index}, {index})"));
+            cmd.CommandText = $@"
+                WITH requested(path, match_line, request_index) AS (
+                    VALUES {requestedValues}
+                ),
+                ranked AS (
+                    SELECT requested.request_index,
+                           s.name AS symbol_name,
+                           s.kind AS symbol_kind,
+                           {startLineSql} AS start_line,
+                           {endLineSql} AS end_line,
+                           {containerNameSql} AS container_name,
+                           {returnTypeSql} AS return_type,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY requested.request_index
+                               ORDER BY CASE WHEN s.id IS NULL THEN 1 ELSE 0 END,
+                                        CASE s.kind
+                                            WHEN 'function' THEN 0
+                                            WHEN 'test.method' THEN 0
+                                            WHEN 'property' THEN 1
+                                            WHEN 'class' THEN 2
+                                            WHEN 'interface' THEN 2
+                                            WHEN 'struct' THEN 2
+                                            WHEN 'enum' THEN 2
+                                            ELSE 3
+                                        END,
+                                        ({endLineSql} - {startLineSql}) ASC,
+                                        {startLineSql} DESC,
+                                        s.line DESC,
+                                        s.id ASC
+                           ) AS symbol_rank
+                    FROM requested
+                    LEFT JOIN files f ON f.path = requested.path
+                    LEFT JOIN symbols s ON s.file_id = f.id
+                                       AND {startLineSql} <= requested.match_line
+                                       AND {endLineSql} >= requested.match_line
+                )
+                SELECT request_index,
+                       symbol_name,
+                       symbol_kind,
+                       start_line,
+                       end_line,
+                       container_name,
+                       return_type
+                FROM ranked
+                WHERE symbol_rank = 1
+                  AND symbol_name IS NOT NULL
+                ORDER BY request_index";
+            for (var index = 0; index < batch.Count; index++)
+            {
+                SqliteCommandPolicy.Add(cmd, $"@symbolPath{index}", batch[index].Result.Path);
+                SqliteCommandPolicy.Add(cmd, $"@symbolLine{index}", batch[index].MatchLine);
+            }
 
-            result.EnclosingSymbolName = symbol.Name;
-            result.EnclosingSymbolKind = symbol.Kind;
-            result.EnclosingSymbolStartLine = symbol.StartLine;
-            result.EnclosingSymbolEndLine = symbol.EndLine;
-            result.EnclosingContainerName = symbol.ContainerName;
-            result.EnclosingSymbolReturnType = symbol.ReturnType;
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                var result = batch[reader.GetInt32(0)].Result;
+                result.EnclosingSymbolName = reader.GetString(1);
+                result.EnclosingSymbolKind = reader.GetString(2);
+                result.EnclosingSymbolStartLine = reader.GetInt32(3);
+                result.EnclosingSymbolEndLine = reader.GetInt32(4);
+                result.EnclosingContainerName = GetNullableString(reader, 5);
+                result.EnclosingSymbolReturnType = GetNullableString(reader, 6);
+            }
         }
     }
+
+    private sealed record SearchEnclosingSymbolRequest(SearchResult Result, int MatchLine);
 
     private static int? GetFirstSearchMatchLine(SearchResult result, SearchMatchLineContext context)
     {
@@ -772,58 +841,6 @@ public partial class DbReader
         => token
             .Trim('"', '\'', '(', ')')
             .TrimEnd('*');
-
-    private SearchEnclosingSymbol? GetSearchEnclosingSymbol(string path, int matchLine)
-    {
-        using var cmd = _conn.CreateCommand();
-        var startLineSql = GetSymbolColumnSql("start_line", "s.line", "s");
-        var endLineSql = GetSymbolColumnSql("end_line", "s.line", "s");
-        var containerNameSql = GetSymbolColumnSql("container_name", symbolAlias: "s");
-        var returnTypeSql = GetSymbolColumnSql("return_type", symbolAlias: "s");
-        cmd.CommandText = $@"
-            SELECT s.name,
-                   s.kind,
-                   {startLineSql} AS start_line,
-                   {endLineSql} AS end_line,
-                   {containerNameSql} AS container_name,
-                   {returnTypeSql} AS return_type
-            FROM symbols s
-            JOIN files f ON s.file_id = f.id
-            WHERE f.path = @path
-              AND {startLineSql} <= @matchLine
-              AND {endLineSql} >= @matchLine
-            ORDER BY CASE s.kind
-                         WHEN 'function' THEN 0
-                         WHEN 'test.method' THEN 0
-                         WHEN 'property' THEN 1
-                         WHEN 'class' THEN 2
-                         WHEN 'interface' THEN 2
-                         WHEN 'struct' THEN 2
-                         WHEN 'enum' THEN 2
-                         ELSE 3
-                     END,
-                     ({endLineSql} - {startLineSql}) ASC,
-                     {startLineSql} DESC,
-                     s.line DESC,
-                     s.id ASC
-            LIMIT 1";
-        SqliteCommandPolicy.Add(cmd, "@path", path);
-        SqliteCommandPolicy.Add(cmd, "@matchLine", matchLine);
-
-        using var reader = cmd.ExecuteTrackedReader();
-        if (!reader.TrackedRead())
-            return null;
-
-        return new SearchEnclosingSymbol(
-            reader.GetString(0),
-            reader.GetString(1),
-            reader.GetInt32(2),
-            reader.GetInt32(3),
-            GetNullableString(reader, 4),
-            GetNullableString(reader, 5));
-    }
-
-    private sealed record SearchEnclosingSymbol(string Name, string Kind, int StartLine, int EndLine, string? ContainerName, string? ReturnType);
 
     public QueryCountResult CountSearchResults(string query, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow, SearchGuardScope guardScope = SearchGuardScope.Window, bool tokenBoundary = false)
     {
