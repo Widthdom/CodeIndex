@@ -601,7 +601,7 @@ internal static class SymbolExtractionWorker
             WriteConsoleOutputForTestingIfRequested(options);
             DelayForTestingIfRequested(options, cancellationToken);
             using var regexTimeouts = BoundedRegex.CaptureTimeouts(request.Lang, "symbol_extraction");
-            var patternConfigsAlreadyLoaded = EnsurePatternConfigsLoadedForWorker(request.ProjectRoot);
+            var patternConfigsAlreadyLoaded = EnsurePatternConfigsLoadedForWorker(request.ProjectRoot, request.FilePath);
             var symbols = request.ContentIsNormalized && request.HasOversizeLine is { } hasOversizeLine
                 ? SymbolExtractor.ExtractNormalized(
                     request.FileId,
@@ -666,7 +666,7 @@ internal static class SymbolExtractionWorker
             cancellationToken.ThrowIfCancellationRequested();
     }
 
-    private static bool EnsurePatternConfigsLoadedForWorker(string? projectRoot)
+    private static bool EnsurePatternConfigsLoadedForWorker(string? projectRoot, string? filePath)
     {
         if (string.IsNullOrWhiteSpace(projectRoot))
             return false;
@@ -674,14 +674,30 @@ internal static class SymbolExtractionWorker
         var fullRoot = Path.GetFullPath(projectRoot);
         lock (PatternConfigProjectRootsGate)
         {
+            var rootAlreadyLoaded = false;
             foreach (var loadedRoot in LoadedPatternConfigProjectRoots)
             {
                 if (PathCasing.PathsEqual(loadedRoot, fullRoot))
-                    return true;
+                {
+                    rootAlreadyLoaded = true;
+                    break;
+                }
             }
 
-            ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(fullRoot);
-            LoadedPatternConfigProjectRoots.Add(fullRoot);
+            if (!rootAlreadyLoaded)
+            {
+                ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(fullRoot);
+                LoadedPatternConfigProjectRoots.Add(fullRoot);
+            }
+
+            if (!string.IsNullOrWhiteSpace(filePath))
+            {
+                var fullPath = Path.IsPathRooted(filePath)
+                    ? Path.GetFullPath(filePath)
+                    : Path.GetFullPath(Path.Combine(fullRoot, filePath));
+                ExtractorPluginRegistry.LoadPatternConfigsForPath(fullPath, fullRoot);
+            }
+
             return true;
         }
     }

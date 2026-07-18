@@ -2690,8 +2690,10 @@ Downstream users can add lightweight language support without rebuilding
   `SymbolKindCatalog` before its path, rules, or budget are committed. Rejected
   content is fingerprinted to suppress duplicate diagnostics, while content or
   metadata changes and transient read recovery are retried without restarting.
-  Workspace discovery requires an explicit trust root and stops after checking
-  that root; it never probes ancestors above it. Path identity follows the
+    Workspace discovery requires an explicit trust root and stops after checking
+    that root; it never probes ancestors above it. Nested sidecars inside that
+    boundary are loaded for the current file in the bounded extraction worker.
+    Path identity follows the
   active filesystem's case-sensitivity, so case-distinct sidecars remain
   distinct on case-sensitive volumes. `status --json` reports accepted files in
   `extractors.pattern_configs[]` with sanitized path, workspace/user provenance,
@@ -4938,7 +4940,8 @@ cleared range を証明するテストが必要です。Bounded accumulation pat
   一時状態で parse / compile され、`SymbolKindCatalog` に対して kind が検証されます。拒否された内容は
   fingerprint によって重複診断を抑制し、内容または metadata の変更時、および一時的な read failure の
   回復後にはプロセスを再起動せず再試行されます。workspace 探索には明示的な trust root が必要で、
-  その root を確認した時点で停止し、それより上の ancestor は探索しません。path identity は実際の
+    その root を確認した時点で停止し、それより上の ancestor は探索しません。その境界内の nested
+    sidecar は、対象 file の上限付き extraction worker 内で読み込まれます。path identity は実際の
   filesystem の case-sensitivity に従うため、case-sensitive volume では大小文字だけが異なる sidecar も
   別々に扱われます。`status --json` の `extractors.pattern_configs[]` は、受理済み file の
   sanitization 済み path、workspace/user provenance、正規化済み language、rule count を報告します。
