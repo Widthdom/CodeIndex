@@ -9085,9 +9085,7 @@ public sealed class Caller
 
         _server.HandleMessage((JsonNode)json);
 
-        var cdidxDir = Path.GetDirectoryName(_dbPath)!;
-        var dbName = Path.GetFileNameWithoutExtension(_dbPath);
-        var stored = new SuggestionStore(cdidxDir, dbName).LoadAll()
+        var stored = OpenSuggestionStore().LoadAll()
             .Single(s => s.Description == uniqueDesc);
         Assert.Equal("codex/5.0", stored.CreatedByAgent);
         Assert.Equal(_server.CurrentSessionId, stored.SessionId);
@@ -9128,7 +9126,7 @@ public sealed class Caller
         var responseRevisionHash = structured["revision_hash"]!.GetValue<string>();
         Assert.Equal(responseId, structured["hash"]!.GetValue<string>());
         Assert.NotEqual(responseId, responseRevisionHash);
-        var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
+        var stored = OpenSuggestionStore().LoadAll()
             .Single(s => s.Id == responseId);
         Assert.Equal(stored.RevisionHash, responseRevisionHash);
         Assert.Contains("api_key=[REDACTED:credential]", stored.Description);
@@ -9206,7 +9204,7 @@ public sealed class Caller
         Assert.Equal("sampled", structured["sampling_status"]!.GetValue<string>());
         Assert.Equal("Improve TypeScript arrow symbol extraction", structured["sampled_title"]!.GetValue<string>());
         Assert.Contains(structured["sampled_tags"]!.AsArray(), tag => tag!.GetValue<string>() == "typescript");
-        var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
+        var stored = OpenSuggestionStore().LoadAll()
             .Single(s => s.Description == uniqueDesc);
         Assert.Equal("Improve TypeScript arrow symbol extraction", stored.SampledTitle);
         Assert.Contains("symbol_extraction", stored.SampledTags!);
@@ -9265,7 +9263,7 @@ public sealed class Caller
         Assert.DoesNotContain(secret, sampledTitle);
         Assert.DoesNotContain(secret, sampledTags);
         var responseHash = structured["hash"]!.GetValue<string>();
-        var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
+        var stored = OpenSuggestionStore().LoadAll()
             .Single(s => s.Hash == responseHash);
         Assert.DoesNotContain(secret, stored.Description);
         Assert.DoesNotContain(secret, stored.SampledTitle!);
@@ -9315,7 +9313,7 @@ public sealed class Caller
         Assert.Equal("sampling_rejected", structured["sampling_status"]!.GetValue<string>());
         Assert.Contains("text length", structured["sampling_diagnostic"]!.GetValue<string>(), StringComparison.Ordinal);
         Assert.Null(structured["sampled_title"]);
-        var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
+        var stored = OpenSuggestionStore().LoadAll()
             .Single(s => s.Description == uniqueDesc);
         Assert.Null(stored.SampledTitle);
         Assert.Null(stored.SampledTags);
@@ -9458,7 +9456,7 @@ public sealed class Caller
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal("recorded", structured["status"]!.GetValue<string>());
         Assert.Null(structured["sampled_title"]);
-        var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
+        var stored = OpenSuggestionStore().LoadAll()
             .Single(s => s.Description == uniqueDesc);
         Assert.Null(stored.SampledTitle);
         Assert.Null(stored.SampledTags);
@@ -9506,7 +9504,7 @@ public sealed class Caller
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal("recorded", structured["status"]!.GetValue<string>());
         Assert.Null(structured["sampled_title"]);
-        var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
+        var stored = OpenSuggestionStore().LoadAll()
             .Single(s => s.Description == uniqueDesc);
         Assert.Null(stored.SampledTitle);
         Assert.Null(stored.SampledTags);
@@ -9566,7 +9564,7 @@ public sealed class Caller
         Assert.Contains("raw content withheld", capturedPrompt);
         Assert.DoesNotContain(secretValue, capturedPrompt);
         Assert.Contains("[truncated]", capturedPrompt);
-        var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
+        var stored = OpenSuggestionStore().LoadAll()
             .Single(s => s.Description == uniqueDesc);
         Assert.Equal(toolInvocationContext, stored.ToolInvocationContext);
     }
@@ -9818,7 +9816,7 @@ public sealed class Caller
     [Fact]
     public void SuggestImprovement_WriteProbePreservesExistingProbeFile()
     {
-        var cdidxDir = Path.GetDirectoryName(_dbPath)!;
+        var cdidxDir = CreateSuggestionStoreDirectory();
         var existingProbe = Path.Combine(cdidxDir, ".write_probe");
         File.WriteAllText(existingProbe, "keep me");
         var uniqueDesc = $"Probe preservation regression {Guid.NewGuid():N}";
@@ -9847,7 +9845,7 @@ public sealed class Caller
     [Fact]
     public void SuggestImprovement_WriteProbeCleanupFailureWarnsWithoutFailing_Issue3023()
     {
-        var cdidxDir = Path.GetDirectoryName(_dbPath)!;
+        var cdidxDir = ResolveSuggestionStoreDirectory();
         var uniqueDesc = $"Probe cleanup regression {Guid.NewGuid():N}";
         var request = new JsonObject
         {
@@ -10322,6 +10320,25 @@ public sealed class Caller
         TestProjectHelper.DeleteFile(Path.Combine(sidecarDirectory, $"suggestions-{dbName}.json.bak"));
         TestProjectHelper.DeleteFile(Path.Combine(sidecarDirectory, $"suggestions-{dbName}.lock"));
         TestProjectHelper.DeleteFile(Path.Combine(sidecarDirectory, $"suggestions-{dbName}.archive.jsonl"));
+    }
+
+    private SuggestionStore OpenSuggestionStore()
+        => new(
+            ResolveSuggestionStoreDirectory(),
+            Path.GetFileNameWithoutExtension(_dbPath));
+
+    private string ResolveSuggestionStoreDirectory()
+        => DataDirectorySecurity.ResolveSensitiveSidecarDirectoryForDatabase(_dbPath, "suggestions");
+
+    private string CreateSuggestionStoreDirectory()
+    {
+        var sidecarDirectory = ResolveSuggestionStoreDirectory();
+        var databaseDirectory = Path.GetDirectoryName(Path.GetFullPath(_dbPath));
+        if (string.Equals(databaseDirectory, sidecarDirectory, StringComparison.Ordinal))
+            DataDirectorySecurity.CreatePrivateDirectory(sidecarDirectory);
+        else
+            DataDirectorySecurity.CreateSensitiveDirectory(sidecarDirectory);
+        return sidecarDirectory;
     }
 
     private void DeleteDbPath()
