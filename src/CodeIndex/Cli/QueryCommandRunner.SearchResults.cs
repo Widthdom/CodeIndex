@@ -793,13 +793,15 @@ public static partial class QueryCommandRunner
 
             if (options.Json)
             {
-                var json = JsonSerializer.Serialize(
-                    new SearchNamedBatchRunJsonResult(
-                        JsonOutputContract.ApiVersion,
-                        queryResults.Count,
-                        total,
-                        queryResults),
-                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchNamedBatchRunJsonResult);
+                var json = options.OutputFormat == OutputFormatCompact
+                    ? BuildCompactNamedSearchBatchPayload(queryResults, total, options, jsonOptions).ToJsonString(jsonOptions)
+                    : JsonSerializer.Serialize(
+                        new SearchNamedBatchRunJsonResult(
+                            JsonOutputContract.ApiVersion,
+                            queryResults.Count,
+                            total,
+                            queryResults),
+                        CliJsonSerializerContextFactory.Create(jsonOptions).SearchNamedBatchRunJsonResult);
                 return WriteJsonObjectWithOptionalByteLimit(
                     json,
                     options,
@@ -825,6 +827,45 @@ public static partial class QueryCommandRunner
             CommandErrorWriter.WriteStderr($"({total} named-query results across {queryResults.Count} queries)");
             return CommandExitCodes.Success;
         });
+    }
+
+    private static JsonObject BuildCompactNamedSearchBatchPayload(
+        IReadOnlyList<SearchNamedBatchQueryResultJsonResult> queryResults,
+        int total,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions)
+    {
+        var queries = new JsonArray();
+        foreach (var queryResult in queryResults)
+        {
+            var locations = queryResult.Results.Select(result => new FormattedLocation(
+                result.Path,
+                result.MatchLines.Count > 0 ? result.MatchLines[0] : result.ChunkStartLine));
+            var compactLocations = BuildCompactLocationsPayload(locations, options, jsonOptions);
+            queries.Add(new JsonObject
+            {
+                ["name"] = queryResult.Name,
+                ["query"] = queryResult.Query,
+                ["count"] = queryResult.Count,
+                ["truncated"] = queryResult.Truncated,
+                ["truncation"] = new JsonObject
+                {
+                    ["limit"] = options.Limit,
+                    ["limit_reached"] = queryResult.Truncated,
+                },
+                ["results"] = compactLocations["results"]?.DeepClone() ?? new JsonArray(),
+            });
+        }
+
+        return new JsonObject
+        {
+            ["api_version"] = JsonOutputContract.ApiVersion,
+            ["format"] = OutputFormatCompact,
+            ["query_count"] = queryResults.Count,
+            ["result_count"] = total,
+            ["truncated"] = queryResults.Any(query => query.Truncated),
+            ["queries"] = queries,
+        };
     }
 
     private static List<SearchDisplayRow> BuildSearchDisplayRows(

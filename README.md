@@ -81,6 +81,7 @@ cdidx map --compact --max-json-bytes 65536
 cdidx map --format issue-drafts --limit 10
 cdidx search --recipe risky-code --format compact --max-json-bytes 65536
 cdidx search --recipe risky-code --format compact --summary-only --json
+cdidx search --named-query todo=TODO --named-query fixme=FIXME --format compact --limit 10
 cdidx search --named-query todo=TODO --named-query fixme=FIXME --format count --summary-only --json
 cdidx suggestions add --category output_format --description "Record a local dogfood finding" --evidence-path src/CodeIndex/Cli/SuggestionsCommandRunner.cs --json
 cdidx suggestions update <id> --description "Corrected finding" --context "Corrected context" --json
@@ -377,6 +378,7 @@ cdidx map --compact --max-json-bytes 65536
 cdidx map --format issue-drafts --limit 10
 cdidx search --recipe risky-code --format compact --max-json-bytes 65536
 cdidx search --recipe risky-code --format compact --summary-only --json
+cdidx search --named-query todo=TODO --named-query fixme=FIXME --format compact --limit 10
 cdidx search --named-query todo=TODO --named-query fixme=FIXME --format count --summary-only --json
 cdidx suggestions add --category output_format --description "ローカル dogfood finding を記録する" --evidence-path src/CodeIndex/Cli/SuggestionsCommandRunner.cs --json
 cdidx suggestions update <id> --description "修正した finding" --context "修正した context" --json

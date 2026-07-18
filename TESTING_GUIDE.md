@@ -223,6 +223,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Generic switch-arm guard and relational predecessors likewise share one production-runtime fixture and run only on the production `net8.0` target.
   Search language-alias coverage may place distinct language files in one database and iterate alias filters when each filter isolates one expected result.
   Named-query escaping for option-looking literals reuses one indexed Probe fixture across definition, graph, symbols, files, inspect, and impact commands.
+  Multi named-query output coverage reuses one indexed fixture for compact projection, rich JSON compatibility, per-query limits/truncation, and UTF-8 byte caps so the serializer modes stay directly comparable.
   Search alias variants for JavaScript extensions, YAML, batch, and SQL dialects each reuse one language fixture and iterate casing/spelling forms in a fact.
   Raw FTS syntax coverage reuses one indexed source for a valid control query and all invalid query/hint variants.
   Literal and raw FTS complexity bounds reuse one indexed source across length, token-count, NEAR-count, and lowercase-operator controls.
@@ -901,6 +902,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   generic switch-arm のguardとrelational predecessorも同様に1つのproduction-runtime fixtureを共有し、production `net8.0` targetだけで実行してください。
   search language-alias coverage は、各filterが期待結果を1件に分離できる場合、異なる言語fileを1 databaseに置いてalias filterを反復してください。
   option風literalのnamed-query escapingは、definition、graph、symbols、files、inspect、impact command全体で1つのindexed Probe fixtureを再利用してください。
+  複数 named-query の output coverage は、compact projection、rich JSON 互換性、query ごとの limit / truncation、UTF-8 byte cap に1つの indexed fixture を再利用し、serializer mode を直接比較できるようにしてください。
   JavaScript extension、YAML、batch、SQL dialectのsearch alias variantは、それぞれ1つのlanguage fixtureを再利用し、casing/spelling形式をfact内で反復してください。
   raw FTS syntax coverage はvalid control queryと全invalid query/hint variantで1つのindexed sourceを再利用してください。
   literalとraw FTSのcomplexity boundはlength、token count、NEAR count、lowercase operator control全体で1つのindexed sourceを再利用してください。
