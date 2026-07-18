@@ -1,4 +1,6 @@
 using System.Reflection;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using CodeIndex.Cli;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
@@ -312,11 +314,12 @@ public class ExtractorPluginRegistryTests
             var originalPath = Path.Combine(projectRoot, "plugin-original.dll");
             try
             {
-                File.Copy(Assembly.GetExecutingAssembly().Location, pluginPath);
+                CopyPluginFixture(pluginPath);
                 ExtractorPluginRegistry.ResetForTests();
                 ExecutableExtensionBoundary.StagedForTesting = (source, staged) =>
                 {
-                    Assert.Equal(pluginPath, source);
+                    if (!string.Equals(pluginPath, source, StringComparison.Ordinal))
+                        return;
                     Assert.NotEqual(source, staged);
                     File.Move(source, originalPath);
                     File.WriteAllText(source, "replacement bytes that are not an assembly");
@@ -338,6 +341,62 @@ public class ExtractorPluginRegistryTests
                 ExtractorPluginRegistry.ResetForTests();
                 TestProjectHelper.DeleteDirectory(projectRoot);
             }
+        }
+    }
+
+    [Fact]
+    public void ExecutableBoundary_WindowsRejectsUntrustedWriteAclAndCleansStaging_Issue4596()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_windows_acl_4596");
+        var pluginDirectory = Path.Combine(projectRoot, "plugins");
+        Directory.CreateDirectory(pluginDirectory);
+        var pluginPath = Path.Combine(pluginDirectory, "plugin.dll");
+        try
+        {
+            CopyPluginFixture(pluginPath);
+            var security = new DirectoryInfo(pluginDirectory).GetAccessControl();
+            security.AddAccessRule(new FileSystemAccessRule(
+                new SecurityIdentifier(WellKnownSidType.WorldSid, null),
+                FileSystemRights.CreateFiles,
+                InheritanceFlags.None,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+            new DirectoryInfo(pluginDirectory).SetAccessControl(security);
+
+            Assert.False(ExecutableExtensionBoundary.TryValidateDirectory(pluginDirectory, out _, out var failure));
+            Assert.Equal("extension_boundary_unsafe_permissions", failure.Category);
+
+            security.RemoveAccessRuleAll(new FileSystemAccessRule(
+                new SecurityIdentifier(WellKnownSidType.WorldSid, null),
+                FileSystemRights.CreateFiles,
+                InheritanceFlags.None,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+            new DirectoryInfo(pluginDirectory).SetAccessControl(security);
+            Assert.True(ExecutableExtensionBoundary.TryStageFile(
+                pluginDirectory,
+                pluginPath,
+                ExtractorPluginRegistry.MaxPluginAssemblyBytes,
+                out var staging,
+                out _));
+            var stagingDirectory = staging!.StagingDirectory;
+            Assert.True(PluginDependencyStager.TryStageManagedDependencies(
+                pluginDirectory,
+                staging,
+                ExtractorPluginRegistry.MaxPluginAssemblyBytes,
+                out _,
+                out _));
+
+            staging.Dispose();
+
+            Assert.False(Directory.Exists(stagingDirectory));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
@@ -968,6 +1027,26 @@ public class ExtractorPluginRegistryTests
         var path = Path.Combine(projectRoot, ".cdidx", "patterns", fileName);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, content);
+    }
+
+    private static void CopyPluginFixture(string pluginPath)
+    {
+        var sourceAssembly = Assembly.GetExecutingAssembly().Location;
+        var sourceDirectory = Path.GetDirectoryName(sourceAssembly)!;
+        var destinationDirectory = Path.GetDirectoryName(pluginPath)!;
+        Directory.CreateDirectory(destinationDirectory);
+        foreach (var dependencyPath in Directory.EnumerateFiles(sourceDirectory, "*.dll", SearchOption.TopDirectoryOnly))
+        {
+            if (string.Equals(dependencyPath, sourceAssembly, StringComparison.Ordinal))
+                continue;
+
+            File.Copy(
+                dependencyPath,
+                Path.Combine(destinationDirectory, Path.GetFileName(dependencyPath)),
+                overwrite: true);
+        }
+
+        File.Copy(sourceAssembly, pluginPath, overwrite: true);
     }
 
     private static string BuildPatternConfigWithOverlongScalar(string scalarName)

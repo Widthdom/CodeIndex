@@ -1,6 +1,9 @@
 using System.Buffers;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
+using System.Security.Principal;
 using CodeIndex.Cli;
 
 namespace CodeIndex.Indexer.Extensibility;
@@ -49,7 +52,7 @@ internal sealed class ExecutableExtensionStagingHandle : IDisposable
             }
             else if (File.Exists(StagedPath))
             {
-                File.SetAttributes(StagedPath, FileAttributes.Normal);
+                NormalizeWindowsStagingAttributes(stagingDirectory);
             }
 
             if (Directory.Exists(stagingDirectory))
@@ -59,6 +62,12 @@ internal sealed class ExecutableExtensionStagingHandle : IDisposable
         {
             // Best effort. A process exit also makes any staged assembly unreachable by cdidx.
         }
+    }
+
+    private static void NormalizeWindowsStagingAttributes(string directory)
+    {
+        foreach (var path in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+            File.SetAttributes(path, FileAttributes.Normal);
     }
 }
 
@@ -110,7 +119,7 @@ internal static class ExecutableExtensionBoundary
                 }
 
                 if (!isSymlinkOrReparsePoint
-                    && !TryValidateUnixIdentity(current.FullName, UnixDirectoryType, out failure))
+                    && !TryValidateIdentity(current.FullName, UnixDirectoryType, out failure))
                     return false;
 
                 current = current.Parent;
@@ -163,7 +172,7 @@ internal static class ExecutableExtensionBoundary
                 return false;
             }
 
-            if (!TryValidateUnixIdentity(fullSourcePath, UnixRegularFileType, out failure))
+            if (!TryValidateIdentity(fullSourcePath, UnixRegularFileType, out failure))
                 return false;
 
             if (sourceInfo.Length > maxBytes)
@@ -195,12 +204,16 @@ internal static class ExecutableExtensionBoundary
                 FileShare.Read,
                 CopyBufferBytes,
                 FileOptions.SequentialScan);
-            if (!TryValidateUnixIdentity(source, out failure))
+            if (!TryValidateIdentity(source, out failure))
                 return false;
 
-            Directory.CreateDirectory(stagingDirectory);
-            if (!OperatingSystem.IsWindows())
+            if (OperatingSystem.IsWindows())
             {
+                CreatePrivateWindowsDirectory(stagingDirectory);
+            }
+            else
+            {
+                Directory.CreateDirectory(stagingDirectory);
                 File.SetUnixFileMode(
                     stagingDirectory,
                     UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
@@ -261,8 +274,13 @@ internal static class ExecutableExtensionBoundary
         {
             try
             {
-                if (!OperatingSystem.IsWindows() && Directory.Exists(stagingDirectory))
-                    File.SetUnixFileMode(stagingDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                if (Directory.Exists(stagingDirectory))
+                {
+                    if (OperatingSystem.IsWindows())
+                        NormalizeWindowsStagingAttributes(stagingDirectory);
+                    else
+                        File.SetUnixFileMode(stagingDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                }
                 if (Directory.Exists(stagingDirectory))
                     Directory.Delete(stagingDirectory, recursive: true);
             }
@@ -276,6 +294,131 @@ internal static class ExecutableExtensionBoundary
                 "Executable extension file rejected: verified bytes could not be copied into private staging.");
             return false;
         }
+    }
+
+    private static bool TryValidateIdentity(
+        string path,
+        uint expectedFileType,
+        out ExecutableExtensionBoundaryFailure failure)
+    {
+        if (OperatingSystem.IsWindows())
+            return TryValidateWindowsIdentity(path, expectedFileType == UnixDirectoryType, out failure);
+
+        return TryValidateUnixIdentity(path, expectedFileType, out failure);
+    }
+
+    private static bool TryValidateIdentity(
+        FileStream stream,
+        out ExecutableExtensionBoundaryFailure failure)
+    {
+        if (OperatingSystem.IsWindows())
+            return TryValidateWindowsIdentity(stream.Name, isDirectory: false, out failure);
+
+        return TryValidateUnixIdentity(stream, out failure);
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static bool TryValidateWindowsIdentity(
+        string path,
+        bool isDirectory,
+        out ExecutableExtensionBoundaryFailure failure)
+    {
+        failure = default;
+        try
+        {
+            FileSystemSecurity security = isDirectory
+                ? new DirectoryInfo(path).GetAccessControl(AccessControlSections.Owner | AccessControlSections.Access)
+                : new FileInfo(path).GetAccessControl(AccessControlSections.Owner | AccessControlSections.Access);
+            var owner = security.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier;
+            using var identity = WindowsIdentity.GetCurrent();
+            var currentUser = identity.User;
+            if (owner == null || currentUser == null || !IsTrustedWindowsPrincipal(owner, currentUser, allowCreatorOwner: false))
+            {
+                failure = new(
+                    "extension_boundary_owner_mismatch",
+                    "Executable extension path rejected: every component must be owned by the current user or a Windows administrator.");
+                return false;
+            }
+
+            var unsafeRights = isDirectory
+                ? FileSystemRights.CreateFiles
+                  | FileSystemRights.CreateDirectories
+                  | FileSystemRights.Delete
+                  | FileSystemRights.DeleteSubdirectoriesAndFiles
+                  | FileSystemRights.ChangePermissions
+                  | FileSystemRights.TakeOwnership
+                : FileSystemRights.WriteData
+                  | FileSystemRights.AppendData
+                  | FileSystemRights.WriteAttributes
+                  | FileSystemRights.WriteExtendedAttributes
+                  | FileSystemRights.Delete
+                  | FileSystemRights.ChangePermissions
+                  | FileSystemRights.TakeOwnership;
+            foreach (FileSystemAccessRule rule in security.GetAccessRules(
+                         includeExplicit: true,
+                         includeInherited: true,
+                         typeof(SecurityIdentifier)))
+            {
+                if (rule.AccessControlType != AccessControlType.Allow
+                    || (rule.FileSystemRights & unsafeRights) == 0
+                    || rule.IdentityReference is not SecurityIdentifier principal
+                    || IsTrustedWindowsPrincipal(principal, currentUser, allowCreatorOwner: true))
+                {
+                    continue;
+                }
+
+                failure = new(
+                    "extension_boundary_unsafe_permissions",
+                    "Executable extension path rejected: an untrusted Windows principal has write access.");
+                return false;
+            }
+
+            return true;
+        }
+        catch (SystemException)
+        {
+            failure = new(
+                "extension_boundary_identity_inspection_failed",
+                "Executable extension path rejected: Windows owner and access rules could not be inspected.");
+            return false;
+        }
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static bool IsTrustedWindowsPrincipal(
+        SecurityIdentifier principal,
+        SecurityIdentifier currentUser,
+        bool allowCreatorOwner)
+        => principal.Equals(currentUser)
+           || principal.IsWellKnown(WellKnownSidType.LocalSystemSid)
+           || principal.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid)
+           || StringComparer.Ordinal.Equals(
+               principal.Value,
+               "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464")
+           || (allowCreatorOwner && principal.IsWellKnown(WellKnownSidType.CreatorOwnerSid));
+
+    [SupportedOSPlatform("windows")]
+    private static void CreatePrivateWindowsDirectory(string path)
+    {
+        using var identity = WindowsIdentity.GetCurrent();
+        var currentUser = identity.User
+                          ?? throw new UnauthorizedAccessException("The current Windows user SID is unavailable.");
+        var security = new DirectorySecurity();
+        security.SetOwner(currentUser);
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.AddAccessRule(new FileSystemAccessRule(
+            currentUser,
+            FileSystemRights.FullControl,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+            PropagationFlags.None,
+            AccessControlType.Allow));
+        new DirectoryInfo(path).Create(security);
+    }
+
+    private static void NormalizeWindowsStagingAttributes(string directory)
+    {
+        foreach (var path in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+            File.SetAttributes(path, FileAttributes.Normal);
     }
 
     private static bool TryValidateUnixIdentity(
