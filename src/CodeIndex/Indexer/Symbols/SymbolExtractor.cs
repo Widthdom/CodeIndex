@@ -2625,7 +2625,7 @@ public static partial class SymbolExtractor
 
         if (pluginLanguage != null
             && !PatternCache.ContainsKey(pluginLanguage)
-            && ExtractorPluginRegistry.TryGetSymbolExtractor(pluginLanguage, out var pluginExtractor))
+            && ExtractorPluginRegistry.TryGetSymbolExtractor(pluginLanguage, projectRoot, out var pluginExtractor))
         {
             var pluginSymbols = pluginExtractor.Extract(
                     fileId,

@@ -130,7 +130,7 @@ public partial class SymbolExtractorTests
                 ExtractorPluginRegistry.ReloadForTests();
                 ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(tempDir);
 
-                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("toydsl", out var extractor));
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("toydsl", tempDir, out var extractor));
                 var configured = Assert.IsType<ConfiguredSymbolExtractor>(extractor);
                 var pattern = Assert.Single(configured.PatternsForTests);
 
@@ -513,7 +513,7 @@ public partial class SymbolExtractorTests
                     "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
                 ExtractorPluginRegistry.ReloadForTests();
                 ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(tempDir);
-                Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot().PatternConfigCount);
+                Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot(tempDir).PatternConfigCount);
 
                 WritePatternConfig(
                     tempDir,
@@ -530,7 +530,7 @@ public partial class SymbolExtractorTests
                     patternConfigsAlreadyLoaded: true);
 
                 Assert.Empty(skipped);
-                Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot().PatternConfigCount);
+                Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot(tempDir).PatternConfigCount);
 
                 var symbols = SymbolExtractor.ExtractNormalized(
                     2,
@@ -542,7 +542,7 @@ public partial class SymbolExtractorTests
 
                 var symbol = Assert.Single(symbols);
                 Assert.Equal("Widget", symbol.Name);
-                Assert.Equal(2, ExtractorPluginRegistry.GetStatusSnapshot().PatternConfigCount);
+                Assert.Equal(2, ExtractorPluginRegistry.GetStatusSnapshot(tempDir).PatternConfigCount);
             }
             finally
             {

@@ -2670,8 +2670,8 @@ Downstream users can add lightweight language support without rebuilding
 - regex-backed symbol patterns are read from `.cdidx/patterns/*.yaml` and
   `~/.config/cdidx/patterns/*.yaml`; sidecars must be regular files under
   non-symlink pattern directories, discovery accepts at most 128 candidates per
-  pattern directory, each file is capped at 64 KiB / 128 rules, the process
-  loads at most 128 configured rules total, and regex matches use a 100 ms
+  pattern directory, each file is capped at 64 KiB / 128 rules, each immutable
+  workspace snapshot loads at most 128 configured rules total, and regex matches use a 100 ms
   timeout. Each sidecar is parsed, compiled, and checked against
   `SymbolKindCatalog` before its path, rules, or budget are committed. Rejected
   content is fingerprinted to suppress duplicate diagnostics, while content or
@@ -2681,7 +2681,11 @@ Downstream users can add lightweight language support without rebuilding
   active filesystem's case-sensitivity, so case-distinct sidecars remain
   distinct on case-sensitive volumes. `status --json` reports accepted files in
   `extractors.pattern_configs[]` with sanitized path, workspace/user provenance,
-  normalized language, and rule count;
+  normalized language, and rule count. Reindexing atomically replaces the
+  workspace snapshot so the old rule budget and timeout state become
+  collectible without changing other workspaces. A timed-out rule is suppressed
+  by a bounded one-minute cooldown in its owning workspace snapshot and emits a
+  workspace-scoped diagnostic;
 - `cdidx test-extractor --language <lang> --file <path> --json` runs symbol
   extraction without building an index, and `--expect-symbols <json>` compares
   the extracted JSON to a fixture. The source and expectation files are capped
@@ -4902,7 +4906,8 @@ cleared range を証明するテストが必要です。Bounded accumulation pat
 - regex ベースのシンボルパターンは `.cdidx/patterns/*.yaml` と
   `~/.config/cdidx/patterns/*.yaml` から読み込まれます。sidecar は symlink ではない
   pattern directory 配下の通常ファイルのみが対象で、探索候補は pattern directory ごとに
-  128 件まで、各ファイルは 64 KiB / 128 ルール、プロセス全体では configured rule 128 件に制限され、
+  128 件まで、各ファイルは 64 KiB / 128 ルール、immutable な workspace snapshot ごとに
+  configured rule 128 件に制限され、
   regex match には 100 ms の timeout が付きます。各 sidecar は path・rule・budget を commit する前に
   一時状態で parse / compile され、`SymbolKindCatalog` に対して kind が検証されます。拒否された内容は
   fingerprint によって重複診断を抑制し、内容または metadata の変更時、および一時的な read failure の
@@ -4911,6 +4916,9 @@ cleared range を証明するテストが必要です。Bounded accumulation pat
   filesystem の case-sensitivity に従うため、case-sensitive volume では大小文字だけが異なる sidecar も
   別々に扱われます。`status --json` の `extractors.pattern_configs[]` は、受理済み file の
   sanitization 済み path、workspace/user provenance、正規化済み language、rule count を報告します。
+  reindex は workspace snapshot を atomically に置換するため、以前の rule budget と timeout state は
+  他 workspace を変更せず回収可能になります。timeout した rule は所有する workspace snapshot 内だけで
+  上限付きの1分間 cooldown に入り、workspace-scoped diagnostic を出します。
 - `cdidx test-extractor --language <lang> --file <path> --json` は index を作らずに
   symbol extraction だけを実行し、`--expect-symbols <json>` で fixture JSON と比較できます。
   source と expectation file はそれぞれ 4 MiB に制限されます。

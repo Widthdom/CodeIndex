@@ -680,7 +680,7 @@ internal static class SymbolExtractionWorker
                     return true;
             }
 
-            ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(fullRoot);
+            ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(fullRoot);
             LoadedPatternConfigProjectRoots.Add(fullRoot);
             return true;
         }

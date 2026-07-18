@@ -276,6 +276,10 @@ bounded paths and messages.
 `path`, its `source` (`workspace` or `user`), normalized `language`, and
 `rule_count`. Workspace discovery never walks above the explicit workspace
 root, and path identity follows the active filesystem's case-sensitivity.
+Configured extractors are published as immutable workspace snapshots: the
+128-rule budget is per workspace, reindexing replaces and releases the prior
+snapshot, and a timed-out rule enters a bounded one-minute cooldown only in
+the workspace that observed the timeout.
 Accepted extension trust overrides such as `CDIDX_TRUST_WORKSPACE_PLUGINS` and
 `CDIDX_HOOKS_DIR` are also reported in sanitized `trust_overrides[]` entries.
 
@@ -575,7 +579,10 @@ bounded な path と message に加えて sanitization 済みの `category` mach
 `extractors.pattern_configs[]` は、受理された各 sidecar について sanitization 済みの
 `path`、`source`（`workspace` または `user`）、正規化済み `language`、`rule_count` を
 報告します。workspace の探索は明示された workspace root より上へ進まず、path identity は
-実際の filesystem の case-sensitivity に従います。
+実際の filesystem の case-sensitivity に従います。configured extractor は immutable な
+workspace snapshot として公開されます。128-rule budget は workspace ごとに独立し、reindex は
+以前の snapshot を置換して解放し、timeout した rule はその timeout を観測した workspace 内だけで
+上限付きの1分間 cooldown に入ります。
 受理された `CDIDX_TRUST_WORKSPACE_PLUGINS` や `CDIDX_HOOKS_DIR` などの
 拡張信頼境界 override は、sanitization 済みの `trust_overrides[]` entry としても報告されます。
 

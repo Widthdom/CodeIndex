@@ -207,7 +207,7 @@ public partial class FileIndexer
             1,
             maxDanglingFileSystemEntryScanCandidates ?? MaxDanglingFileSystemEntryScanCandidates);
         _generatedCodePatterns = GeneratedCodePatternMatcher.FromPatterns(generatedCodePatterns, ignoreCase);
-        ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(_projectRoot);
+        ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(_projectRoot);
         var pathComparer = _ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         (_submodulePaths, _submoduleAncestorPaths, _submoduleLoadWarnings) = LoadGitSubmodulePaths(_ignoreRuleRoot, _projectRoot, pathComparer);
     }

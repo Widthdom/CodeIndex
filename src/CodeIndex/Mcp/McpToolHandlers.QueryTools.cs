@@ -1463,7 +1463,7 @@ public partial class McpServer
             }
             ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(status.ProjectRoot);
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
-            status.Extractors = ExtractorPluginRegistry.GetStatusSnapshot();
+            status.Extractors = ExtractorPluginRegistry.GetStatusSnapshot(status.ProjectRoot);
             var postExtractionHookSnapshot = PostExtractionHookRunner.DiscoverDefaultMetadata();
             var postExtractionHooks = postExtractionHookSnapshot.Hooks;
             if (postExtractionHookSnapshot.Diagnostics.Count > 0)

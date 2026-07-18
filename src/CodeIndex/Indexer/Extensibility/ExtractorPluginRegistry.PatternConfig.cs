@@ -12,20 +12,20 @@ namespace CodeIndex.Indexer.Extensibility;
 
 public static partial class ExtractorPluginRegistry
 {
-    private static void TryLoadPatternConfig(string path, string source)
+    private static void TryLoadPatternConfig(PatternWorkspaceState state, string path, string source)
     {
         try
         {
             path = Path.GetFullPath(path);
-            var configText = TryReadPatternConfigText(path);
+            var configText = TryReadPatternConfigText(state, path);
             if (configText == null)
                 return;
 
             var fingerprint = CreatePatternConfigFingerprint(path, configText);
-            lock (Gate)
+            lock (state.Gate)
             {
-                if (PatternConfigPathIsLoaded(path)
-                    || (TryGetFailedPatternConfigFingerprint(path, out var failedFingerprint)
+                if (PatternConfigPathIsLoaded(state, path)
+                    || (TryGetFailedPatternConfigFingerprint(state, path, out var failedFingerprint)
                         && failedFingerprint == fingerprint))
                     return;
             }
@@ -33,56 +33,58 @@ public static partial class ExtractorPluginRegistry
             var parseResult = ParsePatternConfig(path, configText);
             if (!parseResult.Success)
             {
-                lock (Gate)
+                lock (state.Gate)
                 {
-                    if (PatternConfigPathIsLoaded(path)
-                        || (TryGetFailedPatternConfigFingerprint(path, out var failedFingerprint)
+                    if (PatternConfigPathIsLoaded(state, path)
+                        || (TryGetFailedPatternConfigFingerprint(state, path, out var failedFingerprint)
                             && failedFingerprint == fingerprint))
                     {
                         return;
                     }
 
-                    SetFailedPatternConfigFingerprint(path, fingerprint);
+                    SetFailedPatternConfigFingerprint(state, path, fingerprint);
                 }
 
                 if (parseResult.Incomplete)
-                    ReportPatternConfigSkipped(path, parseResult.FailureReason!);
+                    ReportPatternConfigSkipped(state, path, parseResult.FailureReason!);
                 else
-                    ReportPatternConfigRejected(path, parseResult.FailureReason!);
+                    ReportPatternConfigRejected(state, path, parseResult.FailureReason!);
                 return;
             }
 
-            lock (Gate)
+            lock (state.Gate)
             {
-                if (PatternConfigPathIsLoaded(path))
+                if (PatternConfigPathIsLoaded(state, path))
                     return;
 
                 var patterns = parseResult.Patterns!;
-                if (loadedPatternRuleCount > MaxPatternRulesTotal - patterns.Count)
+                if (state.RuleCount > MaxPatternRulesTotal - patterns.Count)
                 {
-                    SetFailedPatternConfigFingerprint(path, fingerprint);
-                    ReportPatternConfigRejected(path, $"too many pattern rules (maximum {MaxPatternRulesTotal})");
+                    SetFailedPatternConfigFingerprint(state, path, fingerprint);
+                    ReportPatternConfigRejected(state, path, $"too many pattern rules (maximum {MaxPatternRulesTotal})");
                     return;
                 }
 
-                SymbolExtractors[parseResult.Language!] = new ConfiguredSymbolExtractor(
+                state.SymbolExtractors[parseResult.Language!] = new ConfiguredSymbolExtractor(
                     parseResult.Language!,
                     parseResult.Extensions!,
-                    patterns);
-                loadedPatternRuleCount += patterns.Count;
-                patternConfigCount++;
-                TryMarkPatternConfigPathLoaded(path);
-                RemoveFailedPatternConfigFingerprint(path);
-                LoadedPatternConfigs.Add(new PatternConfigStatus(
+                    patterns,
+                    (sourcePath, language, kind) => ReportPatternExtractorTimeout(state, sourcePath, language, kind));
+                state.RuleCount += patterns.Count;
+                state.ConfigCount++;
+                TryMarkPatternConfigPathLoaded(state, path);
+                RemoveFailedPatternConfigFingerprint(state, path);
+                state.Configs.Add(new PatternConfigStatus(
                     DiagnosticSanitizer.ForPath(path),
                     source,
                     parseResult.Language!,
                     patterns.Count));
+                state.PublishSnapshot();
             }
         }
         catch (Exception)
         {
-            ReportPatternConfigRejected(path, "could not parse pattern config");
+            ReportPatternConfigRejected(state, path, "could not parse pattern config");
         }
     }
 
@@ -213,37 +215,37 @@ public static partial class ExtractorPluginRegistry
 
     private sealed record PatternConfigFingerprint(long Length, long LastWriteUtcTicks, string ContentHash);
 
-    private static string? TryReadPatternConfigText(string path)
+    private static string? TryReadPatternConfigText(PatternWorkspaceState state, string path)
     {
         var fileInfo = new FileInfo(path);
         if (!fileInfo.Exists)
         {
-            ReportPatternConfigRejected(path, "file does not exist");
+            ReportPatternConfigRejected(state, path, "file does not exist");
             return null;
         }
 
         var attributes = fileInfo.Attributes;
         if ((attributes & FileAttributes.Directory) != 0)
         {
-            ReportPatternConfigRejected(path, "path is a directory");
+            ReportPatternConfigRejected(state, path, "path is a directory");
             return null;
         }
 
         if (FileSystemBoundary.IsSymlinkOrReparsePoint(fileInfo))
         {
-            ReportPatternConfigRejected(path, "symbolic links and reparse points are not supported");
+            ReportPatternConfigRejected(state, path, "symbolic links and reparse points are not supported");
             return null;
         }
 
         if (fileInfo.Length > MaxPatternConfigBytes)
         {
-            ReportPatternConfigRejected(path, $"file is too large ({fileInfo.Length} bytes; maximum {MaxPatternConfigBytes})");
+            ReportPatternConfigRejected(state, path, $"file is too large ({fileInfo.Length} bytes; maximum {MaxPatternConfigBytes})");
             return null;
         }
 
         return OperatingSystem.IsWindows()
-            ? TryReadWindowsPatternConfigText(path)
-            : TryReadUnixPatternConfigText(path);
+            ? TryReadWindowsPatternConfigText(state, path)
+            : TryReadUnixPatternConfigText(state, path);
     }
 
     private static bool TryReadNextPatternConfigLine(ref ReadOnlySpan<char> remaining, out ReadOnlySpan<char> line)
@@ -277,7 +279,7 @@ public static partial class ExtractorPluginRegistry
         return line.Trim();
     }
 
-    private static string? TryReadWindowsPatternConfigText(string path)
+    private static string? TryReadWindowsPatternConfigText(PatternWorkspaceState state, string path)
     {
         using var handle = CreateFile(
             path,
@@ -289,40 +291,40 @@ public static partial class ExtractorPluginRegistry
             templateFile: IntPtr.Zero);
         if (handle.IsInvalid)
         {
-            ReportPatternConfigRejected(path, $"could not open safely (errno {Marshal.GetLastPInvokeError()})");
+            ReportPatternConfigRejected(state, path, $"could not open safely (errno {Marshal.GetLastPInvokeError()})");
             return null;
         }
 
         if (!GetFileInformationByHandle(handle, out var info))
         {
-            ReportPatternConfigRejected(path, $"could not inspect file handle (errno {Marshal.GetLastPInvokeError()})");
+            ReportPatternConfigRejected(state, path, $"could not inspect file handle (errno {Marshal.GetLastPInvokeError()})");
             return null;
         }
 
         var attributes = (FileAttributes)info.FileAttributes;
         if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
         {
-            ReportPatternConfigRejected(path, "path is not a regular file");
+            ReportPatternConfigRejected(state, path, "path is not a regular file");
             return null;
         }
 
         var size = ((long)info.FileSizeHigh << 32) | info.FileSizeLow;
         if (size > MaxPatternConfigBytes)
         {
-            ReportPatternConfigRejected(path, $"file is too large ({size} bytes; maximum {MaxPatternConfigBytes})");
+            ReportPatternConfigRejected(state, path, $"file is too large ({size} bytes; maximum {MaxPatternConfigBytes})");
             return null;
         }
 
         using var stream = new FileStream(handle, FileAccess.Read, bufferSize: 8192, isAsync: false);
-        return TryReadBoundedPatternConfigText(path, stream);
+        return TryReadBoundedPatternConfigText(state, path, stream);
     }
 
-    private static string? TryReadUnixPatternConfigText(string path)
+    private static string? TryReadUnixPatternConfigText(PatternWorkspaceState state, string path)
     {
         var fd = UnixOpen(path, GetUnixOpenFlags());
         if (fd < 0)
         {
-            ReportPatternConfigRejected(path, $"could not open safely (errno {Marshal.GetLastPInvokeError()})");
+            ReportPatternConfigRejected(state, path, $"could not open safely (errno {Marshal.GetLastPInvokeError()})");
             return null;
         }
 
@@ -330,7 +332,7 @@ public static partial class ExtractorPluginRegistry
         {
             if (!TryGetUnixFileType(fd, out var mode) || !IsRegularUnixFile(mode))
             {
-                ReportPatternConfigRejected(path, "path is not a regular file");
+                ReportPatternConfigRejected(state, path, "path is not a regular file");
                 return null;
             }
 
@@ -347,14 +349,14 @@ public static partial class ExtractorPluginRegistry
                     break;
                 if (bytesRead < 0)
                 {
-                    ReportPatternConfigRejected(path, $"could not read safely (errno {Marshal.GetLastPInvokeError()})");
+                    ReportPatternConfigRejected(state, path, $"could not read safely (errno {Marshal.GetLastPInvokeError()})");
                     return null;
                 }
 
                 stream.Write(buffer, 0, (int)bytesRead);
             }
 
-            return ValidatePatternConfigText(path, stream);
+            return ValidatePatternConfigText(state, path, stream);
         }
         finally
         {
@@ -362,7 +364,7 @@ public static partial class ExtractorPluginRegistry
         }
     }
 
-    private static string? TryReadBoundedPatternConfigText(string path, Stream stream)
+    private static string? TryReadBoundedPatternConfigText(PatternWorkspaceState state, string path, Stream stream)
     {
         using var output = new MemoryStream(MaxPatternConfigBytes + 1);
         var buffer = new byte[Math.Min(8192, MaxPatternConfigBytes + 1)];
@@ -379,15 +381,15 @@ public static partial class ExtractorPluginRegistry
             output.Write(buffer, 0, bytesRead);
         }
 
-        return ValidatePatternConfigText(path, output);
+        return ValidatePatternConfigText(state, path, output);
     }
 
-    private static string? ValidatePatternConfigText(string path, MemoryStream stream)
+    private static string? ValidatePatternConfigText(PatternWorkspaceState state, string path, MemoryStream stream)
     {
         if (stream.Length <= MaxPatternConfigBytes)
             return DecodePatternConfigText(stream);
 
-        ReportPatternConfigRejected(path, $"file is too large (more than {MaxPatternConfigBytes} bytes)");
+        ReportPatternConfigRejected(state, path, $"file is too large (more than {MaxPatternConfigBytes} bytes)");
         return null;
     }
 
