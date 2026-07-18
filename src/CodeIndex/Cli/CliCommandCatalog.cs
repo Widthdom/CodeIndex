@@ -9,6 +9,21 @@ internal static class CliCommandCatalog
         "doctor", "db", "diff", "report", "validate", "deps", "impact", "unused", "hotspots", "suggestions", "export", "import", "languages", "batch", "mcp", "lsp", "completions", "license", "help",
     ];
 
+    // Authoritative allowlist for `cdidx batch`. Keep the side-effect boundary in the
+    // shared command catalog so adding a top-level command cannot make it batch-dispatchable
+    // merely by adding a switch arm (#4582).
+    // `cdidx batch` の副作用なし command allowlist の正本。top-level command の追加だけで
+    // batch dispatch が暗黙に許可されないよう、共有 command catalog で境界を管理する (#4582)。
+    internal static readonly string[] BatchReadOnlyCommands =
+    [
+        "search", "recipes", "audit", "definition", "goto", "references", "callers", "callees",
+        "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
+        "validate", "languages", "impact", "deps", "unused", "hotspots",
+    ];
+
+    internal static bool IsBatchReadOnlyCommand(string command) =>
+        BatchReadOnlyCommands.Contains(command, StringComparer.Ordinal);
+
     internal static readonly IReadOnlyDictionary<string, string> CommandAliases =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {

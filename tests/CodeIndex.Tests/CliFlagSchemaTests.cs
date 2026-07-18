@@ -23,6 +23,18 @@ public class CliFlagSchemaTests
     }
 
     [Fact]
+    public void BatchReadOnlyCommands_AreCatalogedAndFailClosed_Issue4582()
+    {
+        var known = CliFlagSchema.AllCommands.ToHashSet(StringComparer.Ordinal);
+        Assert.All(CliCommandCatalog.BatchReadOnlyCommands, command => Assert.Contains(command, known));
+        Assert.Contains("goto", CliCommandCatalog.BatchReadOnlyCommands);
+        Assert.Contains("audit", CliCommandCatalog.BatchReadOnlyCommands);
+        Assert.DoesNotContain("index", CliCommandCatalog.BatchReadOnlyCommands);
+        Assert.DoesNotContain("import", CliCommandCatalog.BatchReadOnlyCommands);
+        Assert.DoesNotContain("hooks", CliCommandCatalog.BatchReadOnlyCommands);
+    }
+
+    [Fact]
     public void EveryFlagCommandsSet_OnlyReferencesKnownSubcommands()
     {
         var known = CliFlagSchema.AllCommands.ToHashSet(StringComparer.Ordinal);
