@@ -119,7 +119,11 @@ internal static class ExecutableExtensionBoundary
                 }
 
                 if (!isSymlinkOrReparsePoint
-                    && !TryValidateIdentity(current.FullName, UnixDirectoryType, out failure))
+                    && !TryValidateIdentity(
+                        current.FullName,
+                        UnixDirectoryType,
+                        rejectChildCreation: string.Equals(current.FullName, fullDirectory, StringComparison.OrdinalIgnoreCase),
+                        out failure))
                     return false;
 
                 current = current.Parent;
@@ -172,7 +176,7 @@ internal static class ExecutableExtensionBoundary
                 return false;
             }
 
-            if (!TryValidateIdentity(fullSourcePath, UnixRegularFileType, out failure))
+            if (!TryValidateIdentity(fullSourcePath, UnixRegularFileType, rejectChildCreation: false, out failure))
                 return false;
 
             if (sourceInfo.Length > maxBytes)
@@ -299,10 +303,17 @@ internal static class ExecutableExtensionBoundary
     private static bool TryValidateIdentity(
         string path,
         uint expectedFileType,
+        bool rejectChildCreation,
         out ExecutableExtensionBoundaryFailure failure)
     {
         if (OperatingSystem.IsWindows())
-            return TryValidateWindowsIdentity(path, expectedFileType == UnixDirectoryType, out failure);
+        {
+            return TryValidateWindowsIdentity(
+                path,
+                expectedFileType == UnixDirectoryType,
+                rejectChildCreation,
+                out failure);
+        }
 
         return TryValidateUnixIdentity(path, expectedFileType, out failure);
     }
@@ -312,7 +323,7 @@ internal static class ExecutableExtensionBoundary
         out ExecutableExtensionBoundaryFailure failure)
     {
         if (OperatingSystem.IsWindows())
-            return TryValidateWindowsIdentity(stream.Name, isDirectory: false, out failure);
+            return TryValidateWindowsIdentity(stream.Name, isDirectory: false, rejectChildCreation: false, out failure);
 
         return TryValidateUnixIdentity(stream, out failure);
     }
@@ -321,6 +332,7 @@ internal static class ExecutableExtensionBoundary
     private static bool TryValidateWindowsIdentity(
         string path,
         bool isDirectory,
+        bool rejectChildCreation,
         out ExecutableExtensionBoundaryFailure failure)
     {
         failure = default;
@@ -341,9 +353,7 @@ internal static class ExecutableExtensionBoundary
             }
 
             var unsafeRights = isDirectory
-                ? FileSystemRights.CreateFiles
-                  | FileSystemRights.CreateDirectories
-                  | FileSystemRights.Delete
+                ? FileSystemRights.Delete
                   | FileSystemRights.DeleteSubdirectoriesAndFiles
                   | FileSystemRights.ChangePermissions
                   | FileSystemRights.TakeOwnership
@@ -354,6 +364,8 @@ internal static class ExecutableExtensionBoundary
                   | FileSystemRights.Delete
                   | FileSystemRights.ChangePermissions
                   | FileSystemRights.TakeOwnership;
+            if (isDirectory && rejectChildCreation)
+                unsafeRights |= FileSystemRights.CreateFiles | FileSystemRights.CreateDirectories;
             foreach (FileSystemAccessRule rule in security.GetAccessRules(
                          includeExplicit: true,
                          includeInherited: true,
