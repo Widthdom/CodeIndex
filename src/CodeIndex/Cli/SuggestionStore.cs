@@ -284,10 +284,13 @@ public class SuggestionStore
     }
 
     /// <summary>
-    /// Atomically removes a stored suggestion by its immutable ID.
-    /// 保存済み提案を不変 ID で原子的に削除する。
+    /// Atomically removes a stored suggestion when its immutable ID and expected revision match.
+    /// 不変 ID と expected revision が一致する場合に保存済み提案を原子的に削除する。
     /// </summary>
-    public MutationResult TryDelete(string id, out SuggestionRecord? deleted)
+    public MutationResult TryDelete(
+        string id,
+        string expectedRevisionHash,
+        out SuggestionRecord? deleted)
     {
         SuggestionRecord? result = null;
         var mutationResult = WithFileLock(() =>
@@ -300,6 +303,8 @@ public class SuggestionStore
                 return MutationResult.NotDraft;
             if (IsSubmissionInFlight(records[index]))
                 return MutationResult.SubmissionInFlight;
+            if (!string.Equals(records[index].RevisionHash, expectedRevisionHash, StringComparison.Ordinal))
+                return MutationResult.RevisionConflict;
 
             result = records[index];
             records.RemoveAt(index);
@@ -308,6 +313,18 @@ public class SuggestionStore
         });
         deleted = result;
         return mutationResult;
+    }
+
+    /// <summary>
+    /// Compatibility overload that snapshots the current revision before deleting.
+    /// 削除前に現在の revision を snapshot する互換 overload。
+    /// </summary>
+    public MutationResult TryDelete(string id, out SuggestionRecord? deleted)
+    {
+        var expectedRevisionHash = LoadAll()
+            .FirstOrDefault(record => string.Equals(record.Id, id, StringComparison.Ordinal))
+            ?.RevisionHash ?? string.Empty;
+        return TryDelete(id, expectedRevisionHash, out deleted);
     }
 
     /// <summary>

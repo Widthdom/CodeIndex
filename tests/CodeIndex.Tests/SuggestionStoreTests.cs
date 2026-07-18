@@ -813,6 +813,30 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void TryDelete_RejectsStaleRevisionWithoutDeletingNewerContent_Issue4588()
+    {
+        var record = MakeRecord("bug", "csharp", "Stale delete regression");
+        Assert.True(_store.TryAdd(record));
+        var staleRevisionHash = record.RevisionHash;
+
+        var current = Assert.Single(_store.LoadAll());
+        current.Context = "newer content that must survive";
+        Assert.Equal(
+            SuggestionStore.MutationResult.Success,
+            _store.TryUpdate(current.Id, staleRevisionHash, current, out var updated));
+        Assert.NotNull(updated);
+
+        Assert.Equal(
+            SuggestionStore.MutationResult.RevisionConflict,
+            _store.TryDelete(current.Id, staleRevisionHash, out var rejected));
+
+        Assert.Null(rejected);
+        var saved = Assert.Single(_store.LoadAll());
+        Assert.Equal("newer content that must survive", saved.Context);
+        Assert.Equal(updated!.RevisionHash, saved.RevisionHash);
+    }
+
+    [Fact]
     public async Task TryAddAndSubmitAsync_ActiveSubmissionRejectsConcurrentMutation_Issue4588()
     {
         var record = MakeRecord("bug", "csharp", "Submission revision regression");
@@ -838,7 +862,7 @@ public class SuggestionStoreTests : IDisposable
         Assert.Null(rejected);
         Assert.Equal(
             SuggestionStore.MutationResult.SubmissionInFlight,
-            _store.TryDelete(current.Id, out var rejectedDelete));
+            _store.TryDelete(current.Id, submittedRevision, out var rejectedDelete));
         Assert.Null(rejectedDelete);
 
         releaseSubmission.SetResult();

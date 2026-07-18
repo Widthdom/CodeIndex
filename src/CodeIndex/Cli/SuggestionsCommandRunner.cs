@@ -195,11 +195,13 @@ internal static class SuggestionsCommandRunner
             return WriteMutationNotFound(options, jsonOptions);
         if (!IsMutableDraft(record))
             return WriteMutationNotDraft(options, jsonOptions);
-        var result = store.TryDelete(record.Id, out var deleted);
+        var result = store.TryDelete(record.Id, record.RevisionHash, out var deleted);
         if (result == SuggestionStore.MutationResult.NotDraft)
             return WriteMutationNotDraft(options, jsonOptions);
         if (result == SuggestionStore.MutationResult.SubmissionInFlight)
             return WriteMutationSubmissionInFlight(options, jsonOptions);
+        if (result == SuggestionStore.MutationResult.RevisionConflict)
+            return WriteMutationRevisionConflict(options, jsonOptions);
         if (result == SuggestionStore.MutationResult.NotFound || deleted == null)
             return WriteMutationNotFound(options, jsonOptions);
         return WriteMutationSuccess("deleted", deleted, options, jsonOptions);
@@ -224,9 +226,9 @@ internal static class SuggestionsCommandRunner
         => CommandErrorWriter.WriteJsonOrHuman(
             options.Json,
             jsonOptions,
-            $"Suggestion changed before the update could be saved: {options.Id}",
+            $"Suggestion changed before the mutation could be saved: {options.Id}",
             CommandExitCodes.UsageError,
-            "Reload the suggestion and retry the edit using its current revision_hash.",
+            "Reload the suggestion and retry using its current revision_hash.",
             category: "revision_conflict");
 
     private static int WriteMutationSubmissionInFlight(Options options, JsonSerializerOptions jsonOptions)
