@@ -41,6 +41,9 @@ public partial class DbReaderTests
         Assert.True(DbReader.ContainsRelevantStructuralTokenMarker(
             "private readonly SyntaxToken accessTokenSyntax;",
             ["access", "token"]));
+        Assert.False(DbReader.ContainsRelevantStructuralTokenMarker(
+            "private string ConnectionMultiplexerAccessToken;",
+            ["access", "token"]));
         const string headerCheck =
             "if (!cancellationToken.IsCancellationRequested && request.Headers.Authorization != null) return;";
         Assert.False(DbReader.ContainsRelevantStructuralTokenMarker(
@@ -74,10 +77,14 @@ public partial class DbReaderTests
             // token
             {{structuralTokenApi}}
             """);
+        InsertIndexedFile(
+            "src/multiplexer-access-token.cs",
+            "csharp",
+            "private string ConnectionMultiplexerAccessToken = ReadCredential();\n");
 
         var results = _reader.Search(
             "access token",
-            limit: 4,
+            limit: 5,
             resultRanking: SearchResultRanking.CredentialContext);
 
         Assert.Equal("src/request-sender.cs", results[0].Path);
@@ -87,6 +94,9 @@ public partial class DbReaderTests
         Assert.True(
             results.FindIndex(result => result.Path == "src/request-sender.cs") <
             results.FindIndex(result => result.Path == "src/structural-access-api.cs"));
+        Assert.True(
+            results.FindIndex(result => result.Path == "src/multiplexer-access-token.cs") <
+            results.FindIndex(result => result.Path == "src/loose-access-terms.cs"));
 
         InsertIndexedFile(
             "src/request-header-check.cs",

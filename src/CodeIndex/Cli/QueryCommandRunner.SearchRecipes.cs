@@ -1236,7 +1236,7 @@ public static partial class QueryCommandRunner
                 guardWindow: options.GuardWindow,
                 guardScope: options.GuardScope,
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery),
-                resultRanking: recipeQuery.ResultRanking);
+                resultRanking: GetSearchRecipeResultRanking(recipeQuery.ResultRanking, resultLimit));
             results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
             var availableCount = rows.Count;
@@ -1314,7 +1314,7 @@ public static partial class QueryCommandRunner
                 guardWindow: options.GuardWindow,
                 guardScope: options.GuardScope,
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery),
-                resultRanking: recipeQuery.ResultRanking);
+                resultRanking: GetSearchRecipeResultRanking(recipeQuery.ResultRanking, resultLimit));
             results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, recipeQuery: recipeQuery);
             var availableCount = rows.Count;
@@ -1889,6 +1889,11 @@ public static partial class QueryCommandRunner
 
         return Math.Min(options.Limit, remaining);
     }
+
+    internal static SearchResultRanking GetSearchRecipeResultRanking(
+        SearchResultRanking requestedRanking,
+        int resultLimit)
+        => resultLimit > 0 ? requestedRanking : SearchResultRanking.Default;
 
     private static int FetchLimitForSearchEnvelope(int limit)
     {

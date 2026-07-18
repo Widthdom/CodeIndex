@@ -11,6 +11,17 @@ namespace CodeIndex.Tests;
 public partial class QueryCommandRunnerTests
 {
     [Fact]
+    public void GetSearchRecipeResultRanking_BypassesContextRankingWhenTotalLimitIsExhausted_Issue4590()
+    {
+        Assert.Equal(
+            SearchResultRanking.CredentialContext,
+            QueryCommandRunner.GetSearchRecipeResultRanking(SearchResultRanking.CredentialContext, resultLimit: 1));
+        Assert.Equal(
+            SearchResultRanking.Default,
+            QueryCommandRunner.GetSearchRecipeResultRanking(SearchResultRanking.CredentialContext, resultLimit: 0));
+    }
+
+    [Fact]
     public void SearchMatchClassifier_McpSchemaDescriptionHasDedicatedOrigin_Issue4416()
     {
         const string schemaLine = "[\"tokenBoundary\"] = new JsonObject { [\"description\"] = \"Use new HttpClient as an example.\" };";

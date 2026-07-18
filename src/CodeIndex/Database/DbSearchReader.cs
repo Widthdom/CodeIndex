@@ -659,7 +659,7 @@ public partial class DbReader
         if (TryFindTightlyCoupledCredentialSpan(text, terms, out var credentialStart, out var credentialEnd))
         {
             return CredentialStructuralTokenMarkers.Any(marker =>
-                EnumerateMarkerStarts(text, marker).Any(markerStart =>
+                EnumerateStructuralMarkerStarts(text, marker).Any(markerStart =>
                 {
                     var markerEnd = markerStart + marker.Length;
                     if (markerStart < credentialEnd && credentialStart < markerEnd)
@@ -673,7 +673,7 @@ public partial class DbReader
         }
 
         return CredentialStructuralTokenMarkers.Any(marker =>
-            EnumerateMarkerStarts(text, marker).Any(markerStart =>
+            EnumerateStructuralMarkerStarts(text, marker).Any(markerStart =>
                 terms.Any(term => EnumerateMarkerStarts(text, term).Any(termStart =>
                     markerStart < termStart + term.Length && termStart < markerStart + marker.Length))));
     }
@@ -705,6 +705,12 @@ public partial class DbReader
         }
     }
 
+    private static IEnumerable<int> EnumerateStructuralMarkerStarts(string text, string marker)
+        => EnumerateMarkerStarts(text, marker)
+            .Where(markerStart =>
+                IsCredentialIdentifierBoundary(text, markerStart) &&
+                IsCredentialIdentifierBoundary(text, markerStart + marker.Length));
+
     private static bool ContainsRegexDefinitionSyntax(string text)
         => text.Contains("Regex", StringComparison.OrdinalIgnoreCase) ||
            text.Contains(".Matches(", StringComparison.OrdinalIgnoreCase) ||
@@ -712,7 +718,7 @@ public partial class DbReader
 
     private static bool ContainsStructuralTokenMarker(string text)
         => CredentialStructuralTokenMarkers.Any(marker =>
-            text.Contains(marker, StringComparison.OrdinalIgnoreCase));
+            EnumerateStructuralMarkerStarts(text, marker).Any());
 
     private static bool ContainsCredentialRankingRuleMarker(string text)
         => text.Contains("ScoreCredentialContext", StringComparison.OrdinalIgnoreCase) ||
