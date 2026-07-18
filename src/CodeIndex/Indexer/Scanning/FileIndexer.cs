@@ -19,7 +19,6 @@ public partial class FileIndexer
     private static readonly IReadOnlyDictionary<string, int> EmptyLanguageCounts =
         new Dictionary<string, int>(StringComparer.Ordinal);
     private const int MaxDirectoryTraversalDepth = 128;
-    private const int GitLfsPointerMaxBytes = 1024;
     private const int MaxGitmodulesBytes = 256 * 1024;
     private const int MaxGitmodulesLines = 4096;
     private const int MaxGitmodulesLineChars = 16 * 1024;
