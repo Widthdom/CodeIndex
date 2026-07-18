@@ -2097,6 +2097,7 @@ public partial class IndexCommandRunnerTests
         var projectRoot = CreateTempProject();
         try
         {
+            ExtractorPluginRegistry.ReloadForTests();
             File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('app')\n");
             var sourcePath = Path.Combine(projectRoot, "sample.issue4592");
             File.WriteAllText(sourcePath, "type AddedPattern\n");
@@ -2119,16 +2120,29 @@ public partial class IndexCommandRunnerTests
 
             File.WriteAllText(
                 patternPath,
-                "language: \"issue4592dsl\"\nextensions:\n  - extension: \".issue4592\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>[A-Za-z]+)\"\n");
-            File.WriteAllText(sourcePath, "entity EditedPattern\n");
+                "language: \"issue4592dsl\"\nextensions:\n  - extension: \".issue4592edited\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>[A-Za-z]+)\"\n");
+            File.WriteAllText(sourcePath, "entity StalePattern\n");
+            var editedSourcePath = Path.Combine(projectRoot, "sample.issue4592edited");
+            File.WriteAllText(editedSourcePath, "entity EditedPattern\n");
 
             var (editExitCode, editJson) = RunAndCaptureJson([projectRoot, "--files", patternPath, "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, editExitCode);
             Assert.True(editJson.GetProperty("summary").TryGetProperty("files_total", out _));
             Assert.DoesNotContain(".cdidx/patterns/issue4592.yaml", ReadIndexedPaths(dbPath));
+            Assert.DoesNotContain("sample.issue4592", ReadIndexedPaths(dbPath));
+            Assert.Contains("sample.issue4592edited", ReadIndexedPaths(dbPath));
             Assert.Empty(ReadIndexedSymbolNames(dbPath, "AddedPattern"));
             Assert.Single(ReadIndexedSymbolNames(dbPath, "EditedPattern"));
+
+            File.Delete(patternPath);
+
+            var (deleteExitCode, deleteJson) = RunAndCaptureJson([projectRoot, "--files", patternPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, deleteExitCode);
+            Assert.True(deleteJson.GetProperty("summary").TryGetProperty("files_total", out _));
+            Assert.DoesNotContain("sample.issue4592edited", ReadIndexedPaths(dbPath));
+            Assert.Empty(ReadIndexedSymbolNames(dbPath, "EditedPattern"));
         }
         finally
         {

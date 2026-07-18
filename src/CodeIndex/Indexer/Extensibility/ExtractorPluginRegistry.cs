@@ -26,6 +26,8 @@ public static partial class ExtractorPluginRegistry
     private static readonly object Gate = new();
     private static readonly Dictionary<string, ISymbolExtractor> SymbolExtractors = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, IReferenceExtractor> ReferenceExtractors = new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, ISymbolExtractor> RegisteredSymbolExtractors = new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, IReferenceExtractor> RegisteredReferenceExtractors = new(StringComparer.Ordinal);
     private static readonly List<string> LoadedPluginAssemblyPaths = [];
     private static readonly HashSet<string> LoadedPatternConfigPaths = new(StringComparer.OrdinalIgnoreCase);
     private static readonly List<AssemblyLoadContext> LoadedPluginAssemblyContexts = [];
@@ -142,10 +144,32 @@ public static partial class ExtractorPluginRegistry
         ArgumentNullException.ThrowIfNull(extractor);
         var language = NormalizePluginLanguage(extractor.Language);
         lock (Gate)
+        {
+            RegisteredSymbolExtractors[language] = extractor;
             SymbolExtractors[language] = extractor;
+        }
     }
 
     public static void Register(IReferenceExtractor extractor)
+    {
+        ArgumentNullException.ThrowIfNull(extractor);
+        var language = NormalizePluginLanguage(extractor.Language);
+        lock (Gate)
+        {
+            RegisteredReferenceExtractors[language] = extractor;
+            ReferenceExtractors[language] = extractor;
+        }
+    }
+
+    private static void RegisterDiscovered(ISymbolExtractor extractor)
+    {
+        ArgumentNullException.ThrowIfNull(extractor);
+        var language = NormalizePluginLanguage(extractor.Language);
+        lock (Gate)
+            SymbolExtractors[language] = extractor;
+    }
+
+    private static void RegisterDiscovered(IReferenceExtractor extractor)
     {
         ArgumentNullException.ThrowIfNull(extractor);
         var language = NormalizePluginLanguage(extractor.Language);
@@ -159,6 +183,8 @@ public static partial class ExtractorPluginRegistry
         {
             SymbolExtractors.Clear();
             ReferenceExtractors.Clear();
+            RegisteredSymbolExtractors.Clear();
+            RegisteredReferenceExtractors.Clear();
             LoadedPluginAssemblyPaths.Clear();
             LoadedPatternConfigPaths.Clear();
             UnloadPluginAssemblyContexts();
@@ -179,6 +205,8 @@ public static partial class ExtractorPluginRegistry
         {
             SymbolExtractors.Clear();
             ReferenceExtractors.Clear();
+            RegisteredSymbolExtractors.Clear();
+            RegisteredReferenceExtractors.Clear();
             LoadedPluginAssemblyPaths.Clear();
             LoadedPatternConfigPaths.Clear();
             UnloadPluginAssemblyContexts();
@@ -241,6 +269,35 @@ public static partial class ExtractorPluginRegistry
         LoadPluginsForProjectRoot(projectRoot);
         foreach (var patternPath in EnumeratePatternConfigPaths(Path.GetFullPath(projectRoot)))
             TryLoadPatternConfig(patternPath);
+    }
+
+    internal static void RefreshProjectExtractorInputs(string projectRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
+        var fullProjectRoot = Path.GetFullPath(projectRoot);
+        lock (Gate)
+        {
+            SymbolExtractors.Clear();
+            foreach (var (language, extractor) in RegisteredSymbolExtractors)
+                SymbolExtractors[language] = extractor;
+
+            ReferenceExtractors.Clear();
+            foreach (var (language, extractor) in RegisteredReferenceExtractors)
+                ReferenceExtractors[language] = extractor;
+
+            LoadedPluginAssemblyPaths.Clear();
+            LoadedPatternConfigPaths.Clear();
+            UnloadPluginAssemblyContexts();
+            Diagnostics.Clear();
+            pluginAssemblyCount = 0;
+            patternConfigCount = 0;
+            skippedFileCount = 0;
+            diagnosticTotalCount = 0;
+            loadedPatternRuleCount = 0;
+            pluginsLoaded = false;
+        }
+
+        LoadPatternConfigsForProjectRoot(fullProjectRoot);
     }
 
     internal static void LoadPatternConfigsForPath(string? path)

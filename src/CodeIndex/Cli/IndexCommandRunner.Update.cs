@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
 
@@ -80,6 +81,9 @@ public static partial class IndexCommandRunner
             || typeScriptJavaScriptConfigChanged
             || extractorConfigurationChanged)
         {
+            if (extractorConfigurationChanged)
+                ExtractorPluginRegistry.RefreshProjectExtractorInputs(projectRoot);
+
             if (!options.Json && !options.Quiet)
             {
                 var reason = extractorConfigurationChanged

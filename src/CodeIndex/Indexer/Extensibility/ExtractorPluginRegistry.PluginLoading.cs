@@ -226,10 +226,10 @@ public static partial class ExtractorPluginRegistry
         {
             var instance = Activator.CreateInstance(type);
             if (supportsSymbolExtraction && instance is ISymbolExtractor symbolExtractor)
-                Register(symbolExtractor);
+                RegisterDiscovered(symbolExtractor);
 
             if (supportsReferenceExtraction && instance is IReferenceExtractor referenceExtractor)
-                Register(referenceExtractor);
+                RegisterDiscovered(referenceExtractor);
         }
         catch (Exception ex)
         {

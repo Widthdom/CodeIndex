@@ -124,7 +124,7 @@ public static partial class ExtractorPluginRegistry
 
             if (language.Length > 0 && patterns.Count > 0)
             {
-                Register(new ConfiguredSymbolExtractor(language, extensions, patterns));
+                RegisterDiscovered(new ConfiguredSymbolExtractor(language, extensions, patterns));
                 lock (Gate)
                     patternConfigCount++;
             }
