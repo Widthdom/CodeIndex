@@ -28,6 +28,7 @@ public static partial class ExtractorPluginRegistry
     private static readonly Dictionary<string, IReferenceExtractor> ReferenceExtractors = new(StringComparer.Ordinal);
     private static readonly List<string> LoadedPluginAssemblyPaths = [];
     private static readonly HashSet<string> LoadedPatternConfigPaths = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string, PatternConfigFingerprint> FailedPatternConfigFingerprints = new(StringComparer.OrdinalIgnoreCase);
     private static readonly List<AssemblyLoadContext> LoadedPluginAssemblyContexts = [];
     private static readonly IReadOnlyList<string> PatternConfigSearchPatterns = ["*.yaml", "*.yml"];
     private static readonly IReadOnlyDictionary<string, string> EmptyLanguageExtensions =
@@ -161,6 +162,7 @@ public static partial class ExtractorPluginRegistry
             ReferenceExtractors.Clear();
             LoadedPluginAssemblyPaths.Clear();
             LoadedPatternConfigPaths.Clear();
+            FailedPatternConfigFingerprints.Clear();
             UnloadPluginAssemblyContexts();
             Diagnostics.Clear();
             pluginAssemblyCount = 0;
@@ -181,6 +183,7 @@ public static partial class ExtractorPluginRegistry
             ReferenceExtractors.Clear();
             LoadedPluginAssemblyPaths.Clear();
             LoadedPatternConfigPaths.Clear();
+            FailedPatternConfigFingerprints.Clear();
             UnloadPluginAssemblyContexts();
             Diagnostics.Clear();
             pluginAssemblyCount = 0;
@@ -216,6 +219,9 @@ public static partial class ExtractorPluginRegistry
 
     internal static void LoadPluginForTests(string pluginPath)
         => TryLoadPlugin(pluginPath);
+
+    internal static void LoadPatternConfigForTests(string patternPath)
+        => TryLoadPatternConfig(patternPath);
 
     internal static bool TryMarkPluginAssemblyPathLoadedForTests(string pluginPath)
     {

@@ -437,7 +437,7 @@ public partial class SymbolExtractorTests
                 var rules = string.Join(
                     "\n",
                     Enumerable.Range(0, ExtractorPluginRegistry.MaxPatternRulesPerConfig + 1)
-                        .Select(i => $"  - kind: \"class{i}\"\n    regex: \"^entity{i} (?<name>\\\\w+)\""));
+                        .Select(i => $"  - kind: \"class\"\n    regex: \"^entity{i} (?<name>\\\\w+)\""));
                 WritePatternConfig(
                     tempDir,
                     $"language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n{rules}\n");
@@ -471,7 +471,7 @@ public partial class SymbolExtractorTests
                 var rules = string.Join(
                     "\n",
                     Enumerable.Range(0, ExtractorPluginRegistry.MaxPatternRulesTotal)
-                        .Select(i => $"  - kind: \"class{i}\"\n    regex: \"^entity{i} (?<name>\\\\w+)\""));
+                        .Select(i => $"  - kind: \"class\"\n    regex: \"^entity{i} (?<name>\\\\w+)\""));
                 WritePatternConfig(
                     tempDir,
                     "first.yaml",
@@ -479,7 +479,7 @@ public partial class SymbolExtractorTests
                 WritePatternConfig(
                     tempDir,
                     "second.yaml",
-                    "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"overflow\"\n    regex: \"^never (?<name>\\\\w+)\"\n  - kind: \"overflow2\"\n    regex: \"^alsoNever (?<name>\\\\w+)\"\n");
+                    "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^never (?<name>\\\\w+)\"\n  - kind: \"class\"\n    regex: \"^alsoNever (?<name>\\\\w+)\"\n");
                 ExtractorPluginRegistry.ReloadForTests();
 
                 var stderr = ConsoleCapture.CaptureError(() =>

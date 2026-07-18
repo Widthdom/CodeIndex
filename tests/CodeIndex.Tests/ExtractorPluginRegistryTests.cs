@@ -590,6 +590,122 @@ public class ExtractorPluginRegistryTests
     }
 
     [Fact]
+    public void LoadPatternConfig_InvalidRegexDoesNotConsumeBudgetAndRepairedContentRetries_Issue4593()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_transactional_pattern_4593");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                var patternPath = Path.Combine(projectRoot, ".cdidx", "patterns", "transactional.yaml");
+                WritePatternConfig(
+                    projectRoot,
+                    "transactional.yaml",
+                    "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"(?<name>\"\n");
+
+                Parallel.For(
+                    fromInclusive: 0,
+                    toExclusive: 4,
+                    _ => ExtractorPluginRegistry.LoadPatternConfigForTests(patternPath));
+                ExtractorPluginRegistry.LoadPatternConfigForTests(patternPath);
+
+                var rejectedStatus = ExtractorPluginRegistry.GetStatusSnapshot();
+                Assert.Equal(0, rejectedStatus.PatternConfigCount);
+                Assert.Equal(1, rejectedStatus.DiagnosticCount);
+                Assert.False(ExtractorPluginRegistry.TryGetSymbolExtractor("toydsl", out _));
+
+                var rules = string.Join(
+                    "\n",
+                    Enumerable.Range(0, ExtractorPluginRegistry.MaxPatternRulesTotal)
+                        .Select(i => $"  - kind: \"class\"\n    regex: \"^entity{i} (?<name>\\\\w+)\""));
+                WritePatternConfig(
+                    projectRoot,
+                    "transactional.yaml",
+                    $"language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n{rules}\n");
+
+                Parallel.For(
+                    fromInclusive: 0,
+                    toExclusive: 4,
+                    _ => ExtractorPluginRegistry.LoadPatternConfigForTests(patternPath));
+
+                var loadedStatus = ExtractorPluginRegistry.GetStatusSnapshot();
+                Assert.Equal(1, loadedStatus.PatternConfigCount);
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("toydsl", out var extractor));
+                Assert.Equal(
+                    ExtractorPluginRegistry.MaxPatternRulesTotal,
+                    Assert.IsType<ConfiguredSymbolExtractor>(extractor).PatternsForTests.Count);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPatternConfig_RejectsUnknownSymbolKindBeforeRegistration_Issue4593()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_unknown_kind_4593");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                WritePatternConfig(
+                    projectRoot,
+                    "unknown-kind.yaml",
+                    "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"not_a_symbol_kind\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
+
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
+
+                var status = ExtractorPluginRegistry.GetStatusSnapshot();
+                Assert.Equal(0, status.PatternConfigCount);
+                Assert.False(ExtractorPluginRegistry.TryGetSymbolExtractor("toydsl", out _));
+                var diagnostic = Assert.Single(status.Diagnostics!);
+                Assert.Equal("invalid_pattern_config", diagnostic.Category);
+                Assert.Contains("unknown symbol kind", diagnostic.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPatternConfig_TransientMissingFileCanBeLoadedAfterCreation_Issue4593()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_transient_read_4593");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                var patternPath = Path.Combine(projectRoot, ".cdidx", "patterns", "later.yaml");
+
+                ExtractorPluginRegistry.LoadPatternConfigForTests(patternPath);
+                WritePatternConfig(
+                    projectRoot,
+                    "later.yaml",
+                    "language: \"laterdsl\"\nextensions:\n  - extension: \".later\"\npatterns:\n  - kind: \"class\"\n    regex: \"^later (?<name>\\\\w+)\"\n");
+
+                ExtractorPluginRegistry.LoadPatternConfigForTests(patternPath);
+
+                Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot().PatternConfigCount);
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("laterdsl", out _));
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void LoadPatternConfigs_RejectsOverlongScalarValues_3245()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_scalar_caps");
@@ -701,7 +817,7 @@ public class ExtractorPluginRegistryTests
     }
 
     [Fact]
-    public void LoadPatternConfigs_SanitizesKindInRegexLengthRejection_Issue3821()
+    public void LoadPatternConfigs_SanitizesUnknownKindRejection_Issues3821And4593()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_pattern_kind_sanitized_3821");
         lock (TestConsoleLock.Gate)
@@ -718,7 +834,7 @@ public class ExtractorPluginRegistryTests
                 var diagnostic = Assert.Single(ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!);
 
                 Assert.Equal("invalid_pattern_config", diagnostic.Category);
-                Assert.Contains("regex for kind", diagnostic.Message, StringComparison.Ordinal);
+                Assert.Contains("unknown symbol kind", diagnostic.Message, StringComparison.Ordinal);
                 Assert.DoesNotContain("/private/secret", diagnostic.Message, StringComparison.Ordinal);
             }
             finally
