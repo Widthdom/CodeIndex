@@ -81,8 +81,8 @@ public static partial class IndexCommandRunner
                 var reason = typeScriptJavaScriptConfigChanged
                     ? "JavaScript/TypeScript config changes"
                     : "ignore-file changes";
-                Console.WriteLine($"  Detected {reason}; falling back to a full scan to keep the index aligned.");
-                Console.WriteLine();
+                CommandOutputWriter.WriteLine($"  Detected {reason}; falling back to a full scan to keep the index aligned.");
+                CommandOutputWriter.WriteLine();
             }
 
             return RunFullScan(
@@ -118,7 +118,7 @@ public static partial class IndexCommandRunner
         }
 
         if (!options.Json && !options.Quiet)
-            Console.WriteLine($"Updating {ConsoleUi.Counted(targetPaths.Count, "file")}...");
+            CommandOutputWriter.WriteLine($"Updating {ConsoleUi.Counted(targetPaths.Count, "file")}...");
         CancellationTokenSource? updateCts = null;
         var interactiveUpdateSpinner = !options.Json && !options.Quiet && ConsoleUi.ShouldUseInteractiveConsole();
         int updated = 0, removed = 0, skipped = 0, warnings = 0, errors = 0;
@@ -262,7 +262,7 @@ public static partial class IndexCommandRunner
             }
 
             PauseUpdateSpinnerForConsoleWrite();
-            Console.WriteLine(message);
+            CommandOutputWriter.WriteLine(message);
             ResumeUpdateSpinnerAfterConsoleWrite();
         }
 
@@ -516,7 +516,7 @@ public static partial class IndexCommandRunner
                             if (options.Verbose && !options.Json && !options.Quiet)
                             {
                                 PauseUpdateSpinnerForConsoleWrite();
-                                Console.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
+                                CommandOutputWriter.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
                                 ResumeUpdateSpinnerAfterConsoleWrite();
                             }
                             continue;
@@ -535,7 +535,7 @@ public static partial class IndexCommandRunner
                             if (options.Verbose && !options.Json && !options.Quiet)
                             {
                                 PauseUpdateSpinnerForConsoleWrite();
-                                Console.WriteLine($"  [DEL ] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
+                                CommandOutputWriter.WriteLine($"  [DEL ] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
                                 ResumeUpdateSpinnerAfterConsoleWrite();
                             }
                         }
@@ -545,7 +545,7 @@ public static partial class IndexCommandRunner
                             if (options.Verbose && !options.Json)
                             {
                                 PauseUpdateSpinnerForConsoleWrite();
-                                Console.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
+                                CommandOutputWriter.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
                                 ResumeUpdateSpinnerAfterConsoleWrite();
                             }
                         }
@@ -622,7 +622,7 @@ public static partial class IndexCommandRunner
                                 if (options.Verbose && !options.Json && !options.Quiet)
                                 {
                                     PauseUpdateSpinnerForConsoleWrite();
-                                    Console.WriteLine($"  [DEL ] {relPath} (unsupported renamed target)");
+                                    CommandOutputWriter.WriteLine($"  [DEL ] {relPath} (unsupported renamed target)");
                                     ResumeUpdateSpinnerAfterConsoleWrite();
                                 }
                             }
@@ -632,7 +632,7 @@ public static partial class IndexCommandRunner
                                 if (options.Verbose && !options.Json && !options.Quiet)
                                 {
                                     PauseUpdateSpinnerForConsoleWrite();
-                                    Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
+                                    CommandOutputWriter.WriteLine($"  [SKIP] {relPath} (unsupported type)");
                                     ResumeUpdateSpinnerAfterConsoleWrite();
                                 }
                             }
@@ -652,7 +652,7 @@ public static partial class IndexCommandRunner
                             if (options.Verbose && !options.Json && !options.Quiet)
                             {
                                 PauseUpdateSpinnerForConsoleWrite();
-                                Console.WriteLine($"  [DEL ] {relPath} (no longer indexable)");
+                                CommandOutputWriter.WriteLine($"  [DEL ] {relPath} (no longer indexable)");
                                 ResumeUpdateSpinnerAfterConsoleWrite();
                             }
                         }
@@ -662,7 +662,7 @@ public static partial class IndexCommandRunner
                             if (options.Verbose && !options.Json)
                             {
                                 PauseUpdateSpinnerForConsoleWrite();
-                                Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
+                                CommandOutputWriter.WriteLine($"  [SKIP] {relPath} (unsupported type)");
                                 ResumeUpdateSpinnerAfterConsoleWrite();
                             }
                         }
@@ -722,7 +722,7 @@ public static partial class IndexCommandRunner
                         if (options.Verbose && !options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
-                            Console.WriteLine($"  [SKIP] {relPath} (unchanged)");
+                            CommandOutputWriter.WriteLine($"  [SKIP] {relPath} (unchanged)");
                             ResumeUpdateSpinnerAfterConsoleWrite();
                         }
                         continue;
@@ -789,7 +789,7 @@ public static partial class IndexCommandRunner
                         if (options.Verbose && !options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
-                            Console.WriteLine(purged > 0
+                            CommandOutputWriter.WriteLine(purged > 0
                                 ? $"  [SKIP] {relPath} (unchanged; purged {purged:N0} stale renamed path(s))"
                                 : $"  [SKIP] {relPath} (unchanged)");
                             ResumeUpdateSpinnerAfterConsoleWrite();
@@ -1121,7 +1121,7 @@ public static partial class IndexCommandRunner
         PauseUpdateSpinnerForConsoleWrite();
 
         if (purgedRefs > 0 && !options.Json && !options.Quiet)
-            Console.WriteLine($"  Purged {purgedRefs:N0} stale references (unsupported language)");
+            CommandOutputWriter.WriteLine($"  Purged {purgedRefs:N0} stale references (unsupported language)");
 
         var ftsOptimizeRan = false;
         if (ftsMutated)
@@ -1321,7 +1321,7 @@ public static partial class IndexCommandRunner
 
         if (options.Json)
         {
-            Console.WriteLine(JsonSerializer.Serialize(new IndexUpdateJsonResult
+            CommandOutputWriter.WriteLine(JsonSerializer.Serialize(new IndexUpdateJsonResult
             {
                 Status = errors > 0 ? "partial" : "success",
                 Mode = "update",
@@ -1368,30 +1368,30 @@ public static partial class IndexCommandRunner
         }
         else
         {
-            Console.WriteLine();
-            Console.WriteLine();
-            Console.WriteLine("Done.");
-            Console.WriteLine();
-            Console.WriteLine(ConsoleUi.FormatSummaryLine("Files", $"{ConsoleUi.FormatNumber(totalFiles)} (total in DB)", indent: "  "));
-            Console.WriteLine(ConsoleUi.FormatSummaryLine("Chunks", ConsoleUi.FormatNumber(totalChunks), indent: "  "));
-            Console.WriteLine(ConsoleUi.FormatSummaryLine("Symbols", ConsoleUi.FormatNumber(totalSymbols), indent: "  "));
-            Console.WriteLine(ConsoleUi.FormatSummaryLine("Refs", ConsoleUi.FormatNumber(totalReferences), indent: "  "));
-            Console.WriteLine(ConsoleUi.FormatSummaryLine("Updated", ConsoleUi.FormatNumber(updated), indent: "  "));
-            if (removed > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Removed", ConsoleUi.FormatNumber(removed), indent: "  "));
-            if (skipped > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Skipped", ConsoleUi.FormatNumber(skipped), indent: "  "));
-            if (warnings > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Warnings", ConsoleUi.FormatNumber(warnings), indent: "  "));
-            if (errors > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Errors", ConsoleUi.FormatNumber(errors), indent: "  "));
-            if (symbolsDroppedByKindFilter > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Filtered symbols", ConsoleUi.FormatNumber(symbolsDroppedByKindFilter), indent: "  "));
-            if (ftsOptimizeRan) Console.WriteLine(ConsoleUi.FormatSummaryLine("FTS optimize", "completed", indent: "  "));
-            Console.WriteLine(ConsoleUi.FormatSummaryLine("Graph", graphTableAvailableAfter ? "ready" : "degraded", indent: "  "));
-            Console.WriteLine(ConsoleUi.FormatSummaryLine("Issues", issuesTableAvailableAfter ? "ready" : "degraded", indent: "  "));
-            Console.WriteLine(ConsoleUi.FormatSummaryLine("SQL graph", sqlGraphContractReadyAfter ? "ready" : "degraded", indent: "  "));
-            Console.WriteLine(ConsoleUi.FormatSummaryLine("Hotspots", hotspotFamilyReadyAfter ? "ready" : "degraded", indent: "  "));
-            Console.WriteLine(ConsoleUi.FormatSummaryLine("C# names", csharpSymbolNameReadyAfter ? "ready" : "degraded", indent: "  "));
-            Console.WriteLine(ConsoleUi.FormatSummaryLine("C# meta", csharpMetadataTargetReadyAfter ? "ready" : "degraded", indent: "  "));
-            Console.WriteLine(ConsoleUi.FormatSummaryLine("Fold", foldReadyAfter ? "ready" : "degraded", indent: "  "));
-            Console.WriteLine(ConsoleUi.FormatSummaryLine("Elapsed", ConsoleUi.FormatDuration(stopwatch.Elapsed, options.DurationFormat), indent: "  "));
-            Console.WriteLine();
+            CommandOutputWriter.WriteLine();
+            CommandOutputWriter.WriteLine();
+            CommandOutputWriter.WriteLine("Done.");
+            CommandOutputWriter.WriteLine();
+            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Files", $"{ConsoleUi.FormatNumber(totalFiles)} (total in DB)", indent: "  "));
+            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Chunks", ConsoleUi.FormatNumber(totalChunks), indent: "  "));
+            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Symbols", ConsoleUi.FormatNumber(totalSymbols), indent: "  "));
+            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Refs", ConsoleUi.FormatNumber(totalReferences), indent: "  "));
+            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Updated", ConsoleUi.FormatNumber(updated), indent: "  "));
+            if (removed > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Removed", ConsoleUi.FormatNumber(removed), indent: "  "));
+            if (skipped > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Skipped", ConsoleUi.FormatNumber(skipped), indent: "  "));
+            if (warnings > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Warnings", ConsoleUi.FormatNumber(warnings), indent: "  "));
+            if (errors > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Errors", ConsoleUi.FormatNumber(errors), indent: "  "));
+            if (symbolsDroppedByKindFilter > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Filtered symbols", ConsoleUi.FormatNumber(symbolsDroppedByKindFilter), indent: "  "));
+            if (ftsOptimizeRan) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("FTS optimize", "completed", indent: "  "));
+            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Graph", graphTableAvailableAfter ? "ready" : "degraded", indent: "  "));
+            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Issues", issuesTableAvailableAfter ? "ready" : "degraded", indent: "  "));
+            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("SQL graph", sqlGraphContractReadyAfter ? "ready" : "degraded", indent: "  "));
+            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Hotspots", hotspotFamilyReadyAfter ? "ready" : "degraded", indent: "  "));
+            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("C# names", csharpSymbolNameReadyAfter ? "ready" : "degraded", indent: "  "));
+            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("C# meta", csharpMetadataTargetReadyAfter ? "ready" : "degraded", indent: "  "));
+            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Fold", foldReadyAfter ? "ready" : "degraded", indent: "  "));
+            CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Elapsed", ConsoleUi.FormatDuration(stopwatch.Elapsed, options.DurationFormat), indent: "  "));
+            CommandOutputWriter.WriteLine();
             if (errors > 0)
                 ConsoleUi.PrintWarning($"Some files failed to update. Fix the reported files or permissions, then rerun `cdidx index \"{projectRoot}\"` to restore a fully ready index.");
             if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !sqlGraphContractReadyAfter || !hotspotFamilyReadyAfter || !csharpSymbolNameReadyAfter || !csharpMetadataTargetReadyAfter || !foldReadyAfter)

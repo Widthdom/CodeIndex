@@ -107,7 +107,15 @@ public static partial class IndexCommandRunner
         Run(indexArgs, jsonOptions, cancellationForTesting: null);
 
     internal static int Run(string[] indexArgs, JsonSerializerOptions jsonOptions, CancellationTokenSource? cancellationForTesting)
+        => Run(indexArgs, jsonOptions, cancellationForTesting, output: null);
+
+    internal static int Run(
+        string[] indexArgs,
+        JsonSerializerOptions jsonOptions,
+        CancellationTokenSource? cancellationForTesting,
+        TextWriter? output)
     {
+        using var outputScope = output == null ? null : CommandOutputWriter.Push(output);
         RuntimeSafety.Configure();
         var options = ParseArgs(indexArgs);
         ConsoleUi.SetWidthDetectionTracing(options.Verbose && !options.Json && !options.Quiet);
@@ -181,11 +189,11 @@ public static partial class IndexCommandRunner
         if (!options.Json && !options.Quiet)
         {
             ConsoleUi.PrintBanner();
-            Console.WriteLine();
-            Console.WriteLine($"  Project : {Path.GetFullPath(options.ProjectPath!)}");
-            Console.WriteLine($"  Output  : {resolvedDbPath}");
-            Console.WriteLine($"  Mode    : {(options.OptimizeOnly ? "optimize" : mode)}");
-            Console.WriteLine();
+            CommandOutputWriter.WriteLine();
+            CommandOutputWriter.WriteLine($"  Project : {Path.GetFullPath(options.ProjectPath!)}");
+            CommandOutputWriter.WriteLine($"  Output  : {resolvedDbPath}");
+            CommandOutputWriter.WriteLine($"  Mode    : {(options.OptimizeOnly ? "optimize" : mode)}");
+            CommandOutputWriter.WriteLine();
         }
 
         if (options.OptimizeOnly)

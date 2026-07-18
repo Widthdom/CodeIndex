@@ -501,6 +501,7 @@ public class IndexWatchRunnerTests
                             3,
                             "incremental",
                             new[] { Path.Combine(projectRoot, "a.cs"), Path.Combine(projectRoot, "b.cs") },
+                            CancellationToken.None,
                         ]));
                 }
                 finally
@@ -589,7 +590,7 @@ public class IndexWatchRunnerTests
                 {
                     exitCode = Assert.IsType<int>(method.Invoke(
                         null,
-                        [options, _jsonOptions, args, Stopwatch.StartNew(), "rescanned", null, "incremental", null]));
+                        [options, _jsonOptions, args, Stopwatch.StartNew(), "rescanned", null, "incremental", null, CancellationToken.None]));
                 }
                 finally
                 {
@@ -654,7 +655,7 @@ public class IndexWatchRunnerTests
                 {
                     exitCode = Assert.IsType<int>(method.Invoke(
                         null,
-                        [options, _jsonOptions, args, Stopwatch.StartNew(), "updated", 3, "incremental", Array.Empty<string>()]));
+                        [options, _jsonOptions, args, Stopwatch.StartNew(), "updated", 3, "incremental", Array.Empty<string>(), CancellationToken.None]));
                 }
                 finally
                 {
@@ -670,6 +671,106 @@ public class IndexWatchRunnerTests
         }
         finally
         {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void InvokeSubRunAndEmit_CancelDuringActiveUpdate_DoesNotCaptureUnrelatedStdout_Issue4591()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "target.py");
+            File.WriteAllText(sourcePath, "print('before')\n");
+            var prebuildJson = RunIndexAndCapture([projectRoot, "--db", dbPath, "--json"], out var prebuildExit);
+            Assert.Equal(CommandExitCodes.Success, prebuildExit);
+            Assert.Contains("\"status\"", prebuildJson, StringComparison.Ordinal);
+            File.WriteAllText(sourcePath, "print('after')\n");
+
+            var options = new IndexCommandOptions
+            {
+                ProjectPath = projectRoot,
+                DbPath = dbPath,
+                Json = false,
+                Watch = true,
+            };
+            var args = new List<string>
+            {
+                projectRoot,
+                "--json",
+                "--quiet",
+                "--db",
+                dbPath,
+                "--files",
+                sourcePath,
+            };
+
+            using var cts = new CancellationTokenSource();
+            using var extractionStarted = new ManualResetEventSlim();
+            const string unrelatedOutput = "unrelated-runner-stdout-4591";
+            string capturedOut;
+            string capturedErr;
+            int exitCode;
+
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                var originalErr = Console.Error;
+                using var stdout = new StringWriter();
+                using var stderr = new StringWriter();
+                Task<int>? subRunTask = null;
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+                IndexCommandRunner.UpdateExtractionWorkStartedForTesting = () =>
+                {
+                    extractionStarted.Set();
+                    cts.Token.WaitHandle.WaitOne();
+                    cts.Token.ThrowIfCancellationRequested();
+                };
+                try
+                {
+                    subRunTask = Task.Run(() => IndexWatchRunner.InvokeSubRunAndEmit(
+                        options,
+                        _jsonOptions,
+                        args,
+                        Stopwatch.StartNew(),
+                        "updated",
+                        1,
+                        "incremental",
+                        [sourcePath],
+                        cts.Token));
+
+                    Assert.True(extractionStarted.Wait(TimeSpan.FromSeconds(10)), "The watch sub-run did not start extraction work.");
+                    Console.Out.WriteLine(unrelatedOutput);
+                    cts.Cancel();
+#pragma warning disable xUnit1031 // Console redirection lock requires synchronous bounded drain.
+                    exitCode = subRunTask.WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    cts.Cancel();
+                    if (subRunTask is { IsCompleted: false })
+                        SpinWait.SpinUntil(() => subRunTask.IsCompleted, TimeSpan.FromSeconds(10));
+                    IndexCommandRunner.UpdateExtractionWorkStartedForTesting = null;
+                    Console.SetOut(originalOut);
+                    Console.SetError(originalErr);
+                }
+                capturedOut = stdout.ToString();
+                capturedErr = stderr.ToString();
+            }
+
+            Assert.Equal(CommandExitCodes.Interrupted, exitCode);
+            Assert.Contains(unrelatedOutput, capturedOut, StringComparison.Ordinal);
+            Assert.DoesNotContain(CommandErrorCodes.Interrupted, capturedOut, StringComparison.Ordinal);
+            Assert.Contains("[watch] failed", capturedErr, StringComparison.Ordinal);
+            Assert.Contains($"exit code {CommandExitCodes.Interrupted}", capturedErr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateExtractionWorkStartedForTesting = null;
             DeleteDirectory(projectRoot);
         }
     }
@@ -873,7 +974,7 @@ public class IndexWatchRunnerTests
             Assert.Equal("old_and_new_paths", contract.GetProperty("rename_events").GetString());
             Assert.Equal("full_rescan_after_debounce", contract.GetProperty("overflow_recovery").GetString());
             Assert.Equal("full_rescan_after_debounce", contract.GetProperty("watcher_error_recovery").GetString());
-            Assert.Equal("emit_stopped_after_current_poll_or_sub_run", contract.GetProperty("cancellation").GetString());
+            Assert.Equal("cancel_active_sub_run_then_emit_stopped", contract.GetProperty("cancellation").GetString());
             Assert.Equal("json_quiet_sub_runs", contract.GetProperty("sub_run_output").GetString());
             Assert.Equal("unsupported", contract.GetProperty("mcp_watch_mode").GetString());
         }

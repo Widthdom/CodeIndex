@@ -179,7 +179,7 @@ public static partial class IndexCommandRunner
         if (options.Json)
         {
             var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
-            Console.WriteLine(JsonSerializer.Serialize(new CommandErrorJsonResult(
+            CommandOutputWriter.WriteLine(JsonSerializer.Serialize(new CommandErrorJsonResult(
                 "error",
                 "--rebuild cannot be used with --commits, --changed-between, or --files (rebuild requires a full rescan)",
                 "Use one of: " + rebuildConflictSynopsis + ".",

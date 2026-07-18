@@ -189,14 +189,14 @@ internal static class IndexWatchRunner
                 if (fullRescan)
                 {
                     EmitWatchOverflow(baseOptions, jsonOptions, overflowReason, resolvedDbPath);
-                    RecordSubRunExitCode(ref watchExitCode, RunFullRescan(baseOptions, jsonOptions, resolvedDbPath));
+                    RecordSubRunExitCode(ref watchExitCode, RunFullRescan(baseOptions, jsonOptions, resolvedDbPath, cancellationToken));
                     continue;
                 }
 
                 if (batch.Count == 0)
                     continue;
 
-                RecordSubRunExitCode(ref watchExitCode, RunPartialUpdate(baseOptions, jsonOptions, batch, resolvedDbPath));
+                RecordSubRunExitCode(ref watchExitCode, RunPartialUpdate(baseOptions, jsonOptions, batch, resolvedDbPath, cancellationToken));
             }
         }
         finally
@@ -216,12 +216,13 @@ internal static class IndexWatchRunner
         IndexCommandOptions baseOptions,
         JsonSerializerOptions jsonOptions,
         IReadOnlyList<string> changedPaths,
-        string resolvedDbPath)
+        string resolvedDbPath,
+        CancellationToken cancellationToken)
     {
         var baseArgs = BuildSubRunArgs(baseOptions, resolvedDbPath);
         var batches = BuildPartialUpdateBatches(baseArgs, changedPaths);
         if (batches == null)
-            return RunFullRescan(baseOptions, jsonOptions, resolvedDbPath);
+            return RunFullRescan(baseOptions, jsonOptions, resolvedDbPath, cancellationToken);
 
         var exitCode = CommandExitCodes.Success;
         foreach (var batch in batches)
@@ -232,8 +233,10 @@ internal static class IndexWatchRunner
             args.Add("--files");
             args.AddRange(batch);
 
-            var subRunExitCode = InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "updated", batch.Count, "incremental", batch);
+            var subRunExitCode = InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "updated", batch.Count, "incremental", batch, cancellationToken);
             RecordSubRunExitCode(ref exitCode, subRunExitCode);
+            if (cancellationToken.IsCancellationRequested)
+                break;
         }
 
         return exitCode;
@@ -282,13 +285,14 @@ internal static class IndexWatchRunner
     private static int RunFullRescan(
         IndexCommandOptions baseOptions,
         JsonSerializerOptions jsonOptions,
-        string resolvedDbPath)
+        string resolvedDbPath,
+        CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
         var args = BuildSubRunArgs(baseOptions, resolvedDbPath);
         // No --files: this is a default incremental full scan.
         // --files を付けない: 通常のインクリメンタル全件スキャン。
-        return InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "rescanned", batchSize: null, "incremental", batchPaths: null);
+        return InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "rescanned", batchSize: null, "incremental", batchPaths: null, cancellationToken);
     }
 
     private static void RecordSubRunExitCode(ref int watchExitCode, int subRunExitCode)
@@ -421,7 +425,7 @@ internal static class IndexWatchRunner
         return args;
     }
 
-    private static int InvokeSubRunAndEmit(
+    internal static int InvokeSubRunAndEmit(
         IndexCommandOptions baseOptions,
         JsonSerializerOptions jsonOptions,
         List<string> args,
@@ -429,12 +433,12 @@ internal static class IndexWatchRunner
         string status,
         int? batchSize,
         string phase,
-        IReadOnlyList<string>? batchPaths)
+        IReadOnlyList<string>? batchPaths,
+        CancellationToken cancellationToken)
     {
         string capturedJson;
         string? spoolPath = null;
         int subRunExitCode;
-        var previousOut = Console.Out;
         WatchSubRunCaptureWriter? captureWriter = null;
         try
         {
@@ -448,22 +452,14 @@ internal static class IndexWatchRunner
             }
 
             captureWriter = new WatchSubRunCaptureWriter(MaxHumanSummarySubRunJsonChars + 1, spoolWriter);
-            Console.SetOut(captureWriter);
-            try
-            {
-                subRunExitCode = IndexCommandRunner.Run(args.ToArray(), jsonOptions);
-            }
-            finally
-            {
-                Console.SetOut(previousOut);
-            }
+            using var subRunCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            subRunExitCode = IndexCommandRunner.Run(args.ToArray(), jsonOptions, subRunCancellation, captureWriter);
 
             captureWriter.Flush();
             capturedJson = captureWriter.CapturedText;
         }
         finally
         {
-            Console.SetOut(previousOut);
             captureWriter?.Dispose();
         }
         stopwatch.Stop();
@@ -890,7 +886,7 @@ internal static class IndexWatchRunner
             RenameEvents = "old_and_new_paths",
             OverflowRecovery = "full_rescan_after_debounce",
             WatcherErrorRecovery = "full_rescan_after_debounce",
-            Cancellation = "emit_stopped_after_current_poll_or_sub_run",
+            Cancellation = "cancel_active_sub_run_then_emit_stopped",
             SubRunOutput = "json_quiet_sub_runs",
             McpWatchMode = "unsupported",
         };

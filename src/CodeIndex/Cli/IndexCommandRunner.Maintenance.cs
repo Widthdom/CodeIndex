@@ -105,17 +105,17 @@ public static partial class IndexCommandRunner
             if (json)
             {
                 var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
-                Console.WriteLine(JsonSerializer.Serialize(
+                CommandOutputWriter.WriteLine(JsonSerializer.Serialize(
                     new OptimizeFtsJsonResult("success", dbPath, before, after, stopwatch.ElapsedMilliseconds),
                     jsonContext.OptimizeFtsJsonResult));
             }
             else
             {
-                Console.WriteLine("Optimized FTS5 index.");
-                Console.WriteLine(ConsoleUi.FormatSummaryLine("DB", dbPath, indent: "  "));
-                Console.WriteLine(ConsoleUi.FormatSummaryLine("Writes before", before.ToString("N0", System.Globalization.CultureInfo.InvariantCulture), indent: "  "));
-                Console.WriteLine(ConsoleUi.FormatSummaryLine("Writes after", after.ToString("N0", System.Globalization.CultureInfo.InvariantCulture), indent: "  "));
-                Console.WriteLine(ConsoleUi.FormatSummaryLine("Elapsed", ConsoleUi.FormatDuration(stopwatch.Elapsed), indent: "  "));
+                CommandOutputWriter.WriteLine("Optimized FTS5 index.");
+                CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("DB", dbPath, indent: "  "));
+                CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Writes before", before.ToString("N0", System.Globalization.CultureInfo.InvariantCulture), indent: "  "));
+                CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Writes after", after.ToString("N0", System.Globalization.CultureInfo.InvariantCulture), indent: "  "));
+                CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Elapsed", ConsoleUi.FormatDuration(stopwatch.Elapsed), indent: "  "));
             }
 
             return CommandExitCodes.Success;
@@ -270,34 +270,34 @@ public static partial class IndexCommandRunner
             if (json)
             {
                 var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
-                Console.WriteLine(JsonSerializer.Serialize(result, jsonContext.OptimizeFtsPreviewJsonResult));
+                CommandOutputWriter.WriteLine(JsonSerializer.Serialize(result, jsonContext.OptimizeFtsPreviewJsonResult));
             }
             else
             {
-                Console.WriteLine("FTS5 optimize preview (read-only; no changes made).");
-                Console.WriteLine(ConsoleUi.FormatSummaryLine("DB", dbPath, indent: "  "));
-                Console.WriteLine(ConsoleUi.FormatSummaryLine("DB size", ConsoleUi.FormatBytes(result.DbSizeBytes ?? 0), indent: "  "));
-                Console.WriteLine(ConsoleUi.FormatSummaryLine("Core size", ConsoleUi.FormatBytes(result.CoreTableSizeBytes ?? 0), indent: "  "));
-                Console.WriteLine(ConsoleUi.FormatSummaryLine("FTS size", ConsoleUi.FormatBytes(result.FtsSizeBytes ?? 0), indent: "  "));
-                Console.WriteLine(ConsoleUi.FormatSummaryLine("Free pages", (result.FreelistCount ?? 0).ToString("N0", System.Globalization.CultureInfo.InvariantCulture), indent: "  "));
-                Console.WriteLine(ConsoleUi.FormatSummaryLine("FTS writes", result.WritesSinceOptimizeBefore.ToString("N0", System.Globalization.CultureInfo.InvariantCulture), indent: "  "));
-                Console.WriteLine(ConsoleUi.FormatSummaryLine("Index lock", result.LockState, indent: "  "));
-                Console.WriteLine(ConsoleUi.FormatSummaryLine(
+                CommandOutputWriter.WriteLine("FTS5 optimize preview (read-only; no changes made).");
+                CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("DB", dbPath, indent: "  "));
+                CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("DB size", ConsoleUi.FormatBytes(result.DbSizeBytes ?? 0), indent: "  "));
+                CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Core size", ConsoleUi.FormatBytes(result.CoreTableSizeBytes ?? 0), indent: "  "));
+                CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("FTS size", ConsoleUi.FormatBytes(result.FtsSizeBytes ?? 0), indent: "  "));
+                CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Free pages", (result.FreelistCount ?? 0).ToString("N0", System.Globalization.CultureInfo.InvariantCulture), indent: "  "));
+                CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("FTS writes", result.WritesSinceOptimizeBefore.ToString("N0", System.Globalization.CultureInfo.InvariantCulture), indent: "  "));
+                CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Index lock", result.LockState, indent: "  "));
+                CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine(
                     "Readiness",
                     result.Readiness == null
                         ? "unavailable"
                         : $"fold={(result.Readiness.FoldReady ? "ready" : "not-ready")}, graph={(result.Readiness.GraphTableAvailable ? "ready" : "not-ready")}, issues={(result.Readiness.IssuesTableAvailable ? "ready" : "not-ready")}, migration={(result.Readiness.MigrationInProgress ? "in-progress" : "idle")}",
                     indent: "  "));
-                Console.WriteLine(ConsoleUi.FormatSummaryLine(
+                CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine(
                     "Est. duration",
                     result.EstimatedDurationMs is { } durationEstimateMs
                         ? ConsoleUi.FormatDuration(TimeSpan.FromMilliseconds(durationEstimateMs))
                         : "unavailable",
                     indent: "  "));
-                Console.WriteLine(ConsoleUi.FormatSummaryLine("Recommended", result.OptimizationRecommended ? "yes" : "not yet", indent: "  "));
-                Console.WriteLine("  Planned operations:");
+                CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Recommended", result.OptimizationRecommended ? "yes" : "not yet", indent: "  "));
+                CommandOutputWriter.WriteLine("  Planned operations:");
                 foreach (var operation in result.PlannedOperations ?? [])
-                    Console.WriteLine($"    - {operation}");
+                    CommandOutputWriter.WriteLine($"    - {operation}");
             }
 
             return CommandExitCodes.Success;
@@ -582,7 +582,7 @@ public static partial class IndexCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(new BackfillFoldJsonResult(
+                CommandOutputWriter.WriteLine(JsonSerializer.Serialize(new BackfillFoldJsonResult(
                     symbols,
                     symbolReferences,
                     rewriteAll,
@@ -597,20 +597,20 @@ public static partial class IndexCommandRunner
             }
             else
             {
-                Console.WriteLine(options.DryRun
+                CommandOutputWriter.WriteLine(options.DryRun
                     ? "Previewing folded-name column backfill ..."
                     : "Backfilling folded-name columns ...");
                 var verb = options.DryRun ? "would be rewritten" : "rewritten";
-                Console.WriteLine($"  symbols:            {ConsoleUi.Counted(symbols, "row", format: "N0")} {verb}");
-                Console.WriteLine($"  symbol_references:  {ConsoleUi.Counted(symbolReferences, "row", format: "N0")} {verb}");
+                CommandOutputWriter.WriteLine($"  symbols:            {ConsoleUi.Counted(symbols, "row", format: "N0")} {verb}");
+                CommandOutputWriter.WriteLine($"  symbol_references:  {ConsoleUi.Counted(symbolReferences, "row", format: "N0")} {verb}");
                 if (rewriteAll)
-                    Console.WriteLine("  mode:               full folded-key refresh (fold metadata missing or mismatched)");
-                Console.WriteLine($"  already complete:   {(wasAlreadyComplete ? "yes" : "no")}");
-                Console.WriteLine($"  fold_ready:         {foldReadyBefore} -> {foldReadyAfter}");
+                    CommandOutputWriter.WriteLine("  mode:               full folded-key refresh (fold metadata missing or mismatched)");
+                CommandOutputWriter.WriteLine($"  already complete:   {(wasAlreadyComplete ? "yes" : "no")}");
+                CommandOutputWriter.WriteLine($"  fold_ready:         {foldReadyBefore} -> {foldReadyAfter}");
                 if (!options.DryRun)
                 {
-                    Console.WriteLine($"  verified:           {(verified ? "yes" : "no")}");
-                    Console.WriteLine($"  stamp:              FoldReady bit set (user_version: {userVersionBefore} -> {userVersionAfter})");
+                    CommandOutputWriter.WriteLine($"  verified:           {(verified ? "yes" : "no")}");
+                    CommandOutputWriter.WriteLine($"  stamp:              FoldReady bit set (user_version: {userVersionBefore} -> {userVersionAfter})");
                 }
             }
 
