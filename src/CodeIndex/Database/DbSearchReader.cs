@@ -35,6 +35,19 @@ public partial class DbReader
     private const string SearchContextRankingCandidatesTruncatedDiagnosticCode = "search_context_ranking_candidates_truncated";
     private const string SearchDedupStateTruncatedDiagnosticCode = "search_dedup_state_truncated";
     private const int MaxContextRankingSymbolCandidates = 200;
+    private static readonly string[] CredentialStructuralTokenMarkers =
+    [
+        "CancellationToken",
+        "SyntaxToken",
+        "SemanticToken",
+        "TokenKind",
+        "TokenType",
+        "Tokenizer",
+        "Lexer",
+        "ParserToken",
+        "ProtocolToken",
+        "LspToken",
+    ];
 
     /// <summary>
     /// Sanitize user input for FTS5 MATCH by quoting each literal term or phrase.
@@ -138,8 +151,17 @@ public partial class DbReader
         var searchMatchLineContext = SearchMatchLineContext.Create(query, lang, exactSearch);
         var exactLiteralBoost = !exactSearch && !rawQuery && ShouldBoostExactLiteralSearch(query);
         var guardedRequestedLimit = Math.Max(0, guardRequestedLimit ?? limit);
-        var guardedCandidateLimit = hasGuardFilters ? GetGuardedSearchCandidateLimit(guardedRequestedLimit, cursor) : 0;
-        var contextRankingCandidateLimit = hasContextRanking ? GetGuardedSearchCandidateLimit(limit, cursor) : 0;
+        var guardedCandidateLimit = hasGuardFilters
+            ? hasContextRanking
+                ? MaxGuardedSearchCandidates
+                : GetGuardedSearchCandidateLimit(guardedRequestedLimit, cursor)
+            : 0;
+        // Context ranking must use the same candidate universe on every page. Growing this
+        // limit with the cursor offset can insert newly inspected results ahead of the cursor
+        // and cause duplicates or omissions between pages.
+        // コンテキスト順位付けでは全ページで同じ候補集合を使う。カーソル位置に応じて候補数を
+        // 増やすと、新たな候補がカーソルより前へ入り、ページ間の重複や欠落が発生し得る。
+        var contextRankingCandidateLimit = hasContextRanking ? MaxGuardedSearchCandidates : 0;
         var tokenBoundaryCandidateLimit = tokenBoundary && !hasGuardFilters && !hasContextRanking ? int.MaxValue : 0;
         var candidatePostProcessingLimit = hasGuardFilters
             ? guardedCandidateLimit
@@ -493,7 +515,11 @@ public partial class DbReader
         score += tightlyCoupled ? 160 : -100;
         if (ContainsRegexDefinitionSyntax(match.Text))
             score -= 360;
-        if (ContainsStructuralTokenMarker(match.Text))
+        if (ContainsRelevantStructuralTokenMarker(
+                match.Text,
+                matchContext.Terms,
+                match.Column,
+                match.Length))
             score -= 420;
         if (ContainsCredentialUseSyntax(match.Text))
             score += 60;
@@ -515,13 +541,24 @@ public partial class DbReader
             kindScore -= 160;
         if (ContainsStructuralTokenMarker(symbolText))
             kindScore -= 240;
+        if (ContainsCredentialRankingRuleMarker(symbolText))
+            kindScore -= 1000;
         if (ContainsCredentialUseSyntax(symbolText))
             kindScore += 40;
         return kindScore;
     }
 
     private static bool HasTightlyCoupledCredentialTerms(string text, IReadOnlyList<string> terms)
+        => TryFindTightlyCoupledCredentialSpan(text, terms, out _, out _);
+
+    private static bool TryFindTightlyCoupledCredentialSpan(
+        string text,
+        IReadOnlyList<string> terms,
+        out int spanStart,
+        out int spanEnd)
     {
+        spanStart = 0;
+        spanEnd = 0;
         if (terms.Count == 0)
             return false;
 
@@ -546,11 +583,58 @@ public partial class DbReader
             }
 
             if (allTermsTightlyCoupled)
+            {
+                spanStart = firstIndex;
+                spanEnd = previousEnd;
                 return true;
+            }
             firstTermStart = firstIndex + 1;
         }
 
         return false;
+    }
+
+    internal static bool ContainsRelevantStructuralTokenMarker(
+        string text,
+        IReadOnlyList<string> terms,
+        int matchColumn,
+        int matchLength)
+    {
+        if (TryFindTightlyCoupledCredentialSpan(text, terms, out var credentialStart, out var credentialEnd))
+        {
+            return CredentialStructuralTokenMarkers.Any(marker =>
+                EnumerateMarkerStarts(text, marker).Any(markerStart =>
+                {
+                    var markerEnd = markerStart + marker.Length;
+                    if (markerStart < credentialEnd && credentialStart < markerEnd)
+                        return true;
+
+                    var betweenStart = Math.Min(markerEnd, credentialEnd);
+                    var betweenEnd = Math.Max(markerStart, credentialStart);
+                    return betweenStart <= betweenEnd &&
+                           !text.AsSpan(betweenStart, betweenEnd - betweenStart).ContainsAny(',', ';');
+                }));
+        }
+
+        var matchStart = Math.Clamp(matchColumn - 1, 0, text.Length);
+        var matchEnd = Math.Clamp(matchStart + matchLength, matchStart, text.Length);
+        return CredentialStructuralTokenMarkers.Any(marker =>
+            EnumerateMarkerStarts(text, marker).Any(markerStart =>
+                markerStart < matchEnd && matchStart < markerStart + marker.Length));
+    }
+
+    private static IEnumerable<int> EnumerateMarkerStarts(string text, string marker)
+    {
+        var searchStart = 0;
+        while (searchStart < text.Length)
+        {
+            var markerStart = text.IndexOf(marker, searchStart, StringComparison.OrdinalIgnoreCase);
+            if (markerStart < 0)
+                yield break;
+
+            yield return markerStart;
+            searchStart = markerStart + 1;
+        }
     }
 
     private static bool ContainsRegexDefinitionSyntax(string text)
@@ -559,16 +643,15 @@ public partial class DbReader
            text.Contains("RegexOptions", StringComparison.OrdinalIgnoreCase);
 
     private static bool ContainsStructuralTokenMarker(string text)
-        => text.Contains("CancellationToken", StringComparison.OrdinalIgnoreCase) ||
-           text.Contains("SyntaxToken", StringComparison.OrdinalIgnoreCase) ||
-           text.Contains("SemanticToken", StringComparison.OrdinalIgnoreCase) ||
-           text.Contains("TokenKind", StringComparison.OrdinalIgnoreCase) ||
-           text.Contains("TokenType", StringComparison.OrdinalIgnoreCase) ||
-           text.Contains("Tokenizer", StringComparison.OrdinalIgnoreCase) ||
-           text.Contains("Lexer", StringComparison.OrdinalIgnoreCase) ||
-           text.Contains("ParserToken", StringComparison.OrdinalIgnoreCase) ||
-           text.Contains("ProtocolToken", StringComparison.OrdinalIgnoreCase) ||
-           text.Contains("LspToken", StringComparison.OrdinalIgnoreCase);
+        => CredentialStructuralTokenMarkers.Any(marker =>
+            text.Contains(marker, StringComparison.OrdinalIgnoreCase));
+
+    private static bool ContainsCredentialRankingRuleMarker(string text)
+        => text.Contains("ScoreCredentialContext", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("RankCredentialContext", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("CredentialUseSyntax", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("CredentialStructuralToken", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("StructuralTokenMarker", StringComparison.OrdinalIgnoreCase);
 
     private static bool ContainsCredentialUseSyntax(string text)
         => text.Contains("Authorization", StringComparison.OrdinalIgnoreCase) ||

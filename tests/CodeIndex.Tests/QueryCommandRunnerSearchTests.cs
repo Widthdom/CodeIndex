@@ -6122,6 +6122,7 @@ public partial class QueryCommandRunnerTests
                 public sealed class CredentialComments
                 {
                     // Bearer token documentation is generated elsewhere.
+                    // Authorization header documentation is generated elsewhere.
                     // The GitHub token documentation is generated elsewhere.
                     // The API token, access token, and token secret examples are intentionally placeholders.
                     public void Run() { }
@@ -6138,6 +6139,22 @@ public partial class QueryCommandRunnerTests
                     private readonly CancellationTokenSource tokenSecretSource = new();
                     private readonly SyntaxToken githubTokenSyntax;
                     private readonly ParserToken apiTokenNode;
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/a-ranking-rules.cs",
+                "csharp",
+                """
+                public static class CredentialRankingRules
+                {
+                    private static bool ContainsCredentialUseSyntax(string text)
+                        => text.Contains("Authorization") ||
+                           text.Contains("Bearer") ||
+                           text.Contains("GitHubToken") ||
+                           text.Contains("ApiKey") ||
+                           text.Contains("AccessToken") ||
+                           text.Contains("TokenSecret");
                 }
                 """);
 
@@ -6174,6 +6191,24 @@ public partial class QueryCommandRunnerTests
                 Assert.All(results, result =>
                     Assert.Contains(result.GetProperty("path").GetString()!, expectedTopPaths));
             }
+
+            var (rankingExitCode, rankingStdout, rankingStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "auth-token-audit/authorization-header", "--db", dbPath, "--json", "--limit", "10"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, rankingExitCode);
+            Assert.Equal(string.Empty, rankingStderr);
+            using var rankingDocument = ParseJsonOutput(rankingStdout);
+            var rankingPaths = rankingDocument.RootElement
+                .GetProperty("queries")[0]
+                .GetProperty("results")
+                .EnumerateArray()
+                .Select(result => result.GetProperty("path").GetString()!)
+                .ToList();
+            Assert.Contains("src/a-ranking-rules.cs", rankingPaths);
+            Assert.Contains("src/a-authorization-regex.cs", rankingPaths);
+            Assert.True(
+                rankingPaths.IndexOf("src/a-ranking-rules.cs") >
+                rankingPaths.IndexOf("src/a-authorization-regex.cs"));
         }
         finally
         {

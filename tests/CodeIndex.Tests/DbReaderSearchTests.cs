@@ -20,6 +20,88 @@ public partial class DbReaderTests
     }
 
     [Fact]
+    public void Search_CredentialContextDoesNotPenalizeSeparateCancellationTokenParameter_Issue4590()
+    {
+        const string credentialMethod =
+            "public Task SendAsync(string accessToken, CancellationToken cancellationToken) => ForwardCredential(accessToken);";
+        Assert.False(DbReader.ContainsRelevantStructuralTokenMarker(
+            credentialMethod,
+            ["access", "token"],
+            credentialMethod.IndexOf("accessToken", StringComparison.Ordinal) + 1,
+            "accessToken".Length));
+
+        InsertIndexedFile(
+            "src/request-sender.cs",
+            "csharp",
+            $$"""
+            public sealed class RequestSender
+            {
+                // access
+                // token
+                {{credentialMethod}}
+            }
+            """);
+        InsertIndexedFile(
+            "src/loose-access-terms.cs",
+            "csharp",
+            "public sealed class LooseTerms { public void Observe() { var access = ReadAccess(); Console.WriteLine(token); } }\n");
+        InsertIndexedFile(
+            "src/structural-access-token.cs",
+            "csharp",
+            "private readonly SyntaxToken accessTokenSyntax;\n");
+
+        var results = _reader.Search(
+            "access token",
+            limit: 3,
+            resultRanking: SearchResultRanking.CredentialContext);
+
+        Assert.Equal("src/request-sender.cs", results[0].Path);
+        Assert.True(
+            results.FindIndex(result => result.Path == "src/request-sender.cs") <
+            results.FindIndex(result => result.Path == "src/loose-access-terms.cs"));
+    }
+
+    [Fact]
+    public void Search_CredentialContextKeepsCandidateUniverseStableAcrossCursorPages_Issue4590()
+    {
+        const string decoy = "// github token github token github token github token github token\n";
+        for (var i = 0; i < 210; i++)
+            InsertIndexedFile($"src/page-noise-{i:D3}.cs", "csharp", decoy);
+
+        var filler = string.Join(' ', Enumerable.Repeat("neutral", 300));
+        InsertIndexedFile(
+            "src/page-credential.cs",
+            "csharp",
+            $$"""
+            public sealed class PageCredential
+            {
+                private string GitHubToken => ReadCredential("github", "token");
+            }
+            // {{filler}}
+            """);
+
+        var databaseOrder = _reader.Search("github token", limit: 250, deduplicate: false);
+        var credentialDatabaseIndex = databaseOrder.FindIndex(result => result.Path == "src/page-credential.cs");
+        Assert.InRange(credentialDatabaseIndex, 200, 249);
+
+        var firstPage = _reader.Search(
+            "github token",
+            limit: 4,
+            resultRanking: SearchResultRanking.CredentialContext);
+        var secondPage = _reader.Search(
+            "github token",
+            limit: 4,
+            cursor: new SearchCursor(0, 0, 4),
+            resultRanking: SearchResultRanking.CredentialContext);
+
+        Assert.Equal("src/page-credential.cs", firstPage[0].Path);
+        Assert.Equal(4, firstPage.Count);
+        Assert.Equal(4, secondPage.Count);
+        Assert.DoesNotContain(secondPage, second =>
+            firstPage.Any(first => first.Path == second.Path && first.ChunkId == second.ChunkId));
+    }
+
+    [Fact]
     public void Search_GuardFiltersReadAcrossChunkBoundaries_Issue2852()
     {
         var fileId = _writer.UpsertFile(new FileRecord
