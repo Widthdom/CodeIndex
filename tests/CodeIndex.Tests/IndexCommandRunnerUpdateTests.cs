@@ -2048,7 +2048,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_UpdateMode_WhenIgnoreFileChanges_FallsBackToFullScanAndPurgesNowIgnoredRows()
+    public void Run_UpdateMode_WhenIgnoreFileChanges_FullScanPurgesAndRestoresMembership_Issue4592()
     {
         var projectRoot = CreateTempProject();
         try
@@ -2074,12 +2074,76 @@ public partial class IndexCommandRunnerTests
             Assert.DoesNotContain("generated.py", indexedPaths);
             Assert.Contains("keep.py", indexedPaths);
             Assert.Contains(".gitignore", indexedPaths);
+
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), string.Empty);
+
+            var (unignoreExitCode, unignoreJson) = RunAndCaptureJson([projectRoot, "--files", ".gitignore", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, unignoreExitCode);
+            Assert.Equal("success", unignoreJson.GetProperty("status").GetString());
+            Assert.True(unignoreJson.GetProperty("summary").TryGetProperty("files_total", out _));
+            Assert.Contains("generated.py", ReadIndexedPaths(dbPath));
         }
         finally
         {
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WhenPatternConfigIsAddedOrEdited_FallsBackToFullScan_Issue4592()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('app')\n");
+            var sourcePath = Path.Combine(projectRoot, "sample.issue4592");
+            File.WriteAllText(sourcePath, "type AddedPattern\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var patternPath = Path.Combine(projectRoot, ".cdidx", "patterns", "issue4592.yaml");
+            Directory.CreateDirectory(Path.GetDirectoryName(patternPath)!);
+            File.WriteAllText(
+                patternPath,
+                "language: \"issue4592dsl\"\nextensions:\n  - extension: \".issue4592\"\npatterns:\n  - kind: \"class\"\n    regex: \"^type (?<name>[A-Za-z]+)\"\n");
+
+            var (addExitCode, addJson) = RunAndCaptureJson([projectRoot, "--files", patternPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, addExitCode);
+            Assert.True(addJson.GetProperty("summary").TryGetProperty("files_total", out _));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Contains("sample.issue4592", ReadIndexedPaths(dbPath));
+            Assert.Single(ReadIndexedSymbolNames(dbPath, "AddedPattern"));
+
+            File.WriteAllText(
+                patternPath,
+                "language: \"issue4592dsl\"\nextensions:\n  - extension: \".issue4592\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>[A-Za-z]+)\"\n");
+            File.WriteAllText(sourcePath, "entity EditedPattern\n");
+
+            var (editExitCode, editJson) = RunAndCaptureJson([projectRoot, "--files", patternPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, editExitCode);
+            Assert.True(editJson.GetProperty("summary").TryGetProperty("files_total", out _));
+            Assert.DoesNotContain(".cdidx/patterns/issue4592.yaml", ReadIndexedPaths(dbPath));
+            Assert.Empty(ReadIndexedSymbolNames(dbPath, "AddedPattern"));
+            Assert.Single(ReadIndexedSymbolNames(dbPath, "EditedPattern"));
+        }
+        finally
+        {
+            ExtractorPluginRegistry.ReloadForTests();
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    private static List<SymbolResult> ReadIndexedSymbolNames(string dbPath, string name)
+    {
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        db.TryMigrateForRead();
+        var reader = new DbReader(db.Connection, db.IsReadOnly);
+        return reader.SearchSymbols(name, limit: 10, exact: true);
     }
 
     [Fact]

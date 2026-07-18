@@ -172,7 +172,7 @@ public class IndexWatchRunnerTests
     }
 
     [Fact]
-    public void ShouldIgnoreWatchInternalPath_DefaultDataDir_IgnoresCdidxArtifacts_Issue4351()
+    public void ShouldIgnoreWatchInternalPath_DefaultDataDir_IgnoresOnlyOwnedArtifacts_Issue4592()
     {
         var projectRoot = CreateTempProject();
         try
@@ -186,10 +186,6 @@ public class IndexWatchRunnerTests
                 dbPath + ".lock",
                 dbPath + ".lock.info",
                 dbPath + ".lock.tmp",
-                Path.Combine(projectRoot, ".cdidx", "lock"),
-                Path.Combine(projectRoot, ".cdidx", "lock.info"),
-                Path.Combine(projectRoot, ".cdidx", "lock.tmp"),
-                Path.Combine(projectRoot, ".cdidx", "nested", "state.tmp"),
             };
 
             Assert.All(internalPaths, path =>
@@ -199,6 +195,18 @@ public class IndexWatchRunnerTests
                     path,
                     ignoreCase: false,
                     dbPathExplicit: false)));
+            Assert.False(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                Path.Combine(projectRoot, ".cdidx", "lock.info"),
+                ignoreCase: false,
+                dbPathExplicit: false));
+            Assert.False(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                Path.Combine(projectRoot, ".cdidx", "nested", "state.tmp"),
+                ignoreCase: false,
+                dbPathExplicit: false));
             Assert.False(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
                 projectRoot,
                 dbPath,
@@ -213,7 +221,7 @@ public class IndexWatchRunnerTests
     }
 
     [Fact]
-    public void ShouldIgnoreWatchInternalPath_ExplicitDb_IgnoresOnlyDbSidecarsAndDefaultCdidx_Issue4351()
+    public void ShouldIgnoreWatchInternalPath_ExplicitDb_IgnoresOnlyDbSidecars_Issue4592()
     {
         var projectRoot = CreateTempProject();
         try
@@ -233,7 +241,7 @@ public class IndexWatchRunnerTests
                 dbPath + ".lock.info",
                 ignoreCase: false,
                 dbPathExplicit: true));
-            Assert.True(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+            Assert.False(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
                 projectRoot,
                 dbPath,
                 Path.Combine(projectRoot, ".cdidx", "suggestions-codeindex.json"),
@@ -245,6 +253,69 @@ public class IndexWatchRunnerTests
                 Path.Combine(projectRoot, "src", "app.cs"),
                 ignoreCase: false,
                 dbPathExplicit: true));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ClassifyWatchPath_ReconcilesInputsAndUsesSharedCdidxMembership_Issue4592()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+
+            Assert.Equal(
+                IndexWatchRunner.WatchPathDisposition.Reconcile,
+                IndexWatchRunner.ClassifyWatchPathForTesting(
+                    projectRoot,
+                    dbPath,
+                    Path.Combine(projectRoot, ".gitignore"),
+                    ignoreCase: false,
+                    dbPathExplicit: false));
+            Assert.Equal(
+                IndexWatchRunner.WatchPathDisposition.Reconcile,
+                IndexWatchRunner.ClassifyWatchPathForTesting(
+                    projectRoot,
+                    dbPath,
+                    Path.Combine(projectRoot, ".cdidx", "patterns", "custom.yaml"),
+                    ignoreCase: false,
+                    dbPathExplicit: false));
+            Assert.Equal(
+                IndexWatchRunner.WatchPathDisposition.Reconcile,
+                IndexWatchRunner.ClassifyWatchPathForTesting(
+                    projectRoot,
+                    dbPath,
+                    Path.Combine(projectRoot, ".cdidx", "plugins", "custom.dll"),
+                    ignoreCase: false,
+                    dbPathExplicit: false));
+            Assert.Equal(
+                IndexWatchRunner.WatchPathDisposition.Ignore,
+                IndexWatchRunner.ClassifyWatchPathForTesting(
+                    projectRoot,
+                    dbPath,
+                    Path.Combine(projectRoot, ".cdidx", "audit-notes.md"),
+                    ignoreCase: false,
+                    dbPathExplicit: false));
+            Assert.Equal(
+                IndexWatchRunner.WatchPathDisposition.Ignore,
+                IndexWatchRunner.ClassifyWatchPathForTesting(
+                    projectRoot,
+                    dbPath,
+                    dbPath + "-wal",
+                    ignoreCase: false,
+                    dbPathExplicit: false));
+            Assert.Equal(
+                IndexWatchRunner.WatchPathDisposition.Index,
+                IndexWatchRunner.ClassifyWatchPathForTesting(
+                    projectRoot,
+                    dbPath,
+                    Path.Combine(projectRoot, "src", "app.cs"),
+                    ignoreCase: false,
+                    dbPathExplicit: false));
         }
         finally
         {

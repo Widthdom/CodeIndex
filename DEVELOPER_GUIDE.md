@@ -1238,6 +1238,8 @@ cdidx ./myproject --files src/app.cs        # specific files only
 
 Watch batches reuse this partial-update runner with a linked cancellation source. The outer watch token therefore interrupts active extraction and database work instead of waiting for a sub-run to finish. Sub-run JSON is routed through `CommandOutputWriter`'s async-local scope into the watch capture writer; the watch loop never replaces `Console.Out`, so other commands and embedding hosts retain their own stdout.
 
+Source membership is shared through `FileIndexer`: full scan, workspace freshness checks, and watch all exclude the `.cdidx` namespace. Watch classifies ignore files plus `.cdidx/patterns/**` and `.cdidx/plugins/**` before applying that source filter, so those non-source inputs remain debounced reconciliation events while ordinary `.cdidx` sidecars stay excluded. The resulting `--files` sub-run recognizes extractor inputs and falls back to a full scan, just as ignore-file changes already do.
+
 ## AI integration
 
 For the AI agent search-rule template, see [AI Integration](USER_GUIDE.md#ai-integration) in the User Guide.
@@ -4011,6 +4013,8 @@ cdidx ./myproject --files src/app.cs        # 特定ファイルのみ
 `--changed-between` は `git diff --name-status -M <old-ref> <new-ref>` を使い、rename の旧パスと新パスを両方含めるため、古い indexed path も purge できます。
 
 watch batch は linked cancellation source を介してこの部分更新 runner を再利用する。そのため外側の watch token は sub-run の完了を待たず、実行中の extraction と database work を中断できる。sub-run JSON は `CommandOutputWriter` の async-local scope から watch capture writer へ送られ、watch loop は `Console.Out` を置き換えないため、他の command や埋め込み host は自身の stdout を維持できる。
+
+source membership は `FileIndexer` で共有し、full scan、workspace freshness check、watch のすべてで `.cdidx` namespace を除外する。watch は source filter の適用前に ignore file と `.cdidx/patterns/**` / `.cdidx/plugins/**` を分類するため、これらの非 source 入力は debounce 付き reconciliation event として保持し、通常の `.cdidx` sidecar は除外したままにする。生成された `--files` sub-run は extractor 入力を認識して、ignore-file 変更と同様に full scan へ fallback する。
 
 FTS5 を変更する差分更新は `codeindex_meta.fts_incremental_writes_since_optimize` を増やします。カウンタが `DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold` に達すると、更新経路は `INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')` を実行し、カウンタをリセットして `fts_last_optimized_at` を記録します。ユーザーは `cdidx optimize --db <path>` または `cdidx index <projectPath> --optimize` で同じ maintenance を手動実行できます。大きな index では短時間 writer lock を保持する可能性があります。
 

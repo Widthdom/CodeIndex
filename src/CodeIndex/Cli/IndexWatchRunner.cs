@@ -18,6 +18,13 @@ namespace CodeIndex.Cli;
 /// </summary>
 internal static class IndexWatchRunner
 {
+    internal enum WatchPathDisposition
+    {
+        Ignore,
+        Index,
+        Reconcile,
+    }
+
     internal const int DefaultDebounceMs = 500;
     internal const int MaxDebounceMs = 60_000;
     internal const int DefaultWatchPendingPathLimit = 4096;
@@ -48,6 +55,17 @@ internal static class IndexWatchRunner
         bool ignoreCase,
         bool dbPathExplicit)
         => ShouldIgnoreWatchInternalPath(projectRoot, resolvedDbPath, fullPath, ignoreCase, dbPathExplicit);
+
+    internal static WatchPathDisposition ClassifyWatchPathForTesting(
+        string projectRoot,
+        string resolvedDbPath,
+        string fullPath,
+        bool ignoreCase,
+        bool dbPathExplicit)
+    {
+        var fileIndexer = new FileIndexer(projectRoot, ignoreCase, projectRoot);
+        return ClassifyWatchPath(projectRoot, resolvedDbPath, fullPath, ignoreCase, dbPathExplicit, fileIndexer);
+    }
 
     public static int Run(
         IndexCommandOptions baseOptions,
@@ -125,19 +143,20 @@ internal static class IndexWatchRunner
 
                 try
                 {
-                    // Drop CodeIndex-owned DB/data-dir side effects before the general source
-                    // filter so watch batches cannot self-trigger on SQLite or lock sidecars.
-                    // DB/data-dir の副作用は通常フィルタより先に落とし、SQLite/lock sidecar
-                    // で watch バッチが自己トリガーしないようにする。
-                    if (ShouldIgnoreWatchInternalPath(projectRoot, resolvedDbPath, fullPath, ignoreCase, dbPathExplicit))
-                        return;
-
-                    // The watcher root encloses .git / build outputs; ShouldSkipPath honors
-                    // .gitignore / .cdidxignore / built-in SkipDirs, so we drop noisy events
-                    // at the source instead of paying for a full sub-update every save.
-                    // root は .git / ビルド出力も含むため、ShouldSkipPath で除外して
-                    // 余計なサブ更新を防ぐ。
-                    if (fileIndexer.ShouldSkipPath(fullPath))
+                    // Membership and extractor inputs are not source files, but they must reach
+                    // the debounced update runner so it can reconcile the whole workspace. All
+                    // other paths use the same FileIndexer membership filter as scan/status.
+                    // membership / extractor 入力は source ではないが、workspace 全体の
+                    // reconciliation を起動するため debounce 対象として保持する。それ以外は
+                    // scan/status と同じ FileIndexer membership filter を使う。
+                    var disposition = ClassifyWatchPath(
+                        projectRoot,
+                        resolvedDbPath,
+                        fullPath,
+                        ignoreCase,
+                        dbPathExplicit,
+                        fileIndexer);
+                    if (disposition == WatchPathDisposition.Ignore)
                         return;
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or NotSupportedException)
@@ -314,11 +333,9 @@ internal static class IndexWatchRunner
         var normalizedDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(resolvedDbPath));
 
         var defaultDataDir = Path.Combine(normalizedProjectRoot, ".cdidx");
-        if (IsSameOrUnderDirectory(defaultDataDir, normalizedPath, comparison))
-            return true;
-
         var dbDirectory = Path.GetDirectoryName(normalizedDbPath);
         if (!dbPathExplicit && !string.IsNullOrEmpty(dbDirectory)
+            && !IsSamePath(defaultDataDir, dbDirectory, comparison)
             && IsSameOrUnderDirectory(dbDirectory, normalizedPath, comparison))
         {
             return true;
@@ -342,6 +359,27 @@ internal static class IndexWatchRunner
         }
 
         return false;
+    }
+
+    private static WatchPathDisposition ClassifyWatchPath(
+        string projectRoot,
+        string resolvedDbPath,
+        string fullPath,
+        bool ignoreCase,
+        bool dbPathExplicit,
+        FileIndexer fileIndexer)
+    {
+        var invalidation = FileIndexer.ClassifyIndexInputInvalidation(projectRoot, fullPath);
+        if (invalidation != FileIndexer.IndexInputInvalidationKind.None)
+            return WatchPathDisposition.Reconcile;
+
+        if (ShouldIgnoreWatchInternalPath(projectRoot, resolvedDbPath, fullPath, ignoreCase, dbPathExplicit)
+            || fileIndexer.ShouldSkipPath(fullPath))
+        {
+            return WatchPathDisposition.Ignore;
+        }
+
+        return WatchPathDisposition.Index;
     }
 
     private static bool IsSameOrUnderDirectory(string directory, string fullPath, StringComparison comparison)

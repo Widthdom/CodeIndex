@@ -74,13 +74,19 @@ public static partial class IndexCommandRunner
             return resolveTargetsExitCode.Value;
 
         var typeScriptJavaScriptConfigChanged = ContainsJavaScriptTypeScriptConfigPath(targetPaths);
-        if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(targetPaths) || typeScriptJavaScriptConfigChanged)
+        var extractorConfigurationChanged = ContainsExtractorConfigurationPath(projectRoot, targetPaths);
+        if (relevantIgnoreFileChanged
+            || ContainsIgnoreFilePath(targetPaths)
+            || typeScriptJavaScriptConfigChanged
+            || extractorConfigurationChanged)
         {
             if (!options.Json && !options.Quiet)
             {
-                var reason = typeScriptJavaScriptConfigChanged
-                    ? "JavaScript/TypeScript config changes"
-                    : "ignore-file changes";
+                var reason = extractorConfigurationChanged
+                    ? "extractor configuration changes"
+                    : typeScriptJavaScriptConfigChanged
+                        ? "JavaScript/TypeScript config changes"
+                        : "ignore-file changes";
                 CommandOutputWriter.WriteLine($"  Detected {reason}; falling back to a full scan to keep the index aligned.");
                 CommandOutputWriter.WriteLine();
             }

@@ -927,6 +927,11 @@ public static partial class IndexCommandRunner
     private static bool ContainsIgnoreFilePath(IEnumerable<string> paths)
         => paths.Any(FileIndexer.IsIgnoreFilePath);
 
+    private static bool ContainsExtractorConfigurationPath(string projectRoot, IEnumerable<string> paths)
+        => paths.Any(path =>
+            FileIndexer.ClassifyIndexInputInvalidation(projectRoot, path)
+                == FileIndexer.IndexInputInvalidationKind.ExtractorConfiguration);
+
     private static bool ContainsJavaScriptTypeScriptConfigPath(IEnumerable<string> paths)
         => paths.Any(IsJavaScriptTypeScriptConfigPath);
 

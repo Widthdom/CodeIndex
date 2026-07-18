@@ -6499,6 +6499,38 @@ public sealed class Caller
     }
 
     [Fact]
+    public void RunStatusCheck_CdidxSidecarIsExcludedFromScanAndWorkspaceMembership_Issue4592()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            var dataDir = Path.Combine(projectRoot, ".cdidx");
+            Directory.CreateDirectory(dataDir);
+            File.WriteAllText(Path.Combine(dataDir, "audit-notes.md"), "local notes\n");
+
+            var (indexExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+
+            var dbPath = Path.Combine(dataDir, "codeindex.db");
+            var indexedPaths = ReadIndexedPaths(dbPath);
+            Assert.Contains("app.cs", indexedPaths);
+            Assert.DoesNotContain(".cdidx/audit-notes.md", indexedPaths);
+
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            var check = statusJson.GetProperty("workspace_check");
+            Assert.True(check.GetProperty("matches_workspace").GetBoolean());
+            Assert.Equal(0, check.GetProperty("unindexed_file_count").GetInt32());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunStatusCheck_FollowSymlinksAll_UsesPersistedPolicy_Issue4352()
     {
         var projectRoot = CreateTempProject();

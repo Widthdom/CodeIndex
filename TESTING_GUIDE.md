@@ -277,6 +277,8 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   The cancellation contract fixture uses only `git init` plus an explicit case-sensitive setting so `path_comparison` has a deterministic expected value without either a second repository-discovery probe after the watch loop exits or the commit-capable Git fixture's unrelated identity and signing setup.
 - `IndexWatchRunnerTests.InvokeSubRunAndEmit_CancelDuringActiveUpdate_DoesNotCaptureUnrelatedStdout_Issue4591`
   blocks at the active update-extraction boundary, cancels through the watch sub-run token, and uses an unrelated stdout sentinel to prove the injected runner writer does not replace process-global stdout. Keep the explicit synchronization point and bounded wait; a fixed delay cannot prove that cancellation happened during active work.
+- `IndexWatchRunnerTests.ClassifyWatchPath_ReconcilesInputsAndUsesSharedCdidxMembership_Issue4592`, `IndexCommandRunnerTests.RunStatusCheck_CdidxSidecarIsExcludedFromScanAndWorkspaceMembership_Issue4592`, and the issue-4592 update-mode fixtures
+  keep scan, `status --check`, and watch on one `.cdidx` membership policy. Ignore/unignore changes and pattern-config add/edit events must reach a debounced full scan, while pattern/plugin inputs and ordinary `.cdidx` sidecars remain outside indexed source rows. Test the classification boundary directly instead of waiting for platform-specific `FileSystemWatcher` delivery.
 - `BackgroundTaskObserverTests`
   relies on `BackgroundTaskObserver`'s fault-only continuation contract: canceled
   tasks are awaited directly and do not need a post-cancellation fixed sleep to
@@ -961,6 +963,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   cancellation contract fixture は `git init` と明示的な case-sensitive setting だけを使い、watch loop 終了後の2回目の repository-discovery probe と、commit 対応 Git fixture の無関係な identity/signing setup の両方を避けながら `path_comparison` の期待値を決定的にする。
 - `IndexWatchRunnerTests.InvokeSubRunAndEmit_CancelDuringActiveUpdate_DoesNotCaptureUnrelatedStdout_Issue4591`
   update extraction の実行中境界で停止させ、watch sub-run token 経由でキャンセルし、無関係な stdout sentinel によって注入 writer が process-global stdout を置き換えないことを検証する。明示的な同期点と bounded wait を維持すること。固定 delay では active work 中のキャンセルを証明できない。
+- `IndexWatchRunnerTests.ClassifyWatchPath_ReconcilesInputsAndUsesSharedCdidxMembership_Issue4592`、`IndexCommandRunnerTests.RunStatusCheck_CdidxSidecarIsExcludedFromScanAndWorkspaceMembership_Issue4592`、issue-4592 の update-mode fixture
+  scan、`status --check`、watch が単一の `.cdidx` membership policy を使うことを固定する。ignore / unignore 変更と pattern-config の追加 / 編集は debounce 付き full scan に到達し、pattern / plugin 入力と通常の `.cdidx` sidecar は indexed source row から除外されたままでなければならない。platform 固有の `FileSystemWatcher` 配信を待たず、classification 境界を直接検証する。
 - `BackgroundTaskObserverTests`
   は `BackgroundTaskObserver` の fault-only continuation 契約に依存します。canceled
   task は直接 await し、warning が抑止されたことを示すための cancellation 後の固定 sleep

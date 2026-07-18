@@ -325,7 +325,9 @@ public static partial class IndexCommandRunner
         {
             // --files: only the specified files / --files: 指定ファイルのみ
             var relevantIgnoreFileChanged = ContainsRelevantIgnoreFileUpdate(projectPath, options.UpdateFiles);
-            if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(normalizedUpdatePaths))
+            if (relevantIgnoreFileChanged
+                || ContainsIgnoreFilePath(normalizedUpdatePaths)
+                || ContainsExtractorConfigurationPath(projectPath, normalizedUpdatePaths))
             {
                 FileIndexer.ScanFilesResult scanResult;
                 try
@@ -413,7 +415,9 @@ public static partial class IndexCommandRunner
                 }
             }
 
-            if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(changedFiles))
+            if (relevantIgnoreFileChanged
+                || ContainsIgnoreFilePath(changedFiles)
+                || ContainsExtractorConfigurationPath(projectPath, changedFiles))
             {
                 FileIndexer.ScanFilesResult scanResult;
                 try
