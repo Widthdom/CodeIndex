@@ -23,6 +23,8 @@ public static partial class ExtractorPluginRegistry
     internal const string PluginLoadContextLifecycle = "collectible_retained_while_extractors_registered";
     internal static readonly TimeSpan PatternRegexTimeout = TimeSpan.FromMilliseconds(100);
     internal static readonly TimeSpan PatternTimeoutCooldown = TimeSpan.FromMinutes(1);
+    internal static readonly IReadOnlyList<string> RegistrationPrecedence =
+        ["built_in", "user_plugin", "user_pattern", "workspace_plugin", "workspace_pattern"];
 
     private static readonly object Gate = new();
     private static readonly Dictionary<string, ISymbolExtractor> SymbolExtractors = new(StringComparer.Ordinal);
@@ -46,12 +48,9 @@ public static partial class ExtractorPluginRegistry
         {
             EnsurePluginsLoaded();
             var patternSnapshot = DefaultPatternWorkspace.GetSnapshot();
-            lock (Gate)
-                return SymbolExtractors.Keys
-                    .Concat(patternSnapshot.SymbolExtractors.Keys)
-                    .Distinct(StringComparer.Ordinal)
-                    .Order(StringComparer.Ordinal)
-                    .ToArray();
+            return patternSnapshot.SymbolExtractors.Keys
+                .Order(StringComparer.Ordinal)
+                .ToArray();
         }
     }
 
@@ -60,10 +59,9 @@ public static partial class ExtractorPluginRegistry
         get
         {
             EnsurePluginsLoaded();
-            lock (Gate)
-                return ReferenceExtractors.Count == 0
-                    ? Array.Empty<string>()
-                    : ReferenceExtractors.Keys.Order(StringComparer.Ordinal).ToArray();
+            return DefaultPatternWorkspace.GetSnapshot().ReferenceExtractors.Keys
+                .Order(StringComparer.Ordinal)
+                .ToArray();
         }
     }
 
@@ -74,20 +72,9 @@ public static partial class ExtractorPluginRegistry
     {
         EnsurePluginsLoaded();
         var patternSnapshot = GetPatternSnapshot(workspaceRoot);
-        lock (Gate)
-        {
-            if (SymbolExtractors.Count == 0
-                && ReferenceExtractors.Count == 0
-                && patternSnapshot.SymbolExtractors.Count == 0)
-                return EmptyLanguageExtensions;
-
-            var extensions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            AddLanguageExtensions(extensions, SymbolExtractors.Values.Select(extractor => (extractor.Language, extractor.FileExtensions)));
-            AddLanguageExtensions(extensions, ReferenceExtractors.Values.Select(extractor => (extractor.Language, extractor.FileExtensions)));
-            foreach (var (extension, language) in patternSnapshot.LanguageExtensions)
-                extensions[extension] = language;
-            return extensions.Count == 0 ? EmptyLanguageExtensions : extensions;
-        }
+        return patternSnapshot.LanguageExtensions.Count == 0
+            ? EmptyLanguageExtensions
+            : patternSnapshot.LanguageExtensions;
     }
 
     internal static bool TryGetLanguageForExtension(string extension, out string language)
@@ -103,15 +90,7 @@ public static partial class ExtractorPluginRegistry
         var patternSnapshot = GetPatternSnapshot(workspaceRoot);
         if (patternSnapshot.LanguageExtensions.TryGetValue(extension, out language!))
             return true;
-
-        lock (Gate)
-        {
-            if (SymbolExtractors.Count == 0 && ReferenceExtractors.Count == 0)
-                return false;
-
-            return TryGetLanguageForExtension(extension, SymbolExtractors.Values, out language)
-                   || TryGetLanguageForExtension(extension, ReferenceExtractors.Values, out language);
-        }
+        return false;
     }
 
     public static bool TryGetSymbolExtractor(string language, out ISymbolExtractor extractor)
@@ -124,18 +103,29 @@ public static partial class ExtractorPluginRegistry
     {
         EnsurePluginsLoaded();
         var patternSnapshot = GetPatternSnapshot(workspaceRoot);
-        if (patternSnapshot.SymbolExtractors.TryGetValue(language, out extractor!))
-            return true;
-
-        lock (Gate)
-            return SymbolExtractors.TryGetValue(language, out extractor!);
+        return patternSnapshot.SymbolExtractors.TryGetValue(language, out extractor!);
     }
 
     public static bool TryGetReferenceExtractor(string language, out IReferenceExtractor extractor)
+        => TryGetReferenceExtractor(language, workspaceRoot: null, path: null, out extractor);
+
+    internal static bool TryGetReferenceExtractor(
+        string language,
+        string? path,
+        out IReferenceExtractor extractor)
+        => TryGetReferenceExtractor(language, workspaceRoot: null, path, out extractor);
+
+    internal static bool TryGetReferenceExtractor(
+        string language,
+        string? workspaceRoot,
+        string? path,
+        out IReferenceExtractor extractor)
     {
         EnsurePluginsLoaded();
-        lock (Gate)
-            return ReferenceExtractors.TryGetValue(language, out extractor!);
+        var snapshot = string.IsNullOrWhiteSpace(workspaceRoot)
+            ? GetWorkspaceSnapshotForPath(path)
+            : GetPatternSnapshot(workspaceRoot);
+        return snapshot.ReferenceExtractors.TryGetValue(language, out extractor!);
     }
 
     internal static ExtractorRegistryStatus GetStatusSnapshot()
@@ -153,14 +143,11 @@ public static partial class ExtractorPluginRegistry
                 .ToList();
             return new ExtractorRegistryStatus
             {
-                PluginAssemblyCount = pluginAssemblyCount,
+                PluginAssemblyCount = pluginAssemblyCount + patternSnapshot.PluginAssemblyCount,
                 PatternConfigCount = patternSnapshot.ConfigCount,
-                SymbolExtractorCount = SymbolExtractors.Keys
-                    .Concat(patternSnapshot.SymbolExtractors.Keys)
-                    .Distinct(StringComparer.Ordinal)
-                    .Count(),
-                ReferenceExtractorCount = ReferenceExtractors.Count,
-                RetainedLoadContextCount = LoadedPluginAssemblyContexts.Count,
+                SymbolExtractorCount = patternSnapshot.SymbolExtractors.Count,
+                ReferenceExtractorCount = patternSnapshot.ReferenceExtractors.Count,
+                RetainedLoadContextCount = LoadedPluginAssemblyContexts.Count + patternSnapshot.RetainedLoadContextCount,
                 LoadContextLifecycle = PluginLoadContextLifecycle,
                 SkippedFileCount = skippedFileCount + patternSnapshot.SkippedFileCount,
                 DiagnosticCount = diagnosticTotalCount + patternSnapshot.DiagnosticTotalCount,
@@ -168,6 +155,8 @@ public static partial class ExtractorPluginRegistry
                 DiagnosticsTruncated = diagnosticTotalCount + patternSnapshot.DiagnosticTotalCount > diagnostics.Count,
                 Diagnostics = diagnostics.Count == 0 ? null : diagnostics,
                 PatternConfigs = patternSnapshot.Configs.Count == 0 ? null : patternSnapshot.Configs.ToList(),
+                SnapshotScope = string.IsNullOrWhiteSpace(workspaceRoot) ? "user" : "workspace",
+                RegistrationPrecedence = RegistrationPrecedence,
             };
         }
     }
@@ -177,7 +166,12 @@ public static partial class ExtractorPluginRegistry
         ArgumentNullException.ThrowIfNull(extractor);
         var language = NormalizePluginLanguage(extractor.Language);
         lock (Gate)
+        {
             SymbolExtractors[language] = extractor;
+            PublishUserExtractorSnapshot();
+        }
+        lock (DefaultPatternWorkspace.Gate)
+            DefaultPatternWorkspace.PublishSnapshot();
     }
 
     public static void Register(IReferenceExtractor extractor)
@@ -185,7 +179,12 @@ public static partial class ExtractorPluginRegistry
         ArgumentNullException.ThrowIfNull(extractor);
         var language = NormalizePluginLanguage(extractor.Language);
         lock (Gate)
+        {
             ReferenceExtractors[language] = extractor;
+            PublishUserExtractorSnapshot();
+        }
+        lock (DefaultPatternWorkspace.Gate)
+            DefaultPatternWorkspace.PublishSnapshot();
     }
 
     internal static void ResetForTests()
@@ -194,6 +193,7 @@ public static partial class ExtractorPluginRegistry
         {
             SymbolExtractors.Clear();
             ReferenceExtractors.Clear();
+            PublishUserExtractorSnapshot();
             LoadedPluginAssemblyPaths.Clear();
             UnloadPluginAssemblyContexts();
             Diagnostics.Clear();
@@ -212,6 +212,7 @@ public static partial class ExtractorPluginRegistry
         {
             SymbolExtractors.Clear();
             ReferenceExtractors.Clear();
+            PublishUserExtractorSnapshot();
             LoadedPluginAssemblyPaths.Clear();
             UnloadPluginAssemblyContexts();
             Diagnostics.Clear();
@@ -249,7 +250,7 @@ public static partial class ExtractorPluginRegistry
         => TryLoadPlugin(pluginPath);
 
     internal static void LoadPatternConfigForTests(string patternPath)
-        => TryLoadPatternConfig(DefaultPatternWorkspace, patternPath, "test");
+        => TryLoadPatternConfig(DefaultPatternWorkspace, patternPath, "user");
 
     internal static bool TryMarkPatternConfigPathLoadedForTests(string patternPath)
     {
@@ -270,10 +271,11 @@ public static partial class ExtractorPluginRegistry
     internal static void LoadPluginsForProjectRoot(string? projectRoot)
     {
         EnsurePluginsLoaded();
-        if (string.IsNullOrWhiteSpace(projectRoot) || !WorkspacePluginsTrusted())
+        if (string.IsNullOrWhiteSpace(projectRoot))
             return;
 
-        LoadPluginAssemblies(EnumerateWorkspacePluginDirectories(Path.GetFullPath(projectRoot)));
+        var fullRoot = Path.GetFullPath(projectRoot);
+        LoadWorkspacePlugins(GetOrCreatePatternWorkspace(fullRoot), fullRoot);
     }
 
     internal static void LoadPatternConfigsForProjectRoot(string? projectRoot)
@@ -283,8 +285,8 @@ public static partial class ExtractorPluginRegistry
             return;
 
         var fullRoot = Path.GetFullPath(projectRoot);
-        LoadPluginsForProjectRoot(fullRoot);
         var state = GetOrCreatePatternWorkspace(fullRoot);
+        LoadWorkspacePlugins(state, fullRoot);
         LoadPatternConfigsForProjectRoot(state, fullRoot);
     }
 
@@ -295,10 +297,40 @@ public static partial class ExtractorPluginRegistry
             return;
 
         var fullRoot = Path.GetFullPath(projectRoot);
-        LoadPluginsForProjectRoot(fullRoot);
         var state = CreatePatternWorkspace(fullRoot);
+        LoadWorkspacePlugins(state, fullRoot);
         LoadPatternConfigsForProjectRoot(state, fullRoot);
         ReplacePatternWorkspace(state);
+    }
+
+    private static void LoadWorkspacePlugins(PatternWorkspaceState state, string fullRoot)
+    {
+        if (!WorkspacePluginsTrusted())
+            return;
+
+        LoadPluginAssemblies(EnumerateWorkspacePluginDirectories(fullRoot), state);
+    }
+
+    internal static void RegisterForWorkspaceForTests(string workspaceRoot, ISymbolExtractor extractor)
+    {
+        ArgumentNullException.ThrowIfNull(extractor);
+        var state = GetOrCreatePatternWorkspace(Path.GetFullPath(workspaceRoot));
+        lock (state.Gate)
+        {
+            state.WorkspaceSymbolExtractors[NormalizePluginLanguage(extractor.Language)] = extractor;
+            state.PublishSnapshot();
+        }
+    }
+
+    internal static void RegisterForWorkspaceForTests(string workspaceRoot, IReferenceExtractor extractor)
+    {
+        ArgumentNullException.ThrowIfNull(extractor);
+        var state = GetOrCreatePatternWorkspace(Path.GetFullPath(workspaceRoot));
+        lock (state.Gate)
+        {
+            state.WorkspaceReferenceExtractors[NormalizePluginLanguage(extractor.Language)] = extractor;
+            state.PublishSnapshot();
+        }
     }
 
     private static void LoadPatternConfigsForProjectRoot(PatternWorkspaceState state, string fullRoot)
@@ -367,73 +399,6 @@ public static partial class ExtractorPluginRegistry
 
     private static int ResolveTypeInspectionLimit()
         => TypeInspectionLimitForTesting is > 0 ? TypeInspectionLimitForTesting.Value : MaxExtensionAssemblyTypes;
-
-    private static void AddLanguageExtensions(
-        Dictionary<string, string> target,
-        IEnumerable<(string Language, IReadOnlyCollection<string> FileExtensions)> plugins)
-    {
-        foreach (var (language, fileExtensions) in plugins)
-        {
-            var normalizedLanguage = NormalizePluginLanguage(language);
-            foreach (var extension in fileExtensions)
-            {
-                var normalizedExtension = NormalizePluginExtension(extension);
-                if (normalizedExtension != null)
-                    target.TryAdd(normalizedExtension, normalizedLanguage);
-            }
-        }
-    }
-
-    private static bool TryGetLanguageForExtension(
-        string extension,
-        IEnumerable<ISymbolExtractor> plugins,
-        out string language)
-    {
-        foreach (var plugin in plugins)
-        {
-            if (TryMatchPluginExtension(extension, plugin.Language, plugin.FileExtensions, out language))
-                return true;
-        }
-
-        language = "";
-        return false;
-    }
-
-    private static bool TryGetLanguageForExtension(
-        string extension,
-        IEnumerable<IReferenceExtractor> plugins,
-        out string language)
-    {
-        foreach (var plugin in plugins)
-        {
-            if (TryMatchPluginExtension(extension, plugin.Language, plugin.FileExtensions, out language))
-                return true;
-        }
-
-        language = "";
-        return false;
-    }
-
-    private static bool TryMatchPluginExtension(
-        string extension,
-        string pluginLanguage,
-        IReadOnlyCollection<string> pluginExtensions,
-        out string language)
-    {
-        foreach (var pluginExtension in pluginExtensions)
-        {
-            var normalizedExtension = NormalizePluginExtension(pluginExtension);
-            if (normalizedExtension != null
-                && string.Equals(normalizedExtension, extension, StringComparison.OrdinalIgnoreCase))
-            {
-                language = NormalizePluginLanguage(pluginLanguage);
-                return true;
-            }
-        }
-
-        language = "";
-        return false;
-    }
 
     private static string NormalizePluginLanguage(string language)
     {

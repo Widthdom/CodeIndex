@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Runtime.Loader;
 using CodeIndex.Cli;
 
 namespace CodeIndex.Indexer.Extensibility;
@@ -7,11 +8,16 @@ public static partial class ExtractorPluginRegistry
 {
     private sealed class PatternWorkspaceState(string? workspaceRoot)
     {
-        private PatternWorkspaceSnapshot snapshot = PatternWorkspaceSnapshot.Empty;
+        private ExtractorWorkspaceSnapshot snapshot = ExtractorWorkspaceSnapshot.Empty;
 
         internal object Gate { get; } = new();
         internal string? WorkspaceRoot { get; } = workspaceRoot;
-        internal Dictionary<string, ISymbolExtractor> SymbolExtractors { get; } = new(StringComparer.Ordinal);
+        internal Dictionary<string, ISymbolExtractor> PatternSymbolExtractors { get; } = new(StringComparer.Ordinal);
+        internal Dictionary<string, string> PatternSources { get; } = new(StringComparer.Ordinal);
+        internal Dictionary<string, ISymbolExtractor> WorkspaceSymbolExtractors { get; } = new(StringComparer.Ordinal);
+        internal Dictionary<string, IReferenceExtractor> WorkspaceReferenceExtractors { get; } = new(StringComparer.Ordinal);
+        internal List<string> LoadedPluginPaths { get; } = [];
+        internal List<AssemblyLoadContext> PluginLoadContexts { get; } = [];
         internal List<string> LoadedPaths { get; } = [];
         internal List<(string Path, PatternConfigFingerprint Fingerprint)> FailedFingerprints { get; } = [];
         internal List<PatternConfigStatus> Configs { get; } = [];
@@ -20,35 +26,83 @@ public static partial class ExtractorPluginRegistry
         internal int SkippedFileCount { get; set; }
         internal int DiagnosticTotalCount { get; set; }
         internal int RuleCount { get; set; }
+        internal int PluginAssemblyCount { get; set; }
 
-        internal PatternWorkspaceSnapshot GetSnapshot()
+        internal ExtractorWorkspaceSnapshot GetSnapshot()
             => Volatile.Read(ref snapshot);
 
         internal void PublishSnapshot()
         {
-            var extractors = new Dictionary<string, ISymbolExtractor>(SymbolExtractors, StringComparer.Ordinal);
+            var user = GetUserExtractorSnapshot();
+            var symbolExtractors = new Dictionary<string, ISymbolExtractor>(StringComparer.Ordinal);
+            var referenceExtractors = new Dictionary<string, IReferenceExtractor>(StringComparer.Ordinal);
+
+            CopyPatternExtractors("workspace", symbolExtractors);
+            foreach (var (language, extractor) in WorkspaceSymbolExtractors)
+                symbolExtractors[language] = extractor;
+            foreach (var (language, extractor) in WorkspaceReferenceExtractors)
+                referenceExtractors[language] = extractor;
+            CopyPatternExtractors("user", symbolExtractors);
+            foreach (var (language, extractor) in user.SymbolExtractors)
+                symbolExtractors[language] = extractor;
+            foreach (var (language, extractor) in user.ReferenceExtractors)
+                referenceExtractors[language] = extractor;
+
             var extensions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            AddLanguageExtensions(
-                extensions,
-                extractors.Values.Select(extractor => (extractor.Language, extractor.FileExtensions)));
+            SetPatternExtensions("workspace");
+            SetLanguageExtensions(extensions, WorkspaceSymbolExtractors.Values.Select(extractor => (extractor.Language, extractor.FileExtensions)));
+            SetLanguageExtensions(extensions, WorkspaceReferenceExtractors.Values.Select(extractor => (extractor.Language, extractor.FileExtensions)));
+            SetPatternExtensions("user");
+            SetLanguageExtensions(extensions, user.SymbolExtractors.Values.Select(extractor => (extractor.Language, extractor.FileExtensions)));
+            SetLanguageExtensions(extensions, user.ReferenceExtractors.Values.Select(extractor => (extractor.Language, extractor.FileExtensions)));
             Volatile.Write(
                 ref snapshot,
-                new PatternWorkspaceSnapshot(
-                    new ReadOnlyDictionary<string, ISymbolExtractor>(extractors),
+                new ExtractorWorkspaceSnapshot(
+                    new ReadOnlyDictionary<string, ISymbolExtractor>(symbolExtractors),
+                    new ReadOnlyDictionary<string, IReferenceExtractor>(referenceExtractors),
                     new ReadOnlyDictionary<string, string>(extensions),
                     Configs.ToArray(),
                     Diagnostics.ToArray(),
                     ConfigCount,
                     SkippedFileCount,
                     DiagnosticTotalCount,
-                    RuleCount));
+                    RuleCount,
+                    PluginAssemblyCount,
+                    PluginLoadContexts.Count));
+
+            void CopyPatternExtractors(string source, Dictionary<string, ISymbolExtractor> target)
+            {
+                foreach (var (language, extractor) in PatternSymbolExtractors)
+                {
+                    if (PatternSources.TryGetValue(language, out var registrationSource)
+                        && string.Equals(registrationSource, source, StringComparison.Ordinal))
+                    {
+                        target[language] = extractor;
+                    }
+                }
+            }
+
+            void SetPatternExtensions(string source)
+            {
+                SetLanguageExtensions(
+                    extensions,
+                    PatternSymbolExtractors
+                        .Where(entry => PatternSources.TryGetValue(entry.Key, out var registrationSource)
+                                        && string.Equals(registrationSource, source, StringComparison.Ordinal))
+                        .Select(entry => (entry.Value.Language, entry.Value.FileExtensions)));
+            }
         }
 
         internal void Reset()
         {
             lock (Gate)
             {
-                SymbolExtractors.Clear();
+                PatternSymbolExtractors.Clear();
+                PatternSources.Clear();
+                WorkspaceSymbolExtractors.Clear();
+                WorkspaceReferenceExtractors.Clear();
+                LoadedPluginPaths.Clear();
+                UnloadPluginAssemblyContexts(PluginLoadContexts);
                 LoadedPaths.Clear();
                 FailedFingerprints.Clear();
                 Configs.Clear();
@@ -57,49 +111,77 @@ public static partial class ExtractorPluginRegistry
                 SkippedFileCount = 0;
                 DiagnosticTotalCount = 0;
                 RuleCount = 0;
+                PluginAssemblyCount = 0;
                 PublishSnapshot();
             }
         }
     }
 
-    private sealed record PatternWorkspaceSnapshot(
+    private sealed record ExtractorWorkspaceSnapshot(
         IReadOnlyDictionary<string, ISymbolExtractor> SymbolExtractors,
+        IReadOnlyDictionary<string, IReferenceExtractor> ReferenceExtractors,
         IReadOnlyDictionary<string, string> LanguageExtensions,
         IReadOnlyList<PatternConfigStatus> Configs,
         IReadOnlyList<ExtractorRegistryDiagnostic> Diagnostics,
         int ConfigCount,
         int SkippedFileCount,
         int DiagnosticTotalCount,
-        int RuleCount)
+        int RuleCount,
+        int PluginAssemblyCount,
+        int RetainedLoadContextCount)
     {
-        internal static PatternWorkspaceSnapshot Empty { get; } = new(
+        internal static ExtractorWorkspaceSnapshot Empty { get; } = new(
             new ReadOnlyDictionary<string, ISymbolExtractor>(new Dictionary<string, ISymbolExtractor>(StringComparer.Ordinal)),
+            new ReadOnlyDictionary<string, IReferenceExtractor>(new Dictionary<string, IReferenceExtractor>(StringComparer.Ordinal)),
             new ReadOnlyDictionary<string, string>(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
             Array.Empty<PatternConfigStatus>(),
             Array.Empty<ExtractorRegistryDiagnostic>(),
             0,
             0,
             0,
+            0,
+            0,
             0);
+    }
+
+    private sealed record UserExtractorSnapshot(
+        IReadOnlyDictionary<string, ISymbolExtractor> SymbolExtractors,
+        IReadOnlyDictionary<string, IReferenceExtractor> ReferenceExtractors)
+    {
+        internal static UserExtractorSnapshot Empty { get; } = new(
+            new ReadOnlyDictionary<string, ISymbolExtractor>(new Dictionary<string, ISymbolExtractor>(StringComparer.Ordinal)),
+            new ReadOnlyDictionary<string, IReferenceExtractor>(new Dictionary<string, IReferenceExtractor>(StringComparer.Ordinal)));
     }
 
     private static readonly PatternWorkspaceState DefaultPatternWorkspace = new(workspaceRoot: null);
     private static readonly List<PatternWorkspaceState> PatternWorkspaces = [];
+    private static UserExtractorSnapshot userExtractorSnapshot = UserExtractorSnapshot.Empty;
 
     private static PatternWorkspaceState CreatePatternWorkspace(string workspaceRoot)
-        => new(workspaceRoot);
+    {
+        var state = new PatternWorkspaceState(workspaceRoot);
+        lock (state.Gate)
+            state.PublishSnapshot();
+        return state;
+    }
 
     private static void ReplacePatternWorkspace(PatternWorkspaceState state)
     {
+        PatternWorkspaceState? replaced = null;
         lock (Gate)
         {
             var index = PatternWorkspaces.FindIndex(existing =>
                 PathCasing.PathsEqual(existing.WorkspaceRoot!, state.WorkspaceRoot!));
             if (index >= 0)
+            {
+                replaced = PatternWorkspaces[index];
                 PatternWorkspaces[index] = state;
+            }
             else
                 PatternWorkspaces.Add(state);
         }
+
+        replaced?.Reset();
     }
 
     private static PatternWorkspaceState GetOrCreatePatternWorkspace(string workspaceRoot)
@@ -117,7 +199,7 @@ public static partial class ExtractorPluginRegistry
         }
     }
 
-    private static PatternWorkspaceSnapshot GetPatternSnapshot(string? workspaceRoot)
+    private static ExtractorWorkspaceSnapshot GetPatternSnapshot(string? workspaceRoot)
     {
         if (string.IsNullOrWhiteSpace(workspaceRoot))
             return DefaultPatternWorkspace.GetSnapshot();
@@ -127,15 +209,66 @@ public static partial class ExtractorPluginRegistry
         {
             return PatternWorkspaces.FirstOrDefault(state =>
                        PathCasing.PathsEqual(state.WorkspaceRoot!, fullRoot))?.GetSnapshot()
-                   ?? PatternWorkspaceSnapshot.Empty;
+                   ?? ExtractorWorkspaceSnapshot.Empty;
+        }
+    }
+
+    private static ExtractorWorkspaceSnapshot GetWorkspaceSnapshotForPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return DefaultPatternWorkspace.GetSnapshot();
+
+        var fullPath = Path.GetFullPath(path);
+        lock (Gate)
+        {
+            return PatternWorkspaces
+                       .Where(state => PathCasing.IsFullPathEqualOrParent(state.WorkspaceRoot!, fullPath))
+                       .OrderByDescending(state => state.WorkspaceRoot!.Length)
+                       .FirstOrDefault()?.GetSnapshot()
+                   ?? DefaultPatternWorkspace.GetSnapshot();
         }
     }
 
     private static void ResetPatternWorkspaces()
     {
         DefaultPatternWorkspace.Reset();
+        PatternWorkspaceState[] workspaces;
         lock (Gate)
+        {
+            workspaces = PatternWorkspaces.ToArray();
             PatternWorkspaces.Clear();
+        }
+
+        foreach (var workspace in workspaces)
+            workspace.Reset();
+    }
+
+    private static UserExtractorSnapshot GetUserExtractorSnapshot()
+        => Volatile.Read(ref userExtractorSnapshot);
+
+    private static void PublishUserExtractorSnapshot()
+    {
+        Volatile.Write(
+            ref userExtractorSnapshot,
+            new UserExtractorSnapshot(
+                new ReadOnlyDictionary<string, ISymbolExtractor>(new Dictionary<string, ISymbolExtractor>(SymbolExtractors, StringComparer.Ordinal)),
+                new ReadOnlyDictionary<string, IReferenceExtractor>(new Dictionary<string, IReferenceExtractor>(ReferenceExtractors, StringComparer.Ordinal))));
+    }
+
+    private static void SetLanguageExtensions(
+        Dictionary<string, string> target,
+        IEnumerable<(string Language, IReadOnlyCollection<string> FileExtensions)> extractors)
+    {
+        foreach (var (language, fileExtensions) in extractors)
+        {
+            var normalizedLanguage = NormalizePluginLanguage(language);
+            foreach (var extension in fileExtensions)
+            {
+                var normalizedExtension = NormalizePluginExtension(extension);
+                if (normalizedExtension != null)
+                    target[normalizedExtension] = normalizedLanguage;
+            }
+        }
     }
 
     private static bool PatternConfigPathIsLoaded(PatternWorkspaceState state, string fullPath)

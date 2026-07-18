@@ -8,7 +8,9 @@ public static partial class ExtractorPluginRegistry
     private static IEnumerable<string> EnumeratePluginAssemblyPaths()
         => EnumeratePluginAssemblyPaths(EnumeratePluginDirectories(projectRoot: null));
 
-    private static IEnumerable<string> EnumeratePluginAssemblyPaths(IEnumerable<string> directories)
+    private static IEnumerable<string> EnumeratePluginAssemblyPaths(
+        IEnumerable<string> directories,
+        PatternWorkspaceState? workspaceState = null)
     {
         var totalCandidates = 0;
         foreach (var directory in directories)
@@ -16,16 +18,17 @@ public static partial class ExtractorPluginRegistry
             if (!Directory.Exists(directory))
                 continue;
 
-            using var enumerator = TryEnumeratePluginFiles(directory);
+            using var enumerator = TryEnumeratePluginFiles(workspaceState, directory);
             if (enumerator == null)
                 continue;
 
             var directoryCandidates = 0;
-            while (TryMoveNextPluginFile(directory, enumerator, out var pluginPath))
+            while (TryMoveNextPluginFile(workspaceState, directory, enumerator, out var pluginPath))
             {
                 if (directoryCandidates >= MaxPluginAssemblyCandidatesPerDirectory)
                 {
                     ReportPluginDirectorySkipped(
+                        workspaceState,
                         directory,
                         $"too many plugin assembly candidates (maximum {MaxPluginAssemblyCandidatesPerDirectory} per directory)",
                         "plugin_candidate_limit_exceeded");
@@ -35,6 +38,7 @@ public static partial class ExtractorPluginRegistry
                 if (totalCandidates >= MaxPluginAssemblyCandidatesTotal)
                 {
                     ReportPluginDirectorySkipped(
+                        workspaceState,
                         directory,
                         $"too many plugin assembly candidates (maximum {MaxPluginAssemblyCandidatesTotal} total)",
                         "plugin_candidate_limit_exceeded");
@@ -48,7 +52,9 @@ public static partial class ExtractorPluginRegistry
         }
     }
 
-    private static IEnumerator<string>? TryEnumeratePluginFiles(string directory)
+    private static IEnumerator<string>? TryEnumeratePluginFiles(
+        PatternWorkspaceState? workspaceState,
+        string directory)
     {
         try
         {
@@ -60,12 +66,16 @@ public static partial class ExtractorPluginRegistry
                 "plugin",
                 "Plugin directory",
                 ex);
-            ReportPluginDirectorySkipped(directory, diagnostic.Message, diagnostic.Category);
+            ReportPluginDirectorySkipped(workspaceState, directory, diagnostic.Message, diagnostic.Category);
             return null;
         }
     }
 
-    private static bool TryMoveNextPluginFile(string directory, IEnumerator<string> enumerator, out string pluginPath)
+    private static bool TryMoveNextPluginFile(
+        PatternWorkspaceState? workspaceState,
+        string directory,
+        IEnumerator<string> enumerator,
+        out string pluginPath)
     {
         pluginPath = string.Empty;
         try
@@ -82,7 +92,7 @@ public static partial class ExtractorPluginRegistry
                 "plugin",
                 "Plugin directory",
                 ex);
-            ReportPluginDirectorySkipped(directory, diagnostic.Message, diagnostic.Category);
+            ReportPluginDirectorySkipped(workspaceState, directory, diagnostic.Message, diagnostic.Category);
             return false;
         }
     }

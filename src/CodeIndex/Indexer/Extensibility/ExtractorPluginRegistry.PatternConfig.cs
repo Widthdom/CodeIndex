@@ -65,11 +65,18 @@ public static partial class ExtractorPluginRegistry
                     return;
                 }
 
-                state.SymbolExtractors[parseResult.Language!] = new ConfiguredSymbolExtractor(
+                var configuredExtractor = new ConfiguredSymbolExtractor(
                     parseResult.Language!,
                     parseResult.Extensions!,
                     patterns,
                     (sourcePath, language, kind) => ReportPatternExtractorTimeout(state, sourcePath, language, kind));
+                if (!state.PatternSources.TryGetValue(parseResult.Language!, out var existingSource)
+                    || string.Equals(source, "user", StringComparison.Ordinal)
+                    || !string.Equals(existingSource, "user", StringComparison.Ordinal))
+                {
+                    state.PatternSymbolExtractors[parseResult.Language!] = configuredExtractor;
+                    state.PatternSources[parseResult.Language!] = source;
+                }
                 state.RuleCount += patterns.Count;
                 state.ConfigCount++;
                 TryMarkPatternConfigPathLoaded(state, path);

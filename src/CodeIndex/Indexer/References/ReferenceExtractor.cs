@@ -1021,7 +1021,8 @@ public static partial class ReferenceExtractor
         IReadOnlyList<SymbolRecord>? workspaceSymbols = null,
         CancellationToken cancellationToken = default,
         int? maxReferenceCount = null,
-        int? conflictMarkerLine = null)
+        int? conflictMarkerLine = null,
+        string? workspaceRoot = null)
         => ExtractDetailedNormalized(
             fileId,
             lang,
@@ -1032,7 +1033,8 @@ public static partial class ReferenceExtractor
             workspaceSymbols,
             cancellationToken,
             maxReferenceCount,
-            conflictMarkerLine).References;
+            conflictMarkerLine,
+            workspaceRoot).References;
 
     public static ReferenceExtractionResult ExtractDetailed(
         long fileId,
@@ -1054,7 +1056,8 @@ public static partial class ReferenceExtractor
             path,
             workspaceSymbols,
             cancellationToken,
-            maxReferenceCount);
+            maxReferenceCount,
+            workspaceRoot: null);
 
     internal static ReferenceExtractionResult ExtractDetailedNormalized(
         long fileId,
@@ -1066,7 +1069,8 @@ public static partial class ReferenceExtractor
         IReadOnlyList<SymbolRecord>? workspaceSymbols = null,
         CancellationToken cancellationToken = default,
         int? maxReferenceCount = null,
-        int? conflictMarkerLine = null)
+        int? conflictMarkerLine = null,
+        string? workspaceRoot = null)
         => ExtractDetailedCore(
             fileId,
             lang,
@@ -1078,7 +1082,8 @@ public static partial class ReferenceExtractor
             path,
             workspaceSymbols,
             cancellationToken,
-            maxReferenceCount);
+            maxReferenceCount,
+            workspaceRoot);
 
     private static ReferenceExtractionResult ExtractDetailedCore(
         long fileId,
@@ -1091,14 +1096,15 @@ public static partial class ReferenceExtractor
         string? path,
         IReadOnlyList<SymbolRecord>? workspaceSymbols,
         CancellationToken cancellationToken,
-        int? maxReferenceCount)
+        int? maxReferenceCount,
+        string? workspaceRoot)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var requestedLanguage = lang;
         if (!TryGetExtractor(lang, out var extractor, out var normalizedLanguage))
         {
             var pluginLanguage = NormalizePluginLanguage(lang);
-            if (pluginLanguage == null || !ExtractorPluginRegistry.TryGetReferenceExtractor(pluginLanguage, out var pluginExtractor))
+            if (pluginLanguage == null || !ExtractorPluginRegistry.TryGetReferenceExtractor(pluginLanguage, workspaceRoot, path, out var pluginExtractor))
                 return new ReferenceExtractionResult([], []);
 
             if (string.IsNullOrEmpty(content))

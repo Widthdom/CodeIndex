@@ -1673,7 +1673,8 @@ public static partial class IndexCommandRunner
                                             record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
                                             extractionCancellationToken,
                                             maxReferenceCount: options.MaxReferencesPerFile + 1,
-                                            conflictMarkerLine: loaded.ConflictMarkerLine);
+                                            conflictMarkerLine: loaded.ConflictMarkerLine,
+                                            workspaceRoot: projectRoot);
                                         references = referenceExtraction.References;
                                         referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                                     }
@@ -2084,7 +2085,8 @@ public static partial class IndexCommandRunner
                                     record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
                                     cancellationToken,
                                     maxReferenceCount: options.MaxReferencesPerFile + 1,
-                                    conflictMarkerLine: item.ConflictMarkerLine);
+                                    conflictMarkerLine: item.ConflictMarkerLine,
+                                    workspaceRoot: projectRoot);
                                 references = referenceExtraction.References;
                                 regexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                             }

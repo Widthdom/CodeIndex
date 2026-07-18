@@ -1558,6 +1558,14 @@ Process exit codes are coarse (`0` success including valid zero-row queries, `1`
 
   Plugin DLL discovery is bounded to `ExtractorPluginRegistry.MaxPluginAssemblyCandidatesPerDirectory` candidates per directory and `ExtractorPluginRegistry.MaxPluginAssemblyCandidatesTotal` candidates per process. Each candidate must also be no larger than `ExtractorPluginRegistry.MaxPluginAssemblyBytes` bytes. Discovery truncation and oversize skips are reported through `status --json` / MCP `status` `extractors.diagnostics`.
 
+  Registrations are resolved from immutable workspace snapshots keyed by the
+  normalized workspace identity and language. Precedence is deterministic and
+  exposed by `extractors.registration_precedence`, highest first: built-in,
+  user plugin, user pattern, workspace plugin, workspace pattern. Workspace
+  plugin assembly contexts and diagnostics are owned by their snapshot;
+  replacing one snapshot starts unloading only that workspace's old contexts
+  and cannot rewrite another workspace's active registrations.
+
 <a id="reference-kind-filtering-matrix"></a>
 
 ## Reference-kind filtering matrix
@@ -4354,6 +4362,12 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
 - **Extractor plugins (#1937)** — `CodeIndex.Indexer.Extensibility.ISymbolExtractor` と `IReferenceExtractor` は、サポート対象となる唯一の assembly-extension surface です。`cdidx` は既定でユーザー所有の `~/.cdidx/plugins/` ディレクトリから trusted plugin DLL を検出します。workspace `.cdidx/plugins/` の DLL discovery は、process が `CDIDX_TRUST_WORKSPACE_PLUGINS=1`（`true`、`yes`、`on` も可）を設定しない限り fail-closed です。workspace DLL のロードは checkout が提供するコードを `cdidx` process 内で実行するためです。plugin assembly は `[assembly: CdidxPlugin(minApiVersion: 1, maxApiVersion: 1)]` を宣言し、どちらかまたは両方の interface を実装する public parameterless type を公開する必要があります。plugin が新しい拡張子を所有する場合は `FileExtensions` を設定し、`FileIndexer` がそのファイルを plugin language へ route できるようにします。plugin は `cdidx` process 内で実行され sandbox されないため、信頼できるローカル DLL だけをインストールしてください。この狭い契約により、チームは CodeIndex を fork せず DSL 固有の symbol/reference を追加できますが、一般的な library/SDK embedding API ではありません。
 
   Plugin DLL discovery は、directory ごとに `ExtractorPluginRegistry.MaxPluginAssemblyCandidatesPerDirectory` 件、process 全体で `ExtractorPluginRegistry.MaxPluginAssemblyCandidatesTotal` 件までに制限されます。各 candidate は `ExtractorPluginRegistry.MaxPluginAssemblyBytes` bytes 以下でなければなりません。discovery の切り詰めや oversized skip は、`status --json` / MCP `status` の `extractors.diagnostics` に報告されます。
+
+  登録は、正規化済み workspace identity と language を key にする immutable workspace snapshot
+  から解決されます。優先順位は決定的で、`extractors.registration_precedence` に高い順で
+  built-in、user plugin、user pattern、workspace plugin、workspace pattern として公開されます。
+  workspace plugin の assembly context と diagnostic は所有 snapshot に属し、snapshot の置換は
+  その workspace の古い context だけを unload 開始するため、他 workspace の active 登録を書き換えません。
 
 ## reference_kind フィルタの対応表
 

@@ -1,30 +1,32 @@
 using System.Reflection;
+using System.Runtime.Loader;
 using CodeIndex.Cli;
 
 namespace CodeIndex.Indexer.Extensibility;
 
 public static partial class ExtractorPluginRegistry
 {
-    private static void LoadPluginAssemblies(IEnumerable<string> directories)
+    private static void LoadPluginAssemblies(
+        IEnumerable<string> directories,
+        PatternWorkspaceState? workspaceState = null)
     {
-        foreach (var pluginPath in EnumeratePluginAssemblyPaths(directories))
-            TryLoadPlugin(pluginPath);
+        foreach (var pluginPath in EnumeratePluginAssemblyPaths(directories, workspaceState))
+            TryLoadPlugin(pluginPath, workspaceState);
     }
 
-    private static void TryLoadPlugin(string pluginPath)
+    private static void TryLoadPlugin(string pluginPath, PatternWorkspaceState? workspaceState = null)
     {
         var fullPath = pluginPath;
         ExtensionAssemblyLoadContext? loadContext = null;
         try
         {
             fullPath = Path.GetFullPath(pluginPath);
-            lock (Gate)
+            if (!TryMarkPluginAssemblyPathLoaded(workspaceState, fullPath))
             {
-                if (!TryMarkPluginAssemblyPathLoaded(fullPath))
-                    return;
+                return;
             }
 
-            if (!PluginAssemblyCandidateIsWithinBudget(fullPath))
+            if (!PluginAssemblyCandidateIsWithinBudget(workspaceState, fullPath))
                 return;
 
             loadContext = new ExtensionAssemblyLoadContext(
@@ -34,7 +36,8 @@ public static partial class ExtractorPluginRegistry
             var attribute = assembly.GetCustomAttribute<CdidxPluginAttribute>();
             if (attribute == null)
             {
-                RecordDiagnostic(
+                RecordPluginDiagnostic(
+                    workspaceState,
                     "plugin",
                     fullPath,
                     typeName: null,
@@ -48,7 +51,8 @@ public static partial class ExtractorPluginRegistry
             if (attribute.MinApiVersion > CurrentApiVersion
                 || attribute.MaxApiVersion < CurrentApiVersion)
             {
-                RecordDiagnostic(
+                RecordPluginDiagnostic(
+                    workspaceState,
                     "plugin",
                     fullPath,
                     typeName: null,
@@ -67,7 +71,8 @@ public static partial class ExtractorPluginRegistry
             catch (ReflectionTypeLoadException ex)
             {
                 var diagnostic = ExtensionLoadDiagnosticClassifier.ClassifyTypeLoad("Plugin assembly type inspection", ex);
-                RecordDiagnostic(
+                RecordPluginDiagnostic(
+                    workspaceState,
                     "plugin",
                     fullPath,
                     typeName: null,
@@ -78,26 +83,40 @@ public static partial class ExtractorPluginRegistry
                 return;
             }
 
-            if (!PluginAssemblyTypesAreWithinBudget(fullPath, types))
+            if (!PluginAssemblyTypesAreWithinBudget(workspaceState, fullPath, types))
                 return;
 
-            lock (Gate)
+            if (workspaceState == null)
             {
-                pluginAssemblyCount++;
-                LoadedPluginAssemblyContexts.Add(loadContext);
-                loadContext = null;
+                lock (Gate)
+                {
+                    pluginAssemblyCount++;
+                    LoadedPluginAssemblyContexts.Add(loadContext);
+                    loadContext = null;
+                }
+            }
+            else
+            {
+                lock (workspaceState.Gate)
+                {
+                    workspaceState.PluginAssemblyCount++;
+                    workspaceState.PluginLoadContexts.Add(loadContext);
+                    workspaceState.PublishSnapshot();
+                    loadContext = null;
+                }
             }
 
             foreach (var type in types)
             {
                 if (type is { IsAbstract: false, IsInterface: false } && type.GetConstructor(Type.EmptyTypes) != null)
-                    TryRegisterPluginType(type, fullPath);
+                    TryRegisterPluginType(type, fullPath, workspaceState);
             }
         }
         catch (Exception ex)
         {
             var diagnostic = ExtensionLoadDiagnosticClassifier.ClassifyAssemblyLoad("Plugin assembly load", ex);
-            RecordDiagnostic(
+            RecordPluginDiagnostic(
+                workspaceState,
                 "plugin",
                 fullPath,
                 typeName: null,
@@ -113,17 +132,20 @@ public static partial class ExtractorPluginRegistry
     }
 
     private static void UnloadPluginAssemblyContexts()
+        => UnloadPluginAssemblyContexts(LoadedPluginAssemblyContexts);
+
+    private static void UnloadPluginAssemblyContexts(List<AssemblyLoadContext> loadContexts)
     {
-        foreach (var loadContext in LoadedPluginAssemblyContexts)
+        foreach (var loadContext in loadContexts)
         {
             if (loadContext.IsCollectible)
                 loadContext.Unload();
         }
 
-        LoadedPluginAssemblyContexts.Clear();
+        loadContexts.Clear();
     }
 
-    private static bool PluginAssemblyCandidateIsWithinBudget(string fullPath)
+    private static bool PluginAssemblyCandidateIsWithinBudget(PatternWorkspaceState? workspaceState, string fullPath)
     {
         FileInfo fileInfo;
         try
@@ -132,7 +154,8 @@ public static partial class ExtractorPluginRegistry
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
         {
-            RecordDiagnostic(
+            RecordPluginDiagnostic(
+                workspaceState,
                 "plugin",
                 fullPath,
                 typeName: null,
@@ -145,7 +168,8 @@ public static partial class ExtractorPluginRegistry
 
         if (!fileInfo.Exists)
         {
-            RecordDiagnostic(
+            RecordPluginDiagnostic(
+                workspaceState,
                 "plugin",
                 fullPath,
                 typeName: null,
@@ -158,7 +182,8 @@ public static partial class ExtractorPluginRegistry
 
         if ((fileInfo.Attributes & FileAttributes.Directory) != 0)
         {
-            RecordDiagnostic(
+            RecordPluginDiagnostic(
+                workspaceState,
                 "plugin",
                 fullPath,
                 typeName: null,
@@ -171,7 +196,8 @@ public static partial class ExtractorPluginRegistry
 
         if (FileSystemBoundary.IsSymlinkOrReparsePoint(fileInfo))
         {
-            RecordDiagnostic(
+            RecordPluginDiagnostic(
+                workspaceState,
                 "plugin",
                 fullPath,
                 typeName: null,
@@ -184,7 +210,8 @@ public static partial class ExtractorPluginRegistry
 
         if (fileInfo.Length > MaxPluginAssemblyBytes)
         {
-            RecordDiagnostic(
+            RecordPluginDiagnostic(
+                workspaceState,
                 "plugin",
                 fullPath,
                 typeName: null,
@@ -198,13 +225,17 @@ public static partial class ExtractorPluginRegistry
         return true;
     }
 
-    private static bool PluginAssemblyTypesAreWithinBudget(string fullPath, IReadOnlyCollection<Type> types)
+    private static bool PluginAssemblyTypesAreWithinBudget(
+        PatternWorkspaceState? workspaceState,
+        string fullPath,
+        IReadOnlyCollection<Type> types)
     {
         var limit = ResolveTypeInspectionLimit();
         if (types.Count <= limit)
             return true;
 
-        RecordDiagnostic(
+        RecordPluginDiagnostic(
+            workspaceState,
             "plugin",
             fullPath,
             typeName: null,
@@ -215,7 +246,10 @@ public static partial class ExtractorPluginRegistry
         return false;
     }
 
-    private static void TryRegisterPluginType(Type type, string pluginPath)
+    private static void TryRegisterPluginType(
+        Type type,
+        string pluginPath,
+        PatternWorkspaceState? workspaceState)
     {
         var supportsSymbolExtraction = typeof(ISymbolExtractor).IsAssignableFrom(type);
         var supportsReferenceExtraction = typeof(IReferenceExtractor).IsAssignableFrom(type);
@@ -225,16 +259,33 @@ public static partial class ExtractorPluginRegistry
         try
         {
             var instance = Activator.CreateInstance(type);
-            if (supportsSymbolExtraction && instance is ISymbolExtractor symbolExtractor)
-                Register(symbolExtractor);
+            if (workspaceState == null)
+            {
+                if (supportsSymbolExtraction && instance is ISymbolExtractor symbolExtractor)
+                    Register(symbolExtractor);
 
-            if (supportsReferenceExtraction && instance is IReferenceExtractor referenceExtractor)
-                Register(referenceExtractor);
+                if (supportsReferenceExtraction && instance is IReferenceExtractor referenceExtractor)
+                    Register(referenceExtractor);
+            }
+            else
+            {
+                lock (workspaceState.Gate)
+                {
+                    if (supportsSymbolExtraction && instance is ISymbolExtractor symbolExtractor)
+                        workspaceState.WorkspaceSymbolExtractors[NormalizePluginLanguage(symbolExtractor.Language)] = symbolExtractor;
+
+                    if (supportsReferenceExtraction && instance is IReferenceExtractor referenceExtractor)
+                        workspaceState.WorkspaceReferenceExtractors[NormalizePluginLanguage(referenceExtractor.Language)] = referenceExtractor;
+
+                    workspaceState.PublishSnapshot();
+                }
+            }
         }
         catch (Exception ex)
         {
             var diagnostic = ExtensionLoadDiagnosticClassifier.ClassifyConstructorFailure("Plugin type constructor", ex);
-            RecordDiagnostic(
+            RecordPluginDiagnostic(
+                workspaceState,
                 "plugin_type",
                 pluginPath,
                 type.FullName,
@@ -243,5 +294,45 @@ public static partial class ExtractorPluginRegistry
                 countsAsSkippedFile: false,
                 category: diagnostic.Category);
         }
+    }
+
+    private static bool TryMarkPluginAssemblyPathLoaded(PatternWorkspaceState? workspaceState, string fullPath)
+    {
+        if (workspaceState == null)
+        {
+            lock (Gate)
+                return TryMarkPluginAssemblyPathLoaded(fullPath);
+        }
+
+        lock (workspaceState.Gate)
+        {
+            if (workspaceState.LoadedPluginPaths.Any(path =>
+                    string.Equals(path, fullPath, PathCasing.ComparisonFor(fullPath))))
+            {
+                return false;
+            }
+
+            workspaceState.LoadedPluginPaths.Add(fullPath);
+            return true;
+        }
+    }
+
+    private static void RecordPluginDiagnostic(
+        PatternWorkspaceState? workspaceState,
+        string kind,
+        string path,
+        string? typeName,
+        string severity,
+        string message,
+        bool countsAsSkippedFile,
+        string category)
+    {
+        if (workspaceState == null)
+        {
+            RecordDiagnostic(kind, path, typeName, severity, message, countsAsSkippedFile, category);
+            return;
+        }
+
+        RecordPatternDiagnostic(workspaceState, kind, path, typeName, severity, message, countsAsSkippedFile, category);
     }
 }

@@ -280,6 +280,13 @@ Configured extractors are published as immutable workspace snapshots: the
 128-rule budget is per workspace, reindexing replaces and releases the prior
 snapshot, and a timed-out rule enters a bounded one-minute cooldown only in
 the workspace that observed the timeout.
+Plugin and pattern registrations with the same language are also resolved from
+that immutable snapshot. `extractors.snapshot_scope` identifies whether status
+describes a `user` or `workspace` snapshot, and
+`extractors.registration_precedence` exposes the highest-to-lowest order:
+`built_in`, `user_plugin`, `user_pattern`, `workspace_plugin`, then
+`workspace_pattern`. Reloading one workspace never mutates another workspace's
+active snapshot.
 Accepted extension trust overrides such as `CDIDX_TRUST_WORKSPACE_PLUGINS` and
 `CDIDX_HOOKS_DIR` are also reported in sanitized `trust_overrides[]` entries.
 
@@ -583,6 +590,11 @@ bounded な path と message に加えて sanitization 済みの `category` mach
 workspace snapshot として公開されます。128-rule budget は workspace ごとに独立し、reindex は
 以前の snapshot を置換して解放し、timeout した rule はその timeout を観測した workspace 内だけで
 上限付きの1分間 cooldown に入ります。
+同じ language の plugin / pattern 登録も、その immutable snapshot から解決されます。
+`extractors.snapshot_scope` は status が `user` / `workspace` のどちらの snapshot を表すかを示し、
+`extractors.registration_precedence` は高い順に `built_in`、`user_plugin`、`user_pattern`、
+`workspace_plugin`、`workspace_pattern` を公開します。一方の workspace を reload しても、
+他 workspace の active snapshot は変更されません。
 受理された `CDIDX_TRUST_WORKSPACE_PLUGINS` や `CDIDX_HOOKS_DIR` などの
 拡張信頼境界 override は、sanitization 済みの `trust_overrides[]` entry としても報告されます。
 

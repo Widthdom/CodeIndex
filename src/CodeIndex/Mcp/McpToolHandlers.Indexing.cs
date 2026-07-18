@@ -650,7 +650,8 @@ public partial class McpServer
                             record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
                             requestToken,
                             maxReferenceCount: maxReferencesPerFile + 1,
-                            conflictMarkerLine: loaded.ConflictMarkerLine);
+                            conflictMarkerLine: loaded.ConflictMarkerLine,
+                            workspaceRoot: projectPath);
                         regexTimeoutIssue = IndexCommandRunner.BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                     }
                     postExtractionHooks.Value.OnReferencesExtracted(fileContext, references);

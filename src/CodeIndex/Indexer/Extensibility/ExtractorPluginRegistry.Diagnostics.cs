@@ -69,9 +69,14 @@ public static partial class ExtractorPluginRegistry
             category: "pattern_candidate_limit_exceeded");
     }
 
-    private static void ReportPluginDirectorySkipped(string path, string reason, string category)
+    private static void ReportPluginDirectorySkipped(
+        PatternWorkspaceState? workspaceState,
+        string path,
+        string reason,
+        string category)
     {
-        RecordDiagnostic(
+        RecordPluginDiagnostic(
+            workspaceState,
             "plugin_directory",
             path,
             typeName: null,
@@ -196,6 +201,10 @@ public sealed class ExtractorRegistryStatus
     [JsonPropertyName("pattern_configs")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<PatternConfigStatus>? PatternConfigs { get; init; }
+    [JsonPropertyName("snapshot_scope")]
+    public string SnapshotScope { get; init; } = "user";
+    [JsonPropertyName("registration_precedence")]
+    public IReadOnlyList<string> RegistrationPrecedence { get; init; } = [];
 }
 
 public sealed record ExtractorRegistryDiagnostic(

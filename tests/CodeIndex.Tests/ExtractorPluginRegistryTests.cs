@@ -773,6 +773,211 @@ public class ExtractorPluginRegistryTests
     }
 
     [Fact]
+    public void WorkspaceSnapshots_IsolateSameLanguageSequentiallyAndAcrossReload_Issue4602()
+    {
+        var workspaceA = TestProjectHelper.CreateTempProject("extractor_registry_snapshot_a_4602");
+        var workspaceB = TestProjectHelper.CreateTempProject("extractor_registry_snapshot_b_4602");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                var extractorA = new SnapshotSymbolExtractor("shareddsl", "workspace-a");
+                var extractorB = new SnapshotSymbolExtractor("shareddsl", "workspace-b");
+                var referenceA = new SnapshotReferenceExtractor("shareddsl", "reference-a");
+                var referenceB = new SnapshotReferenceExtractor("shareddsl", "reference-b");
+                ExtractorPluginRegistry.RegisterForWorkspaceForTests(workspaceA, extractorA);
+                ExtractorPluginRegistry.RegisterForWorkspaceForTests(workspaceB, extractorB);
+                ExtractorPluginRegistry.RegisterForWorkspaceForTests(workspaceA, referenceA);
+                ExtractorPluginRegistry.RegisterForWorkspaceForTests(workspaceB, referenceB);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspaceA, out var resolvedA));
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspaceB, out var resolvedB));
+                Assert.Same(extractorA, resolvedA);
+                Assert.Same(extractorB, resolvedB);
+                Assert.True(ExtractorPluginRegistry.TryGetReferenceExtractor(
+                    "shareddsl",
+                    workspaceA,
+                    "a.shared",
+                    out var resolvedReferenceA));
+                Assert.True(ExtractorPluginRegistry.TryGetReferenceExtractor(
+                    "shareddsl",
+                    workspaceB,
+                    "b.shared",
+                    out var resolvedReferenceB));
+                Assert.Same(referenceA, resolvedReferenceA);
+                Assert.Same(referenceB, resolvedReferenceB);
+                Assert.Equal(
+                    "reference-a",
+                    Assert.Single(CodeIndex.Indexer.ReferenceExtractor.ExtractNormalized(
+                        1,
+                        "shareddsl",
+                        "reference-a",
+                        hasOversizeLine: false,
+                        symbols: [],
+                        path: "a.shared",
+                        workspaceRoot: workspaceA)).SymbolName);
+                Assert.Equal(
+                    "reference-b",
+                    Assert.Single(CodeIndex.Indexer.ReferenceExtractor.ExtractNormalized(
+                        2,
+                        "shareddsl",
+                        "reference-b",
+                        hasOversizeLine: false,
+                        symbols: [],
+                        path: "b.shared",
+                        workspaceRoot: workspaceB)).SymbolName);
+                Assert.Equal("workspace-a", Assert.Single(resolvedA.Extract(1, "", new ExtractionContext("shareddsl", "a.shared"))).Name);
+                Assert.Equal("workspace-b", Assert.Single(resolvedB.Extract(2, "", new ExtractionContext("shareddsl", "b.shared"))).Name);
+
+                var lateUserExtractor = new SnapshotSymbolExtractor("shareddsl", "late-user");
+                ExtractorPluginRegistry.Register(lateUserExtractor);
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspaceA, out var stillActiveA));
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspaceB, out var stillActiveB));
+                Assert.Same(extractorA, stillActiveA);
+                Assert.Same(extractorB, stillActiveB);
+
+                ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(workspaceA);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspaceA, out var reloadedA));
+                Assert.Same(lateUserExtractor, reloadedA);
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspaceB, out var unchangedB));
+                Assert.Same(extractorB, unchangedB);
+                Assert.Equal("workspace-b", Assert.Single(unchangedB.Extract(3, "", new ExtractionContext("shareddsl", "b2.shared"))).Name);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(workspaceA);
+                TestProjectHelper.DeleteDirectory(workspaceB);
+            }
+        }
+    }
+
+    [Fact]
+    public void WorkspaceSnapshots_IsolateSameLanguageDuringConcurrentRegistration_Issue4602()
+    {
+        var workspaceA = TestProjectHelper.CreateTempProject("extractor_registry_snapshot_concurrent_a_4602");
+        var workspaceB = TestProjectHelper.CreateTempProject("extractor_registry_snapshot_concurrent_b_4602");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                var extractorA = new SnapshotSymbolExtractor("shareddsl", "workspace-a");
+                var extractorB = new SnapshotSymbolExtractor("shareddsl", "workspace-b");
+
+                Parallel.Invoke(
+                    () => ExtractorPluginRegistry.RegisterForWorkspaceForTests(workspaceA, extractorA),
+                    () => ExtractorPluginRegistry.RegisterForWorkspaceForTests(workspaceB, extractorB));
+
+                Parallel.For(0, 64, _ =>
+                {
+                    Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspaceA, out var resolvedA));
+                    Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspaceB, out var resolvedB));
+                    Assert.Same(extractorA, resolvedA);
+                    Assert.Same(extractorB, resolvedB);
+                });
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(workspaceA);
+                TestProjectHelper.DeleteDirectory(workspaceB);
+            }
+        }
+    }
+
+    [Fact]
+    public void WorkspacePluginAssemblies_AreOwnedByTheirImmutableSnapshots_Issue4602()
+    {
+        var workspaceA = TestProjectHelper.CreateTempProject("extractor_registry_plugin_snapshot_a_4602");
+        var workspaceB = TestProjectHelper.CreateTempProject("extractor_registry_plugin_snapshot_b_4602");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "1");
+                var pluginA = Path.Combine(workspaceA, ".cdidx", "plugins", "snapshot-plugin.dll");
+                var pluginB = Path.Combine(workspaceB, ".cdidx", "plugins", "snapshot-plugin.dll");
+                Directory.CreateDirectory(Path.GetDirectoryName(pluginA)!);
+                Directory.CreateDirectory(Path.GetDirectoryName(pluginB)!);
+                File.Copy(Assembly.GetExecutingAssembly().Location, pluginA);
+                File.Copy(Assembly.GetExecutingAssembly().Location, pluginB);
+
+                ExtractorPluginRegistry.LoadPluginsForProjectRoot(workspaceA);
+                ExtractorPluginRegistry.LoadPluginsForProjectRoot(workspaceB);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", workspaceA, out var extractorA));
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", workspaceB, out var extractorB));
+                Assert.NotSame(extractorA, extractorB);
+                Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot(workspaceA).PluginAssemblyCount);
+                Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot(workspaceB).PluginAssemblyCount);
+                Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot(workspaceA).RetainedLoadContextCount);
+                Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot(workspaceB).RetainedLoadContextCount);
+
+                ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(workspaceA);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", workspaceB, out var unchangedB));
+                Assert.Same(extractorB, unchangedB);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(workspaceA);
+                TestProjectHelper.DeleteDirectory(workspaceB);
+            }
+        }
+    }
+
+    [Fact]
+    public void WorkspaceSnapshots_ExposeAndApplyRegistrationPrecedence_Issue4602()
+    {
+        var workspace = TestProjectHelper.CreateTempProject("extractor_registry_snapshot_precedence_4602");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                var userExtractor = new SnapshotSymbolExtractor("shareddsl", "user", ".precedence");
+                var workspaceExtractor = new SnapshotSymbolExtractor("shareddsl", "workspace", ".precedence");
+                var workspaceCollisionExtractor = new SnapshotSymbolExtractor("workspacecollision", "workspace-collision", ".precedence");
+                ExtractorPluginRegistry.Register(userExtractor);
+                ExtractorPluginRegistry.RegisterForWorkspaceForTests(workspace, workspaceExtractor);
+                ExtractorPluginRegistry.RegisterForWorkspaceForTests(workspace, workspaceCollisionExtractor);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspace, out var resolved));
+                Assert.Same(userExtractor, resolved);
+                Assert.True(ExtractorPluginRegistry.TryGetLanguageForExtension(".precedence", workspace, out var extensionLanguage));
+                Assert.Equal("shareddsl", extensionLanguage);
+                var status = ExtractorPluginRegistry.GetStatusSnapshot(workspace);
+                Assert.Equal("workspace", status.SnapshotScope);
+                Assert.Equal(
+                    ["built_in", "user_plugin", "user_pattern", "workspace_plugin", "workspace_pattern"],
+                    status.RegistrationPrecedence);
+
+                var builtInOverride = new SnapshotSymbolExtractor("csharp", "plugin-override");
+                ExtractorPluginRegistry.Register(builtInOverride);
+                var symbols = CodeIndex.Indexer.SymbolExtractor.Extract(
+                    1,
+                    "csharp",
+                    "class BuiltInWins {}",
+                    "sample.cs",
+                    workspace);
+                Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "BuiltInWins");
+                Assert.Equal(0, builtInOverride.ExtractionCount);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(workspace);
+            }
+        }
+    }
+
+    [Fact]
     public void LoadPatternConfigs_SanitizesRejectedPathAndReason_3243()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_sanitized_pattern");
@@ -1075,6 +1280,53 @@ public class ExtractorPluginRegistryTests
             "kind" => $"language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"{new string('k', ExtractorPluginRegistry.MaxPatternKindLength + 1)}\"\n    regex: \"^(?<name>\\\\w+)\"\n",
             _ => throw new ArgumentOutOfRangeException(nameof(scalarName), scalarName, null),
         };
+    }
+
+    private sealed class SnapshotSymbolExtractor(string language, string symbolName, string extension = ".shared") : ISymbolExtractor
+    {
+        private int extractionCount;
+
+        public string Language { get; } = language;
+        public IReadOnlyCollection<string> FileExtensions { get; } = [extension];
+        internal int ExtractionCount => Volatile.Read(ref extractionCount);
+
+        public IReadOnlyList<SymbolRecord> Extract(long fileId, string source, ExtractionContext context)
+        {
+            Interlocked.Increment(ref extractionCount);
+            return
+            [
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "class",
+                    Name = symbolName,
+                    Line = 1,
+                    StartLine = 1,
+                    EndLine = 1,
+                    Signature = symbolName,
+                },
+            ];
+        }
+    }
+
+    private sealed class SnapshotReferenceExtractor(string language, string symbolName) : CodeIndex.Indexer.Extensibility.IReferenceExtractor
+    {
+        public string Language { get; } = language;
+        public IReadOnlyCollection<string> FileExtensions { get; } = [".shared"];
+
+        public IReadOnlyList<ReferenceRecord> Extract(long fileId, string source, ExtractionContext context)
+            =>
+            [
+                new ReferenceRecord
+                {
+                    FileId = fileId,
+                    SymbolName = symbolName,
+                    ReferenceKind = "call",
+                    Line = 1,
+                    Column = 1,
+                    Context = source,
+                },
+            ];
     }
 }
 
