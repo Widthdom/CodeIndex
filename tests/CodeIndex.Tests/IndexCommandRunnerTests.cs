@@ -1861,6 +1861,70 @@ public sealed class Caller
     }
 
     [Fact]
+    public void Run_CancelAtFtsOptimize_InterruptsAndLeavesRecoverableState_Issue4591()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        using var cts = new CancellationTokenSource();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('fts cancellation')\n");
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = cts.Cancel;
+
+            var (cancelledExitCode, _) = RunAndCaptureJson([projectRoot, "--json"], cts);
+
+            Assert.Equal(CommandExitCodes.Interrupted, cancelledExitCode);
+            using (var interruptedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var marker = interruptedDb.GetMetaString(DbWriter.FtsBulkLoadInProgressMetaKey);
+                Assert.True(marker is null or "true", $"Unexpected active-owner FTS marker: {marker}");
+            }
+
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = null;
+            var (recoveryExitCode, recoveryJson) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, recoveryExitCode);
+            Assert.Equal("success", recoveryJson.GetProperty("status").GetString());
+            using var recoveredDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Null(recoveredDb.GetMetaString(DbWriter.FtsBulkLoadInProgressMetaKey));
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_CancelAtPlannerMaintenance_StopsWithoutDuplicateResult_Issue4591()
+    {
+        var projectRoot = CreateTempProject();
+        using var cts = new CancellationTokenSource();
+        var plannerReached = false;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('planner cancellation')\n");
+            DbContext.PlannerStatisticsCommandCreatedForTesting = _ =>
+            {
+                plannerReached = true;
+                cts.Cancel();
+            };
+
+            var (exitCode, _) = RunAndCaptureJson([projectRoot, "--json"], cts);
+
+            Assert.True(plannerReached);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+        }
+        finally
+        {
+            DbContext.PlannerStatisticsCommandCreatedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_ExistingIndexDatabase_RunsPragmaOptimizeAfterSuccessfulIndex()
     {
         var projectRoot = CreateTempProject();

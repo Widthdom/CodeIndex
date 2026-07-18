@@ -361,7 +361,7 @@ public static partial class IndexCommandRunner
                 AddToGitExclude(options.ProjectPath, dbPath, indexRunDiagnostics, indexCancellation.Token);
 
                 var writer = new DbWriter(db);
-                writer.RecoverInterruptedFtsBulkLoadIfNeeded();
+                writer.RecoverInterruptedFtsBulkLoadIfNeeded(indexCancellation.Token);
                 var indexer = new FileIndexer(
                     options.ProjectPath,
                     ignoreCase,
@@ -378,9 +378,21 @@ public static partial class IndexCommandRunner
                     : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, showNextSteps: !databaseExistedBeforeIndex, indexCancellation.Token);
                 if (initialExitCode == CommandExitCodes.Success)
                 {
-                    var plannerMaintenanceFailure = db.RunPlannerStatisticsMaintenance(forceAnalyze: !databaseExistedBeforeIndex);
-                    if (plannerMaintenanceFailure != null)
-                        TryStampPlannerStatisticsMaintenanceDiagnostic(writer, indexRunDiagnostics, plannerMaintenanceFailure);
+                    try
+                    {
+                        var plannerMaintenanceFailure = db.RunPlannerStatisticsMaintenance(
+                            forceAnalyze: !databaseExistedBeforeIndex,
+                            indexCancellation.Token);
+                        if (plannerMaintenanceFailure != null)
+                            TryStampPlannerStatisticsMaintenanceDiagnostic(writer, indexRunDiagnostics, plannerMaintenanceFailure);
+                    }
+                    catch (OperationCanceledException) when (indexCancellation.IsCancellationRequested)
+                    {
+                        // The authoritative result has already been emitted by the mode runner.
+                        // Stop optional planner maintenance without appending a second JSON result.
+                        // authoritative result は mode runner が出力済み。optional planner
+                        // maintenance を止め、2 個目の JSON result は追加しない。
+                    }
                 }
             }
         }
@@ -456,7 +468,12 @@ public static partial class IndexCommandRunner
         // partial-update batch re-acquires the lock through IndexCommandRunner.Run.
         // watch ループ突入前にロックを解放し、バッチ間に別プロセスの `cdidx index` が
         // 取得できる状態にする。各バッチ更新はサブ実行で再取得する。
-        return IndexWatchRunner.Run(options, jsonOptions, Path.GetFullPath(options.ProjectPath!), Path.GetFullPath(dbPath));
+        return IndexWatchRunner.Run(
+            options,
+            jsonOptions,
+            Path.GetFullPath(options.ProjectPath!),
+            Path.GetFullPath(dbPath),
+            indexCancellation.Token);
     }
 
     private static string DescribeLockHolder(IndexLockInfo? holder)

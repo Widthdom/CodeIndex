@@ -1070,6 +1070,91 @@ public class IndexWatchRunnerTests
     }
 
     [Fact]
+    public void IndexCommandRun_WatchIdle_PropagatesTopLevelCancellation_Issue4591()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        using var cts = new CancellationTokenSource();
+        using var ready = new ManualResetEventSlim();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "idle.py"), "print('idle')\n");
+            IndexWatchRunner.WatchReadyForTesting = _ =>
+            {
+                ready.Set();
+                cts.Cancel();
+            };
+
+            var runTask = Task.Run(() => IndexCommandRunner.Run(
+                [projectRoot, "--watch", "--quiet", "--db", dbPath],
+                _jsonOptions,
+                cts));
+
+            Assert.True(ready.Wait(TimeSpan.FromSeconds(10)), "The top-level watch run did not become ready.");
+#pragma warning disable xUnit1031 // Bounded synchronous wait keeps the static test hook scoped.
+            var exitCode = runTask.WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+        }
+        finally
+        {
+            cts.Cancel();
+            IndexWatchRunner.WatchReadyForTesting = null;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void IndexCommandRun_WatchActiveUpdate_PropagatesTopLevelCancellation_Issue4591()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        var sourcePath = Path.Combine(projectRoot, "active.py");
+        using var cts = new CancellationTokenSource();
+        using var ready = new ManualResetEventSlim();
+        using var extractionStarted = new ManualResetEventSlim();
+        Task<int>? runTask = null;
+        try
+        {
+            File.WriteAllText(sourcePath, "print('before')\n");
+            IndexWatchRunner.WatchReadyForTesting = enqueue =>
+            {
+                File.WriteAllText(sourcePath, "print('after')\n");
+                enqueue(sourcePath);
+                ready.Set();
+            };
+            IndexCommandRunner.UpdateExtractionWorkStartedForTesting = () =>
+            {
+                extractionStarted.Set();
+                cts.Token.WaitHandle.WaitOne();
+                cts.Token.ThrowIfCancellationRequested();
+            };
+
+            runTask = Task.Run(() => IndexCommandRunner.Run(
+                [projectRoot, "--watch", "--quiet", "--debounce", "50", "--db", dbPath],
+                _jsonOptions,
+                cts));
+
+            Assert.True(ready.Wait(TimeSpan.FromSeconds(10)), "The top-level watch run did not become ready.");
+            Assert.True(extractionStarted.Wait(TimeSpan.FromSeconds(10)), "The watch update did not start extraction work.");
+            cts.Cancel();
+#pragma warning disable xUnit1031 // Bounded synchronous wait keeps the static test hooks scoped.
+            var exitCode = runTask.WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+            Assert.Equal(CommandExitCodes.Interrupted, exitCode);
+        }
+        finally
+        {
+            cts.Cancel();
+            if (runTask is { IsCompleted: false })
+                SpinWait.SpinUntil(() => runTask.IsCompleted, TimeSpan.FromSeconds(10));
+            IndexWatchRunner.WatchReadyForTesting = null;
+            IndexCommandRunner.UpdateExtractionWorkStartedForTesting = null;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunCore_StartupHandoff_ReconcilesMutationAndDrainsBeforeReady_Issue4594()
     {
         var projectRoot = CreateTempProject();

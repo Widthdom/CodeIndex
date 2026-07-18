@@ -3747,22 +3747,33 @@ public class DbContext : IDisposable
 
     internal sealed record PlannerStatisticsMaintenanceFailure(string CommandText, SqliteException Exception);
 
-    internal PlannerStatisticsMaintenanceFailure? RunPlannerStatisticsMaintenance(bool forceAnalyze)
+    internal PlannerStatisticsMaintenanceFailure? RunPlannerStatisticsMaintenance(
+        bool forceAnalyze,
+        CancellationToken cancellationToken = default)
     {
         if (_isReadOnly)
             return null;
 
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = forceAnalyze ? "ANALYZE" : "PRAGMA optimize";
+        cancellationToken.ThrowIfCancellationRequested();
+        using var cancellationRegistration = cancellationToken.UnsafeRegister(
+            static state => SQLitePCL.raw.sqlite3_interrupt(((SqliteConnection)state!).Handle),
+            _connection);
         try
         {
             PlannerStatisticsCommandCreatedForTesting?.Invoke(cmd);
             cmd.ExecuteNonQuery();
+            cancellationToken.ThrowIfCancellationRequested();
             PlannerStatisticsCommandExecutedForTesting?.Invoke(_connection.DataSource, cmd.CommandText);
             if (!forceAnalyze)
                 OptimizePragmaExecutedForTesting?.Invoke(_connection.DataSource);
             _hasWriteWork = false;
             return null;
+        }
+        catch (SqliteException ex) when (cancellationToken.IsCancellationRequested && ex.SqliteErrorCode == 9)
+        {
+            throw new OperationCanceledException("SQLite planner maintenance was interrupted.", ex, cancellationToken);
         }
         catch (SqliteException ex)
         {

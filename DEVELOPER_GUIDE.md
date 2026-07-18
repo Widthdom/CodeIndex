@@ -1236,7 +1236,7 @@ cdidx ./myproject --files src/app.cs        # specific files only
 `--commits` uses `git diff-tree --no-commit-id -r --name-only` to resolve changed file paths.
 `--changed-between` uses `git diff --name-status -M <old-ref> <new-ref>` and includes both old and new rename paths so stale indexed paths can be purged.
 
-Watch batches reuse this partial-update runner with a linked cancellation source. The outer watch token therefore interrupts active extraction and database work instead of waiting for a sub-run to finish. Sub-run JSON is routed through `CommandOutputWriter`'s async-local scope into the watch capture writer; the watch loop never replaces `Console.Out`, so other commands and embedding hosts retain their own stdout.
+Watch batches reuse this partial-update runner with a linked cancellation source. The top-level Ctrl-C, SIGTERM, or embedding-host token remains linked after the initial scan, so it interrupts idle watch waits, active extraction, FTS recovery/rebuild/optimization, and SQLite planner maintenance instead of waiting for a sub-run to finish. A cancelled bulk FTS completion restores synchronization triggers and leaves an owner-independent recovery marker when its transaction did not roll back the marker. Sub-run JSON is routed through `CommandOutputWriter`'s async-local scope into the watch capture writer; the watch loop never replaces `Console.Out`, so other commands and embedding hosts retain their own stdout.
 
 Source membership is shared through `FileIndexer`: full scan, workspace freshness checks, and watch all exclude the `.cdidx` namespace. Watch classifies ignore files plus `.cdidx/patterns/**` and `.cdidx/plugins/**` before applying that source filter, so those non-source inputs remain debounced reconciliation events while ordinary `.cdidx` sidecars stay excluded. The resulting `--files` sub-run recognizes extractor inputs and falls back to a full scan, just as ignore-file changes already do.
 
@@ -4020,7 +4020,7 @@ cdidx ./myproject --files src/app.cs        # 特定ファイルのみ
 `--commits` は `git diff-tree --no-commit-id -r --name-only` で変更ファイルパスを解決します。
 `--changed-between` は `git diff --name-status -M <old-ref> <new-ref>` を使い、rename の旧パスと新パスを両方含めるため、古い indexed path も purge できます。
 
-watch batch は linked cancellation source を介してこの部分更新 runner を再利用する。そのため外側の watch token は sub-run の完了を待たず、実行中の extraction と database work を中断できる。sub-run JSON は `CommandOutputWriter` の async-local scope から watch capture writer へ送られ、watch loop は `Console.Out` を置き換えないため、他の command や埋め込み host は自身の stdout を維持できる。
+watch batch は linked cancellation source を介してこの部分更新 runner を再利用する。top-level の Ctrl-C、SIGTERM、埋め込み host token は初回 scan 後も link されたままなので、sub-run の完了を待たず、idle watch wait、実行中 extraction、FTS recovery / rebuild / optimization、SQLite planner maintenance を中断できる。cancel された bulk FTS completion は同期 trigger を復元し、transaction rollback で marker が戻らなかった場合は owner 非依存の recovery marker を残す。sub-run JSON は `CommandOutputWriter` の async-local scope から watch capture writer へ送られ、watch loop は `Console.Out` を置き換えないため、他の command や埋め込み host は自身の stdout を維持できる。
 
 source membership は `FileIndexer` で共有し、full scan、workspace freshness check、watch のすべてで `.cdidx` namespace を除外する。watch は source filter の適用前に ignore file と `.cdidx/patterns/**` / `.cdidx/plugins/**` を分類するため、これらの非 source 入力は debounce 付き reconciliation event として保持し、通常の `.cdidx` sidecar は除外したままにする。生成された `--files` sub-run は extractor 入力を認識して、ignore-file 変更と同様に full scan へ fallback する。
 

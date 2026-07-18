@@ -2196,7 +2196,7 @@ public static partial class IndexCommandRunner
             var ftsHeartbeat = StartFullScanJsonPhaseHeartbeat(options, phase);
             try
             {
-                ftsBulkLoad.Complete(ftsMutated, FullScanFtsOptimizeForTesting);
+                ftsBulkLoad.Complete(ftsMutated, FullScanFtsOptimizeForTesting, cancellationToken);
             }
             finally
             {
@@ -2210,7 +2210,7 @@ public static partial class IndexCommandRunner
             try
             {
                 FullScanFtsOptimizeForTesting?.Invoke();
-                writer.OptimizeFts();
+                writer.OptimizeFts(cancellationToken);
             }
             finally
             {

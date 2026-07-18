@@ -169,7 +169,7 @@ public partial class McpServer
         db.InitializeSchema();
 
         var writer = new DbWriter(db);
-        writer.RecoverInterruptedFtsBulkLoadIfNeeded();
+        writer.RecoverInterruptedFtsBulkLoadIfNeeded(requestToken);
         var indexer = new FileIndexer(
             projectPath,
             GitHelper.ResolveIgnoreCase(projectPath, requestToken),
@@ -773,12 +773,12 @@ public partial class McpServer
 
         if (ftsBulkLoad != null)
         {
-            ftsBulkLoad.Complete(ftsMutated, McpIndexFtsOptimizeForTesting);
+            ftsBulkLoad.Complete(ftsMutated, McpIndexFtsOptimizeForTesting, requestToken);
         }
         else if (ftsMutated)
         {
             McpIndexFtsOptimizeForTesting?.Invoke();
-            writer.OptimizeFts();
+            writer.OptimizeFts(requestToken);
         }
         // MCP index now runs ValidateContent + InsertIssues per file (bdbb2bd) on par with CLI
         // index, so stamp both graph-ready and issues-ready on clean runs — the old "graph only"
@@ -977,7 +977,9 @@ public partial class McpServer
         }
         if (!scanResult.HadErrors && errors == 0)
         {
-            var plannerMaintenanceFailure = db.RunPlannerStatisticsMaintenance(forceAnalyze: false);
+            var plannerMaintenanceFailure = db.RunPlannerStatisticsMaintenance(
+                forceAnalyze: false,
+                requestToken);
             if (plannerMaintenanceFailure != null)
                 IndexCommandRunner.TryStampPlannerStatisticsMaintenanceDiagnostic(writer, indexRunDiagnostics, plannerMaintenanceFailure);
         }

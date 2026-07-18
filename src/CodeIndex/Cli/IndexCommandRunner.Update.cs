@@ -1133,7 +1133,8 @@ public static partial class IndexCommandRunner
         if (ftsMutated)
         {
             writer.RecordFtsIncrementalWrite();
-            ftsOptimizeRan = writer.OptimizeFtsIfIncrementalWriteThresholdReached();
+            ftsOptimizeRan = writer.OptimizeFtsIfIncrementalWriteThresholdReached(
+                cancellationToken: cancellationToken);
         }
         ThrowIfUpdateCancelled();
         // Only stamp readiness on a fully successful run (errors == 0). A partial / error

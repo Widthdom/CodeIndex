@@ -35,6 +35,7 @@ internal static class IndexWatchRunner
     internal const int MaxSubRunArgumentChars = 64 * 1024;
     internal const int BatchPathSampleMaxChars = 160;
     internal const int MaxWatchDiagnosticChars = 256;
+    internal static Action<Action<string>>? WatchReadyForTesting { get; set; }
     private const int InternalBufferSize = 64 * 1024;
     private const int PollIntervalMs = 50;
     private const string WatchDiagnosticTruncationMarker = "...[truncated]";
@@ -71,9 +72,10 @@ internal static class IndexWatchRunner
         IndexCommandOptions baseOptions,
         JsonSerializerOptions jsonOptions,
         string projectRoot,
-        string resolvedDbPath)
+        string resolvedDbPath,
+        CancellationToken cancellationToken)
     {
-        using var cts = new CancellationTokenSource();
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         ConsoleCancelEventHandler handler = (_, e) =>
         {
             e.Cancel = true;
@@ -230,7 +232,10 @@ internal static class IndexWatchRunner
 
             var ready = !cancellationToken.IsCancellationRequested;
             if (ready)
+            {
                 EmitWatchStarted(baseOptions, jsonOptions, projectRoot, resolvedDbPath, debounce, maxPendingPaths, ignoreCase);
+                WatchReadyForTesting?.Invoke(Enqueue);
+            }
 
             while (ready && !cancellationToken.IsCancellationRequested)
             {
