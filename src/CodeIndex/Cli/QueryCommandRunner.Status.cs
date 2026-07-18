@@ -133,7 +133,7 @@ public static partial class QueryCommandRunner
             // Attach runtime metadata / ランタイムメタデータを付加
             ApplyStatusSymbolKindLimits(status, reader.GetSymbolKindCounts());
             ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(status.ProjectRoot);
-            status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
+            status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages(status.ProjectRoot).OrderBy(l => l).ToList();
             status.Extractors = ExtractorPluginRegistry.GetStatusSnapshot(status.ProjectRoot);
             var postExtractionHookSnapshot = PostExtractionHookRunner.DiscoverDefaultMetadata();
             var postExtractionHooks = postExtractionHookSnapshot.Hooks;

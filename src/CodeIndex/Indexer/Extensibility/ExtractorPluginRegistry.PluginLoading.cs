@@ -6,6 +6,8 @@ namespace CodeIndex.Indexer.Extensibility;
 
 public static partial class ExtractorPluginRegistry
 {
+    internal static Action? WorkspacePluginLoadedBeforeCommitForTesting { get; set; }
+
     private static void LoadPluginAssemblies(
         IEnumerable<string> directories,
         PatternWorkspaceState? workspaceState = null)
@@ -86,6 +88,9 @@ public static partial class ExtractorPluginRegistry
             if (!PluginAssemblyTypesAreWithinBudget(workspaceState, fullPath, types))
                 return;
 
+            if (workspaceState != null)
+                WorkspacePluginLoadedBeforeCommitForTesting?.Invoke();
+
             if (workspaceState == null)
             {
                 lock (Gate)
@@ -99,6 +104,9 @@ public static partial class ExtractorPluginRegistry
             {
                 lock (workspaceState.Gate)
                 {
+                    if (workspaceState.Retired)
+                        return;
+
                     workspaceState.PluginAssemblyCount++;
                     workspaceState.PluginLoadContexts.Add(loadContext);
                     workspaceState.PublishSnapshot();
@@ -271,6 +279,9 @@ public static partial class ExtractorPluginRegistry
             {
                 lock (workspaceState.Gate)
                 {
+                    if (workspaceState.Retired)
+                        return;
+
                     if (supportsSymbolExtraction && instance is ISymbolExtractor symbolExtractor)
                         workspaceState.WorkspaceSymbolExtractors[NormalizePluginLanguage(symbolExtractor.Language)] = symbolExtractor;
 
@@ -306,6 +317,9 @@ public static partial class ExtractorPluginRegistry
 
         lock (workspaceState.Gate)
         {
+            if (workspaceState.Retired)
+                return false;
+
             if (workspaceState.LoadedPluginPaths.Any(path =>
                     string.Equals(path, fullPath, PathCasing.ComparisonFor(fullPath))))
             {

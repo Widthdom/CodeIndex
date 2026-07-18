@@ -286,7 +286,11 @@ describes a `user` or `workspace` snapshot, and
 `extractors.registration_precedence` exposes the highest-to-lowest order:
 `built_in`, `user_plugin`, `user_pattern`, `workspace_plugin`, then
 `workspace_pattern`. Reloading one workspace never mutates another workspace's
-active snapshot.
+active snapshot. Reference purging, status/language reporting, and database graph
+queries resolve their supported-language set from that same active snapshot.
+Long-running hosts retain at most 32 workspace snapshots using LRU eviction;
+evicted, replaced, and shutdown snapshots are retired terminally so late plugin
+loads are rejected and collectible contexts can unload.
 Accepted extension trust overrides such as `CDIDX_TRUST_WORKSPACE_PLUGINS` and
 `CDIDX_HOOKS_DIR` are also reported in sanitized `trust_overrides[]` entries.
 
@@ -592,9 +596,13 @@ workspace snapshot として公開されます。128-rule budget は workspace �
 上限付きの1分間 cooldown に入ります。
 同じ language の plugin / pattern 登録も、その immutable snapshot から解決されます。
 `extractors.snapshot_scope` は status が `user` / `workspace` のどちらの snapshot を表すかを示し、
-`extractors.registration_precedence` は高い順に `built_in`、`user_plugin`、`user_pattern`、
-`workspace_plugin`、`workspace_pattern` を公開します。一方の workspace を reload しても、
-他 workspace の active snapshot は変更されません。
+  `extractors.registration_precedence` は高い順に `built_in`、`user_plugin`、`user_pattern`、
+  `workspace_plugin`、`workspace_pattern` を公開します。一方の workspace を reload しても、
+  他 workspace の active snapshot は変更されません。reference purge、status/language reporting、
+  database graph query の supported-language 集合も同じ active snapshot から解決されます。
+  長時間実行 host が保持する workspace snapshot は LRU で最大32件に制限され、evict・replace・
+  shutdown 済み snapshot は terminal に retire されるため、遅延 plugin load は拒否され、
+  collectible context を unload できます。
 受理された `CDIDX_TRUST_WORKSPACE_PLUGINS` や `CDIDX_HOOKS_DIR` などの
 拡張信頼境界 override は、sanitization 済みの `trust_overrides[]` entry としても報告されます。
 

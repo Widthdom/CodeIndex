@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using CodeIndex.Database;
 using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
@@ -1103,11 +1104,12 @@ public static partial class IndexCommandRunner
         // グラフ非対応になった言語の参照をパージする。symbols-only では古い graph 行が
         // degraded readiness の裏に残らないよう全参照を消す。
         ThrowIfFullScanCancelled(0, files.Count);
+        ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
         var purgedRefs = startedWithNoIndexedFiles
             ? 0
             : options.SymbolsOnly
                 ? writer.PurgeAllReferences()
-                : writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
+                : writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages(projectRoot));
         if (purgedRefs > 0 && !options.Json && !options.Quiet)
         {
             var reason = options.SymbolsOnly ? "symbols-only mode" : "unsupported language";

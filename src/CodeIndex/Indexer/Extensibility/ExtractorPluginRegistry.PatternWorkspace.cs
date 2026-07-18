@@ -27,12 +27,20 @@ public static partial class ExtractorPluginRegistry
         internal int DiagnosticTotalCount { get; set; }
         internal int RuleCount { get; set; }
         internal int PluginAssemblyCount { get; set; }
+        internal bool Retired { get; private set; }
+        internal long LastAccessSequence { get; set; }
 
         internal ExtractorWorkspaceSnapshot GetSnapshot()
             => Volatile.Read(ref snapshot);
 
         internal void PublishSnapshot()
         {
+            if (Retired)
+            {
+                Volatile.Write(ref snapshot, ExtractorWorkspaceSnapshot.Empty);
+                return;
+            }
+
             var user = GetUserExtractorSnapshot();
             var symbolExtractors = new Dictionary<string, ISymbolExtractor>(StringComparer.Ordinal);
             var referenceExtractors = new Dictionary<string, IReferenceExtractor>(StringComparer.Ordinal);
@@ -97,23 +105,39 @@ public static partial class ExtractorPluginRegistry
         {
             lock (Gate)
             {
-                PatternSymbolExtractors.Clear();
-                PatternSources.Clear();
-                WorkspaceSymbolExtractors.Clear();
-                WorkspaceReferenceExtractors.Clear();
-                LoadedPluginPaths.Clear();
-                UnloadPluginAssemblyContexts(PluginLoadContexts);
-                LoadedPaths.Clear();
-                FailedFingerprints.Clear();
-                Configs.Clear();
-                Diagnostics.Clear();
-                ConfigCount = 0;
-                SkippedFileCount = 0;
-                DiagnosticTotalCount = 0;
-                RuleCount = 0;
-                PluginAssemblyCount = 0;
+                Retired = false;
+                ClearState();
                 PublishSnapshot();
             }
+        }
+
+        internal void Retire()
+        {
+            lock (Gate)
+            {
+                Retired = true;
+                ClearState();
+                Volatile.Write(ref snapshot, ExtractorWorkspaceSnapshot.Empty);
+            }
+        }
+
+        private void ClearState()
+        {
+            PatternSymbolExtractors.Clear();
+            PatternSources.Clear();
+            WorkspaceSymbolExtractors.Clear();
+            WorkspaceReferenceExtractors.Clear();
+            LoadedPluginPaths.Clear();
+            UnloadPluginAssemblyContexts(PluginLoadContexts);
+            LoadedPaths.Clear();
+            FailedFingerprints.Clear();
+            Configs.Clear();
+            Diagnostics.Clear();
+            ConfigCount = 0;
+            SkippedFileCount = 0;
+            DiagnosticTotalCount = 0;
+            RuleCount = 0;
+            PluginAssemblyCount = 0;
         }
     }
 
@@ -156,6 +180,7 @@ public static partial class ExtractorPluginRegistry
     private static readonly PatternWorkspaceState DefaultPatternWorkspace = new(workspaceRoot: null);
     private static readonly List<PatternWorkspaceState> PatternWorkspaces = [];
     private static UserExtractorSnapshot userExtractorSnapshot = UserExtractorSnapshot.Empty;
+    private static long workspaceAccessSequence;
 
     private static PatternWorkspaceState CreatePatternWorkspace(string workspaceRoot)
     {
@@ -168,6 +193,7 @@ public static partial class ExtractorPluginRegistry
     private static void ReplacePatternWorkspace(PatternWorkspaceState state)
     {
         PatternWorkspaceState? replaced = null;
+        PatternWorkspaceState? evicted = null;
         lock (Gate)
         {
             var index = PatternWorkspaces.FindIndex(existing =>
@@ -179,24 +205,38 @@ public static partial class ExtractorPluginRegistry
             }
             else
                 PatternWorkspaces.Add(state);
+
+            TouchPatternWorkspace(state);
+            evicted = TrimPatternWorkspaces(state);
         }
 
-        replaced?.Reset();
+        replaced?.Retire();
+        if (evicted != null && !ReferenceEquals(evicted, replaced))
+            evicted.Retire();
     }
 
     private static PatternWorkspaceState GetOrCreatePatternWorkspace(string workspaceRoot)
     {
+        PatternWorkspaceState state;
+        PatternWorkspaceState? evicted;
         lock (Gate)
         {
-            var existing = PatternWorkspaces.FirstOrDefault(state =>
-                PathCasing.PathsEqual(state.WorkspaceRoot!, workspaceRoot));
+            var existing = PatternWorkspaces.FirstOrDefault(candidate =>
+                PathCasing.PathsEqual(candidate.WorkspaceRoot!, workspaceRoot));
             if (existing != null)
+            {
+                TouchPatternWorkspace(existing);
                 return existing;
+            }
 
-            var created = CreatePatternWorkspace(workspaceRoot);
-            PatternWorkspaces.Add(created);
-            return created;
+            state = CreatePatternWorkspace(workspaceRoot);
+            PatternWorkspaces.Add(state);
+            TouchPatternWorkspace(state);
+            evicted = TrimPatternWorkspaces(state);
         }
+
+        evicted?.Retire();
+        return state;
     }
 
     private static ExtractorWorkspaceSnapshot GetPatternSnapshot(string? workspaceRoot)
@@ -207,9 +247,13 @@ public static partial class ExtractorPluginRegistry
         var fullRoot = Path.GetFullPath(workspaceRoot);
         lock (Gate)
         {
-            return PatternWorkspaces.FirstOrDefault(state =>
-                       PathCasing.PathsEqual(state.WorkspaceRoot!, fullRoot))?.GetSnapshot()
-                   ?? ExtractorWorkspaceSnapshot.Empty;
+            var state = PatternWorkspaces.FirstOrDefault(candidate =>
+                PathCasing.PathsEqual(candidate.WorkspaceRoot!, fullRoot));
+            if (state == null)
+                return DefaultPatternWorkspace.GetSnapshot();
+
+            TouchPatternWorkspace(state);
+            return state.GetSnapshot();
         }
     }
 
@@ -221,26 +265,52 @@ public static partial class ExtractorPluginRegistry
         var fullPath = Path.GetFullPath(path);
         lock (Gate)
         {
-            return PatternWorkspaces
-                       .Where(state => PathCasing.IsFullPathEqualOrParent(state.WorkspaceRoot!, fullPath))
-                       .OrderByDescending(state => state.WorkspaceRoot!.Length)
-                       .FirstOrDefault()?.GetSnapshot()
-                   ?? DefaultPatternWorkspace.GetSnapshot();
+            var state = PatternWorkspaces
+                .Where(candidate => PathCasing.IsFullPathEqualOrParent(candidate.WorkspaceRoot!, fullPath))
+                .OrderByDescending(candidate => candidate.WorkspaceRoot!.Length)
+                .FirstOrDefault();
+            if (state == null)
+                return DefaultPatternWorkspace.GetSnapshot();
+
+            TouchPatternWorkspace(state);
+            return state.GetSnapshot();
         }
+    }
+
+    private static void TouchPatternWorkspace(PatternWorkspaceState state)
+        => state.LastAccessSequence = ++workspaceAccessSequence;
+
+    private static PatternWorkspaceState? TrimPatternWorkspaces(PatternWorkspaceState retainedState)
+    {
+        if (PatternWorkspaces.Count <= MaxRetainedWorkspaceSnapshots)
+            return null;
+
+        var evicted = PatternWorkspaces
+            .Where(state => !ReferenceEquals(state, retainedState))
+            .OrderBy(state => state.LastAccessSequence)
+            .First();
+        PatternWorkspaces.Remove(evicted);
+        return evicted;
     }
 
     private static void ResetPatternWorkspaces()
     {
         DefaultPatternWorkspace.Reset();
+        ReleaseWorkspaceSnapshots();
+    }
+
+    internal static void ReleaseWorkspaceSnapshots()
+    {
         PatternWorkspaceState[] workspaces;
         lock (Gate)
         {
             workspaces = PatternWorkspaces.ToArray();
             PatternWorkspaces.Clear();
+            workspaceAccessSequence = 0;
         }
 
         foreach (var workspace in workspaces)
-            workspace.Reset();
+            workspace.Retire();
     }
 
     private static UserExtractorSnapshot GetUserExtractorSnapshot()

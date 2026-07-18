@@ -827,8 +827,11 @@ public static partial class ReferenceExtractor
     };
 
     public static IReadOnlyCollection<string> GetSupportedLanguages()
+        => GetSupportedLanguages(workspaceRoot: null);
+
+    internal static IReadOnlyCollection<string> GetSupportedLanguages(string? workspaceRoot)
     {
-        var pluginLanguages = ExtractorPluginRegistry.ReferenceLanguages;
+        var pluginLanguages = ExtractorPluginRegistry.GetReferenceLanguages(workspaceRoot);
         var capacity = RegisteredLanguages.Count + AdditionalReferenceLanguages.Length + pluginLanguages.Count;
         var languages = new List<string>(capacity);
         var seen = new HashSet<string>(capacity, StringComparer.Ordinal);

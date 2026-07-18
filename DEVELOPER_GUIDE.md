@@ -1570,7 +1570,12 @@ Process exit codes are coarse (`0` success including valid zero-row queries, `1`
   user plugin, user pattern, workspace plugin, workspace pattern. Workspace
   plugin assembly contexts and diagnostics are owned by their snapshot;
   replacing one snapshot starts unloading only that workspace's old contexts
-  and cannot rewrite another workspace's active registrations.
+  and cannot rewrite another workspace's active registrations. Reference purge,
+  status/language reporting, and database graph predicates resolve supported
+  languages from the active workspace snapshot. Long-running hosts retain at
+  most 32 workspace snapshots with LRU eviction. Replacement, eviction, and MCP
+  shutdown terminally retire their snapshots; an in-flight plugin load that
+  reaches a retired state rejects its late commit and unloads its local context.
 
 <a id="reference-kind-filtering-matrix"></a>
 
@@ -4382,6 +4387,10 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
   built-in、user plugin、user pattern、workspace plugin、workspace pattern として公開されます。
   workspace plugin の assembly context と diagnostic は所有 snapshot に属し、snapshot の置換は
   その workspace の古い context だけを unload 開始するため、他 workspace の active 登録を書き換えません。
+  reference purge、status/language reporting、database graph predicate の supported language は
+  active workspace snapshot から解決されます。長時間実行 host が保持する workspace snapshot は
+  LRU で最大32件です。replace、evict、MCP shutdown は snapshot を terminal に retire し、in-flight
+  plugin load が retired state に到達した場合は遅延 commit を拒否して local context を unload します。
 
 ## reference_kind フィルタの対応表
 

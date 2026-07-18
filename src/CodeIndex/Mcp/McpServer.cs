@@ -12,6 +12,7 @@ using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
 
 namespace CodeIndex.Mcp;
 
@@ -31,6 +32,7 @@ namespace CodeIndex.Mcp;
 public partial class McpServer : IDisposable
 {
     private static int s_nextClientRequestId;
+    private static int s_activeServerCount;
     private readonly string _dbPath;
     private readonly bool _dbPathExplicit;
     private readonly string _version;
@@ -353,6 +355,7 @@ public partial class McpServer : IDisposable
             : maxConcurrency + DefaultMaxConcurrentFrameBacklog;
         _requestTimeout = DefaultRequestTimeout;
         _keepAliveInterval = ReadKeepAliveIntervalFromEnvironment();
+        Interlocked.Increment(ref s_activeServerCount);
     }
 
     /// <summary>
@@ -6406,6 +6409,8 @@ public partial class McpServer : IDisposable
             return;
         _disposed = true;
         CloseSharedDb();
+        if (Interlocked.Decrement(ref s_activeServerCount) == 0)
+            ExtractorPluginRegistry.ReleaseWorkspaceSnapshots();
         var shutdownCancellationTask = RequestShutdownCancellation();
         if (shutdownCancellationTask.IsCompleted)
         {

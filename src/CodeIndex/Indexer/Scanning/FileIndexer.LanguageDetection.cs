@@ -222,8 +222,11 @@ public partial class FileIndexer
     /// 全ファイルパターン（拡張子とファイル名）と対応する言語名のマッピングを返す。
     /// </summary>
     public static IReadOnlyDictionary<string, string> GetLanguageExtensions()
+        => GetLanguageExtensions(workspaceRoot: null);
+
+    internal static IReadOnlyDictionary<string, string> GetLanguageExtensions(string? workspaceRoot)
     {
-        var pluginExtensions = ExtractorPluginRegistry.LanguageExtensions;
+        var pluginExtensions = ExtractorPluginRegistry.GetLanguageExtensions(workspaceRoot);
         var languageMapOverrides = LanguageMapOverrides.LoadEffectiveMap();
         var capacity = LangMap.Count
             + DisplayOnlyLanguageExtensions.Length

@@ -19,7 +19,7 @@ public static partial class ExtractorPluginRegistry
             path = Path.GetFullPath(path);
             lock (state.Gate)
             {
-                if (PatternConfigPathIsLoaded(state, path))
+                if (state.Retired || PatternConfigPathIsLoaded(state, path))
                     return;
             }
 
@@ -30,7 +30,8 @@ public static partial class ExtractorPluginRegistry
             var fingerprint = CreatePatternConfigFingerprint(path, configText);
             lock (state.Gate)
             {
-                if (PatternConfigPathIsLoaded(state, path)
+                if (state.Retired
+                    || PatternConfigPathIsLoaded(state, path)
                     || (TryGetFailedPatternConfigFingerprint(state, path, out var failedFingerprint)
                         && failedFingerprint == fingerprint))
                     return;
@@ -41,7 +42,8 @@ public static partial class ExtractorPluginRegistry
             {
                 lock (state.Gate)
                 {
-                    if (PatternConfigPathIsLoaded(state, path)
+                    if (state.Retired
+                        || PatternConfigPathIsLoaded(state, path)
                         || (TryGetFailedPatternConfigFingerprint(state, path, out var failedFingerprint)
                             && failedFingerprint == fingerprint))
                     {
@@ -60,7 +62,7 @@ public static partial class ExtractorPluginRegistry
 
             lock (state.Gate)
             {
-                if (PatternConfigPathIsLoaded(state, path))
+                if (state.Retired || PatternConfigPathIsLoaded(state, path))
                     return;
 
                 var patterns = parseResult.Patterns!;

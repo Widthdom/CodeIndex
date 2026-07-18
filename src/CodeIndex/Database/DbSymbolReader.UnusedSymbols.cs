@@ -826,7 +826,7 @@ public partial class DbReader
     private IEnumerable<UnusedCandidateSymbol> FetchUnusedCandidateSymbols(int fetchLimit, int offset, int provisionalBucketOrder, string? kind, string? lang,
         IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
-        var graphLangs = ReferenceExtractor.GetSupportedLanguages()
+        var graphLangs = GetWorkspaceSupportedReferenceLanguages()
             .Where(value => !IsSqlLanguage(value))
             .ToList();
         var visibilitySql = $"lower({GetSymbolColumnSql("visibility", "''")})";
@@ -1209,7 +1209,7 @@ public partial class DbReader
     private List<UnusedSymbolResult> FetchUnusedCandidates(int fetchLimit, int provisionalBucketOrder, int offset, string? kind, string? lang,
         IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
-        var graphLangs = ReferenceExtractor.GetSupportedLanguages();
+        var graphLangs = GetWorkspaceSupportedReferenceLanguages();
         var visibilitySql = $"lower({GetSymbolColumnSql("visibility", "''")})";
         var signatureSql = $"lower({GetSymbolColumnSql("signature", "''")})";
         const string pathSql = "lower(f.path)";
@@ -1723,7 +1723,7 @@ public partial class DbReader
         if (!ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePathPatterns, excludeTests))
             return CountUnusedSymbolsWithoutSqlResolver(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
 
-        var graphLangs = ReferenceExtractor.GetSupportedLanguages();
+        var graphLangs = GetWorkspaceSupportedReferenceLanguages();
         using var cmd = _conn.CreateCommand();
         var referenceLineJoin = ReferenceLineJoinSql("sr");
         var contextSql = ReferenceContextSql("sr");

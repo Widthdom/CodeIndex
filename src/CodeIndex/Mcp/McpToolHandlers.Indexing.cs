@@ -343,9 +343,10 @@ public partial class McpServer
         }
 
         // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
+        ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectPath);
         var purgedRefs = startedWithNoIndexedFiles
             ? 0
-            : writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
+            : writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages(projectPath));
 
         // Scan and index / スキャン・インデックス
         var scanResult = indexer.ScanFilesDetailed(cancellationToken: requestToken);

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
 
@@ -141,7 +142,8 @@ public static partial class IndexCommandRunner
         var mutualRecursionRefreshNeeded = !options.SymbolsOnly
             && !writer.ReferenceIdentityContractMatchesCurrent();
         var purgedRefs = 0;
-        var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages();
+        ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
+        var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages(projectRoot);
         using var postExtractionHooks = new LazyDisposable<PostExtractionHookRunner>(
             () => PostExtractionHookRunner.DiscoverDefault(
                 options.MaxFileSizeBytes,

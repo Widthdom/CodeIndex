@@ -115,6 +115,9 @@ public static partial class ExtractorPluginRegistry
     {
         lock (state.Gate)
         {
+            if (state.Retired)
+                return;
+
             state.DiagnosticTotalCount++;
             if (countsAsSkippedFile)
                 state.SkippedFileCount++;

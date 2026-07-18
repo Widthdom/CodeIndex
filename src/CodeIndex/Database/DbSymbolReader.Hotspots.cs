@@ -48,7 +48,7 @@ public partial class DbReader
                       )
                   )"
             : string.Empty;
-        var graphLangs = ReferenceExtractor.GetSupportedLanguages().ToList();
+        var graphLangs = GetWorkspaceSupportedReferenceLanguages().ToList();
         var candidateLimit = GetBoundedHotspotCandidateLimit(resultLimit);
         var boundedCandidatePrefix = BuildBoundedHotspotCandidatePrefix(candidateLimit);
         var boundedSymbolPredicate = BuildBoundedHotspotSymbolPredicate(candidateLimit);
@@ -952,7 +952,7 @@ public partial class DbReader
                 JOIN files f ON s.file_id = f.id
                 WHERE s.kind NOT IN ('import', 'namespace')" + csharpFunctionDefinitionGateSql + boundedSymbolPredicate;
 
-        var graphLangs = ReferenceExtractor.GetSupportedLanguages().ToList();
+        var graphLangs = GetWorkspaceSupportedReferenceLanguages().ToList();
         if (lang != null)
             sql += SymbolLanguageFileIdFilter;
         else

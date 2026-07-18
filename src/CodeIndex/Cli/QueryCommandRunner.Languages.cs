@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 
 namespace CodeIndex.Cli;
@@ -28,46 +29,52 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         var json = options.Json || options.CountOnly || options.OutputFormat == OutputFormatCount || options.SummaryOnly;
 
-        var langExtensions = FileIndexer.GetLanguageExtensions();
-        var symbolLangs = SymbolExtractor.GetSupportedLanguages();
-        var graphLangs = ReferenceExtractor.GetSupportedLanguages();
-
-        // Build a consolidated view: language -> capability flags and gaps.
-        // 統合ビュー: 言語 -> capability flag と gap。
-        var allLangs = new Dictionary<string, LanguageSupportInfo>(StringComparer.Ordinal);
-
-        foreach (var (ext, lang) in langExtensions)
-        {
-            if (!allLangs.TryGetValue(lang, out var info))
-            {
-                var hasSymbols = symbolLangs.Contains(lang);
-                var hasReferences = graphLangs.Contains(lang);
-                info = new LanguageSupportInfo(
-                    [],
-                    GetLanguageAliases(lang).ToList(),
-                    hasSymbols,
-                    hasReferences,
-                    hasReferences,
-                    LanguageCapabilitySupport.BuildGaps(hasSymbols, hasReferences, hasReferences),
-                    LanguageCapabilitySupport.BuildUnsupportedGuidance(lang, hasSymbols, hasReferences, hasReferences));
-                allLangs[lang] = info;
-            }
-            info.Extensions.Add(ext);
-        }
-
-        // Sort by language name / 言語名でソート
-        var sorted = allLangs.OrderBy(kv => kv.Key).ToList();
-
-        if (options.LanguagesIndexedOnly || ShouldLoadLanguageIndexedCounts(options))
+        var loadIndexedCounts = options.LanguagesIndexedOnly || ShouldLoadLanguageIndexedCounts(options);
+        if (options.DbPathExplicit || loadIndexedCounts)
         {
             return WithDb(options, jsonOptions, reader =>
             {
-                var indexedLanguageCounts = reader.GetStatus().Languages;
-                return WriteLanguages(SelectLanguages(sorted, indexedLanguageCounts), indexedLanguageCounts);
+                var status = reader.GetStatus();
+                var sorted = BuildLanguageCatalog(status.ProjectRoot);
+                var indexedLanguageCounts = loadIndexedCounts ? status.Languages : null;
+                return WriteLanguages(SelectLanguages(sorted, indexedLanguageCounts), sorted.Count, indexedLanguageCounts);
             });
         }
 
-        return WriteLanguages(SelectLanguages(sorted, indexedLanguageCounts: null), indexedLanguageCounts: null);
+        var defaultLanguages = BuildLanguageCatalog(workspaceRoot: null);
+        return WriteLanguages(SelectLanguages(defaultLanguages, indexedLanguageCounts: null), defaultLanguages.Count, indexedLanguageCounts: null);
+
+        List<KeyValuePair<string, LanguageSupportInfo>> BuildLanguageCatalog(string? workspaceRoot)
+        {
+            ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(workspaceRoot);
+            var langExtensions = FileIndexer.GetLanguageExtensions(workspaceRoot);
+            var symbolLangs = SymbolExtractor.GetSupportedLanguages(workspaceRoot);
+            var graphLangs = ReferenceExtractor.GetSupportedLanguages(workspaceRoot);
+
+            // Build a consolidated view: language -> capability flags and gaps.
+            // 統合ビュー: 言語 -> capability flag と gap。
+            var allLangs = new Dictionary<string, LanguageSupportInfo>(StringComparer.Ordinal);
+            foreach (var (ext, lang) in langExtensions)
+            {
+                if (!allLangs.TryGetValue(lang, out var info))
+                {
+                    var hasSymbols = symbolLangs.Contains(lang);
+                    var hasReferences = graphLangs.Contains(lang);
+                    info = new LanguageSupportInfo(
+                        [],
+                        GetLanguageAliases(lang).ToList(),
+                        hasSymbols,
+                        hasReferences,
+                        hasReferences,
+                        LanguageCapabilitySupport.BuildGaps(hasSymbols, hasReferences, hasReferences),
+                        LanguageCapabilitySupport.BuildUnsupportedGuidance(lang, hasSymbols, hasReferences, hasReferences));
+                    allLangs[lang] = info;
+                }
+                info.Extensions.Add(ext);
+            }
+
+            return allLangs.OrderBy(kv => kv.Key).ToList();
+        }
 
         IEnumerable<KeyValuePair<string, LanguageSupportInfo>> SelectLanguages(
             IEnumerable<KeyValuePair<string, LanguageSupportInfo>> languages,
@@ -83,6 +90,7 @@ public static partial class QueryCommandRunner
 
         int WriteLanguages(
             IEnumerable<KeyValuePair<string, LanguageSupportInfo>> languages,
+            int totalLanguageCount,
             IReadOnlyDictionary<string, long>? indexedLanguageCounts)
         {
             var filtered = languages
@@ -92,7 +100,7 @@ public static partial class QueryCommandRunner
 
             if (json && (options.SummaryOnly || options.CountOnly || options.OutputFormat == OutputFormatCount))
             {
-                var payload = BuildLanguageSummaryPayload(filtered, sorted.Count, indexedLanguageCounts, options);
+                var payload = BuildLanguageSummaryPayload(filtered, totalLanguageCount, indexedLanguageCounts, options);
                 AddActiveSqliteDiagnostics(payload);
                 CommandOutputWriter.WriteJsonNode(payload, jsonOptions);
                 return CommandExitCodes.Success;
