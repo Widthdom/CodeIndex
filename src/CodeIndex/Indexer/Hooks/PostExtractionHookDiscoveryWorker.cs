@@ -225,14 +225,7 @@ internal static class PostExtractionHookDiscoveryWorkerClient
     }
 
     private static string? EnsureProcessExited(Process process)
-    {
-        var wait = WorkerProcessCleanupDiagnostics.WaitForExit(process, 100);
-        if (wait.Exited)
-            return wait.Diagnostic;
-
-        var cleanup = WorkerProcessCleanupDiagnostics.TryKill(process, 5000);
-        return WorkerProcessCleanupDiagnostics.Combine(wait.Diagnostic, cleanup);
-    }
+        => WorkerProcessCleanupDiagnostics.TryKill(process, 5000);
 
     private static PostExtractionHookDiscoveryWorkerResult Failure(string category, string? message)
         => new(false, category, string.IsNullOrWhiteSpace(message) ? "Hook discovery worker failed." : message, null);
@@ -245,6 +238,7 @@ internal static class PostExtractionHookDiscoveryWorker
 
     internal static bool TryRunCommand(
         string[] args,
+        TextReader input,
         TextWriter output,
         TextWriter error,
         out int exitCode)
@@ -255,11 +249,11 @@ internal static class PostExtractionHookDiscoveryWorker
             return false;
         }
 
-        exitCode = RunCommand(args, output, error);
+        exitCode = RunCommand(args, input, output, error);
         return true;
     }
 
-    private static int RunCommand(string[] args, TextWriter output, TextWriter error)
+    private static int RunCommand(string[] args, TextReader input, TextWriter output, TextWriter error)
     {
         if (args.Length != 5
             || !int.TryParse(args[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var typeLimit)
@@ -300,7 +294,21 @@ internal static class PostExtractionHookDiscoveryWorker
 
         output.WriteLine(json);
         output.Flush();
+        WaitForParentTermination(input);
         return 0;
+    }
+
+    private static void WaitForParentTermination(TextReader input)
+    {
+        try
+        {
+            _ = input.ReadLine();
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        {
+            // The parent normally terminates the live process tree. EOF or a closed pipe
+            // lets direct/in-process protocol callers complete without an orphaned wait.
+        }
     }
 
     private static PostExtractionHookDiscoveryWorkerResponse Discover(string assemblyPath, int typeLimit)

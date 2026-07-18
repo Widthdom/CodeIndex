@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.Versioning;
 using System.Text;
@@ -7,6 +8,8 @@ namespace CodeIndex.Tests;
 
 internal static class ReferenceExtractorWarmup
 {
+    private static Process? persistentDiscoveryDescendant;
+
     [ModuleInitializer]
     internal static void WarmUp()
     {
@@ -33,6 +36,20 @@ internal static class ReferenceExtractorWarmup
                 Name = "cdidx-hook-discovery-persistent-fixture",
             };
             persistentThread.Start();
+        }
+
+        var persistentDescendantPidPath = Environment.GetEnvironmentVariable(
+            PostExtractionHookTests.PersistentDiscoveryDescendantPidPathEnvironmentVariable);
+        if (!string.IsNullOrWhiteSpace(persistentDescendantPidPath))
+        {
+            if (!SymbolExtractionWorker.TryCreateStartInfo(out var startInfo, out var error))
+                throw new InvalidOperationException(error);
+
+            persistentDiscoveryDescendant = Process.Start(startInfo)
+                                            ?? throw new InvalidOperationException("Failed to start the hook discovery descendant fixture.");
+            File.WriteAllText(
+                persistentDescendantPidPath,
+                persistentDiscoveryDescendant.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
 
         if (!IsContinuousIntegration() || !IsNet8TestAssembly())

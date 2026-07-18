@@ -22,6 +22,7 @@ public class PostExtractionHookTests
     internal const string ModuleInitializerDelayEnvironmentVariable = "CDIDX_TEST_HOOK_MODULE_INITIALIZER_DELAY_MS";
     internal const string SelectiveSlowHookAssemblyEnvironmentVariable = "CDIDX_TEST_SELECTIVE_SLOW_HOOK_ASSEMBLY";
     internal const string PersistentDiscoveryWorkerPidPathEnvironmentVariable = "CDIDX_TEST_HOOK_DISCOVERY_PERSISTENT_PID_PATH";
+    internal const string PersistentDiscoveryDescendantPidPathEnvironmentVariable = "CDIDX_TEST_HOOK_DISCOVERY_DESCENDANT_PID_PATH";
     private const string TimedOutHookDelayMilliseconds = "150";
     private static readonly TimeSpan TimedOutHookLeakObservationWindow = TimeSpan.FromMilliseconds(400);
 
@@ -85,35 +86,50 @@ public class PostExtractionHookTests
     }
 
     [ProductionRuntimeFact]
-    public void DiscoveryWorker_TerminatesAfterManifestDespiteForegroundThread_Issue4600()
+    public void DiscoveryWorker_TerminatesProcessTreeAfterManifest_Issue4600()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-persistent-discovery-4600");
         lock (TestConsoleLock.Gate)
         {
             using var persistent = EnvironmentVariableScope.Capture(PersistentDiscoveryWorkerPidPathEnvironmentVariable);
+            using var descendant = EnvironmentVariableScope.Capture(PersistentDiscoveryDescendantPidPathEnvironmentVariable);
+            int? descendantPid = null;
             try
             {
                 var hooksDir = Path.Combine(projectRoot, "hooks");
                 Directory.CreateDirectory(hooksDir);
                 File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "persistent.dll"));
                 var workerPidPath = Path.Combine(projectRoot, "persistent-worker.pid");
+                var descendantPidPath = Path.Combine(projectRoot, "persistent-descendant.pid");
                 persistent.Set(PersistentDiscoveryWorkerPidPathEnvironmentVariable, workerPidPath);
+                descendant.Set(PersistentDiscoveryDescendantPidPathEnvironmentVariable, descendantPidPath);
 
                 using var runner = PostExtractionHookRunner.Discover(hooksDir);
 
                 Assert.NotEmpty(runner.Hooks);
                 Assert.True(File.Exists(workerPidPath));
+                Assert.True(File.Exists(descendantPidPath));
                 var workerPid = int.Parse(
                     File.ReadAllText(workerPidPath),
                     System.Globalization.CultureInfo.InvariantCulture);
+                descendantPid = int.Parse(
+                    File.ReadAllText(descendantPidPath),
+                    System.Globalization.CultureInfo.InvariantCulture);
                 Assert.NotEqual(Environment.ProcessId, workerPid);
+                Assert.NotEqual(Environment.ProcessId, descendantPid);
+                Assert.NotEqual(workerPid, descendantPid);
                 TestDeterminism.WaitUntil(
                     () => !IsProcessRunning(workerPid),
                     "hook discovery worker termination",
                     getDiagnostics: () => $"worker_pid={workerPid}");
+                TestDeterminism.WaitUntil(
+                    () => !IsProcessRunning(descendantPid.Value),
+                    "hook discovery descendant termination",
+                    getDiagnostics: () => $"descendant_pid={descendantPid}");
             }
             finally
             {
+                TryTerminateProcess(descendantPid);
                 TestProjectHelper.DeleteDirectory(projectRoot);
             }
         }
@@ -990,6 +1006,26 @@ public class PostExtractionHookTests
         catch (ArgumentException)
         {
             return false;
+        }
+    }
+
+    private static void TryTerminateProcess(int? processId)
+    {
+        if (!processId.HasValue)
+            return;
+
+        try
+        {
+            using var process = Process.GetProcessById(processId.Value);
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch (Exception ex) when (ex is ArgumentException
+                                   or InvalidOperationException
+                                   or System.ComponentModel.Win32Exception
+                                   or NotSupportedException)
+        {
+            // The discovery worker normally removed the descendant already.
         }
     }
 }
