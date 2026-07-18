@@ -241,7 +241,15 @@ internal static partial class ProgramRunner
 
             var unhandledExitCode = MapUnhandledExceptionExitCode(ex);
             GlobalToolLog.Error($"command_complete exit_code={unhandledExitCode} unhandled_exception", ex);
-            CommandErrorWriter.WriteStderr("Error: command failed before it could complete. Run `cdidx report` for details.");
+            var failureCaptured = LastFailureEventStore.TryPersist(
+                args,
+                context.AppVersion,
+                unhandledExitCode,
+                ex,
+                TimeProvider.GetUtcNow());
+            CommandErrorWriter.WriteStderr(failureCaptured
+                ? "Error: command failed before it could complete. Run `cdidx report` for details."
+                : "Error: command failed before it could complete; current failure diagnostics could not be saved.");
             EmitCommandMetric(args[0], args, context.StartTimestamp, context.Stopwatch, unhandledExitCode, ex.GetType().Name);
             return unhandledExitCode;
         }
