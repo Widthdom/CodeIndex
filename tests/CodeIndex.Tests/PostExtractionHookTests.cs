@@ -516,6 +516,45 @@ public class PostExtractionHookTests
     }
 
     [Fact]
+    public void DiscoverDefaultMetadata_RejectsUnsafeHooksDirectoryMode_Issue4596()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-unsafe-mode-4596");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable);
+            var hooksDir = Path.Combine(projectRoot, "hooks");
+            try
+            {
+                Directory.CreateDirectory(hooksDir);
+                File.SetUnixFileMode(
+                    hooksDir,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                    | UnixFileMode.OtherWrite);
+                env.Set(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hooksDir);
+
+                var snapshot = PostExtractionHookRunner.DiscoverDefaultMetadata();
+
+                Assert.Empty(snapshot.Hooks);
+                Assert.Empty(snapshot.TrustOverrides);
+                var diagnostic = Assert.Single(snapshot.Diagnostics);
+                Assert.Equal("extension_boundary_unsafe_permissions", diagnostic.Category);
+                Assert.Contains("override rejected", diagnostic.Message, StringComparison.Ordinal);
+                Assert.Contains("group- or world-writable", diagnostic.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                File.SetUnixFileMode(
+                    hooksDir,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void Discover_CapsHookAssemblyCandidates()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-discovery-cap");

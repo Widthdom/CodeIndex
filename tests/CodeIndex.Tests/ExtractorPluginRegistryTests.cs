@@ -249,6 +249,98 @@ public class ExtractorPluginRegistryTests
     }
 
     [Fact]
+    public void LoadPluginAssemblies_RejectsUnsafeDirectoryModeAndAncestorSymlink_Issue4596()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_boundary_4596");
+        lock (TestConsoleLock.Gate)
+        {
+            var realParent = Path.Combine(projectRoot, "real-parent");
+            var pluginDirectory = Path.Combine(realParent, "plugins");
+            var linkedParent = Path.Combine(projectRoot, "linked-parent");
+            try
+            {
+                Directory.CreateDirectory(pluginDirectory);
+                File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(pluginDirectory, "plugin.dll"));
+
+                ExtractorPluginRegistry.ResetForTests();
+                File.SetUnixFileMode(
+                    pluginDirectory,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                    | UnixFileMode.GroupWrite);
+                ExtractorPluginRegistry.LoadPluginAssembliesForTests([pluginDirectory]);
+
+                var unsafeMode = Assert.Single(ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!);
+                Assert.Equal("extension_boundary_unsafe_permissions", unsafeMode.Category);
+                Assert.Contains("group- or world-writable", unsafeMode.Message, StringComparison.Ordinal);
+
+                File.SetUnixFileMode(
+                    pluginDirectory,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                Directory.CreateSymbolicLink(linkedParent, realParent);
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.LoadPluginAssembliesForTests([Path.Combine(linkedParent, "plugins")]);
+
+                var ancestorLink = Assert.Single(ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!);
+                Assert.Equal("extension_boundary_unsafe_ancestor", ancestorLink.Category);
+                Assert.Contains("every ancestor", ancestorLink.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExecutableExtensionBoundary.StagedForTesting = null;
+                ExtractorPluginRegistry.ResetForTests();
+                if (Directory.Exists(linkedParent) || File.Exists(linkedParent))
+                    Directory.Delete(linkedParent);
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPlugin_LoadsPrivateStagedBytesAfterSourceRenameSwap_Issue4596()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_staging_swap_4596");
+        lock (TestConsoleLock.Gate)
+        {
+            var pluginPath = Path.Combine(projectRoot, "plugin.dll");
+            var originalPath = Path.Combine(projectRoot, "plugin-original.dll");
+            try
+            {
+                File.Copy(Assembly.GetExecutingAssembly().Location, pluginPath);
+                ExtractorPluginRegistry.ResetForTests();
+                ExecutableExtensionBoundary.StagedForTesting = (source, staged) =>
+                {
+                    Assert.Equal(pluginPath, source);
+                    Assert.NotEqual(source, staged);
+                    File.Move(source, originalPath);
+                    File.WriteAllText(source, "replacement bytes that are not an assembly");
+                };
+
+                ExtractorPluginRegistry.LoadPluginForTests(pluginPath);
+
+                var status = ExtractorPluginRegistry.GetStatusSnapshot();
+                Assert.Equal(1, status.PluginAssemblyCount);
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", out _));
+                var stagedPath = Assert.Single(ExtractorPluginRegistry.PluginStagedAssemblyPathsForTests());
+                Assert.True(File.Exists(stagedPath));
+                Assert.NotEqual(pluginPath, stagedPath);
+                Assert.Equal("replacement bytes that are not an assembly", File.ReadAllText(pluginPath));
+            }
+            finally
+            {
+                ExecutableExtensionBoundary.StagedForTesting = null;
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void LoadPlugin_ReportsSanitizedAssemblyLoadCategory_3414()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_plugin_load_category");

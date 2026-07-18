@@ -51,6 +51,7 @@ public sealed class PostExtractionHookRunner : IDisposable
     internal const string HookLoadContextLifecycle = "collectible_unloaded_on_runner_dispose";
 
     private readonly List<LoadedPostExtractionHook> hooks;
+    private readonly List<ExecutableExtensionStagingHandle> stagingHandles;
     private readonly ConcurrentQueue<PostExtractionHookDiagnostic> diagnostics = new();
     private readonly ConcurrentDictionary<string, byte> disabledHooks = new(StringComparer.Ordinal);
     private readonly TimeSpan callbackBudget;
@@ -65,11 +66,13 @@ public sealed class PostExtractionHookRunner : IDisposable
 
     private PostExtractionHookRunner(
         List<LoadedPostExtractionHook> hooks,
+        List<ExecutableExtensionStagingHandle> stagingHandles,
         TimeSpan callbackBudget,
         int? maxSymbolCount,
         int? maxReferenceCount)
     {
         this.hooks = hooks;
+        this.stagingHandles = stagingHandles;
         this.callbackBudget = callbackBudget;
         this.maxSymbolCount = maxSymbolCount;
         this.maxReferenceCount = maxReferenceCount;
@@ -99,8 +102,9 @@ public sealed class PostExtractionHookRunner : IDisposable
         IReadOnlyList<ExtensionTrustOverride> initialTrustOverrides)
     {
         var loaded = new List<LoadedPostExtractionHook>();
+        var stagingHandles = new List<ExecutableExtensionStagingHandle>();
         var callbackBudget = ResolveCallbackBudget();
-        var runner = new PostExtractionHookRunner(loaded, callbackBudget.Value, null, null);
+        var runner = new PostExtractionHookRunner(loaded, stagingHandles, callbackBudget.Value, null, null);
         runner.EnqueueDiagnostic(callbackBudget.Diagnostic);
         runner.EnqueueDiagnostics(initialDiagnostics);
         var discoveryLimit = ResolveDiscoveryLimit();
@@ -143,9 +147,11 @@ public sealed class PostExtractionHookRunner : IDisposable
         int? maxReferenceCount)
     {
         var loaded = new List<LoadedPostExtractionHook>();
+        var stagingHandles = new List<ExecutableExtensionStagingHandle>();
         var callbackBudget = ResolveCallbackBudget();
         var runner = new PostExtractionHookRunner(
             loaded,
+            stagingHandles,
             callbackBudget.Value,
             PostExtractionHookMutationMaterializer.NormalizeLimit(maxSymbolCount),
             PostExtractionHookMutationMaterializer.NormalizeLimit(maxReferenceCount));
@@ -169,6 +175,7 @@ public sealed class PostExtractionHookRunner : IDisposable
                      runner.EnqueueDiagnostic))
         {
             ExtensionAssemblyLoadContext? loadContext = null;
+            ExecutableExtensionStagingHandle? staging = null;
             var retainedLoadContext = false;
             Assembly assembly;
             try
@@ -179,16 +186,32 @@ public sealed class PostExtractionHookRunner : IDisposable
                         runner.EnqueueDiagnostic))
                     continue;
 
+                if (!ExecutableExtensionBoundary.TryStageFile(
+                        hooksDirectory,
+                        dllPath,
+                        maxAssemblyBytes.Value,
+                        out staging,
+                        out var boundaryFailure))
+                {
+                    runner.EnqueueDiagnostic(
+                        dllPath,
+                        null,
+                        boundaryFailure.Message,
+                        category: boundaryFailure.Category);
+                    continue;
+                }
+
                 loadContext = new ExtensionAssemblyLoadContext(
                     $"cdidx-hook:{Path.GetFileNameWithoutExtension(dllPath)}",
-                    dllPath);
-                assembly = loadContext.LoadFromAssemblyPath(Path.GetFullPath(dllPath));
+                    staging!.StagedPath);
+                assembly = loadContext.LoadFromAssemblyPath(staging.StagedPath);
             }
             catch (Exception ex)
             {
                 var diagnostic = ExtensionLoadDiagnosticClassifier.ClassifyAssemblyLoad("Hook assembly load", ex);
                 runner.EnqueueDiagnostic(dllPath, null, diagnostic.Message, category: diagnostic.Category);
                 loadContext?.Unload();
+                staging?.Dispose();
                 continue;
             }
 
@@ -202,6 +225,7 @@ public sealed class PostExtractionHookRunner : IDisposable
                 var diagnostic = ExtensionLoadDiagnosticClassifier.ClassifyTypeLoad("Hook assembly type inspection", ex);
                 runner.EnqueueDiagnostic(dllPath, null, diagnostic.Message, category: diagnostic.Category);
                 loadContext?.Unload();
+                staging?.Dispose();
                 continue;
             }
 
@@ -212,6 +236,7 @@ public sealed class PostExtractionHookRunner : IDisposable
                     runner.EnqueueDiagnostic))
             {
                 loadContext?.Unload();
+                staging?.Dispose();
                 continue;
             }
 
@@ -236,7 +261,9 @@ public sealed class PostExtractionHookRunner : IDisposable
                     loaded.Add(new LoadedPostExtractionHook(
                         info,
                         loadContext,
-                        new PostExtractionHookCallbackWorkerClient(info, maxProtocolLineBytes)));
+                        new PostExtractionHookCallbackWorkerClient(
+                            info with { AssemblyPath = staging!.StagedPath },
+                            maxProtocolLineBytes)));
                     retainedLoadContext = true;
                 }
                 catch (Exception)
@@ -250,6 +277,11 @@ public sealed class PostExtractionHookRunner : IDisposable
                 if (loadContext != null)
                     LastUnretainedLoadContextForTesting = new WeakReference(loadContext, trackResurrection: false);
                 loadContext?.Unload();
+                staging?.Dispose();
+            }
+            else
+            {
+                stagingHandles.Add(staging!);
             }
         }
 
@@ -621,9 +653,6 @@ public sealed class PostExtractionHookRunner : IDisposable
             return;
 
         disposed = true;
-        if (hooks.Count == 0)
-            return;
-
         foreach (var hook in hooks)
         {
             hook.Worker.Dispose();
@@ -640,6 +669,10 @@ public sealed class PostExtractionHookRunner : IDisposable
         {
             loadContext!.Unload();
         }
+
+        foreach (var staging in stagingHandles)
+            staging.Dispose();
+        stagingHandles.Clear();
     }
 
     private sealed record LoadedPostExtractionHook(

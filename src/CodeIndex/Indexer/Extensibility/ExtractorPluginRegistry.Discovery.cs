@@ -16,6 +16,12 @@ public static partial class ExtractorPluginRegistry
             if (!Directory.Exists(directory))
                 continue;
 
+            if (!ExecutableExtensionBoundary.TryValidateDirectory(directory, out _, out var boundaryFailure))
+            {
+                ReportPluginDirectorySkipped(directory, boundaryFailure.Message, boundaryFailure.Category);
+                continue;
+            }
+
             using var enumerator = TryEnumeratePluginFiles(directory);
             if (enumerator == null)
                 continue;

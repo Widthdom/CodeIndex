@@ -29,6 +29,7 @@ public static partial class ExtractorPluginRegistry
     private static readonly List<string> LoadedPluginAssemblyPaths = [];
     private static readonly HashSet<string> LoadedPatternConfigPaths = new(StringComparer.OrdinalIgnoreCase);
     private static readonly List<AssemblyLoadContext> LoadedPluginAssemblyContexts = [];
+    private static readonly List<ExecutableExtensionStagingHandle> LoadedPluginStagingHandles = [];
     private static readonly IReadOnlyList<string> PatternConfigSearchPatterns = ["*.yaml", "*.yml"];
     private static readonly IReadOnlyDictionary<string, string> EmptyLanguageExtensions =
         new ReadOnlyDictionary<string, string>(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
@@ -162,6 +163,7 @@ public static partial class ExtractorPluginRegistry
             LoadedPluginAssemblyPaths.Clear();
             LoadedPatternConfigPaths.Clear();
             UnloadPluginAssemblyContexts();
+            DisposePluginStagingHandles();
             Diagnostics.Clear();
             pluginAssemblyCount = 0;
             patternConfigCount = 0;
@@ -182,6 +184,7 @@ public static partial class ExtractorPluginRegistry
             LoadedPluginAssemblyPaths.Clear();
             LoadedPatternConfigPaths.Clear();
             UnloadPluginAssemblyContexts();
+            DisposePluginStagingHandles();
             Diagnostics.Clear();
             pluginAssemblyCount = 0;
             patternConfigCount = 0;
@@ -209,6 +212,12 @@ public static partial class ExtractorPluginRegistry
     {
         lock (Gate)
             return LoadedPluginAssemblyContexts.ToList();
+    }
+
+    internal static IReadOnlyList<string> PluginStagedAssemblyPathsForTests()
+    {
+        lock (Gate)
+            return LoadedPluginStagingHandles.Select(handle => handle.StagedPath).ToList();
     }
 
     internal static void LoadPluginAssembliesForTests(IReadOnlyList<string> directories)

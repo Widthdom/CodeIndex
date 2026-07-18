@@ -274,6 +274,11 @@ unloaded when the hook runner is disposed. `extractors.diagnostics[]` and
 bounded paths and messages.
 Accepted extension trust overrides such as `CDIDX_TRUST_WORKSPACE_PLUGINS` and
 `CDIDX_HOOKS_DIR` are also reported in sanitized `trust_overrides[]` entries.
+Default and overridden plugin/hook directories share one executable-content
+boundary: cdidx rejects unsafe owners, group/world-writable modes, symlink or
+reparse-point ancestors, and non-regular DLL candidates. Accepted DLL bytes are
+hashed and copied into a private read-only staging directory before any assembly
+load, so a source-path rename cannot swap executable content after validation.
 
 Successful CLI and MCP index runs can also persist bounded
 `last_index_run.diagnostics` when best-effort metadata writes fail after the
@@ -570,6 +575,11 @@ unload されることを示します。`extractors.diagnostics[]` と `hook_dia
 bounded な path と message に加えて sanitization 済みの `category` machine code を含みます。
 受理された `CDIDX_TRUST_WORKSPACE_PLUGINS` や `CDIDX_HOOKS_DIR` などの
 拡張信頼境界 override は、sanitization 済みの `trust_overrides[]` entry としても報告されます。
+既定および override の plugin / hook directory は単一の executable-content
+boundary を共有します。cdidx は安全でない owner、group / world writable mode、
+symlink / reparse-point の祖先、regular file ではない DLL 候補を拒否します。
+受理した DLL bytes は assembly load 前に hash を計算して private read-only staging
+directory へ copy するため、検証後に source path を rename して実行内容を差し替えることはできません。
 
 成功した CLI / MCP index run は、index data 自体の書き込みが成功した後に
 best-effort metadata write が失敗した場合、上限付きの

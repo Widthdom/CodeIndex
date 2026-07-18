@@ -15,6 +15,7 @@ public static partial class ExtractorPluginRegistry
     {
         var fullPath = pluginPath;
         ExtensionAssemblyLoadContext? loadContext = null;
+        ExecutableExtensionStagingHandle? staging = null;
         try
         {
             fullPath = Path.GetFullPath(pluginPath);
@@ -27,10 +28,29 @@ public static partial class ExtractorPluginRegistry
             if (!PluginAssemblyCandidateIsWithinBudget(fullPath))
                 return;
 
+            var pluginDirectory = Path.GetDirectoryName(fullPath) ?? string.Empty;
+            if (!ExecutableExtensionBoundary.TryStageFile(
+                    pluginDirectory,
+                    fullPath,
+                    MaxPluginAssemblyBytes,
+                    out staging,
+                    out var boundaryFailure))
+            {
+                RecordDiagnostic(
+                    "plugin",
+                    fullPath,
+                    typeName: null,
+                    severity: "error",
+                    boundaryFailure.Message,
+                    countsAsSkippedFile: true,
+                    category: boundaryFailure.Category);
+                return;
+            }
+
             loadContext = new ExtensionAssemblyLoadContext(
                 $"cdidx-plugin:{Path.GetFileNameWithoutExtension(fullPath)}",
-                fullPath);
-            var assembly = loadContext.LoadFromAssemblyPath(fullPath);
+                staging!.StagedPath);
+            var assembly = loadContext.LoadFromAssemblyPath(staging.StagedPath);
             var attribute = assembly.GetCustomAttribute<CdidxPluginAttribute>();
             if (attribute == null)
             {
@@ -85,7 +105,9 @@ public static partial class ExtractorPluginRegistry
             {
                 pluginAssemblyCount++;
                 LoadedPluginAssemblyContexts.Add(loadContext);
+                LoadedPluginStagingHandles.Add(staging!);
                 loadContext = null;
+                staging = null;
             }
 
             foreach (var type in types)
@@ -109,6 +131,7 @@ public static partial class ExtractorPluginRegistry
         finally
         {
             loadContext?.Unload();
+            staging?.Dispose();
         }
     }
 
@@ -121,6 +144,14 @@ public static partial class ExtractorPluginRegistry
         }
 
         LoadedPluginAssemblyContexts.Clear();
+    }
+
+    private static void DisposePluginStagingHandles()
+    {
+        foreach (var staging in LoadedPluginStagingHandles)
+            staging.Dispose();
+
+        LoadedPluginStagingHandles.Clear();
     }
 
     private static bool PluginAssemblyCandidateIsWithinBudget(string fullPath)

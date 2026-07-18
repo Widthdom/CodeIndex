@@ -38,6 +38,19 @@ internal static class PostExtractionHookAssemblyDiscovery
             return false;
         }
 
+        if (!ExecutableExtensionBoundary.TryValidateDirectory(
+                hooksDirectory,
+                out _,
+                out var boundaryFailure))
+        {
+            reportDiagnostic(PostExtractionHookDiagnosticFactory.Create(
+                hooksDirectory,
+                null,
+                boundaryFailure.Message,
+                category: boundaryFailure.Category));
+            return false;
+        }
+
         return true;
     }
 
