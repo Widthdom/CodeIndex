@@ -5,6 +5,7 @@ using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
 using System.IO.Compression;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -1319,6 +1320,10 @@ public class ProgramCliTests
         Assert.False(second.GetProperty("created").GetBoolean());
         Assert.True(second.GetProperty("duplicate").GetBoolean());
         Assert.Equal(suggestion.GetProperty("id").GetString(), second.GetProperty("suggestion").GetProperty("id").GetString());
+        Assert.NotEqual(suggestion.GetProperty("id").GetString(), suggestion.GetProperty("revision_hash").GetString());
+        Assert.NotEqual(
+            SuggestionStore.ComputeHash("output_format", "csharp", "Record local dogfood finding before opening GitHub issues"),
+            suggestion.GetProperty("id").GetString());
         Assert.Equal("draft", suggestion.GetProperty("status").GetString());
         Assert.Equal("output_format", suggestion.GetProperty("category").GetString());
         Assert.Equal("csharp", suggestion.GetProperty("language").GetString());
@@ -1327,6 +1332,88 @@ public class ProgramCliTests
         Assert.Equal("Local dogfood finding store", suggestion.GetProperty("sampled_title").GetString());
         Assert.Equal("src/CodeIndex/Cli/SuggestionsCommandRunner.cs", suggestion.GetProperty("evidence_paths")[0].GetString());
         Assert.Equal(suggestion.GetProperty("id").GetString(), listDoc.RootElement.GetProperty("results")[0].GetProperty("id").GetString());
+    }
+
+    [ProductionRuntimeFact]
+    public void Suggestions_AddExplicitDbInSharedTempUsesPrivateSidecar_Issue4589()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return;
+
+        var sharedTempRoot = RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? "/private/tmp" : "/tmp";
+        if (!Directory.Exists(sharedTempRoot))
+            return;
+
+        var dbPath = Path.Combine(sharedTempRoot, $"cdidx-issue4589-{Guid.NewGuid():N}.db");
+        var dbName = Path.GetFileNameWithoutExtension(dbPath);
+        var sidecarDirectory = DataDirectorySecurity.ResolveSensitiveSidecarDirectoryForDatabase(dbPath, "suggestions");
+        var sidecarPath = Path.Combine(sidecarDirectory, $"suggestions-{dbName}.json");
+        var adjacentSidecarPath = Path.Combine(sharedTempRoot, $"suggestions-{dbName}.json");
+        try
+        {
+            File.WriteAllBytes(dbPath, []);
+
+            var (addExitCode, addStdout, addStderr) = RunCliInSubprocess([
+                "suggestions", "add", "Shared temporary database sidecar regression", "--category", "bug", "--db", dbPath, "--json"
+            ]);
+            var (listExitCode, listStdout, listStderr) = RunCliInSubprocess([
+                "suggestions", "list", "--db", dbPath, "--json"
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, addExitCode);
+            Assert.Equal(CommandExitCodes.Success, listExitCode);
+            Assert.Equal(string.Empty, addStderr);
+            Assert.Equal(string.Empty, listStderr);
+            using var addDocument = JsonDocument.Parse(addStdout);
+            using var listDocument = JsonDocument.Parse(listStdout);
+            Assert.True(addDocument.RootElement.GetProperty("created").GetBoolean());
+            Assert.Single(listDocument.RootElement.GetProperty("results").EnumerateArray());
+            Assert.True(File.Exists(sidecarPath));
+            Assert.False(File.Exists(adjacentSidecarPath));
+            Assert.Equal(
+                DataDirectorySecurity.PrivateDirectoryMode,
+                File.GetUnixFileMode(sidecarDirectory) & DataDirectorySecurity.PermissionBits);
+            Assert.Equal(
+                DataDirectorySecurity.PrivateFileMode,
+                File.GetUnixFileMode(sidecarPath) & DataDirectorySecurity.PermissionBits);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(sidecarDirectory);
+            TestProjectHelper.DeleteFile(dbPath);
+            TestProjectHelper.DeleteFile(adjacentSidecarPath);
+            TestProjectHelper.DeleteFile(Path.Combine(sharedTempRoot, $"suggestions-{dbName}.lock"));
+            TestProjectHelper.DeleteFile(Path.Combine(sharedTempRoot, $"suggestions-{dbName}.archive.jsonl"));
+        }
+    }
+
+    [ProductionRuntimeFact]
+    public void Suggestions_AddUnusableSidecarPathReturnsStructuredFilesystemError_Issue4589()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_suggestion_store_error");
+        var blockedParent = Path.Combine(root, "not-a-directory");
+        var dbPath = Path.Combine(blockedParent, "codeindex.db");
+        try
+        {
+            File.WriteAllText(blockedParent, "file blocks directory creation");
+
+            var (exitCode, stdout, stderr) = RunCliInSubprocess([
+                "suggestions", "add", "Structured storage error regression", "--db", dbPath, "--json"
+            ]);
+
+            Assert.Equal(CommandExitCodes.RuntimeError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal(CommandErrorCodes.SuggestionStoreUnavailable, document.RootElement.GetProperty("error_code").GetString());
+            Assert.Equal("io_error", document.RootElement.GetProperty("category").GetString());
+            Assert.Contains("--db", document.RootElement.GetProperty("hint").GetString());
+            Assert.DoesNotContain(dbPath, stdout, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
     }
 
     [ProductionRuntimeFact]
@@ -1342,28 +1429,55 @@ public class ProgramCliTests
     }
 
     [ProductionRuntimeFact]
-    public void Suggestions_UpdateCorrectsDraftAndReplacesDedupIdentity_Issue4441()
+    public void Suggestions_UpdatePreservesStableIdAcrossShowExportAndDelete_Issue4588()
     {
         using var fixture = SuggestionFixture.Create();
         var record = fixture.Add("bug", "csharp", "Malformed draft description", submitted: false, context: "bad context", sampledTitle: "Stale title");
 
-        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+        var (updateExitCode, updateStdout, updateStderr) = RunCliInSubprocess([
             "suggestions", "update", record.Hash[..12], "--db", fixture.DbPath, "--json",
             "--description", "Corrected draft description", "--context", "correct context", "--title", "Corrected title",
             "--evidence-path", "src/CodeIndex/Cli/SuggestionsCommandRunner.cs"
         ]);
+        var (showExitCode, showStdout, showStderr) = RunCliInSubprocess([
+            "suggestions", "show", record.Hash[..12], "--db", fixture.DbPath, "--json"
+        ]);
+        var (exportExitCode, exportStdout, exportStderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "json"
+        ]);
+        var (deleteExitCode, deleteStdout, deleteStderr) = RunCliInSubprocess([
+            "suggestions", "delete", record.Hash[..12], "--db", fixture.DbPath, "--json"
+        ]);
 
-        Assert.Equal(CommandExitCodes.Success, exitCode);
-        Assert.Equal(string.Empty, stderr);
-        using var doc = JsonDocument.Parse(stdout);
-        var suggestion = doc.RootElement.GetProperty("suggestion");
-        Assert.Equal("updated", doc.RootElement.GetProperty("action").GetString());
+        Assert.Equal(CommandExitCodes.Success, updateExitCode);
+        Assert.Equal(CommandExitCodes.Success, showExitCode);
+        Assert.Equal(CommandExitCodes.Success, exportExitCode);
+        Assert.Equal(CommandExitCodes.Success, deleteExitCode);
+        Assert.Equal(string.Empty, updateStderr);
+        Assert.Equal(string.Empty, showStderr);
+        Assert.Equal(string.Empty, exportStderr);
+        Assert.Equal(string.Empty, deleteStderr);
+        using var updateDoc = JsonDocument.Parse(updateStdout);
+        using var showDoc = JsonDocument.Parse(showStdout);
+        using var exportDoc = JsonDocument.Parse(exportStdout);
+        using var deleteDoc = JsonDocument.Parse(deleteStdout);
+        var suggestion = updateDoc.RootElement.GetProperty("suggestion");
+        var revisionHash = suggestion.GetProperty("revision_hash").GetString();
+        Assert.Equal("updated", updateDoc.RootElement.GetProperty("action").GetString());
         Assert.Equal("Corrected draft description", suggestion.GetProperty("description").GetString());
         Assert.Equal("correct context", suggestion.GetProperty("context").GetString());
         Assert.Equal("Corrected title", suggestion.GetProperty("sampled_title").GetString());
         Assert.Equal("src/CodeIndex/Cli/SuggestionsCommandRunner.cs", suggestion.GetProperty("evidence_paths")[0].GetString());
-        Assert.NotEqual(record.Hash, suggestion.GetProperty("id").GetString());
+        Assert.Equal(record.Hash, suggestion.GetProperty("id").GetString());
+        Assert.NotEqual(record.Hash, revisionHash);
         Assert.Equal(record.CreatedAt, suggestion.GetProperty("created_at").GetDateTime());
+        Assert.Equal(record.Hash, showDoc.RootElement.GetProperty("id").GetString());
+        Assert.Equal(revisionHash, showDoc.RootElement.GetProperty("revision_hash").GetString());
+        var exported = Assert.Single(exportDoc.RootElement.GetProperty("suggestions").EnumerateArray());
+        Assert.Equal(record.Hash, exported.GetProperty("id").GetString());
+        Assert.Equal(revisionHash, exported.GetProperty("revision_hash").GetString());
+        Assert.Equal(record.Hash, deleteDoc.RootElement.GetProperty("suggestion").GetProperty("id").GetString());
+        Assert.Equal(revisionHash, deleteDoc.RootElement.GetProperty("suggestion").GetProperty("revision_hash").GetString());
     }
 
     [ProductionRuntimeFact]
