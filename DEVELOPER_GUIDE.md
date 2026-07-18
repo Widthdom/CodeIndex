@@ -1410,6 +1410,8 @@ The `suggest_improvement` MCP tool allows AI agents to report gaps or errors.
 
 `SuggestionRecord.Id` is the immutable public identity used by CLI resolution, mutation, export, MCP responses, and GitHub retry idempotency. `RevisionHash` is the SHA256 digest of the current deduplication content and changes when editable content changes; updates compare the revision read by the caller with the revision under the store lock before replacing a draft. A legacy record containing only `hash` migrates in memory by preserving that value as `Id`, computing `RevisionHash`, and continuing to persist `hash` as an alias of the stable ID. Consequently, an ID copied before migration or an edit remains valid, while exact duplicate detection follows the current revision.
 
+Suggestion sidecars use `DataDirectorySecurity.ResolveSensitiveSidecarDirectoryForDatabase`. A database in a private directory retains colocated JSON/archive/lock files. On POSIX, a database whose direct parent is group- or other-writable instead uses a path-derived scope below `ResolveSensitiveTempFallbackDirectory`; `CreateSensitiveDirectory` enforces `0700`, and sensitive file writers enforce `0600`. CLI filesystem failures are caught at the suggestion-store boundary and emitted as `E021_SUGGESTION_STORE_UNAVAILABLE` with `FileSystemBoundary.ClassifyProbeFailure` in `category`. The MCP path uses `permission_denied` plus `error_code` and `filesystem_category` in structured content rather than leaking an unhandled exception.
+
 ### Deduplication
 
 `SuggestionStore` first checks the SHA256 hash, then compares the candidate against the most recent suggestions in the same category and language using normalized-token Jaccard similarity. The default fuzzy threshold is `0.85`; `cdidx mcp --suggestion-dedup-threshold`, `CDIDX_SUGGESTION_DEDUP_THRESHOLD`, or `.cdidxrc.json` `suggestion_dedup_threshold` can override it with a value from `0` to `1`. Fuzzy matches are returned as duplicates before GitHub submission and log the matched hash plus score to stderr for auditability.
@@ -4186,6 +4188,8 @@ Unlist しても exact version restore は不可能になりません。これ�
 ### 提案 ID と revision
 
 `SuggestionRecord.Id` は、CLI の解決・変更・export、MCP 応答、GitHub 再試行の冪等性で使用する不変の公開 identity です。`RevisionHash` は現在の重複排除対象内容の SHA256 digest で、編集可能な内容が変わると更新されます。update は draft を置換する前に、caller が読み取った revision と store lock 内の現在の revision を比較します。`hash` しか持たない legacy record は、その値を `Id` として保持し、`RevisionHash` を計算し、stable ID の alias として `hash` を引き続き永続化することで in-memory migration されます。そのため、移行前または編集前に控えた ID は引き続き有効で、完全一致の重複排除は現在の revision に従います。
+
+suggestion sidecar は `DataDirectorySecurity.ResolveSensitiveSidecarDirectoryForDatabase` を使います。private directory 内の database は JSON / archive / lock file を隣接配置したままです。POSIX では、database の直接の親が group- または other-writable の場合、`ResolveSensitiveTempFallbackDirectory` 配下の path-derived scope を代わりに使い、`CreateSensitiveDirectory` が `0700`、sensitive file writer が `0600` を強制します。CLI の filesystem failure は suggestion-store 境界で捕捉し、`E021_SUGGESTION_STORE_UNAVAILABLE` と `FileSystemBoundary.ClassifyProbeFailure` による `category` を返します。MCP 経路は unhandled exception を漏らさず、structured content に `permission_denied` と `error_code`、`filesystem_category` を載せます。
 
 ### 重複排除とローカル保持
 

@@ -8996,7 +8996,9 @@ public sealed class Caller
         Assert.True(structured["stored_locally"]!.GetValue<bool>());
         Assert.False(structured["submitted_to_github"]!.GetValue<bool>());
         Assert.Equal("token_not_configured", structured["github_submission_reason"]!.GetValue<string>());
-        Assert.Equal(Path.GetFullPath(Path.GetDirectoryName(_dbPath)!), structured["cdidx_dir"]!.GetValue<string>());
+        Assert.Equal(
+            DataDirectorySecurity.ResolveSensitiveSidecarDirectoryForDatabase(_dbPath, "suggestions"),
+            structured["cdidx_dir"]!.GetValue<string>());
     }
 
     [Fact]
@@ -9743,7 +9745,9 @@ public sealed class Caller
         var structured = response2["result"]!["structuredContent"]!;
         Assert.Equal("duplicate", structured["status"]!.GetValue<string>());
         Assert.Equal("draft", structured["lifecycle_status"]!.GetValue<string>());
-        Assert.Equal(Path.GetFullPath(Path.GetDirectoryName(_dbPath)!), structured["cdidx_dir"]!.GetValue<string>());
+        Assert.Equal(
+            DataDirectorySecurity.ResolveSensitiveSidecarDirectoryForDatabase(_dbPath, "suggestions"),
+            structured["cdidx_dir"]!.GetValue<string>());
     }
 
     [Fact]
@@ -10262,8 +10266,26 @@ public sealed class Caller
     {
         _server.Dispose();
         _db.Dispose();
+        DeleteSuggestionStore();
         DeleteDbPath();
         TestProjectHelper.DeleteDirectory(_projectRoot);
+    }
+
+    private void DeleteSuggestionStore()
+    {
+        var databaseDirectory = Path.GetDirectoryName(Path.GetFullPath(_dbPath))!;
+        var sidecarDirectory = DataDirectorySecurity.ResolveSensitiveSidecarDirectoryForDatabase(_dbPath, "suggestions");
+        if (!string.Equals(databaseDirectory, sidecarDirectory, StringComparison.Ordinal))
+        {
+            TestProjectHelper.DeleteDirectory(sidecarDirectory);
+            return;
+        }
+
+        var dbName = Path.GetFileNameWithoutExtension(_dbPath);
+        TestProjectHelper.DeleteFile(Path.Combine(sidecarDirectory, $"suggestions-{dbName}.json"));
+        TestProjectHelper.DeleteFile(Path.Combine(sidecarDirectory, $"suggestions-{dbName}.json.bak"));
+        TestProjectHelper.DeleteFile(Path.Combine(sidecarDirectory, $"suggestions-{dbName}.lock"));
+        TestProjectHelper.DeleteFile(Path.Combine(sidecarDirectory, $"suggestions-{dbName}.archive.jsonl"));
     }
 
     private void DeleteDbPath()

@@ -425,7 +425,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - `WorkspaceMetadataEnricherTests.cs`
   Workspace freshness and git metadata enrichment behavior.
 - `SuggestionStoreTests.cs`
-  Local suggestion JSON storage: immutable-ID migration, revision-aware updates, dedup hashing, persistence, corruption recovery, atomic writes.
+  Local suggestion JSON storage: immutable-ID migration, revision-aware updates, dedup hashing, shared-temp sidecar routing and structured failures, persistence, corruption recovery, atomic writes.
 - `SourceCodeDetectorTests.cs`
   Source code leak prevention: allowed natural-language inputs vs rejected code blocks (fenced, indented, import runs, etc.).
 - `ConsoleUiTests.cs`
@@ -1099,7 +1099,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `WorkspaceMetadataEnricherTests.cs`
   ワークスペース鮮度と git メタデータ付与のテスト。
 - `SuggestionStoreTests.cs`
-  ローカル提案JSON蓄積: 不変 ID migration、revision-aware update、ハッシュ重複排除、永続化、破損復旧、アトミック書き込み。
+  ローカル提案JSON蓄積: 不変 ID migration、revision-aware update、ハッシュ重複排除、shared-temp sidecar routing と structured failure、永続化、破損復旧、アトミック書き込み。
 - `SourceCodeDetectorTests.cs`
   ソースコード漏洩防止: 許容される自然言語入力 vs 拒否されるコードブロック（フェンス、インデント、import連打等）。
 - `ConsoleUiTests.cs`

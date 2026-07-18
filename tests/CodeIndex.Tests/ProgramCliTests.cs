@@ -5,6 +5,7 @@ using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
 using System.IO.Compression;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -1328,6 +1329,88 @@ public class ProgramCliTests
         Assert.Equal("Local dogfood finding store", suggestion.GetProperty("sampled_title").GetString());
         Assert.Equal("src/CodeIndex/Cli/SuggestionsCommandRunner.cs", suggestion.GetProperty("evidence_paths")[0].GetString());
         Assert.Equal(suggestion.GetProperty("id").GetString(), listDoc.RootElement.GetProperty("results")[0].GetProperty("id").GetString());
+    }
+
+    [ProductionRuntimeFact]
+    public void Suggestions_AddExplicitDbInSharedTempUsesPrivateSidecar_Issue4589()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return;
+
+        var sharedTempRoot = RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? "/private/tmp" : "/tmp";
+        if (!Directory.Exists(sharedTempRoot))
+            return;
+
+        var dbPath = Path.Combine(sharedTempRoot, $"cdidx-issue4589-{Guid.NewGuid():N}.db");
+        var dbName = Path.GetFileNameWithoutExtension(dbPath);
+        var sidecarDirectory = DataDirectorySecurity.ResolveSensitiveSidecarDirectoryForDatabase(dbPath, "suggestions");
+        var sidecarPath = Path.Combine(sidecarDirectory, $"suggestions-{dbName}.json");
+        var adjacentSidecarPath = Path.Combine(sharedTempRoot, $"suggestions-{dbName}.json");
+        try
+        {
+            File.WriteAllBytes(dbPath, []);
+
+            var (addExitCode, addStdout, addStderr) = RunCliInSubprocess([
+                "suggestions", "add", "Shared temporary database sidecar regression", "--category", "bug", "--db", dbPath, "--json"
+            ]);
+            var (listExitCode, listStdout, listStderr) = RunCliInSubprocess([
+                "suggestions", "list", "--db", dbPath, "--json"
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, addExitCode);
+            Assert.Equal(CommandExitCodes.Success, listExitCode);
+            Assert.Equal(string.Empty, addStderr);
+            Assert.Equal(string.Empty, listStderr);
+            using var addDocument = JsonDocument.Parse(addStdout);
+            using var listDocument = JsonDocument.Parse(listStdout);
+            Assert.True(addDocument.RootElement.GetProperty("created").GetBoolean());
+            Assert.Single(listDocument.RootElement.GetProperty("results").EnumerateArray());
+            Assert.True(File.Exists(sidecarPath));
+            Assert.False(File.Exists(adjacentSidecarPath));
+            Assert.Equal(
+                DataDirectorySecurity.PrivateDirectoryMode,
+                File.GetUnixFileMode(sidecarDirectory) & DataDirectorySecurity.PermissionBits);
+            Assert.Equal(
+                DataDirectorySecurity.PrivateFileMode,
+                File.GetUnixFileMode(sidecarPath) & DataDirectorySecurity.PermissionBits);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(sidecarDirectory);
+            TestProjectHelper.DeleteFile(dbPath);
+            TestProjectHelper.DeleteFile(adjacentSidecarPath);
+            TestProjectHelper.DeleteFile(Path.Combine(sharedTempRoot, $"suggestions-{dbName}.lock"));
+            TestProjectHelper.DeleteFile(Path.Combine(sharedTempRoot, $"suggestions-{dbName}.archive.jsonl"));
+        }
+    }
+
+    [ProductionRuntimeFact]
+    public void Suggestions_AddUnusableSidecarPathReturnsStructuredFilesystemError_Issue4589()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_suggestion_store_error");
+        var blockedParent = Path.Combine(root, "not-a-directory");
+        var dbPath = Path.Combine(blockedParent, "codeindex.db");
+        try
+        {
+            File.WriteAllText(blockedParent, "file blocks directory creation");
+
+            var (exitCode, stdout, stderr) = RunCliInSubprocess([
+                "suggestions", "add", "Structured storage error regression", "--db", dbPath, "--json"
+            ]);
+
+            Assert.Equal(CommandExitCodes.RuntimeError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal(CommandErrorCodes.SuggestionStoreUnavailable, document.RootElement.GetProperty("error_code").GetString());
+            Assert.Equal("io_error", document.RootElement.GetProperty("category").GetString());
+            Assert.Contains("--db", document.RootElement.GetProperty("hint").GetString());
+            Assert.DoesNotContain(dbPath, stdout, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
     }
 
     [ProductionRuntimeFact]

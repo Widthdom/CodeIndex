@@ -92,18 +92,26 @@ internal static class SuggestionsCommandRunner
                 jsonOptions,
                 "Use `suggestions export --format json --json` for JSON output, or remove `--json` to export Markdown.");
 
-        var store = CreateStore(options.DbPath);
-        if (verb == "add")
-            return RunAdd(store, options, jsonOptions);
-        if (verb == "update")
-            return RunUpdate(store, store.LoadAll(), options, jsonOptions);
-        if (verb == "delete")
-            return RunDelete(store, store.LoadAll(), options, jsonOptions);
+        List<SuggestionRecord> records;
+        try
+        {
+            var store = CreateStore(options.DbPath);
+            if (verb == "add")
+                return RunAdd(store, options, jsonOptions);
+            if (verb == "update")
+                return RunUpdate(store, store.LoadAll(), options, jsonOptions);
+            if (verb == "delete")
+                return RunDelete(store, store.LoadAll(), options, jsonOptions);
 
-        var records = ApplyFilters(store.LoadAll(), options)
-            .OrderByDescending(s => s.CreatedAt)
-            .ThenBy(s => s.Id, StringComparer.Ordinal)
-            .ToList();
+            records = ApplyFilters(store.LoadAll(), options)
+                .OrderByDescending(s => s.CreatedAt)
+                .ThenBy(s => s.Id, StringComparer.Ordinal)
+                .ToList();
+        }
+        catch (Exception ex) when (IsSuggestionStoreFileSystemException(ex))
+        {
+            return WriteSuggestionStoreAccessError(options, jsonOptions, ex);
+        }
         var outputRecords = verb is "list" or "export"
             ? ApplyOutputPage(records, options)
             : records;
@@ -451,10 +459,27 @@ internal static class SuggestionsCommandRunner
             ? DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null).DbPath
             : DbPathResolver.NormalizeDbPath(dbPath);
         var fullDbPath = Path.GetFullPath(normalizedDbPath);
-        var cdidxDir = Path.GetDirectoryName(fullDbPath) ?? Path.Combine(Environment.CurrentDirectory, ".cdidx");
+        var cdidxDir = DataDirectorySecurity.ResolveSensitiveSidecarDirectoryForDatabase(fullDbPath, "suggestions");
         var dbName = Path.GetFileNameWithoutExtension(fullDbPath);
         return new SuggestionStore(cdidxDir, dbName);
     }
+
+    private static bool IsSuggestionStoreFileSystemException(Exception ex)
+        => ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException
+            or System.Security.SecurityException;
+
+    private static int WriteSuggestionStoreAccessError(
+        Options options,
+        JsonSerializerOptions jsonOptions,
+        Exception ex)
+        => CommandErrorWriter.WriteJsonOrHuman(
+            options.Json,
+            jsonOptions,
+            $"Suggestion storage is unavailable ({CommandErrorWriter.FormatSanitizedException(ex)}).",
+            CommandExitCodes.RuntimeError,
+            "Check write permission for the selected database parent and the system temporary directory, or choose a writable --db path.",
+            errorCode: CommandErrorCodes.SuggestionStoreUnavailable,
+            category: FileSystemBoundary.ClassifyProbeFailure(ex));
 
     private static IEnumerable<SuggestionRecord> ApplyFilters(IEnumerable<SuggestionRecord> records, Options options)
     {
