@@ -274,6 +274,47 @@ public class ReportCommandRunnerTests
                 LastFailureEventStore.MaxEventBytes,
                 manifestRoot.GetProperty("limits").GetProperty("max_last_failure_event_bytes").GetInt32());
             Assert.Empty(manifestRoot.GetProperty("omissions").GetProperty("last_failure").EnumerateArray());
+
+            const string storedSecret = "query=SELECT legacy_secret FROM customer_records";
+            const string validDiagnostics =
+                "exception[0] type=System.InvalidOperationException message=\"invalid_operation\"\n"
+                + "  stack:    at CodeIndex.Tests.ReportCommandRunnerTests.SyntheticFailure()";
+            var storedFailure = new LastFailureEvent(
+                LastFailureEventStore.SchemaVersion,
+                DateTimeOffset.UtcNow.ToString("O"),
+                "1.38.0-test",
+                "<redacted>",
+                "<redacted>",
+                "report",
+                CommandExitCodes.UnhandledException,
+                "invalid_operation",
+                typeof(InvalidOperationException).FullName!,
+                "invalid_operation",
+                validDiagnostics,
+                PathsRedacted: true,
+                LiteralArgumentsIncluded: false);
+            var unsafeStoredFailures = new[]
+            {
+                storedFailure with
+                {
+                    SchemaVersion = LastFailureEventStore.SchemaVersion - 1,
+                    ExceptionMessage = storedSecret,
+                    Diagnostics = storedSecret,
+                },
+                storedFailure with { ExceptionMessage = storedSecret },
+                storedFailure with { Diagnostics = storedSecret },
+            };
+
+            foreach (var unsafeStoredFailure in unsafeStoredFailures)
+            {
+                var unsafeJson = JsonSerializer.Serialize(
+                    unsafeStoredFailure,
+                    LastFailureEventJsonContext.Default.LastFailureEvent);
+                DataDirectorySecurity.WritePrivateText(savedFailurePath, unsafeJson + "\n");
+
+                Assert.False(LastFailureEventStore.TryBuildReportPayload(out var rejectedPayload));
+                Assert.Equal(string.Empty, rejectedPayload);
+            }
         }
         finally
         {

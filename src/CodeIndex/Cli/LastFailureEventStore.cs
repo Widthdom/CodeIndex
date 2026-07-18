@@ -15,7 +15,7 @@ namespace CodeIndex.Cli;
 internal static class LastFailureEventStore
 {
     internal const string FileName = "last-failure.json";
-    internal const int SchemaVersion = 1;
+    internal const int SchemaVersion = 2;
     internal const int MaxEventBytes = 32 * 1024;
     internal const int MaxDiagnosticsChars = 8 * 1024;
     internal const int MaxDiagnosticLines = 32;
@@ -104,6 +104,8 @@ internal static class LastFailureEventStore
         normalized = null!;
         if (failure is null
             || failure.SchemaVersion != SchemaVersion
+            || !failure.PathsRedacted
+            || failure.LiteralArgumentsIncluded
             || !DateTimeOffset.TryParseExact(
                 failure.OccurredAtUtc,
                 "O",
@@ -113,7 +115,16 @@ internal static class LastFailureEventStore
             || string.IsNullOrWhiteSpace(failure.BinaryVersion)
             || string.IsNullOrWhiteSpace(failure.CommandCategory)
             || string.IsNullOrWhiteSpace(failure.ExceptionCategory)
-            || string.IsNullOrWhiteSpace(failure.ExceptionType))
+            || string.IsNullOrWhiteSpace(failure.ExceptionType)
+            || !TryNormalizeStoredCommandCategory(failure.CommandCategory, out var commandCategory)
+            || !IsStableExceptionCategory(failure.ExceptionCategory)
+            || !string.Equals(failure.ExceptionMessage, failure.ExceptionCategory, StringComparison.Ordinal)
+            || !string.Equals(failure.ExceptionType, SanitizeField(failure.ExceptionType), StringComparison.Ordinal)
+            || !TryNormalizeStoredDiagnostics(
+                failure.Diagnostics,
+                failure.ExceptionCategory,
+                failure.ExceptionType,
+                out var diagnostics))
         {
             return false;
         }
@@ -124,11 +135,9 @@ internal static class LastFailureEventStore
             BinaryVersion = SanitizeField(failure.BinaryVersion),
             BinaryPath = DiagnosticSanitizer.ForPath(failure.BinaryPath),
             ProcessPath = DiagnosticSanitizer.ForPath(failure.ProcessPath),
-            CommandCategory = SanitizeField(failure.CommandCategory),
-            ExceptionCategory = SanitizeField(failure.ExceptionCategory),
-            ExceptionType = SanitizeField(failure.ExceptionType),
-            ExceptionMessage = DiagnosticSanitizer.ForMessage(failure.ExceptionMessage, maxLength: 512),
-            Diagnostics = SanitizeDiagnostics(failure.Diagnostics),
+            CommandCategory = commandCategory,
+            ExceptionMessage = failure.ExceptionCategory,
+            Diagnostics = diagnostics,
             PathsRedacted = true,
             LiteralArgumentsIncluded = false,
         };
@@ -156,6 +165,196 @@ internal static class LastFailureEventStore
 
     private static string SanitizeField(string? value)
         => DiagnosticSanitizer.ForMessage(value, MaxFieldChars);
+
+    private static bool TryNormalizeStoredCommandCategory(string category, out string normalized)
+    {
+        normalized = string.Empty;
+        if (string.Equals(category, "unknown", StringComparison.Ordinal))
+        {
+            normalized = category;
+            return true;
+        }
+
+        if (!CliCommandCatalog.TryResolvePublicCommand(category, out var command)
+            || !string.Equals(command, category, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        normalized = command;
+        return true;
+    }
+
+    private static bool IsStableExceptionCategory(string category) => category is
+        "access_denied"
+        or "path_too_long"
+        or "directory_not_found"
+        or "file_not_found"
+        or "io_error"
+        or "decoder_error"
+        or "operation_canceled"
+        or "timeout"
+        or "sqlite_error"
+        or "argument_error"
+        or "invalid_operation"
+        or "not_supported"
+        or "exception_message_redacted";
+
+    private static bool TryNormalizeStoredDiagnostics(
+        string? diagnostics,
+        string expectedCategory,
+        string expectedType,
+        out string normalized)
+    {
+        normalized = string.Empty;
+        var sanitized = SanitizeDiagnostics(diagnostics);
+        if (!string.Equals(diagnostics, sanitized, StringComparison.Ordinal))
+            return false;
+
+        var lines = sanitized.Split('\n');
+        if (lines.Length == 0
+            || !IsStructuredExceptionHeader(lines[0], requireRoot: true, expectedCategory, expectedType))
+        {
+            return false;
+        }
+
+        for (var index = 1; index < lines.Length; index++)
+        {
+            var line = lines[index];
+            if (IsTerminalDiagnosticMarker(line))
+            {
+                if (index != lines.Length - 1)
+                    return false;
+                continue;
+            }
+
+            if (index == lines.Length - 1
+                && line.EndsWith(GlobalToolLog.ExceptionChainTruncationMarker, StringComparison.Ordinal))
+            {
+                line = line[..^GlobalToolLog.ExceptionChainTruncationMarker.Length];
+                if (line.Length == 0)
+                    continue;
+            }
+
+            if (!IsStructuredExceptionHeader(line, requireRoot: false, expectedCategory: null, expectedType: null)
+                && !IsStructuredStackLine(line)
+                && !IsStructuredAggregateIndex(line))
+            {
+                return false;
+            }
+        }
+
+        normalized = sanitized;
+        return true;
+    }
+
+    private static bool IsStructuredExceptionHeader(
+        string line,
+        bool requireRoot,
+        string? expectedCategory,
+        string? expectedType)
+    {
+        var leadingSpaces = CountLeadingSpaces(line);
+        var content = line[leadingSpaces..];
+        var bracketStart = content.IndexOf('[', StringComparison.Ordinal);
+        var bracketEnd = content.IndexOf("] type=", StringComparison.Ordinal);
+        if (bracketStart <= 0 || bracketEnd <= bracketStart + 1)
+            return false;
+
+        if (!int.TryParse(
+                content.AsSpan(bracketStart + 1, bracketEnd - bracketStart - 1),
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var depth)
+            || depth < 0
+            || leadingSpaces != depth * 2
+            || requireRoot != (depth == 0)
+            || !string.Equals(
+                content[..bracketStart],
+                depth == 0 ? "exception" : "inner_exception",
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        const string messageMarker = " message=\"";
+        var typeStart = bracketEnd + "] type=".Length;
+        var messageStart = content.IndexOf(messageMarker, typeStart, StringComparison.Ordinal);
+        if (messageStart <= typeStart || !content.EndsWith('"'))
+            return false;
+
+        var type = content[typeStart..messageStart];
+        var category = content[(messageStart + messageMarker.Length)..^1];
+        return string.Equals(type, SanitizeField(type), StringComparison.Ordinal)
+            && IsStableExceptionCategory(category)
+            && (!requireRoot
+                || (string.Equals(category, expectedCategory, StringComparison.Ordinal)
+                    && string.Equals(type, expectedType, StringComparison.Ordinal)));
+    }
+
+    private static bool IsStructuredStackLine(string line)
+    {
+        var leadingSpaces = CountLeadingSpaces(line);
+        if (leadingSpaces < 2 || leadingSpaces % 2 != 0)
+            return false;
+
+        var content = line[leadingSpaces..];
+        if (!content.StartsWith("stack: ", StringComparison.Ordinal))
+            return false;
+
+        var frame = content["stack: ".Length..].TrimStart();
+        if (frame is "--- End of stack trace from previous location ---"
+            or "--- End of inner exception stack trace ---")
+        {
+            return true;
+        }
+
+        if (!frame.StartsWith("at ", StringComparison.Ordinal))
+            return false;
+
+        var openParenthesis = frame.IndexOf('(', "at ".Length);
+        var closeParenthesis = openParenthesis < 0 ? -1 : frame.IndexOf(')', openParenthesis + 1);
+        if (openParenthesis <= "at ".Length || closeParenthesis <= openParenthesis)
+            return false;
+
+        foreach (var character in frame.AsSpan("at ".Length, openParenthesis - "at ".Length))
+        {
+            if (char.IsWhiteSpace(character) || character is '=' or '"' or '\'' or '\\')
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsStructuredAggregateIndex(string line)
+    {
+        var leadingSpaces = CountLeadingSpaces(line);
+        if (leadingSpaces < 2 || leadingSpaces % 2 != 0)
+            return false;
+
+        const string prefix = "aggregate_inner_index=";
+        var content = line[leadingSpaces..];
+        return content.StartsWith(prefix, StringComparison.Ordinal)
+            && int.TryParse(
+                content.AsSpan(prefix.Length),
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var index)
+            && index >= 0;
+    }
+
+    private static bool IsTerminalDiagnosticMarker(string line) => line is
+        "[diagnostic lines truncated]"
+        or "[diagnostics truncated]"
+        or GlobalToolLog.ExceptionChainTruncationMarker;
+
+    private static int CountLeadingSpaces(string value)
+    {
+        var count = 0;
+        while (count < value.Length && value[count] == ' ')
+            count++;
+        return count;
+    }
 
     private static string SanitizeDiagnostics(string? diagnostics)
     {
