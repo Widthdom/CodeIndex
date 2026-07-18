@@ -111,7 +111,8 @@ internal static class IndexWatchRunner
         JsonSerializerOptions jsonOptions,
         string projectRoot,
         string resolvedDbPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<Action<string>>? startupHandoff = null)
     {
         var debounce = TimeSpan.FromMilliseconds(baseOptions.WatchDebounceMs ?? DefaultDebounceMs);
         var maxPendingPaths = baseOptions.WatchPendingPathLimit;
@@ -188,10 +189,50 @@ internal static class IndexWatchRunner
             };
 
             watcher.EnableRaisingEvents = true;
+            startupHandoff?.Invoke(Enqueue);
 
-            EmitWatchStarted(baseOptions, jsonOptions, projectRoot, resolvedDbPath, debounce, maxPendingPaths, ignoreCase);
+            // The initial command scan completed before this watcher was subscribed. Re-scan
+            // after subscription, then drain every event buffered during that reconciliation
+            // before publishing the ready event. A callback that reaches Add after
+            // the ready transition is an ordinary live update, not a startup handoff event.
+            // 初回 command scan は watcher の subscribe より先に完了している。subscribe 後に
+            // 再 scan し、その間に buffer された event をすべて drain してから ready event を
+            // 公開する。ready 遷移後に Add へ到達した callback は通常の live update。
+            if (File.Exists(DbPathResolver.NormalizeDbPath(resolvedDbPath)))
+            {
+                RecordSubRunExitCode(
+                    ref watchExitCode,
+                    RunFullRescan(baseOptions, jsonOptions, resolvedDbPath, cancellationToken, phase: "startup"));
+            }
 
-            while (!cancellationToken.IsCancellationRequested)
+            // Close the startup generation by taking one atomic snapshot. Events arriving after
+            // this boundary remain queued as ordinary live updates, so a continuously changing
+            // workspace cannot prevent the watcher from ever becoming ready.
+            // startup generation は atomic snapshot で閉じる。この境界後の event は通常の
+            // live update として queue に残し、変更が連続する workspace でも ready を妨げない。
+            if (!cancellationToken.IsCancellationRequested
+                && batcher.TryDrainImmediately(out var startupBatch, out var startupFullRescan, out var startupOverflowReason))
+            {
+                if (startupFullRescan)
+                {
+                    EmitWatchOverflow(baseOptions, jsonOptions, startupOverflowReason, resolvedDbPath);
+                    RecordSubRunExitCode(
+                        ref watchExitCode,
+                        RunFullRescan(baseOptions, jsonOptions, resolvedDbPath, cancellationToken, phase: "startup"));
+                }
+                else if (startupBatch.Count > 0)
+                {
+                    RecordSubRunExitCode(
+                        ref watchExitCode,
+                        RunPartialUpdate(baseOptions, jsonOptions, startupBatch, resolvedDbPath, cancellationToken, phase: "startup"));
+                }
+            }
+
+            var ready = !cancellationToken.IsCancellationRequested;
+            if (ready)
+                EmitWatchStarted(baseOptions, jsonOptions, projectRoot, resolvedDbPath, debounce, maxPendingPaths, ignoreCase);
+
+            while (ready && !cancellationToken.IsCancellationRequested)
             {
                 try
                 {
@@ -236,7 +277,8 @@ internal static class IndexWatchRunner
         JsonSerializerOptions jsonOptions,
         IReadOnlyList<string> changedPaths,
         string resolvedDbPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string phase = "incremental")
     {
         var baseArgs = BuildSubRunArgs(baseOptions, resolvedDbPath);
         var batches = BuildPartialUpdateBatches(baseArgs, changedPaths);
@@ -252,7 +294,7 @@ internal static class IndexWatchRunner
             args.Add("--files");
             args.AddRange(batch);
 
-            var subRunExitCode = InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "updated", batch.Count, "incremental", batch, cancellationToken);
+            var subRunExitCode = InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "updated", batch.Count, phase, batch, cancellationToken);
             RecordSubRunExitCode(ref exitCode, subRunExitCode);
             if (cancellationToken.IsCancellationRequested)
                 break;
@@ -305,13 +347,14 @@ internal static class IndexWatchRunner
         IndexCommandOptions baseOptions,
         JsonSerializerOptions jsonOptions,
         string resolvedDbPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string phase = "incremental")
     {
         var stopwatch = Stopwatch.StartNew();
         var args = BuildSubRunArgs(baseOptions, resolvedDbPath);
         // No --files: this is a default incremental full scan.
         // --files を付けない: 通常のインクリメンタル全件スキャン。
-        return InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "rescanned", batchSize: null, "incremental", batchPaths: null, cancellationToken);
+        return InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "rescanned", batchSize: null, phase, batchPaths: null, cancellationToken);
     }
 
     private static void RecordSubRunExitCode(ref int watchExitCode, int subRunExitCode)
@@ -1088,6 +1131,16 @@ internal sealed class FileChangeBatcher
     }
 
     public bool TryDrain(out IReadOnlyList<string> batch, out bool fullRescan, out string? overflowReason)
+        => TryDrainCore(requireDebounce: true, out batch, out fullRescan, out overflowReason);
+
+    public bool TryDrainImmediately(out IReadOnlyList<string> batch, out bool fullRescan, out string? overflowReason)
+        => TryDrainCore(requireDebounce: false, out batch, out fullRescan, out overflowReason);
+
+    private bool TryDrainCore(
+        bool requireDebounce,
+        out IReadOnlyList<string> batch,
+        out bool fullRescan,
+        out string? overflowReason)
     {
         lock (_gate)
         {
@@ -1099,7 +1152,9 @@ internal sealed class FileChangeBatcher
                 return false;
             }
 
-            if (_hasLastEventTimestamp && _timeProvider.GetElapsedTime(_lastEventTimestamp) < _debounce)
+            if (requireDebounce
+                && _hasLastEventTimestamp
+                && _timeProvider.GetElapsedTime(_lastEventTimestamp) < _debounce)
             {
                 batch = Array.Empty<string>();
                 fullRescan = false;

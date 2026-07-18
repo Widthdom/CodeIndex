@@ -62,6 +62,20 @@ public class IndexWatchRunnerTests
     }
 
     [Fact]
+    public void FileChangeBatcher_TryDrainImmediately_ClosesStartupSnapshotBeforeDebounce_Issue4594()
+    {
+        var timeProvider = new ManualTimeProvider();
+        var batcher = new FileChangeBatcher(TimeSpan.FromSeconds(30), timeProvider);
+        batcher.Add("/repo/handoff.cs");
+
+        Assert.True(batcher.TryDrainImmediately(out var batch, out var rescan, out var reason));
+        Assert.Equal(["/repo/handoff.cs"], batch);
+        Assert.False(rescan);
+        Assert.Null(reason);
+        Assert.False(batcher.TryDrainImmediately(out _, out _, out _));
+    }
+
+    [Fact]
     public void FileChangeBatcher_CaseSensitive_KeepsDistinctPaths()
     {
         // On case-sensitive filesystems (Linux ext4), `foo.py` and `Foo.py` are different
@@ -1056,6 +1070,88 @@ public class IndexWatchRunnerTests
     }
 
     [Fact]
+    public void RunCore_StartupHandoff_ReconcilesMutationAndDrainsBeforeReady_Issue4594()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            TestProjectHelper.RunGit(projectRoot, "init");
+            TestProjectHelper.RunGit(projectRoot, "config", "core.ignorecase", "false");
+            var sourcePath = Path.Combine(projectRoot, "Handoff.cs");
+            File.WriteAllText(sourcePath, "public sealed class BeforeHandoff { }\n");
+
+            var initialJson = RunIndexAndCapture([projectRoot, "--db", dbPath, "--json"], out var initialExitCode);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Contains("\"status\":\"success\"", initialJson, StringComparison.Ordinal);
+            Assert.True(HasIndexedSymbol(dbPath, "BeforeHandoff"));
+
+            var options = new IndexCommandOptions
+            {
+                ProjectPath = projectRoot,
+                DbPath = dbPath,
+                Json = true,
+                Watch = true,
+                WatchDebounceMs = 50,
+            };
+
+            using var cts = new CancellationTokenSource();
+            var handoffInvoked = false;
+            string capturedOut;
+            int exitCode;
+
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var stdout = new StringWriter();
+                Task<int>? loopTask = null;
+                Console.SetOut(stdout);
+                try
+                {
+                    loopTask = IndexWatchRunner.RunCoreAsync(
+                        options,
+                        _jsonOptions,
+                        projectRoot,
+                        dbPath,
+                        cts.Token,
+                        enqueue =>
+                        {
+                            handoffInvoked = true;
+                            File.WriteAllText(sourcePath, "public sealed class AfterHandoff { }\n");
+                            enqueue(sourcePath);
+                        });
+                    cts.Cancel();
+#pragma warning disable xUnit1031 // Console redirection lock requires synchronous bounded drain.
+                    exitCode = loopTask.WaitAsync(TimeSpan.FromSeconds(30)).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    CancelAndDrainWatchLoop(cts, loopTask);
+                    Console.SetOut(originalOut);
+                }
+                capturedOut = stdout.ToString();
+            }
+
+            Assert.True(handoffInvoked);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(HasIndexedSymbol(dbPath, "AfterHandoff"));
+            Assert.False(HasIndexedSymbol(dbPath, "BeforeHandoff"));
+
+            var startupRescan = capturedOut.IndexOf("\"status\":\"rescanned\",\"phase\":\"startup\"", StringComparison.Ordinal);
+            var startupDrain = capturedOut.IndexOf("\"status\":\"updated\",\"phase\":\"startup\"", StringComparison.Ordinal);
+            var ready = capturedOut.IndexOf("\"status\":\"watching\"", StringComparison.Ordinal);
+            Assert.True(startupRescan >= 0, capturedOut);
+            Assert.True(startupDrain > startupRescan, capturedOut);
+            Assert.True(ready > startupDrain, capturedOut);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunCore_JsonLifecycleEventsHonorIndentedJsonOptions()
     {
         var projectRoot = CreateTempProject();
@@ -1251,6 +1347,14 @@ public class IndexWatchRunnerTests
         cmd.CommandText = "SELECT 1 FROM files WHERE path = @path";
         cmd.Parameters.AddWithValue("@path", filePath);
         return cmd.ExecuteScalar() != null;
+    }
+
+    private static bool HasIndexedSymbol(string dbPath, string symbolName)
+    {
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        db.TryMigrateForRead();
+        var reader = new DbReader(db.Connection, db.IsReadOnly);
+        return reader.SearchSymbols(symbolName, limit: 1, exact: true).Count == 1;
     }
 
     private static string CreateTempProject()

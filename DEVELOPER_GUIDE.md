@@ -1240,6 +1240,8 @@ Watch batches reuse this partial-update runner with a linked cancellation source
 
 Source membership is shared through `FileIndexer`: full scan, workspace freshness checks, and watch all exclude the `.cdidx` namespace. Watch classifies ignore files plus `.cdidx/patterns/**` and `.cdidx/plugins/**` before applying that source filter, so those non-source inputs remain debounced reconciliation events while ordinary `.cdidx` sidecars stay excluded. The resulting `--files` sub-run recognizes extractor inputs and falls back to a full scan, just as ignore-file changes already do.
 
+The watcher is enabled before its startup reconciliation scan. `FileChangeBatcher.TryDrainImmediately` closes the buffered startup generation without waiting for the normal debounce interval; those paths are applied before the `watching` event, while events arriving after the snapshot remain queued as normal live updates. This generation boundary prevents both the initial-scan subscription gap and unbounded readiness delay on a continuously changing workspace.
+
 ## AI integration
 
 For the AI agent search-rule template, see [AI Integration](USER_GUIDE.md#ai-integration) in the User Guide.
@@ -4015,6 +4017,8 @@ cdidx ./myproject --files src/app.cs        # 特定ファイルのみ
 watch batch は linked cancellation source を介してこの部分更新 runner を再利用する。そのため外側の watch token は sub-run の完了を待たず、実行中の extraction と database work を中断できる。sub-run JSON は `CommandOutputWriter` の async-local scope から watch capture writer へ送られ、watch loop は `Console.Out` を置き換えないため、他の command や埋め込み host は自身の stdout を維持できる。
 
 source membership は `FileIndexer` で共有し、full scan、workspace freshness check、watch のすべてで `.cdidx` namespace を除外する。watch は source filter の適用前に ignore file と `.cdidx/patterns/**` / `.cdidx/plugins/**` を分類するため、これらの非 source 入力は debounce 付き reconciliation event として保持し、通常の `.cdidx` sidecar は除外したままにする。生成された `--files` sub-run は extractor 入力を認識して、ignore-file 変更と同様に full scan へ fallback する。
+
+watcher は startup reconciliation scan より先に有効化する。`FileChangeBatcher.TryDrainImmediately` は通常の debounce interval を待たずに buffer 済み startup generation を閉じ、その path を `watching` event より前に適用する一方、snapshot 後に到着した event は通常の live update として queue に残す。この generation boundary により、初回 scan と subscribe の間の gap と、変更が連続する workspace で ready が無期限に遅れる問題の両方を防ぐ。
 
 FTS5 を変更する差分更新は `codeindex_meta.fts_incremental_writes_since_optimize` を増やします。カウンタが `DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold` に達すると、更新経路は `INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')` を実行し、カウンタをリセットして `fts_last_optimized_at` を記録します。ユーザーは `cdidx optimize --db <path>` または `cdidx index <projectPath> --optimize` で同じ maintenance を手動実行できます。大きな index では短時間 writer lock を保持する可能性があります。
 
