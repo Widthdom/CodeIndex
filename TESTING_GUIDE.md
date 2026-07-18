@@ -428,7 +428,9 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - `WorkspaceMetadataEnricherTests.cs`
   Workspace freshness and git metadata enrichment behavior.
 - `SuggestionStoreTests.cs`
-  Local suggestion JSON storage: dedup hashing, persistence, corruption recovery, atomic writes.
+  Local suggestion JSON storage: opaque/stable-ID allocation and legacy migration, all-editable-field revision conflicts, dedup hashing, submission-finalization races, persistence, corruption recovery, atomic writes.
+- `DataDirectorySecurityTests.cs`, `ProgramCliTests.cs` suggestion-sidecar coverage
+  Shared-temp database routing, owner-only directory/file modes, colocated private-directory behavior, and structured CLI filesystem failures.
 - `SourceCodeDetectorTests.cs`
   Source code leak prevention: allowed natural-language inputs vs rejected code blocks (fenced, indented, import runs, etc.).
 - `ConsoleUiTests.cs`
@@ -1109,7 +1111,9 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `WorkspaceMetadataEnricherTests.cs`
   ワークスペース鮮度と git メタデータ付与のテスト。
 - `SuggestionStoreTests.cs`
-  ローカル提案JSON蓄積: ハッシュ重複排除、永続化、破損復旧、アトミック書き込み。
+  ローカル提案JSON蓄積: 不透明で安定した ID の割り当てと legacy migration、全編集対象 field の revision conflict、ハッシュ重複排除、submission finalization race、永続化、破損復旧、アトミック書き込み。
+- `DataDirectorySecurityTests.cs`、`ProgramCliTests.cs` の suggestion-sidecar coverage
+  shared-temp database routing、owner-only の directory / file mode、private directory での隣接配置、structured CLI filesystem failure。
 - `SourceCodeDetectorTests.cs`
   ソースコード漏洩防止: 許容される自然言語入力 vs 拒否されるコードブロック（フェンス、インデント、import連打等）。
 - `ConsoleUiTests.cs`

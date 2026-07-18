@@ -117,22 +117,39 @@ public partial class McpServer
             samplingDecision).ConfigureAwait(false);
         var sampling = RedactSuggestionSamplingResult(samplingAttempt.Result);
 
-        // 4. Compute dedup hash / 重複排除ハッシュを計算
-        var hash = SuggestionStore.ComputeHash(category, language, description);
-
-        // 5. Resolve .cdidx directory and create if needed
+        // 4. Resolve .cdidx directory and create if needed
         //    .cdidx ディレクトリを解決し、必要に応じて作成
-        var cdidxDir = Path.GetDirectoryName(_dbPath);
-        if (string.IsNullOrEmpty(cdidxDir))
-            cdidxDir = Path.GetDirectoryName(Path.GetFullPath(_dbPath));
-        if (string.IsNullOrEmpty(cdidxDir))
-            cdidxDir = Path.Combine(Path.GetFullPath("."), ".cdidx");
-        DataDirectorySecurity.CreatePrivateDirectory(cdidxDir);
-        cdidxDir = Path.GetFullPath(cdidxDir);
-        if (!TryProbeCdidxDirectoryWritable(cdidxDir, out var probeError))
-            return CreateToolErrorResponse(id, probeError!);
+        string cdidxDir;
+        try
+        {
+            cdidxDir = DataDirectorySecurity.ResolveSensitiveSidecarDirectoryForDatabase(_dbPath, "suggestions");
+            var databaseDirectory = Path.GetDirectoryName(Path.GetFullPath(_dbPath));
+            if (string.Equals(databaseDirectory, cdidxDir, StringComparison.Ordinal))
+                DataDirectorySecurity.CreatePrivateDirectory(cdidxDir);
+            else
+                DataDirectorySecurity.CreateSensitiveDirectory(cdidxDir);
+            cdidxDir = Path.GetFullPath(cdidxDir);
+            if (!TryProbeCdidxDirectoryWritable(cdidxDir, out var probeError))
+            {
+                return CreateToolErrorResponse(
+                    id,
+                    probeError!,
+                    McpErrorEnvelope.CategoryPermissionDenied,
+                    "Check the selected database parent and system temporary directory permissions, or select a writable database path.",
+                    retrySafe: false,
+                    new JsonObject
+                    {
+                        ["error_code"] = CommandErrorCodes.SuggestionStoreUnavailable,
+                        ["filesystem_category"] = "permission_denied",
+                    });
+            }
+        }
+        catch (Exception ex) when (IsSuggestionStoreFileSystemException(ex))
+        {
+            return CreateSuggestionStoreErrorResponse(id, ex);
+        }
 
-        // 6. Store locally, reserve a submission attempt under the file lock,
+        // 5. Store locally, reserve a submission attempt under the file lock,
         //    then call GitHub outside the lock so slow remote I/O does not block
         //    other suggestion-store writers.
         //    ローカル保存と送信試行の予約だけをファイルロック内で行い、
@@ -142,13 +159,15 @@ public partial class McpServer
         // スコープ付き提案蓄積のため DB identity を導出。
         var dbName = Path.GetFileNameWithoutExtension(_dbPath);
         var store = new SuggestionStore(cdidxDir, dbName, _timeProvider);
+        var suggestionId = SuggestionStore.CreateId();
         var record = new SuggestionRecord
         {
             Category = category,
             Language = language,
             Description = description,
             Context = context,
-            Hash = hash,
+            Id = suggestionId,
+            Hash = suggestionId,
             CreatedByAgent = ResolveSuggestionAgent(initializeState),
             SessionId = _sessionId,
             ClientVersion = _version,
@@ -159,6 +178,7 @@ public partial class McpServer
             SampledTags = sampling?.Tags,
             EvidencePaths = evidencePaths,
         };
+        record.RevisionHash = SuggestionStore.ComputeRevisionHash(record);
 
         // Build GitHub submission callback (null if no token configured).
         // GitHub 送信コールバックを構築（トークン未設定なら null）。
@@ -171,15 +191,26 @@ public partial class McpServer
             githubCallback = (r, token) => GitHubIssueReporter.TryCreateIssueDetailedAsync(r, version, token);
         }
 
-        var result = await store.TryAddAndSubmitAsync(record, githubCallback, cancellationToken).ConfigureAwait(false);
-        var storedHash = result.StoredHash ?? hash;
+        SuggestionStore.AddAndSubmitResult result;
+        try
+        {
+            result = await store.TryAddAndSubmitAsync(record, githubCallback, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsSuggestionStoreFileSystemException(ex))
+        {
+            return CreateSuggestionStoreErrorResponse(id, ex);
+        }
+        var storedId = result.StoredHash ?? record.Id;
+        var storedRevisionHash = result.StoredRevisionHash ?? record.RevisionHash;
 
         if (!result.IsNew)
         {
             var dupPayload = new JsonObject
             {
                 ["status"] = "duplicate",
-                ["hash"] = storedHash,
+                ["id"] = storedId,
+                ["revision_hash"] = storedRevisionHash,
+                ["hash"] = storedId,
                 ["message"] = result.AlreadySubmitted
                     ? "This suggestion has already been recorded and submitted."
                     : result.UpstreamUrl != null
@@ -205,11 +236,13 @@ public partial class McpServer
             return CreateToolResult(id, "Duplicate suggestion (already recorded).", dupPayload);
         }
 
-        // 7. Return success / 成功レスポンスを返す
+        // 6. Return success / 成功レスポンスを返す
         var payload = new JsonObject
         {
             ["status"] = "recorded",
-            ["hash"] = storedHash,
+            ["id"] = storedId,
+            ["revision_hash"] = storedRevisionHash,
+            ["hash"] = storedId,
             ["category"] = category,
             ["language"] = language,
             ["stored_locally"] = true,
@@ -234,6 +267,23 @@ public partial class McpServer
             payload["evidence_paths"] = new JsonArray(evidencePaths.Select(path => JsonValue.Create(path)).ToArray<JsonNode?>());
         return CreateToolResult(id, "Suggestion recorded. Thank you for the feedback.", payload);
     }
+
+    private JsonObject CreateSuggestionStoreErrorResponse(JsonNode? id, Exception ex)
+        => CreateToolErrorResponse(
+            id,
+            $"Suggestion storage is unavailable ({CommandErrorWriter.FormatSanitizedException(ex)}).",
+            McpErrorEnvelope.CategoryPermissionDenied,
+            "Check the selected database parent and system temporary directory permissions, or select a writable database path.",
+            retrySafe: false,
+            new JsonObject
+            {
+                ["error_code"] = CommandErrorCodes.SuggestionStoreUnavailable,
+                ["filesystem_category"] = FileSystemBoundary.ClassifyProbeFailure(ex),
+            });
+
+    private static bool IsSuggestionStoreFileSystemException(Exception ex)
+        => ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException
+            or System.Security.SecurityException;
 
     private JsonObject CreateSourceCodeDetectedErrorResponse(
         JsonNode? id,

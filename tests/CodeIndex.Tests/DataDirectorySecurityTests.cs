@@ -136,6 +136,42 @@ public class DataDirectorySecurityTests
             directory);
     }
 
+    [Theory]
+    [InlineData("/tmp")]
+    [InlineData("/private/tmp")]
+    public void ResolveSensitiveSidecarDirectoryForDatabase_RelocatesSharedTempDbToPrivateScope_Issue4589(string sharedTempRoot)
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return;
+        if (sharedTempRoot == "/private/tmp" && !RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            return;
+        if (!Directory.Exists(sharedTempRoot))
+            return;
+
+        var databasePath = Path.Combine(sharedTempRoot, $"cdidx-sidecar-{Guid.NewGuid():N}.db");
+        var directory = DataDirectorySecurity.ResolveSensitiveSidecarDirectoryForDatabase(databasePath, "suggestions");
+        try
+        {
+            Assert.NotEqual(
+                Path.GetFullPath(sharedTempRoot).TrimEnd(Path.DirectorySeparatorChar),
+                directory.TrimEnd(Path.DirectorySeparatorChar));
+            Assert.StartsWith(
+                Path.Combine(Path.GetTempPath(), "cdidx-u"),
+                directory,
+                StringComparison.Ordinal);
+
+            DataDirectorySecurity.CreateSensitiveDirectory(directory);
+
+            Assert.Equal(
+                DataDirectorySecurity.PrivateDirectoryMode,
+                File.GetUnixFileMode(directory) & DataDirectorySecurity.PermissionBits);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(directory);
+        }
+    }
+
     [Fact]
     public void CreateSensitiveDirectory_OnExistingTempFallbackScopeRoot_HardensRoot_Issue3675()
     {

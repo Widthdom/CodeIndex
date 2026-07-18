@@ -54,6 +54,28 @@ internal static class DataDirectorySecurity
             ResolveSensitiveTempFallbackRootDirectory(),
             NormalizeSensitiveTempFallbackPurpose(purpose)));
 
+    /// <summary>
+    /// Resolve a directory for sensitive sidecars associated with a database file. Sidecars
+    /// remain beside databases in private directories, but move below the user-scoped temp
+    /// fallback when the database sits directly in a group/other-writable POSIX directory.
+    /// database file に関連する sensitive sidecar の directory を解決する。private directory
+    /// 内の DB では隣接配置を維持し、DB が group/other-writable な POSIX directory 直下に
+    /// ある場合は user-scoped temp fallback 配下へ退避する。
+    /// </summary>
+    internal static string ResolveSensitiveSidecarDirectoryForDatabase(string databasePath, string purpose)
+    {
+        var fullDatabasePath = Path.GetFullPath(databasePath);
+        var databaseDirectory = Path.GetDirectoryName(fullDatabasePath)
+            ?? throw new DirectoryNotFoundException("The selected database does not have a parent directory.");
+        if (!IsSharedWritableDirectory(databaseDirectory))
+            return databaseDirectory;
+
+        var pathHash = SHA256.HashData(Utf8NoBom.GetBytes(fullDatabasePath));
+        var pathScope = HexEncoding.ToLowerHexString(pathHash, 0, 8);
+        return ResolveSensitiveTempFallbackDirectory(
+            $"{NormalizeSensitiveTempFallbackPurpose(purpose)}-{pathScope}");
+    }
+
     private static string ResolveSensitiveTempFallbackRootDirectory()
     {
         var identity = $"{Environment.UserName}\0{Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)}";
@@ -173,6 +195,29 @@ internal static class DataDirectorySecurity
 
         var pathRoot = Path.GetPathRoot(Path.GetFullPath(path));
         return !string.IsNullOrWhiteSpace(pathRoot) && IsSameDirectory(path, pathRoot);
+    }
+
+    private static bool IsSharedWritableDirectory(string path)
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return false;
+        if (IsSameDirectory(path, "/tmp")
+            || (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) && IsSameDirectory(path, "/private/tmp")))
+        {
+            return true;
+        }
+        if (!Directory.Exists(path))
+            return false;
+
+        try
+        {
+            var mode = File.GetUnixFileMode(path);
+            return (mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return IsSharedDirectoryRoot(path);
+        }
     }
 
     private static bool IsSameDirectory(string left, string right)
