@@ -11,6 +11,17 @@ namespace CodeIndex.Tests;
 public partial class QueryCommandRunnerTests
 {
     [Fact]
+    public void GetSearchRecipeResultRanking_BypassesContextRankingWhenTotalLimitIsExhausted_Issue4590()
+    {
+        Assert.Equal(
+            SearchResultRanking.CredentialContext,
+            QueryCommandRunner.GetSearchRecipeResultRanking(SearchResultRanking.CredentialContext, resultLimit: 1));
+        Assert.Equal(
+            SearchResultRanking.Default,
+            QueryCommandRunner.GetSearchRecipeResultRanking(SearchResultRanking.CredentialContext, resultLimit: 0));
+    }
+
+    [Fact]
     public void SearchMatchClassifier_McpSchemaDescriptionHasDedicatedOrigin_Issue4416()
     {
         const string schemaLine = "[\"tokenBoundary\"] = new JsonObject { [\"description\"] = \"Use new HttpClient as an example.\" };";
@@ -6079,6 +6090,170 @@ public partial class QueryCommandRunnerTests
             Assert.Contains(queries, query => query.GetProperty("name").GetString() == "github-token");
             Assert.Contains(allResults, result => result.GetProperty("path").GetString() == "src/auth.cs");
             Assert.DoesNotContain(allResults, result => result.GetProperty("path").GetString() == "src/token-noise.cs");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_AuthTokenRecipeRanksCredentialContextAheadOfCommentsRegexAndStructuralTokens_Issue4590()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_auth_token_ranking");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/z-primary-credentials.cs",
+                "csharp",
+                """
+                using System.Net.Http.Headers;
+
+                public sealed class PrimaryCredentials
+                {
+                    private string GitHubToken { get; } = LoadSecret("github");
+                    private string ApiToken { get; } = LoadSecret("api");
+                    private string AccessToken { get; } = LoadSecret("access");
+                    private string TokenSecret { get; } = LoadSecret("token");
+                    private const string TokenSecretKey = "token secret";
+                    private readonly string token = secretProvider.Read("credential");
+
+                    public void Apply(HttpRequestMessage request)
+                    {
+                        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", AccessToken);
+                        Console.WriteLine(GitHubToken.Length + ApiToken.Length + TokenSecret.Length);
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/y-secondary-credentials.cs",
+                "csharp",
+                """
+                public sealed class SecondaryCredentials
+                {
+                    private readonly string github_token = ReadCredential("github");
+                    private readonly string api_token = ReadCredential("api");
+                    private readonly string access_token = ReadCredential("access");
+                    private readonly string token_secret = ReadCredential("secret");
+                    private const string TokenSecretKey = "token secret";
+                    private readonly string token = secretProvider.Read("credential");
+
+                    public void Forward(HttpRequestMessage request)
+                    {
+                        request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {access_token}");
+                        Console.WriteLine(github_token.Length + api_token.Length + token_secret.Length);
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/a-authorization-regex.cs",
+                "csharp",
+                """
+                public static class SqlAuthorizationPatterns
+                {
+                    private static readonly Regex AlterAuthorizationOptionsRegex = new("ALTER AUTHORIZATION");
+                    public static MatchCollection Read(string sql) => AlterAuthorizationOptionsRegex.Matches(sql);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/a-credential-comments.cs",
+                "csharp",
+                """
+                public sealed class CredentialComments
+                {
+                    // Bearer token documentation is generated elsewhere.
+                    // Authorization header documentation is generated elsewhere.
+                    // The GitHub token documentation is generated elsewhere.
+                    // The API token, access token, and token secret examples are intentionally placeholders.
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/a-structural-tokens.cs",
+                "csharp",
+                """
+                public sealed class StructuralTokens
+                {
+                    private readonly CancellationTokenSource accessTokenSource = new();
+                    private readonly CancellationTokenSource tokenSecretSource = new();
+                    private readonly SyntaxToken githubTokenSyntax;
+                    private readonly ParserToken apiTokenNode;
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/a-ranking-rules.cs",
+                "csharp",
+                """
+                public static class CredentialRankingRules
+                {
+                    private static bool ContainsCredentialUseSyntax(string text)
+                        => text.Contains("Authorization") ||
+                           text.Contains("Bearer") ||
+                           text.Contains("GitHubToken") ||
+                           text.Contains("ApiKey") ||
+                           text.Contains("AccessToken") ||
+                           text.Contains("TokenSecret");
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "auth-token-audit", "--db", dbPath, "--json", "--limit", "2"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var queries = document.RootElement.GetProperty("queries").EnumerateArray().ToList();
+            var expectedTopPaths = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "src/y-secondary-credentials.cs",
+                "src/z-primary-credentials.cs",
+            };
+
+            foreach (var queryName in new[]
+                     {
+                         "bearer-token",
+                         "authorization-header",
+                         "github-token",
+                         "api-token",
+                         "access-token",
+                         "token-secret",
+                     })
+            {
+                var results = queries
+                    .Single(query => query.GetProperty("name").GetString() == queryName)
+                    .GetProperty("results")
+                    .EnumerateArray()
+                    .ToList();
+                Assert.Equal(2, results.Count);
+                Assert.All(results, result =>
+                    Assert.Contains(result.GetProperty("path").GetString()!, expectedTopPaths));
+            }
+
+            var (rankingExitCode, rankingStdout, rankingStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "auth-token-audit/authorization-header", "--db", dbPath, "--json", "--limit", "10"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, rankingExitCode);
+            Assert.Equal(string.Empty, rankingStderr);
+            using var rankingDocument = ParseJsonOutput(rankingStdout);
+            var rankingPaths = rankingDocument.RootElement
+                .GetProperty("queries")[0]
+                .GetProperty("results")
+                .EnumerateArray()
+                .Select(result => result.GetProperty("path").GetString()!)
+                .ToList();
+            Assert.Contains("src/a-ranking-rules.cs", rankingPaths);
+            Assert.Contains("src/a-authorization-regex.cs", rankingPaths);
+            Assert.True(
+                rankingPaths.IndexOf("src/a-ranking-rules.cs") >
+                rankingPaths.IndexOf("src/a-authorization-regex.cs"));
         }
         finally
         {

@@ -1182,6 +1182,11 @@ Built-in recipes include `risky-code`, `json-parse-apis`,
 `filesystem-traversal`, `bounded-read-evidence`, `resource-materialization-audit`,
 `concurrency-state-audit`, `phrase-risk-patterns`, and the
 opt-in broad `broad-token-audit` recipe.
+`auth-token-audit` applies credential-context ranking before each child-query
+limit. Tightly coupled credential identifiers and phrases, runtime header use,
+and secret-provider symbols rank ahead of comments, documentation/help text,
+regex definitions, and structural parser, LSP, or `CancellationToken` symbols.
+Use `broad-token-audit` when those lexical token domains are intentionally in scope.
 Use `dotnet-risk-patterns` for .NET cancellation and liveness triage; its async
 child queries cover `CancellationTokenSource`, `Register(`, `Task.Run`,
 `Task.Delay`, `WaitForExit`, `SemaphoreSlim`, `TaskCompletionSource`, and
@@ -4171,6 +4176,11 @@ search audit recipe は、名前付き recipe を複数の curated search query 
 `nullable-contracts`、`filesystem-traversal`、`bounded-read-evidence`、
 `resource-materialization-audit`、`concurrency-state-audit`、`phrase-risk-patterns`、
 `broad-token-audit` があります。
+`auth-token-audit` は各 child query の limit 適用前に credential context ranking を行います。
+密接に結合した credential identifier / phrase、実行時の header 利用、secret-provider symbol を、
+comment、documentation / help text、regex 定義、parser / LSP / `CancellationToken` の構造的 symbol
+より上位に配置します。これらの lexical token domain も意図的に対象とする場合は
+`broad-token-audit` を使用してください。
 `dotnet-risk-patterns` は .NET の cancellation と liveness の triage にも使えます。
 async 系の child query は `CancellationToken.None`、`.Wait(`、
 `GetAwaiter().GetResult` に加えて、`CancellationTokenSource`、`Register(`、

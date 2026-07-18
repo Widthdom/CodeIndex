@@ -299,7 +299,8 @@ public partial class McpServer
                         guardFilters: guardFilters,
                         guardWindow: guardWindow,
                         guardScope: guardScope,
-                        requiredPathPatterns: requiredPathPatterns);
+                        requiredPathPatterns: requiredPathPatterns,
+                        resultRanking: recipeQuery.ResultRanking);
                 }
                 catch (SearchQueryLimitException)
                 {
