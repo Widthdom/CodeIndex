@@ -136,7 +136,8 @@ internal static class PostExtractionHookDiscoveryWorkerClient
         if (responseJson == null)
         {
             var exit = process.HasExited ? process.ExitCode : (int?)null;
-            return Failure(
+            return KillAndFail(
+                process,
                 "hook_discovery_worker_exit",
                 SafeDiagnosticFormatter.FormatWorkerExit(
                     "hook_discovery_worker_exit",
@@ -148,8 +149,21 @@ internal static class PostExtractionHookDiscoveryWorkerClient
         try
         {
             var response = PostExtractionHookDiscoveryWorkerProtocol.Deserialize(responseJson, maxProtocolLineBytes);
+            var cleanup = EnsureProcessExited(process);
             if (!string.IsNullOrWhiteSpace(response.Error))
-                return Failure(response.ErrorCategory ?? "hook_discovery_failed", response.Error);
+            {
+                return Failure(
+                    response.ErrorCategory ?? "hook_discovery_failed",
+                    WorkerProcessCleanupDiagnostics.AppendToMessage(response.Error, cleanup));
+            }
+            if (!string.IsNullOrWhiteSpace(cleanup))
+            {
+                return Failure(
+                    "hook_discovery_worker_cleanup_failed",
+                    WorkerProcessCleanupDiagnostics.AppendToMessage(
+                        "Hook discovery worker could not be terminated after returning its manifest.",
+                        cleanup));
+            }
             return new(true, null, null, response);
         }
         catch (Exception ex) when (ex is JsonException or InvalidDataException)
@@ -208,6 +222,16 @@ internal static class PostExtractionHookDiscoveryWorkerClient
     {
         var cleanup = WorkerProcessCleanupDiagnostics.TryKill(process, 5000);
         return Failure(category, WorkerProcessCleanupDiagnostics.AppendToMessage(message, cleanup));
+    }
+
+    private static string? EnsureProcessExited(Process process)
+    {
+        var wait = WorkerProcessCleanupDiagnostics.WaitForExit(process, 100);
+        if (wait.Exited)
+            return wait.Diagnostic;
+
+        var cleanup = WorkerProcessCleanupDiagnostics.TryKill(process, 5000);
+        return WorkerProcessCleanupDiagnostics.Combine(wait.Diagnostic, cleanup);
     }
 
     private static PostExtractionHookDiscoveryWorkerResult Failure(string category, string? message)

@@ -20,6 +20,21 @@ internal static class ReferenceExtractorWarmup
         if (int.TryParse(moduleInitializerDelay, out var delayMilliseconds) && delayMilliseconds > 0)
             Thread.Sleep(delayMilliseconds);
 
+        var persistentWorkerPidPath = Environment.GetEnvironmentVariable(
+            PostExtractionHookTests.PersistentDiscoveryWorkerPidPathEnvironmentVariable);
+        if (!string.IsNullOrWhiteSpace(persistentWorkerPidPath))
+        {
+            File.WriteAllText(
+                persistentWorkerPidPath,
+                Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            var persistentThread = new Thread(static () => Thread.Sleep(Timeout.Infinite))
+            {
+                IsBackground = false,
+                Name = "cdidx-hook-discovery-persistent-fixture",
+            };
+            persistentThread.Start();
+        }
+
         if (!IsContinuousIntegration() || !IsNet8TestAssembly())
             return;
 

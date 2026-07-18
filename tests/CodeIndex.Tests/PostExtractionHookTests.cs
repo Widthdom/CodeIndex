@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.Json;
@@ -20,6 +21,7 @@ public class PostExtractionHookTests
     internal const string ModuleInitializerPidPathEnvironmentVariable = "CDIDX_TEST_HOOK_MODULE_INITIALIZER_PID_PATH";
     internal const string ModuleInitializerDelayEnvironmentVariable = "CDIDX_TEST_HOOK_MODULE_INITIALIZER_DELAY_MS";
     internal const string SelectiveSlowHookAssemblyEnvironmentVariable = "CDIDX_TEST_SELECTIVE_SLOW_HOOK_ASSEMBLY";
+    internal const string PersistentDiscoveryWorkerPidPathEnvironmentVariable = "CDIDX_TEST_HOOK_DISCOVERY_PERSISTENT_PID_PATH";
     private const string TimedOutHookDelayMilliseconds = "150";
     private static readonly TimeSpan TimedOutHookLeakObservationWindow = TimeSpan.FromMilliseconds(400);
 
@@ -79,6 +81,41 @@ public class PostExtractionHookTests
         {
             CollectUnloadedHookAssemblies();
             TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [ProductionRuntimeFact]
+    public void DiscoveryWorker_TerminatesAfterManifestDespiteForegroundThread_Issue4600()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-persistent-discovery-4600");
+        lock (TestConsoleLock.Gate)
+        {
+            using var persistent = EnvironmentVariableScope.Capture(PersistentDiscoveryWorkerPidPathEnvironmentVariable);
+            try
+            {
+                var hooksDir = Path.Combine(projectRoot, "hooks");
+                Directory.CreateDirectory(hooksDir);
+                File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "persistent.dll"));
+                var workerPidPath = Path.Combine(projectRoot, "persistent-worker.pid");
+                persistent.Set(PersistentDiscoveryWorkerPidPathEnvironmentVariable, workerPidPath);
+
+                using var runner = PostExtractionHookRunner.Discover(hooksDir);
+
+                Assert.NotEmpty(runner.Hooks);
+                Assert.True(File.Exists(workerPidPath));
+                var workerPid = int.Parse(
+                    File.ReadAllText(workerPidPath),
+                    System.Globalization.CultureInfo.InvariantCulture);
+                Assert.NotEqual(Environment.ProcessId, workerPid);
+                TestDeterminism.WaitUntil(
+                    () => !IsProcessRunning(workerPid),
+                    "hook discovery worker termination",
+                    getDiagnostics: () => $"worker_pid={workerPid}");
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
         }
     }
 
@@ -942,6 +979,19 @@ public class PostExtractionHookTests
             duration,
             pollInterval: TimeSpan.FromMilliseconds(25),
             getDiagnostics: () => $"path={path}");
+
+    private static bool IsProcessRunning(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
 }
 
 public sealed class AWaitingPostExtractionHook : IPostExtractionHook
