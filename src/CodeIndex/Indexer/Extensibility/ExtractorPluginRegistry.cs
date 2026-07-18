@@ -23,6 +23,7 @@ public static partial class ExtractorPluginRegistry
     internal static readonly TimeSpan PatternRegexTimeout = TimeSpan.FromMilliseconds(100);
 
     private static readonly object Gate = new();
+    private static readonly object DefaultPluginDiscoveryGate = new();
     private static readonly Dictionary<string, ISymbolExtractor> SymbolExtractors = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, IReferenceExtractor> ReferenceExtractors = new(StringComparer.Ordinal);
     private static readonly List<string> LoadedPluginAssemblyPaths = [];
@@ -259,7 +260,7 @@ public static partial class ExtractorPluginRegistry
 
     internal static void LoadPatternConfigsForProjectRoot(string? projectRoot)
     {
-        EnsurePluginsLoaded();
+        RefreshDefaultPlugins();
         if (string.IsNullOrWhiteSpace(projectRoot))
             return;
 
@@ -293,14 +294,29 @@ public static partial class ExtractorPluginRegistry
     {
         if (Volatile.Read(ref suppressDefaultPluginDiscoveryForTesting))
             return;
+        if (Volatile.Read(ref pluginsLoaded))
+            return;
 
-        if (!Volatile.Read(ref pluginsLoaded))
+        lock (DefaultPluginDiscoveryGate)
         {
-            lock (Gate)
-                pluginsLoaded = true;
-        }
+            if (Volatile.Read(ref pluginsLoaded))
+                return;
 
-        LoadPluginAssemblies(EnumeratePluginDirectories(projectRoot: null));
+            LoadPluginAssemblies(EnumeratePluginDirectories(projectRoot: null));
+            Volatile.Write(ref pluginsLoaded, true);
+        }
+    }
+
+    private static void RefreshDefaultPlugins()
+    {
+        if (Volatile.Read(ref suppressDefaultPluginDiscoveryForTesting))
+            return;
+
+        lock (DefaultPluginDiscoveryGate)
+        {
+            LoadPluginAssemblies(EnumeratePluginDirectories(projectRoot: null));
+            Volatile.Write(ref pluginsLoaded, true);
+        }
     }
 
     private static bool TryMarkPluginAssemblyPathLoaded(string fullPath)

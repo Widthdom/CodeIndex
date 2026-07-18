@@ -486,24 +486,40 @@ public class ExtractorPluginRegistryTests
         {
             var pluginDirectory = Path.Combine(projectRoot, "plugins");
             var pluginPath = Path.Combine(pluginDirectory, "plugin.dll");
+            var mainAssemblyStageCount = 0;
             try
             {
                 Directory.CreateDirectory(pluginDirectory);
                 File.WriteAllText(pluginPath, "partial assembly copy");
                 ExtractorPluginRegistry.ReloadForTests();
                 ExtractorPluginRegistry.UserPluginDirectoryForTesting = pluginDirectory;
+                ExecutableExtensionBoundary.StagedForTesting = (source, _) =>
+                {
+                    if (string.Equals(source, pluginPath, StringComparison.Ordinal))
+                        mainAssemblyStageCount++;
+                };
 
                 Assert.Equal(0, ExtractorPluginRegistry.GetStatusSnapshot().PluginAssemblyCount);
                 Assert.Equal(0, ExtractorPluginRegistry.PluginWorkerCountForTests());
+                Assert.Equal(1, mainAssemblyStageCount);
+                Assert.Equal(0, ExtractorPluginRegistry.GetStatusSnapshot().PluginAssemblyCount);
+                Assert.Equal(1, mainAssemblyStageCount);
 
                 CopyPluginFixture(pluginPath);
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
                 Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot().PluginAssemblyCount);
                 Assert.Equal(1, ExtractorPluginRegistry.PluginWorkerCountForTests());
+                Assert.Equal(2, mainAssemblyStageCount);
                 var firstStagedPath = Assert.Single(ExtractorPluginRegistry.PluginStagedAssemblyPathsForTests());
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", out _));
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", out _));
+                Assert.Equal(2, mainAssemblyStageCount);
 
                 File.AppendAllText(pluginPath, "fingerprint replacement padding");
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
                 Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot().PluginAssemblyCount);
                 Assert.Equal(1, ExtractorPluginRegistry.PluginWorkerCountForTests());
+                Assert.Equal(3, mainAssemblyStageCount);
                 var replacementStagedPath = Assert.Single(ExtractorPluginRegistry.PluginStagedAssemblyPathsForTests());
                 Assert.NotEqual(firstStagedPath, replacementStagedPath);
                 Assert.False(File.Exists(firstStagedPath));
@@ -511,6 +527,7 @@ public class ExtractorPluginRegistryTests
             }
             finally
             {
+                ExecutableExtensionBoundary.StagedForTesting = null;
                 ExtractorPluginRegistry.ResetForTests();
                 TestProjectHelper.DeleteDirectory(projectRoot);
             }
