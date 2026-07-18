@@ -68,7 +68,7 @@ public class IndexWatchRunnerIssue4169Tests
         Assert.Equal("old_and_new_paths", contract.RenameEvents);
         Assert.Equal("full_rescan_after_debounce", contract.OverflowRecovery);
         Assert.Equal("full_rescan_after_debounce", contract.WatcherErrorRecovery);
-        Assert.Equal("emit_stopped_after_current_poll_or_sub_run", contract.Cancellation);
+        Assert.Equal("cancel_active_sub_run_then_emit_stopped", contract.Cancellation);
         Assert.Equal("json_quiet_sub_runs", contract.SubRunOutput);
         Assert.Equal("unsupported", contract.McpWatchMode);
     }
@@ -118,7 +118,7 @@ public class IndexWatchRunnerIssue4169Tests
         Assert.Equal("old_and_new_paths", contract.GetProperty("rename_events").GetString());
         Assert.Equal("full_rescan_after_debounce", contract.GetProperty("overflow_recovery").GetString());
         Assert.Equal("full_rescan_after_debounce", contract.GetProperty("watcher_error_recovery").GetString());
-        Assert.Equal("emit_stopped_after_current_poll_or_sub_run", contract.GetProperty("cancellation").GetString());
+        Assert.Equal("cancel_active_sub_run_then_emit_stopped", contract.GetProperty("cancellation").GetString());
         Assert.Equal("json_quiet_sub_runs", contract.GetProperty("sub_run_output").GetString());
         Assert.Equal("unsupported", contract.GetProperty("mcp_watch_mode").GetString());
     }
