@@ -126,14 +126,14 @@ internal static class GitHubIssueReporter
             // Idempotency check: if a previous submission attempt actually
             // created an issue on GitHub but the response was lost in transit,
             // the local record still shows SubmittedToGitHub=false. Look for
-            // an existing issue carrying this suggestion's hash before
+            // an existing issue carrying this suggestion's immutable ID before
             // posting a new one, so retries do not create duplicates.
             // 冪等性チェック: 過去の送信試行で GitHub 側に Issue が作成されたが
             // レスポンスが消失した場合、ローカルレコードでは SubmittedToGitHub=false の
             // ままになる。再試行で重複 Issue を作らないよう、新規 POST 前に
-            // 当該提案ハッシュを含む既存 Issue を探す。
+            // 当該提案の不変 ID を含む既存 Issue を探す。
             var existingLookup = await FindExistingIssueByHashDetailedAsync(
-                record.Hash,
+                record.Id,
                 token,
                 BuildExistingSuggestionLookupLabels(record),
                 requestCancellation.Token);
@@ -544,7 +544,7 @@ internal static class GitHubIssueReporter
         body.AppendLine($"Tool invocation context: {scrubbedToolInvocationContext ?? "N/A"}");
         body.AppendLine();
         body.AppendLine("---");
-        body.AppendLine($"_Submitted by cdidx v{version}. Hash: `{record.Hash}`_");
+        body.AppendLine($"_Submitted by cdidx v{version}. ID: `{record.Id}`. Revision: `{record.RevisionHash}`._");
 
         // Build the request payload / リクエストペイロードを構築
         var payload = new JsonObject

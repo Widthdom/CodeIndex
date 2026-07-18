@@ -133,6 +133,67 @@ public class SuggestionStoreTests : IDisposable
         Assert.True(File.Exists(path + ".bak"));
     }
 
+    [Fact]
+    public void LoadAll_MigratesLegacyHashToStableIdAndRevision_Issue4588()
+    {
+        const string description = "Legacy suggestion identity";
+        var legacyHash = SuggestionStore.ComputeHash("bug", "csharp", description);
+        var path = Path.Combine(_tempDir, "suggestions-codeindex.json");
+        File.WriteAllText(
+            path,
+            $$"""
+            [
+              {
+                "category": "bug",
+                "language": "csharp",
+                "description": "{{description}}",
+                "hash": "{{legacyHash}}"
+              }
+            ]
+            """);
+
+        var record = Assert.Single(_store.LoadAll());
+
+        Assert.Equal(legacyHash, record.Id);
+        Assert.Equal(SuggestionStore.ComputeRevisionHash(record), record.RevisionHash);
+        Assert.NotEqual(legacyHash, record.RevisionHash);
+        Assert.Equal(legacyHash, record.Hash);
+    }
+
+    [Fact]
+    public void ComputeRevisionHash_CoversEveryEditableField_Issue4588()
+    {
+        var record = MakeRecord("bug", "csharp", "Revision coverage");
+        var baseline = SuggestionStore.ComputeRevisionHash(record);
+
+        record.Category = "performance";
+        Assert.NotEqual(baseline, SuggestionStore.ComputeRevisionHash(record));
+        record.Category = "bug";
+        record.Language = "fsharp";
+        Assert.NotEqual(baseline, SuggestionStore.ComputeRevisionHash(record));
+        record.Language = "csharp";
+        record.Description = "changed description";
+        Assert.NotEqual(baseline, SuggestionStore.ComputeRevisionHash(record));
+        record.Description = "Revision coverage";
+        record.Context = "changed context";
+        Assert.NotEqual(baseline, SuggestionStore.ComputeRevisionHash(record));
+        record.Context = null;
+        record.SampledTitle = "changed title";
+        Assert.NotEqual(baseline, SuggestionStore.ComputeRevisionHash(record));
+        record.SampledTitle = null;
+        record.EvidencePaths = ["src/example.cs"];
+        Assert.NotEqual(baseline, SuggestionStore.ComputeRevisionHash(record));
+        record.EvidencePaths = null;
+        record.Agent = "changed-agent";
+        Assert.NotEqual(baseline, SuggestionStore.ComputeRevisionHash(record));
+        record.Agent = null;
+        record.ToolInvocationContext = "changed invocation";
+        Assert.NotEqual(baseline, SuggestionStore.ComputeRevisionHash(record));
+        record.ToolInvocationContext = null;
+        record.SampledTags = ["changed-tag"];
+        Assert.NotEqual(baseline, SuggestionStore.ComputeRevisionHash(record));
+    }
+
     private static void CreateSparseFile(string path, long length)
     {
         using var stream = File.Create(path);
@@ -672,6 +733,186 @@ public class SuggestionStoreTests : IDisposable
         Assert.Null(callbackException);
         Assert.Null(result.UpstreamUrl);
         Assert.Equal(2, _store.LoadAll().Count);
+    }
+
+    [Fact]
+    public void TryUpdate_RejectsStaleRevisionWithoutOverwritingCurrentContent_Issue4588()
+    {
+        var record = MakeRecord("bug", "csharp", "Original suggestion content");
+        Assert.True(_store.TryAdd(record));
+        var originalRevisionHash = record.RevisionHash;
+
+        var current = Assert.Single(_store.LoadAll());
+        current.Description = "Current suggestion content";
+        Assert.Equal(
+            SuggestionStore.MutationResult.Success,
+            _store.TryUpdate(current.Id, originalRevisionHash, current, out var updated));
+        Assert.NotNull(updated);
+
+        var stale = MakeRecord("bug", "csharp", "Stale overwrite content");
+        stale.Id = current.Id;
+        stale.Hash = current.Id;
+        Assert.Equal(
+            SuggestionStore.MutationResult.RevisionConflict,
+            _store.TryUpdate(current.Id, originalRevisionHash, stale, out var rejected));
+
+        Assert.Null(rejected);
+        var saved = Assert.Single(_store.LoadAll());
+        Assert.Equal(current.Id, saved.Id);
+        Assert.Equal("Current suggestion content", saved.Description);
+        Assert.Equal(updated!.RevisionHash, saved.RevisionHash);
+    }
+
+    [Fact]
+    public void TryUpdate_ContextOnlyChangeInvalidatesStaleRevision_Issue4588()
+    {
+        var record = MakeRecord("bug", "csharp", "Context concurrency regression");
+        record.Context = "original context";
+        Assert.True(_store.TryAdd(record));
+        var originalRevisionHash = record.RevisionHash;
+
+        var current = Assert.Single(_store.LoadAll());
+        current.Context = "current context";
+        Assert.Equal(
+            SuggestionStore.MutationResult.Success,
+            _store.TryUpdate(current.Id, originalRevisionHash, current, out var updated));
+
+        var stale = Assert.Single(_store.LoadAll());
+        stale.Context = "stale context";
+        Assert.Equal(
+            SuggestionStore.MutationResult.RevisionConflict,
+            _store.TryUpdate(current.Id, originalRevisionHash, stale, out var rejected));
+
+        Assert.Null(rejected);
+        Assert.Equal("current context", Assert.Single(_store.LoadAll()).Context);
+        Assert.NotEqual(originalRevisionHash, updated!.RevisionHash);
+    }
+
+    [Fact]
+    public void TryAdd_EditThenReAddOriginalContentAllocatesDistinctStableId_Issue4588()
+    {
+        var first = MakeRecord("bug", "csharp", "Original reusable content");
+        Assert.True(_store.TryAdd(first));
+        var firstId = first.Id;
+        var originalRevisionHash = first.RevisionHash;
+
+        var edited = Assert.Single(_store.LoadAll());
+        edited.Description = "Edited content";
+        Assert.Equal(
+            SuggestionStore.MutationResult.Success,
+            _store.TryUpdate(firstId, originalRevisionHash, edited, out _));
+
+        var readded = MakeRecord("bug", "csharp", "Original reusable content");
+        Assert.True(_store.TryAdd(readded));
+
+        var saved = _store.LoadAll();
+        Assert.Equal(2, saved.Count);
+        Assert.Equal(2, saved.Select(candidate => candidate.Id).Distinct(StringComparer.Ordinal).Count());
+        Assert.Contains(saved, candidate => candidate.Id == firstId && candidate.Description == "Edited content");
+        Assert.Contains(saved, candidate => candidate.Id != firstId && candidate.Description == "Original reusable content");
+    }
+
+    [Fact]
+    public void TryDelete_RejectsStaleRevisionWithoutDeletingNewerContent_Issue4588()
+    {
+        var record = MakeRecord("bug", "csharp", "Stale delete regression");
+        Assert.True(_store.TryAdd(record));
+        var staleRevisionHash = record.RevisionHash;
+
+        var current = Assert.Single(_store.LoadAll());
+        current.Context = "newer content that must survive";
+        Assert.Equal(
+            SuggestionStore.MutationResult.Success,
+            _store.TryUpdate(current.Id, staleRevisionHash, current, out var updated));
+        Assert.NotNull(updated);
+
+        Assert.Equal(
+            SuggestionStore.MutationResult.RevisionConflict,
+            _store.TryDelete(current.Id, staleRevisionHash, out var rejected));
+
+        Assert.Null(rejected);
+        var saved = Assert.Single(_store.LoadAll());
+        Assert.Equal("newer content that must survive", saved.Context);
+        Assert.Equal(updated!.RevisionHash, saved.RevisionHash);
+    }
+
+    [Fact]
+    public async Task TryAddAndSubmitAsync_ActiveSubmissionRejectsConcurrentMutation_Issue4588()
+    {
+        var record = MakeRecord("bug", "csharp", "Submission revision regression");
+        var submissionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSubmission = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var submitTask = _store.TryAddAndSubmitAsync(
+            record,
+            async (_, _) =>
+            {
+                submissionStarted.SetResult();
+                await releaseSubmission.Task;
+                return SuggestionStore.SubmitAttemptResult.Success("https://github.com/Widthdom/CodeIndex/issues/9999");
+            },
+            CancellationToken.None);
+
+        await submissionStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var current = Assert.Single(_store.LoadAll());
+        var submittedRevision = current.RevisionHash;
+        current.Context = "edited while submission was in flight";
+        Assert.Equal(
+            SuggestionStore.MutationResult.SubmissionInFlight,
+            _store.TryUpdate(current.Id, submittedRevision, current, out var rejected));
+        Assert.Null(rejected);
+        Assert.Equal(
+            SuggestionStore.MutationResult.SubmissionInFlight,
+            _store.TryDelete(current.Id, submittedRevision, out var rejectedDelete));
+        Assert.Null(rejectedDelete);
+
+        releaseSubmission.SetResult();
+        var result = await submitTask;
+
+        Assert.Equal("https://github.com/Widthdom/CodeIndex/issues/9999", result.UpstreamUrl);
+        Assert.Null(result.SubmissionError);
+        var saved = Assert.Single(_store.LoadAll());
+        Assert.Equal(SuggestionStatus.SubmittedPendingTriage, saved.Status);
+        Assert.Equal(submittedRevision, saved.RevisionHash);
+        Assert.Null(saved.Context);
+    }
+
+    [Fact]
+    public async Task TryAddAndSubmitAsync_ExpiredReservationEditDoesNotStampOldSubmissionOntoNewRevision_Issue4588()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2032, 1, 2, 3, 4, 5, TimeSpan.Zero));
+        var store = new SuggestionStore(_tempDir, null, clock);
+        var record = MakeRecord("bug", "csharp", "Expired submission revision regression");
+        var submissionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSubmission = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var submitTask = store.TryAddAndSubmitAsync(
+            record,
+            async (_, _) =>
+            {
+                submissionStarted.SetResult();
+                await releaseSubmission.Task;
+                return SuggestionStore.SubmitAttemptResult.Success("https://github.com/Widthdom/CodeIndex/issues/9998");
+            },
+            CancellationToken.None);
+
+        await submissionStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var current = Assert.Single(store.LoadAll());
+        var submittedRevision = current.RevisionHash;
+        clock.Advance(TimeSpan.FromMinutes(7));
+        current.Context = "edited after the submission reservation expired";
+        Assert.Equal(
+            SuggestionStore.MutationResult.Success,
+            store.TryUpdate(current.Id, submittedRevision, current, out var updated));
+
+        releaseSubmission.SetResult();
+        var result = await submitTask;
+
+        Assert.Null(result.UpstreamUrl);
+        Assert.Contains("changed while GitHub submission was in flight", result.SubmissionError);
+        var saved = Assert.Single(store.LoadAll());
+        Assert.Equal(SuggestionStatus.Draft, saved.Status);
+        Assert.Null(saved.UpstreamUrl);
+        Assert.Equal(updated!.RevisionHash, saved.RevisionHash);
+        Assert.Equal("edited after the submission reservation expired", saved.Context);
     }
 
     [Fact]

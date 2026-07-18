@@ -74,4 +74,7 @@ internal static class CommandErrorCodes
 
     /// <summary>A requested source line falls outside the indexed file's 1-based line range.</summary>
     public const string LineOutOfRange = "E020_LINE_OUT_OF_RANGE";
+
+    /// <summary>Suggestion sidecar storage could not be resolved, created, read, or written safely.</summary>
+    public const string SuggestionStoreUnavailable = "E021_SUGGESTION_STORE_UNAVAILABLE";
 }
