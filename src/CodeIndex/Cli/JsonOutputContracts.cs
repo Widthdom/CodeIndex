@@ -395,6 +395,7 @@ internal sealed record ReportBundleSummary(
     [property: JsonPropertyName("schema_tables")] int SchemaTables,
     [property: JsonPropertyName("log_lines_included")] int LogLinesIncluded,
     [property: JsonPropertyName("log_included")] bool LogIncluded,
+    [property: JsonPropertyName("last_failure_included")] bool LastFailureIncluded,
     [property: JsonPropertyName("db_included")] bool DbIncluded,
     [property: JsonPropertyName("db_path")] string? DbPath,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;

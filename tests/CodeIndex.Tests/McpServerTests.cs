@@ -8512,6 +8512,42 @@ public sealed class Caller
         }
     }
 
+    [Fact]
+    public void SearchRecipe_AuthTokenAuditRanksCredentialContextForMcp_Issue4590()
+    {
+        var writer = new DbWriter(_db.Connection);
+        InsertSearchFile(
+            writer,
+            "src/a-authorization-regex.cs",
+            """
+            public static class SqlAuthorizationPatterns
+            {
+                private static readonly Regex AlterAuthorizationOptionsRegex = new("ALTER AUTHORIZATION");
+                public static MatchCollection Read(string sql) => AlterAuthorizationOptionsRegex.Matches(sql);
+            }
+            """);
+        InsertSearchFile(
+            writer,
+            "src/z-request-auth.cs",
+            """
+            public sealed class RequestAuth
+            {
+                public void Apply(HttpRequestMessage request, AuthenticationHeaderValue credential)
+                    => request.Headers.Authorization = credential;
+            }
+            """);
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":4590,"method":"tools/call","params":{"name":"search","arguments":{"recipe":"auth-token-audit","limit":1}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false);
+        var authorizationQuery = response["result"]!["structuredContent"]!["queries"]!.AsArray()
+            .Single(item => item!["name"]!.GetValue<string>() == "authorization-header")!;
+        var result = Assert.Single(authorizationQuery["results"]!.AsArray());
+        Assert.Equal("src/z-request-auth.cs", result!["path"]!.GetValue<string>());
+    }
+
 
 
 

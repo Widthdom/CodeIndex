@@ -15,7 +15,7 @@ namespace CodeIndex.Cli;
 /// 1 行ずつ出力する NDJSON を <c>{ "metadata": {...}, "results": [...] }</c>
 /// 単一エンベロープに包んで返す。Issue #1527。
 /// </summary>
-internal static class JsonEnvelopeWrapper
+internal static partial class JsonEnvelopeWrapper
 {
     internal const string EnvelopeFlag = "--json-envelope";
     internal const int MaxCapturedOutputChars = 10 * 1024 * 1024;
@@ -32,8 +32,20 @@ internal static class JsonEnvelopeWrapper
         "deps", "unused", "hotspots",
     };
 
+    internal static string CanonicalizeCommandName(string command)
+        => command switch
+        {
+            "refs" => "references",
+            "stats" => "status",
+            _ => command,
+        };
+
     internal static bool ShouldWrap(string command, string[] args)
-        => WrappableCommands.Contains(command) && HasEnvelopeFlag(args);
+    {
+        command = CanonicalizeCommandName(command);
+        return WrappableCommands.Contains(command)
+               && (HasEnvelopeFlag(args) || ShouldAutoWrapBoundedResponse(command, args));
+    }
 
     internal static bool HasEnvelopeFlag(string[] args)
     {
@@ -76,6 +88,10 @@ internal static class JsonEnvelopeWrapper
         JsonSerializerOptions jsonOptions,
         Func<string[], int> runInner)
     {
+        command = CanonicalizeCommandName(command);
+        if (IsBoundedResponseRequest(command, args))
+            return RunBoundedResponse(command, args, appVersion, jsonOptions, runInner);
+
         if (HasArgument(args, "--max-json-bytes"))
         {
             CommandErrorWriter.WriteStderr("Error [E010_USAGE_ERROR]: --json-envelope cannot be combined with --max-json-bytes because envelope serialization changes the final stdout byte count.");
@@ -401,8 +417,11 @@ internal static class JsonEnvelopeWrapper
 
     private static bool IsJsonStreamControlRecord(JsonNode node)
     {
-        if (node is not JsonObject obj
-            || !obj.TryGetPropertyValue("count", out var countNode)
+        if (node is not JsonObject obj)
+            return false;
+        if (obj.ContainsKey("profile") || obj.ContainsKey("_debug"))
+            return true;
+        if (!obj.TryGetPropertyValue("count", out var countNode)
             || countNode is not JsonValue countValue
             || !countValue.TryGetValue<int>(out var count)
             || count != 0)
@@ -430,7 +449,10 @@ internal static class JsonEnvelopeWrapper
         "--start", "--end", "--before", "--after", "--name",
         "--snippet-lines", "--snippet-focus", "--path", "--exclude-path", "--max-hops", "--depth",
         "--focus-line", "--focus-column", "--focus-length",
-        "--max-line-width",
+        "--max-line-width", "--fields", "--cursor", "--max-json-bytes", "--format",
+        "--sections", "--rank-by", "--visibility", "--exclude-visibility", "--group-by",
+        "--stale-after", "--explain", "--context", "--line-scan-limit", "--min-entrypoint-confidence",
+        "--project", "--solution",
     };
 
     private static string? ExtractQueryArg(string[] args)

@@ -37,7 +37,7 @@ public static class ReportCommandRunner
     internal const UnixFileMode BundleFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
     internal static readonly DateTimeOffset BundleEntryModificationTime = DateTimeOffset.UnixEpoch;
     private const string SchemaTableLabelPrefix = "table_";
-    private const int SupportManifestVersion = 2;
+    private const int SupportManifestVersion = 3;
 
     public static int Run(string[] cmdArgs, JsonSerializerOptions jsonOptions, string? appVersion = null)
     {
@@ -88,6 +88,7 @@ public static class ReportCommandRunner
                 bundle.SchemaTables.Count,
                 bundle.LogLinesIncluded,
                 bundle.LogIncluded,
+                bundle.LastFailureIncluded,
                 bundle.DbIncluded,
                 options.Json ? RedactLocalJsonPath(bundle.DbPath) : bundle.DbPath);
 
@@ -105,6 +106,7 @@ public static class ReportCommandRunner
                 Console.WriteLine($"  files        : {summary.Files}");
                 Console.WriteLine($"  schema rows  : {summary.SchemaTables}");
                 Console.WriteLine($"  log lines    : {(summary.LogIncluded ? summary.LogLinesIncluded.ToString() : "skipped")}");
+                Console.WriteLine($"  last failure : {(summary.LastFailureIncluded ? "included" : "unavailable")}");
                 Console.WriteLine($"  schema source: {(summary.DbIncluded ? bundle.DbPath : "(no DB found)")}");
                 Console.WriteLine();
                 Console.WriteLine("Attach the tarball to the GitHub issue. Path lists, query strings, and");
@@ -215,15 +217,21 @@ public static class ReportCommandRunner
             bundle.AddText("log/stderr-recent.log", logText);
         }
 
+        if (LastFailureEventStore.TryBuildReportPayload(out var lastFailurePayload))
+        {
+            bundle.LastFailureIncluded = true;
+            bundle.AddText(LastFailureEventStore.FileName, lastFailurePayload);
+        }
+
         var supportManifest = BuildSupportManifest(options, bundle, nowUtc, redactions);
         bundle.AddText(
             "support-manifest.json",
             JsonSerializer.Serialize(supportManifest, ReportSupportManifestJsonContext.Default.ReportSupportManifest));
-        bundle.AddText("README.md", BuildReadme(version, options.IncludeLog, options.IncludeArgs));
+        bundle.AddText("README.md", BuildReadme(version, options.IncludeLog, options.IncludeArgs, bundle.LastFailureIncluded));
         return bundle;
     }
 
-    internal static string BuildReadme(string version, bool includeLog, bool includeArgs)
+    internal static string BuildReadme(string version, bool includeLog, bool includeArgs, bool lastFailureIncluded)
     {
         var sb = new StringBuilder();
         sb.AppendLine("# cdidx bug-report bundle");
@@ -241,6 +249,9 @@ public static class ReportCommandRunner
         sb.AppendLine("- `env.txt` — human-readable OS / runtime summary.");
         sb.AppendLine("- `schema.txt` — capped SQLite table labels and bounded row counts (no raw table names or row contents).");
         sb.AppendLine("- `support-manifest.json` — machine-readable redaction, omission, readiness, and diagnostic summary.");
+        sb.AppendLine(lastFailureIncluded
+            ? $"- `{LastFailureEventStore.FileName}` — the bounded, redacted failure event that most recently recommended running `cdidx report`; literal arguments are never included."
+            : $"- `{LastFailureEventStore.FileName}` is unavailable because no valid saved failure event was found.");
         sb.AppendLine("- Archive entry modification times are fixed for reproducible tar metadata; generation time is recorded in `metadata.json`, `env.txt`, and `support-manifest.json`.");
         if (includeLog)
         {
@@ -404,10 +415,12 @@ public static class ReportCommandRunner
                 MaxLogLines,
                 MaxLogFileTailBytes,
                 MaxLogTailLineChars,
-                MaxRecentLogFiles),
+                MaxRecentLogFiles,
+                LastFailureEventStore.MaxEventBytes),
             Bundle: new ReportManifestBundle(
                 DbIncluded: bundle.DbIncluded,
                 LogIncluded: bundle.LogIncluded,
+                LastFailureIncluded: bundle.LastFailureIncluded,
                 IncludeArgs: options.IncludeArgs,
                 Files: bundle.Files.Count + 2,
                 SchemaTables: bundle.SchemaTables.Count,
@@ -454,7 +467,11 @@ public static class ReportCommandRunner
         status.Add("raw_config_values");
         status.Add("diagnostic_paths");
 
-        return new ReportManifestOmissions(schema, log, status);
+        var lastFailure = bundle.LastFailureIncluded
+            ? new List<string>()
+            : new List<string> { "last_failure_event_unavailable" };
+
+        return new ReportManifestOmissions(schema, log, status, lastFailure);
     }
 
     private static ReportReadinessSnapshot BuildReadinessSnapshot(string? dbPath, bool dbIncluded)
@@ -733,6 +750,7 @@ internal sealed class ReportBundle
     public int LogLinesIncluded { get; set; }
     public bool LogTailTruncated { get; set; }
     public bool LogLineCharsTruncated { get; set; }
+    public bool LastFailureIncluded { get; set; }
 
     public void AddText(string name, string content) =>
         Files.Add((name, Encoding.UTF8.GetBytes(content)));
@@ -831,11 +849,13 @@ internal sealed record ReportManifestLimits(
     int MaxLogLines,
     int MaxLogFileTailBytes,
     int MaxLogTailLineChars,
-    int MaxRecentLogFiles);
+    int MaxRecentLogFiles,
+    int MaxLastFailureEventBytes);
 
 internal sealed record ReportManifestBundle(
     bool DbIncluded,
     bool LogIncluded,
+    bool LastFailureIncluded,
     bool IncludeArgs,
     int Files,
     int SchemaTables,
@@ -849,7 +869,8 @@ internal sealed record ReportRedactionSummary(int Total, Dictionary<string, int>
 internal sealed record ReportManifestOmissions(
     List<string> Schema,
     List<string> Log,
-    List<string> Status);
+    List<string> Status,
+    List<string> LastFailure);
 
 internal sealed record ReportReadinessSnapshot(
     string Source,

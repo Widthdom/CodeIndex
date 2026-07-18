@@ -181,7 +181,7 @@ public class ReportCommandRunnerTests
 
             using var manifest = ReadJsonEntry(entries, "support-manifest.json");
             var root = manifest.RootElement;
-            Assert.Equal(2, root.GetProperty("manifest_version").GetInt32());
+            Assert.Equal(3, root.GetProperty("manifest_version").GetInt32());
             var artifact = root.GetProperty("artifact");
             Assert.Equal(ReportCommandRunner.BundleArtifactFormat, artifact.GetProperty("format").GetString());
             Assert.Equal(ReportCommandRunner.BundleArtifactMediaType, artifact.GetProperty("media_type").GetString());
@@ -202,6 +202,126 @@ public class ReportCommandRunnerTests
         {
             TestProjectHelper.DeleteDirectory(workDir);
         }
+    }
+
+    [Fact]
+    public void Run_AfterCurrentProcessFailure_IncludesBoundedRedactedFailureWithoutPersistentLog_Issue4586()
+    {
+        var workDir = CreateWorkDir();
+        var logDir = CreateLogDir(workDir);
+        var output = Path.Combine(workDir, "bundle.tgz");
+        const string secretArgument = "clients/private-project";
+        const string secretMessage = "query=SELECT * FROM private_customer_records";
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+                "CDIDX_DISABLE_PERSISTENT_LOG",
+                "CDIDX_GLOBAL_TOOL_LOG_DIR");
+            env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", null);
+            env.Set("CDIDX_DISABLE_PERSISTENT_LOG", "1");
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+
+            var (failureExitCode, _, failureStderr) = ConsoleCapture.Capture(() => ProgramRunner.Run(
+                [secretArgument],
+                appVersion: "1.38.0-test",
+                beforeDispatchForTesting: ThrowCurrentProcessFailure));
+
+            Assert.Equal(CommandExitCodes.UnhandledException, failureExitCode);
+            Assert.Contains("Run `cdidx report`", failureStderr);
+            Assert.Empty(Directory.GetFiles(logDir, "stderr-*.log"));
+            var savedFailurePath = Path.Combine(logDir, LastFailureEventStore.FileName);
+            Assert.True(File.Exists(savedFailurePath));
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Equal(
+                    DataDirectorySecurity.PrivateFileMode,
+                    File.GetUnixFileMode(savedFailurePath) & PermissionBits);
+            }
+
+            var (reportExitCode, reportStdout, reportStderr) = ConsoleCapture.Capture(() => ProgramRunner.Run(
+                ["report", "--output", output, "--db", Path.Combine(workDir, "missing.db"), "--no-log"],
+                appVersion: "1.38.0-test"));
+
+            Assert.Equal(CommandExitCodes.Success, reportExitCode);
+            Assert.Equal(string.Empty, reportStderr);
+            Assert.Contains("last failure : included", reportStdout);
+            var entries = ReadTarGzEntries(output);
+            Assert.Contains(LastFailureEventStore.FileName, entries.Keys);
+            Assert.DoesNotContain("log/stderr-recent.log", entries.Keys);
+
+            using var failure = ReadJsonEntry(entries, LastFailureEventStore.FileName);
+            var failureRoot = failure.RootElement;
+            Assert.Equal(LastFailureEventStore.SchemaVersion, failureRoot.GetProperty("schema_version").GetInt32());
+            Assert.True(DateTimeOffset.TryParse(failureRoot.GetProperty("occurred_at_utc").GetString(), out _));
+            Assert.Equal("1.38.0-test", failureRoot.GetProperty("binary_version").GetString());
+            Assert.Equal("cdidx.dll", failureRoot.GetProperty("binary_path").GetString());
+            Assert.Equal("index", failureRoot.GetProperty("command_category").GetString());
+            Assert.Equal(CommandExitCodes.UnhandledException, failureRoot.GetProperty("exit_code").GetInt32());
+            Assert.Equal("invalid_operation", failureRoot.GetProperty("exception_category").GetString());
+            Assert.Equal("invalid_operation", failureRoot.GetProperty("exception_message").GetString());
+            Assert.Contains(nameof(ThrowCurrentProcessFailure), failureRoot.GetProperty("diagnostics").GetString());
+            Assert.True(failureRoot.GetProperty("paths_redacted").GetBoolean());
+            Assert.False(failureRoot.GetProperty("literal_arguments_included").GetBoolean());
+            Assert.DoesNotContain(secretArgument, failureRoot.GetRawText());
+            Assert.DoesNotContain(secretMessage, failureRoot.GetRawText());
+            Assert.DoesNotContain(workDir, failureRoot.GetRawText());
+
+            using var manifest = ReadJsonEntry(entries, "support-manifest.json");
+            var manifestRoot = manifest.RootElement;
+            Assert.True(manifestRoot.GetProperty("bundle").GetProperty("last_failure_included").GetBoolean());
+            Assert.Equal(
+                LastFailureEventStore.MaxEventBytes,
+                manifestRoot.GetProperty("limits").GetProperty("max_last_failure_event_bytes").GetInt32());
+            Assert.Empty(manifestRoot.GetProperty("omissions").GetProperty("last_failure").EnumerateArray());
+
+            const string storedSecret = "query=SELECT legacy_secret FROM customer_records";
+            const string validDiagnostics =
+                "exception[0] type=System.InvalidOperationException message=\"invalid_operation\"\n"
+                + "  stack:    at CodeIndex.Tests.ReportCommandRunnerTests.SyntheticFailure()";
+            var storedFailure = new LastFailureEvent(
+                LastFailureEventStore.SchemaVersion,
+                DateTimeOffset.UtcNow.ToString("O"),
+                "1.38.0-test",
+                "<redacted>",
+                "<redacted>",
+                "report",
+                CommandExitCodes.UnhandledException,
+                "invalid_operation",
+                typeof(InvalidOperationException).FullName!,
+                "invalid_operation",
+                validDiagnostics,
+                PathsRedacted: true,
+                LiteralArgumentsIncluded: false);
+            var unsafeStoredFailures = new[]
+            {
+                storedFailure with
+                {
+                    SchemaVersion = LastFailureEventStore.SchemaVersion - 1,
+                    ExceptionMessage = storedSecret,
+                    Diagnostics = storedSecret,
+                },
+                storedFailure with { ExceptionMessage = storedSecret },
+                storedFailure with { Diagnostics = storedSecret },
+            };
+
+            foreach (var unsafeStoredFailure in unsafeStoredFailures)
+            {
+                var unsafeJson = JsonSerializer.Serialize(
+                    unsafeStoredFailure,
+                    LastFailureEventJsonContext.Default.LastFailureEvent);
+                DataDirectorySecurity.WritePrivateText(savedFailurePath, unsafeJson + "\n");
+
+                Assert.False(LastFailureEventStore.TryBuildReportPayload(out var rejectedPayload));
+                Assert.Equal(string.Empty, rejectedPayload);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+
+        static void ThrowCurrentProcessFailure() => throw new InvalidOperationException(secretMessage);
     }
 
     [Fact]
@@ -896,6 +1016,7 @@ public class ReportCommandRunnerTests
             Assert.True(JsonArrayContains(json.GetProperty("recommended_extensions"), ".tgz"));
             Assert.True(JsonArrayContains(json.GetProperty("recommended_extensions"), ".tar.gz"));
             Assert.True(json.GetProperty("json_metadata_stdout_only").GetBoolean());
+            Assert.True(json.TryGetProperty("last_failure_included", out _));
             Assert.Equal("1", json.GetProperty("api_version").GetString());
             Assert.Equal(0, json.GetProperty("warnings").GetArrayLength());
             Assert.True(json.GetProperty("files").GetInt32() >= 4);

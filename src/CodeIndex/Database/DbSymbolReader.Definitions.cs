@@ -14,7 +14,7 @@ public partial class DbReader
     /// Resolve symbol definitions with reconstructed excerpts.
     /// シンボル定義を抜粋付きで解決する。
     /// </summary>
-    public List<DefinitionResult> GetDefinitions(string query, int limit = 20, string? kind = null, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, int? bodyStartLine = null, int? bodyLineCount = null, bool groupPartials = false)
+    public List<DefinitionResult> GetDefinitions(string query, int limit = 20, string? kind = null, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, int? bodyStartLine = null, int? bodyLineCount = null, bool groupPartials = false, int offset = 0)
     {
         lang = DbReader.NormalizeQueryLanguage(lang);
         var symbols = SearchSymbols(
@@ -29,7 +29,8 @@ public partial class DbReader
             exact,
             visibilityFilters,
             excludeVisibilityFilters,
-            groupPartials: groupPartials);
+            groupPartials: groupPartials,
+            offset: offset);
         var results = new List<DefinitionResult>();
 
         foreach (var symbol in symbols)

@@ -223,6 +223,9 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Generic switch-arm guard and relational predecessors likewise share one production-runtime fixture and run only on the production `net8.0` target.
   Search language-alias coverage may place distinct language files in one database and iterate alias filters when each filter isolates one expected result.
   Named-query escaping for option-looking literals reuses one indexed Probe fixture across definition, graph, symbols, files, inspect, and impact commands.
+  Multi named-query output coverage reuses one indexed fixture for compact projection, rich JSON compatibility, per-query limits/truncation, and UTF-8 byte caps so the serializer modes stay directly comparable.
+  Shared bounded-response coverage reuses one graph-ready database across definition, find, status, hotspots, references, callers/callees, impact, and map; keep cursor and UTF-8 byte-budget boundary cases in a separate minimal multi-row fixture so family parity does not multiply indexing setup. Regression coverage must also exercise aliases and read-only batch dispatch, explicit definition body projections, inactive impact collections, and row-wise map-section pagination with authoritative totals.
+  Adversarial bounded-response coverage must also lock parser-failure byte caps, impact definition-page offsets, legacy map compact sections, conflicting map shape controls, compact explicit bodies, and profile/verbose control-record extraction.
   Search alias variants for JavaScript extensions, YAML, batch, and SQL dialects each reuse one language fixture and iterate casing/spelling forms in a fact.
   Raw FTS syntax coverage reuses one indexed source for a valid control query and all invalid query/hint variants.
   Literal and raw FTS complexity bounds reuse one indexed source across length, token-count, NEAR-count, and lowercase-operator controls.
@@ -624,6 +627,7 @@ For background log or metrics sinks, use explicit writer-entry/release signals a
 - Immediate help-routing tests must assert both rendered usage and exit code, use a nested command whose normal execution would require additional input so the test proves help does not dispatch it, accept supported public aliases, and reject internal usage keys.
 - For JSON output, parse it with `JsonDocument` instead of asserting raw strings.
 - JSON failure-contract tests must assert that stdout contains one parseable versioned error object, stderr is empty, the documented exit code is preserved, and `status` / `error_code` identify the failure.
+- Auth-token recipe ranking coverage must pair high-signal credential fixtures with comment, regex-definition, and structural `CancellationToken` / syntax-token decoys, then assert explicit top-N precision for the bearer/authorization, GitHub/API/access-token, and token-secret child queries.
 - `inspect` file-coordinate coverage must prove that an exact indexed positional path wins over symbol lookup and that missing paths or out-of-range lines fail before nearest-symbol resolution.
 - For bounded NDJSON streams, include plain and recipe/audit search paths, parse the final `terminal_record`, verify authoritative-versus-lower-bound totals (including per-query and total-limit omissions) and selection reasons/counts before result-limit trimming, count UTF-8 bytes including newlines, and assert partial exit `11` plus the explicit `--allow-partial` exit-`0` opt-in. Also assert that capped profile/verbose/envelope combinations fail before stdout.
 - For `find --all`, cover row-terminal, count-object, and human scan metadata together: assert active file/line caps, `scan_complete` / authority fields, stable continuation/recovery guidance, the same partial-exit opt-in, option-order handling, and rejection of every row format that cannot carry terminal metadata. Envelope tests must keep row terminals in `metadata.stream_terminal` and preserve count objects as results.
@@ -903,6 +907,9 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   generic switch-arm のguardとrelational predecessorも同様に1つのproduction-runtime fixtureを共有し、production `net8.0` targetだけで実行してください。
   search language-alias coverage は、各filterが期待結果を1件に分離できる場合、異なる言語fileを1 databaseに置いてalias filterを反復してください。
   option風literalのnamed-query escapingは、definition、graph、symbols、files、inspect、impact command全体で1つのindexed Probe fixtureを再利用してください。
+  複数 named-query の output coverage は、compact projection、rich JSON 互換性、query ごとの limit / truncation、UTF-8 byte cap に1つの indexed fixture を再利用し、serializer mode を直接比較できるようにしてください。
+  共通 bounded-response coverage は、definition、find、status、hotspots、references、callers / callees、impact、map 全体で1つの graph-ready databaseを再利用してください。cursor と UTF-8 byte-budget の境界 case は別の最小 multi-row fixture にまとめ、family parity のために indexing setup を重複させないでください。regression coverage では alias と read-only batch dispatch、明示的な definition body projection、inactive な impact collection、authoritative な総件数を持つ map section の row 単位 pagination も確認してください。
+  adversarial な bounded-response coverage では、parser failure の byte cap、impact definition page の offset、既存 map compact section、map shape control の競合、compact と明示 body の組み合わせ、profile / verbose control record の抽出も固定してください。
   JavaScript extension、YAML、batch、SQL dialectのsearch alias variantは、それぞれ1つのlanguage fixtureを再利用し、casing/spelling形式をfact内で反復してください。
   raw FTS syntax coverage はvalid control queryと全invalid query/hint variantで1つのindexed sourceを再利用してください。
   literalとraw FTSのcomplexity boundはlength、token count、NEAR count、lowercase operator control全体で1つのindexed sourceを再利用してください。
@@ -1293,6 +1300,7 @@ background の log / metrics sink は、sleep や狭い stopwatch 閾値では�
 - immediate help routing の test は rendered usage と終了コードを併せて検証し、通常実行なら追加入力を必要とする nested command を含めて help が dispatch しないことを証明し、対応する公開 alias の受理と内部 usage key の拒否も確認する。
 - JSON 出力は生文字列比較ではなく `JsonDocument` で解析して検証する。
 - JSON failure contract のテストでは、stdout に parse 可能な version 付き error object が 1 件だけあること、stderr が空であること、documented exit code が維持されること、`status` / `error_code` が失敗を識別することを検証する。
+- auth-token recipe の ranking coverage では、高 signal な credential fixture と comment、regex 定義、構造的な `CancellationToken` / syntax-token decoy を対にし、bearer / authorization、GitHub / API / access-token、token-secret の各 child query について明示的な top-N precision を検証する。
 - `inspect` の file-coordinate coverage では、indexed positional path の完全一致が symbol lookup より優先されることと、path 未検出・line 範囲外が nearest-symbol 解決前に失敗することを検証する。
 - 上限付き NDJSON stream は plain search と recipe / audit search の両経路を含め、最後の `terminal_record` を解析し、query ごとおよび total-limit の省略を含む authoritative / lower-bound の総件数、result-limit 適用前の selection 理由 / 件数、改行を含む UTF-8 byte 数、partial 終了コード `11`、明示的な `--allow-partial` による終了コード `0` の opt-in を検証する。上限付き profile / verbose / envelope の組み合わせが stdout 前に失敗することも確認する。
 - `find --all` は row 終端、count object、human scan metadata を併せて検証し、有効な file / line cap、`scan_complete` / authority field、安定した continuation / recovery 案内、同じ partial-exit opt-in、option 順序の扱い、終端 metadata を持てない全 row format の拒否を確認する。envelope test では row 終端を `metadata.stream_terminal` に入れ、count object を result として保持することを検証する。

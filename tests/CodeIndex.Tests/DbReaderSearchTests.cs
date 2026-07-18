@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text;
+using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
@@ -17,6 +18,278 @@ public partial class DbReaderTests
         var results = _reader.Search("café*", lang: "markdown");
 
         Assert.Contains(results, r => r.Path == "src/cafe.md");
+    }
+
+    [Fact]
+    public void Search_CredentialContextDoesNotPenalizeSeparateCancellationTokenParameter_Issue4590()
+    {
+        const string credentialMethod =
+            "public Task<string> GetAccessTokenAsync(CancellationToken cancellationToken) => FetchCredentialAsync(cancellationToken);";
+        const string separateParameterMethod =
+            "public Task SendAsync(string accessToken, CancellationToken cancellationToken) => ForwardCredential(accessToken);";
+        const string structuralTokenApi =
+            "public Task AccessAsync(CancellationToken token) => ObserveAsync(token);";
+        Assert.False(DbReader.ContainsRelevantStructuralTokenMarker(
+            credentialMethod,
+            ["access", "token"]));
+        Assert.False(DbReader.ContainsRelevantStructuralTokenMarker(
+            separateParameterMethod,
+            ["access", "token"]));
+        Assert.True(DbReader.ContainsRelevantStructuralTokenMarker(
+            structuralTokenApi,
+            ["access", "token"]));
+        Assert.True(DbReader.ContainsRelevantStructuralTokenMarker(
+            "private readonly SyntaxToken accessTokenSyntax;",
+            ["access", "token"]));
+        Assert.False(DbReader.ContainsRelevantStructuralTokenMarker(
+            "private string ConnectionMultiplexerAccessToken;",
+            ["access", "token"]));
+        const string headerCheck =
+            "if (!cancellationToken.IsCancellationRequested && request.Headers.Authorization != null) return;";
+        Assert.False(DbReader.ContainsRelevantStructuralTokenMarker(
+            headerCheck,
+            ["Authorization"]));
+
+        InsertIndexedFile(
+            "src/request-sender.cs",
+            "csharp",
+            $$"""
+            public sealed class RequestSender
+            {
+                // access
+                // token
+                {{credentialMethod}}
+            }
+            """);
+        InsertIndexedFile(
+            "src/loose-access-terms.cs",
+            "csharp",
+            "public sealed class LooseTerms { public void Observe() { var access = ReadAccess(); Console.WriteLine(token); } }\n");
+        InsertIndexedFile(
+            "src/structural-access-token.cs",
+            "csharp",
+            "private readonly SyntaxToken accessTokenSyntax;\n");
+        InsertIndexedFile(
+            "src/structural-access-api.cs",
+            "csharp",
+            $$"""
+            // access
+            // token
+            {{structuralTokenApi}}
+            """);
+        InsertIndexedFile(
+            "src/multiplexer-access-token.cs",
+            "csharp",
+            "private string ConnectionMultiplexerAccessToken = ReadCredential();\n");
+
+        var results = _reader.Search(
+            "access token",
+            limit: 5,
+            resultRanking: SearchResultRanking.CredentialContext);
+
+        Assert.Equal("src/request-sender.cs", results[0].Path);
+        Assert.True(
+            results.FindIndex(result => result.Path == "src/request-sender.cs") <
+            results.FindIndex(result => result.Path == "src/loose-access-terms.cs"));
+        Assert.True(
+            results.FindIndex(result => result.Path == "src/request-sender.cs") <
+            results.FindIndex(result => result.Path == "src/structural-access-api.cs"));
+        Assert.True(
+            results.FindIndex(result => result.Path == "src/multiplexer-access-token.cs") <
+            results.FindIndex(result => result.Path == "src/loose-access-terms.cs"));
+
+        InsertIndexedFile(
+            "src/request-header-check.cs",
+            "csharp",
+            $$"""
+            public sealed class RequestHeaderCheck
+            {
+                public void Apply(CancellationToken cancellationToken, HttpRequestMessage request)
+                {
+                    {{headerCheck}}
+                }
+            }
+            """);
+        InsertIndexedFile(
+            "src/header-name.cs",
+            "csharp",
+            "public static class HeaderNames { private const string HeaderName = \"Authorization\"; }\n");
+
+        var authorizationResults = _reader.Search(
+            "Authorization",
+            limit: 2,
+            resultRanking: SearchResultRanking.CredentialContext);
+
+        Assert.Equal("src/request-header-check.cs", authorizationResults[0].Path);
+    }
+
+    [Fact]
+    public void Search_CredentialContextUsesIdentifierBoundariesWhenCouplingTerms_Issue4590()
+    {
+        InsertIndexedFile(
+            "src/a-domain-token.cs",
+            "csharp",
+            "public void MergeValues() { var capitalToken = Merge(api, fallback, token); }\n");
+        InsertIndexedFile(
+            "src/z-credential.cs",
+            "csharp",
+            "public sealed class CredentialStore { private string ApiToken => ReadCredential(\"api\", \"token\"); }\n");
+
+        var results = _reader.Search(
+            "api token",
+            limit: 2,
+            resultRanking: SearchResultRanking.CredentialContext);
+
+        Assert.Equal("src/z-credential.cs", results[0].Path);
+    }
+
+    [Fact]
+    public void Search_CredentialContextScopesRegexPenaltyAndSymbolToWinningMatch_Issue4590()
+    {
+        InsertIndexedFile(
+            "src/mixed-authorization.cs",
+            "csharp",
+            """
+            public sealed class AuthorizationHandler
+            {
+                private static Regex AuthorizationRegex => new("Authorization");
+
+                public void Apply(HttpRequestMessage request, AuthenticationHeaderValue credential)
+                {
+                    request.Headers.Authorization = credential;
+                }
+            }
+            """);
+        InsertIndexedFile(
+            "src/header-string.cs",
+            "csharp",
+            "public static class HeaderStrings { private const string HeaderName = \"Authorization\"; }\n");
+
+        var results = _reader.Search(
+            "Authorization",
+            limit: 2,
+            resultRanking: SearchResultRanking.CredentialContext);
+
+        Assert.Equal("src/mixed-authorization.cs", results[0].Path);
+        Assert.Equal("Apply", results[0].EnclosingSymbolName);
+    }
+
+    [Fact]
+    public void Search_CredentialContextKeepsCandidateUniverseStableAcrossCursorPages_Issue4590()
+    {
+        const string decoy = "// github token github token github token github token github token\n";
+        for (var i = 0; i < 210; i++)
+            InsertIndexedFile($"src/page-noise-{i:D3}.cs", "csharp", decoy);
+
+        var filler = string.Join(' ', Enumerable.Repeat("neutral", 300));
+        InsertIndexedFile(
+            "src/page-credential.cs",
+            "csharp",
+            $$"""
+            public sealed class PageCredential
+            {
+                private string GitHubToken => ReadCredential("github", "token");
+            }
+            // {{filler}}
+            """);
+
+        var databaseOrder = _reader.Search("github token", limit: 250, deduplicate: false);
+        var credentialDatabaseIndex = databaseOrder.FindIndex(result => result.Path == "src/page-credential.cs");
+        Assert.InRange(credentialDatabaseIndex, 200, 249);
+
+        var firstPage = _reader.Search(
+            "github token",
+            limit: 4,
+            resultRanking: SearchResultRanking.CredentialContext);
+        var secondPage = _reader.Search(
+            "github token",
+            limit: 4,
+            cursor: new SearchCursor(0, 0, 4),
+            resultRanking: SearchResultRanking.CredentialContext);
+
+        Assert.Equal("src/page-credential.cs", firstPage[0].Path);
+        Assert.Equal(4, firstPage.Count);
+        Assert.Equal(4, secondPage.Count);
+        Assert.DoesNotContain(secondPage, second =>
+            firstPage.Any(first => first.Path == second.Path && first.ChunkId == second.ChunkId));
+    }
+
+    [Fact]
+    public void Search_CredentialContextHonorsSupportedLimitAboveLegacyCandidateCap_Issue4590()
+    {
+        Assert.Equal(QueryCommandRunner.MaxQueryResultLimit, DbReader.MaxContextRankingCandidates);
+        const int candidateCount = 1001;
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/large-auth-audit.cs",
+            Lang = "csharp",
+            Size = candidateCount * 40,
+            Lines = candidateCount,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(Enumerable.Range(0, candidateCount)
+            .Select(index => new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = index,
+                StartLine = index + 1,
+                EndLine = index + 1,
+                Content = $"// github token candidate {index}\n",
+            })
+            .ToList());
+
+        var results = _reader.Search(
+            "github token",
+            limit: candidateCount,
+            deduplicate: false,
+            resultRanking: SearchResultRanking.CredentialContext);
+
+        Assert.Equal(candidateCount, results.Count);
+    }
+
+    [Fact]
+    public void Search_CredentialContextScoresRankingRuleSymbolsBeyondFirstTwoHundredCandidates_Issue4590()
+    {
+        for (var i = 0; i < 200; i++)
+        {
+            InsertIndexedFile(
+                $"src/symbol-decoy-{i:D3}.cs",
+                "csharp",
+                $$"""
+                public sealed class CancellationTokenRegexContainer{{i}}
+                {
+                    public string Authorization => credential;
+                }
+                """);
+        }
+
+        var filler = string.Join(' ', Enumerable.Repeat("neutral", 300));
+        InsertIndexedFile(
+            "src/late-ranking-rules.cs",
+            "csharp",
+            $$"""
+            public static class RankingRules
+            {
+                private static bool ContainsCredentialUseSyntax(string text)
+                    => text.Contains("Authorization");
+            }
+            // {{filler}}
+            """);
+
+        var databaseOrder = _reader.Search("Authorization", limit: 250, deduplicate: false);
+        Assert.InRange(
+            databaseOrder.FindIndex(result => result.Path == "src/late-ranking-rules.cs"),
+            200,
+            249);
+
+        var ranked = _reader.Search(
+            "Authorization",
+            limit: 250,
+            deduplicate: false,
+            resultRanking: SearchResultRanking.CredentialContext);
+
+        Assert.NotEqual("src/late-ranking-rules.cs", ranked[0].Path);
+        Assert.True(ranked.FindIndex(result => result.Path == "src/late-ranking-rules.cs") > 0);
     }
 
     [Fact]

@@ -140,7 +140,11 @@ internal static class CliFlagSchema
     private static readonly string[] SymbolSortCommands = ["symbols", "outline"];
     private static readonly string[] ByBucketCommands = ["unused"];
     private static readonly string[] UnusedFilterCommands = ["unused"];
-    private static readonly string[] CursorCommands = ["search", "outline", "unused"];
+    private static readonly string[] BoundedProjectionCommands =
+    [
+        "definition", "find", "status", "hotspots", "references", "callers", "callees", "impact", "map",
+    ];
+    private static readonly string[] CursorCommands = ["search", "outline", "unused", .. BoundedProjectionCommands];
     private static readonly string[] AllResultCommands = ["goto", "find", "unused"];
 
     private static readonly string[] SinceCommands = ["search", "definition", "symbols", "files", "suggestions"];
@@ -211,11 +215,11 @@ internal static class CliFlagSchema
         "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "db", "report", "upgrade",
     ];
 
-    private static readonly string[] CompactJsonCommands = ["map", "inspect", "outline", "symbols", "unused"];
+    private static readonly string[] CompactJsonCommands = ["map", "inspect", "outline", "symbols", "unused", "status", "hotspots", "impact"];
 
     private static readonly string[] FormatCommands =
     [
-        "search", "recipes", "audit", "definition", "references", "callers", "callees", "symbols", "files", "find", "map", "inspect", "validate", "deps", "suggestions", "languages",
+        "search", "recipes", "audit", "definition", "references", "callers", "callees", "symbols", "files", "find", "map", "inspect", "status", "validate", "deps", "impact", "hotspots", "suggestions", "languages",
     ];
 
     private static readonly string[] ProfileCommands =
@@ -321,7 +325,7 @@ internal static class CliFlagSchema
             new() { Name = "--duplicate-threshold", ValuePlaceholder = "<score>", Description = "Issue-drafts: explicit duplicate-preflight minimum score from 0 to 1", Commands = Set("search", "suggestions") },
             new() { Name = "--issue-title", ValuePlaceholder = "<title>", Description = "Search issue-drafts: override the title for an ad hoc search draft", Commands = Set("search") },
             new() { Name = "--issue-label", ValuePlaceholder = "<label>", Description = "Search issue-drafts: add a label hint; repeat or comma-separate values", Commands = Set("search") },
-            new() { Name = "--cursor", ValuePlaceholder = "<cursor>", Description = "Search recipe, outline, or unused pagination cursor returned as next_cursor", Commands = Set(CursorCommands) },
+            new() { Name = "--cursor", ValuePlaceholder = "<cursor>", Description = "Pagination cursor returned as next_cursor; bounded query responses use response:v1 cursors", Commands = Set(CursorCommands) },
             new() { Name = "--status", ValuePlaceholder = "<all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>", Description = "Suggestions: filter by suggestion status", Commands = Set("suggestions") },
             new() { Name = "--category", ValuePlaceholder = "<symbol_extraction|reference_extraction|search_ranking|language_support|output_format|crash_report|unexpected_error|other>", Description = "Suggestions: filter by category", Commands = Set("suggestions") },
             new() { Name = "--agent", ValuePlaceholder = "<agent>", Description = "Suggestions: filter by agent", Commands = Set("suggestions") },
@@ -332,7 +336,7 @@ internal static class CliFlagSchema
             new() { Name = "--body-start", ValuePlaceholder = "<line>", Description = "Inspect: start definition body slice at this 1-based source line", Commands = Set(InspectFieldCommands) },
             new() { Name = "--body-lines", ValuePlaceholder = "<n>", Description = "Inspect: return at most this many definition body lines", Commands = Set(InspectFieldCommands) },
             new() { Name = "--body-line-count", ValuePlaceholder = "<n>", Description = "Inspect: alias for --body-lines", Commands = Set(InspectFieldCommands) },
-            new() { Name = "--fields", ValuePlaceholder = "<file,workspace,graph,definitions,body,source_excerpt,nearby_symbols,references,callers,callees,all>", Description = "Inspect: select top-level JSON evidence groups", Commands = Set(InspectFieldCommands) },
+            new() { Name = "--fields", ValuePlaceholder = "<csv>", Description = "Project bounded-response row fields; inspect selects top-level evidence groups; nested collections accept collection.field", Commands = Set(InspectFieldCommands.Concat(BoundedProjectionCommands).ToArray()) },
             new() { Name = "--body-only", Description = "Inspect: body-focused JSON shorthand for --body --fields definitions", Commands = Set(InspectFieldCommands) },
             new() { Name = "--outline-only", Description = "Inspect: outline-first JSON shorthand for --fields file,definitions,nearby_symbols", Commands = Set(InspectFieldCommands) },
             new() { Name = "--exact", Description = "Backward-compatible exact shorthand", Commands = Set(ExactCommands) },
@@ -360,7 +364,7 @@ internal static class CliFlagSchema
             new() { Name = "--sample", ValuePlaceholder = "<n>", Description = "Search: deterministically sample returned rows down to n results", Commands = Set("search") },
             new() { Name = "--per-file-limit", ValuePlaceholder = "<n>", Description = "Search/Audit grouped output: representative matches per file", Commands = Set("search", "audit") },
             new() { Name = "--total-limit", ValuePlaceholder = "<n>", Description = "Search/Audit recipes: cap emitted rows across all child queries", Commands = Set("search", "audit") },
-            new() { Name = "--max-json-bytes", ValuePlaceholder = "<n>", Description = "Search/Definition/Excerpt/Inspect/Impact/Recipes/Audit/Map/Files/Symbols/Deps/Hotspots JSON: bound emitted JSON bytes; discovery commands truncate rows with metadata", Commands = Set("search", "definition", "excerpt", "inspect", "impact", "recipes", "audit", "map", "files", "symbols", "deps", "hotspots") },
+            new() { Name = "--max-json-bytes", ValuePlaceholder = "<n>", Description = "Bound emitted JSON bytes; bounded high-volume responses truncate projected rows with paging metadata", Commands = Set("search", "definition", "find", "status", "references", "callers", "callees", "excerpt", "inspect", "impact", "recipes", "audit", "map", "files", "symbols", "deps", "hotspots") },
             new() { Name = "--next-steps", Description = "Search: print inspect/excerpt follow-up commands for top hits", Commands = Set("search") },
             new() { Name = "--exclude-comments", Description = "Search: suppress comment-only matches after origin classification", Commands = Set("search") },
             new() { Name = "--exclude-strings", Description = "Search: suppress string, regex, and help-text matches after origin classification", Commands = Set("search") },

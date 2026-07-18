@@ -116,7 +116,7 @@ public partial class DbReader
         set => LegacyResourceReadSqliteVmStepLimitOverride.Value = value;
     }
 
-    public FindResults FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? focusLine = null, int? focusColumn = null, bool regex = false, int? maxCandidateFiles = null, int? maxLinesScanned = null)
+    public FindResults FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? focusLine = null, int? focusColumn = null, bool regex = false, int? maxCandidateFiles = null, int? maxLinesScanned = null, int offset = 0)
     {
         if (string.IsNullOrWhiteSpace(query) || limit <= 0)
             return new FindResults([], new FindScanSummary(0, 0, 0));
@@ -145,6 +145,8 @@ public partial class DbReader
         var linesScanned = 0;
         var truncated = false;
         string? truncationReason = null;
+        var matchesSkipped = 0;
+        offset = Math.Max(0, offset);
         var results = new List<FileFindResult>();
         using var fileReader = fileCmd.ExecuteTrackedReader();
         while (fileReader.TrackedRead())
@@ -188,7 +190,8 @@ public partial class DbReader
 
                 AddLineToFindWindow(indexedLine, snippetWindow, snippetLinesByNumber);
 
-                if (acceptedMatches < limit && (!focusLine.HasValue || indexedLine.Number == focusLine.Value))
+                if ((matchesSkipped < offset || acceptedMatches < limit)
+                    && (!focusLine.HasValue || indexedLine.Number == focusLine.Value))
                 {
                     foreach (var lineMatch in EnumerateFindLineMatches(
                         indexedLine.Text,
@@ -199,6 +202,11 @@ public partial class DbReader
                         exact && !regex,
                         focusColumn))
                     {
+                        if (matchesSkipped < offset)
+                        {
+                            matchesSkipped++;
+                            continue;
+                        }
                         if (acceptedMatches >= limit)
                             break;
 
@@ -1566,7 +1574,7 @@ public partial class DbReader
     /// Delegate to RepoMapBuilder for repo-level overview generation.
     /// RepoMapBuilderに委譲してリポジトリ俯瞰情報を生成する。
     /// </summary>
-    public RepoMapResult GetRepoMap(int limit = 10, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, double minEntrypointConfidence = 0, int? moduleDepth = null, int? oversizedLineThreshold = null, long? oversizedByteThreshold = null)
+    public RepoMapResult GetRepoMap(int limit = 10, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, double minEntrypointConfidence = 0, int? moduleDepth = null, int? oversizedLineThreshold = null, long? oversizedByteThreshold = null, int offset = 0, string? requestedCollection = null, bool summaryProjection = false)
     {
         var builder = new RepoMapBuilder(_conn, _fileColumns, _hasReferencesTable, GetIndexedPathComparer);
         return builder.Build(
@@ -1579,7 +1587,10 @@ public partial class DbReader
             GetWorkspaceFreshness,
             moduleDepth,
             oversizedLineThreshold,
-            oversizedByteThreshold);
+            oversizedByteThreshold,
+            offset,
+            requestedCollection,
+            summaryProjection);
     }
 
     private long ExecuteScalar(string sql)

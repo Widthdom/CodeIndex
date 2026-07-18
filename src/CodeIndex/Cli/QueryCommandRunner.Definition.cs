@@ -167,7 +167,8 @@ public static partial class QueryCommandRunner
                 exact,
                 visibilityFilters: options.VisibilityFilters,
                 excludeVisibilityFilters: options.ExcludeVisibilityFilters,
-                groupPartials: options.GroupPartials);
+                groupPartials: options.GroupPartials,
+                offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("definition"));
             var exactSignal = reader.GetDefinitionExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
             var exactZeroHint = BuildExactZeroHint(
                 exact,

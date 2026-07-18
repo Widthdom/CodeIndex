@@ -124,6 +124,12 @@ public enum SearchGuardScope
     SameLine,
 }
 
+public enum SearchResultRanking
+{
+    Default,
+    CredentialContext,
+}
+
 public sealed record SearchGuardFilter(
     SearchGuardRole Role,
     SearchGuardDirection Direction,
@@ -1812,6 +1818,12 @@ public class RepoMapResult
     internal int IssueDraftCandidateCount { get; set; }
     [JsonIgnore]
     internal List<RepoFileSummaryResult> IssueDraftCandidates { get; set; } = [];
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? LanguageCount { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? ModuleCount { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? EntrypointCount { get; set; }
     public List<RepoLanguageResult> Languages { get; set; } = [];
     public List<RepoModuleResult> Modules { get; set; } = [];
     public List<RepoFileSummaryResult> TopFiles { get; set; } = [];
