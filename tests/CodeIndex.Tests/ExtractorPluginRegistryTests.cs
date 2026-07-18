@@ -1064,6 +1064,38 @@ public class ExtractorPluginRegistryTests
     }
 
     [Fact]
+    public void LoadPatternConfig_AcceptedSidecarIsNotReopenedDuringLaterProbes_Issue4593()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_loaded_pattern_probe_4593");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                var patternPath = Path.Combine(projectRoot, ".cdidx", "patterns", "accepted.yaml");
+                WritePatternConfig(
+                    projectRoot,
+                    "accepted.yaml",
+                    "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
+
+                ExtractorPluginRegistry.LoadPatternConfigForTests(patternPath);
+                File.Delete(patternPath);
+                ExtractorPluginRegistry.LoadPatternConfigForTests(patternPath);
+
+                var status = ExtractorPluginRegistry.GetStatusSnapshot();
+                Assert.Equal(1, status.PatternConfigCount);
+                Assert.Equal(0, status.DiagnosticCount);
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("toydsl", out _));
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void LoadPatternConfig_RejectsUnknownSymbolKindBeforeRegistration_Issue4593()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_unknown_kind_4593");

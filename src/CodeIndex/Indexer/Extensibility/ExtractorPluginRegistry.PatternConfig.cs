@@ -17,6 +17,12 @@ public static partial class ExtractorPluginRegistry
         try
         {
             path = Path.GetFullPath(path);
+            lock (state.Gate)
+            {
+                if (PatternConfigPathIsLoaded(state, path))
+                    return;
+            }
+
             var configText = TryReadPatternConfigText(state, path);
             if (configText == null)
                 return;
