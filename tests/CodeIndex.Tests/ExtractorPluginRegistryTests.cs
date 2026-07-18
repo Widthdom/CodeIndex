@@ -726,6 +726,50 @@ public class ExtractorPluginRegistryTests
     }
 
     [Fact]
+    public void PatternRuleBudget_ReservesCapacityForHigherPrecedenceUserPatterns_Issue4595()
+    {
+        var workspace = TestProjectHelper.CreateTempProject("extractor_registry_pattern_precedence_workspace_4595");
+        var userPatterns = TestProjectHelper.CreateTempProject("extractor_registry_pattern_precedence_user_4595");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.UserPatternDirectoryOverrideForTests = userPatterns;
+                var workspaceRules = string.Join(
+                    "\n",
+                    Enumerable.Range(0, ExtractorPluginRegistry.MaxPatternRulesTotal)
+                        .Select(i => $"  - kind: \"class\"\n    regex: \"^workspace{i} (?<name>\\\\w+)\""));
+                WritePatternConfig(
+                    workspace,
+                    "workspace.yaml",
+                    $"language: \"workspacedsl\"\nextensions:\n  - extension: \".workspace\"\npatterns:\n{workspaceRules}\n");
+                File.WriteAllText(
+                    Path.Combine(userPatterns, "user.yaml"),
+                    "language: \"userdsl\"\nextensions:\n  - extension: \".user\"\npatterns:\n  - kind: \"class\"\n    regex: \"^user (?<name>\\\\w+)\"\n");
+
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(workspace);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("userdsl", workspace, out var userExtractor));
+                Assert.Single(Assert.IsType<ConfiguredSymbolExtractor>(userExtractor).PatternsForTests);
+                Assert.False(ExtractorPluginRegistry.TryGetSymbolExtractor("workspacedsl", workspace, out _));
+                var status = ExtractorPluginRegistry.GetStatusSnapshot(workspace);
+                var config = Assert.Single(status.PatternConfigs!);
+                Assert.Equal("user", config.Source);
+                Assert.Contains(status.Diagnostics!, diagnostic =>
+                    diagnostic.Category == "invalid_pattern_config"
+                    && diagnostic.Message.Contains("too many pattern rules", StringComparison.Ordinal));
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(workspace);
+                TestProjectHelper.DeleteDirectory(userPatterns);
+            }
+        }
+    }
+
+    [Fact]
     public void PatternTimeoutCooldown_DoesNotCrossWorkspaceSnapshots_Issue4595()
     {
         var workspaceA = TestProjectHelper.CreateTempProject("extractor_registry_pattern_timeout_a_4595");

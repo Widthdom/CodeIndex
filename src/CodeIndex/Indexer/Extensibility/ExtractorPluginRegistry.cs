@@ -202,6 +202,7 @@ public static partial class ExtractorPluginRegistry
             diagnosticTotalCount = 0;
             pluginsLoaded = true;
             TypeInspectionLimitForTesting = null;
+            UserPatternDirectoryOverrideForTests = null;
         }
         ResetPatternWorkspaces();
     }
@@ -221,6 +222,7 @@ public static partial class ExtractorPluginRegistry
             diagnosticTotalCount = 0;
             pluginsLoaded = false;
             TypeInspectionLimitForTesting = null;
+            UserPatternDirectoryOverrideForTests = null;
         }
         ResetPatternWorkspaces();
     }
@@ -335,11 +337,11 @@ public static partial class ExtractorPluginRegistry
 
     private static void LoadPatternConfigsForProjectRoot(PatternWorkspaceState state, string fullRoot)
     {
-        foreach (var patternPath in EnumeratePatternConfigPaths(state, fullRoot, includeUserDirectory: false))
-            TryLoadPatternConfig(state, patternPath, "workspace");
-
         foreach (var patternPath in EnumerateUserPatternConfigPaths(state))
             TryLoadPatternConfig(state, patternPath, "user");
+
+        foreach (var patternPath in EnumeratePatternConfigPaths(state, fullRoot, includeUserDirectory: false))
+            TryLoadPatternConfig(state, patternPath, "workspace");
     }
 
     internal static void LoadPatternConfigsForPath(string? path, string? workspaceRoot)
@@ -357,6 +359,9 @@ public static partial class ExtractorPluginRegistry
             return;
 
         var state = GetOrCreatePatternWorkspace(fullRoot);
+        foreach (var patternPath in EnumerateUserPatternConfigPaths(state))
+            TryLoadPatternConfig(state, patternPath, "user");
+
         while (PathCasing.IsFullPathEqualOrParent(fullRoot, directory))
         {
             foreach (var patternPath in EnumeratePatternConfigPaths(state, directory, includeUserDirectory: false))
@@ -369,8 +374,6 @@ public static partial class ExtractorPluginRegistry
                 break;
         }
 
-        foreach (var patternPath in EnumerateUserPatternConfigPaths(state))
-            TryLoadPatternConfig(state, patternPath, "user");
     }
 
     private static void EnsurePluginsLoaded()

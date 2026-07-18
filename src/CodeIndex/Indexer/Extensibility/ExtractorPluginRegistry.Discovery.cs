@@ -5,6 +5,8 @@ namespace CodeIndex.Indexer.Extensibility;
 
 public static partial class ExtractorPluginRegistry
 {
+    internal static string? UserPatternDirectoryOverrideForTests { get; set; }
+
     private static IEnumerable<string> EnumeratePluginAssemblyPaths()
         => EnumeratePluginAssemblyPaths(EnumeratePluginDirectories(projectRoot: null));
 
@@ -164,6 +166,19 @@ public static partial class ExtractorPluginRegistry
 
     private static IEnumerable<string> EnumerateUserPatternConfigPaths(PatternWorkspaceState state)
     {
+        if (!string.IsNullOrWhiteSpace(UserPatternDirectoryOverrideForTests))
+        {
+            foreach (var path in EnumeratePatternConfigPathsFromDirectory(
+                         state,
+                         UserPatternDirectoryOverrideForTests,
+                         workspaceRoot: null))
+            {
+                yield return path;
+            }
+
+            yield break;
+        }
+
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (!string.IsNullOrWhiteSpace(home))
         {
