@@ -40,27 +40,47 @@ internal static class PluginMetadataInspector
                 return false;
             }
 
+            PluginMetadataInspection? marker = null;
             foreach (var attributeHandle in reader.GetAssemblyDefinition().GetCustomAttributes())
             {
                 var attribute = reader.GetCustomAttribute(attributeHandle);
-                if (!IsPluginMarker(reader, attribute.Constructor))
+                if (!TryValidatePluginMarkerConstructor(
+                        reader,
+                        attribute.Constructor,
+                        out var isPluginMarker,
+                        out error))
+                {
+                    return false;
+                }
+                if (!isPluginMarker)
                     continue;
 
+                if (marker.HasValue)
+                {
+                    error = "Plugin metadata contains duplicate CdidxPluginAttribute markers.";
+                    return false;
+                }
+
                 var value = reader.GetBlobReader(attribute.Value);
-                if (value.ReadUInt16() != 1 || value.RemainingBytes < sizeof(int) * 2)
+                if (value.RemainingBytes != sizeof(ushort) + (sizeof(int) * 2) + sizeof(ushort)
+                    || value.ReadUInt16() != 1)
                 {
                     error = "CdidxPluginAttribute metadata has an invalid value blob.";
                     return false;
                 }
 
-                inspection = new(
+                marker = new(
                     HasMarker: true,
                     MinApiVersion: value.ReadInt32(),
                     MaxApiVersion: value.ReadInt32());
-                return true;
+                if (value.ReadUInt16() != 0 || value.RemainingBytes != 0)
+                {
+                    error = "CdidxPluginAttribute metadata has unsupported named arguments.";
+                    return false;
+                }
             }
 
-            inspection = new(HasMarker: false, MinApiVersion: 0, MaxApiVersion: 0);
+            inspection = marker ?? new(HasMarker: false, MinApiVersion: 0, MaxApiVersion: 0);
             return true;
         }
         catch (Exception ex) when (ex is BadImageFormatException or IOException or UnauthorizedAccessException or InvalidOperationException)
@@ -108,27 +128,42 @@ internal static class PluginMetadataInspector
         }
     }
 
-    private static bool IsPluginMarker(MetadataReader reader, EntityHandle constructor)
+    internal static bool IsExpectedMarkerConstructorSignatureForTests(string name, byte[] signature)
+        => IsExpectedMarkerConstructorSignature(name, signature);
+
+    private static bool TryValidatePluginMarkerConstructor(
+        MetadataReader reader,
+        EntityHandle constructor,
+        out bool isPluginMarker,
+        out string error)
     {
-        EntityHandle declaringType;
-        switch (constructor.Kind)
+        isPluginMarker = false;
+        error = string.Empty;
+        if (constructor.Kind != HandleKind.MemberReference)
+            return true;
+
+        var member = reader.GetMemberReference((MemberReferenceHandle)constructor);
+        if (member.Parent.Kind != HandleKind.TypeReference
+            || !IsPluginMarker(reader, reader.GetTypeReference((TypeReferenceHandle)member.Parent)))
         {
-            case HandleKind.MemberReference:
-                declaringType = reader.GetMemberReference((MemberReferenceHandle)constructor).Parent;
-                break;
-            case HandleKind.MethodDefinition:
-                declaringType = reader.GetMethodDefinition((MethodDefinitionHandle)constructor).GetDeclaringType();
-                break;
-            default:
-                return false;
+            return true;
         }
 
-        return declaringType.Kind switch
+        isPluginMarker = true;
+        if (IsExpectedMarkerConstructorSignature(
+                reader.GetString(member.Name),
+                reader.GetBlobBytes(member.Signature)))
         {
-            HandleKind.TypeReference => IsPluginMarker(reader, reader.GetTypeReference((TypeReferenceHandle)declaringType)),
-            _ => false,
-        };
+            return true;
+        }
+
+        error = "CdidxPluginAttribute constructor metadata is invalid.";
+        return false;
     }
+
+    private static bool IsExpectedMarkerConstructorSignature(string name, ReadOnlySpan<byte> signature)
+        => StringComparer.Ordinal.Equals(name, ".ctor")
+           && signature.SequenceEqual(new byte[] { 0x20, 0x02, 0x01, 0x08, 0x08 });
 
     private static bool IsPluginMarker(MetadataReader reader, TypeReference type)
         => reader.StringComparer.Equals(type.Name, nameof(CdidxPluginAttribute))

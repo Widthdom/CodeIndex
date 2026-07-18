@@ -430,6 +430,23 @@ public class ExtractorPluginRegistryTests
     }
 
     [Fact]
+    public void PluginMetadataInspector_RequiresExactMarkerConstructorSignature_Issue4598()
+    {
+        Assert.True(PluginMetadataInspector.IsExpectedMarkerConstructorSignatureForTests(
+            ".ctor",
+            [0x20, 0x02, 0x01, 0x08, 0x08]));
+        Assert.False(PluginMetadataInspector.IsExpectedMarkerConstructorSignatureForTests(
+            "Invoke",
+            [0x20, 0x02, 0x01, 0x08, 0x08]));
+        Assert.False(PluginMetadataInspector.IsExpectedMarkerConstructorSignatureForTests(
+            ".ctor",
+            [0x20, 0x01, 0x01, 0x08]));
+        Assert.False(PluginMetadataInspector.IsExpectedMarkerConstructorSignatureForTests(
+            ".ctor",
+            [0x00, 0x02, 0x01, 0x08, 0x08]));
+    }
+
+    [Fact]
     public void LoadPlugin_RetriesFailedFingerprintAfterPartialCopyIsRepaired_Issue4598()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_retry_4598");
@@ -446,12 +463,51 @@ public class ExtractorPluginRegistryTests
                 Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot().DiagnosticCount);
                 Assert.Equal(0, ExtractorPluginRegistry.PluginWorkerCountForTests());
 
-                File.Copy(Assembly.GetExecutingAssembly().Location, pluginPath, overwrite: true);
+                CopyPluginFixture(pluginPath);
                 ExtractorPluginRegistry.LoadPluginForTests(pluginPath);
 
                 Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", out _));
                 Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot().PluginAssemblyCount);
                 Assert.Equal(1, ExtractorPluginRegistry.PluginWorkerCountForTests());
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void DefaultPluginDiscovery_RepairsAndReplacesFingerprintWithoutLeakingWorker_Issue4598()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_production_retry_4598");
+        lock (TestConsoleLock.Gate)
+        {
+            var pluginDirectory = Path.Combine(projectRoot, "plugins");
+            var pluginPath = Path.Combine(pluginDirectory, "plugin.dll");
+            try
+            {
+                Directory.CreateDirectory(pluginDirectory);
+                File.WriteAllText(pluginPath, "partial assembly copy");
+                ExtractorPluginRegistry.ReloadForTests();
+                ExtractorPluginRegistry.UserPluginDirectoryForTesting = pluginDirectory;
+
+                Assert.Equal(0, ExtractorPluginRegistry.GetStatusSnapshot().PluginAssemblyCount);
+                Assert.Equal(0, ExtractorPluginRegistry.PluginWorkerCountForTests());
+
+                CopyPluginFixture(pluginPath);
+                Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot().PluginAssemblyCount);
+                Assert.Equal(1, ExtractorPluginRegistry.PluginWorkerCountForTests());
+                var firstStagedPath = Assert.Single(ExtractorPluginRegistry.PluginStagedAssemblyPathsForTests());
+
+                File.AppendAllText(pluginPath, "fingerprint replacement padding");
+                Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot().PluginAssemblyCount);
+                Assert.Equal(1, ExtractorPluginRegistry.PluginWorkerCountForTests());
+                var replacementStagedPath = Assert.Single(ExtractorPluginRegistry.PluginStagedAssemblyPathsForTests());
+                Assert.NotEqual(firstStagedPath, replacementStagedPath);
+                Assert.False(File.Exists(firstStagedPath));
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", out _));
             }
             finally
             {

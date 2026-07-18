@@ -29,6 +29,7 @@ public static partial class ExtractorPluginRegistry
     private static readonly HashSet<string> LoadedPatternConfigPaths = new(StringComparer.OrdinalIgnoreCase);
     private static readonly List<ExtractorPluginWorkerClient> LoadedPluginWorkers = [];
     private static readonly List<ExecutableExtensionStagingHandle> LoadedPluginStagingHandles = [];
+    private static readonly List<LoadedPluginState> LoadedPluginStates = [];
     private static readonly List<PluginLoadAttempt> PluginLoadAttempts = [];
     private static readonly IReadOnlyList<string> PatternConfigSearchPatterns = ["*.yaml", "*.yml"];
     private static readonly IReadOnlyDictionary<string, string> EmptyLanguageExtensions =
@@ -43,6 +44,8 @@ public static partial class ExtractorPluginRegistry
     private static bool pluginsLoaded;
     internal static int? TypeInspectionLimitForTesting { get; set; }
     internal static TimeSpan? WorkerOperationBudgetForTesting { get; set; }
+    internal static string? UserPluginDirectoryForTesting { get; set; }
+    private static bool suppressDefaultPluginDiscoveryForTesting;
 
     public static IReadOnlyCollection<string> SymbolLanguages
     {
@@ -165,6 +168,7 @@ public static partial class ExtractorPluginRegistry
             LoadedPatternConfigPaths.Clear();
             DisposePluginWorkers();
             DisposePluginStagingHandles();
+            LoadedPluginStates.Clear();
             PluginLoadAttempts.Clear();
             Diagnostics.Clear();
             pluginAssemblyCount = 0;
@@ -176,6 +180,8 @@ public static partial class ExtractorPluginRegistry
             TypeInspectionLimitForTesting = null;
             WorkerOperationBudgetForTesting = null;
             ExtractorPluginWorkerClient.ProcessStartedForTesting = null;
+            UserPluginDirectoryForTesting = null;
+            suppressDefaultPluginDiscoveryForTesting = true;
         }
     }
 
@@ -189,6 +195,7 @@ public static partial class ExtractorPluginRegistry
             LoadedPatternConfigPaths.Clear();
             DisposePluginWorkers();
             DisposePluginStagingHandles();
+            LoadedPluginStates.Clear();
             PluginLoadAttempts.Clear();
             Diagnostics.Clear();
             pluginAssemblyCount = 0;
@@ -200,6 +207,8 @@ public static partial class ExtractorPluginRegistry
             TypeInspectionLimitForTesting = null;
             WorkerOperationBudgetForTesting = null;
             ExtractorPluginWorkerClient.ProcessStartedForTesting = null;
+            UserPluginDirectoryForTesting = null;
+            suppressDefaultPluginDiscoveryForTesting = false;
         }
     }
 
@@ -282,17 +291,16 @@ public static partial class ExtractorPluginRegistry
 
     private static void EnsurePluginsLoaded()
     {
-        if (Volatile.Read(ref pluginsLoaded))
+        if (Volatile.Read(ref suppressDefaultPluginDiscoveryForTesting))
             return;
 
-        lock (Gate)
+        if (!Volatile.Read(ref pluginsLoaded))
         {
-            if (pluginsLoaded)
-                return;
-
-            LoadPluginAssemblies(EnumeratePluginDirectories(projectRoot: null));
-            pluginsLoaded = true;
+            lock (Gate)
+                pluginsLoaded = true;
         }
+
+        LoadPluginAssemblies(EnumeratePluginDirectories(projectRoot: null));
     }
 
     private static bool TryMarkPluginAssemblyPathLoaded(string fullPath)
@@ -308,6 +316,20 @@ public static partial class ExtractorPluginRegistry
         => TypeInspectionLimitForTesting is > 0 ? TypeInspectionLimitForTesting.Value : MaxExtensionAssemblyTypes;
 
     private sealed record PluginLoadAttempt(string Path, string Fingerprint, bool Succeeded);
+
+    private sealed record PluginRegistration(
+        string? SymbolLanguage,
+        string? ReferenceLanguage,
+        IsolatedPluginExtractorProxy Proxy,
+        bool SupportsSymbols,
+        bool SupportsReferences);
+
+    private sealed record LoadedPluginState(
+        string Path,
+        string Fingerprint,
+        ExtractorPluginWorkerClient Worker,
+        ExecutableExtensionStagingHandle Staging,
+        IReadOnlyList<PluginRegistration> Registrations);
 
     private static void AddLanguageExtensions(
         Dictionary<string, string> target,

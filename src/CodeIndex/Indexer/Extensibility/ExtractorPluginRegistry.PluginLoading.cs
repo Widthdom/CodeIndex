@@ -144,16 +144,31 @@ public static partial class ExtractorPluginRegistry
                     category: diagnostic.Category);
             }
 
+            LoadedPluginState? replacedState;
             lock (Gate)
             {
+                replacedState = LoadedPluginStates.FirstOrDefault(
+                    state => string.Equals(state.Path, fullPath, PathCasing.ComparisonFor(fullPath)));
+                if (replacedState != null)
+                    RemoveLoadedPluginStateUnderLock(replacedState);
+
+                var registrations = RegisterPluginManifest(manifestResult.Response.Manifest, worker, fullPath);
                 pluginAssemblyCount++;
                 LoadedPluginWorkers.Add(worker);
                 LoadedPluginStagingHandles.Add(staging!);
-                RegisterPluginManifest(manifestResult.Response.Manifest, worker, fullPath);
+                LoadedPluginStates.Add(new(
+                    fullPath,
+                    stagedFingerprint,
+                    worker,
+                    staging!,
+                    registrations));
                 RecordPluginLoadAttemptUnderLock(fullPath, stagedFingerprint, succeeded: true);
                 worker = null;
                 staging = null;
             }
+
+            replacedState?.Worker.Dispose();
+            replacedState?.Staging.Dispose();
         }
         catch (Exception ex)
         {
@@ -265,11 +280,12 @@ public static partial class ExtractorPluginRegistry
         return true;
     }
 
-    private static void RegisterPluginManifest(
+    private static IReadOnlyList<PluginRegistration> RegisterPluginManifest(
         IReadOnlyList<ExtractorPluginWorkerManifestEntry> manifest,
         ExtractorPluginWorkerClient worker,
         string pluginPath)
     {
+        var registrations = new List<PluginRegistration>();
         foreach (var entry in manifest)
         {
             try
@@ -285,10 +301,22 @@ public static partial class ExtractorPluginRegistry
                         message,
                         countsAsSkippedFile: false,
                         category));
+                var symbolLanguage = entry.SupportsSymbols
+                    ? NormalizePluginLanguage(((ISymbolExtractor)proxy).Language)
+                    : string.Empty;
+                var referenceLanguage = entry.SupportsReferences
+                    ? NormalizePluginLanguage(((IReferenceExtractor)proxy).Language)
+                    : string.Empty;
                 if (entry.SupportsSymbols)
-                    Register((ISymbolExtractor)proxy);
+                    SymbolExtractors[symbolLanguage] = proxy;
                 if (entry.SupportsReferences)
-                    Register((IReferenceExtractor)proxy);
+                    ReferenceExtractors[referenceLanguage] = proxy;
+                registrations.Add(new(
+                    entry.SupportsSymbols ? symbolLanguage : null,
+                    entry.SupportsReferences ? referenceLanguage : null,
+                    proxy,
+                    entry.SupportsSymbols,
+                    entry.SupportsReferences));
             }
             catch (Exception ex)
             {
@@ -302,6 +330,35 @@ public static partial class ExtractorPluginRegistry
                     category: "plugin_manifest_invalid");
             }
         }
+
+        return registrations;
+    }
+
+    private static void RemoveLoadedPluginStateUnderLock(LoadedPluginState state)
+    {
+        foreach (var registration in state.Registrations)
+        {
+            if (registration.SupportsSymbols
+                && registration.SymbolLanguage != null
+                && SymbolExtractors.TryGetValue(registration.SymbolLanguage, out var symbolExtractor)
+                && ReferenceEquals(symbolExtractor, registration.Proxy))
+            {
+                SymbolExtractors.Remove(registration.SymbolLanguage);
+            }
+
+            if (registration.SupportsReferences
+                && registration.ReferenceLanguage != null
+                && ReferenceExtractors.TryGetValue(registration.ReferenceLanguage, out var referenceExtractor)
+                && ReferenceEquals(referenceExtractor, registration.Proxy))
+            {
+                ReferenceExtractors.Remove(registration.ReferenceLanguage);
+            }
+        }
+
+        LoadedPluginStates.Remove(state);
+        LoadedPluginWorkers.Remove(state.Worker);
+        LoadedPluginStagingHandles.Remove(state.Staging);
+        pluginAssemblyCount--;
     }
 
     private static void RecordPluginLoadAttempt(string path, string fingerprint, bool succeeded)

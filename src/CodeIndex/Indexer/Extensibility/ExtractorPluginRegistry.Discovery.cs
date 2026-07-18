@@ -101,9 +101,16 @@ public static partial class ExtractorPluginRegistry
                 yield return directory;
         }
 
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        if (!string.IsNullOrWhiteSpace(home))
-            yield return Path.Combine(home, ".cdidx", "plugins");
+        if (!string.IsNullOrWhiteSpace(UserPluginDirectoryForTesting))
+        {
+            yield return UserPluginDirectoryForTesting;
+        }
+        else
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrWhiteSpace(home))
+                yield return Path.Combine(home, ".cdidx", "plugins");
+        }
     }
 
     private static IEnumerable<string> EnumerateWorkspacePluginDirectories(string projectRoot)
