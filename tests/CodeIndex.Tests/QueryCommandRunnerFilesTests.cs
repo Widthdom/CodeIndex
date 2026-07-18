@@ -736,14 +736,24 @@ public partial class QueryCommandRunnerTests
         {
             using var env = EnvironmentVariableScope.Capture(
                 PostExtractionHookRunner.HooksDirectoryEnvironmentVariable,
-                ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
+                ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable,
+                GitHelper.GitExecutableEnvironmentVariable);
             try
             {
                 var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
                 var hooksDir = Path.Combine(projectRoot, "hooks");
+                var gitPath = Path.Combine(projectRoot, OperatingSystem.IsWindows() ? "git.exe" : "git");
                 Directory.CreateDirectory(hooksDir);
+                File.WriteAllText(gitPath, OperatingSystem.IsWindows() ? "not a portable executable" : "#!/bin/sh\nexit 1\n");
+                if (!OperatingSystem.IsWindows())
+                {
+                    File.SetUnixFileMode(
+                        gitPath,
+                        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                }
                 env.Set(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hooksDir);
                 env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "true");
+                env.Set(GitHelper.GitExecutableEnvironmentVariable, gitPath);
 
                 var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
                     ["--db", dbPath, "--json"],
@@ -753,7 +763,25 @@ public partial class QueryCommandRunnerTests
                 Assert.Equal(string.Empty, stderr);
                 using var document = JsonDocument.Parse(stdout);
                 var trustOverrides = document.RootElement.GetProperty("trust_overrides").EnumerateArray().ToArray();
-                Assert.Equal(2, trustOverrides.Length);
+                Assert.Equal(3, trustOverrides.Length);
+
+                var gitExecutable = document.RootElement.GetProperty("git_executable");
+                Assert.Equal("environment_override", gitExecutable.GetProperty("source").GetString());
+                Assert.True(gitExecutable.GetProperty("accepted").GetBoolean());
+                Assert.Equal("accepted", gitExecutable.GetProperty("reason").GetString());
+                Assert.True(gitExecutable.GetProperty("executable").GetBoolean());
+                if (!OperatingSystem.IsWindows())
+                {
+                    Assert.True(gitExecutable.GetProperty("owner_only_writable").GetBoolean());
+                    Assert.Equal("0700", gitExecutable.GetProperty("unix_mode").GetString());
+                }
+
+                var gitOverride = Assert.Single(
+                    trustOverrides,
+                    item => item.GetProperty("kind").GetString() == "git_executable");
+                Assert.Equal(GitHelper.GitExecutableEnvironmentVariable, gitOverride.GetProperty("environment_variable").GetString());
+                Assert.Equal(Path.GetFileName(gitPath), gitOverride.GetProperty("path").GetString());
+                Assert.DoesNotContain(projectRoot, gitOverride.GetProperty("path").GetString(), StringComparison.Ordinal);
 
                 var pluginOverride = Assert.Single(
                     trustOverrides,

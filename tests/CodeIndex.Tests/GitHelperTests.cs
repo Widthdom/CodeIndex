@@ -44,6 +44,32 @@ public class GitHelperTests : IDisposable
     }
 
     [Fact]
+    public void GitMetadataEntrySymlinks_ReturnNull_Issue4599()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var externalGitDirectory = Path.Combine(_tempDir, "external-git-directory");
+        Directory.CreateDirectory(externalGitDirectory);
+        var directoryProject = Path.Combine(_tempDir, "directory-project");
+        Directory.CreateDirectory(directoryProject);
+        var directoryLink = Path.Combine(directoryProject, ".git");
+        Directory.CreateSymbolicLink(directoryLink, externalGitDirectory);
+
+        var externalGitFile = Path.Combine(_tempDir, "external-git-file");
+        File.WriteAllText(externalGitFile, $"gitdir: {externalGitDirectory}");
+        var fileProject = Path.Combine(_tempDir, "file-project");
+        Directory.CreateDirectory(fileProject);
+        var fileLink = Path.Combine(fileProject, ".git");
+        File.CreateSymbolicLink(fileLink, externalGitFile);
+
+        Assert.Null(GitHelper.ResolveGitCommonDir(directoryProject));
+        Assert.Equal(GitRepositoryType.None, GitHelper.TryGetRepositoryType(directoryProject));
+        Assert.Null(GitHelper.ResolveGitCommonDir(fileProject));
+        Assert.Equal(GitRepositoryType.None, GitHelper.TryGetRepositoryType(fileProject));
+    }
+
+    [Fact]
     public void NoGitAtAll_ReturnsNull()
     {
         // No .git file or directory / .gitファイルもディレクトリもない
@@ -166,6 +192,38 @@ public class GitHelperTests : IDisposable
         var result = GitHelper.ResolveGitCommonDir(projectRoot);
 
         Assert.Null(result);
+    }
+
+    [Fact]
+    public void WorktreeWithSymlinkedMetadataDirectories_ReturnsNull_Issue4599()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var externalCommonDir = Path.Combine(_tempDir, "external-common-dir");
+        var externalWorktreeGitDir = Path.Combine(externalCommonDir, "worktrees", "linked");
+        Directory.CreateDirectory(externalWorktreeGitDir);
+        File.WriteAllText(Path.Combine(externalWorktreeGitDir, "commondir"), "../..");
+
+        var worktreeGitDirLink = Path.Combine(_tempDir, "worktree-git-dir-link");
+        Directory.CreateSymbolicLink(worktreeGitDirLink, externalWorktreeGitDir);
+        var directTargetProject = Path.Combine(_tempDir, "linked-target-project");
+        Directory.CreateDirectory(directTargetProject);
+        File.WriteAllText(Path.Combine(directTargetProject, ".git"), $"gitdir: {worktreeGitDirLink}");
+
+        var commonDirLink = Path.Combine(_tempDir, "common-dir-link");
+        Directory.CreateSymbolicLink(commonDirLink, externalCommonDir);
+        var projectRoot = Path.Combine(_tempDir, "linked-worktree-project");
+        Directory.CreateDirectory(projectRoot);
+        File.WriteAllText(
+            Path.Combine(projectRoot, ".git"),
+            $"gitdir: {Path.Combine(commonDirLink, "worktrees", "linked")}");
+
+        var directTargetResult = GitHelper.ResolveGitCommonDir(directTargetProject);
+        var commonDirectoryResult = GitHelper.ResolveGitCommonDir(projectRoot);
+
+        Assert.Null(directTargetResult);
+        Assert.Null(commonDirectoryResult);
     }
 
     [Fact]
@@ -931,6 +989,102 @@ public class GitHelperTests : IDisposable
         Assert.DoesNotContain("/usr/bin/git", candidates);
         Assert.Contains("/Library/Developer/CommandLineTools/usr/bin/git", candidates);
         Assert.Contains("/Applications/Xcode.app/Contents/Developer/usr/bin/git", candidates);
+    }
+
+    [ExternalProcessFact]
+    public void GitExecutableEnvironmentOverride_AcceptsPortableAbsoluteGit_Issue4599()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var repoDir = Path.Combine(_tempDir, "portable-git-repo");
+        var portableGitDir = Path.Combine(_tempDir, "portable-git-bin");
+        Directory.CreateDirectory(repoDir);
+        Directory.CreateDirectory(portableGitDir);
+        WriteFakeGitThatReturnsChangedFile(portableGitDir, "portable.txt");
+        var portableGitPath = Path.Combine(portableGitDir, "git");
+
+        using var env = EnvironmentVariableScope.Capture(GitHelper.GitExecutableEnvironmentVariable);
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        GitHelper.GitExecutablePathOverride = null;
+        env.Set(GitHelper.GitExecutableEnvironmentVariable, portableGitPath);
+        try
+        {
+            var changedFiles = GitHelper.GetChangedFilesFromCommit(repoDir, "0123456789abcdef");
+            var status = GitHelper.GetGitExecutableStatus();
+            var trustOverride = Assert.Single(GitHelper.GetAcceptedTrustOverrides());
+
+            Assert.Equal(["portable.txt"], changedFiles);
+            Assert.Equal("environment_override", status.Source);
+            Assert.True(status.Accepted);
+            Assert.Equal("accepted", status.Reason);
+            Assert.Equal("git", status.Path);
+            Assert.True(status.OwnerOnlyWritable);
+            Assert.Equal("0700", status.UnixMode);
+            Assert.True(status.Executable);
+            Assert.Equal(GitHelper.GitExecutableEnvironmentVariable, trustOverride.EnvironmentVariable);
+            Assert.Contains("mode 0700", trustOverride.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
+        }
+    }
+
+    [Fact]
+    public void GitExecutableEnvironmentOverride_ReportsUnsafeModeAndMissingExecuteBit_Issue4599()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var portableGitDir = Path.Combine(_tempDir, "portable-git-diagnostics");
+        Directory.CreateDirectory(portableGitDir);
+        var portableGitPath = Path.Combine(portableGitDir, "git");
+        File.WriteAllText(portableGitPath, "#!/bin/sh\nexit 0\n");
+
+        using var env = EnvironmentVariableScope.Capture(GitHelper.GitExecutableEnvironmentVariable);
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        GitHelper.GitExecutablePathOverride = null;
+        env.Set(GitHelper.GitExecutableEnvironmentVariable, portableGitPath);
+        try
+        {
+            File.SetUnixFileMode(
+                portableGitPath,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                | UnixFileMode.GroupWrite | UnixFileMode.OtherWrite);
+            var sharedWritable = GitHelper.GetGitExecutableStatus();
+
+            Assert.False(sharedWritable.Accepted);
+            Assert.Equal("shared_writable", sharedWritable.Reason);
+            Assert.False(sharedWritable.OwnerOnlyWritable);
+            Assert.True(sharedWritable.Executable);
+            Assert.Empty(GitHelper.GetAcceptedTrustOverrides());
+
+            File.SetUnixFileMode(portableGitPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            var nonExecutable = GitHelper.GetGitExecutableStatus();
+
+            Assert.False(nonExecutable.Accepted);
+            Assert.Equal("not_executable", nonExecutable.Reason);
+            Assert.True(nonExecutable.OwnerOnlyWritable);
+            Assert.False(nonExecutable.Executable);
+
+            env.Set(GitHelper.GitExecutableEnvironmentVariable, "git");
+            var relativePath = GitHelper.GetGitExecutableStatus();
+
+            Assert.False(relativePath.Accepted);
+            Assert.Equal("path_not_absolute", relativePath.Reason);
+            Assert.Null(relativePath.Path);
+
+            env.Set(GitHelper.GitExecutableEnvironmentVariable, portableGitPath + ".sh");
+            var unexpectedName = GitHelper.GetGitExecutableStatus();
+
+            Assert.False(unexpectedName.Accepted);
+            Assert.Equal("unexpected_filename", unexpectedName.Reason);
+        }
+        finally
+        {
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
+        }
     }
 
     [ExternalProcessFact]

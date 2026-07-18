@@ -945,6 +945,27 @@ public sealed class StatusQueryContext
     public long StaleAfterSeconds { get; set; }
 }
 
+/// <summary>
+/// Runtime diagnostics for the Git executable selected by cdidx.
+/// cdidx が選択した Git 実行ファイルの runtime 診断。
+/// </summary>
+public sealed record GitExecutableStatus(
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("accepted")] bool Accepted,
+    [property: JsonPropertyName("reason")] string Reason,
+    [property: JsonPropertyName("path")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Path,
+    [property: JsonPropertyName("owner_only_writable")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    bool? OwnerOnlyWritable,
+    [property: JsonPropertyName("unix_mode")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? UnixMode,
+    [property: JsonPropertyName("executable")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    bool? Executable);
+
 public class StatusResult
 {
     internal const string SqliteConnectionPolicyJsonFieldName = "sqlite_connection_policy";
@@ -1171,6 +1192,9 @@ public class StatusResult
     [JsonPropertyName("trust_overrides")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<ExtensionTrustOverride>? TrustOverrides { get; set; }
+    [JsonPropertyName("git_executable")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public GitExecutableStatus? GitExecutable { get; set; }
     [JsonPropertyName("extractors")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ExtractorRegistryStatus? Extractors { get; set; }

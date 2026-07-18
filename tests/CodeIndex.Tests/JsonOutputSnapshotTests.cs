@@ -106,6 +106,16 @@ public class Probe
                 pragmas["journal_mode"] = "wal";
         }
 
+        if (root["git_executable"] is JsonObject gitExecutable)
+        {
+            // Keep the public field shape pinned while normalizing OS-specific executable names
+            // and POSIX-only ownership/mode diagnostics. Dedicated Issue4599 tests cover those values.
+            if (gitExecutable["path"] is not null)
+                gitExecutable["path"] = "<GIT_EXECUTABLE>";
+            gitExecutable.Remove("owner_only_writable");
+            gitExecutable.Remove("unix_mode");
+        }
+
         return root.ToJsonString();
     }
 

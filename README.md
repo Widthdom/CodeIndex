@@ -272,8 +272,23 @@ and `load_context_lifecycle` to show that hook contexts are collectible and
 unloaded when the hook runner is disposed. `extractors.diagnostics[]` and
 `hook_diagnostics[]` include sanitized `category` machine codes alongside
 bounded paths and messages.
-Accepted extension trust overrides such as `CDIDX_TRUST_WORKSPACE_PLUGINS` and
-`CDIDX_HOOKS_DIR` are also reported in sanitized `trust_overrides[]` entries.
+Accepted extension trust overrides such as `CDIDX_TRUST_WORKSPACE_PLUGINS`,
+`CDIDX_HOOKS_DIR`, and `CDIDX_GIT_EXECUTABLE` are also reported in sanitized
+`trust_overrides[]` entries.
+
+Git subprocesses do not resolve an arbitrary executable from `PATH`. On Nix,
+custom-prefix, or portable installations, set `CDIDX_GIT_EXECUTABLE` in the
+process environment to the absolute path of `git` (`git.exe` on Windows). The
+override is accepted only for a regular non-symlink/non-reparse file; POSIX
+files must have an execute bit and must not be group- or other-writable, while
+Windows paths must end in `.exe`. An invalid explicit override fails closed
+instead of falling back to a different Git binary. CLI and MCP `status` expose
+the sanitized selection under `git_executable`, including `source`, `accepted`,
+the stable `reason`, `owner_only_writable`, `unix_mode`, and `executable`.
+Git metadata resolution applies the same regular-entry boundary to normal
+`.git` directories, worktree `.git` files, their `gitdir` targets, and
+`commondir` targets, so symlink/reparse/device redirection is rejected before
+`info/exclude` or hooks can be written.
 
 Successful CLI and MCP index runs can also persist bounded
 `last_index_run.diagnostics` when best-effort metadata writes fail after the
@@ -568,8 +583,22 @@ context は unload されます。`hooks[]` entry は `callback_budget_ms` と
 `load_context_lifecycle` を含み、hook context が collectible で hook runner の dispose 時に
 unload されることを示します。`extractors.diagnostics[]` と `hook_diagnostics[]` は、
 bounded な path と message に加えて sanitization 済みの `category` machine code を含みます。
-受理された `CDIDX_TRUST_WORKSPACE_PLUGINS` や `CDIDX_HOOKS_DIR` などの
-拡張信頼境界 override は、sanitization 済みの `trust_overrides[]` entry としても報告されます。
+受理された `CDIDX_TRUST_WORKSPACE_PLUGINS`、`CDIDX_HOOKS_DIR`、
+`CDIDX_GIT_EXECUTABLE` などの拡張信頼境界 override は、sanitization 済みの
+`trust_overrides[]` entry としても報告されます。
+
+Git subprocess は `PATH` から任意の実行ファイルを解決しません。Nix、custom-prefix、
+portable installation では、process environment の `CDIDX_GIT_EXECUTABLE` に
+`git`（Windows は `git.exe`）の絶対パスを設定してください。override は regular かつ
+symlink / reparse point ではない file だけを受理し、POSIX では execute bit があり
+group / other writable でないこと、Windows では `.exe` suffix を要求します。不正な明示
+override は別の Git binary へ fallback せず fail-closed になります。CLI / MCP の
+`status` は sanitization 済みの選択結果を `git_executable` として公開し、`source`、
+`accepted`、stable な `reason`、`owner_only_writable`、`unix_mode`、`executable` を
+含みます。Git metadata 解決も通常 repo の `.git` directory、worktree の `.git` file、
+その `gitdir` target と `commondir` target に同じ regular-entry boundary を適用するため、
+symlink / reparse point / device による redirect は `info/exclude` や hook の書込み前に
+拒否されます。
 
 成功した CLI / MCP index run は、index data 自体の書き込みが成功した後に
 best-effort metadata write が失敗した場合、上限付きの

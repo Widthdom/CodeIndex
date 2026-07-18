@@ -3453,17 +3453,27 @@ public partial class McpServerTests
         {
             using var env = EnvironmentVariableScope.Capture(
                 PostExtractionHookRunner.HooksDirectoryEnvironmentVariable,
-                ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
+                ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable,
+                GitHelper.GitExecutableEnvironmentVariable);
             var hooksDir = Path.Combine(_projectRoot, "hooks");
+            var gitPath = Path.Combine(_projectRoot, OperatingSystem.IsWindows() ? "git.exe" : "git");
             Directory.CreateDirectory(hooksDir);
+            File.WriteAllText(gitPath, OperatingSystem.IsWindows() ? "not a portable executable" : "#!/bin/sh\nexit 1\n");
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(
+                    gitPath,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
             env.Set(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hooksDir);
             env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "on");
+            env.Set(GitHelper.GitExecutableEnvironmentVariable, gitPath);
 
             var response = _server.HandleMessage(JsonNode.Parse(
                 """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{"format":"compact"}}}""")!)!;
 
             var trustOverrides = response["result"]!["structuredContent"]!["trust_overrides"]!.AsArray();
-            Assert.Equal(2, trustOverrides.Count);
+            Assert.Equal(3, trustOverrides.Count);
             Assert.Contains(
                 trustOverrides,
                 item => item?["kind"]?.GetValue<string>() == "workspace_plugin_directory"
@@ -3475,6 +3485,15 @@ public partial class McpServerTests
             Assert.Equal(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hookOverride!["environment_variable"]!.GetValue<string>());
             Assert.EndsWith("hooks", hookOverride["path"]!.GetValue<string>(), StringComparison.Ordinal);
             Assert.DoesNotContain(_projectRoot, hookOverride["path"]!.GetValue<string>(), StringComparison.Ordinal);
+
+            var gitExecutable = response["result"]!["structuredContent"]!["git_executable"]!;
+            Assert.Equal("environment_override", gitExecutable["source"]!.GetValue<string>());
+            Assert.True(gitExecutable["accepted"]!.GetValue<bool>());
+            Assert.Equal("accepted", gitExecutable["reason"]!.GetValue<string>());
+            var gitOverride = Assert.Single(
+                trustOverrides,
+                item => item?["kind"]?.GetValue<string>() == "git_executable");
+            Assert.Equal(GitHelper.GitExecutableEnvironmentVariable, gitOverride!["environment_variable"]!.GetValue<string>());
         }
     }
 

@@ -68,6 +68,33 @@ public class HookCommandRunnerTests
     }
 
     [Fact]
+    public void Hooks_Install_RejectsSymlinkedGitDirectoryBeforeExternalWrite_Issue4599()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("hook_symlinked_git");
+        var externalGitDir = TestProjectHelper.CreateTempProject("hook_external_git");
+        var gitLink = Path.Combine(projectRoot, ".git");
+        try
+        {
+            Directory.CreateSymbolicLink(gitLink, externalGitDir);
+
+            var result = RunHooksAndCaptureStreams(["install", "--project", projectRoot]);
+
+            Assert.Equal(CommandExitCodes.NotFound, result.ExitCode);
+            Assert.False(Directory.Exists(Path.Combine(externalGitDir, "hooks")));
+            Assert.Contains("not a git repository", result.StdErr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteFile(gitLink);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(externalGitDir);
+        }
+    }
+
+    [Fact]
     public void Hooks_StatusJson_UsesSourceGeneratedSerializer()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("hook_status_json");
