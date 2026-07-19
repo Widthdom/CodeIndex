@@ -439,6 +439,7 @@ public class ExtractorPluginRegistryTests
                 Assert.Single(ExtractorPluginRegistry.WorkspacePluginLoadContextsForTests(projectRoot));
 
                 File.Delete(pluginPath);
+                Assert.False(File.Exists(pluginPath));
                 ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(projectRoot);
 
                 Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", projectRoot, out var restoredFallback));
