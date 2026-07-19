@@ -1572,7 +1572,7 @@ public partial class FileIndexerTests
     }
 
     [Fact]
-    public void ScanFiles_LoadsProjectRootPatternConfigsBeforeLanguageDetection_3190()
+    public void ScanFiles_LoadsProjectRootPatternConfigsWithoutIndexingCdidxInputs_Issue4592()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx-pattern-scan-project");
         using var cwd = TestProjectHelper.CreateTempProjectScope("cdidx-pattern-scan-cwd");
@@ -1598,7 +1598,7 @@ public partial class FileIndexerTests
 
                 var scanned = ScanRelativeFiles(projectRoot);
 
-                Assert.Equal([".cdidx/patterns/project.yaml", "Project.projecttoy"], scanned);
+                Assert.Equal(["Project.projecttoy"], scanned);
             }
             finally
             {

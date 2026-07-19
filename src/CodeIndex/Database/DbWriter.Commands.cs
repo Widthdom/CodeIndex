@@ -50,6 +50,23 @@ public partial class DbWriter
         cmd.ExecuteNonQuery();
     }
 
+    private void Execute(string sql, CancellationToken cancellationToken)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = sql;
+        cancellationToken.ThrowIfCancellationRequested();
+        using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
+        try
+        {
+            cmd.ExecuteNonQuery();
+        }
+        catch (SqliteException exception) when (IsSqliteInterruptCancellation(exception, cancellationToken))
+        {
+            throw new OperationCanceledException("SQLite write maintenance was interrupted.", exception, cancellationToken);
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
     private void Execute(string sql, SqliteTransaction? transaction)
     {
         using var cmd = _conn.CreateCommand();

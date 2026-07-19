@@ -210,6 +210,7 @@ public class DbContext : IDisposable
     private PreparedCommandCache? _preparedCommands;
     private bool _suppressWriteWorkTracking = true;
     private bool _hasWriteWork;
+    private bool _suppressPlannerStatisticsMaintenanceOnClose;
     private bool _hasWalCheckpointableWriteWork;
     private bool _rebuildFtsAfterSchemaMigration;
     private readonly DbOpenIntent _openIntent;
@@ -3747,22 +3748,36 @@ public class DbContext : IDisposable
 
     internal sealed record PlannerStatisticsMaintenanceFailure(string CommandText, SqliteException Exception);
 
-    internal PlannerStatisticsMaintenanceFailure? RunPlannerStatisticsMaintenance(bool forceAnalyze)
+    internal void SuppressPlannerStatisticsMaintenanceOnClose()
+        => Volatile.Write(ref _suppressPlannerStatisticsMaintenanceOnClose, true);
+
+    internal PlannerStatisticsMaintenanceFailure? RunPlannerStatisticsMaintenance(
+        bool forceAnalyze,
+        CancellationToken cancellationToken = default)
     {
         if (_isReadOnly)
             return null;
 
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = forceAnalyze ? "ANALYZE" : "PRAGMA optimize";
+        cancellationToken.ThrowIfCancellationRequested();
+        using var cancellationRegistration = cancellationToken.UnsafeRegister(
+            static state => SQLitePCL.raw.sqlite3_interrupt(((SqliteConnection)state!).Handle),
+            _connection);
         try
         {
             PlannerStatisticsCommandCreatedForTesting?.Invoke(cmd);
             cmd.ExecuteNonQuery();
+            cancellationToken.ThrowIfCancellationRequested();
             PlannerStatisticsCommandExecutedForTesting?.Invoke(_connection.DataSource, cmd.CommandText);
             if (!forceAnalyze)
                 OptimizePragmaExecutedForTesting?.Invoke(_connection.DataSource);
             _hasWriteWork = false;
             return null;
+        }
+        catch (SqliteException ex) when (cancellationToken.IsCancellationRequested && ex.SqliteErrorCode == 9)
+        {
+            throw new OperationCanceledException("SQLite planner maintenance was interrupted.", ex, cancellationToken);
         }
         catch (SqliteException ex)
         {
@@ -3775,10 +3790,21 @@ public class DbContext : IDisposable
 
     private void RunOptimizeOnCloseIfNeeded()
     {
-        if (!_hasWriteWork || _isReadOnly)
+        if (!_hasWriteWork
+            || _isReadOnly
+            || _cancellation.IsCancellationRequested
+            || Volatile.Read(ref _suppressPlannerStatisticsMaintenanceOnClose))
             return;
 
-        RunPlannerStatisticsMaintenance(forceAnalyze: false);
+        try
+        {
+            RunPlannerStatisticsMaintenance(forceAnalyze: false, _cancellation);
+        }
+        catch (OperationCanceledException) when (_cancellation.IsCancellationRequested)
+        {
+            // Dispose-time maintenance is best effort and must not outlive or fail the
+            // operation that owns this database context.
+        }
     }
 
     public void Dispose()

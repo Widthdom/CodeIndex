@@ -685,6 +685,40 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void FtsBulkLoadTriggerGuard_CancelledCompleteDefersRecoveryWithoutActiveOwner_Issue4591()
+    {
+        var fileId = UpsertTestFile("src/cancelled-complete-bulk-fts.cs", checksum: "cancelled-complete-bulk-fts");
+        using var cts = new CancellationTokenSource();
+
+        using (var guard = FtsBulkLoadTriggerGuard.Start(_writer, enabled: true))
+        {
+            Assert.NotNull(guard);
+            _writer.InsertChunks(
+            [
+                new ChunkRecord
+                {
+                    FileId = fileId,
+                    ChunkIndex = 0,
+                    StartLine = 1,
+                    EndLine = 1,
+                    Content = "cancelledcompletebulktoken",
+                },
+            ]);
+
+            Assert.Throws<OperationCanceledException>(() => guard!.Complete(
+                rebuild: true,
+                beforeOptimize: cts.Cancel,
+                cancellationToken: cts.Token));
+        }
+
+        Assert.Equal(3L, CountFtsSyncTriggers());
+        Assert.Equal("true", ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+        Assert.True(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+        Assert.Null(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+        Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'cancelledcompletebulktoken'"));
+    }
+
+    [Fact]
     public void RecoverInterruptedFtsBulkLoadIfNeeded_RebuildsCommittedRowsAndClearsMarker()
     {
         var fileId = UpsertTestFile("src/recovered-bulk-fts.cs", checksum: "recovered-bulk-fts");

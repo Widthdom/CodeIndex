@@ -6386,6 +6386,57 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public async Task ToolsCall_Index_LaterPlannerCancellationDoesNotRerunMaintenanceOnDispose_Issue4591()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"cdidx_mcp_planner_cancel_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_planner_cancel");
+        using var cancellation = new CancellationTokenSource();
+        var plannerCallCount = 0;
+        try
+        {
+            var sourcePath = Path.Combine(fixtureDir, "app.py");
+            File.WriteAllText(sourcePath, "print('first')\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var firstResponse = CallIndex(server, fixtureDir);
+            Assert.False(firstResponse["result"]?["isError"]?.GetValue<bool>() ?? false, firstResponse.ToJsonString());
+
+            File.WriteAllText(sourcePath, "print('second')\n");
+            DbContext.PlannerStatisticsCommandCreatedForTesting = _ =>
+            {
+                plannerCallCount++;
+                cancellation.Cancel();
+            };
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject { ["path"] = fixtureDir },
+                },
+            };
+            var transport = new QueuedFrameTransport(request.ToJsonString());
+
+            await server.RunAsync(transport, cancellation.Token).WaitAsync(TimeSpan.FromSeconds(10));
+            server.Dispose();
+
+            Assert.Equal(1, plannerCallCount);
+        }
+        finally
+        {
+            DbContext.PlannerStatisticsCommandCreatedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+        }
+    }
+
+    [Fact]
     public async Task ToolsCall_Index_CancelledDuringCSharpContractPreflight_DoesNotPurgeStaleFiles()
     {
         var fixtureDir = Path.Combine(

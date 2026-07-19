@@ -18,6 +18,13 @@ namespace CodeIndex.Cli;
 /// </summary>
 internal static class IndexWatchRunner
 {
+    internal enum WatchPathDisposition
+    {
+        Ignore,
+        Index,
+        Reconcile,
+    }
+
     internal const int DefaultDebounceMs = 500;
     internal const int MaxDebounceMs = 60_000;
     internal const int DefaultWatchPendingPathLimit = 4096;
@@ -28,6 +35,7 @@ internal static class IndexWatchRunner
     internal const int MaxSubRunArgumentChars = 64 * 1024;
     internal const int BatchPathSampleMaxChars = 160;
     internal const int MaxWatchDiagnosticChars = 256;
+    internal static Action<Action<string>>? WatchReadyForTesting { get; set; }
     private const int InternalBufferSize = 64 * 1024;
     private const int PollIntervalMs = 50;
     private const string WatchDiagnosticTruncationMarker = "...[truncated]";
@@ -49,30 +57,31 @@ internal static class IndexWatchRunner
         bool dbPathExplicit)
         => ShouldIgnoreWatchInternalPath(projectRoot, resolvedDbPath, fullPath, ignoreCase, dbPathExplicit);
 
+    internal static WatchPathDisposition ClassifyWatchPathForTesting(
+        string projectRoot,
+        string resolvedDbPath,
+        string fullPath,
+        bool ignoreCase,
+        bool dbPathExplicit)
+    {
+        var fileIndexer = new FileIndexer(projectRoot, ignoreCase, projectRoot);
+        return ClassifyWatchPath(projectRoot, resolvedDbPath, fullPath, ignoreCase, dbPathExplicit, fileIndexer);
+    }
+
     public static int Run(
         IndexCommandOptions baseOptions,
         JsonSerializerOptions jsonOptions,
         string projectRoot,
-        string resolvedDbPath)
+        string resolvedDbPath,
+        CancellationToken cancellationToken)
     {
-        using var cts = new CancellationTokenSource();
-        ConsoleCancelEventHandler handler = (_, e) =>
-        {
-            e.Cancel = true;
-            cts.Cancel();
-        };
-        Console.CancelKeyPress += handler;
         try
         {
-            return RunCore(baseOptions, jsonOptions, projectRoot, resolvedDbPath, cts.Token);
+            return RunCore(baseOptions, jsonOptions, projectRoot, resolvedDbPath, cancellationToken);
         }
-        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             return CommandExitCodes.Success;
-        }
-        finally
-        {
-            Console.CancelKeyPress -= handler;
         }
     }
 
@@ -93,7 +102,8 @@ internal static class IndexWatchRunner
         JsonSerializerOptions jsonOptions,
         string projectRoot,
         string resolvedDbPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<Action<string>>? startupHandoff = null)
     {
         var debounce = TimeSpan.FromMilliseconds(baseOptions.WatchDebounceMs ?? DefaultDebounceMs);
         var maxPendingPaths = baseOptions.WatchPendingPathLimit;
@@ -106,6 +116,7 @@ internal static class IndexWatchRunner
         var watchExitCode = CommandExitCodes.Success;
 
         FileSystemWatcher? watcher = null;
+        List<FileSystemWatcher>? ancestorIgnoreWatchers = null;
         try
         {
             watcher = new FileSystemWatcher(projectRoot)
@@ -125,19 +136,20 @@ internal static class IndexWatchRunner
 
                 try
                 {
-                    // Drop CodeIndex-owned DB/data-dir side effects before the general source
-                    // filter so watch batches cannot self-trigger on SQLite or lock sidecars.
-                    // DB/data-dir の副作用は通常フィルタより先に落とし、SQLite/lock sidecar
-                    // で watch バッチが自己トリガーしないようにする。
-                    if (ShouldIgnoreWatchInternalPath(projectRoot, resolvedDbPath, fullPath, ignoreCase, dbPathExplicit))
-                        return;
-
-                    // The watcher root encloses .git / build outputs; ShouldSkipPath honors
-                    // .gitignore / .cdidxignore / built-in SkipDirs, so we drop noisy events
-                    // at the source instead of paying for a full sub-update every save.
-                    // root は .git / ビルド出力も含むため、ShouldSkipPath で除外して
-                    // 余計なサブ更新を防ぐ。
-                    if (fileIndexer.ShouldSkipPath(fullPath))
+                    // Membership and extractor inputs are not source files, but they must reach
+                    // the debounced update runner so it can reconcile the whole workspace. All
+                    // other paths use the same FileIndexer membership filter as scan/status.
+                    // membership / extractor 入力は source ではないが、workspace 全体の
+                    // reconciliation を起動するため debounce 対象として保持する。それ以外は
+                    // scan/status と同じ FileIndexer membership filter を使う。
+                    var disposition = ClassifyWatchPath(
+                        projectRoot,
+                        resolvedDbPath,
+                        fullPath,
+                        ignoreCase,
+                        dbPathExplicit,
+                        fileIndexer);
+                    if (disposition == WatchPathDisposition.Ignore)
                         return;
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or NotSupportedException)
@@ -169,10 +181,59 @@ internal static class IndexWatchRunner
             };
 
             watcher.EnableRaisingEvents = true;
+            ancestorIgnoreWatchers = CreateAncestorIgnoreWatchers(
+                projectRoot,
+                ignoreRuleRoot,
+                ignoreCase,
+                Enqueue);
+            startupHandoff?.Invoke(Enqueue);
 
-            EmitWatchStarted(baseOptions, jsonOptions, projectRoot, resolvedDbPath, debounce, maxPendingPaths, ignoreCase);
+            // The initial command scan completed before this watcher was subscribed. Re-scan
+            // after subscription, then drain every event buffered during that reconciliation
+            // before publishing the ready event. A callback that reaches Add after
+            // the ready transition is an ordinary live update, not a startup handoff event.
+            // 初回 command scan は watcher の subscribe より先に完了している。subscribe 後に
+            // 再 scan し、その間に buffer された event をすべて drain してから ready event を
+            // 公開する。ready 遷移後に Add へ到達した callback は通常の live update。
+            if (File.Exists(DbPathResolver.NormalizeDbPath(resolvedDbPath)))
+            {
+                RecordSubRunExitCode(
+                    ref watchExitCode,
+                    RunFullRescan(baseOptions, jsonOptions, resolvedDbPath, cancellationToken, phase: "startup"));
+            }
 
-            while (!cancellationToken.IsCancellationRequested)
+            // Close the startup generation by taking one atomic snapshot. Events arriving after
+            // this boundary remain queued as ordinary live updates, so a continuously changing
+            // workspace cannot prevent the watcher from ever becoming ready.
+            // startup generation は atomic snapshot で閉じる。この境界後の event は通常の
+            // live update として queue に残し、変更が連続する workspace でも ready を妨げない。
+            if (!cancellationToken.IsCancellationRequested
+                && batcher.TryDrainImmediately(out var startupBatch, out var startupFullRescan, out var startupOverflowReason))
+            {
+                if (startupFullRescan)
+                {
+                    EmitWatchOverflow(baseOptions, jsonOptions, startupOverflowReason, resolvedDbPath);
+                    RecordSubRunExitCode(
+                        ref watchExitCode,
+                        RunFullRescan(baseOptions, jsonOptions, resolvedDbPath, cancellationToken, phase: "startup"));
+                }
+                else if (startupBatch.Count > 0)
+                {
+                    RecordSubRunExitCode(
+                        ref watchExitCode,
+                        RunPartialUpdate(baseOptions, jsonOptions, startupBatch, resolvedDbPath, cancellationToken, phase: "startup"));
+                }
+            }
+
+            var ready = !cancellationToken.IsCancellationRequested
+                && watchExitCode == CommandExitCodes.Success;
+            if (ready)
+            {
+                EmitWatchStarted(baseOptions, jsonOptions, projectRoot, resolvedDbPath, debounce, maxPendingPaths, ignoreCase);
+                WatchReadyForTesting?.Invoke(Enqueue);
+            }
+
+            while (ready && !cancellationToken.IsCancellationRequested)
             {
                 try
                 {
@@ -189,18 +250,26 @@ internal static class IndexWatchRunner
                 if (fullRescan)
                 {
                     EmitWatchOverflow(baseOptions, jsonOptions, overflowReason, resolvedDbPath);
-                    RecordSubRunExitCode(ref watchExitCode, RunFullRescan(baseOptions, jsonOptions, resolvedDbPath));
+                    RecordSubRunExitCode(ref watchExitCode, RunFullRescan(baseOptions, jsonOptions, resolvedDbPath, cancellationToken));
                     continue;
                 }
 
                 if (batch.Count == 0)
                     continue;
 
-                RecordSubRunExitCode(ref watchExitCode, RunPartialUpdate(baseOptions, jsonOptions, batch, resolvedDbPath));
+                RecordSubRunExitCode(ref watchExitCode, RunPartialUpdate(baseOptions, jsonOptions, batch, resolvedDbPath, cancellationToken));
             }
         }
         finally
         {
+            if (ancestorIgnoreWatchers != null)
+            {
+                foreach (var ancestorWatcher in ancestorIgnoreWatchers)
+                {
+                    try { ancestorWatcher.EnableRaisingEvents = false; } catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException) { }
+                    ancestorWatcher.Dispose();
+                }
+            }
             if (watcher != null)
             {
                 try { watcher.EnableRaisingEvents = false; } catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException) { }
@@ -212,16 +281,79 @@ internal static class IndexWatchRunner
         return watchExitCode;
     }
 
+    private static List<FileSystemWatcher> CreateAncestorIgnoreWatchers(
+        string projectRoot,
+        string ignoreRuleRoot,
+        bool ignoreCase,
+        Action<string> enqueue)
+    {
+        var watchers = new List<FileSystemWatcher>();
+        var fullProjectRoot = Path.GetFullPath(projectRoot);
+        var fullIgnoreRuleRoot = Path.GetFullPath(ignoreRuleRoot);
+        var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (string.Equals(fullProjectRoot, fullIgnoreRuleRoot, comparison))
+            return watchers;
+
+        var relativeProjectRoot = Path.GetRelativePath(fullIgnoreRuleRoot, fullProjectRoot);
+        if (Path.IsPathRooted(relativeProjectRoot)
+            || relativeProjectRoot == ".."
+            || relativeProjectRoot.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+            || relativeProjectRoot.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal))
+        {
+            return watchers;
+        }
+
+        try
+        {
+            var directory = Directory.GetParent(fullProjectRoot);
+            while (directory != null)
+            {
+                var ancestorWatcher = new FileSystemWatcher(directory.FullName)
+                {
+                    IncludeSubdirectories = false,
+                    NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size,
+                };
+                watchers.Add(ancestorWatcher);
+                ancestorWatcher.Filters.Add(".gitignore");
+                ancestorWatcher.Filters.Add(".cdidxignore");
+                ancestorWatcher.Created += (_, e) => enqueue(e.FullPath);
+                ancestorWatcher.Changed += (_, e) => enqueue(e.FullPath);
+                ancestorWatcher.Deleted += (_, e) => enqueue(e.FullPath);
+                ancestorWatcher.Renamed += (_, e) =>
+                {
+                    enqueue(e.OldFullPath);
+                    enqueue(e.FullPath);
+                };
+                ancestorWatcher.EnableRaisingEvents = true;
+
+                if (string.Equals(directory.FullName, fullIgnoreRuleRoot, comparison))
+                    break;
+
+                directory = directory.Parent;
+            }
+        }
+        catch
+        {
+            foreach (var watcher in watchers)
+                watcher.Dispose();
+            throw;
+        }
+
+        return watchers;
+    }
+
     private static int RunPartialUpdate(
         IndexCommandOptions baseOptions,
         JsonSerializerOptions jsonOptions,
         IReadOnlyList<string> changedPaths,
-        string resolvedDbPath)
+        string resolvedDbPath,
+        CancellationToken cancellationToken,
+        string phase = "incremental")
     {
         var baseArgs = BuildSubRunArgs(baseOptions, resolvedDbPath);
         var batches = BuildPartialUpdateBatches(baseArgs, changedPaths);
         if (batches == null)
-            return RunFullRescan(baseOptions, jsonOptions, resolvedDbPath);
+            return RunFullRescan(baseOptions, jsonOptions, resolvedDbPath, cancellationToken);
 
         var exitCode = CommandExitCodes.Success;
         foreach (var batch in batches)
@@ -232,8 +364,10 @@ internal static class IndexWatchRunner
             args.Add("--files");
             args.AddRange(batch);
 
-            var subRunExitCode = InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "updated", batch.Count, "incremental", batch);
+            var subRunExitCode = InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "updated", batch.Count, phase, batch, cancellationToken);
             RecordSubRunExitCode(ref exitCode, subRunExitCode);
+            if (cancellationToken.IsCancellationRequested)
+                break;
         }
 
         return exitCode;
@@ -282,13 +416,15 @@ internal static class IndexWatchRunner
     private static int RunFullRescan(
         IndexCommandOptions baseOptions,
         JsonSerializerOptions jsonOptions,
-        string resolvedDbPath)
+        string resolvedDbPath,
+        CancellationToken cancellationToken,
+        string phase = "incremental")
     {
         var stopwatch = Stopwatch.StartNew();
         var args = BuildSubRunArgs(baseOptions, resolvedDbPath);
         // No --files: this is a default incremental full scan.
         // --files を付けない: 通常のインクリメンタル全件スキャン。
-        return InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "rescanned", batchSize: null, "incremental", batchPaths: null);
+        return InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "rescanned", batchSize: null, phase, batchPaths: null, cancellationToken);
     }
 
     private static void RecordSubRunExitCode(ref int watchExitCode, int subRunExitCode)
@@ -310,11 +446,9 @@ internal static class IndexWatchRunner
         var normalizedDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(resolvedDbPath));
 
         var defaultDataDir = Path.Combine(normalizedProjectRoot, ".cdidx");
-        if (IsSameOrUnderDirectory(defaultDataDir, normalizedPath, comparison))
-            return true;
-
         var dbDirectory = Path.GetDirectoryName(normalizedDbPath);
         if (!dbPathExplicit && !string.IsNullOrEmpty(dbDirectory)
+            && !IsSamePath(defaultDataDir, dbDirectory, comparison)
             && IsSameOrUnderDirectory(dbDirectory, normalizedPath, comparison))
         {
             return true;
@@ -338,6 +472,27 @@ internal static class IndexWatchRunner
         }
 
         return false;
+    }
+
+    private static WatchPathDisposition ClassifyWatchPath(
+        string projectRoot,
+        string resolvedDbPath,
+        string fullPath,
+        bool ignoreCase,
+        bool dbPathExplicit,
+        FileIndexer fileIndexer)
+    {
+        var invalidation = FileIndexer.ClassifyIndexInputInvalidation(projectRoot, fullPath);
+        if (invalidation != FileIndexer.IndexInputInvalidationKind.None)
+            return WatchPathDisposition.Reconcile;
+
+        if (ShouldIgnoreWatchInternalPath(projectRoot, resolvedDbPath, fullPath, ignoreCase, dbPathExplicit)
+            || fileIndexer.ShouldSkipPath(fullPath))
+        {
+            return WatchPathDisposition.Ignore;
+        }
+
+        return WatchPathDisposition.Index;
     }
 
     private static bool IsSameOrUnderDirectory(string directory, string fullPath, StringComparison comparison)
@@ -421,7 +576,7 @@ internal static class IndexWatchRunner
         return args;
     }
 
-    private static int InvokeSubRunAndEmit(
+    internal static int InvokeSubRunAndEmit(
         IndexCommandOptions baseOptions,
         JsonSerializerOptions jsonOptions,
         List<string> args,
@@ -429,12 +584,12 @@ internal static class IndexWatchRunner
         string status,
         int? batchSize,
         string phase,
-        IReadOnlyList<string>? batchPaths)
+        IReadOnlyList<string>? batchPaths,
+        CancellationToken cancellationToken)
     {
         string capturedJson;
         string? spoolPath = null;
         int subRunExitCode;
-        var previousOut = Console.Out;
         WatchSubRunCaptureWriter? captureWriter = null;
         try
         {
@@ -448,22 +603,14 @@ internal static class IndexWatchRunner
             }
 
             captureWriter = new WatchSubRunCaptureWriter(MaxHumanSummarySubRunJsonChars + 1, spoolWriter);
-            Console.SetOut(captureWriter);
-            try
-            {
-                subRunExitCode = IndexCommandRunner.Run(args.ToArray(), jsonOptions);
-            }
-            finally
-            {
-                Console.SetOut(previousOut);
-            }
+            using var subRunCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            subRunExitCode = IndexCommandRunner.Run(args.ToArray(), jsonOptions, subRunCancellation, captureWriter);
 
             captureWriter.Flush();
             capturedJson = captureWriter.CapturedText;
         }
         finally
         {
-            Console.SetOut(previousOut);
             captureWriter?.Dispose();
         }
         stopwatch.Stop();
@@ -890,7 +1037,7 @@ internal static class IndexWatchRunner
             RenameEvents = "old_and_new_paths",
             OverflowRecovery = "full_rescan_after_debounce",
             WatcherErrorRecovery = "full_rescan_after_debounce",
-            Cancellation = "emit_stopped_after_current_poll_or_sub_run",
+            Cancellation = "cancel_active_sub_run_then_emit_stopped",
             SubRunOutput = "json_quiet_sub_runs",
             McpWatchMode = "unsupported",
         };
@@ -1054,6 +1201,16 @@ internal sealed class FileChangeBatcher
     }
 
     public bool TryDrain(out IReadOnlyList<string> batch, out bool fullRescan, out string? overflowReason)
+        => TryDrainCore(requireDebounce: true, out batch, out fullRescan, out overflowReason);
+
+    public bool TryDrainImmediately(out IReadOnlyList<string> batch, out bool fullRescan, out string? overflowReason)
+        => TryDrainCore(requireDebounce: false, out batch, out fullRescan, out overflowReason);
+
+    private bool TryDrainCore(
+        bool requireDebounce,
+        out IReadOnlyList<string> batch,
+        out bool fullRescan,
+        out string? overflowReason)
     {
         lock (_gate)
         {
@@ -1065,7 +1222,9 @@ internal sealed class FileChangeBatcher
                 return false;
             }
 
-            if (_hasLastEventTimestamp && _timeProvider.GetElapsedTime(_lastEventTimestamp) < _debounce)
+            if (requireDebounce
+                && _hasLastEventTimestamp
+                && _timeProvider.GetElapsedTime(_lastEventTimestamp) < _debounce)
             {
                 batch = Array.Empty<string>();
                 fullRescan = false;

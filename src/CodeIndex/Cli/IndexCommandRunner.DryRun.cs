@@ -259,7 +259,7 @@ public static partial class IndexCommandRunner
 
         if (options.Json)
         {
-            Console.WriteLine(JsonSerializer.Serialize(new IndexDryRunJsonResult
+            CommandOutputWriter.WriteLine(JsonSerializer.Serialize(new IndexDryRunJsonResult
             {
                 Status = "dry_run",
                 FilesTotal = dryFileCount,
@@ -290,13 +290,13 @@ public static partial class IndexCommandRunner
         else
         {
             var lowerBound = candidatePathsTruncated ? " (truncated; totals are lower bounds)" : string.Empty;
-            Console.WriteLine($"Dry run: {dryFileCount} files would be indexed{lowerBound}");
+            CommandOutputWriter.WriteLine($"Dry run: {dryFileCount} files would be indexed{lowerBound}");
             if (candidatePathsTruncated)
-                Console.WriteLine($"  candidate paths processed {candidatePathsProcessed.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} of limit {dryRunPathLimit.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)}");
-            Console.WriteLine($"  projected deletes {projectedDeletes,6}");
-            Console.WriteLine($"  projected purges  {projectedPurges,6}");
+                CommandOutputWriter.WriteLine($"  candidate paths processed {candidatePathsProcessed.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} of limit {dryRunPathLimit.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)}");
+            CommandOutputWriter.WriteLine($"  projected deletes {projectedDeletes,6}");
+            CommandOutputWriter.WriteLine($"  projected purges  {projectedPurges,6}");
             foreach (var (lang, count) in langCounts.OrderByDescending(kv => kv.Value))
-                Console.WriteLine($"  {lang,-12} {count,6}");
+                CommandOutputWriter.WriteLine($"  {lang,-12} {count,6}");
         }
         return CommandExitCodes.Success;
     }
@@ -325,7 +325,9 @@ public static partial class IndexCommandRunner
         {
             // --files: only the specified files / --files: 指定ファイルのみ
             var relevantIgnoreFileChanged = ContainsRelevantIgnoreFileUpdate(projectPath, options.UpdateFiles);
-            if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(normalizedUpdatePaths))
+            if (relevantIgnoreFileChanged
+                || ContainsIgnoreFilePath(normalizedUpdatePaths)
+                || ContainsExtractorConfigurationPath(projectPath, normalizedUpdatePaths))
             {
                 FileIndexer.ScanFilesResult scanResult;
                 try
@@ -413,7 +415,9 @@ public static partial class IndexCommandRunner
                 }
             }
 
-            if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(changedFiles))
+            if (relevantIgnoreFileChanged
+                || ContainsIgnoreFilePath(changedFiles)
+                || ContainsExtractorConfigurationPath(projectPath, changedFiles))
             {
                 FileIndexer.ScanFilesResult scanResult;
                 try

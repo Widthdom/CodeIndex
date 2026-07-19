@@ -8,10 +8,10 @@ public partial class DbWriter
     /// Optimize FTS5 index to merge internal b-tree segments for better query performance.
     /// FTS5インデックスを最適化して内部b-treeセグメントを統合し、クエリ性能を改善する。
     /// </summary>
-    public void OptimizeFts()
+    public void OptimizeFts(CancellationToken cancellationToken = default)
     {
         var stopwatch = Stopwatch.StartNew();
-        Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')");
+        Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')", cancellationToken);
         stopwatch.Stop();
         SetMetaValues(
             (FtsIncrementalWritesSinceOptimizeMetaKey, "0"),
@@ -36,9 +36,9 @@ public partial class DbWriter
     /// Restore FTS synchronization triggers after a bulk load.
     /// bulk load 後に FTS 同期 trigger を復元する。
     /// </summary>
-    public void RestoreFtsSyncTriggers()
+    public void RestoreFtsSyncTriggers(CancellationToken cancellationToken = default)
     {
-        Execute(DbContext.CreateFtsChunksSyncTriggersSql);
+        Execute(DbContext.CreateFtsChunksSyncTriggersSql, cancellationToken);
         _markWriteWork?.Invoke();
     }
 
@@ -46,9 +46,11 @@ public partial class DbWriter
     /// Rebuild the external-content FTS table from the current chunks table.
     /// 現在の chunks テーブルから external-content FTS テーブルを再構築する。
     /// </summary>
-    public void RebuildFtsFromChunks(bool resetIncrementalWriteCounter = true)
+    public void RebuildFtsFromChunks(
+        bool resetIncrementalWriteCounter = true,
+        CancellationToken cancellationToken = default)
     {
-        Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('rebuild')");
+        Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('rebuild')", cancellationToken);
         if (resetIncrementalWriteCounter)
             SetMeta(FtsIncrementalWritesSinceOptimizeMetaKey, "0");
     }
@@ -56,16 +58,33 @@ public partial class DbWriter
     public void ClearFtsBulkLoadInProgress()
         => SetMeta(FtsBulkLoadInProgressMetaKey, null);
 
-    public bool RecoverInterruptedFtsBulkLoadIfNeeded()
+    internal void MarkFtsBulkLoadRecoveryNeeded()
+        => SetMeta(FtsBulkLoadInProgressMetaKey, "true");
+
+    public bool RecoverInterruptedFtsBulkLoadIfNeeded(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var marker = GetMetaString(FtsBulkLoadInProgressMetaKey);
         if (!IsFtsBulkLoadMarkerSet(marker) || IsFtsBulkLoadOwnerActive(marker!))
             return false;
 
-        RestoreFtsSyncTriggers();
-        RebuildFtsFromChunks();
-        ClearFtsBulkLoadInProgress();
-        return true;
+        try
+        {
+            RestoreFtsSyncTriggers(cancellationToken);
+            RebuildFtsFromChunks(cancellationToken: cancellationToken);
+            ClearFtsBulkLoadInProgress();
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // CREATE TRIGGER is idempotent and short. Restore source synchronization without
+            // cancellation, then retain an owner-independent marker so the next run can rebuild.
+            // CREATE TRIGGER は冪等で短い。cancel なしで source 同期を復元し、次回 run が
+            // rebuild できるよう owner 非依存 marker を残す。
+            RestoreFtsSyncTriggers();
+            MarkFtsBulkLoadRecoveryNeeded();
+            throw;
+        }
     }
 
     private static string CreateFtsBulkLoadMarker()
@@ -128,7 +147,9 @@ public partial class DbWriter
 
     public void ClearBatchInProgress() => SetMeta(DbContext.BatchInProgressMetaKey, "false");
 
-    public bool OptimizeFtsIfIncrementalWriteThresholdReached(int threshold = DefaultFtsOptimizeIncrementalWriteThreshold)
+    public bool OptimizeFtsIfIncrementalWriteThresholdReached(
+        int threshold = DefaultFtsOptimizeIncrementalWriteThreshold,
+        CancellationToken cancellationToken = default)
     {
         if (threshold <= 0)
             throw new ArgumentOutOfRangeException(nameof(threshold));
@@ -136,7 +157,7 @@ public partial class DbWriter
         if (GetFtsIncrementalWritesSinceOptimize() < threshold)
             return false;
 
-        OptimizeFts();
+        OptimizeFts(cancellationToken);
         return true;
     }
 }

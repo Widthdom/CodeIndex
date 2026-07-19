@@ -4,6 +4,7 @@ using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -59,6 +60,20 @@ public class IndexWatchRunnerTests
 
         // Subsequent drain without new events returns false.
         Assert.False(batcher.TryDrain(out _, out _, out _));
+    }
+
+    [Fact]
+    public void FileChangeBatcher_TryDrainImmediately_ClosesStartupSnapshotBeforeDebounce_Issue4594()
+    {
+        var timeProvider = new ManualTimeProvider();
+        var batcher = new FileChangeBatcher(TimeSpan.FromSeconds(30), timeProvider);
+        batcher.Add("/repo/handoff.cs");
+
+        Assert.True(batcher.TryDrainImmediately(out var batch, out var rescan, out var reason));
+        Assert.Equal(["/repo/handoff.cs"], batch);
+        Assert.False(rescan);
+        Assert.Null(reason);
+        Assert.False(batcher.TryDrainImmediately(out _, out _, out _));
     }
 
     [Fact]
@@ -172,7 +187,7 @@ public class IndexWatchRunnerTests
     }
 
     [Fact]
-    public void ShouldIgnoreWatchInternalPath_DefaultDataDir_IgnoresCdidxArtifacts_Issue4351()
+    public void ShouldIgnoreWatchInternalPath_DefaultDataDir_IgnoresOnlyOwnedArtifacts_Issue4592()
     {
         var projectRoot = CreateTempProject();
         try
@@ -186,10 +201,6 @@ public class IndexWatchRunnerTests
                 dbPath + ".lock",
                 dbPath + ".lock.info",
                 dbPath + ".lock.tmp",
-                Path.Combine(projectRoot, ".cdidx", "lock"),
-                Path.Combine(projectRoot, ".cdidx", "lock.info"),
-                Path.Combine(projectRoot, ".cdidx", "lock.tmp"),
-                Path.Combine(projectRoot, ".cdidx", "nested", "state.tmp"),
             };
 
             Assert.All(internalPaths, path =>
@@ -199,6 +210,18 @@ public class IndexWatchRunnerTests
                     path,
                     ignoreCase: false,
                     dbPathExplicit: false)));
+            Assert.False(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                Path.Combine(projectRoot, ".cdidx", "lock.info"),
+                ignoreCase: false,
+                dbPathExplicit: false));
+            Assert.False(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                Path.Combine(projectRoot, ".cdidx", "nested", "state.tmp"),
+                ignoreCase: false,
+                dbPathExplicit: false));
             Assert.False(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
                 projectRoot,
                 dbPath,
@@ -213,7 +236,7 @@ public class IndexWatchRunnerTests
     }
 
     [Fact]
-    public void ShouldIgnoreWatchInternalPath_ExplicitDb_IgnoresOnlyDbSidecarsAndDefaultCdidx_Issue4351()
+    public void ShouldIgnoreWatchInternalPath_ExplicitDb_IgnoresOnlyDbSidecars_Issue4592()
     {
         var projectRoot = CreateTempProject();
         try
@@ -233,7 +256,7 @@ public class IndexWatchRunnerTests
                 dbPath + ".lock.info",
                 ignoreCase: false,
                 dbPathExplicit: true));
-            Assert.True(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+            Assert.False(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
                 projectRoot,
                 dbPath,
                 Path.Combine(projectRoot, ".cdidx", "suggestions-codeindex.json"),
@@ -245,6 +268,69 @@ public class IndexWatchRunnerTests
                 Path.Combine(projectRoot, "src", "app.cs"),
                 ignoreCase: false,
                 dbPathExplicit: true));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ClassifyWatchPath_ReconcilesInputsAndUsesSharedCdidxMembership_Issue4592()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+
+            Assert.Equal(
+                IndexWatchRunner.WatchPathDisposition.Reconcile,
+                IndexWatchRunner.ClassifyWatchPathForTesting(
+                    projectRoot,
+                    dbPath,
+                    Path.Combine(projectRoot, ".gitignore"),
+                    ignoreCase: false,
+                    dbPathExplicit: false));
+            Assert.Equal(
+                IndexWatchRunner.WatchPathDisposition.Reconcile,
+                IndexWatchRunner.ClassifyWatchPathForTesting(
+                    projectRoot,
+                    dbPath,
+                    Path.Combine(projectRoot, ".cdidx", "patterns", "custom.yaml"),
+                    ignoreCase: false,
+                    dbPathExplicit: false));
+            Assert.Equal(
+                IndexWatchRunner.WatchPathDisposition.Reconcile,
+                IndexWatchRunner.ClassifyWatchPathForTesting(
+                    projectRoot,
+                    dbPath,
+                    Path.Combine(projectRoot, ".cdidx", "plugins", "custom.dll"),
+                    ignoreCase: false,
+                    dbPathExplicit: false));
+            Assert.Equal(
+                IndexWatchRunner.WatchPathDisposition.Ignore,
+                IndexWatchRunner.ClassifyWatchPathForTesting(
+                    projectRoot,
+                    dbPath,
+                    Path.Combine(projectRoot, ".cdidx", "audit-notes.md"),
+                    ignoreCase: false,
+                    dbPathExplicit: false));
+            Assert.Equal(
+                IndexWatchRunner.WatchPathDisposition.Ignore,
+                IndexWatchRunner.ClassifyWatchPathForTesting(
+                    projectRoot,
+                    dbPath,
+                    dbPath + "-wal",
+                    ignoreCase: false,
+                    dbPathExplicit: false));
+            Assert.Equal(
+                IndexWatchRunner.WatchPathDisposition.Index,
+                IndexWatchRunner.ClassifyWatchPathForTesting(
+                    projectRoot,
+                    dbPath,
+                    Path.Combine(projectRoot, "src", "app.cs"),
+                    ignoreCase: false,
+                    dbPathExplicit: false));
         }
         finally
         {
@@ -501,6 +587,7 @@ public class IndexWatchRunnerTests
                             3,
                             "incremental",
                             new[] { Path.Combine(projectRoot, "a.cs"), Path.Combine(projectRoot, "b.cs") },
+                            CancellationToken.None,
                         ]));
                 }
                 finally
@@ -589,7 +676,7 @@ public class IndexWatchRunnerTests
                 {
                     exitCode = Assert.IsType<int>(method.Invoke(
                         null,
-                        [options, _jsonOptions, args, Stopwatch.StartNew(), "rescanned", null, "incremental", null]));
+                        [options, _jsonOptions, args, Stopwatch.StartNew(), "rescanned", null, "incremental", null, CancellationToken.None]));
                 }
                 finally
                 {
@@ -654,7 +741,7 @@ public class IndexWatchRunnerTests
                 {
                     exitCode = Assert.IsType<int>(method.Invoke(
                         null,
-                        [options, _jsonOptions, args, Stopwatch.StartNew(), "updated", 3, "incremental", Array.Empty<string>()]));
+                        [options, _jsonOptions, args, Stopwatch.StartNew(), "updated", 3, "incremental", Array.Empty<string>(), CancellationToken.None]));
                 }
                 finally
                 {
@@ -670,6 +757,106 @@ public class IndexWatchRunnerTests
         }
         finally
         {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void InvokeSubRunAndEmit_CancelDuringActiveUpdate_DoesNotCaptureUnrelatedStdout_Issue4591()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "target.py");
+            File.WriteAllText(sourcePath, "print('before')\n");
+            var prebuildJson = RunIndexAndCapture([projectRoot, "--db", dbPath, "--json"], out var prebuildExit);
+            Assert.Equal(CommandExitCodes.Success, prebuildExit);
+            Assert.Contains("\"status\"", prebuildJson, StringComparison.Ordinal);
+            File.WriteAllText(sourcePath, "print('after')\n");
+
+            var options = new IndexCommandOptions
+            {
+                ProjectPath = projectRoot,
+                DbPath = dbPath,
+                Json = false,
+                Watch = true,
+            };
+            var args = new List<string>
+            {
+                projectRoot,
+                "--json",
+                "--quiet",
+                "--db",
+                dbPath,
+                "--files",
+                sourcePath,
+            };
+
+            using var cts = new CancellationTokenSource();
+            using var extractionStarted = new ManualResetEventSlim();
+            const string unrelatedOutput = "unrelated-runner-stdout-4591";
+            string capturedOut;
+            string capturedErr;
+            int exitCode;
+
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                var originalErr = Console.Error;
+                using var stdout = new StringWriter();
+                using var stderr = new StringWriter();
+                Task<int>? subRunTask = null;
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+                IndexCommandRunner.UpdateExtractionWorkStartedForTesting = () =>
+                {
+                    extractionStarted.Set();
+                    cts.Token.WaitHandle.WaitOne();
+                    cts.Token.ThrowIfCancellationRequested();
+                };
+                try
+                {
+                    subRunTask = Task.Run(() => IndexWatchRunner.InvokeSubRunAndEmit(
+                        options,
+                        _jsonOptions,
+                        args,
+                        Stopwatch.StartNew(),
+                        "updated",
+                        1,
+                        "incremental",
+                        [sourcePath],
+                        cts.Token));
+
+                    Assert.True(extractionStarted.Wait(TimeSpan.FromSeconds(10)), "The watch sub-run did not start extraction work.");
+                    Console.Out.WriteLine(unrelatedOutput);
+                    cts.Cancel();
+#pragma warning disable xUnit1031 // Console redirection lock requires synchronous bounded drain.
+                    exitCode = subRunTask.WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    cts.Cancel();
+                    if (subRunTask is { IsCompleted: false })
+                        SpinWait.SpinUntil(() => subRunTask.IsCompleted, TimeSpan.FromSeconds(10));
+                    IndexCommandRunner.UpdateExtractionWorkStartedForTesting = null;
+                    Console.SetOut(originalOut);
+                    Console.SetError(originalErr);
+                }
+                capturedOut = stdout.ToString();
+                capturedErr = stderr.ToString();
+            }
+
+            Assert.Equal(CommandExitCodes.Interrupted, exitCode);
+            Assert.Contains(unrelatedOutput, capturedOut, StringComparison.Ordinal);
+            Assert.DoesNotContain(CommandErrorCodes.Interrupted, capturedOut, StringComparison.Ordinal);
+            Assert.Contains("[watch] failed", capturedErr, StringComparison.Ordinal);
+            Assert.Contains($"exit code {CommandExitCodes.Interrupted}", capturedErr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateExtractionWorkStartedForTesting = null;
             DeleteDirectory(projectRoot);
         }
     }
@@ -873,9 +1060,236 @@ public class IndexWatchRunnerTests
             Assert.Equal("old_and_new_paths", contract.GetProperty("rename_events").GetString());
             Assert.Equal("full_rescan_after_debounce", contract.GetProperty("overflow_recovery").GetString());
             Assert.Equal("full_rescan_after_debounce", contract.GetProperty("watcher_error_recovery").GetString());
-            Assert.Equal("emit_stopped_after_current_poll_or_sub_run", contract.GetProperty("cancellation").GetString());
+            Assert.Equal("cancel_active_sub_run_then_emit_stopped", contract.GetProperty("cancellation").GetString());
             Assert.Equal("json_quiet_sub_runs", contract.GetProperty("sub_run_output").GetString());
             Assert.Equal("unsupported", contract.GetProperty("mcp_watch_mode").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void IndexCommandRun_WatchIdle_PropagatesTopLevelCancellation_Issue4591()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        using var cts = new CancellationTokenSource();
+        using var ready = new ManualResetEventSlim();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "idle.py"), "print('idle')\n");
+            IndexWatchRunner.WatchReadyForTesting = _ =>
+            {
+                ready.Set();
+                cts.Cancel();
+            };
+
+            var runTask = Task.Run(() => IndexCommandRunner.Run(
+                [projectRoot, "--watch", "--quiet", "--db", dbPath],
+                _jsonOptions,
+                cts));
+
+            Assert.True(ready.Wait(TimeSpan.FromSeconds(10)), "The top-level watch run did not become ready.");
+#pragma warning disable xUnit1031 // Bounded synchronous wait keeps the static test hook scoped.
+            var exitCode = runTask.WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+        }
+        finally
+        {
+            cts.Cancel();
+            IndexWatchRunner.WatchReadyForTesting = null;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void IndexCommandRun_WatchActiveUpdate_PropagatesTopLevelCancellation_Issue4591()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        var sourcePath = Path.Combine(projectRoot, "active.py");
+        using var cts = new CancellationTokenSource();
+        using var ready = new ManualResetEventSlim();
+        using var extractionStarted = new ManualResetEventSlim();
+        Task<int>? runTask = null;
+        try
+        {
+            File.WriteAllText(sourcePath, "print('before')\n");
+            IndexWatchRunner.WatchReadyForTesting = enqueue =>
+            {
+                File.WriteAllText(sourcePath, "print('after')\n");
+                enqueue(sourcePath);
+                ready.Set();
+            };
+            IndexCommandRunner.UpdateExtractionWorkStartedForTesting = () =>
+            {
+                extractionStarted.Set();
+                cts.Token.WaitHandle.WaitOne();
+                cts.Token.ThrowIfCancellationRequested();
+            };
+
+            runTask = Task.Run(() => IndexCommandRunner.Run(
+                [projectRoot, "--watch", "--quiet", "--debounce", "50", "--db", dbPath],
+                _jsonOptions,
+                cts));
+
+            Assert.True(ready.Wait(TimeSpan.FromSeconds(10)), "The top-level watch run did not become ready.");
+            Assert.True(extractionStarted.Wait(TimeSpan.FromSeconds(10)), "The watch update did not start extraction work.");
+            cts.Cancel();
+#pragma warning disable xUnit1031 // Bounded synchronous wait keeps the static test hooks scoped.
+            var exitCode = runTask.WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+            Assert.Equal(CommandExitCodes.Interrupted, exitCode);
+        }
+        finally
+        {
+            cts.Cancel();
+            if (runTask is { IsCompleted: false })
+                SpinWait.SpinUntil(() => runTask.IsCompleted, TimeSpan.FromSeconds(10));
+            IndexWatchRunner.WatchReadyForTesting = null;
+            IndexCommandRunner.UpdateExtractionWorkStartedForTesting = null;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCore_StartupHandoff_ReconcilesMutationAndDrainsBeforeReady_Issue4594()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            TestProjectHelper.RunGit(projectRoot, "init");
+            TestProjectHelper.RunGit(projectRoot, "config", "core.ignorecase", "false");
+            var sourcePath = Path.Combine(projectRoot, "Handoff.cs");
+            File.WriteAllText(sourcePath, "public sealed class BeforeHandoff { }\n");
+
+            var initialJson = RunIndexAndCapture([projectRoot, "--db", dbPath, "--json"], out var initialExitCode);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Contains("\"status\":\"success\"", initialJson, StringComparison.Ordinal);
+            Assert.True(HasIndexedSymbol(dbPath, "BeforeHandoff"));
+
+            var options = new IndexCommandOptions
+            {
+                ProjectPath = projectRoot,
+                DbPath = dbPath,
+                Json = true,
+                Watch = true,
+                WatchDebounceMs = 50,
+            };
+
+            using var cts = new CancellationTokenSource();
+            var handoffInvoked = false;
+            string capturedOut;
+            int exitCode;
+
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var stdout = new StringWriter();
+                Task<int>? loopTask = null;
+                Console.SetOut(stdout);
+                try
+                {
+                    loopTask = IndexWatchRunner.RunCoreAsync(
+                        options,
+                        _jsonOptions,
+                        projectRoot,
+                        dbPath,
+                        cts.Token,
+                        enqueue =>
+                        {
+                            handoffInvoked = true;
+                            File.WriteAllText(sourcePath, "public sealed class AfterHandoff { }\n");
+                            enqueue(sourcePath);
+                        });
+                    cts.Cancel();
+#pragma warning disable xUnit1031 // Console redirection lock requires synchronous bounded drain.
+                    exitCode = loopTask.WaitAsync(TimeSpan.FromSeconds(30)).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    CancelAndDrainWatchLoop(cts, loopTask);
+                    Console.SetOut(originalOut);
+                }
+                capturedOut = stdout.ToString();
+            }
+
+            Assert.True(handoffInvoked);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(HasIndexedSymbol(dbPath, "AfterHandoff"));
+            Assert.False(HasIndexedSymbol(dbPath, "BeforeHandoff"));
+
+            var startupRescan = capturedOut.IndexOf("\"status\":\"rescanned\",\"phase\":\"startup\"", StringComparison.Ordinal);
+            var startupDrain = capturedOut.IndexOf("\"status\":\"updated\",\"phase\":\"startup\"", StringComparison.Ordinal);
+            var ready = capturedOut.IndexOf("\"status\":\"watching\"", StringComparison.Ordinal);
+            Assert.True(startupRescan >= 0, capturedOut);
+            Assert.True(startupDrain > startupRescan, capturedOut);
+            Assert.True(ready > startupDrain, capturedOut);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCore_StartupReconciliationFailureDoesNotEmitWatching_Issue4594()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('startup failure')\n");
+            var initialJson = RunIndexAndCapture([projectRoot, "--db", dbPath, "--json"], out var initialExitCode);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Contains("\"status\":\"success\"", initialJson, StringComparison.Ordinal);
+
+            var options = new IndexCommandOptions
+            {
+                ProjectPath = projectRoot,
+                DbPath = dbPath,
+                Json = true,
+                Watch = true,
+                WatchDebounceMs = 50,
+            };
+            using var heldLock = IndexLock.Acquire(IndexLock.GetLockPath(dbPath), projectRoot);
+            string capturedOut;
+            int exitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var stdout = new StringWriter();
+                Console.SetOut(stdout);
+                try
+                {
+#pragma warning disable xUnit1031 // Console redirection lock requires synchronous bounded drain.
+                    exitCode = IndexWatchRunner.RunCoreAsync(
+                            options,
+                            _jsonOptions,
+                            projectRoot,
+                            dbPath,
+                            CancellationToken.None)
+                        .WaitAsync(TimeSpan.FromSeconds(10))
+                        .GetAwaiter()
+                        .GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+                capturedOut = stdout.ToString();
+            }
+
+            Assert.NotEqual(CommandExitCodes.Success, exitCode);
+            Assert.Contains("\"status\":\"failed\"", capturedOut, StringComparison.Ordinal);
+            Assert.DoesNotContain("\"status\":\"watching\"", capturedOut, StringComparison.Ordinal);
+            Assert.Contains("\"status\":\"stopped\"", capturedOut, StringComparison.Ordinal);
         }
         finally
         {
@@ -1002,6 +1416,59 @@ public class IndexWatchRunnerTests
         }
     }
 
+    [Fact]
+    public void RunCore_SubprojectObservesAncestorIgnoreFileChanges_Issue4592()
+    {
+        var repoRoot = CreateTempProject();
+        var projectRoot = Path.Combine(repoRoot, "subproj");
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        using var cts = new CancellationTokenSource();
+        using var ready = new ManualResetEventSlim();
+        Task<int>? loopTask = null;
+        try
+        {
+            TestProjectHelper.RunGit(repoRoot, "init");
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, "ignored.py"), "print('initially indexed')\n");
+            var initialJson = RunIndexAndCapture([projectRoot, "--db", dbPath, "--json"], out var initialExitCode);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Contains("\"status\":\"success\"", initialJson, StringComparison.Ordinal);
+            Assert.True(HasIndexedFile(dbPath, "ignored.py"));
+
+            var options = new IndexCommandOptions
+            {
+                ProjectPath = projectRoot,
+                DbPath = dbPath,
+                Json = true,
+                Quiet = true,
+                Watch = true,
+                WatchDebounceMs = 50,
+            };
+            IndexWatchRunner.WatchReadyForTesting = _ => ready.Set();
+            loopTask = IndexWatchRunner.RunCoreAsync(options, _jsonOptions, projectRoot, dbPath, cts.Token);
+
+            Assert.True(ready.Wait(TimeSpan.FromSeconds(15)), "The subproject watcher did not become ready.");
+            File.WriteAllText(Path.Combine(repoRoot, ".gitignore"), "subproj/ignored.py\n");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try { return !HasIndexedFile(dbPath, "ignored.py"); }
+                        catch (SqliteException) { return false; }
+                    },
+                    TimeSpan.FromSeconds(15)),
+                "The ancestor .gitignore change was not reconciled by the subproject watcher.");
+        }
+        finally
+        {
+            cts.Cancel();
+            if (loopTask is { IsCompleted: false })
+                SpinWait.SpinUntil(() => loopTask.IsCompleted, TimeSpan.FromSeconds(10));
+            IndexWatchRunner.WatchReadyForTesting = null;
+            DeleteDirectory(repoRoot);
+        }
+    }
+
     private static void AssertOptionValue(IReadOnlyList<string?> args, string option, string expectedValue)
     {
         var index = -1;
@@ -1079,6 +1546,14 @@ public class IndexWatchRunnerTests
         cmd.CommandText = "SELECT 1 FROM files WHERE path = @path";
         cmd.Parameters.AddWithValue("@path", filePath);
         return cmd.ExecuteScalar() != null;
+    }
+
+    private static bool HasIndexedSymbol(string dbPath, string symbolName)
+    {
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        db.TryMigrateForRead();
+        var reader = new DbReader(db.Connection, db.IsReadOnly);
+        return reader.SearchSymbols(symbolName, limit: 1, exact: true).Count == 1;
     }
 
     private static string CreateTempProject()
