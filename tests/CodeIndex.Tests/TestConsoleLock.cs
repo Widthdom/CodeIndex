@@ -1,8 +1,29 @@
 namespace CodeIndex.Tests;
 
 [CollectionDefinition("Console sensitive", DisableParallelization = true)]
-public sealed class ConsoleSensitiveCollection
+public sealed class ConsoleSensitiveCollection : ICollectionFixture<TrustedPluginAssemblyFixture>
 {
+}
+
+public sealed class TrustedPluginAssemblyFixture : IDisposable
+{
+    private readonly string root;
+
+    public TrustedPluginAssemblyFixture()
+    {
+        root = OperatingSystem.IsWindows()
+            ? TestProjectHelper.CreateTrustedWindowsGitDirectory("cdidx_plugin_fixture")
+            : TestProjectHelper.CreateTempProject("cdidx_plugin_fixture");
+        PluginPath = Path.Combine(root, "CodeIndex.Tests.dll");
+        TestProjectHelper.CopyAssemblyFixtureWithDependencies(
+            typeof(ExtractorPluginRegistryTests).Assembly.Location,
+            PluginPath);
+    }
+
+    internal string PluginPath { get; }
+
+    public void Dispose()
+        => TestProjectHelper.DeleteDirectory(root);
 }
 
 internal static class TestConsoleLock
