@@ -34,7 +34,15 @@ public static partial class ExtractorPluginRegistry
             loadContext = new ExtensionAssemblyLoadContext(
                 $"cdidx-plugin:{Path.GetFileNameWithoutExtension(fullPath)}",
                 fullPath);
-            var assembly = loadContext.LoadFromAssemblyPath(fullPath);
+            Assembly assembly;
+            using (var assemblyStream = new FileStream(
+                fullPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read | FileShare.Delete))
+            {
+                assembly = loadContext.LoadFromStream(assemblyStream);
+            }
             var attribute = assembly.GetCustomAttribute<CdidxPluginAttribute>();
             if (attribute == null)
             {

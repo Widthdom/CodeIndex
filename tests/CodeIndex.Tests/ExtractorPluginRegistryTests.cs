@@ -416,6 +416,46 @@ public class ExtractorPluginRegistryTests
     }
 
     [Fact]
+    public void ReloadPatternConfigsForProjectRoot_ReloadsDeletedPluginAndPreservesRegisteredFallback_Issue4592()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_refresh_4592");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
+            var pluginPath = Path.Combine(projectRoot, ".cdidx", "plugins", "CodeIndex.Tests.dll");
+            try
+            {
+                env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "1");
+                ExtractorPluginRegistry.ReloadForTests();
+                var registeredFallback = new CollectiblePluginSymbolExtractor();
+                ExtractorPluginRegistry.Register(registeredFallback);
+                Directory.CreateDirectory(Path.GetDirectoryName(pluginPath)!);
+                File.Copy(Assembly.GetExecutingAssembly().Location, pluginPath);
+
+                ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(projectRoot);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", projectRoot, out var resolvedExtractor));
+                Assert.Same(registeredFallback, resolvedExtractor);
+                Assert.Single(ExtractorPluginRegistry.WorkspacePluginLoadContextsForTests(projectRoot));
+
+                File.Delete(pluginPath);
+                Assert.False(File.Exists(pluginPath));
+                ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(projectRoot);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", projectRoot, out var restoredFallback));
+                Assert.Same(registeredFallback, restoredFallback);
+                Assert.Empty(ExtractorPluginRegistry.WorkspacePluginLoadContextsForTests(projectRoot));
+                Assert.Equal(0, ExtractorPluginRegistry.GetStatusSnapshot(projectRoot).PluginAssemblyCount);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ReloadForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void PluginAssemblyPathIdentity_FollowsPathCasingPolicy_Issue3790()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_path_casing_3790");

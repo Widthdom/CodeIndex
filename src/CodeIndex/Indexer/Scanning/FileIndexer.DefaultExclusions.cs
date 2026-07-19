@@ -5,7 +5,7 @@ public partial class FileIndexer
     // Directories to skip (case-insensitive for cross-platform) / スキップするディレクトリ（クロスプラットフォーム対応で大文字小文字を区別しない）
     private static readonly string[] SkipDirNames =
     [
-        ".git", ".svn", ".hg",
+        ".git", ".svn", ".hg", ".cdidx",
         "node_modules", ".pnpm-store", ".yarn", ".turbo", ".parcel-cache", ".svelte-kit", ".nx",
         "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".nox", ".eggs", "htmlcov",
         "venv", ".venv", "env",

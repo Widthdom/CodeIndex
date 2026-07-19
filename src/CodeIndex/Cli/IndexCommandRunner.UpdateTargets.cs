@@ -70,8 +70,8 @@ public static partial class IndexCommandRunner
             }
             if (!options.Json && !options.Quiet)
             {
-                Console.WriteLine($"  Found {ConsoleUi.Counted(targetPaths.Count, "changed file")} from git");
-                Console.WriteLine("  Note    : After reset/rebase/amend/switch/merge, prefer `cdidx .` over `--commits` for a full sync / 履歴改変やcheckout変更後は `--commits` より `cdidx .` を推奨");
+                CommandOutputWriter.WriteLine($"  Found {ConsoleUi.Counted(targetPaths.Count, "changed file")} from git");
+                CommandOutputWriter.WriteLine("  Note    : After reset/rebase/amend/switch/merge, prefer `cdidx .` over `--commits` for a full sync / 履歴改変やcheckout変更後は `--commits` より `cdidx .` を推奨");
             }
         }
 
@@ -117,7 +117,7 @@ public static partial class IndexCommandRunner
 
             WriteIndexJsonLiveness(options, $"found {ConsoleUi.Counted(targetPaths.Count, "changed file")}; preparing update...");
             if (!options.Json)
-                Console.WriteLine($"  Found {targetPaths.Count} changed file(s) between git refs");
+                CommandOutputWriter.WriteLine($"  Found {targetPaths.Count} changed file(s) between git refs");
         }
 
         if (options.UpdateFiles.Count > 0)

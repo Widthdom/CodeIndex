@@ -18,24 +18,43 @@ internal sealed class FtsBulkLoadTriggerGuard : IDisposable
         Func<bool>? shouldRebuildOnAbandon = null)
         => enabled ? new FtsBulkLoadTriggerGuard(writer, shouldRebuildOnAbandon) : null;
 
-    public void Complete(bool rebuild, Action? beforeOptimize = null)
+    public void Complete(
+        bool rebuild,
+        Action? beforeOptimize = null,
+        CancellationToken cancellationToken = default)
     {
         var writer = _writer;
         if (writer == null)
             return;
 
-        writer.RestoreFtsSyncTriggers();
-        if (rebuild)
-            writer.RebuildFtsFromChunks(resetIncrementalWriteCounter: false);
-
-        if (rebuild)
+        try
         {
-            beforeOptimize?.Invoke();
-            writer.OptimizeFts();
-        }
+            writer.RestoreFtsSyncTriggers(cancellationToken);
+            if (rebuild)
+                writer.RebuildFtsFromChunks(
+                    resetIncrementalWriteCounter: false,
+                    cancellationToken: cancellationToken);
 
-        writer.ClearFtsBulkLoadInProgress();
-        _writer = null;
+            if (rebuild)
+            {
+                beforeOptimize?.Invoke();
+                writer.OptimizeFts(cancellationToken);
+            }
+
+            writer.ClearFtsBulkLoadInProgress();
+            _writer = null;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Do not synchronously repeat a potentially long rebuild while unwinding a canceled
+            // watch sub-run. Restore triggers and leave a stale marker for the next run.
+            // cancel 済み watch sub-run の unwind 中に長い rebuild を繰り返さない。trigger を
+            // 復元し、次回 run 用の stale marker を残す。
+            writer.RestoreFtsSyncTriggers();
+            writer.MarkFtsBulkLoadRecoveryNeeded();
+            _writer = null;
+            throw;
+        }
     }
 
     public void Dispose()
@@ -58,6 +77,8 @@ internal sealed class FtsBulkLoadTriggerGuard : IDisposable
                 writer.RebuildFtsFromChunks();
             if (hasAbandonPolicy)
                 writer.ClearFtsBulkLoadInProgress();
+            else
+                writer.MarkFtsBulkLoadRecoveryNeeded();
         }
         finally
         {

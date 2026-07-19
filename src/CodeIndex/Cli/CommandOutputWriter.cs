@@ -7,11 +7,23 @@ namespace CodeIndex.Cli;
 
 internal static class CommandOutputWriter
 {
+    private static readonly AsyncLocal<TextWriter?> ScopedOutput = new();
+
+    private static TextWriter Output => ScopedOutput.Value ?? Console.Out;
+
+    internal static IDisposable Push(TextWriter output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        var previous = ScopedOutput.Value;
+        ScopedOutput.Value = output;
+        return new OutputScope(previous);
+    }
+
     internal static void WriteLine(string message = "")
-        => Console.WriteLine(message);
+        => Output.WriteLine(message);
 
     internal static void WriteJson<T>(T value, JsonTypeInfo<T> jsonTypeInfo)
-        => Console.WriteLine(JsonSerializer.Serialize(value, jsonTypeInfo));
+        => Output.WriteLine(JsonSerializer.Serialize(value, jsonTypeInfo));
 
     internal static void WriteJsonNode(JsonNode node, JsonSerializerOptions jsonOptions)
     {
@@ -25,9 +37,23 @@ internal static class CommandOutputWriter
             node.WriteTo(writer);
         }
 
-        Console.WriteLine(Encoding.UTF8.GetString(stream.ToArray()));
+        Output.WriteLine(Encoding.UTF8.GetString(stream.ToArray()));
     }
 
     internal static void WriteRawJson(string json)
-        => Console.WriteLine(json);
+        => Output.WriteLine(json);
+
+    private sealed class OutputScope(TextWriter? previous) : IDisposable
+    {
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+
+            ScopedOutput.Value = previous;
+            _disposed = true;
+        }
+    }
 }
