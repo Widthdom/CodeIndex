@@ -1,7 +1,5 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Reflection;
-using System.Runtime.Loader;
 using System.Text.Json.Serialization;
 using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
@@ -19,7 +17,11 @@ public interface IPostExtractionHook
 
 public sealed record FileContext(string ProjectRoot, string Path, string FullPath, string? Language);
 
-public sealed record PostExtractionHookInfo(string Name, string AssemblyPath, string TypeName);
+public sealed record PostExtractionHookInfo(
+    string Name,
+    string AssemblyPath,
+    string TypeName,
+    [property: JsonPropertyName("id")] string Id = "");
 
 public sealed record PostExtractionHookDiagnostic(
     string AssemblyPath,
@@ -27,7 +29,8 @@ public sealed record PostExtractionHookDiagnostic(
     string Message,
     string? Callback = null,
     long? DurationMs = null,
-    [property: JsonPropertyName("category")] string Category = "unspecified");
+    [property: JsonPropertyName("category")] string Category = "unspecified",
+    [property: JsonPropertyName("hook_id")] string? HookId = null);
 
 public sealed record PostExtractionHookDiscoverySnapshot(
     IReadOnlyList<PostExtractionHookInfo> Hooks,
@@ -48,9 +51,10 @@ public sealed class PostExtractionHookRunner : IDisposable
     internal const int MaxDiscoveryLimit = 4096;
     internal const long MaxDiscoveryMaxBytes = 512L * 1024 * 1024;
     internal const int DefaultTypeInspectionLimit = 4096;
-    internal const string HookLoadContextLifecycle = "collectible_unloaded_on_runner_dispose";
+    internal const string HookLoadContextLifecycle = "isolated_worker_process_no_parent_load_context";
 
     private readonly List<LoadedPostExtractionHook> hooks;
+    private readonly List<ExecutableExtensionStagingHandle> stagingHandles;
     private readonly ConcurrentQueue<PostExtractionHookDiagnostic> diagnostics = new();
     private readonly ConcurrentDictionary<string, byte> disabledHooks = new(StringComparer.Ordinal);
     private readonly TimeSpan callbackBudget;
@@ -61,15 +65,16 @@ public sealed class PostExtractionHookRunner : IDisposable
     internal static Func<int>? DiscoveryLimitForTesting { get; set; }
     internal static Func<long>? DiscoveryMaxBytesForTesting { get; set; }
     internal static Func<int>? TypeInspectionLimitForTesting { get; set; }
-    internal static WeakReference? LastUnretainedLoadContextForTesting { get; set; }
 
     private PostExtractionHookRunner(
         List<LoadedPostExtractionHook> hooks,
+        List<ExecutableExtensionStagingHandle> stagingHandles,
         TimeSpan callbackBudget,
         int? maxSymbolCount,
         int? maxReferenceCount)
     {
         this.hooks = hooks;
+        this.stagingHandles = stagingHandles;
         this.callbackBudget = callbackBudget;
         this.maxSymbolCount = maxSymbolCount;
         this.maxReferenceCount = maxReferenceCount;
@@ -99,8 +104,9 @@ public sealed class PostExtractionHookRunner : IDisposable
         IReadOnlyList<ExtensionTrustOverride> initialTrustOverrides)
     {
         var loaded = new List<LoadedPostExtractionHook>();
+        var stagingHandles = new List<ExecutableExtensionStagingHandle>();
         var callbackBudget = ResolveCallbackBudget();
-        var runner = new PostExtractionHookRunner(loaded, callbackBudget.Value, null, null);
+        var runner = new PostExtractionHookRunner(loaded, stagingHandles, callbackBudget.Value, null, null);
         runner.EnqueueDiagnostic(callbackBudget.Diagnostic);
         runner.EnqueueDiagnostics(initialDiagnostics);
         var discoveryLimit = ResolveDiscoveryLimit();
@@ -111,19 +117,21 @@ public sealed class PostExtractionHookRunner : IDisposable
         if (!PostExtractionHookAssemblyDiscovery.DirectoryIsSupported(hooksDirectory, runner.EnqueueDiagnostic))
             return new PostExtractionHookDiscoverySnapshot([], runner.Diagnostics, runner.CallbackBudget, initialTrustOverrides);
 
-        var hooks = PostExtractionHookAssemblyDiscovery.EnumerateAssemblyPaths(
+        var maxAssemblyBytes = ResolveDiscoveryMaxBytes();
+        runner.EnqueueDiagnostic(maxAssemblyBytes.Diagnostic);
+        var hooks = new List<PostExtractionHookInfo>();
+        foreach (var dllPath in PostExtractionHookAssemblyDiscovery.EnumerateAssemblyPaths(
+                     hooksDirectory,
+                     discoveryLimit.Value,
+                     runner.EnqueueDiagnostic))
+        {
+            hooks.AddRange(runner.DiscoverAssemblyManifest(
                 hooksDirectory,
-                discoveryLimit.Value,
-                runner.EnqueueDiagnostic)
-            .Select(dllPath =>
-            {
-                var fullPath = Path.GetFullPath(dllPath);
-                return new PostExtractionHookInfo(
-                    Path.GetFileNameWithoutExtension(fullPath),
-                    DiagnosticSanitizer.ForPath(fullPath),
-                    string.Empty);
-            })
-            .ToArray();
+                dllPath,
+                maxAssemblyBytes.Value,
+                WorkerProtocolLineLimits.MaxLineUtf8Bytes,
+                retainForCallbacks: false));
+        }
 
         return new PostExtractionHookDiscoverySnapshot(hooks, runner.Diagnostics, runner.CallbackBudget, initialTrustOverrides);
     }
@@ -143,9 +151,11 @@ public sealed class PostExtractionHookRunner : IDisposable
         int? maxReferenceCount)
     {
         var loaded = new List<LoadedPostExtractionHook>();
+        var stagingHandles = new List<ExecutableExtensionStagingHandle>();
         var callbackBudget = ResolveCallbackBudget();
         var runner = new PostExtractionHookRunner(
             loaded,
+            stagingHandles,
             callbackBudget.Value,
             PostExtractionHookMutationMaterializer.NormalizeLimit(maxSymbolCount),
             PostExtractionHookMutationMaterializer.NormalizeLimit(maxReferenceCount));
@@ -168,99 +178,140 @@ public sealed class PostExtractionHookRunner : IDisposable
                      discoveryLimit.Value,
                      runner.EnqueueDiagnostic))
         {
-            ExtensionAssemblyLoadContext? loadContext = null;
-            var retainedLoadContext = false;
-            Assembly assembly;
-            try
-            {
-                if (!PostExtractionHookAssemblyDiscovery.CandidateIsWithinBudget(
-                        dllPath,
-                        maxAssemblyBytes.Value,
-                        runner.EnqueueDiagnostic))
-                    continue;
-
-                loadContext = new ExtensionAssemblyLoadContext(
-                    $"cdidx-hook:{Path.GetFileNameWithoutExtension(dllPath)}",
-                    dllPath);
-                assembly = loadContext.LoadFromAssemblyPath(Path.GetFullPath(dllPath));
-            }
-            catch (Exception ex)
-            {
-                var diagnostic = ExtensionLoadDiagnosticClassifier.ClassifyAssemblyLoad("Hook assembly load", ex);
-                runner.EnqueueDiagnostic(dllPath, null, diagnostic.Message, category: diagnostic.Category);
-                loadContext?.Unload();
-                continue;
-            }
-
-            Type[] types;
-            try
-            {
-                types = assembly.GetTypes();
-            }
-            catch (ReflectionTypeLoadException ex)
-            {
-                var diagnostic = ExtensionLoadDiagnosticClassifier.ClassifyTypeLoad("Hook assembly type inspection", ex);
-                runner.EnqueueDiagnostic(dllPath, null, diagnostic.Message, category: diagnostic.Category);
-                loadContext?.Unload();
-                continue;
-            }
-
-            if (!PostExtractionHookAssemblyDiscovery.TypesAreWithinBudget(
-                    dllPath,
-                    types,
-                    ResolveTypeInspectionLimit(),
-                    runner.EnqueueDiagnostic))
-            {
-                loadContext?.Unload();
-                continue;
-            }
-
-            foreach (var type in types.OrderBy(type => type.FullName, StringComparer.Ordinal))
-            {
-                if (type.IsAbstract || type.IsInterface || !typeof(IPostExtractionHook).IsAssignableFrom(type))
-                    continue;
-
-                try
-                {
-                    if (type.GetConstructor(Type.EmptyTypes) == null)
-                    {
-                        runner.EnqueueDiagnostic(
-                            dllPath,
-                            type.FullName,
-                            "Failed to instantiate hook: public parameterless constructor not found.",
-                            category: "hook_constructor_missing");
-                        continue;
-                    }
-
-                    var info = new PostExtractionHookInfo(type.Name, Path.GetFullPath(dllPath), type.FullName ?? type.Name);
-                    loaded.Add(new LoadedPostExtractionHook(
-                        info,
-                        loadContext,
-                        new PostExtractionHookCallbackWorkerClient(info, maxProtocolLineBytes)));
-                    retainedLoadContext = true;
-                }
-                catch (Exception)
-                {
-                    runner.EnqueueDiagnostic(dllPath, type.FullName, "Failed to instantiate hook.", category: "activation_failed");
-                }
-            }
-
-            if (!retainedLoadContext)
-            {
-                if (loadContext != null)
-                    LastUnretainedLoadContextForTesting = new WeakReference(loadContext, trackResurrection: false);
-                loadContext?.Unload();
-            }
+            _ = runner.DiscoverAssemblyManifest(
+                hooksDirectory,
+                dllPath,
+                maxAssemblyBytes.Value,
+                maxProtocolLineBytes,
+                retainForCallbacks: true);
         }
 
         return runner;
     }
 
+    private IReadOnlyList<PostExtractionHookInfo> DiscoverAssemblyManifest(
+        string hooksDirectory,
+        string dllPath,
+        long maxAssemblyBytes,
+        int maxProtocolLineBytes,
+        bool retainForCallbacks)
+    {
+        if (!PostExtractionHookAssemblyDiscovery.CandidateIsWithinBudget(
+                dllPath,
+                maxAssemblyBytes,
+                EnqueueDiagnostic))
+        {
+            return [];
+        }
+
+        ExecutableExtensionStagingHandle? staging = null;
+        try
+        {
+            if (!ExecutableExtensionBoundary.TryStageFile(
+                    hooksDirectory,
+                    dllPath,
+                    maxAssemblyBytes,
+                    out staging,
+                    out var boundaryFailure))
+            {
+                EnqueueDiagnostic(
+                    dllPath,
+                    null,
+                    boundaryFailure.Message,
+                    category: boundaryFailure.Category);
+                return [];
+            }
+
+            if (!PluginDependencyStager.TryStageManagedDependencies(
+                    hooksDirectory,
+                    staging!,
+                    maxAssemblyBytes,
+                    out var stagedFingerprint,
+                    out var dependencyFailure,
+                    requireManagedMainMetadata: false))
+            {
+                EnqueueDiagnostic(
+                    dllPath,
+                    null,
+                    dependencyFailure.Message,
+                    category: dependencyFailure.Category);
+                return [];
+            }
+
+            var discovery = PostExtractionHookDiscoveryWorkerClient.Discover(
+                staging!.StagedPath,
+                ResolveTypeInspectionLimit(),
+                maxProtocolLineBytes);
+            if (!discovery.Success || discovery.Response?.Hooks == null)
+            {
+                EnqueueDiagnostic(
+                    dllPath,
+                    null,
+                    discovery.Error ?? "Hook discovery worker did not return a manifest.",
+                    category: discovery.ErrorCategory ?? "hook_discovery_failed");
+                return [];
+            }
+
+            var fullPath = Path.GetFullPath(dllPath);
+            foreach (var diagnostic in discovery.Response.Diagnostics ?? [])
+            {
+                var hookId = diagnostic.TypeName == null
+                    ? null
+                    : PostExtractionHookIdentity.Create(fullPath, stagedFingerprint, diagnostic.TypeName);
+                EnqueueDiagnostic(
+                    fullPath,
+                    diagnostic.TypeName,
+                    diagnostic.Message,
+                    category: diagnostic.Category,
+                    hookId: hookId);
+            }
+
+            var infos = new List<PostExtractionHookInfo>();
+            foreach (var entry in discovery.Response.Hooks)
+            {
+                var hookId = PostExtractionHookIdentity.Create(fullPath, stagedFingerprint, entry.TypeName);
+                var info = new PostExtractionHookInfo(
+                    entry.Name,
+                    retainForCallbacks ? fullPath : DiagnosticSanitizer.ForPath(fullPath),
+                    entry.TypeName,
+                    hookId);
+                infos.Add(info);
+                if (retainForCallbacks)
+                {
+                    hooks.Add(new LoadedPostExtractionHook(
+                        info,
+                        new PostExtractionHookCallbackWorkerClient(
+                            info with { AssemblyPath = staging.StagedPath },
+                            maxProtocolLineBytes)));
+                }
+            }
+
+            if (retainForCallbacks && infos.Count > 0)
+            {
+                stagingHandles.Add(staging);
+                staging = null;
+            }
+
+            return infos;
+        }
+        catch (Exception ex)
+        {
+            var diagnostic = ExtensionLoadDiagnosticClassifier.ClassifyAssemblyLoad(
+                "Hook discovery",
+                ex);
+            EnqueueDiagnostic(dllPath, null, diagnostic.Message, category: diagnostic.Category);
+            return [];
+        }
+        finally
+        {
+            staging?.Dispose();
+        }
+    }
+
     public IReadOnlyList<PostExtractionHookInfo> Hooks
         => hooks.Count == 0 ? [] : hooks.Select(hook => hook.Info).ToList();
 
-    internal IReadOnlyList<AssemblyLoadContext?> LoadContextsForTests
-        => hooks.Count == 0 ? [] : hooks.Select(hook => hook.LoadContext).ToList();
+    internal int ParentLoadContextCountForTests => 0;
 
     public IReadOnlyList<PostExtractionHookDiagnostic> Diagnostics
         => diagnostics.Count == 0 ? [] : diagnostics.ToList();
@@ -346,7 +397,7 @@ public sealed class PostExtractionHookRunner : IDisposable
         int? maxReferences,
         CancellationToken cancellationToken)
     {
-        if (disabledHooks.ContainsKey(hook.Info.TypeName))
+        if (disabledHooks.ContainsKey(hook.Info.Id))
             return false;
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -362,7 +413,7 @@ public sealed class PostExtractionHookRunner : IDisposable
             cancellationToken);
         if (result.TimedOut)
         {
-            disabledHooks.TryAdd(hook.Info.TypeName, 0);
+            disabledHooks.TryAdd(hook.Info.Id, 0);
             EnqueueDiagnostic(
                 hook.Info.AssemblyPath,
                 hook.Info.TypeName,
@@ -371,13 +422,14 @@ public sealed class PostExtractionHookRunner : IDisposable
                     result.WorkerError),
                 callback,
                 result.DurationMs,
-                "callback_timeout");
+                "callback_timeout",
+                hook.Info.Id);
             return false;
         }
 
         if (!result.Success)
         {
-            disabledHooks.TryAdd(hook.Info.TypeName, 0);
+            disabledHooks.TryAdd(hook.Info.Id, 0);
             EnqueueDiagnostic(
                 hook.Info.AssemblyPath,
                 hook.Info.TypeName,
@@ -386,7 +438,8 @@ public sealed class PostExtractionHookRunner : IDisposable
                     result.WorkerError),
                 callback,
                 result.DurationMs,
-                ClassifyWorkerFailureCategory(result.WorkerError));
+                ClassifyWorkerFailureCategory(result.WorkerError),
+                hook.Info.Id);
             return false;
         }
 
@@ -425,7 +478,8 @@ public sealed class PostExtractionHookRunner : IDisposable
                 $"{callback} failed.",
                 callback,
                 result.DurationMs,
-                "hook_callback_failed");
+                "hook_callback_failed",
+                hook.Info.Id);
         }
 
         return true;
@@ -463,9 +517,10 @@ public sealed class PostExtractionHookRunner : IDisposable
         string message,
         string? callback = null,
         long? durationMs = null,
-        string category = "unspecified")
+        string category = "unspecified",
+        string? hookId = null)
     {
-        diagnostics.Enqueue(PostExtractionHookDiagnosticFactory.Create(assemblyPath, typeName, message, callback, durationMs, category));
+        diagnostics.Enqueue(PostExtractionHookDiagnosticFactory.Create(assemblyPath, typeName, message, callback, durationMs, category, hookId));
     }
 
     private void EnqueueDiagnostic(PostExtractionHookDiagnostic? diagnostic)
@@ -492,7 +547,8 @@ public sealed class PostExtractionHookRunner : IDisposable
             hook.Info.TypeName,
             $"Post-extraction hook {callback} {direction} exceeded the {maxCount:N0} {recordKind} materialization budget; extra {recordKind} records were discarded.",
             callback,
-            category: recordKind == "symbol" ? "hook_symbol_count_truncated" : "hook_reference_count_truncated");
+            category: recordKind == "symbol" ? "hook_symbol_count_truncated" : "hook_reference_count_truncated",
+            hookId: hook.Info.Id);
     }
 
     private static HookBudgetResolution<TimeSpan> ResolveCallbackBudget()
@@ -621,30 +677,19 @@ public sealed class PostExtractionHookRunner : IDisposable
             return;
 
         disposed = true;
-        if (hooks.Count == 0)
-            return;
-
         foreach (var hook in hooks)
         {
             hook.Worker.Dispose();
         }
-
-        var loadContexts = hooks
-            .Select(hook => hook.LoadContext)
-            .Where(loadContext => loadContext is { IsCollectible: true })
-            .Distinct()
-            .ToList();
         hooks.Clear();
 
-        foreach (var loadContext in loadContexts)
-        {
-            loadContext!.Unload();
-        }
+        foreach (var staging in stagingHandles)
+            staging.Dispose();
+        stagingHandles.Clear();
     }
 
     private sealed record LoadedPostExtractionHook(
         PostExtractionHookInfo Info,
-        AssemblyLoadContext? LoadContext,
         PostExtractionHookCallbackWorkerClient Worker);
 
     private sealed record HookBudgetResolution<T>(T Value, PostExtractionHookDiagnostic? Diagnostic);

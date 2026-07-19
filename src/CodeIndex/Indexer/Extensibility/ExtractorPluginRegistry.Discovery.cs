@@ -20,6 +20,16 @@ public static partial class ExtractorPluginRegistry
             if (!Directory.Exists(directory))
                 continue;
 
+            if (!ExecutableExtensionBoundary.TryValidateDirectory(directory, out _, out var boundaryFailure))
+            {
+                ReportPluginDirectorySkipped(
+                    workspaceState,
+                    directory,
+                    boundaryFailure.Message,
+                    boundaryFailure.Category);
+                continue;
+            }
+
             using var enumerator = TryEnumeratePluginFiles(workspaceState, directory);
             if (enumerator == null)
                 continue;
@@ -107,9 +117,16 @@ public static partial class ExtractorPluginRegistry
                 yield return directory;
         }
 
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        if (!string.IsNullOrWhiteSpace(home))
-            yield return Path.Combine(home, ".cdidx", "plugins");
+        if (!string.IsNullOrWhiteSpace(UserPluginDirectoryForTesting))
+        {
+            yield return UserPluginDirectoryForTesting;
+        }
+        else
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrWhiteSpace(home))
+                yield return Path.Combine(home, ".cdidx", "plugins");
+        }
     }
 
     private static IEnumerable<string> EnumerateWorkspacePluginDirectories(string projectRoot)

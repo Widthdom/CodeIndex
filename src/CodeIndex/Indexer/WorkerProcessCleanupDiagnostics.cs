@@ -36,7 +36,8 @@ internal static class WorkerProcessCleanupDiagnostics
 
         try
         {
-            process.WaitForExit(waitMilliseconds);
+            if (!process.WaitForExit(waitMilliseconds))
+                waitDiagnostic = "worker_kill_wait_timeout";
         }
         catch (Exception ex)
         {

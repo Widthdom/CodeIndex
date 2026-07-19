@@ -1,12 +1,10 @@
-using System.Reflection;
-using System.Runtime.Loader;
 using CodeIndex.Cli;
 
 namespace CodeIndex.Indexer.Extensibility;
 
 public static partial class ExtractorPluginRegistry
 {
-    internal static Action<AssemblyLoadContext>? WorkspacePluginLoadedBeforeCommitForTesting { get; set; }
+    internal static Action? WorkspacePluginLoadedBeforeCommitForTesting { get; set; }
 
     private static void LoadPluginAssemblies(
         IEnumerable<string> directories,
@@ -19,33 +17,59 @@ public static partial class ExtractorPluginRegistry
     private static void TryLoadPlugin(string pluginPath, PatternWorkspaceState? workspaceState = null)
     {
         var fullPath = pluginPath;
-        ExtensionAssemblyLoadContext? loadContext = null;
+        ExecutableExtensionStagingHandle? staging = null;
+        ExtractorPluginWorkerClient? worker = null;
         try
         {
             fullPath = Path.GetFullPath(pluginPath);
-            if (!TryMarkPluginAssemblyPathLoaded(workspaceState, fullPath))
+            if (WorkspacePluginIsAlreadyLoaded(workspaceState, fullPath)
+                || !PluginAssemblyCandidateIsWithinBudget(workspaceState, fullPath))
             {
                 return;
             }
 
-            if (!PluginAssemblyCandidateIsWithinBudget(workspaceState, fullPath))
+            var pluginDirectory = Path.GetDirectoryName(fullPath) ?? string.Empty;
+            if (!ExecutableExtensionBoundary.TryStageFile(
+                    pluginDirectory,
+                    fullPath,
+                    MaxPluginAssemblyBytes,
+                    out staging,
+                    out var boundaryFailure))
+            {
+                RecordPluginDiagnostic(
+                    workspaceState,
+                    "plugin",
+                    fullPath,
+                    typeName: null,
+                    severity: "error",
+                    boundaryFailure.Message,
+                    countsAsSkippedFile: true,
+                    category: boundaryFailure.Category);
                 return;
-
-            loadContext = new ExtensionAssemblyLoadContext(
-                $"cdidx-plugin:{Path.GetFileNameWithoutExtension(fullPath)}",
-                fullPath);
-            Assembly assembly;
-            using (var assemblyStream = new FileStream(
-                fullPath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read | FileShare.Delete))
-            {
-                assembly = loadContext.LoadFromStream(assemblyStream);
             }
-            var attribute = assembly.GetCustomAttribute<CdidxPluginAttribute>();
-            if (attribute == null)
+
+            if (!PluginMetadataInspector.TryInspect(staging!.StagedPath, out var metadata, out var metadataError))
             {
+                if (PluginLoadAttemptIsCached(workspaceState, fullPath, staging.Fingerprint))
+                    return;
+                RecordPluginLoadAttempt(workspaceState, fullPath, staging.Fingerprint, succeeded: false);
+                RecordPluginDiagnostic(
+                    workspaceState,
+                    "plugin",
+                    fullPath,
+                    typeName: null,
+                    severity: "error",
+                    metadataError,
+                    countsAsSkippedFile: true,
+                    category: "plugin_metadata_invalid");
+                return;
+            }
+
+            if (!metadata.HasMarker)
+            {
+                if (PluginLoadAttemptIsCached(workspaceState, fullPath, staging.Fingerprint))
+                    return;
+                RecordPluginLoadAttempt(workspaceState, fullPath, staging.Fingerprint, succeeded: false);
                 RecordPluginDiagnostic(
                     workspaceState,
                     "plugin",
@@ -58,55 +82,121 @@ public static partial class ExtractorPluginRegistry
                 return;
             }
 
-            if (attribute.MinApiVersion > CurrentApiVersion
-                || attribute.MaxApiVersion < CurrentApiVersion)
+            if (metadata.MinApiVersion > CurrentApiVersion
+                || metadata.MaxApiVersion < CurrentApiVersion)
             {
+                if (PluginLoadAttemptIsCached(workspaceState, fullPath, staging.Fingerprint))
+                    return;
+                RecordPluginLoadAttempt(workspaceState, fullPath, staging.Fingerprint, succeeded: false);
                 RecordPluginDiagnostic(
                     workspaceState,
                     "plugin",
                     fullPath,
                     typeName: null,
                     severity: "skipped",
-                    $"Plugin assembly skipped: API range {attribute.MinApiVersion}-{attribute.MaxApiVersion} does not include {CurrentApiVersion}.",
+                    $"Plugin assembly skipped: API range {metadata.MinApiVersion}-{metadata.MaxApiVersion} does not include {CurrentApiVersion}.",
                     countsAsSkippedFile: true,
                     category: "incompatible_plugin_api");
                 return;
             }
 
-            Type[] types;
-            try
+            if (!PluginDependencyStager.TryStageManagedDependencies(
+                    pluginDirectory,
+                    staging,
+                    MaxPluginAssemblyBytes,
+                    out var stagedFingerprint,
+                    out var dependencyFailure))
             {
-                types = assembly.GetTypes();
-            }
-            catch (ReflectionTypeLoadException ex)
-            {
-                var diagnostic = ExtensionLoadDiagnosticClassifier.ClassifyTypeLoad("Plugin assembly type inspection", ex);
                 RecordPluginDiagnostic(
                     workspaceState,
                     "plugin",
                     fullPath,
                     typeName: null,
                     severity: "error",
-                    diagnostic.Message,
+                    dependencyFailure.Message,
                     countsAsSkippedFile: true,
-                    category: diagnostic.Category);
+                    category: dependencyFailure.Category);
                 return;
             }
 
-            if (!PluginAssemblyTypesAreWithinBudget(workspaceState, fullPath, types))
+            if (PluginLoadAttemptIsCached(workspaceState, fullPath, stagedFingerprint))
                 return;
 
-            if (workspaceState != null)
-                WorkspacePluginLoadedBeforeCommitForTesting?.Invoke(loadContext);
+            worker = new ExtractorPluginWorkerClient(
+                staging.StagedPath,
+                ResolveTypeInspectionLimit(),
+                WorkerOperationBudgetForTesting);
+            var manifestResult = worker.LoadManifest();
+            if (!manifestResult.Success || manifestResult.Response?.Manifest == null)
+            {
+                RecordPluginLoadAttempt(workspaceState, fullPath, stagedFingerprint, succeeded: false);
+                var typeLimitExceeded = StringComparer.Ordinal.Equals(
+                    manifestResult.ErrorCategory,
+                    "plugin_type_limit_exceeded");
+                RecordPluginDiagnostic(
+                    workspaceState,
+                    "plugin",
+                    fullPath,
+                    typeName: null,
+                    severity: typeLimitExceeded ? "skipped" : "error",
+                    manifestResult.Error ?? "Plugin worker did not return a manifest.",
+                    countsAsSkippedFile: true,
+                    category: manifestResult.ErrorCategory ?? "plugin_worker_manifest_failed");
+                return;
+            }
 
+            foreach (var diagnostic in manifestResult.Response.Diagnostics ?? [])
+            {
+                RecordPluginDiagnostic(
+                    workspaceState,
+                    "plugin_type",
+                    fullPath,
+                    diagnostic.TypeName,
+                    severity: "error",
+                    diagnostic.Message,
+                    countsAsSkippedFile: false,
+                    category: diagnostic.Category);
+            }
+
+            if (workspaceState != null)
+                WorkspacePluginLoadedBeforeCommitForTesting?.Invoke();
+
+            LoadedPluginState? replacedState;
             if (workspaceState == null)
             {
                 lock (Gate)
                 {
+                    replacedState = LoadedPluginStates.FirstOrDefault(
+                        state => string.Equals(state.Path, fullPath, PathCasing.ComparisonFor(fullPath)));
+                    if (replacedState != null)
+                        RemoveLoadedPluginStateUnderLock(replacedState, workspaceState: null);
+
+                    var registrations = RegisterPluginManifest(
+                        manifestResult.Response.Manifest,
+                        worker,
+                        fullPath,
+                        workspaceState: null);
                     pluginAssemblyCount++;
-                    LoadedPluginAssemblyContexts.Add(loadContext);
-                    loadContext = null;
+                    LoadedPluginWorkers.Add(worker);
+                    LoadedPluginStagingHandles.Add(staging!);
+                    LoadedPluginStates.Add(new(
+                        fullPath,
+                        stagedFingerprint,
+                        worker,
+                        staging!,
+                        registrations));
+                    RecordPluginLoadAttemptUnderLock(
+                        PluginLoadAttempts,
+                        fullPath,
+                        stagedFingerprint,
+                        succeeded: true);
+                    PublishUserExtractorSnapshot();
+                    worker = null;
+                    staging = null;
                 }
+
+                lock (DefaultPatternWorkspace.Gate)
+                    DefaultPatternWorkspace.PublishSnapshot();
             }
             else
             {
@@ -115,18 +205,36 @@ public static partial class ExtractorPluginRegistry
                     if (workspaceState.Retired)
                         return;
 
-                    workspaceState.PluginAssemblyCount++;
-                    workspaceState.PluginLoadContexts.Add(loadContext);
+                    replacedState = workspaceState.PluginStates.FirstOrDefault(
+                        state => string.Equals(state.Path, fullPath, PathCasing.ComparisonFor(fullPath)));
+                    if (replacedState != null)
+                        RemoveLoadedPluginStateUnderLock(replacedState, workspaceState);
+
+                    var registrations = RegisterPluginManifest(
+                        manifestResult.Response.Manifest,
+                        worker,
+                        fullPath,
+                        workspaceState);
+                    workspaceState.PluginStates.Add(new(
+                        fullPath,
+                        stagedFingerprint,
+                        worker,
+                        staging!,
+                        registrations));
+                    workspaceState.PluginAssemblyCount = workspaceState.PluginStates.Count;
+                    RecordPluginLoadAttemptUnderLock(
+                        workspaceState.PluginLoadAttempts,
+                        fullPath,
+                        stagedFingerprint,
+                        succeeded: true);
                     workspaceState.PublishSnapshot();
-                    loadContext = null;
+                    worker = null;
+                    staging = null;
                 }
             }
 
-            foreach (var type in types)
-            {
-                if (type is { IsAbstract: false, IsInterface: false } && type.GetConstructor(Type.EmptyTypes) != null)
-                    TryRegisterPluginType(type, fullPath, workspaceState);
-            }
+            replacedState?.Worker.Dispose();
+            replacedState?.Staging.Dispose();
         }
         catch (Exception ex)
         {
@@ -143,22 +251,47 @@ public static partial class ExtractorPluginRegistry
         }
         finally
         {
-            loadContext?.Unload();
+            worker?.Dispose();
+            staging?.Dispose();
         }
     }
 
-    private static void UnloadPluginAssemblyContexts()
-        => UnloadPluginAssemblyContexts(LoadedPluginAssemblyContexts);
-
-    private static void UnloadPluginAssemblyContexts(List<AssemblyLoadContext> loadContexts)
+    private static bool WorkspacePluginIsAlreadyLoaded(PatternWorkspaceState? workspaceState, string fullPath)
     {
-        foreach (var loadContext in loadContexts)
-        {
-            if (loadContext.IsCollectible)
-                loadContext.Unload();
-        }
+        if (workspaceState == null)
+            return false;
 
-        loadContexts.Clear();
+        lock (workspaceState.Gate)
+        {
+            return workspaceState.Retired
+                   || workspaceState.PluginStates.Any(
+                       state => string.Equals(state.Path, fullPath, PathCasing.ComparisonFor(fullPath)));
+        }
+    }
+
+    private static void DisposePluginWorkers()
+    {
+        foreach (var worker in LoadedPluginWorkers)
+            worker.Dispose();
+
+        LoadedPluginWorkers.Clear();
+    }
+
+    private static void DisposePluginStagingHandles()
+    {
+        foreach (var staging in LoadedPluginStagingHandles)
+            staging.Dispose();
+
+        LoadedPluginStagingHandles.Clear();
+    }
+
+    private static void DisposePluginStates(IEnumerable<LoadedPluginState> states)
+    {
+        foreach (var state in states)
+        {
+            state.Worker.Dispose();
+            state.Staging.Dispose();
+        }
     }
 
     private static bool PluginAssemblyCandidateIsWithinBudget(PatternWorkspaceState? workspaceState, string fullPath)
@@ -241,102 +374,153 @@ public static partial class ExtractorPluginRegistry
         return true;
     }
 
-    private static bool PluginAssemblyTypesAreWithinBudget(
-        PatternWorkspaceState? workspaceState,
-        string fullPath,
-        IReadOnlyCollection<Type> types)
-    {
-        var limit = ResolveTypeInspectionLimit();
-        if (types.Count <= limit)
-            return true;
-
-        RecordPluginDiagnostic(
-            workspaceState,
-            "plugin",
-            fullPath,
-            typeName: null,
-            severity: "skipped",
-            $"Plugin assembly skipped: too many loadable types ({types.Count}; maximum {limit}).",
-            countsAsSkippedFile: true,
-            category: "plugin_type_limit_exceeded");
-        return false;
-    }
-
-    private static void TryRegisterPluginType(
-        Type type,
+    private static IReadOnlyList<PluginRegistration> RegisterPluginManifest(
+        IReadOnlyList<ExtractorPluginWorkerManifestEntry> manifest,
+        ExtractorPluginWorkerClient worker,
         string pluginPath,
         PatternWorkspaceState? workspaceState)
     {
-        var supportsSymbolExtraction = typeof(ISymbolExtractor).IsAssignableFrom(type);
-        var supportsReferenceExtraction = typeof(IReferenceExtractor).IsAssignableFrom(type);
-        if (!supportsSymbolExtraction && !supportsReferenceExtraction)
-            return;
-
-        try
+        var registrations = new List<PluginRegistration>();
+        foreach (var entry in manifest)
         {
-            var instance = Activator.CreateInstance(type);
-            if (workspaceState == null)
+            try
             {
-                if (supportsSymbolExtraction && instance is ISymbolExtractor symbolExtractor)
-                    Register(symbolExtractor);
-
-                if (supportsReferenceExtraction && instance is IReferenceExtractor referenceExtractor)
-                    Register(referenceExtractor);
+                var proxy = new IsolatedPluginExtractorProxy(
+                    entry,
+                    worker,
+                    (typeName, category, message) => RecordPluginDiagnostic(
+                        workspaceState,
+                        "plugin_type",
+                        pluginPath,
+                        typeName,
+                        severity: "error",
+                        message,
+                        countsAsSkippedFile: false,
+                        category));
+                var symbolLanguage = entry.SupportsSymbols
+                    ? NormalizePluginLanguage(((ISymbolExtractor)proxy).Language)
+                    : string.Empty;
+                var referenceLanguage = entry.SupportsReferences
+                    ? NormalizePluginLanguage(((IReferenceExtractor)proxy).Language)
+                    : string.Empty;
+                var symbolExtractors = workspaceState?.WorkspaceSymbolExtractors ?? SymbolExtractors;
+                var referenceExtractors = workspaceState?.WorkspaceReferenceExtractors ?? ReferenceExtractors;
+                if (entry.SupportsSymbols)
+                    symbolExtractors[symbolLanguage] = proxy;
+                if (entry.SupportsReferences)
+                    referenceExtractors[referenceLanguage] = proxy;
+                registrations.Add(new(
+                    entry.SupportsSymbols ? symbolLanguage : null,
+                    entry.SupportsReferences ? referenceLanguage : null,
+                    proxy,
+                    entry.SupportsSymbols,
+                    entry.SupportsReferences));
             }
-            else
+            catch (Exception ex)
             {
-                lock (workspaceState.Gate)
-                {
-                    if (workspaceState.Retired)
-                        return;
-
-                    if (supportsSymbolExtraction && instance is ISymbolExtractor symbolExtractor)
-                        workspaceState.WorkspaceSymbolExtractors[NormalizePluginLanguage(symbolExtractor.Language)] = symbolExtractor;
-
-                    if (supportsReferenceExtraction && instance is IReferenceExtractor referenceExtractor)
-                        workspaceState.WorkspaceReferenceExtractors[NormalizePluginLanguage(referenceExtractor.Language)] = referenceExtractor;
-
-                    workspaceState.PublishSnapshot();
-                }
+                RecordPluginDiagnostic(
+                    workspaceState,
+                    "plugin_type",
+                    pluginPath,
+                    entry.TypeName,
+                    severity: "error",
+                    SafeDiagnosticFormatter.FormatExceptionCategory("plugin_manifest_invalid", ex),
+                    countsAsSkippedFile: false,
+                    category: "plugin_manifest_invalid");
             }
         }
-        catch (Exception ex)
+
+        return registrations;
+    }
+
+    private static void RemoveLoadedPluginStateUnderLock(
+        LoadedPluginState state,
+        PatternWorkspaceState? workspaceState)
+    {
+        var symbolExtractors = workspaceState?.WorkspaceSymbolExtractors ?? SymbolExtractors;
+        var referenceExtractors = workspaceState?.WorkspaceReferenceExtractors ?? ReferenceExtractors;
+        foreach (var registration in state.Registrations)
         {
-            var diagnostic = ExtensionLoadDiagnosticClassifier.ClassifyConstructorFailure("Plugin type constructor", ex);
-            RecordPluginDiagnostic(
-                workspaceState,
-                "plugin_type",
-                pluginPath,
-                type.FullName,
-                severity: "error",
-                diagnostic.Message,
-                countsAsSkippedFile: false,
-                category: diagnostic.Category);
+            if (registration.SupportsSymbols
+                && registration.SymbolLanguage != null
+                && symbolExtractors.TryGetValue(registration.SymbolLanguage, out var symbolExtractor)
+                && ReferenceEquals(symbolExtractor, registration.Proxy))
+            {
+                symbolExtractors.Remove(registration.SymbolLanguage);
+            }
+
+            if (registration.SupportsReferences
+                && registration.ReferenceLanguage != null
+                && referenceExtractors.TryGetValue(registration.ReferenceLanguage, out var referenceExtractor)
+                && ReferenceEquals(referenceExtractor, registration.Proxy))
+            {
+                referenceExtractors.Remove(registration.ReferenceLanguage);
+            }
+        }
+
+        if (workspaceState == null)
+        {
+            LoadedPluginStates.Remove(state);
+            LoadedPluginWorkers.Remove(state.Worker);
+            LoadedPluginStagingHandles.Remove(state.Staging);
+            pluginAssemblyCount--;
+        }
+        else
+        {
+            workspaceState.PluginStates.Remove(state);
+            workspaceState.PluginAssemblyCount = workspaceState.PluginStates.Count;
         }
     }
 
-    private static bool TryMarkPluginAssemblyPathLoaded(PatternWorkspaceState? workspaceState, string fullPath)
+    private static void RecordPluginLoadAttempt(
+        PatternWorkspaceState? workspaceState,
+        string path,
+        string fingerprint,
+        bool succeeded)
     {
         if (workspaceState == null)
         {
             lock (Gate)
-                return TryMarkPluginAssemblyPathLoaded(fullPath);
+                RecordPluginLoadAttemptUnderLock(PluginLoadAttempts, path, fingerprint, succeeded);
+            return;
         }
 
         lock (workspaceState.Gate)
+            RecordPluginLoadAttemptUnderLock(workspaceState.PluginLoadAttempts, path, fingerprint, succeeded);
+    }
+
+    private static bool PluginLoadAttemptIsCached(
+        PatternWorkspaceState? workspaceState,
+        string path,
+        string fingerprint)
+    {
+        if (workspaceState == null)
         {
-            if (workspaceState.Retired)
-                return false;
-
-            if (workspaceState.LoadedPluginPaths.Any(path =>
-                    string.Equals(path, fullPath, PathCasing.ComparisonFor(fullPath))))
-            {
-                return false;
-            }
-
-            workspaceState.LoadedPluginPaths.Add(fullPath);
-            return true;
+            lock (Gate)
+                return PluginLoadAttemptIsCachedUnderLock(PluginLoadAttempts, path, fingerprint);
         }
+
+        lock (workspaceState.Gate)
+            return PluginLoadAttemptIsCachedUnderLock(workspaceState.PluginLoadAttempts, path, fingerprint);
+    }
+
+    private static bool PluginLoadAttemptIsCachedUnderLock(
+        IReadOnlyCollection<PluginLoadAttempt> attempts,
+        string path,
+        string fingerprint)
+        => attempts.Any(
+            attempt => string.Equals(attempt.Path, path, PathCasing.ComparisonFor(path))
+                       && StringComparer.Ordinal.Equals(attempt.Fingerprint, fingerprint));
+
+    private static void RecordPluginLoadAttemptUnderLock(
+        List<PluginLoadAttempt> attempts,
+        string path,
+        string fingerprint,
+        bool succeeded)
+    {
+        attempts.RemoveAll(
+            attempt => string.Equals(attempt.Path, path, PathCasing.ComparisonFor(path)));
+        attempts.Add(new(path, fingerprint, succeeded));
     }
 
     private static void RecordPluginDiagnostic(

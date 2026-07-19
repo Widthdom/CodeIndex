@@ -6,12 +6,38 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-if (-not $env:RUNNER_TEMP) {
-  throw "RUNNER_TEMP is required to configure the Windows test host."
+if (-not $env:USERPROFILE) {
+  throw "USERPROFILE is required to configure the Windows test host."
 }
 
-$tempRoot = Join-Path $env:RUNNER_TEMP "cdidx-temp"
+$tempRoot = Join-Path $env:USERPROFILE "cdidx-test-temp"
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+
+$currentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+try {
+  $currentUser = $currentIdentity.User
+  if (-not $currentUser) {
+    throw "The current Windows user SID is unavailable."
+  }
+
+  $tempAcl = [System.Security.AccessControl.DirectorySecurity]::new()
+  $tempAcl.SetOwner($currentUser)
+  $tempAcl.SetAccessRuleProtection($true, $false)
+  $inheritanceFlags =
+    [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+    [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+  $tempAcl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
+    $currentUser,
+    [System.Security.AccessControl.FileSystemRights]::FullControl,
+    $inheritanceFlags,
+    [System.Security.AccessControl.PropagationFlags]::None,
+    [System.Security.AccessControl.AccessControlType]::Allow))
+  Set-Acl -LiteralPath $tempRoot -AclObject $tempAcl
+  Write-Host "Protected Windows test temp ACL for current user: $currentUser"
+}
+finally {
+  $currentIdentity.Dispose()
+}
 
 if ($env:GITHUB_ENV) {
   "TMP=$tempRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -30,7 +56,7 @@ $candidates = @(
   },
   [pscustomobject]@{
     Path = $env:RUNNER_TEMP
-    Reason = "GitHub-hosted runner temp root used by actions and pinned TMP/TEMP."
+    Reason = "GitHub-hosted runner temp root used by actions."
   },
   [pscustomobject]@{
     Path = $env:TEMP

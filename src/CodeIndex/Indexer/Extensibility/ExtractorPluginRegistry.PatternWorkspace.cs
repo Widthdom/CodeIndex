@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Runtime.Loader;
 using CodeIndex.Cli;
 
 namespace CodeIndex.Indexer.Extensibility;
@@ -16,8 +15,8 @@ public static partial class ExtractorPluginRegistry
         internal Dictionary<string, string> PatternSources { get; } = new(StringComparer.Ordinal);
         internal Dictionary<string, ISymbolExtractor> WorkspaceSymbolExtractors { get; } = new(StringComparer.Ordinal);
         internal Dictionary<string, IReferenceExtractor> WorkspaceReferenceExtractors { get; } = new(StringComparer.Ordinal);
-        internal List<string> LoadedPluginPaths { get; } = [];
-        internal List<AssemblyLoadContext> PluginLoadContexts { get; } = [];
+        internal List<LoadedPluginState> PluginStates { get; } = [];
+        internal List<PluginLoadAttempt> PluginLoadAttempts { get; } = [];
         internal List<string> LoadedPaths { get; } = [];
         internal List<(string Path, PatternConfigFingerprint Fingerprint)> FailedFingerprints { get; } = [];
         internal List<PatternConfigStatus> Configs { get; } = [];
@@ -78,7 +77,7 @@ public static partial class ExtractorPluginRegistry
                     DiagnosticTotalCount,
                     RuleCount,
                     PluginAssemblyCount,
-                    PluginLoadContexts.Count));
+                    0));
 
             void CopyPatternExtractors(string source, Dictionary<string, ISymbolExtractor> target)
             {
@@ -129,8 +128,9 @@ public static partial class ExtractorPluginRegistry
             PatternSources.Clear();
             WorkspaceSymbolExtractors.Clear();
             WorkspaceReferenceExtractors.Clear();
-            LoadedPluginPaths.Clear();
-            UnloadPluginAssemblyContexts(PluginLoadContexts);
+            DisposePluginStates(PluginStates);
+            PluginStates.Clear();
+            PluginLoadAttempts.Clear();
             LoadedPaths.Clear();
             FailedFingerprints.Clear();
             Configs.Clear();

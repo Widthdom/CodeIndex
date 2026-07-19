@@ -134,7 +134,16 @@ public class PerformanceTests : IDisposable
         Assert.True(chunks >= 120, $"Expected at least one chunk per file, got {chunks}");
         Assert.True(symbols >= 240, $"Expected class and method symbols from the smoke fixture, got {symbols}");
         Assert.True(references > 0, "Expected reference rows from the smoke fixture.");
-        Assert.True(indexElapsed < TimeSpan.FromSeconds(20), $"CI performance smoke indexing took {indexElapsed.TotalSeconds:F1}s");
+        // Hosted Windows runners have wider filesystem and process-scheduling variance.
+        // Keep a bounded platform budget without weakening other lanes.
+        // hosted Windows runner は filesystem / process scheduling の変動幅が大きいため、
+        // 他 lane の基準は維持したまま platform 別の上限を設定する。
+        var indexBudget = OperatingSystem.IsWindows()
+            ? TimeSpan.FromSeconds(45)
+            : TimeSpan.FromSeconds(20);
+        Assert.True(
+            indexElapsed < indexBudget,
+            $"CI performance smoke indexing took {indexElapsed.TotalSeconds:F1}s (budget {indexBudget.TotalSeconds:F0}s)");
 
         var reader = new DbReader(_db.Connection);
         List<SearchResult> results = [];

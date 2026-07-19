@@ -1480,6 +1480,7 @@ public partial class McpServer
                 status.Hooks = postExtractionHooks
                     .Select(hook => new PostExtractionHookStatus
                     {
+                        Id = hook.Id,
                         Name = hook.Name,
                         AssemblyPath = hook.AssemblyPath,
                         TypeName = hook.TypeName,

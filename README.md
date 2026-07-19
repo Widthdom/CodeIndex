@@ -265,11 +265,13 @@ selected by `indexed_head_source` without a workspace scan.
 
 Runtime diagnostics under `extractors` include `retained_load_context_count` and
 `load_context_lifecycle` so long-running processes can see how many plugin
-assembly load contexts are still held and why. Plugin contexts are collectible
-but retained while registered extractor instances remain active; rejected or
-unretained contexts are unloaded. `hooks[]` entries include `callback_budget_ms`
-and `load_context_lifecycle` to show that hook contexts are collectible and
-unloaded when the hook runner is disposed. `extractors.diagnostics[]` and
+assembly load contexts are still held and why. Plugin DLL metadata is checked
+before execution, while assembly loading, construction, and extraction run in a
+deadline-, memory-, and output-bounded worker; the parent therefore retains no
+plugin load context. Hook assembly loading, module initialization, type discovery,
+construction, and callbacks all occur in bounded workers, so `hooks[]` entries
+include stable `id`, `callback_budget_ms`, and the worker-only
+`load_context_lifecycle`. `extractors.diagnostics[]` and
 `hook_diagnostics[]` include sanitized `category` machine codes alongside
 bounded paths and messages.
 `extractors.pattern_configs[]` reports each accepted sidecar with a sanitized
@@ -291,9 +293,14 @@ queries resolve their supported-language set from that same active snapshot.
 Long-running hosts retain at most 32 workspace snapshots using LRU eviction;
 evicted, replaced, and shutdown snapshots are retired terminally so late plugin
 loads are rejected and collectible contexts can unload.
-Accepted extension trust overrides such as `CDIDX_TRUST_WORKSPACE_PLUGINS`,
-`CDIDX_HOOKS_DIR`, and `CDIDX_GIT_EXECUTABLE` are also reported in sanitized
-`trust_overrides[]` entries.
+Accepted extension trust overrides such as `CDIDX_TRUST_WORKSPACE_PLUGINS` and
+`CDIDX_HOOKS_DIR` are also reported in sanitized `trust_overrides[]` entries,
+along with the `CDIDX_GIT_EXECUTABLE` Git executable override.
+Default and overridden plugin/hook directories share one executable-content
+boundary: cdidx rejects unsafe owners, group/world-writable modes, symlink or
+reparse-point ancestors, and non-regular DLL candidates. Accepted DLL bytes are
+hashed and copied into a private read-only staging directory before any assembly
+load, so a source-path rename cannot swap executable content after validation.
 
 Git subprocesses do not resolve an arbitrary executable from `PATH`. On Nix,
 custom-prefix, or portable installations, set `CDIDX_GIT_EXECUTABLE` in the
@@ -603,11 +610,12 @@ workspace scan なしで runtime HEAD と `indexed_head_source` が選んだ `in
 
 `extractors` の runtime diagnostics は `retained_load_context_count` と
 `load_context_lifecycle` を含むため、長時間実行プロセスは保持中の plugin assembly load
-context 数とその理由を確認できます。plugin context は collectible ですが、
-登録済み extractor instance が active な間は保持され、reject された context や保持されない
-context は unload されます。`hooks[]` entry は `callback_budget_ms` と
-`load_context_lifecycle` を含み、hook context が collectible で hook runner の dispose 時に
-unload されることを示します。`extractors.diagnostics[]` と `hook_diagnostics[]` は、
+context 数とその理由を確認できます。plugin DLL metadata は実行前に検証し、assembly load、
+construction、extraction は deadline・memory・output 上限付き worker 内で実行するため、
+parent process は plugin load context を保持しません。hook assembly load、module initialization、
+type discovery、construction、callback はすべて bounded worker 内で実行するため、`hooks[]` entry は
+stable な `id`、`callback_budget_ms`、worker-only の `load_context_lifecycle` を含みます。
+`extractors.diagnostics[]` と `hook_diagnostics[]` は、
 bounded な path と message に加えて sanitization 済みの `category` machine code を含みます。
 `extractors.pattern_configs[]` は、受理された各 sidecar について sanitization 済みの
 `path`、`source`（`workspace` または `user`）、正規化済み `language`、`rule_count` を
@@ -625,9 +633,14 @@ workspace snapshot として公開されます。128-rule budget は workspace �
   長時間実行 host が保持する workspace snapshot は LRU で最大32件に制限され、evict・replace・
   shutdown 済み snapshot は terminal に retire されるため、遅延 plugin load は拒否され、
   collectible context を unload できます。
-受理された `CDIDX_TRUST_WORKSPACE_PLUGINS`、`CDIDX_HOOKS_DIR`、
-`CDIDX_GIT_EXECUTABLE` などの拡張信頼境界 override は、sanitization 済みの
-`trust_overrides[]` entry としても報告されます。
+受理された `CDIDX_TRUST_WORKSPACE_PLUGINS` や `CDIDX_HOOKS_DIR` などの
+拡張信頼境界 override は、`CDIDX_GIT_EXECUTABLE` の Git executable override とともに、
+sanitization 済みの `trust_overrides[]` entry としても報告されます。
+既定および override の plugin / hook directory は単一の executable-content
+boundary を共有します。cdidx は安全でない owner、group / world writable mode、
+symlink / reparse-point の祖先、regular file ではない DLL 候補を拒否します。
+受理した DLL bytes は assembly load 前に hash を計算して private read-only staging
+directory へ copy するため、検証後に source path を rename して実行内容を差し替えることはできません。
 
 Git subprocess は `PATH` から任意の実行ファイルを解決しません。Nix、custom-prefix、
 portable installation では、process environment の `CDIDX_GIT_EXECUTABLE` に

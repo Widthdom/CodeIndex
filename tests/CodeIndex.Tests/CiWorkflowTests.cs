@@ -158,12 +158,20 @@ public class CiWorkflowTests
         AssertDoesNotContainAny(releaseWorkflow, "Add-MpPreference", "Get-MpPreference");
         AssertContainsAll(
             setupScript,
+            "if (-not $env:USERPROFILE)",
+            "$tempRoot = Join-Path $env:USERPROFILE \"cdidx-test-temp\"",
             "\"TMP=$tempRoot\"",
             "\"TEMP=$tempRoot\"",
+            "$tempAcl.SetAccessRuleProtection($true, $false)",
+            "[System.Security.AccessControl.FileSystemRights]::FullControl",
+            "Set-Acl -LiteralPath $tempRoot -AclObject $tempAcl",
             "Add-MpPreference -ExclusionPath $entry.Path -ErrorAction Stop",
             "Get-MpPreference",
             "Windows Defender exclusion audit:",
-            "GitHub-hosted runner temp root used by actions and pinned TMP/TEMP.");
+            "GitHub-hosted runner temp root used by actions.");
+        AssertDoesNotContainAny(
+            setupScript,
+            "$tempRoot = Join-Path $env:RUNNER_TEMP \"cdidx-temp\"");
     }
 
     [Fact]
@@ -303,7 +311,7 @@ public class CiWorkflowTests
         var document = XDocument.Load(path);
 
         Assert.Equal(
-            "2700000",
+            "3600000",
             document.Root?.Element("RunConfiguration")?.Element("TestSessionTimeout")?.Value);
         Assert.Equal(
             "60",

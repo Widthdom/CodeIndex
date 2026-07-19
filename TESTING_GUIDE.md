@@ -468,7 +468,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Collect crash diagnostics on the initial attempt only. The flaky-classification retry reuses that evidence and skips the crash collector, while retaining blame-hang and its five-minute kill bound in case the retry hangs.
   Summarize TRX telemetry only when the test helper reports a failed initial attempt (including pass-on-retry); clean first-pass lanes and jobs that failed before testing should not pay for a second project launch and TRX parse. Keep result and dump artifact uploads failure-gated to avoid unnecessary transfer time.
 - `.github/scripts/configure-windows-test-host.ps1`
-  The `dotnet.yml` and `release.yml` Windows lanes share TMP/TEMP pinning and Defender exclusion setup here so both workflows keep the same test-host performance assumptions. Update `CiWorkflowTests` when changing this script or its workflow call contract.
+  The `dotnet.yml` and `release.yml` Windows lanes share TMP/TEMP pinning and Defender exclusion setup here so both workflows keep the same test-host performance assumptions. The pinned temp root lives directly under the current user's `USERPROFILE` and uses a protected current-user ACL, so its complete ancestor chain satisfies the executable-boundary ownership contract instead of inheriting the GitHub runner's shared `RUNNER_TEMP` ancestry. Update `CiWorkflowTests` when changing this script or its workflow call contract.
 - The `dotnet.yml` SDK setup has one conditional retry for transient SDK download failures. Keep the first attempt marked `continue-on-error` only while the retry is guarded by its failed outcome, so a second failure still fails the job.
 - `DbRecoveryTests.cs`
   Database corruption recovery and graceful degradation behavior. Filesystem setup failures for `cdidx index` (read-only DB files and unwritable DB parent directories) are covered in `IndexCommandRunnerTests.cs` so they exercise the same CLI JSON/stderr boundary users see.
@@ -524,6 +524,9 @@ Use the inventory below before adding or moving a test class:
 - JSON API-version fixtures use locked console capture and scoped project cleanup; deleting the project before an unconditional pool reset makes that reset both redundant and too late, so keep this contract suite parallelizable.
 - Golden JSON snapshot fixtures use the non-parallel console-sensitive collection because empty stderr is part of their contract, while retaining per-instance database cleanup; they should not pay a process-wide pool reset after each of the status, search, references, impact, and excerpt snapshots.
 - Extractor plugin-registry fixtures share that console-sensitive collection because rejected pattern configs emit diagnostics through the process-wide stderr writer.
+- Executable extension boundary fixtures should cover unsafe Unix directory modes, symlink ancestors, and a source rename-swap after staging; keep permission assertions Unix-only and restore staging test hooks in `finally`.
+- Plugin-worker fixtures should prove metadata rejection before process start, bounded timeout/crash/memory/output behavior, proxy extraction, failed-fingerprint retry after an explicit refresh, and no restaging during repeated hot-path lookups; use `CDIDX_TEST_` variables so the isolated-worker environment policy carries only explicit fixtures.
+- Hook-discovery worker fixtures should force a module initializer to record its worker PID and spawn a persistent descendant, prove both PIDs terminate after a manifest, cover discovery timeout/memory/output caps, and copy one hook assembly under two names to prove stable IDs and per-ID disablement without `Type.FullName` collisions.
 - Suites that capture, replace, or intentionally close process-wide console writers use the same console-sensitive collection; removing SQLite pool cleanup does not make console mutation parallel-safe.
 - Temporary repositories and files: create them through `TestProjectHelper` when practical, and do not depend on user-level git config.
 - MCP unit fixtures that instantiate a real server should place its database inside a scoped temporary project and delete the project after server disposal instead of leaving a standalone database in the system temp directory.
@@ -1159,7 +1162,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   crash diagnostics は初回 attempt だけで収集する。flaky classification retry は初回の evidence を再利用して crash collector を省略する一方、retry 自体が hang した場合に備えて blame-hang と5分の kill bound は維持する。
   TRX telemetry summary は test helper が初回 attempt の失敗を報告した場合（retry 成功を含む）だけ実行する。clean first-pass lane と test 開始前に失敗した job は、2回目の project 起動と TRX parse を支払わない。不要な転送時間を避けるため、result / dump artifact upload も failure-gated のままにする。
 - `.github/scripts/configure-windows-test-host.ps1`
-  `dotnet.yml` と `release.yml` の Windows lane は、TMP/TEMP 固定と Defender 除外 setup をこのスクリプトで共有します。両 workflow の test-host performance 前提を揃えるため、スクリプトまたは workflow からの呼び出し contract を変更するときは `CiWorkflowTests` も更新してください。
+  `dotnet.yml` と `release.yml` の Windows lane は、TMP/TEMP 固定と Defender 除外 setup をこのスクリプトで共有します。固定した temp root は current user の `USERPROFILE` 直下に置き、current-user 限定の protected ACL を設定することで、GitHub runner の shared `RUNNER_TEMP` 祖先を継承せず、祖先 chain 全体が executable-boundary の owner contract を満たすようにします。両 workflow の test-host performance 前提を揃えるため、スクリプトまたは workflow からの呼び出し contract を変更するときは `CiWorkflowTests` も更新してください。
 - `DbRecoveryTests.cs`
   DB破損からの復旧とグレースフル劣化のテスト。`cdidx index` の filesystem setup failure（read-only DB file や書き込み不可の DB 親ディレクトリ）は、ユーザーが見る CLI JSON/stderr 境界を通すため `IndexCommandRunnerTests.cs` で扱います。
 - `JsonOutputSnapshotTests.cs`、`JsonOutputSnapshotHelper.cs`
@@ -1214,6 +1217,9 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - JSON API-version fixture は locked console capture と scoped project cleanup を使う。project 削除後の無条件 pool reset は冗長なうえ遅すぎるため、この contract suite は parallel 実行可能な状態を保つ。
 - golden JSON snapshot fixture は空の stderr 自体が契約なので non-parallel な console-sensitive collection を使い、instance ごとの database cleanup を維持する。status、search、references、impact、excerpt の各 snapshot 後に process-wide pool reset を支払わないこと。
 - extractor plugin-registry fixture も、reject された pattern config が process-wide stderr writer 経由で診断を出すため、同じ console-sensitive collection を共有する。
+- executable extension boundary fixture は unsafe な Unix directory mode、symlink ancestor、staging 後の source rename-swap を検証する。permission assertion は Unix のみにし、staging の test hook は `finally` で必ず復元する。
+- plugin-worker fixture はprocess開始前のmetadata拒否、timeout / crash / memory / output上限、proxy extraction、明示的refreshによるfile修復後のfailed-fingerprint再試行、hot-path lookup反復時に再stagingしないことを検証する。isolated-worker environment policyが明示的なfixtureだけを渡すよう、`CDIDX_TEST_` variableを使う。
+- hook-discovery worker fixture は module initializer に worker PID を記録させて persistent な descendant を起動し、manifest 後に両方の PID が終了することと discovery の timeout / memory / output cap を検証する。同じ hook assembly を 2 つの名前で copy し、stable ID と `Type.FullName` が衝突しない ID 単位 disablement も固定する。
 - process-wide console writer を capture、差し替え、または意図的に close する suite は同じ console-sensitive collection を使う。SQLite pool cleanup を外しても console mutation は parallel-safe にはならない。
 - 一時 repo / file: 可能な限り `TestProjectHelper` 経由で作り、user-level の git config に依存しない。
 - real server を生成する MCP unit fixture は、system temp directory に単独 DB を残さず、scoped temporary project 内へ DB を置き、server dispose 後に project を削除する。
