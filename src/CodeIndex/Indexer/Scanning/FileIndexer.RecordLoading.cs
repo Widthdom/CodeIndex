@@ -53,6 +53,7 @@ public partial class FileIndexer
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        _pathAccessValidator?.Invoke(absolutePath);
         if (!IsFilePathSyntaxIndexable(absolutePath))
             throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
 
@@ -93,6 +94,7 @@ public partial class FileIndexer
     internal string LoadNormalizedContentForPrepass(string absolutePath, string relativePath, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        _pathAccessValidator?.Invoke(absolutePath);
         if (!IsFilePathSyntaxIndexable(absolutePath))
             throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
 
@@ -114,6 +116,7 @@ public partial class FileIndexer
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        _pathAccessValidator?.Invoke(absolutePath);
         if (!IsFilePathSyntaxIndexable(absolutePath))
             throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
 
@@ -144,6 +147,7 @@ public partial class FileIndexer
 
     internal FileRecord BuildSkippedFileRecord(string absolutePath, string relativePath, string? knownLanguage)
     {
+        _pathAccessValidator?.Invoke(absolutePath);
         if (!IsFilePathSyntaxIndexable(absolutePath))
             throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
 

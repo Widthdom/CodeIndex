@@ -69,6 +69,9 @@ public partial class FileIndexer
     private readonly SymlinkPolicy _symlinkPolicy;
     private readonly int _maxDanglingFileSystemEntryScanCandidates;
     private readonly GeneratedCodePatternMatcher _generatedCodePatterns;
+    private readonly Action<string>? _pathAccessValidator;
+    private readonly Func<string, FileStream> _openReadForIndexContent;
+    private readonly bool _bindConfigurationReadsToFileSystemIdentity;
     private readonly string? _internalIndexDatabaseRelativePath;
     // Submodule working-tree paths declared in <ignoreRuleRoot>/.gitmodules, relative to
     // _projectRoot and slash-normalized. Used to override SkipDirs so that submodules
@@ -189,6 +192,9 @@ public partial class FileIndexer
         SymlinkPolicy symlinkPolicy = SymlinkPolicy.None,
         int? maxDanglingFileSystemEntryScanCandidates = null,
         IReadOnlyList<string>? generatedCodePatterns = null,
+        Action<string>? pathAccessValidator = null,
+        Func<string, FileStream>? openReadForIndexContent = null,
+        bool bindConfigurationReadsToFileSystemIdentity = false,
         string? internalIndexDatabasePath = null)
     {
         _projectRoot = Path.GetFullPath(projectRoot);
@@ -203,8 +209,11 @@ public partial class FileIndexer
         _languageMapOverrideCache = new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal);
         _nestedGitRepositoryCache = new Dictionary<string, bool>(StringComparer.Ordinal);
         _maxFileSizeBytes = ResolveMaxFileSizeBytes(maxFileSizeBytes);
-        _contentLoader = new FileContentLoader(_maxFileSizeBytes);
+        _openReadForIndexContent = openReadForIndexContent ?? BoundedFile.OpenReadForIndexContent;
+        _contentLoader = new FileContentLoader(_maxFileSizeBytes, _openReadForIndexContent);
         _symlinkPolicy = symlinkPolicy;
+        _pathAccessValidator = pathAccessValidator;
+        _bindConfigurationReadsToFileSystemIdentity = bindConfigurationReadsToFileSystemIdentity;
         _maxDanglingFileSystemEntryScanCandidates = Math.Max(
             1,
             maxDanglingFileSystemEntryScanCandidates ?? MaxDanglingFileSystemEntryScanCandidates);
@@ -212,7 +221,19 @@ public partial class FileIndexer
         _internalIndexDatabaseRelativePath = ResolveInternalIndexDatabaseRelativePath(
             _projectRoot,
             internalIndexDatabasePath);
-        ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(_projectRoot);
+        _pathAccessValidator?.Invoke(_projectRoot);
+        _pathAccessValidator?.Invoke(_ignoreRuleRoot);
+        if (_bindConfigurationReadsToFileSystemIdentity)
+        {
+            ExtractorPluginRegistry.ReloadAuthorizedPatternConfigsForProjectRoot(
+                _projectRoot,
+                _enumerateFileSystemEntries,
+                _openReadForIndexContent);
+        }
+        else
+        {
+            ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(_projectRoot);
+        }
         var pathComparer = _ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         (_submodulePaths, _submoduleAncestorPaths, _submoduleLoadWarnings) = LoadGitSubmodulePaths(_ignoreRuleRoot, _projectRoot, pathComparer);
     }
