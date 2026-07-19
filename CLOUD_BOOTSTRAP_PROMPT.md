@@ -69,6 +69,7 @@ out-of-range values instead of silently disabling a bound.
 
 Release inputs are also bounded before and after extraction. The installer
 caps release archives at 512 MiB and checksum/signature metadata at 1 MiB,
+including unknown-length responses while they are still streaming,
 rejects archives with more than 4,096 members, more than 1 GiB of declared or
 extracted regular-file data, more than 1.125 GiB of expanded tar stream, or a
 compression ratio above 250:1, and rejects links and other unsupported member
@@ -440,7 +441,8 @@ total・low-speed timeout と有界 retry が適用されます。制約のあ�
 値は上限を黙って無効化せず installer が拒否します。
 
 release input は展開前後にも上限が適用されます。installer は release archive を
-512 MiB、checksum / signature metadata を 1 MiB に制限し、4,096 を超える member、
+512 MiB、checksum / signature metadata を 1 MiB に制限し、長さが事前に不明な
+response も転送中に上限で停止します。4,096 を超える member、
 宣言または実展開された regular-file data が 1 GiB を超える archive、展開後 tar
 stream が 1.125 GiB を超える archive、圧縮率が 250:1 を超える archive を拒否します。
 link とその他の未対応 member type も拒否し、mode 0700 の private staging directory、

@@ -116,6 +116,7 @@ RELEASE_GPG_FINGERPRINT="${CDIDX_RELEASE_GPG_FINGERPRINT:-$DEFAULT_RELEASE_GPG_F
 GITHUB_BASE_URL="${GITHUB_BASE_URL%/}"
 GITHUB_API_BASE_URL="${GITHUB_API_BASE_URL%/}"
 TMPDIR_CLEANUP=""
+TRANSFER_DIR_CLEANUP=""
 STAGE_DIR_CLEANUP=""
 BACKUP_DIR_CLEANUP=""
 LOCAL_MIRROR_DIR_CLEANUP=""
@@ -171,6 +172,9 @@ validate_published_release_rid() {
 }
 
 cleanup() {
+    if [ -n "$TRANSFER_DIR_CLEANUP" ]; then
+        rm -rf "$TRANSFER_DIR_CLEANUP"
+    fi
     if [ -n "$TMPDIR_CLEANUP" ]; then
         rm -rf "$TMPDIR_CLEANUP"
     fi
@@ -959,72 +963,122 @@ curl_http_get() {
     local output_path="$2"
     local source_label="${3:-remote host}"
     local max_bytes="${4:-$LATEST_RELEASE_RESPONSE_MAX_BYTES}"
-    local http_code
-    local curl_stderr
+    local http_code curl_status reader_status downloaded_bytes
+    local transfer_dir curl_stderr body_fifo reader_pid bounded_probe_bytes
 
     probe_temp_root
-    if ! curl_stderr="$(mktemp)"; then
-        report_error "Failed to create temporary curl stderr capture while fetching ${source_label} at $url."
+    need_cmd mkfifo
+    if ! transfer_dir="$(mktemp -d)"; then
+        report_error "Failed to create private transfer staging while fetching ${source_label} at $url."
+        return 1
+    fi
+    TRANSFER_DIR_CLEANUP="$transfer_dir"
+    if ! chmod 700 "$transfer_dir"; then
+        rmdir "$transfer_dir"
+        TRANSFER_DIR_CLEANUP=""
+        report_error "Failed to restrict private transfer staging while fetching ${source_label} at $url."
+        return 1
+    fi
+    curl_stderr="${transfer_dir}/curl.stderr"
+    body_fifo="${transfer_dir}/response.body.pipe"
+    if ! : > "$curl_stderr" || ! mkfifo "$body_fifo"; then
+        rm -f "$body_fifo" "$curl_stderr"
+        rmdir "$transfer_dir"
+        TRANSFER_DIR_CLEANUP=""
+        report_error "Failed to prepare bounded response capture while fetching ${source_label} at $url."
         return 1
     fi
     verify_temp_path_space "$curl_stderr"
 
-    if http_code="$(run_curl_with_optional_loopback_bypass "$url" -sSL --max-filesize "$max_bytes" -o "$output_path" -w '%{http_code}' "$url" 2>"$curl_stderr")"; then
-        local downloaded_bytes
-        if ! downloaded_bytes="$(file_size_bytes "$output_path")"; then
-            rm -f "$curl_stderr"
-            report_error "Failed to inspect downloaded byte count for ${source_label} at $url."
-            return 1
-        fi
-        if [ "${downloaded_bytes:-0}" -gt "$max_bytes" ]; then
-            rm -f "$curl_stderr"
-            report_error "Download from ${source_label} at $url exceeded the ${max_bytes} byte limit. [download_size_exceeded]"
-            return 1
-        fi
-        rm -f "$curl_stderr"
+    # `curl --max-filesize` did not stop unknown-length/chunked bodies before
+    # curl 8.4. Stream through a private FIFO and retain only max+1 bytes so
+    # the sentinel byte closes the reader and forces curl to stop writing.
+    bounded_probe_bytes=$((max_bytes + 1))
+    head -c "$bounded_probe_bytes" "$body_fifo" > "$output_path" &
+    reader_pid=$!
+    # Keep one writer open so the reader also receives EOF when curl fails
+    # before opening the FIFO (for example, DNS or protocol-policy failure).
+    if ! exec 8> "$body_fifo"; then
+        kill "$reader_pid" 2>/dev/null || true
+        wait "$reader_pid" 2>/dev/null || true
+        rm -f "$body_fifo" "$curl_stderr"
+        rmdir "$transfer_dir"
+        TRANSFER_DIR_CLEANUP=""
+        report_error "Failed to open bounded response capture while fetching ${source_label} at $url."
+        return 1
+    fi
+
+    curl_status=0
+    http_code="$(run_curl_with_optional_loopback_bypass "$url" -sSL --max-filesize "$max_bytes" -o "$body_fifo" -w '%{http_code}' "$url" 2>"$curl_stderr")" || curl_status=$?
+    exec 8>&-
+    reader_status=0
+    wait "$reader_pid" || reader_status=$?
+
+    if ! downloaded_bytes="$(file_size_bytes "$output_path")"; then
+        rm -f "$body_fifo" "$curl_stderr"
+        rmdir "$transfer_dir"
+        TRANSFER_DIR_CLEANUP=""
+        report_error "Failed to inspect downloaded byte count for ${source_label} at $url."
+        return 1
+    fi
+    if [ "${downloaded_bytes:-0}" -gt "$max_bytes" ]; then
+        rm -f "$body_fifo" "$curl_stderr"
+        rmdir "$transfer_dir"
+        TRANSFER_DIR_CLEANUP=""
+        report_error "Download from ${source_label} at $url exceeded the ${max_bytes} byte limit. [download_size_exceeded]"
+        return 1
+    fi
+
+    if [ "$curl_status" -eq 0 ] && [ "$reader_status" -eq 0 ]; then
+        rm -f "$body_fifo" "$curl_stderr"
+        rmdir "$transfer_dir"
+        TRANSFER_DIR_CLEANUP=""
         printf '%s' "$http_code"
         return 0
-    else
-        local curl_status=$?
-        local stderr_text=""
-        if [ -f "$curl_stderr" ]; then
-            stderr_text="$(read_bounded_file_sample "$curl_stderr" "$CURL_STDERR_SAMPLE_BYTES" "curl stderr for ${source_label}")"
-            rm -f "$curl_stderr"
-        fi
+    fi
 
-        if [ "$curl_status" -eq 56 ] && is_proxy_tunnel_403 "$stderr_text"; then
-            if [ -n "$stderr_text" ]; then
-                printf '%s\n' "$stderr_text" >&2
-            fi
-            report_error "CONNECT tunnel failed with HTTP 403 while reaching ${source_label} at $url (curl exit 56). This deny is happening in an upstream proxy/egress policy before TLS."
-            report_error "If every HTTPS endpoint fails with a CONNECT-stage HTTP 403, route substitution alone will not fix it."
-            report_error "Ask your network administrator to allow-list at least one required API or artifact host path."
-            return 1
-        fi
+    local stderr_text=""
+    if [ -f "$curl_stderr" ]; then
+        stderr_text="$(read_bounded_file_sample "$curl_stderr" "$CURL_STDERR_SAMPLE_BYTES" "curl stderr for ${source_label}")"
+    fi
+    rm -f "$body_fifo" "$curl_stderr"
+    rmdir "$transfer_dir"
+    TRANSFER_DIR_CLEANUP=""
 
+    if [ "$curl_status" -eq 56 ] && is_proxy_tunnel_403 "$stderr_text"; then
         if [ -n "$stderr_text" ]; then
             printf '%s\n' "$stderr_text" >&2
         fi
-
-        if [ "$curl_status" -eq 63 ]; then
-            report_error "Download from ${source_label} at $url exceeded the ${max_bytes} byte limit (curl exit 63). [download_size_exceeded]"
-        elif [ "$curl_status" -eq 97 ] || { [ "$curl_status" -eq 1 ] && is_curl_protocol_rejection "$stderr_text"; }; then
-            report_error "Installer protocol policy rejected the URL or redirect while fetching ${source_label} at $url. Public release and API traffic must remain HTTPS. [protocol_rejected]"
-        elif [ "$curl_status" -eq 28 ]; then
-            report_error "Installer network timeout while fetching ${source_label} at $url (curl exit 28). Check endpoint responsiveness or adjust the bounded CDIDX_NETWORK_* timeout settings. [network_timeout]"
-        else
-            case "$curl_status" in
-            6|7|35|52|56)
-                report_error "Network error reaching ${source_label} while fetching $url (curl exit $curl_status). Check your connection, proxy, or configured mirror."
-                ;;
-            *)
-                report_error "curl failed while fetching ${source_label} at $url (exit $curl_status)."
-                ;;
-            esac
-        fi
-
+        report_error "CONNECT tunnel failed with HTTP 403 while reaching ${source_label} at $url (curl exit 56). This deny is happening in an upstream proxy/egress policy before TLS."
+        report_error "If every HTTPS endpoint fails with a CONNECT-stage HTTP 403, route substitution alone will not fix it."
+        report_error "Ask your network administrator to allow-list at least one required API or artifact host path."
         return 1
     fi
+
+    if [ -n "$stderr_text" ]; then
+        printf '%s\n' "$stderr_text" >&2
+    fi
+
+    if [ "$curl_status" -eq 63 ]; then
+        report_error "Download from ${source_label} at $url exceeded the ${max_bytes} byte limit (curl exit 63). [download_size_exceeded]"
+    elif [ "$curl_status" -eq 97 ] || { [ "$curl_status" -eq 1 ] && is_curl_protocol_rejection "$stderr_text"; }; then
+        report_error "Installer protocol policy rejected the URL or redirect while fetching ${source_label} at $url. Public release and API traffic must remain HTTPS. [protocol_rejected]"
+    elif [ "$curl_status" -eq 28 ]; then
+        report_error "Installer network timeout while fetching ${source_label} at $url (curl exit 28). Check endpoint responsiveness or adjust the bounded CDIDX_NETWORK_* timeout settings. [network_timeout]"
+    elif [ "$reader_status" -ne 0 ] && [ "$curl_status" -eq 0 ]; then
+        report_error "Failed to write bounded response data from ${source_label} at $url."
+    else
+        case "$curl_status" in
+        6|7|35|52|56)
+            report_error "Network error reaching ${source_label} while fetching $url (curl exit $curl_status). Check your connection, proxy, or configured mirror."
+            ;;
+        *)
+            report_error "curl failed while fetching ${source_label} at $url (exit $curl_status)."
+            ;;
+        esac
+    fi
+
+    return 1
 }
 
 fetch_latest_release_version() {
@@ -1239,6 +1293,11 @@ validate_archive_members() {
                     return 1
                     ;;
             esac
+            if [ "${#size}" -gt "${#ARCHIVE_DECLARED_MAX_BYTES}" ]; then
+                rm -f "$names_file" "$metadata_file"
+                report_error "Release archive declares a regular-file size that exceeds the ${ARCHIVE_DECLARED_MAX_BYTES} byte limit. [archive_declared_size_exceeded]"
+                return 1
+            fi
             declared_bytes=$((declared_bytes + size))
             if [ "$declared_bytes" -gt "$ARCHIVE_DECLARED_MAX_BYTES" ]; then
                 rm -f "$names_file" "$metadata_file"

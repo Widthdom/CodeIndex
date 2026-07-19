@@ -2207,7 +2207,11 @@ public sealed class InstallScriptTests : IDisposable
                         *) shift ;;
                     esac
                 done
-                printf '123456789' > "$output_path"
+                local i=0
+                while [ "$i" -lt 1024 ]; do
+                    printf '123456789abcdef0' || return $?
+                    i=$((i + 1))
+                done > "$output_path"
                 printf '200'
             }
 
@@ -2220,6 +2224,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("UNREACHABLE", stdout);
         Assert.Contains("exceeded the 8 byte limit", stderr);
         Assert.Contains("[download_size_exceeded]", stderr);
+        Assert.InRange(new FileInfo(outputPath).Length, 0, 9);
     }
 
     [ProductionCliFact]

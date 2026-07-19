@@ -131,6 +131,11 @@ validate_archive_members() {
                     return 1
                     ;;
             esac
+            if [ "${#size}" -gt "${#ARCHIVE_DECLARED_MAX_BYTES}" ]; then
+                rm -f "$names_file" "$metadata_file"
+                report_error "Release archive declares a regular-file size that exceeds the ${ARCHIVE_DECLARED_MAX_BYTES} byte limit. [archive_declared_size_exceeded]"
+                return 1
+            fi
             declared_bytes=$((declared_bytes + size))
             if [ "$declared_bytes" -gt "$ARCHIVE_DECLARED_MAX_BYTES" ]; then
                 rm -f "$names_file" "$metadata_file"

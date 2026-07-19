@@ -18,6 +18,7 @@ public sealed class InstallScriptSafetyLintTests
         var allowedRmRfLines = new HashSet<string>(StringComparer.Ordinal)
         {
             "rm -rf \"$TMPDIR_CLEANUP\"",
+            "rm -rf \"$TRANSFER_DIR_CLEANUP\"",
             "rm -rf \"$STAGE_DIR_CLEANUP\"",
             "rm -rf \"$BACKUP_DIR_CLEANUP\"",
             "rm -rf \"$LOCAL_MIRROR_DIR_CLEANUP\"",
@@ -49,6 +50,7 @@ public sealed class InstallScriptSafetyLintTests
         var cleanupByLocalVariable = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["tmpdir"] = "TMPDIR_CLEANUP",
+            ["transfer_dir"] = "TRANSFER_DIR_CLEANUP",
             ["stage_dir"] = "STAGE_DIR_CLEANUP",
             ["backup_dir"] = "BACKUP_DIR_CLEANUP",
             ["local_mirror_root"] = "LOCAL_MIRROR_DIR_CLEANUP",
@@ -97,7 +99,8 @@ public sealed class InstallScriptSafetyLintTests
         Assert.Contains("--retry-max-time \"$CURL_MAX_TIME_SECONDS\"", curlWrapper, StringComparison.Ordinal);
 
         var downloadBody = ExtractShellFunction(activeText, "curl_http_get");
-        Assert.Contains("run_curl_with_optional_loopback_bypass \"$url\" -sSL --max-filesize \"$max_bytes\" -o \"$output_path\" -w '%{http_code}' \"$url\" 2>\"$curl_stderr\"", downloadBody, StringComparison.Ordinal);
+        Assert.Contains("head -c \"$bounded_probe_bytes\" \"$body_fifo\" > \"$output_path\" &", downloadBody, StringComparison.Ordinal);
+        Assert.Contains("run_curl_with_optional_loopback_bypass \"$url\" -sSL --max-filesize \"$max_bytes\" -o \"$body_fifo\" -w '%{http_code}' \"$url\" 2>\"$curl_stderr\"", downloadBody, StringComparison.Ordinal);
         Assert.Contains("read_bounded_file_sample \"$curl_stderr\" \"$CURL_STDERR_SAMPLE_BYTES\" \"curl stderr for ${source_label}\"", downloadBody, StringComparison.Ordinal);
 
         var doctorProbeBody = ExtractShellFunction(activeText, "probe_doctor_url");
