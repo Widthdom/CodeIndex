@@ -572,6 +572,26 @@ public class SearchSnippetFormatterTests
         {
             Assert.Contains(codeExpression, sameLine.Snippet, StringComparison.Ordinal);
             Assert.DoesNotContain($"\"{query}\"", sameLine.Snippet, StringComparison.Ordinal);
+
+            var largePrefix = string.Join(
+                '\n',
+                Enumerable.Range(1, 18).Select(index => $"var text{index} = \"{query} {new string('x', 60_000)}\";"));
+            var largeResult = new SearchResult
+            {
+                Path = "src/large.cs",
+                Lang = "csharp",
+                StartLine = 1,
+                EndLine = 19,
+                Content = $"{largePrefix}\n{codeExpression}",
+                Score = -1.0,
+            };
+
+            var large = SearchSnippetFormatter.ToCompactResult(largeResult, query, maxLines: 1, maxLineWidth: 80);
+
+            Assert.Equal(19, large.FocusLine);
+            Assert.Equal(1, large.FocusColumn);
+            Assert.Equal(codeExpression, large.Snippet);
+            Assert.Equal(18, large.DroppedMatchLineCount);
         }
         else
         {

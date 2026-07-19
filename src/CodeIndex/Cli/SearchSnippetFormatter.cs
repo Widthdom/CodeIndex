@@ -69,12 +69,12 @@ public static class SearchSnippetFormatter
         return snippet;
     }
 
-    public static CompactSearchResult ToCompactResult(SearchResult result, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false, int? preferredMatchLine = null)
+    public static CompactSearchResult ToCompactResult(SearchResult result, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false, int? preferredMatchLine = null, int? preferredMatchColumn = null, int? preferredMatchLength = null)
     {
-        return ToCompactResult(result, PrepareQueryContext(query), maxLines, caseSensitive, maxLineWidth, lang, focusMode, exposeLiteralHighlights, preferredMatchLine);
+        return ToCompactResult(result, PrepareQueryContext(query), maxLines, caseSensitive, maxLineWidth, lang, focusMode, exposeLiteralHighlights, preferredMatchLine, preferredMatchColumn, preferredMatchLength);
     }
 
-    public static CompactSearchResult ToCompactResult(SearchResult result, SearchSnippetQueryContext queryContext, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false, int? preferredMatchLine = null)
+    public static CompactSearchResult ToCompactResult(SearchResult result, SearchSnippetQueryContext queryContext, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality, bool exposeLiteralHighlights = false, int? preferredMatchLine = null, int? preferredMatchColumn = null, int? preferredMatchLength = null)
     {
         ArgumentNullException.ThrowIfNull(queryContext);
 
@@ -85,6 +85,10 @@ public static class SearchSnippetFormatter
             : SelectPreferredCodeMatch(queryContext.ForLanguage(effectiveLang).NormalizedQuery, focusMode, matchFacets);
         var effectivePreferredMatchLine = preferredMatchLine
             ?? preferredCodeMatch?.Line;
+        var effectivePreferredMatchColumn = preferredMatchColumn
+            ?? preferredCodeMatch?.Column;
+        var effectivePreferredMatchLength = preferredMatchLength
+            ?? preferredCodeMatch?.Length;
         var excerpt = BuildExcerptCore(
             result.Content,
             queryContext,
@@ -96,8 +100,8 @@ public static class SearchSnippetFormatter
             focusMode,
             exposeLiteralHighlights,
             effectivePreferredMatchLine,
-            preferredCodeMatch?.Column,
-            preferredCodeMatch?.Length);
+            effectivePreferredMatchColumn,
+            effectivePreferredMatchLength);
         AttachHighlightOrigins(excerpt.Highlights, matchFacets);
         return new CompactSearchResult
         {
@@ -325,9 +329,12 @@ public static class SearchSnippetFormatter
         var tokens = queryForLanguage.Tokens;
         var normalizeCSharpVerbatimNames = queryForLanguage.NormalizeCSharpVerbatimNames;
 
+        var hasPreferredMatchSpan = preferredMatchLine.HasValue
+            && preferredMatchColumn is > 0
+            && preferredMatchLength is > 0;
         var maxTrackedWindowLines = preferredMatchLine.HasValue ? MaxPreferredMatchScanLines : maxLines;
-        var maxScannedLines = preferredMatchLine.HasValue ? MaxPreferredMatchScanLines : int.MaxValue;
-        var maxScannedChars = preferredMatchLine.HasValue ? MaxPreferredMatchScanChars : int.MaxValue;
+        var maxScannedLines = preferredMatchLine.HasValue && !hasPreferredMatchSpan ? MaxPreferredMatchScanLines : int.MaxValue;
+        var maxScannedChars = preferredMatchLine.HasValue && !hasPreferredMatchSpan ? MaxPreferredMatchScanChars : int.MaxValue;
         var matchScan = FindMatchingLineIndexes(content, normalizedQuery, tokens, caseSensitive, normalizeCSharpVerbatimNames, maxTrackedWindowLines, maxScannedLines, maxScannedChars);
         var lineCount = matchScan.LineCount;
         if (lineCount == 0)
@@ -394,6 +401,7 @@ public static class SearchSnippetFormatter
             var isMatch = matchSet.Contains(i);
             ClampedTextResult clamped;
             if (i == focusStart
+                && preferredMatchLine == absoluteStartLine + i
                 && preferredMatchColumn is > 0 and var preferredColumn
                 && preferredMatchLength is > 0 and var preferredLength)
             {
