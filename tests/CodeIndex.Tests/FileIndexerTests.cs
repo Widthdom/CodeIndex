@@ -705,6 +705,34 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void DetectLanguage_ExplicitOverrideWinsBuiltInExactPrefixAndExtensionRules_Issue4613()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap_authoritative");
+        LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        try
+        {
+            TestProjectHelper.WriteTextFile(
+                project.Root,
+                LanguageMapOverrides.WorkspaceFileName,
+                "entries:\n"
+                + "- extension: .toml\n  language: exact_override\n"
+                + "- extension: .dev\n  language: prefix_override\n"
+                + "- extension: .cs\n  language: extension_override\n");
+            var exactPath = TestProjectHelper.WriteTextFile(project.Root, "pyproject.toml", "[project]\n");
+            var prefixPath = TestProjectHelper.WriteTextFile(project.Root, "Dockerfile.dev", "FROM scratch\n");
+            var extensionPath = TestProjectHelper.WriteTextFile(project.Root, "Program.cs", "class Program {}\n");
+
+            Assert.Equal("exact_override", FileIndexer.DetectLanguage(exactPath));
+            Assert.Equal("prefix_override", FileIndexer.DetectLanguage(prefixPath));
+            Assert.Equal("extension_override", FileIndexer.DetectLanguage(extensionPath));
+        }
+        finally
+        {
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        }
+    }
+
+    [Fact]
     public void DetectLanguage_ExtensionlessFile_DoesNotLoadLanguageMapOverrides()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap_extensionless");
@@ -828,7 +856,7 @@ public partial class FileIndexerTests
             Assert.True(parentProbeCount > 0);
 
             Assert.Equal("ruby", indexer.TryDetectLanguageForIndexing(childPath).Language);
-            Assert.Equal(parentProbeCount, stampProbeCount);
+            Assert.Equal(parentProbeCount + 1, stampProbeCount);
         }
         finally
         {
@@ -872,6 +900,86 @@ public partial class FileIndexerTests
         finally
         {
             LanguageMapOverrides.ConfigPathStampProbeForTesting = null;
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        }
+    }
+
+    [Fact]
+    public void TryDetectLanguageForIndexing_ProbeFailureBlocksParentOverrideInheritance_Issue4613()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap_child_probe_failure");
+        var parentDir = project.Root;
+        var childDir = TestProjectHelper.CreateDirectory(parentDir, "src");
+        var childConfigPath = Path.Combine(childDir, LanguageMapOverrides.WorkspaceFileName);
+        const string extension = ".issue4613blocked";
+        LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        try
+        {
+            TestProjectHelper.WriteTextFile(
+                parentDir,
+                LanguageMapOverrides.WorkspaceFileName,
+                $"entries:\n- extension: {extension}\n  language: ruby\n");
+            File.WriteAllText(
+                childConfigPath,
+                $"entries:\n- extension: {extension}\n  language: python\n");
+            var parentPath = TestProjectHelper.WriteTextFile(parentDir, "parent" + extension, "parent\n");
+            var childPath = TestProjectHelper.WriteTextFile(childDir, "child" + extension, "child\n");
+            var indexer = new FileIndexer(parentDir);
+
+            Assert.Equal("ruby", indexer.TryDetectLanguageForIndexing(parentPath).Language);
+
+            LanguageMapOverrides.ConfigPathStampProbeForTesting = path =>
+            {
+                if (string.Equals(path, childConfigPath, StringComparison.Ordinal))
+                    throw new UnauthorizedAccessException("simulated access denial");
+            };
+
+            Assert.Null(indexer.TryDetectLanguageForIndexing(childPath).Language);
+            var result = LanguageMapOverrides.LoadEffectiveMapFromDirectoryWithDiagnostics(childDir);
+            var diagnostic = Assert.Single(
+                result.Diagnostics,
+                item => item.Code == "language_map_probe_failed");
+            Assert.Equal("access_denied", diagnostic.Reason);
+            Assert.True(diagnostic.BlocksParentFallback);
+            Assert.False(result.Map.ContainsKey(extension));
+        }
+        finally
+        {
+            LanguageMapOverrides.ConfigPathStampProbeForTesting = null;
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        }
+    }
+
+    [Fact]
+    public void TryDetectLanguageForIndexing_NonFileChildConfigBlocksParentOverrideInheritance_Issue4613()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap_child_non_file");
+        var parentDir = project.Root;
+        var childDir = TestProjectHelper.CreateDirectory(parentDir, "src");
+        const string extension = ".issue4613nonfile";
+        LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        try
+        {
+            TestProjectHelper.WriteTextFile(
+                parentDir,
+                LanguageMapOverrides.WorkspaceFileName,
+                $"entries:\n- extension: {extension}\n  language: ruby\n");
+            Directory.CreateDirectory(Path.Combine(childDir, LanguageMapOverrides.WorkspaceFileName));
+            var childPath = TestProjectHelper.WriteTextFile(childDir, "child" + extension, "child\n");
+
+            var indexer = new FileIndexer(parentDir);
+
+            Assert.Null(indexer.TryDetectLanguageForIndexing(childPath).Language);
+            var result = LanguageMapOverrides.LoadEffectiveMapFromDirectoryWithDiagnostics(childDir);
+            var diagnostic = Assert.Single(
+                result.Diagnostics,
+                item => item.Code == "language_map_probe_failed");
+            Assert.Equal("not_regular_file", diagnostic.Reason);
+            Assert.True(diagnostic.BlocksParentFallback);
+            Assert.False(result.Map.ContainsKey(extension));
+        }
+        finally
+        {
             LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
         }
     }
@@ -929,7 +1037,7 @@ public partial class FileIndexerTests
         var tempDir = project.Root;
         try
         {
-            var unreadablePath = Path.Combine(tempDir, "unreadable-langmap.yaml");
+            var unreadablePath = Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName);
             var fallbackPath = Path.Combine(tempDir, "fallback-langmap.yaml");
             File.WriteAllText(unreadablePath, "entries:\n- extension: bad\n  language: ruby\n");
             File.WriteAllText(fallbackPath, "entries:\n- extension: ok\n  language: python\n");
@@ -949,10 +1057,19 @@ public partial class FileIndexerTests
                 warnings,
                 warning => warning.Contains("could not be read", StringComparison.Ordinal)
                     && warning.Contains("IOException", StringComparison.Ordinal));
+
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+            var result = LanguageMapOverrides.LoadEffectiveMapFromDirectoryWithDiagnostics(tempDir);
+            var diagnostic = Assert.Single(
+                result.Diagnostics,
+                item => item.Code == "language_map_read_failed");
+            Assert.Equal("io_error", diagnostic.Reason);
+            Assert.True(diagnostic.BlocksParentFallback);
         }
         finally
         {
             LanguageMapOverrides.OpenOverrideFileForTesting = null;
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
         }
     }
 
@@ -1520,14 +1637,207 @@ public partial class FileIndexerTests
     }
 
     [Fact]
-    public void DetectLanguage_UnknownExtensionWithShebang_ReturnsNull()
+    public void DetectLanguage_UnknownExtensionWithShebang_ReturnsLanguageAndSource_Issue4611()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
         var tempDir = project.Root;
         var path = Path.Combine(tempDir, "notes.txt");
-        File.WriteAllText(path, "#!/usr/bin/env bash\necho hi\n");
+        File.WriteAllText(path, "#!/usr/bin/env python3\nprint('hi')\n");
+
+        var detection = FileIndexer.TryDetectLanguage(path);
+
+        Assert.Equal(FileIndexer.FileProbeStatus.Supported, detection.Status);
+        Assert.Equal("python", detection.Language);
+        Assert.Equal("shebang", detection.DetectionSource);
+    }
+
+    [Fact]
+    public void DetectLanguage_AmbiguousTclShebangOverridesTFileDefault_Issue4611()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_shebang_tcl");
+        var path = TestProjectHelper.WriteTextFile(
+            project.Root,
+            "command.t",
+            "#!/usr/bin/env tclsh\nproc greet {} { puts hello }\n");
+
+        var detection = FileIndexer.TryDetectLanguage(path);
+        var scan = new FileIndexer(project.Root).ScanFilesDetailed();
+
+        Assert.Equal(FileIndexer.FileProbeStatus.Supported, detection.Status);
+        Assert.Equal("tcl", detection.Language);
+        Assert.Equal("shebang", detection.DetectionSource);
+        Assert.Equal("tcl", scan.FileLanguages[path]);
+    }
+
+    [Fact]
+    public void DetectLanguage_ExplicitOverrideBeatsAmbiguousShebang_Issue4611()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_shebang_override");
+        LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        try
+        {
+            TestProjectHelper.WriteTextFile(
+                project.Root,
+                LanguageMapOverrides.WorkspaceFileName,
+                "entries:\n  - extension: \".t\"\n    language: \"ruby\"\n");
+            var path = TestProjectHelper.WriteTextFile(
+                project.Root,
+                "command.t",
+                "#!/usr/bin/env tclsh\nputs hello\n");
+
+            Assert.Equal("ruby", FileIndexer.DetectLanguage(path));
+        }
+        finally
+        {
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        }
+    }
+
+    [Fact]
+    public void DetectLanguage_MalformedAmbiguousShebangFallsBackToExtension_Issue4611()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_shebang_malformed");
+        var path = TestProjectHelper.WriteTextFile(project.Root, "legacy.t", "#!\nuse strict;\n");
+
+        Assert.Equal("perl", FileIndexer.DetectLanguage(path));
+    }
+
+    [Fact]
+    public void DetectLanguage_BinaryUnknownExtensionDoesNotTrustShebangPrefix_Issue4611()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_shebang_binary");
+        var path = TestProjectHelper.ProjectPath(project.Root, "payload.txt");
+        File.WriteAllBytes(path, [(byte)'#', (byte)'!', (byte)'/', (byte)'u', (byte)'s', (byte)'r', (byte)'/', (byte)'b', (byte)'i', (byte)'n', (byte)'/', (byte)'p', (byte)'y', (byte)'t', (byte)'h', (byte)'o', (byte)'n', 0]);
 
         Assert.Null(FileIndexer.DetectLanguage(path));
+    }
+
+    [Fact]
+    public void DetectLanguage_StrongExtensionWinsConflictingShebang_Issue4611()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_shebang_conflict");
+        var path = TestProjectHelper.WriteTextFile(
+            project.Root,
+            "worker.rb",
+            "#!/usr/bin/env python3\nputs 'ruby'\n");
+
+        var detection = FileIndexer.TryDetectLanguage(path);
+
+        Assert.Equal("ruby", detection.Language);
+        Assert.Null(detection.DetectionSource);
+    }
+
+    [Theory]
+    [InlineData("Widget.m", "#import <Foundation/Foundation.h>\n@interface Widget : NSObject\n@end\n", "objc")]
+    [InlineData("add.m", "function result = add(left, right)\nresult = left + right;\nend\n", "matlab")]
+    [InlineData("Worker.pl", "use strict;\nuse warnings;\nsub run { return 1; }\n", "perl")]
+    [InlineData("family.pl", "ancestor(X, Y) :- parent(X, Y).\n", "prolog")]
+    public void DetectLanguage_AmbiguousExtensionsUseStrongContentMarkers_Issue4612(
+        string fileName,
+        string content,
+        string expectedLanguage)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_ambiguous_content");
+        var path = TestProjectHelper.WriteTextFile(project.Root, fileName, content);
+
+        var detection = FileIndexer.TryDetectLanguage(path);
+        var scan = new FileIndexer(project.Root).ScanFilesDetailed();
+
+        Assert.Equal(FileIndexer.FileProbeStatus.Supported, detection.Status);
+        Assert.Equal(expectedLanguage, detection.Language);
+        Assert.Equal("content", detection.DetectionSource);
+        Assert.Equal(expectedLanguage, scan.FileLanguages[path]);
+    }
+
+    [Theory]
+    [InlineData("main :- run.\n")]
+    [InlineData("sentence --> noun_phrase.\n")]
+    public void DetectLanguage_ZeroArityPrologRulesAreStrongContentMarkers_Issue4612(string content)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_zero_arity_prolog");
+        var path = TestProjectHelper.WriteTextFile(project.Root, "rules.pl", content);
+
+        var detection = FileIndexer.TryDetectLanguage(path);
+
+        Assert.Equal(FileIndexer.FileProbeStatus.Supported, detection.Status);
+        Assert.Equal("prolog", detection.Language);
+        Assert.Equal("content", detection.DetectionSource);
+    }
+
+    [Fact]
+    public void DetectLanguage_Utf8CodePointSplitAtBoundedPrefixRemainsSupported_Issue4612()
+    {
+        const int probeByteLimit = 64 * 1024;
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_ambiguous_utf8_boundary");
+        var path = TestProjectHelper.ProjectPath(project.Root, "rules.pl");
+        var prologMarker = Encoding.UTF8.GetBytes("ancestor(X, Y) :- parent(X, Y).\n");
+        var bytes = new byte[probeByteLimit + 2];
+        prologMarker.CopyTo(bytes, 0);
+        Array.Fill(bytes, (byte)'x', prologMarker.Length, probeByteLimit - prologMarker.Length - 1);
+        bytes[probeByteLimit - 1] = 0xe2;
+        bytes[probeByteLimit] = 0x82;
+        bytes[probeByteLimit + 1] = 0xac;
+        File.WriteAllBytes(path, bytes);
+
+        var detection = FileIndexer.TryDetectLanguage(path);
+
+        Assert.Equal(FileIndexer.FileProbeStatus.Supported, detection.Status);
+        Assert.Equal("prolog", detection.Language);
+        Assert.Equal("content", detection.DetectionSource);
+    }
+
+    [Theory]
+    [InlineData("notes.m", "% deliberately weak markers only\nvalue = 1;\nend\n", "ambiguous_m")]
+    [InlineData("conflict.m", "#import <Foundation/Foundation.h>\nfunction result = add(left, right)\n", "ambiguous_m")]
+    [InlineData("facts.pl", "parent(alice, bob).\n", "ambiguous_pl")]
+    [InlineData("conflict.pl", "use strict;\nancestor(X, Y) :- parent(X, Y).\n", "ambiguous_pl")]
+    public void DetectLanguage_WeakOrConflictingMarkersRemainExplicitlyAmbiguous_Issue4612(
+        string fileName,
+        string content,
+        string expectedLanguage)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_ambiguous_unresolved");
+        var path = TestProjectHelper.WriteTextFile(project.Root, fileName, content);
+
+        var detection = FileIndexer.TryDetectLanguage(path);
+
+        Assert.Equal(expectedLanguage, detection.Language);
+        Assert.Equal("ambiguous", detection.DetectionSource);
+    }
+
+    [Theory]
+    [InlineData("Demo.xcodeproj", "source.m", "objc")]
+    [InlineData("model.slx", "source.m", "matlab")]
+    [InlineData("Makefile.PL", "source.pl", "perl")]
+    [InlineData("rules.prolog", "source.pl", "prolog")]
+    public void DetectLanguage_AmbiguousExtensionsUseConservativeProjectMarkers_Issue4612(
+        string markerName,
+        string fileName,
+        string expectedLanguage)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_ambiguous_project");
+        TestProjectHelper.WriteTextFile(project.Root, markerName, string.Empty);
+        var path = TestProjectHelper.WriteTextFile(project.Root, fileName, string.Empty);
+
+        var detection = FileIndexer.TryDetectLanguage(path);
+
+        Assert.Equal(expectedLanguage, detection.Language);
+        Assert.Equal("project", detection.DetectionSource);
+    }
+
+    [Fact]
+    public void DetectLanguage_PrologShebangOverridesAmbiguousPl_Issue4612()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_ambiguous_prolog_shebang");
+        var path = TestProjectHelper.WriteTextFile(
+            project.Root,
+            "tool.pl",
+            "#!/usr/bin/env swipl\n:- initialization(main).\nmain :- halt.\n");
+
+        var detection = FileIndexer.TryDetectLanguage(path);
+
+        Assert.Equal("prolog", detection.Language);
+        Assert.Equal("shebang", detection.DetectionSource);
     }
 
     [Fact]
@@ -1730,7 +2040,7 @@ public partial class FileIndexerTests
         (".jl", "julia"),
         (".nim", "nim"),
         (".nims", "nim"),
-        (".pl", "perl"),
+        (".pl", "ambiguous_pl"),
         (".pm", "perl"),
         (".pod", "perl"),
         (".psgi", "perl"),
@@ -1743,7 +2053,7 @@ public partial class FileIndexerTests
 
     private static readonly (string Entry, string Language)[] ObjCLanguageMapEntries =
     [
-        (".m", "objc"),
+        (".m", "ambiguous_m"),
         (".mm", "objc"),
         (".hh", "cpp")
     ];
@@ -1936,7 +2246,7 @@ public partial class FileIndexerTests
         AssertHeaderDetection(
             null,
             "c",
-            FileIndexer.LanguageDetectionSource.HeaderExtensionFallback,
+            FileIndexer.HeaderExtensionFallbackDetectionSource,
             FileIndexer.LanguageDetectionConfidence.Low);
 
         const string commentOnlyHeader = """
@@ -1950,7 +2260,7 @@ public partial class FileIndexerTests
         AssertHeaderDetection(
             commentOnlyHeader,
             "c",
-            FileIndexer.LanguageDetectionSource.HeaderLexicalFallback,
+            FileIndexer.HeaderLexicalFallbackDetectionSource,
             FileIndexer.LanguageDetectionConfidence.Low);
 
         const string macroHeader = """
@@ -1962,7 +2272,7 @@ public partial class FileIndexerTests
         AssertHeaderDetection(
             macroHeader,
             "c",
-            FileIndexer.LanguageDetectionSource.HeaderLexicalFallback,
+            FileIndexer.HeaderLexicalFallbackDetectionSource,
             FileIndexer.LanguageDetectionConfidence.Low);
 
         const string splicedNonCodeHeader = """
@@ -1975,7 +2285,7 @@ public partial class FileIndexerTests
         AssertHeaderDetection(
             splicedNonCodeHeader,
             "c",
-            FileIndexer.LanguageDetectionSource.HeaderLexicalFallback,
+            FileIndexer.HeaderLexicalFallbackDetectionSource,
             FileIndexer.LanguageDetectionConfidence.Low);
 
         const string spliceFormedDelimiterHeader = """
@@ -1992,7 +2302,7 @@ public partial class FileIndexerTests
         AssertHeaderDetection(
             spliceFormedDelimiterHeader,
             "c",
-            FileIndexer.LanguageDetectionSource.HeaderLexicalFallback,
+            FileIndexer.HeaderLexicalFallbackDetectionSource,
             FileIndexer.LanguageDetectionConfidence.Low);
 
         const string spliceFormedBlockCommentCloserHeader = """
@@ -2003,7 +2313,7 @@ public partial class FileIndexerTests
         AssertHeaderDetection(
             spliceFormedBlockCommentCloserHeader,
             "cpp",
-            FileIndexer.LanguageDetectionSource.HeaderLexicalMarker,
+            FileIndexer.HeaderLexicalMarkerDetectionSource,
             FileIndexer.LanguageDetectionConfidence.High);
 
         const string mixedHeader = """
@@ -2017,7 +2327,7 @@ public partial class FileIndexerTests
         AssertHeaderDetection(
             mixedHeader,
             "cpp",
-            FileIndexer.LanguageDetectionSource.HeaderLexicalMarker,
+            FileIndexer.HeaderLexicalMarkerDetectionSource,
             FileIndexer.LanguageDetectionConfidence.High);
     }
 
@@ -2034,7 +2344,7 @@ public partial class FileIndexerTests
         AssertHeaderDetection(
             longLicenseHeader,
             "cpp",
-            FileIndexer.LanguageDetectionSource.HeaderSampledLexicalMarker,
+            FileIndexer.HeaderSampledLexicalMarkerDetectionSource,
             FileIndexer.LanguageDetectionConfidence.Medium);
 
         var longBlockCommentHeader = "/*" + new string('x', 55_000)
@@ -2043,7 +2353,7 @@ public partial class FileIndexerTests
         AssertHeaderDetection(
             longBlockCommentHeader,
             "c",
-            FileIndexer.LanguageDetectionSource.HeaderSampledLexicalFallback,
+            FileIndexer.HeaderSampledLexicalFallbackDetectionSource,
             FileIndexer.LanguageDetectionConfidence.Low);
 
         var longRawStringHeader = "const char *text = R\"tag(" + new string('x', 55_000)
@@ -2052,7 +2362,7 @@ public partial class FileIndexerTests
         AssertHeaderDetection(
             longRawStringHeader,
             "c",
-            FileIndexer.LanguageDetectionSource.HeaderSampledLexicalFallback,
+            FileIndexer.HeaderSampledLexicalFallbackDetectionSource,
             FileIndexer.LanguageDetectionConfidence.Low);
 
         var longMacroHeader = "#define PHANTOM_DECL \\\n"
@@ -2062,7 +2372,7 @@ public partial class FileIndexerTests
         AssertHeaderDetection(
             longMacroHeader,
             "c",
-            FileIndexer.LanguageDetectionSource.HeaderSampledLexicalFallback,
+            FileIndexer.HeaderSampledLexicalFallbackDetectionSource,
             FileIndexer.LanguageDetectionConfidence.Low);
 
         var singleLineHeader = new string('x', 55_000)
@@ -2071,7 +2381,7 @@ public partial class FileIndexerTests
         AssertHeaderDetection(
             singleLineHeader,
             "cpp",
-            FileIndexer.LanguageDetectionSource.HeaderSampledLexicalMarker,
+            FileIndexer.HeaderSampledLexicalMarkerDetectionSource,
             FileIndexer.LanguageDetectionConfidence.Medium);
 
         const int boundaryFixtureLength = 100_000;
@@ -2087,7 +2397,7 @@ public partial class FileIndexerTests
         AssertHeaderDetection(
             boundarySplitIdentifierHeader,
             "c",
-            FileIndexer.LanguageDetectionSource.HeaderSampledLexicalFallback,
+            FileIndexer.HeaderSampledLexicalFallbackDetectionSource,
             FileIndexer.LanguageDetectionConfidence.Low);
 
         var multibyteHeader = "/*" + new string('界', 18_000) + "*/\n"
@@ -2098,21 +2408,21 @@ public partial class FileIndexerTests
         AssertHeaderDetection(
             multibyteHeader,
             "cpp",
-            FileIndexer.LanguageDetectionSource.HeaderSampledLexicalMarker,
+            FileIndexer.HeaderSampledLexicalMarkerDetectionSource,
             FileIndexer.LanguageDetectionConfidence.Medium);
     }
 
     private static void AssertHeaderDetection(
         string? content,
         string expectedLanguage,
-        FileIndexer.LanguageDetectionSource expectedSource,
+        string expectedSource,
         FileIndexer.LanguageDetectionConfidence expectedConfidence)
     {
         var detection = FileIndexer.TryDetectLanguage("sample.h", content);
 
         Assert.Equal(FileIndexer.FileProbeStatus.Supported, detection.Status);
         Assert.Equal(expectedLanguage, detection.Language);
-        Assert.Equal(expectedSource, detection.Source);
+        Assert.Equal(expectedSource, detection.DetectionSource);
         Assert.Equal(expectedConfidence, detection.Confidence);
     }
 
@@ -3715,7 +4025,7 @@ public partial class FileIndexerTests
     }
 
     [Fact]
-    public void ScanFiles_ExcludesUnknownExtensionEvenWhenShebangLooksSupported()
+    public void ScanFiles_IncludesUnknownExtensionWhenShebangLooksSupported_Issue4611()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
         var tempDir = project.Root;
@@ -3733,7 +4043,27 @@ public partial class FileIndexerTests
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(["script"], files);
+        Assert.Equal(["notes.txt", "script"], files);
+    }
+
+    [Fact]
+    public void ScanFiles_ExcludesInternalIndexArtifactsBeforeUnknownExtensionShebangProbe_Issue4611()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_internal_artifacts");
+        var internalDirectory = TestProjectHelper.ProjectPath(project.Root, ".cdidx");
+        Directory.CreateDirectory(internalDirectory);
+        File.WriteAllText(
+            Path.Combine(internalDirectory, "codeindex.db.lock"),
+            "#!/usr/bin/env bash\necho internal\n");
+        File.WriteAllText(
+            Path.Combine(internalDirectory, "codeindex.db.lock.info"),
+            "#!/usr/bin/env bash\necho internal metadata\n");
+        File.WriteAllText(TestProjectHelper.ProjectPath(project.Root, "tool.txt"), "#!/usr/bin/env bash\necho public\n");
+
+        var result = new FileIndexer(project.Root).ScanFilesDetailed();
+
+        Assert.Equal(["tool.txt"], result.Files.Select(Path.GetFileName).ToArray());
+        Assert.Empty(result.Errors);
     }
 
     [Fact]

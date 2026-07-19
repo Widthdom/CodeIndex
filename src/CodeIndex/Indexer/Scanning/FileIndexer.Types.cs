@@ -24,30 +24,17 @@ public partial class FileIndexer
         Low,
     }
 
-    internal enum LanguageDetectionSource
-    {
-        HeaderLexicalMarker,
-        HeaderSampledLexicalMarker,
-        HeaderLexicalFallback,
-        HeaderSampledLexicalFallback,
-        HeaderExtensionFallback,
-    }
+    internal const string HeaderLexicalMarkerDetectionSource = "header_lexical_marker";
+    internal const string HeaderSampledLexicalMarkerDetectionSource = "header_sampled_lexical_marker";
+    internal const string HeaderLexicalFallbackDetectionSource = "header_lexical_fallback";
+    internal const string HeaderSampledLexicalFallbackDetectionSource = "header_sampled_lexical_fallback";
+    internal const string HeaderExtensionFallbackDetectionSource = "header_extension_fallback";
 
     internal readonly record struct LanguageDetectionResult(
         FileProbeStatus Status,
         string? Language,
-        LanguageDetectionSource? Source = null,
+        string? DetectionSource = null,
         LanguageDetectionConfidence? Confidence = null);
-
-    internal static string GetLanguageDetectionSourceCode(LanguageDetectionSource source) => source switch
-    {
-        LanguageDetectionSource.HeaderLexicalMarker => "header_lexical_marker",
-        LanguageDetectionSource.HeaderSampledLexicalMarker => "header_sampled_lexical_marker",
-        LanguageDetectionSource.HeaderLexicalFallback => "header_lexical_fallback",
-        LanguageDetectionSource.HeaderSampledLexicalFallback => "header_sampled_lexical_fallback",
-        LanguageDetectionSource.HeaderExtensionFallback => "header_extension_fallback",
-        _ => throw new ArgumentOutOfRangeException(nameof(source), source, null),
-    };
 
     internal static string GetLanguageDetectionConfidenceCode(LanguageDetectionConfidence confidence) => confidence switch
     {

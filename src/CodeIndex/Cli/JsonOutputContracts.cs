@@ -547,6 +547,10 @@ internal sealed record JsonStreamDoneResult(
 internal sealed record LanguageEntryJsonResult(
     [property: JsonPropertyName("lang")] string Lang,
     [property: JsonPropertyName("extensions")] List<string> Extensions,
+    [property: JsonPropertyName("exact_filenames")] List<string> ExactFilenames,
+    [property: JsonPropertyName("filename_prefix_patterns")] List<string> FilenamePrefixPatterns,
+    [property: JsonPropertyName("legacy_patterns")] List<string> LegacyPatterns,
+    [property: JsonPropertyName("pattern_provenance")] List<LanguagePatternProvenanceJsonResult> PatternProvenance,
     [property: JsonPropertyName("aliases")] List<string> Aliases,
     [property: JsonPropertyName("symbol_extraction")] bool SymbolExtraction,
     [property: JsonPropertyName("reference_extraction")] bool ReferenceExtraction,
@@ -556,8 +560,27 @@ internal sealed record LanguageEntryJsonResult(
     [property: JsonPropertyName("indexed_file_count")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? IndexedFileCount = null);
 
+internal sealed record LanguagePatternProvenanceJsonResult(
+    [property: JsonPropertyName("pattern")] string Pattern,
+    [property: JsonPropertyName("kind")] string Kind,
+    [property: JsonPropertyName("source")] string Source);
+
+internal sealed record LanguageDetectionPolicyJsonResult(
+    [property: JsonPropertyName("filename_case_policy")] string FilenameCasePolicy,
+    [property: JsonPropertyName("filename_case_source")] string FilenameCaseSource,
+    [property: JsonPropertyName("extension_case_policy")] string ExtensionCasePolicy,
+    [property: JsonPropertyName("precedence")] List<string> Precedence);
+
+internal sealed record LanguageMapDiagnosticJsonResult(
+    [property: JsonPropertyName("code")] string Code,
+    [property: JsonPropertyName("config")] string Config,
+    [property: JsonPropertyName("reason")] string Reason,
+    [property: JsonPropertyName("blocks_parent_fallback")] bool BlocksParentFallback);
+
 internal sealed record LanguagesJsonResult(
     [property: JsonPropertyName("languages")] List<LanguageEntryJsonResult> Languages,
+    [property: JsonPropertyName("detection_policy")] LanguageDetectionPolicyJsonResult DetectionPolicy,
+    [property: JsonPropertyName("language_map_diagnostics")] List<LanguageMapDiagnosticJsonResult> LanguageMapDiagnostics,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record IndexLanguageDetectionJsonResult(
@@ -897,6 +920,9 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(List<HookCommandWarningJsonResult>))]
 [JsonSerializable(typeof(JsonStreamDoneResult))]
 [JsonSerializable(typeof(LanguageEntryJsonResult))]
+[JsonSerializable(typeof(LanguageDetectionPolicyJsonResult))]
+[JsonSerializable(typeof(LanguageMapDiagnosticJsonResult))]
+[JsonSerializable(typeof(LanguagePatternProvenanceJsonResult))]
 [JsonSerializable(typeof(LanguageUnsupportedGuidance))]
 [JsonSerializable(typeof(LanguagesJsonResult))]
 [JsonSerializable(typeof(LspLocation))]

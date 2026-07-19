@@ -64,7 +64,13 @@ internal static class IndexWatchRunner
         bool ignoreCase,
         bool dbPathExplicit)
     {
-        var fileIndexer = new FileIndexer(projectRoot, ignoreCase, projectRoot);
+        var fileIndexer = new FileIndexer(
+            projectRoot,
+            ignoreCase,
+            projectRoot,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: null,
+            internalIndexDatabasePath: resolvedDbPath);
         return ClassifyWatchPath(projectRoot, resolvedDbPath, fullPath, ignoreCase, dbPathExplicit, fileIndexer);
     }
 
@@ -112,7 +118,13 @@ internal static class IndexWatchRunner
         var batcher = new FileChangeBatcher(debounce, ignoreCase: ignoreCase, maxPendingPaths: maxPendingPaths);
 
         var ignoreRuleRoot = GitHelper.TryGetRepositoryRoot(projectRoot, cancellationToken) ?? Path.GetFullPath(projectRoot);
-        var fileIndexer = new FileIndexer(projectRoot, ignoreCase, ignoreRuleRoot);
+        var fileIndexer = new FileIndexer(
+            projectRoot,
+            ignoreCase,
+            ignoreRuleRoot,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: null,
+            internalIndexDatabasePath: resolvedDbPath);
         var watchExitCode = CommandExitCodes.Success;
 
         FileSystemWatcher? watcher = null;

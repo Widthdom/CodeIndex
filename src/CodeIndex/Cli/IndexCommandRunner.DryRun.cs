@@ -28,6 +28,7 @@ public static partial class IndexCommandRunner
             ? new List<IndexMemorySampleJsonResult> { CaptureMemorySample("start", stopwatch) }
             : [];
         var projectPath = options.ProjectPath!;
+        var resolvedDbPath = DbPathResolver.NormalizeDbPath(DbPathResolver.ResolveForIndex(projectPath, options.DbPath, options.DataDir).DbPath);
         var dryIndexer = new FileIndexer(
             projectPath,
             ignoreCase,
@@ -35,7 +36,8 @@ public static partial class IndexCommandRunner
             options.MaxFileSizeBytes,
             directoryIgnoreCaseProbe: null,
             symlinkPolicy: options.SymlinkPolicy,
-            generatedCodePatterns: options.GeneratedCodePatterns);
+            generatedCodePatterns: options.GeneratedCodePatterns,
+            internalIndexDatabasePath: resolvedDbPath);
         IEnumerable<string> dryCandidates;
         IEnumerable<string> dryDeleteCandidates;
         bool authoritativeFullScan;
@@ -43,7 +45,6 @@ public static partial class IndexCommandRunner
         var errorCount = 0;
         var dryScanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
         DryRunScanMetadata dryScanMetadata;
-        var resolvedDbPath = DbPathResolver.NormalizeDbPath(DbPathResolver.ResolveForIndex(projectPath, options.DbPath, options.DataDir).DbPath);
         var dbSnapshot = ReadDryRunDbSnapshot(resolvedDbPath, options.SymbolKindFilter);
         if (options.MemoryTrace)
             memorySamples.Add(CaptureMemorySample("snapshot", stopwatch));
@@ -203,7 +204,7 @@ public static partial class IndexCommandRunner
                     languageDetectionSamples.Add(new IndexLanguageDetectionJsonResult(
                         displayRelativePath,
                         probe.Language,
-                        FileIndexer.GetLanguageDetectionSourceCode(detectionSource),
+                        detectionSource,
                         FileIndexer.GetLanguageDetectionConfidenceCode(detectionConfidence)));
                 }
             }
@@ -685,7 +686,7 @@ public static partial class IndexCommandRunner
                 loaded.Warning,
                 Unsupported: false,
                 UnknownExtension: false,
-                DetectionSource: loaded.LanguageDetection.Source,
+                DetectionSource: loaded.LanguageDetection.DetectionSource,
                 DetectionConfidence: loaded.LanguageDetection.Confidence);
         }
         catch (Exception ex)
@@ -928,7 +929,7 @@ public static partial class IndexCommandRunner
         string? Error,
         bool Unsupported,
         bool UnknownExtension,
-        FileIndexer.LanguageDetectionSource? DetectionSource,
+        string? DetectionSource,
         FileIndexer.LanguageDetectionConfidence? DetectionConfidence)
     {
         public static DryRunFileProbe FromError(string message) => new(false, string.Empty, null, message, Unsupported: false, UnknownExtension: false, null, null);

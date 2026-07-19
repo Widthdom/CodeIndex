@@ -1433,26 +1433,33 @@ public static partial class GitHelper
             if (FileSystemIgnoreCaseProbeForTesting is { } probeOverride)
                 return probeOverride(normalizedRoot);
 
-            if (TryProbeExistingDirectoryPath(normalizedRoot, out var ignoreCase))
-                return ignoreCase;
-
-            using var probe = CaseSensitivityProbeDirectory.CreateProbePathScope(normalizedRoot, "case-probe-");
-            var probePath = probe.Path;
-            FileWriteProbe.WriteEmptyFile(probePath);
-            try
+            if (Directory.Exists(LongPath.EnsureWindowsPrefix(normalizedRoot)))
             {
-                if (TryCreateCaseVariant(probePath, out var variant))
-                    return File.Exists(LongPath.EnsureWindowsPrefix(variant));
-            }
-            finally
-            {
-                FileWriteProbe.DeleteFileIfExists(probePath);
+                try
+                {
+                    if (CaseSensitivityProbeDirectory.ProbeExistingChildIgnoreCase(normalizedRoot) is { } existingChildIgnoreCase)
+                        return existingChildIgnoreCase;
+                }
+                catch (Exception ex) when (IsCaseSensitivityProbeFailure(ex))
+                {
+                    // An unreadable workspace cannot reveal the policy of names inside it.
+                    // Use the containing namespace so discovery can report the traversal
+                    // failure itself instead of failing during preliminary case probing.
+                    // unreadable workspace 内の名前 policy は probe できないため、包含する
+                    // namespace の policy を使い、事前 case probe ではなく traversal 本体で
+                    // failure を報告できるようにする。
+                    var parent = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(normalizedRoot));
+                    if (!string.IsNullOrEmpty(parent)
+                        && !string.Equals(parent, normalizedRoot, StringComparison.Ordinal))
+                    {
+                        return ProbeFileSystemIgnoreCase(parent);
+                    }
+
+                    throw;
+                }
             }
 
-            throw new CaseSensitivityProbeException(
-                "Failed to create a case-variant path for filesystem case-sensitivity probing.",
-                normalizedRoot,
-                probePath: probePath);
+            return CaseSensitivityProbeDirectory.ProbeIgnoreCase(normalizedRoot, "case-probe-");
         }
         catch (CaseSensitivityProbeException ex)
         {
@@ -1492,33 +1499,4 @@ public static partial class GitHelper
             or NotSupportedException
             or System.Security.SecurityException;
 
-    private static bool TryProbeExistingDirectoryPath(string path, out bool ignoreCase)
-    {
-        ignoreCase = false;
-        if (!TryCreateCaseVariant(path, out var variant))
-            return false;
-
-        ignoreCase = Directory.Exists(LongPath.EnsureWindowsPrefix(variant));
-        return true;
-    }
-
-    private static bool TryCreateCaseVariant(string path, out string variant)
-    {
-        var chars = path.ToCharArray();
-        for (var i = chars.Length - 1; i >= 0; i--)
-        {
-            var ch = chars[i];
-            if (!char.IsLetter(ch))
-                continue;
-
-            chars[i] = char.IsUpper(ch)
-                ? char.ToLowerInvariant(ch)
-                : char.ToUpperInvariant(ch);
-            variant = new string(chars);
-            return true;
-        }
-
-        variant = path;
-        return false;
-    }
 }

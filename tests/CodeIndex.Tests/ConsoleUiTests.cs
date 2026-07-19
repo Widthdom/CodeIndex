@@ -1533,7 +1533,12 @@ public class ConsoleUiTests
         Assert.Contains("batch", tokens);
         Assert.Contains("cmd", tokens);
         Assert.Contains("yml", tokens);
+        Assert.Contains("matlab", tokens);
+        Assert.Contains("prolog", tokens);
+        Assert.Contains("octave", tokens);
+        Assert.Contains("swipl", tokens);
         Assert.DoesNotContain("gnu assembler", langs);
+        Assert.DoesNotContain("gnu octave", langs);
         Assert.DoesNotContain("visual basic", langs);
     }
 

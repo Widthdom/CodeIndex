@@ -7,12 +7,90 @@ internal static class CaseSensitivityProbeDirectory
 {
     internal const string DataDirectoryName = ".cdidx";
     internal const string ProbeDirectoryName = "probes";
+    internal const string IsolatedProbeDirectoryPrefix = ".cdidx-case-probe-";
 
     private const UnixFileMode PrivateDirectoryMode =
         UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
 
     internal static Action<string>? DeleteCreatedEmptyDirectoryForTesting { get; set; }
     internal static Action<CaseSensitivityProbeCleanupDiagnostic>? CleanupDiagnosticSinkForTesting { get; set; }
+
+    internal static bool ProbeIgnoreCase(string projectRoot, string prefix)
+    {
+        var normalizedRoot = Path.GetFullPath(projectRoot);
+        using var probe = CreateIsolatedProbePathScope(normalizedRoot, prefix);
+        var probePath = probe.Path;
+        FileWriteProbe.WriteEmptyFile(probePath);
+        try
+        {
+            if (TryCreateLeafNameCaseVariant(probePath, out var probeVariant))
+                return File.Exists(LongPath.EnsureWindowsPrefix(probeVariant));
+        }
+        finally
+        {
+            FileWriteProbe.DeleteFileIfExists(probePath);
+        }
+
+        throw new CaseSensitivityProbeException(
+            "Failed to create a case-variant path for filesystem case-sensitivity probing.",
+            normalizedRoot,
+            probePath: probePath);
+    }
+
+    internal static bool TryCreateLeafNameCaseVariant(string path, out string variant)
+    {
+        var leafName = Path.GetFileName(path);
+        var chars = leafName.ToCharArray();
+        for (var i = chars.Length - 1; i >= 0; i--)
+        {
+            var ch = chars[i];
+            if (!char.IsLetter(ch))
+                continue;
+
+            chars[i] = char.IsUpper(ch)
+                ? char.ToLowerInvariant(ch)
+                : char.ToUpperInvariant(ch);
+            variant = Path.Combine(Path.GetDirectoryName(path) ?? string.Empty, new string(chars));
+            return true;
+        }
+
+        variant = path;
+        return false;
+    }
+
+    internal static bool? ProbeExistingChildIgnoreCase(string directory)
+    {
+        var normalizedDirectory = Path.GetFullPath(directory);
+        var entries = Directory.EnumerateFileSystemEntries(LongPath.EnsureWindowsPrefix(normalizedDirectory))
+            .Select(LongPath.RemoveWindowsPrefix)
+            .ToArray();
+        var exactNames = entries
+            .Select(Path.GetFileName)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var normalizedEntry in entries)
+        {
+            if (!TryCreateLeafNameCaseVariant(normalizedEntry, out var variant))
+                continue;
+
+            // A case-sensitive directory may legitimately contain both spellings. Do not
+            // mistake that sibling for case-insensitive resolution of the original entry.
+            // case-sensitive directory では大小文字だけが異なる sibling が共存できるため、
+            // その sibling を元 entry の case-insensitive 解決と誤認しない。
+            var variantName = Path.GetFileName(variant);
+            if (exactNames.Contains(variantName))
+                continue;
+
+            var probeStatus = FileSystemBoundary.TryGetAttributes(
+                LongPath.EnsureWindowsPrefix(variant),
+                out _);
+            if (probeStatus == FileSystemBoundaryProbeStatus.Found)
+                return true;
+            if (probeStatus == FileSystemBoundaryProbeStatus.Missing)
+                return false;
+        }
+
+        return null;
+    }
 
     internal static ProbePathScope CreateProbePathScope(string projectRoot, string prefix)
     {
@@ -25,6 +103,24 @@ internal static class CaseSensitivityProbeDirectory
             directory.DataDirectory,
             directory.CreatedProbeDirectory,
             directory.CreatedDataDirectory);
+    }
+
+    private static ProbePathScope CreateIsolatedProbePathScope(string projectRoot, string prefix)
+    {
+        var normalizedRoot = Path.GetFullPath(projectRoot);
+        var probeDirectory = Path.Combine(
+            normalizedRoot,
+            $"{IsolatedProbeDirectoryPrefix}{Guid.NewGuid():N}");
+        CreatePrivateDirectory(probeDirectory);
+        return new ProbePathScope(
+            normalizedRoot,
+            Path.Combine(probeDirectory, $"{prefix}{Guid.NewGuid():N}"),
+            probeDirectory,
+            normalizedRoot,
+            createdProbeDirectory: true,
+            createdDataDirectory: false,
+            probeDirectoryNamePrefix: IsolatedProbeDirectoryPrefix,
+            cleanupPathComparison: StringComparison.Ordinal);
     }
 
     internal static ProbeDirectoryScope CreateProbeDirectory(string projectRoot)
@@ -46,6 +142,8 @@ internal static class CaseSensitivityProbeDirectory
         private readonly string _dataDirectory;
         private readonly bool _createdProbeDirectory;
         private readonly bool _createdDataDirectory;
+        private readonly string _probeDirectoryNamePrefix;
+        private readonly StringComparison? _cleanupPathComparison;
         private readonly List<CaseSensitivityProbeCleanupDiagnostic> _cleanupDiagnostics = [];
         private bool _disposed;
 
@@ -55,7 +153,9 @@ internal static class CaseSensitivityProbeDirectory
             string probeDirectory,
             string dataDirectory,
             bool createdProbeDirectory,
-            bool createdDataDirectory)
+            bool createdDataDirectory,
+            string probeDirectoryNamePrefix = ProbeDirectoryName,
+            StringComparison? cleanupPathComparison = null)
         {
             ProjectRoot = projectRoot;
             Path = path;
@@ -63,6 +163,8 @@ internal static class CaseSensitivityProbeDirectory
             _dataDirectory = dataDirectory;
             _createdProbeDirectory = createdProbeDirectory;
             _createdDataDirectory = createdDataDirectory;
+            _probeDirectoryNamePrefix = probeDirectoryNamePrefix;
+            _cleanupPathComparison = cleanupPathComparison;
         }
 
         internal string ProjectRoot { get; }
@@ -75,7 +177,7 @@ internal static class CaseSensitivityProbeDirectory
                 return;
 
             _disposed = true;
-            DeleteCreatedEmptyDirectory(_probeDirectory, _createdProbeDirectory, _dataDirectory, ProbeDirectoryName);
+            DeleteCreatedEmptyDirectory(_probeDirectory, _createdProbeDirectory, _dataDirectory, _probeDirectoryNamePrefix);
             DeleteCreatedEmptyDirectory(_dataDirectory, _createdDataDirectory, ProjectRoot, DataDirectoryName);
         }
 
@@ -150,7 +252,7 @@ internal static class CaseSensitivityProbeDirectory
                 $"Remove stale {DataDirectoryName}/{ProbeDirectoryName} entries when no cdidx process is running.");
         }
 
-        private static bool TryValidateCleanupTarget(
+        private bool TryValidateCleanupTarget(
             string path,
             string safeRoot,
             string expectedNamePrefix,
@@ -167,7 +269,8 @@ internal static class CaseSensitivityProbeDirectory
                 safeRoot,
                 options,
                 out fullPath,
-                out failureReason);
+                out failureReason,
+                _cleanupPathComparison);
         }
 
         private string FormatCleanupRelativePath(string path)

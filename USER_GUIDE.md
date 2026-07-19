@@ -2173,7 +2173,7 @@ The database reflects the working tree at the time of the last index. After swit
 
 ## Supported languages
 
-All indexed languages are searchable through FTS5. Rows with **Symbols = yes** also support structured queries by function, class, import, or language-specific symbol name. Use `cdidx languages --indexed-only --json` to list only languages present in the current DB; JSON rows expose `symbol_extraction`, `reference_extraction`, `graph_queries`, `capability_gaps`, `unsupported_guidance`, and `indexed_file_count`. When references or graph queries are unsupported, `unsupported_guidance` explains why empty reference/graph results are not authoritative and lists fallback commands. Add `--language <name>`, `--extension <ext>`, or `--alias <alias>` to retrieve one language row by canonical name, recognized extension/filename pattern, or display alias. Add `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` to narrow the table to languages that support a structured capability or still have a capability gap. YAML reference extraction recognizes GitHub Actions `uses` targets, `needs` job edges, and unambiguous repository-local script/project paths in `run` steps. JSON reference extraction recognizes conservative repository-local file paths in string values, including paths embedded in command strings, and emits them as `project_reference` edges; URLs, parent-directory paths, and ambiguous bare filenames are ignored.
+All indexed languages are searchable through FTS5. Rows with **Symbols = yes** also support structured queries by function, class, import, or language-specific symbol name. Use `cdidx languages --indexed-only --json` to list only languages present in the current DB; JSON rows expose `symbol_extraction`, `reference_extraction`, `graph_queries`, `capability_gaps`, `unsupported_guidance`, and `indexed_file_count`. Pattern capabilities are split into suffix-only `extensions`, literal `exact_filenames`, and `filename_prefix_patterns` whose `<suffix>` placeholder requires one or more trailing characters. `legacy_patterns` retains the previous combined list for a deprecation window, while `pattern_provenance` reports each pattern's kind and `built_in`, `plugin_or_pattern`, or `language_map_override` source. The top-level `detection_policy` reports that extensions remain case-insensitive while exact filenames and filename-prefix patterns follow the indexed filesystem's `path_case_sensitive` policy; its `precedence` array records that a trusted language-map suffix override wins before built-in exact-filename, prefix-pattern, and extension rules. `language_map_diagnostics` reports stable `code`, sanitized `config`, `reason`, and `blocks_parent_fallback` fields. If the closest workspace `.cdidx-langmap.yaml` cannot be probed or read, cdidx reports the failure and does not silently inherit a parent workspace map for that subtree. When references or graph queries are unsupported, `unsupported_guidance` explains why empty reference/graph results are not authoritative and lists fallback commands. Add `--language <name>`, `--extension <ext>`, or `--alias <alias>` to retrieve one language row by canonical name, recognized suffix extension, or display alias. Add `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` to narrow the table to languages that support a structured capability or still have a capability gap. YAML reference extraction recognizes GitHub Actions `uses` targets, `needs` job edges, and unambiguous repository-local script/project paths in `run` steps. JSON reference extraction recognizes conservative repository-local file paths in string values, including paths embedded in command strings, and emits them as `project_reference` edges; URLs, parent-directory paths, and ambiguous bare filenames are ignored.
 
 | Language | Extensions | Symbols |
 |---|---|:---:|
@@ -2189,6 +2189,8 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 | Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Rakefile`, `Guardfile`, `Capfile`, `Vagrantfile` | yes |
 | C | `.c`, `.h` | yes |
 | C++ | `.cpp`, `.cc`, `.cxx`, `.hh`, `.hpp`, `.hxx` | yes |
+| Objective-C | `.m` (content/project classified), `.mm` | yes |
+| MATLAB / GNU Octave | `.m` (content/project classified) | yes |
 | PHP | `.php` | yes |
 | Swift | `.swift` | yes |
 | Dart | `.dart` | yes |
@@ -2203,7 +2205,8 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 | Julia | `.jl` | yes |
 | Nim | `.nim`, `.nims` | yes |
 | OCaml | `.ml`, `.mli` | yes |
-| Perl | `.pl`, `.pm`, `.t`, `.pod` | -- |
+| Perl | `.pl` (content/project/shebang classified), `.pm`, `.t`, `.pod` | yes |
+| Prolog | `.pl` (content/project/shebang classified) | yes |
 | Solidity | `.sol` | yes |
 | Tcl | `.tcl`, `.tk` | yes |
 | R | `.r`, `.R` | yes |
@@ -2279,7 +2282,8 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 - Node module layouts: `.cjs` / `.mjs` are JavaScript; `.cts` / `.mts`, including `.d.cts` / `.d.mts`, are TypeScript.
 - Dependency manifests and lockfiles: use `--lang dependency_manifest` or `--lang dependency_lock` for dependency/security audits. `Directory.Packages.props`, `packages.config`, `requirements.txt`, `pyproject.toml`, `packages.lock.json`, and npm `package-lock.json` / `npm-shrinkwrap.json` expose package symbols and `dependency` references with version, scope, and direct/transitive metadata where the format provides it.
 - Solution and application manifests: `.sln` files expose project entries as symbols and project path references; `.manifest` files expose assembly identity, requested execution level, supported OS, and long-path settings as symbols.
-- Extensionless scripts: files with recognized shebangs are indexed for shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`), Python, Ruby, Node.js, PHP, Lua, and PowerShell.
+- Shebang scripts: recognized first-line shebangs index extensionless and unknown-extension files for shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`), Python, Ruby, Perl, Tcl (`tclsh`, `wish`), Node.js, PHP, Lua, and PowerShell. Explicit language-map overrides remain authoritative; for ambiguous `.t` files, a recognized shebang overrides the Perl default, while strong known extensions continue to win conflicts.
+- Ambiguous `.m` / `.pl`: recognized shebangs win first, then bounded content checks use only strong Objective-C/MATLAB or Perl/Prolog markers, followed by conservative project markers. Scoped updates that add, change, or remove one of those markers automatically rescan the workspace so unchanged ambiguous files do not retain stale classifications. Weak or conflicting evidence remains searchable under `ambiguous_m` or `ambiguous_pl` instead of being assigned unconditionally. MATLAB and Prolog expose declaration symbols but no reference or graph support yet.
 
 ### Language extraction matrix
 
@@ -2306,6 +2310,7 @@ entries with the unsupported capability, an explanatory message, and
 | Java / Kotlin / Scala | packages/imports, classes/interfaces, methods, properties | calls, constructors, annotations, type references | Kotlin inline lambda body modeling is limited; verify with `references` before relying on deep call chains. |
 | JavaScript / TypeScript / Vue / Svelte | functions, classes, exports, imports, variables | calls, constructors, static/dynamic imports, workers, service workers | Dynamic property calls and computed module specifiers are best-effort. `cdidx references render --lang typescript` |
 | Python / Ruby / PHP / Perl / R | functions, classes/modules, imports where supported | calls, constructors, decorators/annotations where supported | Dynamic dispatch and metaprogramming may require `search`. PHPDoc/static import patterns are indexed when statically visible. |
+| MATLAB / Prolog | classes/modules, functions/predicates, imports | none yet | `.m` / `.pl` are classified conservatively; declaration symbols are searchable, but use `search` for reference and graph questions. |
 | Cython | `cdef` / `cpdef` declarations, cimports, extern declarations | none yet | Cython native-extension declarations are searchable as symbols; use `search` for call/reference questions. |
 | C / C++ / Objective-C / Swift / Rust / Go / Zig | functions, types, methods, imports/modules | calls, constructors, macro invocations where supported, type references | C++ templates/macros and Rust macro expansion are not evaluated; Rust macro invocations are still reference edges. |
 | CUDA | C++-style functions/types plus CUDA kernel/device/host sub-kinds | none yet | CUDA kernel/device/host declarations are indexed as C++-style symbols with CUDA sub-kinds; use `search` for call/reference questions. |
@@ -5187,7 +5192,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 
 ## 対応言語
 
-全言語が FTS5 全文検索に対応しています。**シンボル = yes** の行は、関数・クラス・import 名などの構造化検索にも対応します。現在の DB に存在する言語だけを一覧するには `cdidx languages --indexed-only --json` を使います。JSON 行には `symbol_extraction`、`reference_extraction`、`graph_queries`、`capability_gaps`、`unsupported_guidance`、`indexed_file_count` が含まれます。参照抽出やグラフクエリが未対応の場合、`unsupported_guidance` は空の参照/グラフ結果を根拠として扱えない理由と代替コマンドを示します。言語名・認識済み拡張子/ファイル名 pattern・表示 alias から 1 行を取得するには `--language <name>`、`--extension <ext>`、`--alias <alias>` を追加してください。YAML の参照抽出は GitHub Actions の `uses` target、`needs` job edge、`run` step 内の明確なリポジトリローカル script / project path を認識します。JSON の参照抽出は command 文字列内を含む string value から保守的にリポジトリローカル file path を認識し、`project_reference` edge として記録します。URL、親ディレクトリ path、曖昧な basename だけのファイル名は無視します。
+全言語が FTS5 全文検索に対応しています。**シンボル = yes** の行は、関数・クラス・import 名などの構造化検索にも対応します。現在の DB に存在する言語だけを一覧するには `cdidx languages --indexed-only --json` を使います。JSON 行には `symbol_extraction`、`reference_extraction`、`graph_queries`、`capability_gaps`、`unsupported_guidance`、`indexed_file_count` が含まれます。pattern capability は suffix だけを含む `extensions`、literal な `exact_filenames`、1 文字以上の末尾文字列を要求する `<suffix>` placeholder 付き `filename_prefix_patterns` に分離されます。`legacy_patterns` は deprecation 期間のため従来の combined list を保持し、`pattern_provenance` は各 pattern の kind と `built_in`、`plugin_or_pattern`、`language_map_override` source を示します。top-level の `detection_policy` は、拡張子が引き続き case-insensitive である一方、完全一致ファイル名と filename-prefix pattern が index 対象 filesystem の `path_case_sensitive` ポリシーに従うことを示します。`precedence` 配列は、信頼済み language-map suffix override が built-in の完全一致 filename、prefix pattern、extension rule より先に適用されることを示します。`language_map_diagnostics` は安定した `code`、sanitization 済み `config`、`reason`、`blocks_parent_fallback` を返します。最も近い workspace の `.cdidx-langmap.yaml` を probe または read できない場合、cdidx は失敗を報告し、その subtree で親 workspace map を暗黙に継承しません。参照抽出やグラフクエリが未対応の場合、`unsupported_guidance` は空の参照/グラフ結果を根拠として扱えない理由と代替コマンドを示します。言語名・認識済み suffix extension・表示 alias から 1 行を取得するには `--language <name>`、`--extension <ext>`、`--alias <alias>` を追加してください。YAML の参照抽出は GitHub Actions の `uses` target、`needs` job edge、`run` step 内の明確なリポジトリローカル script / project path を認識します。JSON の参照抽出は command 文字列内を含む string value から保守的にリポジトリローカル file path を認識し、`project_reference` edge として記録します。URL、親ディレクトリ path、曖昧な basename だけのファイル名は無視します。
 
 | 言語 | 拡張子 | シンボル |
 |---|---|:---:|
@@ -5203,6 +5208,8 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Rakefile`, `Guardfile`, `Capfile`, `Vagrantfile` | yes |
 | C | `.c`, `.h` | yes |
 | C++ | `.cpp`, `.cc`, `.cxx`, `.hh`, `.hpp`, `.hxx` | yes |
+| Objective-C | `.m`（content/project 判定）、`.mm` | yes |
+| MATLAB / GNU Octave | `.m`（content/project 判定） | yes |
 | PHP | `.php` | yes |
 | Swift | `.swift` | yes |
 | Dart | `.dart` | yes |
@@ -5217,7 +5224,8 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | Julia | `.jl` | yes |
 | Nim | `.nim`, `.nims` | yes |
 | OCaml | `.ml`, `.mli` | yes |
-| Perl | `.pl`, `.pm`, `.t`, `.pod` | -- |
+| Perl | `.pl`（content/project/shebang 判定）、`.pm`, `.t`, `.pod` | yes |
+| Prolog | `.pl`（content/project/shebang 判定） | yes |
 | Solidity | `.sol` | yes |
 | Tcl | `.tcl`, `.tk` | yes |
 | R | `.r`, `.R` | yes |
@@ -5293,7 +5301,8 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 - Node モジュール構成: `.cjs` / `.mjs` は JavaScript、`.cts` / `.mts`（`.d.cts` / `.d.mts` を含む）は TypeScript として扱います。
 - Dependency manifest / lockfile: dependency / security audit では `--lang dependency_manifest` または `--lang dependency_lock` を使います。`Directory.Packages.props`、`packages.config`、`requirements.txt`、`pyproject.toml`、`packages.lock.json`、npm の `package-lock.json` / `npm-shrinkwrap.json` は、format が提供する範囲で version、scope、direct/transitive metadata を持つ package symbol と `dependency` reference を公開します。
 - ソリューションとアプリケーションマニフェスト: `.sln` は project entry をシンボルとして公開し、project path を参照として記録します。`.manifest` は assembly identity、requested execution level、supported OS、long-path 設定をシンボルとして公開します。
-- 拡張子なしスクリプト: 先頭行の shebang が shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`)、Python、Ruby、Node.js、PHP、Lua、PowerShell として認識できれば index 対象です。
+- shebang script: 先頭行の shebang を認識できる拡張子なし/未知拡張子ファイルは、shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`)、Python、Ruby、Perl、Tcl (`tclsh`, `wish`)、Node.js、PHP、Lua、PowerShell として index 対象です。明示的な language-map override は常に優先し、曖昧な `.t` では認識済み shebang が Perl の既定値を上書きします。一方、曖昧でない既知拡張子は競合する shebang より優先されます。
+- 曖昧な `.m` / `.pl`: 認識済み shebang を最優先し、その後は bounded content check で Objective-C/MATLAB または Perl/Prolog の強い marker だけを使い、最後に保守的な project marker を確認します。これらの marker を追加・変更・削除する scoped update は workspace を自動的に再 scan し、未変更の曖昧ファイルに古い分類を残しません。弱い証拠や競合する証拠は無条件に言語を割り当てず、`ambiguous_m` / `ambiguous_pl` として全文検索可能なまま残します。MATLAB と Prolog は宣言 symbol を公開しますが、reference / graph はまだ未対応です。
 
 ### 言語別 extraction matrix
 
@@ -5314,6 +5323,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 | Java / Kotlin / Scala | package/import、class/interface、method、property | call、constructor、annotation、type reference | Kotlin inline lambda body の modeling は限定的です。深い call chain を信頼する前に `references` で確認してください。 |
 | JavaScript / TypeScript / Vue / Svelte | function、class、export、import、variable | call、constructor、static/dynamic import、worker、service worker | dynamic property call と computed module specifier は best-effort です。`cdidx references render --lang typescript` |
 | Python / Ruby / PHP / Perl / R | function、class/module、対応言語の import | call、constructor、対応言語の decorator/annotation | dynamic dispatch と metaprogramming は `search` が必要な場合があります。PHPDoc/static import pattern は静的に見える範囲で索引されます。 |
+| MATLAB / Prolog | class/module、function/predicate、import | まだなし | `.m` / `.pl` は保守的に分類され、宣言 symbol は検索できます。reference / graph の調査には `search` を使ってください。 |
 | Cython | `cdef` / `cpdef` 宣言、cimport、extern 宣言 | まだなし | Cython の native extension 宣言はシンボルとして検索できます。call/reference の調査には `search` を使ってください。 |
 | C / C++ / Objective-C / Swift / Rust / Go / Zig | function、type、method、import/module | call、constructor、対応言語の macro invocation、type reference | C++ template/macro と Rust macro expansion は評価しません。Rust macro invocation 自体は reference edge です。 |
 | CUDA | C++ 風の function/type と CUDA kernel/device/host sub-kind | まだなし | CUDA の kernel / device / host 宣言は CUDA sub-kind 付きの C++ 風シンボルとして索引します。call/reference の調査には `search` を使ってください。 |

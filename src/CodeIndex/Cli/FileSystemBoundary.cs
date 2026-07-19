@@ -95,7 +95,8 @@ internal static class FileSystemBoundary
         string safeRoot,
         DirectoryCleanupBoundaryOptions options,
         out string fullPath,
-        out string failureReason)
+        out string failureReason,
+        StringComparison? pathComparisonOverride = null)
     {
         fullPath = string.Empty;
         failureReason = string.Empty;
@@ -103,8 +104,9 @@ internal static class FileSystemBoundary
         {
             fullPath = NormalizeDirectoryPath(path);
             var normalizedRoot = NormalizeDirectoryPath(safeRoot);
-            if (string.Equals(fullPath, normalizedRoot, PathCasing.ComparisonFor(normalizedRoot))
-                || !PathCasing.IsPathEqualOrParent(normalizedRoot, fullPath))
+            var comparison = pathComparisonOverride ?? PathCasing.ComparisonFor(normalizedRoot);
+            if (string.Equals(fullPath, normalizedRoot, comparison)
+                || !IsEqualOrDescendant(normalizedRoot, fullPath, comparison))
             {
                 failureReason = options.OutsideRootReason;
                 return false;
@@ -145,5 +147,17 @@ internal static class FileSystemBoundary
             failureReason = options.InvalidPathReason;
             return false;
         }
+    }
+
+    private static bool IsEqualOrDescendant(string normalizedRoot, string normalizedPath, StringComparison comparison)
+    {
+        if (string.Equals(normalizedRoot, normalizedPath, comparison))
+            return true;
+
+        var rootWithSeparator = normalizedRoot.EndsWith(Path.DirectorySeparatorChar)
+            || normalizedRoot.EndsWith(Path.AltDirectorySeparatorChar)
+            ? normalizedRoot
+            : normalizedRoot + Path.DirectorySeparatorChar;
+        return normalizedPath.StartsWith(rootWithSeparator, comparison);
     }
 }

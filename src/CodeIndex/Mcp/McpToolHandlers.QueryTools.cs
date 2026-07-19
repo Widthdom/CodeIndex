@@ -1453,7 +1453,11 @@ public partial class McpServer
                 status.MacProfileDiagnostics = macProfile.Diagnostics.ToList();
             if (checkWorkspace)
             {
-                status.WorkspaceCheck = IndexFreshnessChecker.Check(reader, status.ProjectRoot, requestToken);
+                status.WorkspaceCheck = IndexFreshnessChecker.Check(
+                    reader,
+                    status.ProjectRoot,
+                    requestToken,
+                    internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(_dbPath));
                 status.IndexMatchesWorkspace = status.WorkspaceCheck.Checked
                     ? status.WorkspaceCheck.MatchesWorkspace
                     : null;

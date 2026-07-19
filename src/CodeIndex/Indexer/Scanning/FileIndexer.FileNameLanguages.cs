@@ -2,8 +2,11 @@ namespace CodeIndex.Indexer;
 
 public partial class FileIndexer
 {
-    // Exact file names (case-insensitive) mapped to language / 完全一致ファイル名→言語マッピング
-    private static readonly Dictionary<string, string> FileNameMap = new(StringComparer.OrdinalIgnoreCase)
+    // Exact file names mapped to language. Index-time matching follows the probed filesystem
+    // case policy; the public static compatibility helper remains case-insensitive.
+    // 完全一致ファイル名→言語マッピング。index 時は実 FS の大小区別ポリシーに従い、
+    // 公開 static compatibility helper は従来どおり case-insensitive とする。
+    private static readonly Dictionary<string, string> FileNameMap = new(StringComparer.Ordinal)
     {
         ["Dockerfile"] = "dockerfile",
         [".dockerfile"] = "dockerfile",
@@ -56,6 +59,9 @@ public partial class FileIndexer
         [".gitattributes"] = "gitattributes",
         [".dockerignore"] = "dockerignore",
     };
+
+    private static readonly IReadOnlyDictionary<string, string> FileNameMapIgnoreCase =
+        new Dictionary<string, string>(FileNameMap, StringComparer.OrdinalIgnoreCase);
 
     // Filename prefixes (with trailing dot) mapped to language for suffixed variants like
     // Dockerfile.dev / Makefile.common / GNUmakefile.am. The suffix must be non-empty.

@@ -20,6 +20,12 @@ public partial class FileIndexer
     {
         if (TryEvaluatePathFilterPrefix(absolutePath, errors, out var fullPath, out var relativePath) is { } prefixResult)
             return prefixResult;
+        if (IsInternalIndexArtifactPath(relativePath))
+        {
+            return CreatePathFilterResult(
+                isDirectory ? PathFilterKind.ExcludedByDefaultDirectory : PathFilterKind.ExcludedByDefaultFile,
+                errors);
+        }
         if (TryLoadRootPathFilterRules(errors, isDirectory, out var activeIgnoreRules) is { } rootResult)
             return rootResult;
 
