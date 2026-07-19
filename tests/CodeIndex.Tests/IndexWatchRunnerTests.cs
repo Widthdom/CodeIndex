@@ -1238,6 +1238,66 @@ public class IndexWatchRunnerTests
     }
 
     [Fact]
+    public void RunCore_StartupReconciliationFailureDoesNotEmitWatching_Issue4594()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('startup failure')\n");
+            var initialJson = RunIndexAndCapture([projectRoot, "--db", dbPath, "--json"], out var initialExitCode);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Contains("\"status\":\"success\"", initialJson, StringComparison.Ordinal);
+
+            var options = new IndexCommandOptions
+            {
+                ProjectPath = projectRoot,
+                DbPath = dbPath,
+                Json = true,
+                Watch = true,
+                WatchDebounceMs = 50,
+            };
+            using var heldLock = IndexLock.Acquire(IndexLock.GetLockPath(dbPath), projectRoot);
+            string capturedOut;
+            int exitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var stdout = new StringWriter();
+                Console.SetOut(stdout);
+                try
+                {
+#pragma warning disable xUnit1031 // Console redirection lock requires synchronous bounded drain.
+                    exitCode = IndexWatchRunner.RunCoreAsync(
+                            options,
+                            _jsonOptions,
+                            projectRoot,
+                            dbPath,
+                            CancellationToken.None)
+                        .WaitAsync(TimeSpan.FromSeconds(10))
+                        .GetAwaiter()
+                        .GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+                capturedOut = stdout.ToString();
+            }
+
+            Assert.NotEqual(CommandExitCodes.Success, exitCode);
+            Assert.Contains("\"status\":\"failed\"", capturedOut, StringComparison.Ordinal);
+            Assert.DoesNotContain("\"status\":\"watching\"", capturedOut, StringComparison.Ordinal);
+            Assert.Contains("\"status\":\"stopped\"", capturedOut, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunCore_JsonLifecycleEventsHonorIndentedJsonOptions()
     {
         var projectRoot = CreateTempProject();

@@ -225,7 +225,8 @@ internal static class IndexWatchRunner
                 }
             }
 
-            var ready = !cancellationToken.IsCancellationRequested;
+            var ready = !cancellationToken.IsCancellationRequested
+                && watchExitCode == CommandExitCodes.Success;
             if (ready)
             {
                 EmitWatchStarted(baseOptions, jsonOptions, projectRoot, resolvedDbPath, debounce, maxPendingPaths, ignoreCase);
