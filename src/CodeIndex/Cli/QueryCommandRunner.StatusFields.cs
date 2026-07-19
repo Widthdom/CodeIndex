@@ -91,6 +91,12 @@ public static partial class QueryCommandRunner
                 "the field is absent outside a Git checkout or when dirty-state detection is unavailable.",
                 "Run `git status` in the workspace to inspect uncommitted changes directly."),
             new(
+                "git_executable",
+                "Trusted Git executable selection",
+                "`accepted=true` means cdidx validated the absolute Git path, metadata type, owner/mode and ancestor trust, then successfully executed `git --version`.",
+                "`accepted=false` includes a stable `reason` identifying the failed path, metadata, owner, mode, ancestor, or execution probe.",
+                $"Set `{GitHelper.GitExecutableEnvironmentVariable}` to a trusted absolute `git` path (`git.exe` on Windows), then inspect the nested diagnostics again."),
+            new(
                 "indexed_head_commit",
                 "Legacy full-scan HEAD stamp",
                 "the index records the Git HEAD from the most recent successful full scan for legacy compatibility.",

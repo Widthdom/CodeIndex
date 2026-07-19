@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using CodeIndex.Database;
 using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
 using Regex = CodeIndex.Indexer.BoundedRegex;
 
 namespace CodeIndex.Cli;
@@ -58,8 +60,10 @@ public sealed record GitHeadCommitResult(
 /// Git integration helpers.
 /// Git連携ヘルパー。
 /// </summary>
-public static class GitHelper
+public static partial class GitHelper
 {
+    public const string GitExecutableEnvironmentVariable = "CDIDX_GIT_EXECUTABLE";
+
     internal static Func<string, bool>? FileSystemIgnoreCaseProbeForTesting { get; set; }
 
     internal const int MaxGitMetadataFileBytes = 4 * 1024;
@@ -87,7 +91,7 @@ public static class GitHelper
         set => GitCommandTimeoutOverride.Value = value;
     }
 
-    private static readonly Lazy<string?> TrustedGitExecutablePath = new(ResolveTrustedGitExecutablePathFromKnownLocations);
+    private static readonly Lazy<GitExecutableResolution> TrustedGitExecutable = new(ResolveTrustedGitExecutableFromKnownLocations);
     private static readonly AsyncLocal<string?> GitExecutablePathOverrideValue = new();
     internal static string? GitExecutablePathOverride
     {
@@ -96,7 +100,9 @@ public static class GitHelper
     }
 
     private const string TrustedGitUnavailableMessage =
-        "Could not resolve a trusted git executable path. Install git in a standard system location. / 信頼済みの git 実行ファイルパスを解決できませんでした。標準のシステム場所に git をインストールしてください。";
+        "Could not resolve a trusted git executable path. Install git in a standard system location or set CDIDX_GIT_EXECUTABLE to a trusted absolute path. / 信頼済みの git 実行ファイルパスを解決できませんでした。標準のシステム場所に git をインストールするか、CDIDX_GIT_EXECUTABLE に信頼できる絶対パスを設定してください。";
+
+    private sealed record GitExecutableResolution(string? Path, GitExecutableStatus Status);
 
     private static ProcessStartInfo? TryCreateGitStartInfo(string projectRoot)
     {
@@ -120,19 +126,78 @@ public static class GitHelper
     private static string? TryResolveGitExecutablePath()
     {
         var overridePath = NormalizeTrustedGitExecutablePath(GitExecutablePathOverrideValue.Value);
-        return overridePath ?? TrustedGitExecutablePath.Value;
+        if (overridePath != null)
+            return overridePath;
+
+        var environmentValue = global::CodeIndex.EnvironmentAccess.GetProcessEnvironmentVariable(GitExecutableEnvironmentVariable);
+        if (environmentValue != null)
+            return EvaluateGitExecutableCandidate(environmentValue, "environment_override").Path;
+
+        return TrustedGitExecutable.Value.Path;
     }
 
-    private static string? ResolveTrustedGitExecutablePathFromKnownLocations()
+    public static GitExecutableStatus GetGitExecutableStatus()
+    {
+        var overridePath = NormalizeTrustedGitExecutablePath(GitExecutablePathOverrideValue.Value);
+        if (overridePath != null)
+        {
+            return new GitExecutableStatus(
+                "test_override",
+                Accepted: true,
+                "accepted",
+                DiagnosticSanitizer.ForPath(overridePath),
+                OwnerOnlyWritable: null,
+                UnixMode: null,
+                Executable: null,
+                Owner: null,
+                OwnerTrusted: null,
+                AncestorDirectoriesTrusted: null);
+        }
+
+        var environmentValue = global::CodeIndex.EnvironmentAccess.GetProcessEnvironmentVariable(GitExecutableEnvironmentVariable);
+        return environmentValue != null
+            ? EvaluateGitExecutableCandidate(environmentValue, "environment_override").Status
+            : TrustedGitExecutable.Value.Status;
+    }
+
+    internal static IReadOnlyList<ExtensionTrustOverride> GetAcceptedTrustOverrides(GitExecutableStatus status)
+    {
+        if (!status.Accepted || !string.Equals(status.Source, "environment_override", StringComparison.Ordinal))
+            return [];
+
+        var modeDetail = status.UnixMode == null
+            ? "regular non-reparse executable with trusted owner/write ACLs and ancestors"
+            : $"{status.Owner ?? "trusted"}-owned, owner-only-writable mode {status.UnixMode} executable with trusted ancestors";
+        return
+        [
+            new ExtensionTrustOverride(
+                "git_executable",
+                GitExecutableEnvironmentVariable,
+                status.Path ?? string.Empty,
+                status.Path,
+                $"Absolute Git executable override accepted after {modeDetail} validation.")
+        ];
+    }
+
+    private static GitExecutableResolution ResolveTrustedGitExecutableFromKnownLocations()
     {
         foreach (var candidate in EnumerateTrustedGitExecutableCandidates())
         {
-            var normalized = NormalizeTrustedGitExecutablePath(candidate);
-            if (normalized != null)
-                return normalized;
+            var resolution = EvaluateGitExecutableCandidate(candidate, "known_location");
+            if (resolution.Path != null)
+                return resolution;
         }
 
-        return null;
+        return RejectedGitExecutable(
+            "known_location",
+            "no_trusted_candidate",
+            path: null,
+            ownerOnlyWritable: null,
+            unixMode: null,
+            executable: null,
+            owner: null,
+            ownerTrusted: null,
+            ancestorDirectoriesTrusted: null);
     }
 
     private static IEnumerable<string> EnumerateTrustedGitExecutableCandidates()
@@ -184,7 +249,7 @@ public static class GitHelper
                 return null;
 
             var fullPath = Path.GetFullPath(path);
-            if (!string.Equals(Path.GetFileNameWithoutExtension(fullPath), "git", StringComparison.OrdinalIgnoreCase))
+            if (!HasExpectedGitExecutableName(fullPath))
                 return null;
 
             return File.Exists(LongPath.EnsureWindowsPrefix(fullPath)) ? fullPath : null;
@@ -194,6 +259,181 @@ public static class GitHelper
             return null;
         }
     }
+
+    private static GitExecutableResolution EvaluateGitExecutableCandidate(string path, string source)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return RejectedGitExecutable(source, "path_empty", null, null, null, null, null, null, null);
+        if (!Path.IsPathFullyQualified(path))
+            return RejectedGitExecutable(source, "path_not_absolute", null, null, null, null, null, null, null);
+
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(path);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or PathTooLongException)
+        {
+            return RejectedGitExecutable(source, "invalid_path", null, null, null, null, null, null, null);
+        }
+
+        var diagnosticPath = DiagnosticSanitizer.ForPath(fullPath);
+        if (!HasExpectedGitExecutableName(fullPath))
+            return RejectedGitExecutable(source, "unexpected_filename", diagnosticPath, null, null, null, null, null, null);
+
+        FileAttributes attributes;
+        try
+        {
+            attributes = File.GetAttributes(LongPath.EnsureWindowsPrefix(fullPath));
+        }
+        catch (FileNotFoundException)
+        {
+            return RejectedGitExecutable(source, "not_found", diagnosticPath, null, null, null, null, null, null);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return RejectedGitExecutable(source, "not_found", diagnosticPath, null, null, null, null, null, null);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return RejectedGitExecutable(source, "attribute_probe_failed", diagnosticPath, null, null, null, null, null, null);
+        }
+
+        if ((attributes & FileAttributes.Directory) != 0)
+            return RejectedGitExecutable(source, "not_regular_file", diagnosticPath, null, null, null, null, null, null);
+        if (FileSystemBoundary.IsSymlinkOrReparsePoint(attributes))
+            return RejectedGitExecutable(source, "symlink_or_reparse_point", diagnosticPath, null, null, null, null, null, null);
+        if (FileSystemBoundary.IsDevice(attributes))
+            return RejectedGitExecutable(source, "device", diagnosticPath, null, null, null, null, null, null);
+
+        if (OperatingSystem.IsWindows())
+        {
+            var windowsAncestorsTrusted = TryValidateGitExecutableAncestors(fullPath, effectiveUserId: null);
+            if (!windowsAncestorsTrusted)
+                return RejectedGitExecutable(source, "ancestor_untrusted", diagnosticPath, null, null, null, null, null, windowsAncestorsTrusted);
+            if (!TryValidateWindowsExecutableAcl(fullPath, out var windowsOwner, out var windowsOwnerTrusted))
+            {
+                return RejectedGitExecutable(
+                    source,
+                    "acl_untrusted",
+                    diagnosticPath,
+                    null,
+                    null,
+                    null,
+                    windowsOwner,
+                    windowsOwnerTrusted,
+                    false);
+            }
+            if (!TryValidateWindowsExecutableImage(fullPath))
+                return RejectedGitExecutable(source, "invalid_executable_format", diagnosticPath, null, null, false, windowsOwner, windowsOwnerTrusted, windowsAncestorsTrusted);
+
+            var windowsExecutable = TryProbeGitVersion(fullPath);
+            return windowsExecutable
+                ? AcceptedGitExecutable(source, fullPath, diagnosticPath, null, null, windowsExecutable, windowsOwner, windowsOwnerTrusted, windowsAncestorsTrusted)
+                : RejectedGitExecutable(source, "execution_probe_failed", diagnosticPath, null, null, windowsExecutable, windowsOwner, windowsOwnerTrusted, windowsAncestorsTrusted);
+        }
+
+        if (!TryResolveRealUnixPath(fullPath, out fullPath))
+            return RejectedGitExecutable(source, "canonicalization_failed", diagnosticPath, null, null, null, null, null, null);
+        diagnosticPath = DiagnosticSanitizer.ForPath(fullPath);
+
+        UnixFileMode mode;
+        try
+        {
+            mode = File.GetUnixFileMode(LongPath.EnsureWindowsPrefix(fullPath));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            return RejectedGitExecutable(source, "mode_probe_failed", diagnosticPath, null, null, null, null, null, null);
+        }
+
+        var ownerOnlyWritable = (mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) == 0;
+        var unixMode = FormatUnixMode(mode);
+        if (!ownerOnlyWritable)
+            return RejectedGitExecutable(source, "shared_writable", diagnosticPath, ownerOnlyWritable, unixMode, null, null, null, null);
+
+        if (!TryGetEffectiveUnixUserId(out var effectiveUserId)
+            || !FileIndexer.TryGetUnixFileOwnerId(LongPath.EnsureWindowsPrefix(fullPath), out var ownerId))
+        {
+            return RejectedGitExecutable(source, "owner_probe_failed", diagnosticPath, ownerOnlyWritable, unixMode, null, null, null, null);
+        }
+
+        var owner = ownerId == effectiveUserId ? "current_user" : ownerId == 0 ? "root" : "other";
+        var ownerTrusted = ownerId == effectiveUserId || ownerId == 0;
+        if (!ownerTrusted)
+            return RejectedGitExecutable(source, "owner_untrusted", diagnosticPath, ownerOnlyWritable, unixMode, null, owner, ownerTrusted, null);
+
+        var ancestorsTrusted = TryValidateGitExecutableAncestors(fullPath, effectiveUserId);
+        if (!ancestorsTrusted)
+            return RejectedGitExecutable(source, "ancestor_untrusted", diagnosticPath, ownerOnlyWritable, unixMode, null, owner, ownerTrusted, ancestorsTrusted);
+
+        var executable = TryAccessUnixExecutable(fullPath);
+        if (!executable)
+            return RejectedGitExecutable(source, "not_executable", diagnosticPath, ownerOnlyWritable, unixMode, executable, owner, ownerTrusted, ancestorsTrusted);
+
+        executable = TryProbeGitVersion(fullPath);
+        if (!executable)
+            return RejectedGitExecutable(source, "execution_probe_failed", diagnosticPath, ownerOnlyWritable, unixMode, executable, owner, ownerTrusted, ancestorsTrusted);
+
+        return AcceptedGitExecutable(source, fullPath, diagnosticPath, ownerOnlyWritable, unixMode, executable, owner, ownerTrusted, ancestorsTrusted);
+    }
+
+    private static GitExecutableResolution AcceptedGitExecutable(
+        string source,
+        string fullPath,
+        string diagnosticPath,
+        bool? ownerOnlyWritable,
+        string? unixMode,
+        bool? executable,
+        string? owner,
+        bool? ownerTrusted,
+        bool? ancestorDirectoriesTrusted)
+        => new(
+            fullPath,
+            new GitExecutableStatus(
+                source,
+                Accepted: true,
+                "accepted",
+                diagnosticPath,
+                ownerOnlyWritable,
+                unixMode,
+                executable,
+                owner,
+                ownerTrusted,
+                ancestorDirectoriesTrusted));
+
+    private static GitExecutableResolution RejectedGitExecutable(
+        string source,
+        string reason,
+        string? path,
+        bool? ownerOnlyWritable,
+        string? unixMode,
+        bool? executable,
+        string? owner,
+        bool? ownerTrusted,
+        bool? ancestorDirectoriesTrusted)
+        => new(
+            Path: null,
+            new GitExecutableStatus(
+                source,
+                Accepted: false,
+                reason,
+                path,
+                ownerOnlyWritable,
+                unixMode,
+                executable,
+                owner,
+                ownerTrusted,
+                ancestorDirectoriesTrusted));
+
+    private static string FormatUnixMode(UnixFileMode mode)
+        => Convert.ToString((int)mode, 8).PadLeft(4, '0');
+
+    private static bool HasExpectedGitExecutableName(string path)
+        => string.Equals(
+            Path.GetFileName(path),
+            OperatingSystem.IsWindows() ? "git.exe" : "git",
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     /// <summary>
     /// Resolve the common git directory for a project root, handling both normal repos and worktrees.
@@ -208,20 +448,24 @@ public static class GitHelper
         var ioDotGit = LongPath.EnsureWindowsPrefix(dotGit);
 
         // Normal repository: .git is a directory / 通常リポジトリ: .gitがディレクトリ
-        if (Directory.Exists(ioDotGit)) return dotGit;
+        if (TryValidateGitMetadataEntry(dotGit, expectDirectory: true, out var canonicalDotGit))
+            return canonicalDotGit;
 
         // Worktree: .git is a file containing "gitdir: <path>" / worktree: .gitがファイルで "gitdir: <path>" を含む
-        if (!File.Exists(ioDotGit))
+        if (!TryValidateGitMetadataEntry(dotGit, expectDirectory: false, out var canonicalGitFile))
         {
-            return TryGetRepositoryType(projectRoot, cancellationToken) == GitRepositoryType.Bare
-                ? Path.GetFullPath(projectRoot)
+            if (GitMetadataPathExists(ioDotGit))
+                return null;
+            if (TryGetRepositoryType(projectRoot, cancellationToken) != GitRepositoryType.Bare)
+                return null;
+            return TryValidateGitMetadataEntry(projectRoot, expectDirectory: true, out var canonicalBareRoot)
+                ? canonicalBareRoot
                 : null;
         }
 
-        if (!IsRegularGitMetadataFile(ioDotGit))
-            return null;
-
-        var gitFileContent = DataDirectorySecurity.ReadTextWithinLimit(ioDotGit, MaxGitMetadataFileBytes);
+        var gitFileContent = DataDirectorySecurity.ReadTextWithinLimit(
+            LongPath.EnsureWindowsPrefix(canonicalGitFile),
+            MaxGitMetadataFileBytes);
         if (gitFileContent is null)
             return null;
 
@@ -231,7 +475,7 @@ public static class GitHelper
         var worktreeGitDirValue = gitFileContent["gitdir:".Length..].Trim();
         if (!TryResolveGitMetadataPath(projectRoot, worktreeGitDirValue, out var worktreeGitDir))
             return null;
-        if (!Directory.Exists(LongPath.EnsureWindowsPrefix(worktreeGitDir)))
+        if (!TryValidateGitMetadataEntry(worktreeGitDir, expectDirectory: true, out worktreeGitDir))
             return null;
 
         // Read commondir to find the shared .git directory / commondirを読んで共有.gitディレクトリを見つける
@@ -239,17 +483,19 @@ public static class GitHelper
         var ioCommonDirFile = LongPath.EnsureWindowsPrefix(commonDirFile);
         if (GitMetadataPathExists(ioCommonDirFile))
         {
-            if (!IsRegularGitMetadataFile(ioCommonDirFile))
+            if (!TryValidateGitMetadataEntry(commonDirFile, expectDirectory: false, out commonDirFile))
                 return null;
 
-            var commonDirRelative = DataDirectorySecurity.ReadTextWithinLimit(ioCommonDirFile, MaxGitMetadataFileBytes);
+            var commonDirRelative = DataDirectorySecurity.ReadTextWithinLimit(
+                LongPath.EnsureWindowsPrefix(commonDirFile),
+                MaxGitMetadataFileBytes);
             if (commonDirRelative is null)
                 return null;
 
             commonDirRelative = commonDirRelative.Trim();
             if (!TryResolveGitMetadataPath(worktreeGitDir, commonDirRelative, out var commonDir))
                 return null;
-            if (!Directory.Exists(LongPath.EnsureWindowsPrefix(commonDir)))
+            if (!TryValidateGitMetadataEntry(commonDir, expectDirectory: true, out commonDir))
                 return null;
             if (PathCasing.PathsEqual(commonDir, worktreeGitDir)
                 || !PathCasing.IsPathEqualOrParent(commonDir, worktreeGitDir))
@@ -265,7 +511,7 @@ public static class GitHelper
     }
 
     private static bool GitMetadataPathExists(string path)
-        => File.Exists(path) || Directory.Exists(path);
+        => FileSystemBoundary.TryGetAttributes(path, out _) != FileSystemBoundaryProbeStatus.Missing;
 
     private static bool TryResolveGitMetadataPath(string baseDirectory, string value, out string resolvedPath)
     {
@@ -288,15 +534,146 @@ public static class GitHelper
     }
 
     private static bool IsRegularGitMetadataFile(string path)
+        => TryValidateGitMetadataEntry(path, expectDirectory: false, out _);
+
+    private static bool TryValidateGitMetadataEntry(string path, bool expectDirectory, out string canonicalPath)
     {
+        canonicalPath = string.Empty;
         try
         {
-            var attributes = File.GetAttributes(path);
-            return (attributes & FileAttributes.Directory) == 0
-                   && (attributes & FileAttributes.ReparsePoint) == 0;
+            canonicalPath = PathCasing.NormalizeBoundaryPath(Path.GetFullPath(path));
+            if (!TryValidateGitMetadataPathComponents(canonicalPath, expectDirectory))
+                return false;
+
+            if (!OperatingSystem.IsWindows())
+            {
+                if (!TryResolveRealUnixPathCore(canonicalPath, out var resolvedPath)
+                    || !TryValidateGitMetadataPathComponents(resolvedPath, expectDirectory))
+                {
+                    return false;
+                }
+            }
+
+            if (!expectDirectory
+                && (!FileIndexer.TryGetFileLinkCount(LongPath.EnsureWindowsPrefix(canonicalPath), out var linkCount)
+                    || linkCount != 1))
+            {
+                return false;
+            }
+
+            return true;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException or CodeIndexException)
         {
+            canonicalPath = string.Empty;
+            return false;
+        }
+    }
+
+    private static bool TryValidateGitMetadataPathComponents(string fullPath, bool expectDirectory)
+    {
+        var root = Path.GetPathRoot(fullPath);
+        if (string.IsNullOrEmpty(root))
+            return false;
+
+        var relativePath = fullPath[root.Length..];
+        var segments = relativePath.Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries);
+        var current = root;
+        for (var index = 0; index < segments.Length; index++)
+        {
+            current = Path.Combine(current, segments[index]);
+            var attributes = File.GetAttributes(LongPath.EnsureWindowsPrefix(current));
+            if (FileSystemBoundary.IsDevice(attributes))
+            {
+                return false;
+            }
+
+            if (FileSystemBoundary.IsSymlinkOrReparsePoint(attributes))
+            {
+                if (index == segments.Length - 1 || !IsTrustedSystemMetadataLink(current))
+                    return false;
+                continue;
+            }
+
+            var isDirectory = (attributes & FileAttributes.Directory) != 0;
+            if (index < segments.Length - 1 && !isDirectory)
+                return false;
+            if (index == segments.Length - 1 && isDirectory != expectDirectory)
+                return false;
+        }
+
+        if (segments.Length > 0)
+            return true;
+
+        var rootAttributes = File.GetAttributes(LongPath.EnsureWindowsPrefix(root));
+        return !FileSystemBoundary.IsSymlinkOrReparsePoint(rootAttributes)
+               && !FileSystemBoundary.IsDevice(rootAttributes)
+               && ((rootAttributes & FileAttributes.Directory) != 0) == expectDirectory;
+    }
+
+    private static bool IsTrustedSystemMetadataLink(string path)
+    {
+        if (OperatingSystem.IsWindows())
+            return false;
+
+        var parent = Directory.GetParent(path)?.FullName;
+        if (string.IsNullOrEmpty(parent)
+            || !FileIndexer.TryGetUnixFileOwnerId(LongPath.EnsureWindowsPrefix(path), out var linkOwner)
+            || linkOwner != 0
+            || !FileIndexer.TryGetUnixFileOwnerId(LongPath.EnsureWindowsPrefix(parent), out var parentOwner)
+            || parentOwner != 0)
+        {
+            return false;
+        }
+
+        var parentMode = File.GetUnixFileMode(LongPath.EnsureWindowsPrefix(parent));
+        return (parentMode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) == 0;
+    }
+
+    internal static bool TryResolveGitMetadataChildPath(
+        string parentDirectory,
+        string childName,
+        bool expectDirectory,
+        bool allowMissing,
+        out string childPath)
+    {
+        childPath = string.Empty;
+        if (string.IsNullOrWhiteSpace(childName)
+            || childName is "." or ".."
+            || !string.Equals(Path.GetFileName(childName), childName, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        try
+        {
+            if (!TryValidateGitMetadataEntry(parentDirectory, expectDirectory: true, out var canonicalParent))
+                return false;
+
+            childPath = PathCasing.NormalizeBoundaryPath(Path.Combine(canonicalParent, childName));
+            if (!FileSystemBoundary.IsStrictDescendant(canonicalParent, childPath))
+            {
+                childPath = string.Empty;
+                return false;
+            }
+
+            var probe = FileSystemBoundary.TryGetAttributes(childPath, out _);
+            if (probe == FileSystemBoundaryProbeStatus.Missing)
+                return allowMissing;
+            if (probe != FileSystemBoundaryProbeStatus.Found
+                || !TryValidateGitMetadataEntry(childPath, expectDirectory, out childPath))
+            {
+                childPath = string.Empty;
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException or CodeIndexException)
+        {
+            childPath = string.Empty;
             return false;
         }
     }
@@ -305,8 +682,7 @@ public static class GitHelper
     {
         try
         {
-            var ioGitDir = LongPath.EnsureWindowsPrefix(gitDir);
-            if (!Directory.Exists(ioGitDir))
+            if (!TryValidateGitMetadataEntry(gitDir, expectDirectory: true, out gitDir))
                 return false;
 
             var headPath = LongPath.EnsureWindowsPrefix(Path.Combine(gitDir, "HEAD"));
@@ -323,18 +699,7 @@ public static class GitHelper
     }
 
     private static bool IsGitMetadataDirectory(string path)
-    {
-        try
-        {
-            var attributes = File.GetAttributes(LongPath.EnsureWindowsPrefix(path));
-            return (attributes & FileAttributes.Directory) != 0
-                   && (attributes & FileAttributes.ReparsePoint) == 0;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
-        {
-            return false;
-        }
-    }
+        => TryValidateGitMetadataEntry(path, expectDirectory: true, out _);
 
     /// <summary>
     /// Try to classify the repository shape for <paramref name="projectRoot"/>.
@@ -344,10 +709,12 @@ public static class GitHelper
     {
         var dotGit = Path.Combine(projectRoot, ".git");
         var ioDotGit = LongPath.EnsureWindowsPrefix(dotGit);
-        if (Directory.Exists(ioDotGit))
+        if (TryValidateGitMetadataEntry(dotGit, expectDirectory: true, out _))
             return GitRepositoryType.Normal;
-        if (File.Exists(ioDotGit))
+        if (TryValidateGitMetadataEntry(dotGit, expectDirectory: false, out _))
             return GitRepositoryType.Worktree;
+        if (GitMetadataPathExists(ioDotGit))
+            return GitRepositoryType.None;
 
         var isBare = TryRunGit(projectRoot, cancellationToken, "rev-parse", "--is-bare-repository")?.Trim();
         return string.Equals(isBare, "true", StringComparison.OrdinalIgnoreCase)

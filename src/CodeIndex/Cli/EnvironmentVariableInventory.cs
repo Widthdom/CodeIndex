@@ -73,6 +73,8 @@ internal static class EnvironmentVariableInventory
         Item("CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS", "github", SensitivityPublic, "performance", "10", "no", "GitHub suggestion submission timeout in seconds.", Location("src/CodeIndex/Cli/GitHubIssueReporter.cs", 53, "GitHubIssueReporter")),
         Item(GitHubHttpClientFactory.ProxyDefaultCredentialsEnvironmentVariable, "github", SensitivityPublic, "security", "disabled", "no", "Allow default proxy credentials for GitHub HTTP calls.", Location("src/CodeIndex/Cli/GitHubHttpClientFactory.cs", 8, "GitHubHttpClientFactory")),
 
+        Item(GitHelper.GitExecutableEnvironmentVariable, "git", SensitivityPublic, "security", "validated known installation path", "no", "Override the trusted Git executable with a validated absolute path.", Location("src/CodeIndex/Cli/GitHelper.cs", 65, "GitHelper")),
+
         Item(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "plugins", SensitivityPublic, "security", "untrusted", "no", "Trust workspace plugin assemblies after path safety checks.", Location("src/CodeIndex/Indexer/Extensibility/ExtractorPluginRegistry.cs", 9, "ExtractorPluginRegistry")),
         Item(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, "plugins", SensitivityPublic, "io", "user config hooks directory", "no", "Override post-extraction hooks directory.", Location("src/CodeIndex/Indexer/Hooks/PostExtractionHooks.cs", 38, "PostExtractionHookRunner")),
         Item(PostExtractionHookRunner.CallbackBudgetEnvironmentVariable, "plugins", SensitivityPublic, "performance", "5 seconds", "no", "Post-extraction hook callback budget in milliseconds.", Location("src/CodeIndex/Indexer/Hooks/PostExtractionHooks.cs", 39, "PostExtractionHookRunner")),
@@ -159,7 +161,7 @@ internal static class EnvironmentVariableInventory
             "terminal" or "locale" or "output" => DomainDisplay,
             _ when policy == "display" => DomainDisplay,
             "config" or "workspace" or "path" => DomainConfig,
-            "plugins" => DomainTrustBoundary,
+            "plugins" or "git" => DomainTrustBoundary,
             "mcp" when policy == "security" => DomainTrustBoundary,
             "github" when policy == "security" => DomainTrustBoundary,
             "logging" or "telemetry" or "debug" or "status" or "update" => DomainUpdateLogging,
@@ -197,6 +199,8 @@ internal static class EnvironmentVariableInventory
                 "unsupported values fall back to automatic display behavior unless the owning option documents a warning",
             "plugins" =>
                 "unsafe or invalid paths/options are rejected or ignored with bounded diagnostics",
+            "git" =>
+                "invalid or unsafe executable paths fail closed and are reported by status.git_executable",
             "mcp" when policy == "security" =>
                 "invalid security gates fail closed or keep the feature disabled with a warning",
             "github" when policy == "security" =>

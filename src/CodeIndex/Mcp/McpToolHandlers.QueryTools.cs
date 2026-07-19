@@ -1464,12 +1464,14 @@ public partial class McpServer
             ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(status.ProjectRoot);
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages(status.ProjectRoot).OrderBy(l => l).ToList();
             status.Extractors = ExtractorPluginRegistry.GetStatusSnapshot(status.ProjectRoot);
+            status.GitExecutable = GitHelper.GetGitExecutableStatus();
             var postExtractionHookSnapshot = PostExtractionHookRunner.DiscoverDefaultMetadata();
             var postExtractionHooks = postExtractionHookSnapshot.Hooks;
             if (postExtractionHookSnapshot.Diagnostics.Count > 0)
                 status.HookDiagnostics = postExtractionHookSnapshot.Diagnostics.ToList();
             var trustOverrides = ExtractorPluginRegistry.GetAcceptedTrustOverrides(status.ProjectRoot)
                 .Concat(postExtractionHookSnapshot.TrustOverrides)
+                .Concat(GitHelper.GetAcceptedTrustOverrides(status.GitExecutable))
                 .ToList();
             if (trustOverrides.Count > 0)
                 status.TrustOverrides = trustOverrides;
@@ -1768,6 +1770,8 @@ public partial class McpServer
             payload["workspace_check"] = JsonSerializer.SerializeToNode(status.WorkspaceCheck);
         if (status.TrustOverrides is { Count: > 0 })
             payload["trust_overrides"] = JsonSerializer.SerializeToNode(status.TrustOverrides);
+        if (status.GitExecutable is not null)
+            payload["git_executable"] = JsonSerializer.SerializeToNode(status.GitExecutable);
         return payload;
     }
 

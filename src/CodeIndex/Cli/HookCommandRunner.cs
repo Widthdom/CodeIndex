@@ -39,14 +39,39 @@ public static class HookCommandRunner
         if (gitDir == null)
             return WriteResult(options.Json, jsonOptions, "error", "not a git repository", projectPath, null, null, CommandExitCodes.NotFound);
 
-        var hooksDir = Path.Combine(gitDir, "hooks");
+        if (!GitHelper.TryResolveGitMetadataChildPath(
+                gitDir,
+                "hooks",
+                expectDirectory: true,
+                allowMissing: true,
+                out var hooksDir))
+        {
+            return WriteResult(options.Json, jsonOptions, "error", "unsafe Git hooks metadata path", projectPath, null, null, CommandExitCodes.InstallError);
+        }
+
         var hookPath = Path.Combine(hooksDir, HookName);
         var chainedHookPath = Path.Combine(hooksDir, ChainedHookName);
+        if (Directory.Exists(LongPath.EnsureWindowsPrefix(hooksDir))
+            && (!GitHelper.TryResolveGitMetadataChildPath(
+                    hooksDir,
+                    HookName,
+                    expectDirectory: false,
+                    allowMissing: true,
+                    out hookPath)
+                || !GitHelper.TryResolveGitMetadataChildPath(
+                    hooksDir,
+                    ChainedHookName,
+                    expectDirectory: false,
+                    allowMissing: true,
+                    out chainedHookPath)))
+        {
+            return WriteResult(options.Json, jsonOptions, "error", "unsafe Git hook file path", projectPath, null, null, CommandExitCodes.InstallError);
+        }
 
         return options.Command switch
         {
-            "install" => Install(options, jsonOptions, projectPath, hooksDir, hookPath, chainedHookPath),
-            "uninstall" => Uninstall(options, jsonOptions, projectPath, hookPath, chainedHookPath),
+            "install" => Install(options, jsonOptions, projectPath, gitDir, hooksDir, hookPath, chainedHookPath),
+            "uninstall" => Uninstall(options, jsonOptions, projectPath, gitDir, hooksDir, hookPath, chainedHookPath),
             "status" => Status(options, jsonOptions, projectPath, hookPath, chainedHookPath),
             _ => UnknownCommand(options, jsonOptions, projectPath)
         };
@@ -94,10 +119,12 @@ public static class HookCommandRunner
         return new HookCommandOptions(command, projectPath, json, force, showHelp, parseError);
     }
 
-    private static int Install(HookCommandOptions options, JsonSerializerOptions jsonOptions, string projectPath, string hooksDir, string hookPath, string chainedHookPath)
+    private static int Install(HookCommandOptions options, JsonSerializerOptions jsonOptions, string projectPath, string gitDir, string hooksDir, string hookPath, string chainedHookPath)
     {
         var warnings = new List<HookCommandWarningJsonResult>();
         Directory.CreateDirectory(LongPath.EnsureWindowsPrefix(hooksDir));
+        if (!TryResolveHookWritePaths(gitDir, out hooksDir, out hookPath, out chainedHookPath))
+            return WriteResult(options.Json, jsonOptions, "error", "unsafe Git hook file path", projectPath, null, null, CommandExitCodes.InstallError);
 
         var ioHookPath = LongPath.EnsureWindowsPrefix(hookPath);
         var ioChainedHookPath = LongPath.EnsureWindowsPrefix(chainedHookPath);
@@ -110,6 +137,8 @@ public static class HookCommandRunner
 
                 try
                 {
+                    if (!TryResolveHookWritePaths(gitDir, out hooksDir, out hookPath, out chainedHookPath))
+                        return WriteResult(options.Json, jsonOptions, "error", "Git hook file path became unsafe before write", projectPath, null, null, CommandExitCodes.InstallError);
                     ReplaceCustomHookWithManagedHook(hooksDir, hookPath, chainedHookPath, projectPath, warnings);
                 }
                 catch (Exception ex) when (IsHookFileOperationException(ex))
@@ -123,14 +152,62 @@ public static class HookCommandRunner
             }
         }
 
+        if (!TryResolveHookWritePaths(gitDir, out hooksDir, out hookPath, out chainedHookPath))
+            return WriteResult(options.Json, jsonOptions, "error", "Git hook file path became unsafe before write", projectPath, null, null, CommandExitCodes.InstallError);
+
         AtomicFileWriter.WriteText(hookPath, BuildHookScript(chainedHookPath, projectPath), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), MakeExecutable);
 
         return WriteResult(options.Json, jsonOptions, "installed", "cdidx pre-commit hook installed", projectPath, hookPath, File.Exists(ioChainedHookPath) ? chainedHookPath : null, CommandExitCodes.Success, warnings);
     }
 
-    private static int Uninstall(HookCommandOptions options, JsonSerializerOptions jsonOptions, string projectPath, string hookPath, string chainedHookPath)
+    private static bool TryResolveHookWritePaths(
+        string gitDir,
+        out string hooksDir,
+        out string hookPath,
+        out string chainedHookPath)
+    {
+        hooksDir = string.Empty;
+        hookPath = string.Empty;
+        chainedHookPath = string.Empty;
+        return GitHelper.TryResolveGitMetadataChildPath(
+                   gitDir,
+                   "hooks",
+                   expectDirectory: true,
+                   allowMissing: false,
+                   out hooksDir)
+               && GitHelper.TryResolveGitMetadataChildPath(
+                   hooksDir,
+                   HookName,
+                   expectDirectory: false,
+                   allowMissing: true,
+                   out hookPath)
+               && GitHelper.TryResolveGitMetadataChildPath(
+                   hooksDir,
+                   ChainedHookName,
+                   expectDirectory: false,
+                   allowMissing: true,
+                   out chainedHookPath);
+    }
+
+    private static int Uninstall(HookCommandOptions options, JsonSerializerOptions jsonOptions, string projectPath, string gitDir, string hooksDir, string hookPath, string chainedHookPath)
     {
         var warnings = new List<HookCommandWarningJsonResult>();
+        if (!Directory.Exists(LongPath.EnsureWindowsPrefix(hooksDir)))
+        {
+            return WriteResult(
+                options.Json,
+                jsonOptions,
+                "absent",
+                "cdidx pre-commit hook is not installed",
+                projectPath,
+                hookPath,
+                null,
+                CommandExitCodes.Success);
+        }
+
+        if (!TryResolveHookWritePaths(gitDir, out _, out hookPath, out chainedHookPath))
+            return WriteResult(options.Json, jsonOptions, "error", "unsafe Git hook file path", projectPath, null, null, CommandExitCodes.InstallError);
+
         var ioHookPath = LongPath.EnsureWindowsPrefix(hookPath);
         var ioChainedHookPath = LongPath.EnsureWindowsPrefix(chainedHookPath);
         if (!File.Exists(ioHookPath))
@@ -143,6 +220,10 @@ public static class HookCommandRunner
         {
             try
             {
+                if (!TryResolveHookWritePaths(gitDir, out _, out hookPath, out chainedHookPath))
+                    return WriteResult(options.Json, jsonOptions, "error", "Git hook file path became unsafe before write", projectPath, null, null, CommandExitCodes.InstallError);
+                ioHookPath = LongPath.EnsureWindowsPrefix(hookPath);
+                ioChainedHookPath = LongPath.EnsureWindowsPrefix(chainedHookPath);
                 ReplaceFile(ioChainedHookPath, ioHookPath, destinationBackupFileName: null);
                 MakeExecutable(ioHookPath);
             }
@@ -154,6 +235,9 @@ public static class HookCommandRunner
         }
         else
         {
+            if (!TryResolveHookWritePaths(gitDir, out _, out hookPath, out chainedHookPath))
+                return WriteResult(options.Json, jsonOptions, "error", "Git hook file path became unsafe before write", projectPath, null, null, CommandExitCodes.InstallError);
+            ioHookPath = LongPath.EnsureWindowsPrefix(hookPath);
             if (!TryDeleteFile(ioHookPath, hookPath, "managed_hook", warnings))
                 return WriteResult(options.Json, jsonOptions, "error", "failed to delete managed pre-commit hook", projectPath, hookPath, null, CommandExitCodes.InstallError, warnings);
         }
