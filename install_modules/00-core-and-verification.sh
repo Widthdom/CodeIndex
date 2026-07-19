@@ -25,7 +25,7 @@
 #   CDIDX_NETWORK_LOW_SPEED_TIME_SECONDS Low-speed timeout (default: 30; max: 300)
 #   CDIDX_NETWORK_RETRY_COUNT   Retry count (default: 2; max: 5)
 #   CDIDX_NETWORK_RETRY_DELAY_SECONDS Retry delay (default: 1; max: 60)
-#   CDIDX_VERIFY_POLICY=compat|strict Verification policy (default: compat)
+#   CDIDX_VERIFY_POLICY=compat|strict Verification policy (default: strict)
 #   CDIDX_REQUIRE_ATTESTATION=1 Require GitHub provenance verification via gh
 #   CDIDX_STRICT_VERIFY=1       Require GPG checksum-manifest signature verification
 #   CDIDX_RELEASE_GPG_FINGERPRINT Expected checksum signer fingerprint
@@ -83,9 +83,11 @@
 set -euo pipefail
 
 REPO="Widthdom/CodeIndex"
+RELEASE_ATTESTATION_SIGNER_WORKFLOW="github.com/Widthdom/CodeIndex/.github/workflows/release.yml"
 INSTALL_DIR="${CDIDX_INSTALL_DIR-${HOME:-}/.local/bin}"
 BINARY_NAME="cdidx"
 MANIFEST_REQUIRED_VERSION="1.24.6"
+AUTHENTICATED_MANIFEST_REQUIRED_VERSION="1.38.1"
 GITHUB_BASE_URL="${CDIDX_GITHUB_BASE_URL:-https://github.com}"
 GITHUB_API_BASE_URL="${CDIDX_GITHUB_API_BASE_URL:-https://api.github.com}"
 CURL_STDERR_SAMPLE_BYTES=8192
@@ -105,9 +107,12 @@ ARCHIVE_COMPRESSION_RATIO_MAX=250
 EXTRACTED_PAYLOAD_MAX_BYTES=1073741824
 VALIDATED_ARCHIVE_DECLARED_BYTES=0
 VALIDATED_ARCHIVE_MEMBER_COUNT=0
-VERIFY_POLICY="${CDIDX_VERIFY_POLICY:-compat}"
+VERIFY_POLICY="${CDIDX_VERIFY_POLICY:-strict}"
 REQUIRE_ATTESTATION="${CDIDX_REQUIRE_ATTESTATION:-0}"
 STRICT_VERIFY="${CDIDX_STRICT_VERIFY:-0}"
+REQUIRE_RELEASE_PROVENANCE=0
+MANIFEST_PROVENANCE_VERIFIED=0
+PAYLOAD_MANIFEST_AUTHENTICATED=0
 DEFAULT_RELEASE_GPG_FINGERPRINT=""
 RELEASE_GPG_FINGERPRINT="${CDIDX_RELEASE_GPG_FINGERPRINT:-$DEFAULT_RELEASE_GPG_FINGERPRINT}"
 # Normalize optional base URL overrides by removing a trailing slash.
@@ -226,12 +231,12 @@ has_cmd() {
 
 apply_verification_policy() {
     case "$VERIFY_POLICY" in
-        ""|compat)
+        compat)
             VERIFY_POLICY="compat"
             ;;
-        strict)
-            REQUIRE_ATTESTATION=1
-            STRICT_VERIFY=1
+        ""|strict)
+            VERIFY_POLICY="strict"
+            REQUIRE_RELEASE_PROVENANCE=1
             ;;
         *)
             error "CDIDX_VERIFY_POLICY must be 'compat' or 'strict' (got '${VERIFY_POLICY}')."
@@ -267,7 +272,13 @@ verify_release_attestation() {
     fi
 
     info "Verifying GitHub provenance attestation for ${artifact_name}..."
-    if gh attestation verify "$artifact_path" -R "$REPO" > /dev/null; then
+    if gh attestation verify "$artifact_path" \
+        -R "$REPO" \
+        --signer-workflow "$RELEASE_ATTESTATION_SIGNER_WORKFLOW" \
+        --source-ref "refs/tags/${VERSION}" > /dev/null; then
+        if [ "$artifact_name" = "sha256sums.txt" ]; then
+            MANIFEST_PROVENANCE_VERIFIED=1
+        fi
         return 0
     fi
 
@@ -341,4 +352,18 @@ verify_checksum_signature() {
     if [ "$actual_fingerprint" != "$expected_fingerprint" ]; then
         error "GPG signature fingerprint mismatch for sha256sums.txt. Expected ${expected_fingerprint}, got ${actual_fingerprint}."
     fi
+
+    MANIFEST_PROVENANCE_VERIFIED=1
+}
+
+enforce_manifest_provenance() {
+    if [ "$MANIFEST_PROVENANCE_VERIFIED" = "1" ]; then
+        return 0
+    fi
+
+    if [ "$REQUIRE_RELEASE_PROVENANCE" = "1" ]; then
+        error "Independent provenance verification failed for sha256sums.txt. Install GitHub CLI for release attestation verification, or configure GnuPG with CDIDX_RELEASE_GPG_FINGERPRINT. Use CDIDX_VERIFY_POLICY=compat only as an explicit, audited opt-in."
+    fi
+
+    warn "AUDIT: CDIDX_VERIFY_POLICY=compat permits installation without independently verified release provenance."
 }

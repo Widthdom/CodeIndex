@@ -47,7 +47,9 @@ uninstall_cdidx() {
         "${INSTALL_DIR}/COMMERCIAL_LICENSE.md" \
         "${INSTALL_DIR}/INTEGRATION_POLICY.md" \
         "${INSTALL_DIR}/TRADEMARKS.md" \
-        "${INSTALL_DIR}/MANIFEST.sha256"; do
+        "${INSTALL_DIR}/MANIFEST.sha256" \
+        "${INSTALL_DIR}/${INSTALLED_CHECKSUMS_NAME}" \
+        "${INSTALL_DIR}/${INSTALLED_CHECKSUM_SIGNATURE_NAME}"; do
         if [ -e "$path" ]; then
             if remove_uninstall_file "$path"; then
                 removed=1
