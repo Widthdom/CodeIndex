@@ -95,6 +95,7 @@ public partial class McpServer : IDisposable
     // 直後にリセットする。`WithDbReader` が `DbReader` にライブな cancellation token
     // を渡せるようにするため (#1567)。
     private readonly AsyncLocal<CancellationToken> _currentRequestToken = new();
+    private readonly AsyncLocal<IndexAuditContext?> _currentIndexAuditContext = new();
     private readonly AsyncLocal<bool> _isolateDbForCurrentRequest = new();
     private readonly AsyncLocal<DbReader?> _activeSqliteDiagnosticsReader = new();
     // JSON-RPC batches divide the complete array-envelope budget among response-bearing
@@ -5451,6 +5452,7 @@ public partial class McpServer : IDisposable
     /// </summary>
     private async Task<JsonNode> HandleToolsCallAsync(bool hasId, JsonNode? id, JsonNode? callParams)
     {
+        _currentIndexAuditContext.Value = new IndexAuditContext();
         var callParamsObject = callParams as JsonObject;
         var args = callParamsObject?["arguments"];
         var toolName = callParamsObject?["name"] is JsonValue toolNameValue
@@ -5623,15 +5625,17 @@ public partial class McpServer : IDisposable
             }
         }
 
-        // Audit observes both the wire response (for result_count / error_code / isError)
-        // and any sanitized exception type, so emission happens after the metrics finally
-        // block. Stop the stopwatch idempotently — the metrics path may have already
-        // stopped it. TryEmitAudit is best-effort internally (#1562).
-        // audit はワイヤーレスポンスと例外型の両方を参照するため metrics finally の後で
-        // 出力する。Stopwatch.Stop は冪等。TryEmitAudit 内部でベストエフォート化済み (#1562)。
+        // Audit observes the wire response (for result_count / error_code / isError),
+        // invocation-scoped authorization identity, and any sanitized exception type, so
+        // emission happens after the metrics finally block. Stop the stopwatch idempotently
+        // — the metrics path may have already stopped it. TryEmitAudit is best-effort internally (#1562).
+        // audit は wire response、invocation-scoped authorization identity、例外型を参照するため
+        // metrics finally の後で出力する。Stopwatch.Stop は冪等。
+        // TryEmitAudit 内部でベストエフォート化済み (#1562)。
         metricsStopwatch.Stop();
         var auditErrorType = metricsError == "unknown_tool" ? null : metricsError;
         TryEmitAudit(hasId, observedToolName, id, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, errorType: auditErrorType);
+        _currentIndexAuditContext.Value = null;
         EmitToolInvocationTelemetry(observedToolName, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, metricsError);
         return response;
     }
@@ -5845,11 +5849,14 @@ public partial class McpServer : IDisposable
 
     /// <summary>
     /// Emit a single audit record for the just-executed tool call. Inspects the wire
-    /// response to derive the result count and error code so the audit trail matches what
-    /// the client actually observed (#1562). Failures are swallowed because audit emission
-    /// must never break the underlying tool call.
+    /// response to derive the result count and error code, and uses invocation-scoped
+    /// authorization state when available, so the audit trail preserves checks performed
+    /// before later error paths build a response (#1562, #4606). Failures are swallowed
+    /// because audit emission must never break the underlying tool call.
     /// 直前に実行したツール呼び出しを 1 レコード分監査出力する。クライアントが実際に観測する
-    /// 値と一致させるため、wire response から result count / error code を抽出する (#1562)。
+    /// 値と一致させるため wire response から result count / error code を抽出し、後続の error
+    /// path が response を生成する前の検証も残すため invocation-scoped authorization state を使う
+    /// (#1562, #4606)。
     /// audit 失敗で本体ツール呼び出しを壊さないようベストエフォート化する。
     /// </summary>
     private void TryEmitAudit(bool hasId, string toolName, JsonNode? id, JsonNode? args, JsonNode response, DateTimeOffset startedAt, double elapsedMs, string? errorType)
@@ -5889,6 +5896,7 @@ public partial class McpServer : IDisposable
                 ElapsedMs: elapsedMs,
                 ErrorCode: errorCode,
                 ErrorType: errorType ?? observedErrorType,
+                CheckedRootIdentity: _currentIndexAuditContext.Value?.CheckedRootIdentity ?? ExtractCheckedRootIdentity(response),
                 ToolLength: toolDisplay.Truncated ? toolDisplay.OriginalLength : null,
                 ToolTruncated: toolDisplay.Truncated,
                 ArgKeyLengths: argKeyLengths,
@@ -5913,6 +5921,15 @@ public partial class McpServer : IDisposable
             // Best-effort: an audit failure must not break the tool call.
             // ベストエフォート: audit 失敗で本体ツール呼び出しを壊さない。
         }
+    }
+
+    private static string? ExtractCheckedRootIdentity(JsonNode response)
+    {
+        var node = response["result"]?["structuredContent"]?["checked_root_identity"]
+            ?? response["error"]?["data"]?["checked_root_identity"];
+        return node is JsonValue value && value.TryGetValue<string>(out var identity)
+            ? identity
+            : null;
     }
 
     /// <summary>

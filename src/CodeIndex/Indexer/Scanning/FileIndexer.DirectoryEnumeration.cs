@@ -1,4 +1,5 @@
 using CodeIndex.Cli;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -18,6 +19,15 @@ public partial class FileIndexer
         var fullyScanned = true;
         try
         {
+            if (_bindConfigurationReadsToFileSystemIdentity)
+            {
+                ExtractorPluginRegistry.LoadAuthorizedPatternConfigsForDirectory(
+                    _projectRoot,
+                    dir,
+                    _enumerateFileSystemEntries,
+                    _openReadForIndexContent);
+            }
+
             var loadResult = LoadIgnoreRulesForDirectory(dir, inheritedIgnoreRules, scanState.Errors, ref fullyScanned);
             var activeIgnoreRules = loadResult.Rules;
             if (!loadResult.IgnoreRulesAvailable)

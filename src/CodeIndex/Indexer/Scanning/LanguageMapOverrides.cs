@@ -93,6 +93,49 @@ internal static class LanguageMapOverrides
         return result;
     }
 
+    internal static IReadOnlyDictionary<string, string> LoadEffectiveMapFromDirectoryWithinScope(
+        string? startDirectory,
+        string workspaceScopeRoot,
+        Func<string, Stream> openFile)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceScopeRoot);
+        ArgumentNullException.ThrowIfNull(openFile);
+
+        startDirectory = NormalizeStartDirectory(startDirectory);
+        var scopeRoot = Path.GetFullPath(workspaceScopeRoot);
+        if (!PathCasing.IsFullPathEqualOrParent(scopeRoot, startDirectory))
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var directory = startDirectory;
+        while (PathCasing.IsFullPathEqualOrParent(scopeRoot, directory))
+        {
+            var candidate = Path.Combine(directory, WorkspaceFileName);
+            var probeStatus = ProbeWorkspaceConfigFile(directory);
+            if (probeStatus == ConfigProbeStatus.ProbeFailed)
+                break;
+            if (probeStatus == ConfigProbeStatus.Present)
+            {
+                LoadInto(
+                    candidate,
+                    map,
+                    ReportWarningOnce,
+                    diagnostics: null,
+                    blocksParentFallback: true,
+                    openFile: openFile);
+                break;
+            }
+
+            if (PathCasing.PathsEqual(directory, scopeRoot))
+                break;
+            directory = Directory.GetParent(directory)?.FullName ?? string.Empty;
+            if (string.IsNullOrEmpty(directory))
+                break;
+        }
+
+        return map;
+    }
+
     internal static string NormalizeStartDirectory(string? startDirectory)
     {
         if (string.IsNullOrWhiteSpace(startDirectory))
@@ -121,7 +164,13 @@ internal static class LanguageMapOverrides
     {
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var path in configPaths)
-            LoadInto(path, map, reportWarning, diagnostics: null, blocksParentFallback: false);
+            LoadInto(
+                path,
+                map,
+                reportWarning,
+                diagnostics: null,
+                blocksParentFallback: false,
+                openFile: null);
         return map;
     }
 
@@ -152,14 +201,26 @@ internal static class LanguageMapOverrides
             if (stamp.IsUserConfig)
             {
                 if (stamp.Status == ConfigProbeStatus.Present)
-                    LoadInto(stamp.Path, map, reportWarning, diagnostics, blocksParentFallback: false);
+                    LoadInto(
+                        stamp.Path,
+                        map,
+                        reportWarning,
+                        diagnostics,
+                        blocksParentFallback: false,
+                        openFile: null);
                 continue;
             }
 
             if (stamp.Status == ConfigProbeStatus.Missing)
                 continue;
 
-            LoadInto(stamp.Path, map, reportWarning, diagnostics, blocksParentFallback: true);
+            LoadInto(
+                stamp.Path,
+                map,
+                reportWarning,
+                diagnostics,
+                blocksParentFallback: true,
+                openFile: null);
             break;
         }
 
@@ -303,9 +364,10 @@ internal static class LanguageMapOverrides
         Dictionary<string, string> target,
         Action<string, string?>? reportWarning,
         ICollection<Diagnostic>? diagnostics,
-        bool blocksParentFallback)
+        bool blocksParentFallback,
+        Func<string, Stream>? openFile)
     {
-        if (!TryReadBoundedUtf8Lines(path, out var lines, out var failure))
+        if (!TryReadBoundedUtf8Lines(path, openFile, out var lines, out var failure))
         {
             reportWarning?.Invoke(
                 $"Skipped language-map override file {DiagnosticSanitizer.ForPath(path)} because {DiagnosticSanitizer.ForMessage(failure.Reason)}.",
@@ -363,6 +425,7 @@ internal static class LanguageMapOverrides
 
     private static bool TryReadBoundedUtf8Lines(
         string path,
+        Func<string, Stream>? openFile,
         out IReadOnlyList<string> lines,
         out BoundedTextFileReadFailure failure)
     {
@@ -373,7 +436,7 @@ internal static class LanguageMapOverrides
             MaxOverrideLineChars,
             out lines,
             out failure,
-            OpenOverrideFileForTesting);
+            openFile ?? OpenOverrideFileForTesting);
         return success;
     }
 

@@ -27,7 +27,9 @@ public partial class FileIndexer
         string extension,
         string? content,
         string? projectRoot,
-        FileProbeStatus? knownIndexability)
+        FileProbeStatus? knownIndexability,
+        Func<string, FileStream>? openReadForIndexContent,
+        Func<string, IEnumerable<string>>? enumerateFileSystemEntries)
     {
         var ambiguityBucket = string.Equals(extension, ".m", StringComparison.OrdinalIgnoreCase)
             ? "ambiguous_m"
@@ -35,7 +37,11 @@ public partial class FileIndexer
 
         if (content == null)
         {
-            var readResult = TryReadAmbiguousLanguagePrefix(filePath, knownIndexability, out content);
+            var readResult = TryReadAmbiguousLanguagePrefix(
+                filePath,
+                knownIndexability,
+                openReadForIndexContent,
+                out content);
             if (readResult != FileProbeStatus.Supported)
             {
                 if (!knownIndexability.HasValue && readResult == FileProbeStatus.Missing)
@@ -71,7 +77,8 @@ public partial class FileIndexer
         var (firstProjectMarker, secondProjectMarker) = ProbeAmbiguousLanguageProjectMarkers(
             filePath,
             projectRoot,
-            string.Equals(extension, ".m", StringComparison.OrdinalIgnoreCase));
+            string.Equals(extension, ".m", StringComparison.OrdinalIgnoreCase),
+            enumerateFileSystemEntries);
         if (firstProjectMarker != secondProjectMarker)
         {
             return new LanguageDetectionResult(
@@ -86,6 +93,7 @@ public partial class FileIndexer
     private static FileProbeStatus TryReadAmbiguousLanguagePrefix(
         string filePath,
         FileProbeStatus? knownIndexability,
+        Func<string, FileStream>? openReadForIndexContent,
         out string content)
     {
         content = string.Empty;
@@ -95,7 +103,8 @@ public partial class FileIndexer
 
         try
         {
-            using var stream = BoundedFile.OpenReadForPrefixProbe(filePath);
+            using var stream = openReadForIndexContent?.Invoke(filePath)
+                ?? BoundedFile.OpenReadForPrefixProbe(filePath);
             var buffer = new byte[AmbiguousLanguageProbeByteLimit];
             var bytesRead = 0;
             while (bytesRead < buffer.Length)
@@ -154,7 +163,8 @@ public partial class FileIndexer
     private static (bool FirstFamily, bool SecondFamily) ProbeAmbiguousLanguageProjectMarkers(
         string filePath,
         string? projectRoot,
-        bool isMExtension)
+        bool isMExtension,
+        Func<string, IEnumerable<string>>? enumerateFileSystemEntries)
     {
         string? directory;
         string? normalizedRoot;
@@ -180,7 +190,9 @@ public partial class FileIndexer
             try
             {
                 var inspected = 0;
-                foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
+                var entries = enumerateFileSystemEntries?.Invoke(directory)
+                    ?? Directory.EnumerateFileSystemEntries(directory);
+                foreach (var entry in entries)
                 {
                     if (++inspected > AmbiguousProjectMarkerEntryLimit)
                         break;

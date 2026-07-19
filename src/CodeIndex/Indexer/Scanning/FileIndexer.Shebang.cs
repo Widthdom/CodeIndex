@@ -25,7 +25,8 @@ public partial class FileIndexer
         string filePath,
         SymlinkPolicy symlinkPolicy,
         string? projectRoot,
-        FileProbeStatus? knownIndexability)
+        FileProbeStatus? knownIndexability,
+        Func<string, FileStream>? openReadForIndexContent)
     {
         var indexability = knownIndexability ?? GetFileIndexability(filePath, symlinkPolicy, projectRoot);
         if (indexability == FileProbeStatus.Missing)
@@ -36,7 +37,8 @@ public partial class FileIndexer
 
         try
         {
-            using var stream = BoundedFile.OpenReadForPrefixProbe(filePath);
+            using var stream = openReadForIndexContent?.Invoke(filePath)
+                ?? BoundedFile.OpenReadForPrefixProbe(filePath);
             if (!stream.CanRead)
                 return new LanguageDetectionResult(FileProbeStatus.ProbeFailed, null);
 
