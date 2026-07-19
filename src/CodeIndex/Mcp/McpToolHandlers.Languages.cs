@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 
 namespace CodeIndex.Mcp;
@@ -9,9 +10,6 @@ public partial class McpServer
 {
     private JsonNode ExecuteLanguages(JsonNode? id, JsonNode? args)
     {
-        var langExtensions = FileIndexer.GetLanguageExtensions();
-        var symbolLangs = SymbolExtractor.GetSupportedLanguages();
-        var referenceLangs = ReferenceExtractor.GetSupportedLanguages();
         var indexedOnly = args?["indexedOnly"]?.GetValue<bool>() ?? false;
         var capabilities = ReadStringOrArrayList(args, "capability")
             .Select(value => value.Trim().ToLowerInvariant())
@@ -31,30 +29,39 @@ public partial class McpServer
                 return CreateToolErrorResponse(id, $"Invalid language capability '{capability}'. Use one of: symbols, graph, references.");
         }
 
-        // Build consolidated language info / 統合言語情報を構築
-        var allLangs = new Dictionary<string, (List<string> Extensions, List<string> Aliases, bool Symbols, bool References, bool Graph, List<string> CapabilityGaps, List<LanguageUnsupportedGuidance> UnsupportedGuidance)>(StringComparer.Ordinal);
-        foreach (var (ext, lang) in langExtensions)
+        (Dictionary<string, (List<string> Extensions, List<string> Aliases, bool Symbols, bool References, bool Graph, List<string> CapabilityGaps, List<LanguageUnsupportedGuidance> UnsupportedGuidance)> Languages, int SymbolLanguageCount, int ReferenceLanguageCount) BuildCatalog(string? workspaceRoot)
         {
-            if (!allLangs.TryGetValue(lang, out var info))
+            ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(workspaceRoot);
+            var langExtensions = FileIndexer.GetLanguageExtensions(workspaceRoot);
+            var symbolLangs = SymbolExtractor.GetSupportedLanguages(workspaceRoot);
+            var referenceLangs = ReferenceExtractor.GetSupportedLanguages(workspaceRoot);
+            var languages = new Dictionary<string, (List<string> Extensions, List<string> Aliases, bool Symbols, bool References, bool Graph, List<string> CapabilityGaps, List<LanguageUnsupportedGuidance> UnsupportedGuidance)>(StringComparer.Ordinal);
+            foreach (var (ext, lang) in langExtensions)
             {
-                var hasSymbols = symbolLangs.Contains(lang);
-                var hasReferences = referenceLangs.Contains(lang);
-                info = (
-                    new List<string>(),
-                    QueryCommandRunner.GetLanguageAliases(lang).ToList(),
-                    hasSymbols,
-                    hasReferences,
-                    hasReferences,
-                    LanguageCapabilitySupport.BuildGaps(hasSymbols, hasReferences, hasReferences),
-                    LanguageCapabilitySupport.BuildUnsupportedGuidance(lang, hasSymbols, hasReferences, hasReferences));
-                allLangs[lang] = info;
+                if (!languages.TryGetValue(lang, out var info))
+                {
+                    var hasSymbols = symbolLangs.Contains(lang);
+                    var hasReferences = referenceLangs.Contains(lang);
+                    info = (
+                        new List<string>(),
+                        QueryCommandRunner.GetLanguageAliases(lang).ToList(),
+                        hasSymbols,
+                        hasReferences,
+                        hasReferences,
+                        LanguageCapabilitySupport.BuildGaps(hasSymbols, hasReferences, hasReferences),
+                        LanguageCapabilitySupport.BuildUnsupportedGuidance(lang, hasSymbols, hasReferences, hasReferences));
+                    languages[lang] = info;
+                }
+                info.Extensions.Add(ext);
             }
-            info.Extensions.Add(ext);
+
+            return (languages, symbolLangs.Count, referenceLangs.Count);
         }
 
-        JsonNode BuildResponse(HashSet<string>? indexedLanguages)
+        JsonNode BuildResponse(HashSet<string>? indexedLanguages, string? workspaceRoot)
         {
-            var sorted = allLangs
+            var catalog = BuildCatalog(workspaceRoot);
+            var sorted = catalog.Languages
                 .Where(kv => !indexedOnly || indexedLanguages?.Contains(kv.Key) == true)
                 .Where(kv => capabilities.All(capability => LanguageMatchesCapability(kv.Value.Symbols, kv.Value.References, kv.Value.Graph, capability)))
                 .Where(kv => normalizedExtension is null || kv.Value.Extensions.Contains(normalizedExtension, StringComparer.OrdinalIgnoreCase))
@@ -125,14 +132,24 @@ public partial class McpServer
                 };
             }
 
-            var summary = $"{sorted.Count} languages supported. {symbolLangs.Count} with symbol extraction, {referenceLangs.Count} with reference extraction, {referenceLangs.Count} with call-graph queries.";
+            var summary = $"{sorted.Count} languages supported. {catalog.SymbolLanguageCount} with symbol extraction, {catalog.ReferenceLanguageCount} with reference extraction, {catalog.ReferenceLanguageCount} with call-graph queries.";
             return CreateToolResult(id, summary, payload);
         }
 
-        if (!indexedOnly)
-            return BuildResponse(null);
+        var configuredDatabaseAvailable = _dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(_dbPath, ":memory:", StringComparison.Ordinal)
+            || File.Exists(LongPath.EnsureWindowsPrefix(_dbPath));
+        if (!indexedOnly && !configuredDatabaseAvailable)
+            return BuildResponse(null, workspaceRoot: null);
 
-        return WithDbReader(id, args, reader => BuildResponse(new HashSet<string>(reader.GetStatus().Languages.Keys, StringComparer.Ordinal)));
+        return WithDbReader(id, args, reader =>
+        {
+            var status = reader.GetStatus();
+            var indexedLanguages = indexedOnly
+                ? new HashSet<string>(status.Languages.Keys, StringComparer.Ordinal)
+                : null;
+            return BuildResponse(indexedLanguages, reader.GetIndexedProjectRoot());
+        });
     }
 
 

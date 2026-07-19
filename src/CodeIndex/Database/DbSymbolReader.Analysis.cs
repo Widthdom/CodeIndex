@@ -101,10 +101,10 @@ public partial class DbReader
         List<DefinitionResult> definitions = primaryLineDefinition == null ? [] : [primaryLineDefinition];
         var primaryDefinition = definitions.FirstOrDefault();
         var hasSupportedGraphDefinition = primaryDefinition != null
-            && ReferenceExtractor.SupportsSymbolGraph(primaryDefinition.Lang, primaryDefinition.Kind, primaryDefinition.ContainerKind) == true;
+            && SupportsSymbolGraph(primaryDefinition.Lang, primaryDefinition.Kind, primaryDefinition.ContainerKind) == true;
         var baseGraphSupported = graphLanguage == null
             ? (bool?)null
-            : ReferenceExtractor.SupportsLanguage(graphLanguage);
+            : SupportsReferenceLanguage(graphLanguage);
         var graphSupportReason = ReferenceExtractor.BuildGraphSupportReasonWithUnsupportedEnumMemberGap(
             graphLanguage,
             baseGraphSupported,
@@ -262,8 +262,8 @@ public partial class DbReader
         var definitionLimit = Math.Min(limit, 5);
         var definitions = PrioritizeSourceDefinitions(GetDefinitions(normalizedQuery, definitionLimit, kind: kind, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact, bodyStartLine: bodyStartLine, bodyLineCount: bodyLineCount, groupPartials: groupPartials));
         DefinitionResult? primaryDefinition = definitions
-            .FirstOrDefault(definition => ReferenceExtractor.SupportsLanguage(definition.Lang) == true && !IsCSharpEnumMemberDefinition(definition))
-            ?? definitions.FirstOrDefault(definition => ReferenceExtractor.SupportsLanguage(definition.Lang) == true)
+            .FirstOrDefault(definition => SupportsReferenceLanguage(definition.Lang) && !IsCSharpEnumMemberDefinition(definition))
+            ?? definitions.FirstOrDefault(definition => SupportsReferenceLanguage(definition.Lang))
             ?? definitions.FirstOrDefault();
         definitions = BuildAnalysisDefinitions(primaryDefinition, definitions, definitionLimit);
         var freshness = GetWorkspaceFreshness();
@@ -272,10 +272,10 @@ public partial class DbReader
         const bool hasUnsupportedEnumMember = false;
         var hasSupportedGraphDefinition = exact
             ? HasExactGraphSupportedDefinition(normalizedQuery, lang, pathPatterns, excludePathPatterns, excludeTests)
-            : definitions.Any(definition => ReferenceExtractor.SupportsSymbolGraph(definition.Lang, definition.Kind, definition.ContainerKind) == true);
+            : definitions.Any(definition => SupportsSymbolGraph(definition.Lang, definition.Kind, definition.ContainerKind) == true);
         var baseGraphSupported = graphLanguage == null
             ? (bool?)null
-            : ReferenceExtractor.SupportsLanguage(graphLanguage);
+            : SupportsReferenceLanguage(graphLanguage);
         bool? graphSupported = baseGraphSupported;
         var graphSupportReason = ReferenceExtractor.BuildGraphSupportReasonWithUnsupportedEnumMemberGap(
             graphLanguage,
@@ -412,7 +412,7 @@ public partial class DbReader
             Math.Min(limit, 10),
             definition.Name,
             definition.StartLine);
-        var graphSupported = ReferenceExtractor.SupportsSymbolGraph(
+        var graphSupported = SupportsSymbolGraph(
             definition.Lang,
             definition.Kind,
             definition.ContainerKind);

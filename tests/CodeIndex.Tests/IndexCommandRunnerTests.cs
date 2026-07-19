@@ -511,6 +511,48 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_NestedPatternSidecarReachesBoundedSymbolWorker_Issue4597()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = CreateTempDbPath("cdidx_nested_pattern_worker_4597");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                var sourceDirectory = Path.Combine(projectRoot, "src", "nested");
+                Directory.CreateDirectory(sourceDirectory);
+                WriteSymbolWorkerPatternConfig(
+                    sourceDirectory,
+                    "nested.yaml",
+                    "language: \"nesteddsl\"\nextensions:\n  - extension: \".nested\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
+                File.WriteAllText(Path.Combine(sourceDirectory, "sample.nested"), "entity NestedEntity\n");
+
+                var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json", "--force"]);
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("success", json.GetProperty("status").GetString());
+                using var connection = OpenNonPoolingConnection(dbPath);
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    SELECT s.name
+                    FROM symbols s
+                    JOIN files f ON f.id = s.file_id
+                    WHERE f.path = 'src/nested/sample.nested'
+                    """;
+                Assert.Equal("NestedEntity", command.ExecuteScalar() as string);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                SqliteConnection.ClearAllPools();
+                DeleteDirectory(projectRoot);
+                DeleteFile(dbPath);
+            }
+        }
+    }
+
+    [Fact]
     public void SymbolExtractionWorker_InvalidRequestJsonDoesNotEchoParserMessage_Issue3425()
     {
         const string secret = "SECRET_SYMBOL_WORKER_3425";

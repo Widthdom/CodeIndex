@@ -5785,6 +5785,45 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Languages_DefaultCatalogUsesIndexedWorkspaceSnapshot_Issue4602()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.RegisterForWorkspaceForTests(
+                    _projectRoot,
+                    new McpWorkspaceCatalogSymbolExtractor());
+                Assert.Contains("mcpcatalog", SymbolExtractor.GetSupportedLanguages(_projectRoot));
+                Assert.Contains("mcpcatalog", FileIndexer.GetLanguageExtensions(_projectRoot).Values);
+
+                var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"languages","arguments":{}}}""")!;
+                var response = _server.HandleMessage(request)!;
+
+                var language = Assert.Single(
+                    response["result"]!["structuredContent"]!["languages"]!.AsArray(),
+                    entry => entry?["lang"]?.GetValue<string>() == "mcpcatalog")!;
+                Assert.True(language["symbol_extraction"]!.GetValue<bool>());
+                Assert.Contains(".mcpcatalog", language["extensions"]!.AsArray().Select(extension => extension!.GetValue<string>()));
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+            }
+        }
+    }
+
+    private sealed class McpWorkspaceCatalogSymbolExtractor : ISymbolExtractor
+    {
+        public string Language => "mcpcatalog";
+        public IReadOnlyCollection<string> FileExtensions => [".mcpcatalog"];
+
+        public IReadOnlyList<SymbolRecord> Extract(long fileId, string source, ExtractionContext context)
+            => [];
+    }
+
+    [Fact]
     public void ToolsCall_Languages_FiltersByCliCompatibleMetadata_Issue3540()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"languages","arguments":{"capability":["graph","references"],"extension":"cs","alias":"cs"}}}""")!;

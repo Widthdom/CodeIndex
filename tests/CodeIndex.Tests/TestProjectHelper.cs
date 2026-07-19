@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using System.Runtime.Loader;
 using System.Security.Cryptography;
 using System.Text;
 using CodeIndex.Database;
@@ -298,6 +300,35 @@ internal static class TestProjectHelper
         // Windows and SQLite can release file handles just after a failed cleanup attempt.
         // Keep that bounded blocking delay in one helper instead of scattering fixed sleeps.
         Thread.Sleep(100);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal static void CaptureAssemblyLoadContextWeakReferences(
+        IEnumerable<AssemblyLoadContext> loadContexts,
+        ICollection<WeakReference> weakReferences)
+    {
+        foreach (var loadContext in loadContexts)
+            weakReferences.Add(new WeakReference(loadContext, trackResurrection: false));
+    }
+
+    internal static void AssertReleasedAssemblyLoadContexts(IReadOnlyCollection<WeakReference> weakReferences)
+    {
+        const int maxCollectionAttempts = 10;
+        for (var attempt = 0; attempt < maxCollectionAttempts; attempt++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            if (weakReferences.All(reference => !reference.IsAlive))
+                return;
+
+            Thread.Sleep(10);
+        }
+
+        Assert.All(
+            weakReferences,
+            reference => Assert.False(reference.IsAlive, "Collectible AssemblyLoadContext remained alive after bounded collection."));
     }
 
     private static void ClearAttributes(string path)

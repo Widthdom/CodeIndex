@@ -28,13 +28,12 @@ public partial class McpServer
         if (minConfidence != null && !QueryCommandRunner.IsKnownUnusedConfidence(minConfidence))
             return CreateToolErrorResponse(id, $"Invalid minConfidence '{minConfidence}'. Use one of: medium, low.");
 
-        // Add graph-support metadata for AI trust decisions
-        // AI の信頼判断のためにグラフ対応メタデータを追加
-        bool? graphSupported = lang != null ? ReferenceExtractor.SupportsLanguage(lang) : null;
-        var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported);
-
         return WithDbReader(id, args, reader =>
         {
+            // Add graph-support metadata for AI trust decisions
+            // AI の信頼判断のためにグラフ対応メタデータを追加
+            bool? graphSupported = lang != null ? reader.SupportsReferenceLanguage(lang) : null;
+            var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported);
             var results = reader.GetUnusedSymbols(
                 limit,
                 kind,

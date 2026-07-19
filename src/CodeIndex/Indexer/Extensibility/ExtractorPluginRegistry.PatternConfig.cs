@@ -1,8 +1,10 @@
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Cli;
 using CodeIndex.Diagnostics;
+using CodeIndex.Models;
 using Microsoft.Win32.SafeHandles;
 using Regex = CodeIndex.Indexer.BoundedRegex;
 
@@ -10,181 +12,255 @@ namespace CodeIndex.Indexer.Extensibility;
 
 public static partial class ExtractorPluginRegistry
 {
-    private static void TryLoadPatternConfig(string path)
+    private static void TryLoadPatternConfig(PatternWorkspaceState state, string path, string source)
     {
         try
         {
             path = Path.GetFullPath(path);
-            lock (Gate)
+            lock (state.Gate)
             {
-                if (!LoadedPatternConfigPaths.Add(path))
+                if (state.Retired || PatternConfigPathIsLoaded(state, path))
                     return;
             }
 
-            var configText = TryReadPatternConfigText(path);
+            var configText = TryReadPatternConfigText(state, path);
             if (configText == null)
                 return;
 
-            var language = string.Empty;
-            var extensions = new List<string>();
-            var patterns = new List<ConfiguredSymbolExtractor.PatternRule>();
-            string? pendingKind = null;
-            var remaining = configText.AsSpan();
-            while (TryReadNextPatternConfigLine(ref remaining, out var rawLine))
+            var fingerprint = CreatePatternConfigFingerprint(path, configText);
+            lock (state.Gate)
             {
-                var line = rawLine.Trim();
-                if (line.Length == 0 || line[0] == '#')
-                    continue;
-
-                var itemLine = TrimPatternConfigListMarker(line);
-                var scalarResult = TryReadScalar(line, "language", MaxPatternLanguageLength, out var value, out var scalarLength);
-                if (scalarResult == PatternScalarReadResult.TooLong)
-                {
-                    ReportPatternConfigRejected(path, $"language scalar is too long ({scalarLength} characters; maximum {MaxPatternLanguageLength})");
+                if (state.Retired
+                    || PatternConfigPathIsLoaded(state, path)
+                    || (TryGetFailedPatternConfigFingerprint(state, path, out var failedFingerprint)
+                        && failedFingerprint == fingerprint))
                     return;
-                }
+            }
 
-                if (scalarResult == PatternScalarReadResult.Success)
+            var parseResult = ParsePatternConfig(path, configText);
+            if (!parseResult.Success)
+            {
+                lock (state.Gate)
                 {
-                    language = NormalizePluginLanguage(value);
-                }
-                else
-                {
-                    scalarResult = TryReadScalar(itemLine, "extension", MaxPatternExtensionLength, out value, out scalarLength);
-                    if (scalarResult == PatternScalarReadResult.TooLong)
+                    if (state.Retired
+                        || PatternConfigPathIsLoaded(state, path)
+                        || (TryGetFailedPatternConfigFingerprint(state, path, out var failedFingerprint)
+                            && failedFingerprint == fingerprint))
                     {
-                        ReportPatternConfigRejected(path, $"extension scalar is too long ({scalarLength} characters; maximum {MaxPatternExtensionLength})");
                         return;
                     }
 
-                    if (scalarResult == PatternScalarReadResult.Success)
-                    {
-                        var extension = NormalizePluginExtension(value) ?? value;
-                        if (extension.Length > MaxPatternExtensionLength)
-                        {
-                            ReportPatternConfigRejected(path, $"extension scalar is too long ({extension.Length} characters; maximum {MaxPatternExtensionLength})");
-                            return;
-                        }
-
-                        extensions.Add(extension);
-                    }
-                    else
-                    {
-                        scalarResult = TryReadScalar(itemLine, "kind", MaxPatternKindLength, out value, out scalarLength);
-                        if (scalarResult == PatternScalarReadResult.TooLong)
-                        {
-                            ReportPatternConfigRejected(path, $"kind scalar is too long ({scalarLength} characters; maximum {MaxPatternKindLength})");
-                            return;
-                        }
-
-                        if (scalarResult == PatternScalarReadResult.Success)
-                        {
-                            pendingKind = value.Trim();
-                        }
-                        else if (TryReadScalar(itemLine, "regex", out value) && pendingKind != null)
-                        {
-                            if (patterns.Count >= MaxPatternRulesPerConfig)
-                            {
-                                ReportPatternConfigRejected(path, $"too many pattern rules (maximum {MaxPatternRulesTotal})");
-                                return;
-                            }
-
-                            if (value.Length > MaxPatternRegexLength)
-                            {
-                                ReportPatternConfigRejected(path, $"regex for kind '{DiagnosticSanitizer.ForMessage(pendingKind)}' is too long ({value.Length} characters; maximum {MaxPatternRegexLength})");
-                                return;
-                            }
-
-                            if (!TryReservePatternRuleBudget(path))
-                                return;
-
-                            Regex regex;
-                            try
-                            {
-                                regex = Regex.CreateExtractionRegex(
-                                    value,
-                                    RegexOptions.Compiled,
-                                    PatternRegexTimeout);
-                            }
-                            catch (ArgumentException)
-                            {
-                                ReportPatternConfigRejected(path, $"invalid regex for kind '{DiagnosticSanitizer.ForMessage(pendingKind)}'");
-                                return;
-                            }
-
-                            patterns.Add(new ConfiguredSymbolExtractor.PatternRule(
-                                pendingKind,
-                                regex,
-                                path));
-                            pendingKind = null;
-                        }
-                    }
+                    SetFailedPatternConfigFingerprint(state, path, fingerprint);
                 }
+
+                if (parseResult.Incomplete)
+                    ReportPatternConfigSkipped(state, path, parseResult.FailureReason!);
+                else
+                    ReportPatternConfigRejected(state, path, parseResult.FailureReason!);
+                return;
             }
 
-            if (language.Length > 0 && patterns.Count > 0)
+            lock (state.Gate)
             {
-                RegisterDiscovered(new ConfiguredSymbolExtractor(language, extensions, patterns));
-                lock (Gate)
-                    patternConfigCount++;
-            }
-            else
-            {
-                ReportPatternConfigSkipped(path, "missing language or regex patterns");
+                if (state.Retired || PatternConfigPathIsLoaded(state, path))
+                    return;
+
+                var patterns = parseResult.Patterns!;
+                if (state.RuleCount > MaxPatternRulesTotal - patterns.Count)
+                {
+                    SetFailedPatternConfigFingerprint(state, path, fingerprint);
+                    ReportPatternConfigRejected(state, path, $"too many pattern rules (maximum {MaxPatternRulesTotal})");
+                    return;
+                }
+
+                var configuredExtractor = new ConfiguredSymbolExtractor(
+                    parseResult.Language!,
+                    parseResult.Extensions!,
+                    patterns,
+                    (sourcePath, language, kind) => ReportPatternExtractorTimeout(state, sourcePath, language, kind));
+                if (!state.PatternSources.TryGetValue(parseResult.Language!, out var existingSource)
+                    || string.Equals(source, "user", StringComparison.Ordinal)
+                    || !string.Equals(existingSource, "user", StringComparison.Ordinal))
+                {
+                    state.PatternSymbolExtractors[parseResult.Language!] = configuredExtractor;
+                    state.PatternSources[parseResult.Language!] = source;
+                }
+                state.RuleCount += patterns.Count;
+                state.ConfigCount++;
+                TryMarkPatternConfigPathLoaded(state, path);
+                RemoveFailedPatternConfigFingerprint(state, path);
+                state.Configs.Add(new PatternConfigStatus(
+                    DiagnosticSanitizer.ForPath(path),
+                    source,
+                    parseResult.Language!,
+                    patterns.Count));
+                state.PublishSnapshot();
             }
         }
         catch (Exception)
         {
-            ReportPatternConfigRejected(path, "could not parse pattern config");
+            ReportPatternConfigRejected(state, path, "could not parse pattern config");
         }
     }
 
-    private static bool TryReservePatternRuleBudget(string path)
+    private static PatternConfigParseResult ParsePatternConfig(string path, string configText)
     {
-        lock (Gate)
+        var language = string.Empty;
+        var extensions = new List<string>();
+        var patterns = new List<ConfiguredSymbolExtractor.PatternRule>();
+        string? pendingKind = null;
+        var remaining = configText.AsSpan();
+        while (TryReadNextPatternConfigLine(ref remaining, out var rawLine))
         {
-            if (loadedPatternRuleCount >= MaxPatternRulesTotal)
+            var line = rawLine.Trim();
+            if (line.Length == 0 || line[0] == '#')
+                continue;
+
+            var itemLine = TrimPatternConfigListMarker(line);
+            var scalarResult = TryReadScalar(line, "language", MaxPatternLanguageLength, out var value, out var scalarLength);
+            if (scalarResult == PatternScalarReadResult.TooLong)
+                return PatternConfigParseResult.Rejected($"language scalar is too long ({scalarLength} characters; maximum {MaxPatternLanguageLength})");
+
+            if (scalarResult == PatternScalarReadResult.Success)
             {
-                ReportPatternConfigRejected(path, $"too many pattern rules (maximum {MaxPatternRulesTotal})");
-                return false;
+                language = NormalizePluginLanguage(value);
+                continue;
             }
 
-            loadedPatternRuleCount++;
-            return true;
+            scalarResult = TryReadScalar(itemLine, "extension", MaxPatternExtensionLength, out value, out scalarLength);
+            if (scalarResult == PatternScalarReadResult.TooLong)
+                return PatternConfigParseResult.Rejected($"extension scalar is too long ({scalarLength} characters; maximum {MaxPatternExtensionLength})");
+
+            if (scalarResult == PatternScalarReadResult.Success)
+            {
+                var extension = NormalizePluginExtension(value) ?? value;
+                if (extension.Length > MaxPatternExtensionLength)
+                    return PatternConfigParseResult.Rejected($"extension scalar is too long ({extension.Length} characters; maximum {MaxPatternExtensionLength})");
+
+                extensions.Add(extension);
+                continue;
+            }
+
+            scalarResult = TryReadScalar(itemLine, "kind", MaxPatternKindLength, out value, out scalarLength);
+            if (scalarResult == PatternScalarReadResult.TooLong)
+                return PatternConfigParseResult.Rejected($"kind scalar is too long ({scalarLength} characters; maximum {MaxPatternKindLength})");
+
+            if (scalarResult == PatternScalarReadResult.Success)
+            {
+                pendingKind = value.Trim();
+                continue;
+            }
+
+            if (!TryReadScalar(itemLine, "regex", out value) || pendingKind == null)
+                continue;
+
+            if (patterns.Count >= MaxPatternRulesPerConfig)
+                return PatternConfigParseResult.Rejected($"too many pattern rules (maximum {MaxPatternRulesPerConfig})");
+
+            if (!SymbolKindCatalog.IsValidSymbolKind(pendingKind))
+                return PatternConfigParseResult.Rejected($"unknown symbol kind '{DiagnosticSanitizer.ForMessage(pendingKind)}'");
+
+            if (value.Length > MaxPatternRegexLength)
+                return PatternConfigParseResult.Rejected($"regex for kind '{DiagnosticSanitizer.ForMessage(pendingKind)}' is too long ({value.Length} characters; maximum {MaxPatternRegexLength})");
+
+            Regex regex;
+            try
+            {
+                regex = Regex.CreateExtractionRegex(
+                    value,
+                    RegexOptions.Compiled,
+                    PatternRegexTimeout);
+            }
+            catch (ArgumentException)
+            {
+                return PatternConfigParseResult.Rejected($"invalid regex for kind '{DiagnosticSanitizer.ForMessage(pendingKind)}'");
+            }
+
+            patterns.Add(new ConfiguredSymbolExtractor.PatternRule(
+                pendingKind,
+                regex,
+                path));
+            pendingKind = null;
         }
+
+        return language.Length > 0 && patterns.Count > 0
+            ? PatternConfigParseResult.Accepted(language, extensions, patterns)
+            : PatternConfigParseResult.Skipped("missing language or regex patterns");
     }
 
-    private static string? TryReadPatternConfigText(string path)
+    private static PatternConfigFingerprint CreatePatternConfigFingerprint(string path, string configText)
+    {
+        long length = 0;
+        long lastWriteUtcTicks = 0;
+        try
+        {
+            var fileInfo = new FileInfo(path);
+            length = fileInfo.Length;
+            lastWriteUtcTicks = fileInfo.LastWriteTimeUtc.Ticks;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            // The content hash still makes repaired content retryable when metadata is unavailable.
+        }
+
+        var contentHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(configText)));
+        return new PatternConfigFingerprint(length, lastWriteUtcTicks, contentHash);
+    }
+
+    private sealed record PatternConfigParseResult(
+        bool Success,
+        bool Incomplete,
+        string? Language,
+        IReadOnlyList<string>? Extensions,
+        IReadOnlyList<ConfiguredSymbolExtractor.PatternRule>? Patterns,
+        string? FailureReason)
+    {
+        internal static PatternConfigParseResult Accepted(
+            string language,
+            IReadOnlyList<string> extensions,
+            IReadOnlyList<ConfiguredSymbolExtractor.PatternRule> patterns)
+            => new(true, false, language, extensions, patterns, null);
+
+        internal static PatternConfigParseResult Rejected(string reason)
+            => new(false, false, null, null, null, reason);
+
+        internal static PatternConfigParseResult Skipped(string reason)
+            => new(false, true, null, null, null, reason);
+    }
+
+    private sealed record PatternConfigFingerprint(long Length, long LastWriteUtcTicks, string ContentHash);
+
+    private static string? TryReadPatternConfigText(PatternWorkspaceState state, string path)
     {
         var fileInfo = new FileInfo(path);
         if (!fileInfo.Exists)
         {
-            ReportPatternConfigRejected(path, "file does not exist");
+            ReportPatternConfigRejected(state, path, "file does not exist");
             return null;
         }
 
         var attributes = fileInfo.Attributes;
         if ((attributes & FileAttributes.Directory) != 0)
         {
-            ReportPatternConfigRejected(path, "path is a directory");
+            ReportPatternConfigRejected(state, path, "path is a directory");
             return null;
         }
 
         if (FileSystemBoundary.IsSymlinkOrReparsePoint(fileInfo))
         {
-            ReportPatternConfigRejected(path, "symbolic links and reparse points are not supported");
+            ReportPatternConfigRejected(state, path, "symbolic links and reparse points are not supported");
             return null;
         }
 
         if (fileInfo.Length > MaxPatternConfigBytes)
         {
-            ReportPatternConfigRejected(path, $"file is too large ({fileInfo.Length} bytes; maximum {MaxPatternConfigBytes})");
+            ReportPatternConfigRejected(state, path, $"file is too large ({fileInfo.Length} bytes; maximum {MaxPatternConfigBytes})");
             return null;
         }
 
         return OperatingSystem.IsWindows()
-            ? TryReadWindowsPatternConfigText(path)
-            : TryReadUnixPatternConfigText(path);
+            ? TryReadWindowsPatternConfigText(state, path)
+            : TryReadUnixPatternConfigText(state, path);
     }
 
     private static bool TryReadNextPatternConfigLine(ref ReadOnlySpan<char> remaining, out ReadOnlySpan<char> line)
@@ -218,7 +294,7 @@ public static partial class ExtractorPluginRegistry
         return line.Trim();
     }
 
-    private static string? TryReadWindowsPatternConfigText(string path)
+    private static string? TryReadWindowsPatternConfigText(PatternWorkspaceState state, string path)
     {
         using var handle = CreateFile(
             path,
@@ -230,40 +306,40 @@ public static partial class ExtractorPluginRegistry
             templateFile: IntPtr.Zero);
         if (handle.IsInvalid)
         {
-            ReportPatternConfigRejected(path, $"could not open safely (errno {Marshal.GetLastPInvokeError()})");
+            ReportPatternConfigRejected(state, path, $"could not open safely (errno {Marshal.GetLastPInvokeError()})");
             return null;
         }
 
         if (!GetFileInformationByHandle(handle, out var info))
         {
-            ReportPatternConfigRejected(path, $"could not inspect file handle (errno {Marshal.GetLastPInvokeError()})");
+            ReportPatternConfigRejected(state, path, $"could not inspect file handle (errno {Marshal.GetLastPInvokeError()})");
             return null;
         }
 
         var attributes = (FileAttributes)info.FileAttributes;
         if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
         {
-            ReportPatternConfigRejected(path, "path is not a regular file");
+            ReportPatternConfigRejected(state, path, "path is not a regular file");
             return null;
         }
 
         var size = ((long)info.FileSizeHigh << 32) | info.FileSizeLow;
         if (size > MaxPatternConfigBytes)
         {
-            ReportPatternConfigRejected(path, $"file is too large ({size} bytes; maximum {MaxPatternConfigBytes})");
+            ReportPatternConfigRejected(state, path, $"file is too large ({size} bytes; maximum {MaxPatternConfigBytes})");
             return null;
         }
 
         using var stream = new FileStream(handle, FileAccess.Read, bufferSize: 8192, isAsync: false);
-        return TryReadBoundedPatternConfigText(path, stream);
+        return TryReadBoundedPatternConfigText(state, path, stream);
     }
 
-    private static string? TryReadUnixPatternConfigText(string path)
+    private static string? TryReadUnixPatternConfigText(PatternWorkspaceState state, string path)
     {
         var fd = UnixOpen(path, GetUnixOpenFlags());
         if (fd < 0)
         {
-            ReportPatternConfigRejected(path, $"could not open safely (errno {Marshal.GetLastPInvokeError()})");
+            ReportPatternConfigRejected(state, path, $"could not open safely (errno {Marshal.GetLastPInvokeError()})");
             return null;
         }
 
@@ -271,7 +347,7 @@ public static partial class ExtractorPluginRegistry
         {
             if (!TryGetUnixFileType(fd, out var mode) || !IsRegularUnixFile(mode))
             {
-                ReportPatternConfigRejected(path, "path is not a regular file");
+                ReportPatternConfigRejected(state, path, "path is not a regular file");
                 return null;
             }
 
@@ -288,14 +364,14 @@ public static partial class ExtractorPluginRegistry
                     break;
                 if (bytesRead < 0)
                 {
-                    ReportPatternConfigRejected(path, $"could not read safely (errno {Marshal.GetLastPInvokeError()})");
+                    ReportPatternConfigRejected(state, path, $"could not read safely (errno {Marshal.GetLastPInvokeError()})");
                     return null;
                 }
 
                 stream.Write(buffer, 0, (int)bytesRead);
             }
 
-            return ValidatePatternConfigText(path, stream);
+            return ValidatePatternConfigText(state, path, stream);
         }
         finally
         {
@@ -303,7 +379,7 @@ public static partial class ExtractorPluginRegistry
         }
     }
 
-    private static string? TryReadBoundedPatternConfigText(string path, Stream stream)
+    private static string? TryReadBoundedPatternConfigText(PatternWorkspaceState state, string path, Stream stream)
     {
         using var output = new MemoryStream(MaxPatternConfigBytes + 1);
         var buffer = new byte[Math.Min(8192, MaxPatternConfigBytes + 1)];
@@ -320,15 +396,15 @@ public static partial class ExtractorPluginRegistry
             output.Write(buffer, 0, bytesRead);
         }
 
-        return ValidatePatternConfigText(path, output);
+        return ValidatePatternConfigText(state, path, output);
     }
 
-    private static string? ValidatePatternConfigText(string path, MemoryStream stream)
+    private static string? ValidatePatternConfigText(PatternWorkspaceState state, string path, MemoryStream stream)
     {
         if (stream.Length <= MaxPatternConfigBytes)
             return DecodePatternConfigText(stream);
 
-        ReportPatternConfigRejected(path, $"file is too large (more than {MaxPatternConfigBytes} bytes)");
+        ReportPatternConfigRejected(state, path, $"file is too large (more than {MaxPatternConfigBytes} bytes)");
         return null;
     }
 
