@@ -40,6 +40,8 @@ public sealed class InstallScriptTests : IDisposable
         File.WriteAllText(Path.Combine(installDir, "cdidx"), "#!/usr/bin/env bash\n");
         File.WriteAllText(Path.Combine(installDir, "version.json"), "{}");
         File.WriteAllText(Path.Combine(installDir, "libe_sqlite3.so"), "");
+        File.WriteAllText(Path.Combine(installDir, ".cdidx-release-sha256sums.txt"), "checksums");
+        File.WriteAllText(Path.Combine(installDir, ".cdidx-release-sha256sums.txt.asc"), "signature");
         Directory.CreateDirectory(Path.Combine(installDir, "LICENSES"));
         File.WriteAllText(Path.Combine(installDir, "LICENSES", "Apache-2.0.txt"), "");
 
@@ -55,6 +57,8 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Uninstall complete", stdout);
         Assert.False(File.Exists(Path.Combine(installDir, "cdidx")));
         Assert.False(File.Exists(Path.Combine(installDir, "version.json")));
+        Assert.False(File.Exists(Path.Combine(installDir, ".cdidx-release-sha256sums.txt")));
+        Assert.False(File.Exists(Path.Combine(installDir, ".cdidx-release-sha256sums.txt.asc")));
         Assert.False(Directory.Exists(Path.Combine(installDir, "LICENSES")));
     }
 
@@ -536,6 +540,7 @@ public sealed class InstallScriptTests : IDisposable
             return;
 
         var installDir = Path.Combine(_tempRoot, $"bin_{osName}");
+        var executionMarker = Path.Combine(_tempRoot, $"executed_{osName}.marker");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             $$"""
             detect_platform() { OS_NAME="{{osName}}"; ARCH_NAME="{{archName}}"; RID="{{rid}}"; }
@@ -566,7 +571,7 @@ public sealed class InstallScriptTests : IDisposable
             mkdir -p "{{installDir}}"
             cat > "{{Path.Combine(installDir, "cdidx")}}" <<'EOF'
             #!/usr/bin/env bash
-            echo "cdidx v1.10.0"
+            printf executed > "{{executionMarker}}"
             EOF
             chmod +x "{{Path.Combine(installDir, "cdidx")}}"
             printf '{"version":"1.10.0","integrity_ok":true}' > "{{Path.Combine(installDir, "version.json")}}"
@@ -578,6 +583,9 @@ public sealed class InstallScriptTests : IDisposable
             mkdir -p "{{Path.Combine(installDir, "LICENSES")}}"
             printf 'fsl text' > "{{Path.Combine(installDir, "LICENSES", "FSL-1.1-ALv2.txt")}}"
             printf 'apache text' > "{{Path.Combine(installDir, "LICENSES", "Apache-2.0.txt")}}"
+            make_installed_manifest "{{installDir}}" \
+                cdidx version.json "{{nativeAssetName}}" LICENSE COMMERCIAL_LICENSE.md \
+                INTEGRATION_POLICY.md TRADEMARKS.md LICENSES/FSL-1.1-ALv2.txt LICENSES/Apache-2.0.txt
 
             main
             """,
@@ -592,6 +600,162 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Version: v1.10.0", stdout);
         Assert.Contains("cdidx 1.10.0 is already installed", stdout);
         Assert.DoesNotContain("DOWNLOAD_SHOULD_NOT_RUN", stdout);
+        Assert.False(File.Exists(executionMarker));
+    }
+
+    [ProductionCliTheory]
+    [InlineData("cdidx")]
+    [InlineData("libe_sqlite3.so")]
+    public void Main_MatchingInstallWithModifiedCriticalArtifact_RedownloadsThroughStaging_Issue4607(string modifiedArtifact)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, $"modified_{modifiedArtifact.Replace('.', '_')}");
+        var executionMarker = Path.Combine(_tempRoot, $"executed_{modifiedArtifact.Replace('.', '_')}.marker");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            download_and_install() { echo "DOWNLOAD_RAN"; }
+            check_path() { :; }
+            curl() {
+                local output_path=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o) output_path="$2"; shift 2 ;;
+                        -w) shift 2 ;;
+                        *) shift ;;
+                    esac
+                done
+                printf '{"tag_name":"v1.10.0"}' > "$output_path"
+                printf '200'
+            }
+
+            mkdir -p "{{Path.Combine(installDir, "LICENSES")}}"
+            cat > "{{Path.Combine(installDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            printf executed > "{{executionMarker}}"
+            EOF
+            chmod +x "{{Path.Combine(installDir, "cdidx")}}"
+            printf '{"version":"1.10.0"}' > "{{Path.Combine(installDir, "version.json")}}"
+            printf 'native' > "{{Path.Combine(installDir, "libe_sqlite3.so")}}"
+            printf 'license text' > "{{Path.Combine(installDir, "LICENSE")}}"
+            printf 'commercial license text' > "{{Path.Combine(installDir, "COMMERCIAL_LICENSE.md")}}"
+            printf 'integration policy text' > "{{Path.Combine(installDir, "INTEGRATION_POLICY.md")}}"
+            printf 'trademark text' > "{{Path.Combine(installDir, "TRADEMARKS.md")}}"
+            printf 'fsl text' > "{{Path.Combine(installDir, "LICENSES", "FSL-1.1-ALv2.txt")}}"
+            printf 'apache text' > "{{Path.Combine(installDir, "LICENSES", "Apache-2.0.txt")}}"
+            make_installed_manifest "{{installDir}}" \
+                cdidx version.json libe_sqlite3.so LICENSE COMMERCIAL_LICENSE.md \
+                INTEGRATION_POLICY.md TRADEMARKS.md LICENSES/FSL-1.1-ALv2.txt LICENSES/Apache-2.0.txt
+            printf tampered >> "{{Path.Combine(installDir, modifiedArtifact)}}"
+
+            main
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains($"integrity verification failed for {modifiedArtifact}", stdout);
+        Assert.Contains("downloading and staging a transactional replacement", stdout);
+        Assert.Contains("DOWNLOAD_RAN", stdout);
+        Assert.False(File.Exists(executionMarker));
+    }
+
+    [ProductionCliFact]
+    public void Main_ReplacedPayloadAndManifestCannotBypassAuthenticatedReceipt_Issue4607()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "replaced_manifest_and_payload");
+        var executionMarker = Path.Combine(_tempRoot, "replaced_manifest_payload.marker");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            download_and_install() { echo "DOWNLOAD_RAN"; }
+            check_path() { :; }
+            curl() {
+                local output_path=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o) output_path="$2"; shift 2 ;;
+                        -w) shift 2 ;;
+                        *) shift ;;
+                    esac
+                done
+                printf '{"tag_name":"v1.10.0"}' > "$output_path"
+                printf '200'
+            }
+
+            mkdir -p "{{Path.Combine(installDir, "LICENSES")}}"
+            cat > "{{Path.Combine(installDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            exit 0
+            EOF
+            chmod +x "{{Path.Combine(installDir, "cdidx")}}"
+            printf '{"version":"1.10.0"}' > "{{Path.Combine(installDir, "version.json")}}"
+            printf 'native' > "{{Path.Combine(installDir, "libe_sqlite3.so")}}"
+            printf 'license text' > "{{Path.Combine(installDir, "LICENSE")}}"
+            printf 'commercial license text' > "{{Path.Combine(installDir, "COMMERCIAL_LICENSE.md")}}"
+            printf 'integration policy text' > "{{Path.Combine(installDir, "INTEGRATION_POLICY.md")}}"
+            printf 'trademark text' > "{{Path.Combine(installDir, "TRADEMARKS.md")}}"
+            printf 'fsl text' > "{{Path.Combine(installDir, "LICENSES", "FSL-1.1-ALv2.txt")}}"
+            printf 'apache text' > "{{Path.Combine(installDir, "LICENSES", "Apache-2.0.txt")}}"
+            make_installed_manifest "{{installDir}}" \
+                cdidx version.json libe_sqlite3.so LICENSE COMMERCIAL_LICENSE.md \
+                INTEGRATION_POLICY.md TRADEMARKS.md LICENSES/FSL-1.1-ALv2.txt LICENSES/Apache-2.0.txt
+
+            cat > "{{Path.Combine(installDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            printf executed > "{{executionMarker}}"
+            EOF
+            chmod +x "{{Path.Combine(installDir, "cdidx")}}"
+            new_digest="$(calculate_sha256 "{{Path.Combine(installDir, "cdidx")}}")"
+            awk -v digest="$new_digest" '$2 == "cdidx" { $1 = digest } { print $1 "  " $2 }' \
+                "{{Path.Combine(installDir, "MANIFEST.sha256")}}" > "{{Path.Combine(installDir, ".MANIFEST.sha256.tmp")}}"
+            mv "{{Path.Combine(installDir, ".MANIFEST.sha256.tmp")}}" "{{Path.Combine(installDir, "MANIFEST.sha256")}}"
+
+            main
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("integrity verification failed for MANIFEST.sha256", stdout);
+        Assert.Contains("DOWNLOAD_RAN", stdout);
+        Assert.False(File.Exists(executionMarker));
+    }
+
+    [ProductionCliFact]
+    public void DownloadAndInstall_MissingDeclaredFindDependency_FailsPreflight_Issue4607()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            command() {
+                if [ "${1:-}" = "-v" ] && [ "${2:-}" = "find" ]; then
+                    return 1
+                fi
+                builtin command "$@"
+            }
+
+            download_and_install
+            echo "UNREACHABLE"
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("UNREACHABLE", stdout);
+        Assert.Contains("Required command not found: find", stderr);
     }
 
     [ProductionCliTheory]
@@ -846,7 +1010,6 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Equal(string.Empty, stderr);
         Assert.Contains("Fetching latest release version", stdout);
         Assert.Contains("Version: v1.2.3", stdout);
-        Assert.Contains("Reinstalling cdidx 1.2.3 because the existing install is incomplete", stdout);
         Assert.Contains("DOWNLOAD_RAN", stdout);
         Assert.DoesNotContain("Skipping latest-release lookup", stdout);
     }
@@ -1417,6 +1580,7 @@ public sealed class InstallScriptTests : IDisposable
 
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             $$"""
+            VERSION="v1.0.0"
             gh() {
                 printf '%s\n' "$*" >> "{{logPath}}"
                 return 0
@@ -1432,7 +1596,9 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Equal(0, exitCode);
         Assert.Empty(stderr);
         Assert.Contains("Verifying GitHub provenance attestation for CodeIndex-linux-x64.tar.gz", stdout);
-        Assert.Equal($"attestation verify {artifactPath} -R Widthdom/CodeIndex{Environment.NewLine}", File.ReadAllText(logPath));
+        Assert.Equal(
+            $"attestation verify {artifactPath} -R Widthdom/CodeIndex --signer-workflow github.com/Widthdom/CodeIndex/.github/workflows/release.yml --source-ref refs/tags/v1.0.0{Environment.NewLine}",
+            File.ReadAllText(logPath));
     }
 
     [ProductionCliFact]
@@ -1446,6 +1612,7 @@ public sealed class InstallScriptTests : IDisposable
 
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             $$"""
+            VERSION="v1.0.0"
             gh() {
                 return 1
             }
@@ -1463,6 +1630,41 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Verifying GitHub provenance attestation for sha256sums.txt", stdout);
         Assert.DoesNotContain("UNREACHABLE", stdout);
         Assert.Contains("GitHub provenance attestation verification failed for sha256sums.txt", stderr);
+    }
+
+    [ProductionCliFact]
+    public void VerificationPolicy_DefaultStrictWithoutGhOrPinnedSigner_FailsClosed_Issue4603()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var artifactPath = Path.Combine(_tempRoot, "sha256sums.txt");
+        File.WriteAllText(artifactPath, "checksums");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            command() {
+                if [ "${1:-}" = "-v" ] && [ "${2:-}" = "gh" ]; then
+                    return 1
+                fi
+                builtin command "$@"
+            }
+
+            verify_release_attestation "{{artifactPath}}" "sha256sums.txt"
+            enforce_manifest_provenance
+            echo "UNREACHABLE"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_VERIFY_POLICY"] = "strict",
+                ["CDIDX_TEST_ENABLE_ATTESTATION"] = "1",
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("UNREACHABLE", stdout);
+        Assert.Contains("'gh' command not found", stderr);
+        Assert.Contains("Independent provenance verification failed for sha256sums.txt", stderr);
     }
 
     [ProductionCliTheory]
@@ -1752,10 +1954,10 @@ public sealed class InstallScriptTests : IDisposable
             mkdir -p "{{Path.Combine(payloadDir, "LICENSES")}}"
             cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
             #!/bin/sh
-            echo "cdidx v1.2.3"
+            echo "cdidx v1.38.1"
             EOF
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
-            printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
+            printf '{"version":"1.38.1"}' > "{{Path.Combine(payloadDir, "version.json")}}"
             printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
             printf 'license text' > "{{Path.Combine(payloadDir, "LICENSE")}}"
             printf 'commercial license text' > "{{Path.Combine(payloadDir, "COMMERCIAL_LICENSE.md")}}"
@@ -1773,8 +1975,10 @@ public sealed class InstallScriptTests : IDisposable
                 checksum="$(openssl dgst -sha256 "{{archivePath}}" | awk '{print $NF}')"
             fi
             printf '%s  CodeIndex-linux-x64.tar.gz\n' "$checksum" > "{{checksumsPath}}"
+            manifest_checksum="$(calculate_sha256 "{{Path.Combine(payloadDir, "MANIFEST.sha256")}}")"
+            printf '%s  CodeIndex-linux-x64.MANIFEST.sha256\n' "$manifest_checksum" >> "{{checksumsPath}}"
 
-            VERSION="v1.2.3"
+            VERSION="v1.38.1"
             OS_NAME="linux"
             ARCH_NAME="x64"
             RID="linux-x64"
@@ -1835,6 +2039,14 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Equal("trademark text", File.ReadAllText(Path.Combine(installDir, "TRADEMARKS.md")));
         Assert.Equal("fsl text", File.ReadAllText(Path.Combine(installDir, "LICENSES", "FSL-1.1-ALv2.txt")));
         Assert.Equal("apache text", File.ReadAllText(Path.Combine(installDir, "LICENSES", "Apache-2.0.txt")));
+        Assert.True(File.Exists(Path.Combine(installDir, "MANIFEST.sha256")));
+        Assert.True(File.Exists(Path.Combine(installDir, ".cdidx-release-sha256sums.txt")));
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead,
+            File.GetUnixFileMode(Path.Combine(installDir, "MANIFEST.sha256")));
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead,
+            File.GetUnixFileMode(Path.Combine(installDir, ".cdidx-release-sha256sums.txt")));
         Assert.Equal(string.Empty, stderr);
     }
 
@@ -1975,7 +2187,8 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Equal(0, exitCode);
         Assert.Contains("LEGACY_INSTALL_OK", stdout);
         Assert.Contains("falling back to archive-level checksum verification", stderr);
-        Assert.Equal("""{"version":"1.24.5","integrity_ok":true}""" + Environment.NewLine, File.ReadAllText(Path.Combine(installDir, "version.json")));
+        Assert.Equal("""{"version":"1.24.5"}""", File.ReadAllText(Path.Combine(installDir, "version.json")));
+        Assert.False(File.Exists(Path.Combine(installDir, "MANIFEST.sha256")));
     }
 
     [ProductionCliFact]
@@ -3283,6 +3496,7 @@ public sealed class InstallScriptTests : IDisposable
             echo "cdidx v1.10.0"
             EOF
             chmod +x "{{Path.Combine(installDir, "cdidx")}}"
+            printf '{"version":"1.10.0"}' > "{{Path.Combine(installDir, "version.json")}}"
 
             VERSION="v0.99.0"
             detect_existing_install
@@ -3334,14 +3548,14 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [ProductionCliFact]
-    public void VerificationPolicy_StrictEnablesAttestationAndStrictGpg()
+    public void VerificationPolicy_StrictRequiresIndependentManifestProvenance_Issue4603()
     {
         if (OperatingSystem.IsWindows())
             return;
 
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
-            printf 'policy=%s attestation=%s strict=%s\n' "$VERIFY_POLICY" "$REQUIRE_ATTESTATION" "$STRICT_VERIFY"
+            printf 'policy=%s provenance=%s attestation=%s strict=%s\n' "$VERIFY_POLICY" "$REQUIRE_RELEASE_PROVENANCE" "$REQUIRE_ATTESTATION" "$STRICT_VERIFY"
             """,
             new Dictionary<string, string?>
             {
@@ -3350,7 +3564,90 @@ public sealed class InstallScriptTests : IDisposable
 
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, stderr);
-        Assert.Contains("policy=strict attestation=1 strict=1", stdout);
+        Assert.Contains("policy=strict provenance=1 attestation=0 strict=0", stdout);
+    }
+
+    [ProductionCliFact]
+    public void InstalledReceipt_AttestationOnlyPolicyRejectsGpgOnlyProof_Issue4607()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var checksumsPath = Path.Combine(_tempRoot, "installed-attestation-only.sha256sums.txt");
+        var signaturePath = checksumsPath + ".asc";
+        File.WriteAllText(checksumsPath, "checksum");
+        File.WriteAllText(signaturePath, "signature");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            VERSION="v1.38.1"
+            release_attestation_supported() { return 1; }
+            has_cmd() { [ "$1" = "gpg" ]; }
+            gpg() { printf '[GNUPG:] VALIDSIG ABCDEF0123456789ABCDEF0123456789ABCDEF01 0 0 0 0 0 0 0 0\n'; }
+
+            if verify_installed_checksum_provenance "{{checksumsPath}}" "{{signaturePath}}"; then
+                echo "UNEXPECTED_SUCCESS"
+            fi
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_REQUIRE_ATTESTATION"] = "1",
+                ["CDIDX_RELEASE_GPG_FINGERPRINT"] = "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+                ["CDIDX_TEST_USE_REAL_INSTALLED_PROVENANCE"] = "1",
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.DoesNotContain("UNEXPECTED_SUCCESS", stdout);
+    }
+
+    [ProductionCliFact]
+    public void InstalledReceipt_GpgOnlyPolicyRejectsAttestationOnlyProof_Issue4607()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var checksumsPath = Path.Combine(_tempRoot, "installed-gpg-only.sha256sums.txt");
+        File.WriteAllText(checksumsPath, "checksum");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            VERSION="v1.38.1"
+            release_attestation_supported() { return 0; }
+            has_cmd() { [ "$1" = "gh" ]; }
+            gh() { return 0; }
+
+            if verify_installed_checksum_provenance "{{checksumsPath}}" "{{checksumsPath}}.asc"; then
+                echo "UNEXPECTED_SUCCESS"
+            fi
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_STRICT_VERIFY"] = "1",
+                ["CDIDX_TEST_USE_REAL_INSTALLED_PROVENANCE"] = "1",
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.DoesNotContain("UNEXPECTED_SUCCESS", stdout);
+    }
+
+    [ProductionCliFact]
+    public void VerificationPolicy_CompatIsExplicitAuditedOptIn_Issue4603()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            MANIFEST_PROVENANCE_VERIFIED=0
+            enforce_manifest_provenance
+            echo "CONTINUED"
+            """);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("CONTINUED", stdout);
+        Assert.Contains("AUDIT: CDIDX_VERIFY_POLICY=compat", stderr);
     }
 
     [ProductionCliFact]
@@ -3375,7 +3672,7 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [ProductionCliFact]
-    public void VerifyChecksumSignature_StrictPolicyWithoutFingerprint_FailsClosed()
+    public void VerificationPolicy_StrictWithoutAttestationOrPinnedSigner_FailsClosed_Issue4603()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -3393,6 +3690,7 @@ public sealed class InstallScriptTests : IDisposable
             }
 
             verify_checksum_signature "{{checksumsPath}}" "{{signaturePath}}"
+            enforce_manifest_provenance
             echo "UNREACHABLE"
             """,
             new Dictionary<string, string?>
@@ -3404,7 +3702,8 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Equal(1, exitCode);
         Assert.Contains("Verifying checksum signature", stdout);
         Assert.DoesNotContain("UNREACHABLE", stdout);
-        Assert.Contains("no expected release signer fingerprint is configured", stderr);
+        Assert.Contains("no expected release signing fingerprint is configured", stderr);
+        Assert.Contains("Independent provenance verification failed for sha256sums.txt", stderr);
     }
 
     [ProductionCliFact]
@@ -3458,7 +3757,8 @@ public sealed class InstallScriptTests : IDisposable
             }
 
             verify_checksum_signature "{{checksumsPath}}" "{{signaturePath}}"
-            echo "VERIFIED"
+            enforce_manifest_provenance
+            printf 'VERIFIED:%s\n' "$MANIFEST_PROVENANCE_VERIFIED"
             """,
             new Dictionary<string, string?>
             {
@@ -3467,7 +3767,7 @@ public sealed class InstallScriptTests : IDisposable
 
         Assert.Equal(0, exitCode);
         Assert.Contains("Verifying checksum signature", stdout);
-        Assert.Contains("VERIFIED", stdout);
+        Assert.Contains("VERIFIED:1", stdout);
         Assert.Equal(string.Empty, stderr);
     }
 
@@ -6462,7 +6762,11 @@ public sealed class InstallScriptTests : IDisposable
                 #!/usr/bin/env bash
                 {{(enforceStrictMode ? "set -euo pipefail" : "")}}
                 export CDIDX_INSTALL_SH_LIB_ONLY=1
+                export CDIDX_VERIFY_POLICY="${CDIDX_VERIFY_POLICY:-compat}"
                 source "{{GetInstallScriptPath()}}"
+                if [ "$VERIFY_POLICY" = "compat" ]; then
+                    MANIFEST_PROVENANCE_VERIFIED=1
+                fi
                 make_payload_archive() {
                     local payload_dir="$1"
                     local archive_path="$2"
@@ -6475,6 +6779,30 @@ public sealed class InstallScriptTests : IDisposable
                     )
                     tar czf "$archive_path" -C "$payload_dir" .
                 }
+                make_installed_manifest() {
+                    local install_dir="$1"
+                    local receipt_rid="linux-x64"
+                    shift
+                    for file in "$@"; do
+                        if [ "$file" = "libe_sqlite3.dylib" ]; then
+                            receipt_rid="osx-arm64"
+                        fi
+                    done
+                    (
+                        cd "$install_dir"
+                        : > .MANIFEST.sha256.tmp
+                        for file in "$@"; do
+                            calculate_sha256 "$file" | awk -v file="$file" '{ print $1 "  " file }' >> .MANIFEST.sha256.tmp
+                        done
+                        mv .MANIFEST.sha256.tmp MANIFEST.sha256
+                        calculate_sha256 MANIFEST.sha256 | awk -v file="CodeIndex-${receipt_rid}.MANIFEST.sha256" '{ print $1 "  " file }' > .cdidx-release-sha256sums.txt
+                    )
+                }
+                if [ "${CDIDX_TEST_USE_REAL_INSTALLED_PROVENANCE:-0}" != "1" ]; then
+                    verify_installed_checksum_provenance() {
+                        return 0
+                    }
+                fi
                 {{snippet}}
                 """);
             File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);

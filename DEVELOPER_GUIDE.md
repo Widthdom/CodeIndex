@@ -566,7 +566,7 @@ On startup, `cdidx` walks up from the current directory looking for `.cdidx-vers
 
 ### Release freshness and upgrade checks
 
-`cdidx --check-updates` and `cdidx status --check-updates` query the GitHub latest-release endpoint through `UpdateChecker`, using the same 24-hour cache and `CDIDX_DISABLE_UPDATE_CHECK=1` opt-out as the `--version` hint. `cdidx upgrade --check-only` reuses that check. `cdidx upgrade` is intentionally a thin wrapper around the signed release installer: it downloads `install.sh`, verifies the current binary directory is writable, sets `CDIDX_INSTALL_DIR` to that directory, and runs the installer for the latest release.
+`cdidx --check-updates` and `cdidx status --check-updates` query the GitHub latest-release endpoint through `UpdateChecker`, using the same 24-hour cache and `CDIDX_DISABLE_UPDATE_CHECK=1` opt-out as the `--version` hint. `cdidx upgrade --check-only` reuses that check. `cdidx upgrade` is intentionally a thin wrapper around the signed release installer: it downloads `sha256sums.txt` and `install.sh` into a private temporary directory, independently verifies both exact files with `gh attestation verify` pinned to `github.com/Widthdom/CodeIndex/.github/workflows/release.yml` and `refs/tags/<selected-version>`, and only then trusts the manifest checksum and starts the installer. Missing or failed provenance blocks execution by default; `CDIDX_VERIFY_POLICY=compat` is the explicit audited opt-in. Upgrade JSON distinguishes the mechanism from the observed result through `verification_policy`, `manifest_provenance_verified`, `installer_provenance_verified`, `installer_verification_status`, and `provenance_audit_code`; check-only reports `not_attempted`, success reports `verified`, a strict blocked failure reports `verification_failed`, and a compat bypass reports `compat_bypass` plus `compat_provenance_bypass`. Invalid policy values return the normal structured usage-error JSON when `--json` is selected. After verification, the command checks that the current binary directory is writable, sets `CDIDX_INSTALL_DIR` to that directory, and runs the selected release installer.
 
 Upgrade installer and git subprocesses scrub the inherited process environment
 before launch. They forward only the shared subprocess allowlist needed for
@@ -1806,7 +1806,10 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh 
 
 What `install.sh` does, in order (see `install.sh`):
 
-1. **Detect platform.** `uname -s` / `uname -m` are normalized to the
+1. **Preflight, then detect platform.** The installer checks one declared
+   dependency list (`curl`, archive/temp/checksum tools, and the `find` / `sed`
+   / `sort` manifest traversal tools) before release work. `uname -s` /
+   `uname -m` are then normalized to the
    `<os>-<arch>` RID and validates it against the release workflow's
    published asset list (`linux-x64`, `linux-arm64`, `osx-arm64`,
    `win-x64`, `win-arm64`; see [Platform Support](docs/platform-support.md))
@@ -1815,10 +1818,10 @@ What `install.sh` does, in order (see `install.sh`):
    glibc. Unsupported RIDs such as `osx-x64` fail with the detected RID,
    supported list, NuGet global-tool and source-build alternatives, and the
    issue link for requesting official platform support.
-2. **Detect existing install first.** If `INSTALL_DIR/cdidx` already
-   exists, the installer caches its parsed `--version` output before any
-   network work so later version-selection and repair decisions can
-   distinguish a healthy match from an older or incomplete install.
+2. **Inspect existing metadata without executing the binary.** If
+   `INSTALL_DIR/version.json` exists, the installer reads its version before
+   any network work. It never runs an unvalidated existing `cdidx` merely to
+   decide whether that binary may be reused.
 3. **Resolve version.** With an explicit argument, the installer accepts
    either the `v`-prefixed or bare form (`v1.8.0` or `1.8.0`). With no
    argument, it calls the GitHub API
@@ -1826,10 +1829,17 @@ What `install.sh` does, in order (see `install.sh`):
    available for `tag_name` parsing, and falls back to the existing
    `grep` + `sed` extraction for portability. The installer then compares
    that latest release tag to any healthy existing install and skips the
-   download only when the installed version already matches the latest
-   tag. Broken `v0.0.0` installs or installs missing required adjacent
-   assets are treated as reinstall targets instead of idempotent
-   successes. HTTP
+   download only when the installed version matches the latest tag, the
+   persisted release checksum receipt reauthenticates against the pinned
+   release workflow/tag or pinned GPG signer, that receipt authenticates the
+   installed `MANIFEST.sha256`, and every installed critical/legal artifact
+   rehashes to it. The receipt, manifest, binary, `version.json`, native SQLite
+   asset, and notices must be regular files; the binary must remain executable.
+   The differing artifact is reported before the replacement is downloaded and
+   staged. Promotion is transactional with rollback but uses per-file moves;
+   concurrent `cdidx` invocations must be avoided during that short maintenance
+   window. Broken `v0.0.0` installs or installs missing required adjacent
+   assets are therefore reinstall targets instead of idempotent successes. HTTP
    failures are classified explicitly (`403` rate limit vs `404` vs
    `5xx` vs real curl network errors) instead of collapsing everything
    into a generic “check your network connection” message.
@@ -1841,9 +1851,14 @@ What `install.sh` does, in order (see `install.sh`):
    are also treated as replacements, which is the desired behaviour.
 5. **Download.** Fetches `CodeIndex-<rid>.tar.gz` and `sha256sums.txt`
    into a `mktemp -d` directory trap-cleaned on exit.
-6. **Verify.** Computes SHA256 via `sha256sum` / `shasum` / `openssl`
-   (whichever is present) and compares against the signed checksum file.
-   A mismatch aborts before any file is placed into `INSTALL_DIR`.
+6. **Verify provenance, then checksum.** The default strict policy requires
+   either a GitHub attestation for `sha256sums.txt` or a valid GPG signature
+   whose signer matches `CDIDX_RELEASE_GPG_FINGERPRINT`. Only after that
+   independent proof succeeds does the installer trust the manifest, compute
+   SHA256 via `sha256sum` / `shasum` / `openssl`, and compare the archive.
+   `CDIDX_VERIFY_POLICY=compat` is an explicit audited opt-in that warns before
+   continuing without provenance. Any checksum mismatch still aborts before
+   files are placed into `INSTALL_DIR`.
 7. **Extract into a dedicated subdirectory.** `tar xzf … -C
    ${tmpdir}/extract` so the unpacked payload does not mix with the
    downloaded archive or checksum file.
@@ -1853,11 +1868,14 @@ What `install.sh` does, in order (see `install.sh`):
    macOS) to all be present in the extracted tarball. Missing files
    abort before touching `INSTALL_DIR`, so a healthy install is not
    replaced by a partial payload.
-9. **Stage and swap binary/runtime assets together.** After the
-   validation above succeeds, the installer copies `cdidx` plus the
+9. **Persist the authenticated receipt and manifest, then stage the asset set.**
+   After validation succeeds, the installer copies `cdidx`, the verified
+   `MANIFEST.sha256`, the independently authenticated release checksum receipt
+   (and detached signature when available), plus the
    required adjacent runtime assets into a staging directory under
-   `INSTALL_DIR`, marks the staged binary executable, then renames the
-   existing files into a backup directory and promotes the staged assets
+   `INSTALL_DIR`, marks the receipt and manifest read-only and the staged
+   binary executable. It then renames existing files into a backup
+   directory and promotes the staged assets
    into place with runtime assets first and the binary last. If any
    promotion step fails, the installer rolls back from the backup so a
    healthy install is not left half-updated. This prevents a
@@ -1866,9 +1884,11 @@ What `install.sh` does, in order (see `install.sh`):
 10. **PATH guidance.** If `INSTALL_DIR` is not on `PATH`, emit the
    shell-specific snippet (`bashrc` / `zshrc` / `fish_add_path`).
 
-After a successful run, `ls $HOME/.local/bin/` shows `cdidx`,
-`libe_sqlite3.so` (on Linux), and `version.json` side-by-side. Any other
-layout is a bug.
+After a successful current-release run, `ls -a $HOME/.local/bin/` shows `cdidx`,
+`libe_sqlite3.so` (on Linux), `version.json`, `MANIFEST.sha256`, and the hidden
+release checksum receipt side-by-side. Any other current-release layout is a bug; legacy releases that
+predate payload manifests can still install but are not reusable without a
+fresh download.
 
 ```mermaid
 sequenceDiagram
@@ -1882,11 +1902,11 @@ sequenceDiagram
     U->>S: curl | bash
     S->>S: detect_platform (uname)
     Note over S: reject musl / osx-x64 early
-    S->>FS: inspect existing cdidx --version
+    S->>FS: read existing version.json (do not execute cdidx)
     alt no explicit version
         S->>API: GET /releases/latest
         API-->>S: tag_name (e.g. v1.8.0 — actual value per GitHub Releases)
-        alt healthy existing install already matches latest
+        alt manifest-rehashed existing install matches latest
             S-->>U: exit 0 after latest-version comparison
         else upgrade or repair needed
             S->>FS: switch/reinstall to resolved latest version
@@ -1901,7 +1921,7 @@ sequenceDiagram
     S->>S: sha256sum / shasum / openssl verify
     S->>TMP: tar xzf -C extract/
     S->>S: validate cdidx + required assets in extract/
-    S->>FS: copy required files into .cdidx-stage.*
+    S->>FS: copy required files + MANIFEST.sha256 into .cdidx-stage.*
     S->>FS: chmod +x staged cdidx
     S->>FS: mv existing files into .cdidx-backup.*
     alt backup move fails
@@ -3375,9 +3395,20 @@ release 間で異なる場合に、team の binary version を揃えるために
 `cdidx --check-updates` と `cdidx status --check-updates` は、`--version` の hint と同じ
 24-hour cache と `CDIDX_DISABLE_UPDATE_CHECK=1` opt-out を使って GitHub latest-release
 endpoint を確認します。`cdidx upgrade --check-only` はこの check を再利用します。
-`cdidx upgrade` は signed release installer の薄い wrapper で、`install.sh` を download し、
-現在の binary directory が writable か確認し、`CDIDX_INSTALL_DIR` をその directory に向けて
-latest release の installer を実行します。
+`cdidx upgrade` は signed release installer の薄い wrapper で、`sha256sums.txt` と
+`install.sh` を private temp directory に download し、両方の exact file を
+`github.com/Widthdom/CodeIndex/.github/workflows/release.yml` と
+`refs/tags/<selected-version>` に固定した `gh attestation verify` で独立に検証してから
+manifest checksum を信頼し installer を起動します。既定では verifier 欠如または
+provenance 失敗時に実行を拒否し、`CDIDX_VERIFY_POLICY=compat` だけが監査対象の明示的
+opt-in です。upgrade JSON は `verification_policy`、`manifest_provenance_verified`、
+`installer_provenance_verified`、`installer_verification_status`、
+`provenance_audit_code` で method と実測結果を分離し、check-only は `not_attempted`、
+成功は `verified`、strict で中断した失敗は `verification_failed`、compat bypass は
+`compat_bypass` と `compat_provenance_bypass` を返します。`--json` 指定時の無効な policy 値は
+通常の構造化 usage-error JSON になります。検証後に current binary directory
+が writable か確認し、`CDIDX_INSTALL_DIR` をその directory に向けて選択した release の
+installer を実行します。
 
 Upgrade installer と git subprocess は、起動前に継承環境を scrub します。
 forward するのは、PATH / home / temp / proxy / certificate 挙動に必要な共有 subprocess
@@ -4554,18 +4585,18 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh 
 
 `install.sh` が順に行うこと（`install.sh` 参照）:
 
-1. **プラットフォーム検出。** `uname -s` / `uname -m` を `<os>-<arch>` RID に正規化し、release asset の download 前にリリースワークフローが publish する一覧（`linux-x64`、`linux-arm64`、`osx-arm64`、`win-x64`、`win-arm64`。詳細は [プラットフォームサポート](docs/platform-support.md#プラットフォームサポート)）と照合する。自己完結型バイナリは glibc にリンクされているため、Alpine / musl は先頭で明示的に拒否する。`osx-x64` などの未対応 RID は、検出 RID、対応一覧、NuGet global tool / source build の代替手段、公式 platform support をリクエストする issue link を含むエラーで拒否する。
-2. **既存インストールを先に検出。** `INSTALL_DIR/cdidx` が既にある場合は、ネットワークへ行く前に `--version` を解釈して保持する。これにより、後続のバージョン選択や repair 判定で「健全な一致」なのか「古い/不完全な install」なのかを区別できる。
-3. **バージョン解決。** 明示引数がある場合は `v` プレフィックス付き・無しの両方を受け付ける（`v1.8.0` / `1.8.0`）。引数なしでも GitHub API（`/repos/Widthdom/CodeIndex/releases/latest`）を叩いて latest tag を解決し、`jq` があれば `tag_name` 取得に使い、無ければ portability のため従来どおり `grep` + `sed` にフォールバックする。そのうえで健全な既存 install がその latest tag と一致している場合だけ download を skip する。壊れた `v0.0.0` install や必須隣接資産欠落 install は再インストール対象として扱う。HTTP 失敗も `403` rate limit / `404` / `5xx` / 実際の curl network error を分けて案内する。
+1. **preflight 後にプラットフォーム検出。** release 処理前に、`curl`、archive/temp/checksum tool、manifest traversal で使う `find` / `sed` / `sort` を1つの宣言済み dependency list から確認する。その後 `uname -s` / `uname -m` を `<os>-<arch>` RID に正規化し、release asset の download 前にリリースワークフローが publish する一覧（`linux-x64`、`linux-arm64`、`osx-arm64`、`win-x64`、`win-arm64`。詳細は [プラットフォームサポート](docs/platform-support.md#プラットフォームサポート)）と照合する。自己完結型バイナリは glibc にリンクされているため、Alpine / musl は先頭で明示的に拒否する。`osx-x64` などの未対応 RID は、検出 RID、対応一覧、NuGet global tool / source build の代替手段、公式 platform support をリクエストする issue link を含むエラーで拒否する。
+2. **binary を実行せず既存 metadata を確認。** `INSTALL_DIR/version.json` があれば、network 処理前に version を読みます。再利用してよいか判断するために、未検証の既存 `cdidx` を実行することはありません。
+3. **バージョン解決。** 明示引数がある場合は `v` プレフィックス付き・無しの両方を受け付ける（`v1.8.0` / `1.8.0`）。引数なしでも GitHub API（`/repos/Widthdom/CodeIndex/releases/latest`）を叩いて latest tag を解決し、`jq` があれば `tag_name` 取得に使い、無ければ portability のため従来どおり `grep` + `sed` にフォールバックする。そのうえで installed version が latest tag と一致し、保存済み release checksum receipt を固定済み release workflow/tag または GPG signer に対して再認証し、その receipt が `MANIFEST.sha256` を認証し、critical/legal artifact がすべて再ハッシュできた場合だけ download を skip する。receipt、manifest、binary、`version.json`、native SQLite asset、notice は regular file、binary は executable であることも必須にする。差異のある artifact 名を報告して replacement を完全に download/stage してから、file ごとの move と rollback で promotion するため、その短い maintenance window 中は concurrent `cdidx` invocation を避ける。壊れた `v0.0.0` install や必須隣接資産欠落 install は再インストール対象として扱う。HTTP 失敗も `403` rate limit / `404` / `5xx` / 実際の curl network error を分けて案内する。
 4. **明示バージョン指定時は再インストールまたは切り替えに進む。** 引数なし再実行も latest release を対象にするが、明示ターゲット版では、同版でも必ず再インストールへ進み、別版なら切り替えへ進む。壊れた `v0.0.0` install や、同版でも必須資産が欠けている install も置き換え対象として扱う — これは意図した挙動。
 5. **ダウンロード。** `CodeIndex-<rid>.tar.gz` と `sha256sums.txt` を `mktemp -d` のディレクトリ（trap で自動クリーンアップ）に取得。
-6. **検証。** `sha256sum` / `shasum` / `openssl`（利用可能なもの）で SHA256 を計算し、チェックサムファイルと比較。不一致なら `INSTALL_DIR` に一切ファイルを置かずに中断する。
+6. **provenance を検証してから checksum を検証。** 既定の strict policy は、`sha256sums.txt` の GitHub attestation、または `CDIDX_RELEASE_GPG_FINGERPRINT` と一致する signer の有効な GPG signature のどちらかを必須にする。この独立した proof が成功してから manifest を信頼し、`sha256sum` / `shasum` / `openssl`（利用可能なもの）で archive の SHA256 を比較する。`CDIDX_VERIFY_POLICY=compat` は、provenance が無いまま続行するときに warning を出す、監査対象の明示的 opt-in である。checksum 不一致なら引き続き `INSTALL_DIR` に一切ファイルを置かず中断する。
 7. **専用サブディレクトリへ展開。** `tar xzf … -C ${tmpdir}/extract` で、展開物がダウンロード済みアーカイブやチェックサムと混ざらないようにする。
 8. **コピー前に展開済み payload 全体を検証。** `cdidx`、`version.json`、OS ごとに必須の native SQLite ライブラリ（Linux は `libe_sqlite3.so`、macOS は `libe_sqlite3.dylib`）がすべて揃っていることを確認する。不足があれば `INSTALL_DIR` に触る前に中断するため、健全な install を部分 payload で壊さない。
-9. **staging と swap でバイナリ/隣接資産をまとめて配置。** 上記検証が通ってから、installer は `INSTALL_DIR` 配下の staging ディレクトリへ `cdidx` と必須隣接資産をコピーし、staged binary に `chmod +x` をかける。その後、既存ファイルを backup ディレクトリへ退避し、runtime asset を先に、binary を最後に rename で昇格させる。途中で失敗した場合は backup から rollback するため、健全な install を半更新状態にしない。これにより、見かけ上は成功しても後で `v0.0.0` や `DllNotFoundException` で落ちる半壊れ install を防ぐ。
+9. **認証済み receipt と manifest を保存し、資産一式を staging。** 上記検証が通ってから、installer は `INSTALL_DIR` 配下の staging ディレクトリへ `cdidx`、検証済み `MANIFEST.sha256`、独立に認証済みの release checksum receipt（利用可能なら detached signature も）、必須隣接資産をコピーし、receipt/manifest を read-only、staged binary を executable にする。その後、既存ファイルを backup ディレクトリへ退避し、runtime asset を先に、binary を最後に rename で昇格させる。途中で失敗した場合は backup から rollback するため、健全な install を半更新状態にしない。これにより、見かけ上は成功しても後で `v0.0.0` や `DllNotFoundException` で落ちる半壊れ install を防ぐ。
 10. **PATH ガイダンス。** `INSTALL_DIR` が `PATH` に無ければ、シェル別のスニペット（`bashrc` / `zshrc` / `fish_add_path`）を表示する。
 
-成功後は `ls $HOME/.local/bin/` に `cdidx`、`libe_sqlite3.so`（Linux の場合）、`version.json` が並んで見える。それ以外のレイアウトはバグである。
+current release の成功後は `ls -a $HOME/.local/bin/` に `cdidx`、`libe_sqlite3.so`（Linux の場合）、`version.json`、`MANIFEST.sha256`、hidden release checksum receipt が並んで見える。それ以外の current-release layout はバグである。authenticated manifest receipt 導入前の legacy release も install はできるが、fresh download なしの再利用対象にはならない。
 
 ```mermaid
 sequenceDiagram
@@ -4579,11 +4610,11 @@ sequenceDiagram
     U->>S: curl | bash
     S->>S: detect_platform (uname)
     Note over S: musl / osx-x64 は早期に拒否
-    S->>FS: 既存 cdidx --version を確認
+    S->>FS: 既存 version.json を読む（cdidx は実行しない）
     alt 引数なし
         S->>API: GET /releases/latest
         API-->>S: tag_name（例: v1.8.0。実際の値は GitHub Releases による）
-        alt 健全な既存 install が latest と一致
+        alt manifest 再ハッシュ済み install が latest と一致
             S-->>U: latest 比較後に exit 0
         else upgrade または repair が必要
             S->>FS: 解決した latest 版へ切り替え/再インストール
@@ -4598,7 +4629,7 @@ sequenceDiagram
     S->>S: sha256sum / shasum / openssl で検証
     S->>TMP: tar xzf -C extract/
     S->>S: extract/ 内の cdidx と必須資産を検証
-    S->>FS: 必須ファイルを .cdidx-stage.* へコピー
+    S->>FS: 必須ファイル + MANIFEST.sha256 を .cdidx-stage.* へコピー
     S->>FS: staged cdidx に chmod +x
     S->>FS: 既存ファイルを .cdidx-backup.* へ mv
     alt backup 退避で失敗
