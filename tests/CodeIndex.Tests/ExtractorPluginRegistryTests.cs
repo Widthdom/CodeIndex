@@ -377,14 +377,7 @@ public class ExtractorPluginRegistryTests
                 InheritanceFlags.None,
                 PropagationFlags.None,
                 AccessControlType.Allow));
-            security.AddAccessRule(new FileSystemAccessRule(
-                new SecurityIdentifier(WellKnownSidType.WorldSid, null),
-                FileSystemRights.CreateFiles,
-                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
-                PropagationFlags.InheritOnly,
-                AccessControlType.Allow));
             new DirectoryInfo(pluginDirectory).SetAccessControl(security);
-            Assert.True(ExecutableExtensionBoundary.TryValidateDirectory(pluginDirectory, out _, out _));
             Assert.True(ExecutableExtensionBoundary.TryStageFile(
                 pluginDirectory,
                 pluginPath,
@@ -402,6 +395,18 @@ public class ExtractorPluginRegistryTests
             staging.Dispose();
 
             Assert.False(Directory.Exists(stagingDirectory));
+
+            var inheritOnlyDirectory = Path.Combine(projectRoot, "inherit-only");
+            Directory.CreateDirectory(inheritOnlyDirectory);
+            var inheritOnlySecurity = new DirectoryInfo(inheritOnlyDirectory).GetAccessControl();
+            inheritOnlySecurity.AddAccessRule(new FileSystemAccessRule(
+                new SecurityIdentifier(WellKnownSidType.WorldSid, null),
+                FileSystemRights.CreateFiles,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.InheritOnly,
+                AccessControlType.Allow));
+            new DirectoryInfo(inheritOnlyDirectory).SetAccessControl(inheritOnlySecurity);
+            Assert.True(ExecutableExtensionBoundary.TryValidateDirectory(inheritOnlyDirectory, out _, out _));
         }
         finally
         {
