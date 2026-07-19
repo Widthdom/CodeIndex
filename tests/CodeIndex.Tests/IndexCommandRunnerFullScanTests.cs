@@ -2030,6 +2030,68 @@ public partial class IndexCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void Run_FullScan_ReindexesUnchangedCSharpTupleReadonlyFieldWhenExtractorVersionChanged_Issue4616()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "tuple-fields.cs"),
+                """
+                public class TupleFields
+                {
+                    public static readonly (int Left, int Right) Pair = (1, 2);
+                }
+                """);
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = $"""
+                    DELETE FROM symbols WHERE name = 'Pair';
+                    UPDATE codeindex_meta
+                    SET value = '3'
+                    WHERE key = '{DbContext.GetSymbolExtractorVersionMetaKey("csharp")}';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+            using var symbolCmd = verify.CreateCommand();
+            symbolCmd.CommandText = "SELECT kind, return_type FROM symbols WHERE name = 'Pair'";
+            using (var reader = symbolCmd.ExecuteReader())
+            {
+                Assert.True(reader.Read());
+                Assert.Equal("field", reader.GetString(0));
+                Assert.Equal("(int Left, int Right)", reader.GetString(1));
+                Assert.False(reader.Read());
+            }
+
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText = $"SELECT value FROM codeindex_meta WHERE key = '{DbContext.GetSymbolExtractorVersionMetaKey("csharp")}'";
+            Assert.Equal(
+                SymbolExtractor.CSharpContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                versionCmd.ExecuteScalar() as string);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
     [ProductionRuntimeFact]
     public void Run_FullScan_DegradedWarningSummarizesRemainingFoldGap()
     {

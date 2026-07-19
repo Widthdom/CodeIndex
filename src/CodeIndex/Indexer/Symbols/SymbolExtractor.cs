@@ -15,7 +15,7 @@ public static partial class SymbolExtractor
 {
     public const int DefaultContractVersion = 1;
     public const int ExpandedLanguageContractVersion = 2;
-    public const int CSharpContractVersion = 3;
+    public const int CSharpContractVersion = 4;
     public const int DockerfileContractVersion = 2;
     public const int MakefileContractVersion = 2;
     public const int StyleAndXamlContractVersion = 2;

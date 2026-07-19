@@ -190,7 +190,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   C# query-range collision forms for basic selection, directional ordering, keyword-named members, and object initializers share one indexed source when they assert the same empty inspect reference bundle.
   C# inspect brace-range regressions place char-literal, raw-string, and verbatim-string forms in one indexed class and query each following method from that shared fixture.
   C# generic query-range selectors share simple and tuple type arguments in one fixture, while generic type-pattern coverage shares designation and no-designation forms in another fixture.
-  C# field-type grammar coverage shares static readonly tuple, nullable-tuple, generic-tuple-member, const/plain-field controls, and deconstruction negatives in one extractor fixture.
+  C# field-type grammar coverage shares static readonly tuple, nullable-tuple, generic-tuple-member, const/plain-field controls, and deconstruction negatives in one extractor fixture. The full-scan regression also seeds the previous C# extractor contract against an unchanged file and verifies that incremental indexing restores the tuple field kind and complete return type.
   C# switch-expression pattern-variable coverage keeps recursive, declaration, guard, and comment-trivia forms in one extractor fixture when their contract is the set of genuine enum-member references.
   C# foreach-shadowing coverage shares embedded, same-line, and dangling-else forms in one source and distinguishes the surviving references by container.
   C# lambda-parameter shadowing coverage shares simple, multiline, after-lambda, and same-line boundary forms in one extraction pass.
@@ -889,7 +889,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   C# query-range collision の basic selection、directional ordering、keyword 名 member、object initializer は、同じ空の inspect reference bundle を検証する場合は1つの indexed source を共有してください。
   C# inspect の brace-range regression は char literal、raw string、verbatim string を1つの indexed class に併置し、それぞれの後続 method を共有 fixture から query してください。
   C# generic query-range selector は単純型引数と tuple 型引数を1つの fixture で共有し、generic type-pattern coverage は designation 有無を別の1 fixture で共有してください。
-  C# field 型文法 coverage は static readonly tuple、nullable tuple、generic 内 tuple member、const / 通常 field の control、deconstruction の負例を1つの extractor fixture で共有してください。
+  C# field 型文法 coverage は static readonly tuple、nullable tuple、generic 内 tuple member、const / 通常 field の control、deconstruction の負例を1つの extractor fixture で共有してください。full-scan regression では未変更 file に以前の C# extractor contract を設定し、incremental index が tuple field の kind と完全な return type を復元することも検証してください。
   C# switch-expression pattern-variable coverage は、真の enum-member reference 集合を同じ contract とする recursive、declaration、guard、comment-trivia 形式を1つの extractor fixture で共有してください。
   C# foreach shadowing coverage は embedded、same-line、dangling-else 形式を1つの source で共有し、残る reference を container で区別してください。
   C# lambda parameter shadowing coverage は simple、multiline、after-lambda、same-line boundary 形式を1回の extraction pass で共有してください。
