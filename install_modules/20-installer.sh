@@ -584,6 +584,8 @@ download_and_install() {
         fi
     fi
 
+    enforce_manifest_provenance
+
     # Verify checksum / チェックサム検証
     info "Verifying checksum..."
     local expected_checksum

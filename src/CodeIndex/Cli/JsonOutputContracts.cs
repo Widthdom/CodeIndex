@@ -210,6 +210,11 @@ internal sealed record UpgradeJsonResult(
     [property: JsonPropertyName("installer_stderr_tail")] string? InstallerStderrTail,
     [property: JsonPropertyName("installer_output_truncated")] bool? InstallerOutputTruncated,
     [property: JsonPropertyName("install_directory_error")] string? InstallDirectoryError,
+    [property: JsonPropertyName("verification_policy")] string? VerificationPolicy,
+    [property: JsonPropertyName("manifest_provenance_verified")] bool? ManifestProvenanceVerified,
+    [property: JsonPropertyName("installer_provenance_verified")] bool? InstallerProvenanceVerified,
+    [property: JsonPropertyName("installer_verification_status")] string? InstallerVerificationStatus,
+    [property: JsonPropertyName("provenance_audit_code")] string? ProvenanceAuditCode,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record DbIntegrityCheckJsonResult(

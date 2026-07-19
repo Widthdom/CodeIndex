@@ -1546,10 +1546,13 @@ public class ProgramRunnerTests
     public async Task RuntimeTestHooks_AreScopedToExecutionContext()
     {
         Func<HttpClient> upgradeFactory = () => new HttpClient();
+        Func<string, string, CancellationToken, bool> provenanceVerifier = (_, _, _) => true;
         var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+        var previousProvenanceVerifier = ProgramRunner.UpgradeAssetProvenanceVerifier;
         try
         {
             ProgramRunner.UpgradeHttpClientFactory = upgradeFactory;
+            ProgramRunner.UpgradeAssetProvenanceVerifier = provenanceVerifier;
             ProgramRunner.TestExtractorFileLengthCheckedForTesting = _ => { };
             ProgramRunner.DeleteInstallDirectoryWriteProbeForTesting = _ => { };
             ProgramRunner.DeleteUpgradeInstallerScriptForTesting = _ => { };
@@ -1559,6 +1562,7 @@ public class ProgramRunnerTests
 
             Task<(
                 bool UpgradeFactoryVisible,
+                bool ProvenanceVerifierVisible,
                 bool TestExtractorHookVisible,
                 bool DeleteInstallHookVisible,
                 bool DeleteUpgradeHookVisible,
@@ -1569,6 +1573,7 @@ public class ProgramRunnerTests
             {
                 task = Task.Run(() => (
                     ReferenceEquals(ProgramRunner.UpgradeHttpClientFactory, upgradeFactory),
+                    ReferenceEquals(ProgramRunner.UpgradeAssetProvenanceVerifier, provenanceVerifier),
                     ProgramRunner.TestExtractorFileLengthCheckedForTesting is not null,
                     ProgramRunner.DeleteInstallDirectoryWriteProbeForTesting is not null,
                     ProgramRunner.DeleteUpgradeInstallerScriptForTesting is not null,
@@ -1579,6 +1584,7 @@ public class ProgramRunnerTests
 
             var observed = await task;
             Assert.False(observed.UpgradeFactoryVisible);
+            Assert.False(observed.ProvenanceVerifierVisible);
             Assert.False(observed.TestExtractorHookVisible);
             Assert.False(observed.DeleteInstallHookVisible);
             Assert.False(observed.DeleteUpgradeHookVisible);
@@ -1589,6 +1595,7 @@ public class ProgramRunnerTests
         finally
         {
             ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+            ProgramRunner.UpgradeAssetProvenanceVerifier = previousProvenanceVerifier;
             ProgramRunner.TestExtractorFileLengthCheckedForTesting = null;
             ProgramRunner.DeleteInstallDirectoryWriteProbeForTesting = null;
             ProgramRunner.DeleteUpgradeInstallerScriptForTesting = null;
@@ -2588,11 +2595,13 @@ exit 7
             WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
 
             var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            var previousProvenanceVerifier = ProgramRunner.UpgradeAssetProvenanceVerifier;
             ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
                 new StaticResponseHandler(new ByteArrayContent(Encoding.UTF8.GetBytes("missing installer checksum\n"))))
             {
                 Timeout = Timeout.InfiniteTimeSpan,
             };
+            ProgramRunner.UpgradeAssetProvenanceVerifier = (_, _, _) => true;
 
             try
             {
@@ -2610,6 +2619,7 @@ exit 7
             finally
             {
                 ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                ProgramRunner.UpgradeAssetProvenanceVerifier = previousProvenanceVerifier;
                 TestProjectHelper.DeleteDirectory(cacheRoot);
             }
         }
@@ -2640,7 +2650,7 @@ exit 7
     }
 
     [Fact]
-    public void RunUpgrade_PassesCallerCancellationToReleaseDownloads()
+    public void RunUpgrade_PassesCancellationAndVerifiesBothReleaseAssets_Issue4603()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -2658,6 +2668,7 @@ exit 7
             var checksumManifest = $"{installerSha256}  install.sh\n";
             var observedCanBeCanceled = new List<bool>();
             var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            var previousProvenanceVerifier = ProgramRunner.UpgradeAssetProvenanceVerifier;
             ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
                 new UpgradeAssetResponseHandler(
                     checksumManifest,
@@ -2665,6 +2676,12 @@ exit 7
                     token => observedCanBeCanceled.Add(token.CanBeCanceled)))
             {
                 Timeout = Timeout.InfiniteTimeSpan,
+            };
+            ProgramRunner.UpgradeAssetProvenanceVerifier = (_, releaseTag, token) =>
+            {
+                Assert.Equal("v9.9.9", releaseTag);
+                observedCanBeCanceled.Add(token.CanBeCanceled);
+                return true;
             };
 
             using var cts = new CancellationTokenSource();
@@ -2678,13 +2695,281 @@ exit 7
                 Assert.Equal(CommandExitCodes.Success, exitCode);
                 Assert.Empty(stdout);
                 Assert.Equal(
-                    $"Verifying install.sh checksum...{Environment.NewLine}Verified install.sh checksum.{Environment.NewLine}",
+                    $"Verified independent release provenance for sha256sums.txt.{Environment.NewLine}Verified independent release provenance for install.sh.{Environment.NewLine}Verifying install.sh checksum...{Environment.NewLine}Verified install.sh checksum.{Environment.NewLine}",
                     stderr.ToString());
-                Assert.Equal([true, true], observedCanBeCanceled);
+                Assert.Equal([true, true, true, true], observedCanBeCanceled);
             }
             finally
             {
                 ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                ProgramRunner.UpgradeAssetProvenanceVerifier = previousProvenanceVerifier;
+                TestProjectHelper.DeleteDirectory(cacheRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void CreateUpgradeAttestationStartInfo_PinsReleaseWorkflowAndTag_Issue4603()
+    {
+        var assetPath = Path.GetFullPath(TestProjectHelper.CreateTempFilePath("cdidx-attestation", ".txt"));
+
+        var startInfo = ProgramRunner.CreateUpgradeAttestationStartInfo(assetPath, "v9.9.9");
+
+        Assert.Equal("gh", startInfo.FileName);
+        Assert.Equal(
+            [
+                "attestation",
+                "verify",
+                assetPath,
+                "-R",
+                "Widthdom/CodeIndex",
+                "--signer-workflow",
+                "github.com/Widthdom/CodeIndex/.github/workflows/release.yml",
+                "--source-ref",
+                "refs/tags/v9.9.9",
+            ],
+            startInfo.ArgumentList);
+    }
+
+    [Fact]
+    public void RunUpgrade_DefaultPolicy_BlocksMatchingChecksumWhenScriptProvenanceFails_Issue4603()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                "XDG_CACHE_HOME",
+                UpdateChecker.DisableEnvVar,
+                "CDIDX_VERIFY_POLICY");
+            var cacheRoot = TestProjectHelper.CreateTempProject("cdidx_update_cache");
+            var markerPath = TestProjectHelper.CreateTempFilePath("cdidx_untrusted_upgrade", ".marker");
+            env.Set("XDG_CACHE_HOME", cacheRoot);
+            env.Set(UpdateChecker.DisableEnvVar, null);
+            env.Set("CDIDX_VERIFY_POLICY", null);
+            WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
+
+            var installerScript = $"#!/bin/sh\nprintf compromised > '{markerPath}'\n";
+            var installerSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(installerScript))).ToLowerInvariant();
+            var checksumManifest = $"{installerSha256}  install.sh\n";
+            var verifiedAssets = new List<string>();
+            var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            var previousProvenanceVerifier = ProgramRunner.UpgradeAssetProvenanceVerifier;
+            ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
+                new UpgradeAssetResponseHandler(checksumManifest, installerScript, _ => { }))
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+            ProgramRunner.UpgradeAssetProvenanceVerifier = (path, releaseTag, _) =>
+            {
+                Assert.Equal("v9.9.9", releaseTag);
+                var assetName = Path.GetFileName(path);
+                verifiedAssets.Add(assetName);
+                return assetName == "sha256sums.txt";
+            };
+
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["upgrade"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.InstallError, exitCode);
+                Assert.Empty(stdout);
+                Assert.Equal(["sha256sums.txt", "install.sh"], verifiedAssets);
+                Assert.Contains("Independent release provenance verification failed for install.sh", stderr);
+                Assert.False(File.Exists(markerPath));
+            }
+            finally
+            {
+                ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                ProgramRunner.UpgradeAssetProvenanceVerifier = previousProvenanceVerifier;
+                TestProjectHelper.DeleteFile(markerPath);
+                TestProjectHelper.DeleteDirectory(cacheRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void RunUpgrade_StrictJson_ReportsVerificationFailureWithoutCompatAuditCode_Issue4603()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                "XDG_CACHE_HOME",
+                UpdateChecker.DisableEnvVar,
+                "CDIDX_VERIFY_POLICY");
+            var cacheRoot = TestProjectHelper.CreateTempProject("cdidx_update_cache");
+            env.Set("XDG_CACHE_HOME", cacheRoot);
+            env.Set(UpdateChecker.DisableEnvVar, null);
+            env.Set("CDIDX_VERIFY_POLICY", "strict");
+            WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
+
+            var installerScript = "#!/bin/sh\nexit 0\n";
+            var installerSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(installerScript))).ToLowerInvariant();
+            var checksumManifest = $"{installerSha256}  install.sh\n";
+            var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            var previousProvenanceVerifier = ProgramRunner.UpgradeAssetProvenanceVerifier;
+            ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
+                new UpgradeAssetResponseHandler(checksumManifest, installerScript, _ => { }))
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+            ProgramRunner.UpgradeAssetProvenanceVerifier = (path, _, _) => Path.GetFileName(path) == "sha256sums.txt";
+
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["upgrade", "--json"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.InstallError, exitCode);
+                Assert.Empty(stderr);
+                using var doc = JsonDocument.Parse(stdout);
+                var root = doc.RootElement;
+                Assert.Equal("strict", root.GetProperty("verification_policy").GetString());
+                Assert.True(root.GetProperty("manifest_provenance_verified").GetBoolean());
+                Assert.False(root.GetProperty("installer_provenance_verified").GetBoolean());
+                Assert.Equal("verification_failed", root.GetProperty("installer_verification_status").GetString());
+                Assert.False(root.GetProperty("install_attempted").GetBoolean());
+                Assert.False(root.TryGetProperty("provenance_audit_code", out _));
+            }
+            finally
+            {
+                ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                ProgramRunner.UpgradeAssetProvenanceVerifier = previousProvenanceVerifier;
+                TestProjectHelper.DeleteDirectory(cacheRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void RunUpgrade_InvalidVerificationPolicyJson_ReturnsStructuredUsageError_Issue4603()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture("CDIDX_VERIFY_POLICY");
+            env.Set("CDIDX_VERIFY_POLICY", "invalid");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["upgrade", "--check-only", "--json", "--version", "v9.9.9"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Empty(stderr);
+            using var doc = JsonDocument.Parse(stdout);
+            var root = doc.RootElement;
+            Assert.Equal("error", root.GetProperty("status").GetString());
+            Assert.Equal(
+                "CDIDX_VERIFY_POLICY must be 'compat' or 'strict' (got 'invalid').",
+                root.GetProperty("message").GetString());
+        }
+    }
+
+    [Fact]
+    public void RunUpgrade_CompatPolicy_AllowsFailedProvenanceWithAuditWarning_Issue4603()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                "XDG_CACHE_HOME",
+                UpdateChecker.DisableEnvVar,
+                "CDIDX_VERIFY_POLICY");
+            var cacheRoot = TestProjectHelper.CreateTempProject("cdidx_update_cache");
+            env.Set("XDG_CACHE_HOME", cacheRoot);
+            env.Set(UpdateChecker.DisableEnvVar, null);
+            env.Set("CDIDX_VERIFY_POLICY", "compat");
+            WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
+
+            var installerScript = "#!/bin/sh\nexit 0\n";
+            var installerSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(installerScript))).ToLowerInvariant();
+            var checksumManifest = $"{installerSha256}  install.sh\n";
+            var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            var previousProvenanceVerifier = ProgramRunner.UpgradeAssetProvenanceVerifier;
+            ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
+                new UpgradeAssetResponseHandler(checksumManifest, installerScript, _ => { }))
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+            ProgramRunner.UpgradeAssetProvenanceVerifier = (_, _, _) => false;
+
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["upgrade"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Empty(stdout);
+                Assert.Contains("AUDIT: CDIDX_VERIFY_POLICY=compat permits sha256sums.txt", stderr);
+                Assert.Contains("AUDIT: CDIDX_VERIFY_POLICY=compat permits install.sh", stderr);
+            }
+            finally
+            {
+                ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                ProgramRunner.UpgradeAssetProvenanceVerifier = previousProvenanceVerifier;
+                TestProjectHelper.DeleteDirectory(cacheRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void RunUpgrade_CompatJson_ReportsProvenanceBypass_Issue4603()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                "XDG_CACHE_HOME",
+                UpdateChecker.DisableEnvVar,
+                "CDIDX_VERIFY_POLICY");
+            var cacheRoot = TestProjectHelper.CreateTempProject("cdidx_update_cache");
+            env.Set("XDG_CACHE_HOME", cacheRoot);
+            env.Set(UpdateChecker.DisableEnvVar, null);
+            env.Set("CDIDX_VERIFY_POLICY", "compat");
+            WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
+
+            var installerScript = "#!/bin/sh\nexit 0\n";
+            var installerSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(installerScript))).ToLowerInvariant();
+            var checksumManifest = $"{installerSha256}  install.sh\n";
+            var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            var previousProvenanceVerifier = ProgramRunner.UpgradeAssetProvenanceVerifier;
+            ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
+                new UpgradeAssetResponseHandler(checksumManifest, installerScript, _ => { }))
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+            ProgramRunner.UpgradeAssetProvenanceVerifier = (_, _, _) => false;
+
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["upgrade", "--json"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Empty(stderr);
+                using var doc = JsonDocument.Parse(stdout);
+                var root = doc.RootElement;
+                Assert.Equal("compat", root.GetProperty("verification_policy").GetString());
+                Assert.False(root.GetProperty("manifest_provenance_verified").GetBoolean());
+                Assert.False(root.GetProperty("installer_provenance_verified").GetBoolean());
+                Assert.Equal("compat_bypass", root.GetProperty("installer_verification_status").GetString());
+                Assert.Equal("compat_provenance_bypass", root.GetProperty("provenance_audit_code").GetString());
+            }
+            finally
+            {
+                ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                ProgramRunner.UpgradeAssetProvenanceVerifier = previousProvenanceVerifier;
                 TestProjectHelper.DeleteDirectory(cacheRoot);
             }
         }
@@ -2713,6 +2998,7 @@ exit 0
             var installerSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(installerScript))).ToLowerInvariant();
             var checksumManifest = $"{installerSha256}  install.sh\n";
             var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            var previousProvenanceVerifier = ProgramRunner.UpgradeAssetProvenanceVerifier;
             ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
                 new UpgradeAssetResponseHandler(
                     checksumManifest,
@@ -2721,6 +3007,7 @@ exit 0
             {
                 Timeout = Timeout.InfiniteTimeSpan,
             };
+            ProgramRunner.UpgradeAssetProvenanceVerifier = (_, _, _) => true;
 
             try
             {
@@ -2740,10 +3027,16 @@ exit 0
                 Assert.True(root.GetProperty("install_attempted").GetBoolean());
                 Assert.Equal(CommandExitCodes.Success, root.GetProperty("install_exit_code").GetInt32());
                 Assert.True(root.GetProperty("install_succeeded").GetBoolean());
+                Assert.Equal("strict", root.GetProperty("verification_policy").GetString());
+                Assert.True(root.GetProperty("manifest_provenance_verified").GetBoolean());
+                Assert.True(root.GetProperty("installer_provenance_verified").GetBoolean());
+                Assert.Equal("verified", root.GetProperty("installer_verification_status").GetString());
+                Assert.False(root.TryGetProperty("provenance_audit_code", out _));
             }
             finally
             {
                 ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                ProgramRunner.UpgradeAssetProvenanceVerifier = previousProvenanceVerifier;
                 TestProjectHelper.DeleteDirectory(cacheRoot);
             }
         }
@@ -2776,6 +3069,7 @@ exit 7
             var installerSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(installerScript))).ToLowerInvariant();
             var checksumManifest = $"{installerSha256}  install.sh\n";
             var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            var previousProvenanceVerifier = ProgramRunner.UpgradeAssetProvenanceVerifier;
             ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
                 new UpgradeAssetResponseHandler(
                     checksumManifest,
@@ -2784,6 +3078,7 @@ exit 7
             {
                 Timeout = Timeout.InfiniteTimeSpan,
             };
+            ProgramRunner.UpgradeAssetProvenanceVerifier = (_, _, _) => true;
 
             try
             {
@@ -2807,6 +3102,7 @@ exit 7
             finally
             {
                 ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                ProgramRunner.UpgradeAssetProvenanceVerifier = previousProvenanceVerifier;
                 TestProjectHelper.DeleteDirectory(cacheRoot);
             }
         }
@@ -2830,6 +3126,7 @@ exit 7
             var installerSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(installerScript))).ToLowerInvariant();
             var checksumManifest = $"{installerSha256}  install.sh\n";
             var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            var previousProvenanceVerifier = ProgramRunner.UpgradeAssetProvenanceVerifier;
             var previousDelete = ProgramRunner.DeleteUpgradeInstallerScriptForTesting;
             ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
                 new UpgradeAssetResponseHandler(
@@ -2839,6 +3136,7 @@ exit 7
             {
                 Timeout = Timeout.InfiniteTimeSpan,
             };
+            ProgramRunner.UpgradeAssetProvenanceVerifier = (_, _, _) => true;
             ProgramRunner.DeleteUpgradeInstallerScriptForTesting = _ => throw new IOException("delete denied");
 
             try
@@ -2856,6 +3154,7 @@ exit 7
             finally
             {
                 ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                ProgramRunner.UpgradeAssetProvenanceVerifier = previousProvenanceVerifier;
                 ProgramRunner.DeleteUpgradeInstallerScriptForTesting = previousDelete;
                 TestProjectHelper.DeleteDirectory(cacheRoot);
             }
@@ -2880,6 +3179,7 @@ exit 7
             var installerSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(installerScript))).ToLowerInvariant();
             var checksumManifest = $"{installerSha256}  install.sh\n";
             var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            var previousProvenanceVerifier = ProgramRunner.UpgradeAssetProvenanceVerifier;
             var previousDelete = ProgramRunner.DeleteUpgradeInstallerDirectoryForTesting;
             string? cleanupDirectory = null;
             ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
@@ -2890,6 +3190,7 @@ exit 7
             {
                 Timeout = Timeout.InfiniteTimeSpan,
             };
+            ProgramRunner.UpgradeAssetProvenanceVerifier = (_, _, _) => true;
             ProgramRunner.DeleteUpgradeInstallerDirectoryForTesting = path =>
             {
                 cleanupDirectory = path;
@@ -2913,6 +3214,7 @@ exit 7
             finally
             {
                 ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                ProgramRunner.UpgradeAssetProvenanceVerifier = previousProvenanceVerifier;
                 ProgramRunner.DeleteUpgradeInstallerDirectoryForTesting = previousDelete;
                 if (cleanupDirectory != null)
                     TestProjectHelper.DeleteDirectory(cleanupDirectory);
@@ -2973,8 +3275,12 @@ exit 7
             Assert.Equal("explicit_version", root.GetProperty("selection_source").GetString());
             Assert.True(root.GetProperty("include_prerelease").GetBoolean());
             Assert.False(root.GetProperty("install_attempted").GetBoolean());
-            Assert.Equal("same_release_sha256_manifest", root.GetProperty("installer_verification").GetString());
-            Assert.Contains("same GitHub release asset namespace", root.GetProperty("installer_trust_boundary").GetString(), StringComparison.Ordinal);
+            Assert.Equal("github_attestation_and_sha256_manifest", root.GetProperty("installer_verification").GetString());
+            Assert.Contains("pinned CodeIndex release workflow and selected tag", root.GetProperty("installer_trust_boundary").GetString(), StringComparison.Ordinal);
+            Assert.Equal("strict", root.GetProperty("verification_policy").GetString());
+            Assert.Equal("not_attempted", root.GetProperty("installer_verification_status").GetString());
+            Assert.False(root.TryGetProperty("manifest_provenance_verified", out _));
+            Assert.False(root.TryGetProperty("installer_provenance_verified", out _));
         }
     }
 

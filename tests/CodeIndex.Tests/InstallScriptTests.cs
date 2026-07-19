@@ -1432,7 +1432,9 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Equal(0, exitCode);
         Assert.Empty(stderr);
         Assert.Contains("Verifying GitHub provenance attestation for CodeIndex-linux-x64.tar.gz", stdout);
-        Assert.Equal($"attestation verify {artifactPath} -R Widthdom/CodeIndex{Environment.NewLine}", File.ReadAllText(logPath));
+        Assert.Equal(
+            $"attestation verify {artifactPath} -R Widthdom/CodeIndex --signer-workflow github.com/Widthdom/CodeIndex/.github/workflows/release.yml --source-ref refs/tags/v1.0.0{Environment.NewLine}",
+            File.ReadAllText(logPath));
     }
 
     [ProductionCliFact]
@@ -1463,6 +1465,41 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Verifying GitHub provenance attestation for sha256sums.txt", stdout);
         Assert.DoesNotContain("UNREACHABLE", stdout);
         Assert.Contains("GitHub provenance attestation verification failed for sha256sums.txt", stderr);
+    }
+
+    [ProductionCliFact]
+    public void VerificationPolicy_DefaultStrictWithoutGhOrPinnedSigner_FailsClosed_Issue4603()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var artifactPath = Path.Combine(_tempRoot, "sha256sums.txt");
+        File.WriteAllText(artifactPath, "checksums");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            command() {
+                if [ "${1:-}" = "-v" ] && [ "${2:-}" = "gh" ]; then
+                    return 1
+                fi
+                builtin command "$@"
+            }
+
+            verify_release_attestation "{{artifactPath}}" "sha256sums.txt"
+            enforce_manifest_provenance
+            echo "UNREACHABLE"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_VERIFY_POLICY"] = "strict",
+                ["CDIDX_TEST_ENABLE_ATTESTATION"] = "1",
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("UNREACHABLE", stdout);
+        Assert.Contains("'gh' command not found", stderr);
+        Assert.Contains("Independent provenance verification failed for sha256sums.txt", stderr);
     }
 
     [ProductionCliTheory]
@@ -3334,14 +3371,14 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [ProductionCliFact]
-    public void VerificationPolicy_StrictEnablesAttestationAndStrictGpg()
+    public void VerificationPolicy_StrictRequiresIndependentManifestProvenance_Issue4603()
     {
         if (OperatingSystem.IsWindows())
             return;
 
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
-            printf 'policy=%s attestation=%s strict=%s\n' "$VERIFY_POLICY" "$REQUIRE_ATTESTATION" "$STRICT_VERIFY"
+            printf 'policy=%s provenance=%s attestation=%s strict=%s\n' "$VERIFY_POLICY" "$REQUIRE_RELEASE_PROVENANCE" "$REQUIRE_ATTESTATION" "$STRICT_VERIFY"
             """,
             new Dictionary<string, string?>
             {
@@ -3350,7 +3387,25 @@ public sealed class InstallScriptTests : IDisposable
 
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, stderr);
-        Assert.Contains("policy=strict attestation=1 strict=1", stdout);
+        Assert.Contains("policy=strict provenance=1 attestation=0 strict=0", stdout);
+    }
+
+    [ProductionCliFact]
+    public void VerificationPolicy_CompatIsExplicitAuditedOptIn_Issue4603()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            MANIFEST_PROVENANCE_VERIFIED=0
+            enforce_manifest_provenance
+            echo "CONTINUED"
+            """);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("CONTINUED", stdout);
+        Assert.Contains("AUDIT: CDIDX_VERIFY_POLICY=compat", stderr);
     }
 
     [ProductionCliFact]
@@ -3375,7 +3430,7 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [ProductionCliFact]
-    public void VerifyChecksumSignature_StrictPolicyWithoutFingerprint_FailsClosed()
+    public void VerificationPolicy_StrictWithoutAttestationOrPinnedSigner_FailsClosed_Issue4603()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -3393,6 +3448,7 @@ public sealed class InstallScriptTests : IDisposable
             }
 
             verify_checksum_signature "{{checksumsPath}}" "{{signaturePath}}"
+            enforce_manifest_provenance
             echo "UNREACHABLE"
             """,
             new Dictionary<string, string?>
@@ -3404,7 +3460,8 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Equal(1, exitCode);
         Assert.Contains("Verifying checksum signature", stdout);
         Assert.DoesNotContain("UNREACHABLE", stdout);
-        Assert.Contains("no expected release signer fingerprint is configured", stderr);
+        Assert.Contains("no expected release signing fingerprint is configured", stderr);
+        Assert.Contains("Independent provenance verification failed for sha256sums.txt", stderr);
     }
 
     [ProductionCliFact]
@@ -3458,7 +3515,8 @@ public sealed class InstallScriptTests : IDisposable
             }
 
             verify_checksum_signature "{{checksumsPath}}" "{{signaturePath}}"
-            echo "VERIFIED"
+            enforce_manifest_provenance
+            printf 'VERIFIED:%s\n' "$MANIFEST_PROVENANCE_VERIFIED"
             """,
             new Dictionary<string, string?>
             {
@@ -3467,7 +3525,7 @@ public sealed class InstallScriptTests : IDisposable
 
         Assert.Equal(0, exitCode);
         Assert.Contains("Verifying checksum signature", stdout);
-        Assert.Contains("VERIFIED", stdout);
+        Assert.Contains("VERIFIED:1", stdout);
         Assert.Equal(string.Empty, stderr);
     }
 
@@ -6462,7 +6520,11 @@ public sealed class InstallScriptTests : IDisposable
                 #!/usr/bin/env bash
                 {{(enforceStrictMode ? "set -euo pipefail" : "")}}
                 export CDIDX_INSTALL_SH_LIB_ONLY=1
+                export CDIDX_VERIFY_POLICY="${CDIDX_VERIFY_POLICY:-compat}"
                 source "{{GetInstallScriptPath()}}"
+                if [ "$VERIFY_POLICY" = "compat" ]; then
+                    MANIFEST_PROVENANCE_VERIFIED=1
+                fi
                 make_payload_archive() {
                     local payload_dir="$1"
                     local archive_path="$2"

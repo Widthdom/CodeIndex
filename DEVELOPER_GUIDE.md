@@ -564,7 +564,7 @@ On startup, `cdidx` walks up from the current directory looking for `.cdidx-vers
 
 ### Release freshness and upgrade checks
 
-`cdidx --check-updates` and `cdidx status --check-updates` query the GitHub latest-release endpoint through `UpdateChecker`, using the same 24-hour cache and `CDIDX_DISABLE_UPDATE_CHECK=1` opt-out as the `--version` hint. `cdidx upgrade --check-only` reuses that check. `cdidx upgrade` is intentionally a thin wrapper around the signed release installer: it downloads `install.sh`, verifies the current binary directory is writable, sets `CDIDX_INSTALL_DIR` to that directory, and runs the installer for the latest release.
+`cdidx --check-updates` and `cdidx status --check-updates` query the GitHub latest-release endpoint through `UpdateChecker`, using the same 24-hour cache and `CDIDX_DISABLE_UPDATE_CHECK=1` opt-out as the `--version` hint. `cdidx upgrade --check-only` reuses that check. `cdidx upgrade` is intentionally a thin wrapper around the signed release installer: it downloads `sha256sums.txt` and `install.sh` into a private temporary directory, independently verifies both exact files with `gh attestation verify` pinned to `github.com/Widthdom/CodeIndex/.github/workflows/release.yml` and `refs/tags/<selected-version>`, and only then trusts the manifest checksum and starts the installer. Missing or failed provenance blocks execution by default; `CDIDX_VERIFY_POLICY=compat` is the explicit audited opt-in. Upgrade JSON distinguishes the mechanism from the observed result through `verification_policy`, `manifest_provenance_verified`, `installer_provenance_verified`, `installer_verification_status`, and `provenance_audit_code`; check-only reports `not_attempted`, success reports `verified`, a strict blocked failure reports `verification_failed`, and a compat bypass reports `compat_bypass` plus `compat_provenance_bypass`. Invalid policy values return the normal structured usage-error JSON when `--json` is selected. After verification, the command checks that the current binary directory is writable, sets `CDIDX_INSTALL_DIR` to that directory, and runs the selected release installer.
 
 Upgrade installer and git subprocesses scrub the inherited process environment
 before launch. They forward only the shared subprocess allowlist needed for
@@ -1839,9 +1839,14 @@ What `install.sh` does, in order (see `install.sh`):
    are also treated as replacements, which is the desired behaviour.
 5. **Download.** Fetches `CodeIndex-<rid>.tar.gz` and `sha256sums.txt`
    into a `mktemp -d` directory trap-cleaned on exit.
-6. **Verify.** Computes SHA256 via `sha256sum` / `shasum` / `openssl`
-   (whichever is present) and compares against the signed checksum file.
-   A mismatch aborts before any file is placed into `INSTALL_DIR`.
+6. **Verify provenance, then checksum.** The default strict policy requires
+   either a GitHub attestation for `sha256sums.txt` or a valid GPG signature
+   whose signer matches `CDIDX_RELEASE_GPG_FINGERPRINT`. Only after that
+   independent proof succeeds does the installer trust the manifest, compute
+   SHA256 via `sha256sum` / `shasum` / `openssl`, and compare the archive.
+   `CDIDX_VERIFY_POLICY=compat` is an explicit audited opt-in that warns before
+   continuing without provenance. Any checksum mismatch still aborts before
+   files are placed into `INSTALL_DIR`.
 7. **Extract into a dedicated subdirectory.** `tar xzf … -C
    ${tmpdir}/extract` so the unpacked payload does not mix with the
    downloaded archive or checksum file.
@@ -3364,9 +3369,20 @@ release 間で異なる場合に、team の binary version を揃えるために
 `cdidx --check-updates` と `cdidx status --check-updates` は、`--version` の hint と同じ
 24-hour cache と `CDIDX_DISABLE_UPDATE_CHECK=1` opt-out を使って GitHub latest-release
 endpoint を確認します。`cdidx upgrade --check-only` はこの check を再利用します。
-`cdidx upgrade` は signed release installer の薄い wrapper で、`install.sh` を download し、
-現在の binary directory が writable か確認し、`CDIDX_INSTALL_DIR` をその directory に向けて
-latest release の installer を実行します。
+`cdidx upgrade` は signed release installer の薄い wrapper で、`sha256sums.txt` と
+`install.sh` を private temp directory に download し、両方の exact file を
+`github.com/Widthdom/CodeIndex/.github/workflows/release.yml` と
+`refs/tags/<selected-version>` に固定した `gh attestation verify` で独立に検証してから
+manifest checksum を信頼し installer を起動します。既定では verifier 欠如または
+provenance 失敗時に実行を拒否し、`CDIDX_VERIFY_POLICY=compat` だけが監査対象の明示的
+opt-in です。upgrade JSON は `verification_policy`、`manifest_provenance_verified`、
+`installer_provenance_verified`、`installer_verification_status`、
+`provenance_audit_code` で method と実測結果を分離し、check-only は `not_attempted`、
+成功は `verified`、strict で中断した失敗は `verification_failed`、compat bypass は
+`compat_bypass` と `compat_provenance_bypass` を返します。`--json` 指定時の無効な policy 値は
+通常の構造化 usage-error JSON になります。検証後に current binary directory
+が writable か確認し、`CDIDX_INSTALL_DIR` をその directory に向けて選択した release の
+installer を実行します。
 
 Upgrade installer と git subprocess は、起動前に継承環境を scrub します。
 forward するのは、PATH / home / temp / proxy / certificate 挙動に必要な共有 subprocess
@@ -4548,7 +4564,7 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh 
 3. **バージョン解決。** 明示引数がある場合は `v` プレフィックス付き・無しの両方を受け付ける（`v1.8.0` / `1.8.0`）。引数なしでも GitHub API（`/repos/Widthdom/CodeIndex/releases/latest`）を叩いて latest tag を解決し、`jq` があれば `tag_name` 取得に使い、無ければ portability のため従来どおり `grep` + `sed` にフォールバックする。そのうえで健全な既存 install がその latest tag と一致している場合だけ download を skip する。壊れた `v0.0.0` install や必須隣接資産欠落 install は再インストール対象として扱う。HTTP 失敗も `403` rate limit / `404` / `5xx` / 実際の curl network error を分けて案内する。
 4. **明示バージョン指定時は再インストールまたは切り替えに進む。** 引数なし再実行も latest release を対象にするが、明示ターゲット版では、同版でも必ず再インストールへ進み、別版なら切り替えへ進む。壊れた `v0.0.0` install や、同版でも必須資産が欠けている install も置き換え対象として扱う — これは意図した挙動。
 5. **ダウンロード。** `CodeIndex-<rid>.tar.gz` と `sha256sums.txt` を `mktemp -d` のディレクトリ（trap で自動クリーンアップ）に取得。
-6. **検証。** `sha256sum` / `shasum` / `openssl`（利用可能なもの）で SHA256 を計算し、チェックサムファイルと比較。不一致なら `INSTALL_DIR` に一切ファイルを置かずに中断する。
+6. **provenance を検証してから checksum を検証。** 既定の strict policy は、`sha256sums.txt` の GitHub attestation、または `CDIDX_RELEASE_GPG_FINGERPRINT` と一致する signer の有効な GPG signature のどちらかを必須にする。この独立した proof が成功してから manifest を信頼し、`sha256sum` / `shasum` / `openssl`（利用可能なもの）で archive の SHA256 を比較する。`CDIDX_VERIFY_POLICY=compat` は、provenance が無いまま続行するときに warning を出す、監査対象の明示的 opt-in である。checksum 不一致なら引き続き `INSTALL_DIR` に一切ファイルを置かず中断する。
 7. **専用サブディレクトリへ展開。** `tar xzf … -C ${tmpdir}/extract` で、展開物がダウンロード済みアーカイブやチェックサムと混ざらないようにする。
 8. **コピー前に展開済み payload 全体を検証。** `cdidx`、`version.json`、OS ごとに必須の native SQLite ライブラリ（Linux は `libe_sqlite3.so`、macOS は `libe_sqlite3.dylib`）がすべて揃っていることを確認する。不足があれば `INSTALL_DIR` に触る前に中断するため、健全な install を部分 payload で壊さない。
 9. **staging と swap でバイナリ/隣接資産をまとめて配置。** 上記検証が通ってから、installer は `INSTALL_DIR` 配下の staging ディレクトリへ `cdidx` と必須隣接資産をコピーし、staged binary に `chmod +x` をかける。その後、既存ファイルを backup ディレクトリへ退避し、runtime asset を先に、binary を最後に rename で昇格させる。途中で失敗した場合は backup から rollback するため、健全な install を半更新状態にしない。これにより、見かけ上は成功しても後で `v0.0.0` や `DllNotFoundException` で落ちる半壊れ install を防ぐ。

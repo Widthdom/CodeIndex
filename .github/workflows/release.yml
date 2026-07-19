@@ -47,6 +47,10 @@ jobs:
           set -euo pipefail
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             tag="$INPUT_TAG_NAME"
+            if [ "$REF_TYPE" != "tag" ] || [ "$REF_NAME" != "$tag" ]; then
+              echo "Manual releases must run this workflow from the same tag ref requested by tag_name; got ${REF_TYPE}:${REF_NAME} for ${tag}." >&2
+              exit 1
+            fi
           else
             if [ "$REF_TYPE" != "tag" ]; then
               echo "Release workflow must run from a tag ref, got ${REF_TYPE}:${REF_NAME}." >&2
