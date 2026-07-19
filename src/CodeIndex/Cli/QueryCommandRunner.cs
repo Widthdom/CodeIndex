@@ -36,6 +36,11 @@ public static partial class QueryCommandRunner
     // OR 結合の `symbols` 名は SQLite の式木深さ上限 1000 を十分下回る値で頭打ちにし、
     // 大量バッチを SQLite 例外ではなく明確な usage error で早期に弾く。
     internal const int MaxSymbolQueryNames = 256;
+    // Dependency filters are expanded into OR-joined SQLite predicates. Keep the combined
+    // exact/family count comfortably below SQLite's expression-tree depth limit.
+    // dependency filter は OR 結合の SQLite 条件へ展開されるため、exact/family の合計を
+    // SQLite の式木深さ上限より十分小さい値に制限する。
+    internal const int MaxDependencySymbolFilterCount = 256;
     internal const int MaxMapSectionsCsvLength = 256;
     internal const int MaxMapSectionsCsvEntries = 16;
     internal const int MaxInspectFieldsCsvLength = 256;

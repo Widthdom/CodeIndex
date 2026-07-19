@@ -5415,6 +5415,51 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("ordered cross-database pairs", stderr);
     }
 
+    [Fact]
+    public void RunDeps_DependencySymbolFiltersAtCombinedLimitExecuteSuccessfully_Issue4619()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_symbol_filter_limit");
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        InsertFileWithReference(dbPath, "src/Caller.cs", "MatchedSymbol");
+        InsertFileWithSymbol(dbPath, "src/Target.cs", "MatchedSymbol");
+        MarkDependencyGraphReady(dbPath);
+
+        var args = new List<string> { "--db", dbPath, "--json", "--limit", "1", "--lang", "csharp" };
+        for (var i = 0; i < QueryCommandRunner.MaxDependencySymbolFilterCount / 2; i++)
+            args.AddRange(["--symbol", i == 0 ? "MatchedSymbol" : $"MissingSymbol{i}"]);
+        for (var i = 0; i < QueryCommandRunner.MaxDependencySymbolFilterCount / 2; i++)
+            args.AddRange(["--symbol-family", $"MissingFamily{i}."]);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            args.ToArray(),
+            _jsonOptions));
+
+        using var document = ParseJsonOutput(stdout);
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
+    }
+
+    [Fact]
+    public void RunDeps_DependencySymbolFiltersAboveCombinedLimitReturnUsageError_Issue4619()
+    {
+        var args = new List<string> { "--db", "definitely-missing.db", "--json" };
+        for (var i = 0; i <= QueryCommandRunner.MaxDependencySymbolFilterCount / 2; i++)
+            args.AddRange(["--symbol", $"Symbol{i}"]);
+        for (var i = 0; i < QueryCommandRunner.MaxDependencySymbolFilterCount / 2; i++)
+            args.AddRange(["--symbol-family", $"Family{i}."]);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            args.ToArray(),
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains($"deps accepts at most {QueryCommandRunner.MaxDependencySymbolFilterCount} combined --symbol and --symbol-family values", stderr);
+        Assert.DoesNotContain("SQLite", stderr, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static void InsertFileWithSymbol(string dbPath, string path, string symbolName)
         => InsertFileWithSymbols(dbPath, path, [symbolName]);
 
