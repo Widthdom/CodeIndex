@@ -555,6 +555,12 @@ internal sealed record LanguagesJsonResult(
     [property: JsonPropertyName("languages")] List<LanguageEntryJsonResult> Languages,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
+internal sealed record IndexLanguageDetectionJsonResult(
+    [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("language")] string Language,
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("confidence")] string Confidence);
+
 internal sealed class IndexDryRunJsonResult : IVersionedJsonResult
 {
     public string ApiVersion { get; init; } = JsonOutputContract.ApiVersion;
@@ -577,6 +583,10 @@ internal sealed class IndexDryRunJsonResult : IVersionedJsonResult
     public bool FileSamplesTruncated { get; init; }
     public int FileSampleLimit { get; init; }
     public Dictionary<string, int> Languages { get; init; } = new();
+    public int LanguageDetectionsTotal { get; init; }
+    public List<IndexLanguageDetectionJsonResult>? LanguageDetections { get; init; }
+    public bool LanguageDetectionsTruncated { get; init; }
+    public int LanguageDetectionLimit { get; init; }
     public int ErrorsTotal { get; init; }
     public List<CliJsonMessage>? Errors { get; init; }
     public bool ErrorsTruncated { get; init; }

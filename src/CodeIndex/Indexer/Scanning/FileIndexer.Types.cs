@@ -39,6 +39,24 @@ public partial class FileIndexer
         LanguageDetectionSource? Source = null,
         LanguageDetectionConfidence? Confidence = null);
 
+    internal static string GetLanguageDetectionSourceCode(LanguageDetectionSource source) => source switch
+    {
+        LanguageDetectionSource.HeaderLexicalMarker => "header_lexical_marker",
+        LanguageDetectionSource.HeaderSampledLexicalMarker => "header_sampled_lexical_marker",
+        LanguageDetectionSource.HeaderLexicalFallback => "header_lexical_fallback",
+        LanguageDetectionSource.HeaderSampledLexicalFallback => "header_sampled_lexical_fallback",
+        LanguageDetectionSource.HeaderExtensionFallback => "header_extension_fallback",
+        _ => throw new ArgumentOutOfRangeException(nameof(source), source, null),
+    };
+
+    internal static string GetLanguageDetectionConfidenceCode(LanguageDetectionConfidence confidence) => confidence switch
+    {
+        LanguageDetectionConfidence.High => "high",
+        LanguageDetectionConfidence.Medium => "medium",
+        LanguageDetectionConfidence.Low => "low",
+        _ => throw new ArgumentOutOfRangeException(nameof(confidence), confidence, null),
+    };
+
     public enum ScanIssueSeverity
     {
         Warning,

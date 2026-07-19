@@ -9,4 +9,5 @@ internal readonly record struct LoadedFileRecord(
     bool HasOversizeLine,
     int ConflictMarkerLine,
     string? Warning,
-    FileContentInspection Inspection);
+    FileContentInspection Inspection,
+    FileIndexer.LanguageDetectionResult LanguageDetection);

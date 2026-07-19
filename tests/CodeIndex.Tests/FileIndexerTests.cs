@@ -1931,7 +1931,7 @@ public partial class FileIndexerTests
     }
 
     [Fact]
-    public void TryDetectLanguage_CppHeaderLexicalDetectionMasksNonCodeAndSamplesBeyondBudget()
+    public void TryDetectLanguage_CppHeaderLexicalDetectionMasksCommentsStringsAndSplicedLines()
     {
         AssertHeaderDetection(
             null,
@@ -1965,18 +1965,18 @@ public partial class FileIndexerTests
             FileIndexer.LanguageDetectionSource.HeaderLexicalFallback,
             FileIndexer.LanguageDetectionConfidence.Low);
 
-        var longLicensePrefix = string.Concat(Enumerable.Repeat("// Licensed material for strategic sampling.\n", 1_800));
-        var cSuffix = string.Concat(Enumerable.Repeat("int legacy_padding_value_for_sampling;\n", 1_800));
-        var longLicenseHeader = longLicensePrefix + """
-            namespace sampled {
-            template <typename T> class BeyondLegacyLineCutoff {};
-            }
-            """ + cSuffix;
+        const string splicedNonCodeHeader = """
+            const char *message = "text \
+            namespace string_phantom";
+            // comment continues through translation-phase splicing \
+            class CommentPhantom {};
+            typedef struct real_c_type { int value; } real_c_type;
+            """;
         AssertHeaderDetection(
-            longLicenseHeader,
-            "cpp",
-            FileIndexer.LanguageDetectionSource.HeaderSampledLexicalMarker,
-            FileIndexer.LanguageDetectionConfidence.Medium);
+            splicedNonCodeHeader,
+            "c",
+            FileIndexer.LanguageDetectionSource.HeaderLexicalFallback,
+            FileIndexer.LanguageDetectionConfidence.Low);
 
         const string mixedHeader = """
             typedef struct legacy_point { int x; int y; } legacy_point;
@@ -1991,20 +1991,85 @@ public partial class FileIndexerTests
             "cpp",
             FileIndexer.LanguageDetectionSource.HeaderLexicalMarker,
             FileIndexer.LanguageDetectionConfidence.High);
+    }
 
-        static void AssertHeaderDetection(
-            string? content,
-            string expectedLanguage,
-            FileIndexer.LanguageDetectionSource expectedSource,
-            FileIndexer.LanguageDetectionConfidence expectedConfidence)
-        {
-            var detection = FileIndexer.TryDetectLanguage("sample.h", content);
+    [Fact]
+    public void TryDetectLanguage_CppHeaderStrategicSamplingTracksLexicalStateAndUtf8Bytes()
+    {
+        var longLicensePrefix = string.Concat(Enumerable.Repeat("// Licensed material for strategic sampling.\n", 1_800));
+        var cSuffix = string.Concat(Enumerable.Repeat("int legacy_padding_value_for_sampling;\n", 1_800));
+        var longLicenseHeader = longLicensePrefix + """
+            namespace sampled {
+            template <typename T> class BeyondLegacyLineCutoff {};
+            }
+            """ + cSuffix;
+        AssertHeaderDetection(
+            longLicenseHeader,
+            "cpp",
+            FileIndexer.LanguageDetectionSource.HeaderSampledLexicalMarker,
+            FileIndexer.LanguageDetectionConfidence.Medium);
 
-            Assert.Equal(FileIndexer.FileProbeStatus.Supported, detection.Status);
-            Assert.Equal(expectedLanguage, detection.Language);
-            Assert.Equal(expectedSource, detection.Source);
-            Assert.Equal(expectedConfidence, detection.Confidence);
-        }
+        var longBlockCommentHeader = "/*" + new string('x', 55_000)
+            + "\nnamespace block_comment_phantom { class Phantom {}; }\n"
+            + new string('x', 55_000) + "*/\nstruct real_c_type { int value; };\n";
+        AssertHeaderDetection(
+            longBlockCommentHeader,
+            "c",
+            FileIndexer.LanguageDetectionSource.HeaderSampledLexicalFallback,
+            FileIndexer.LanguageDetectionConfidence.Low);
+
+        var longRawStringHeader = "const char *text = R\"tag(" + new string('x', 55_000)
+            + "\nnamespace raw_string_phantom { class Phantom {}; }\n"
+            + new string('x', 55_000) + ")tag\";\nstruct real_c_type { int value; };\n";
+        AssertHeaderDetection(
+            longRawStringHeader,
+            "c",
+            FileIndexer.LanguageDetectionSource.HeaderSampledLexicalFallback,
+            FileIndexer.LanguageDetectionConfidence.Low);
+
+        var longMacroHeader = "#define PHANTOM_DECL \\\n"
+            + string.Concat(Enumerable.Repeat("    ignored_macro_payload \\\n", 1_600))
+            + "    namespace macro_phantom { class Phantom {}; }\n"
+            + string.Concat(Enumerable.Repeat("int real_c_value;\n", 2_500));
+        AssertHeaderDetection(
+            longMacroHeader,
+            "c",
+            FileIndexer.LanguageDetectionSource.HeaderSampledLexicalFallback,
+            FileIndexer.LanguageDetectionConfidence.Low);
+
+        var singleLineHeader = new string('x', 55_000)
+            + " std::vector<int> sampled_values; "
+            + new string('x', 55_000);
+        AssertHeaderDetection(
+            singleLineHeader,
+            "cpp",
+            FileIndexer.LanguageDetectionSource.HeaderSampledLexicalMarker,
+            FileIndexer.LanguageDetectionConfidence.Medium);
+
+        var multibyteHeader = "/*" + new string('界', 18_000) + "*/\n"
+            + "namespace utf8_sampled { class Utf8Marker {}; }\n"
+            + new string(' ', 18_000);
+        Assert.True(multibyteHeader.Length < 48 * 1024);
+        Assert.True(Encoding.UTF8.GetByteCount(multibyteHeader) > 48 * 1024);
+        AssertHeaderDetection(
+            multibyteHeader,
+            "cpp",
+            FileIndexer.LanguageDetectionSource.HeaderSampledLexicalMarker,
+            FileIndexer.LanguageDetectionConfidence.Medium);
+    }
+
+    private static void AssertHeaderDetection(
+        string? content,
+        string expectedLanguage,
+        FileIndexer.LanguageDetectionSource expectedSource,
+        FileIndexer.LanguageDetectionConfidence expectedConfidence)
+    {
+        var detection = FileIndexer.TryDetectLanguage("sample.h", content);
+
+        Assert.Equal(FileIndexer.FileProbeStatus.Supported, detection.Status);
+        Assert.Equal(expectedLanguage, detection.Language);
+        Assert.Equal(expectedSource, detection.Source);
+        Assert.Equal(expectedConfidence, detection.Confidence);
     }
 
     [Fact]

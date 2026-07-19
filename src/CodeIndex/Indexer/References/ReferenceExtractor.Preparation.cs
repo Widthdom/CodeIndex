@@ -1,3 +1,4 @@
+using System.Text;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -85,7 +86,12 @@ public static partial class ReferenceExtractor
             : (MultilineStringContent: null, BlockComment: null);
         var csharpLinesInsideMultilineStringContent = csharpLineState.MultilineStringContent;
         var csharpLinesInsideBlockComment = csharpLineState.BlockComment;
-        var referenceStructuralLines = language == "pascal"
+        var referenceStructuralLines = language == "cpp"
+            ? SplitContentLines(MaskCppLexicalRanges(
+                maskedContent,
+                [new CppLexicalRange(0, maskedContent.Length)],
+                maskPreprocessorPayloads: false)[0])
+            : language == "pascal"
             ? MaskPascalBlockCommentLines(structuralLines)
             : language == "haskell"
                 ? MaskHaskellBlockCommentLines(structuralLines)
@@ -182,13 +188,258 @@ public static partial class ReferenceExtractor
         return preparedLines ?? referenceStructuralLines;
     }
 
-    internal static string[] MaskCppLexicalLinesForDetection(string[] lines)
+    internal readonly record struct CppLexicalRange(int Start, int End);
+
+    internal static string[] MaskCppLexicalRanges(
+        string content,
+        IReadOnlyList<CppLexicalRange> ranges,
+        bool maskPreprocessorPayloads)
     {
-        var blockCommentMaskedLines = MaskCStyleBlockCommentLines("cpp", lines);
-        return PrepareReferenceLines(
-            "cpp",
-            blockCommentMaskedLines,
-            CreateReferenceLinePrepareOptions("cpp"));
+        if (ranges.Count == 0)
+            return [];
+
+        var builders = new StringBuilder[ranges.Count];
+        var previousEnd = 0;
+        for (var rangeIndex = 0; rangeIndex < ranges.Count; rangeIndex++)
+        {
+            var range = ranges[rangeIndex];
+            if (range.Start < previousEnd || range.Start < 0 || range.End < range.Start || range.End > content.Length)
+                throw new ArgumentOutOfRangeException(nameof(ranges), "C++ lexical ranges must be ordered, non-overlapping, and within content.");
+
+            builders[rangeIndex] = new StringBuilder(range.End - range.Start);
+            previousEnd = range.End;
+        }
+
+        var activeRangeIndex = 0;
+        var inBlockComment = false;
+        var inLineComment = false;
+        var inMaskedDirective = false;
+        var quote = '\0';
+        string? rawStringTerminator = null;
+        var onlyWhitespaceOnLine = true;
+
+        void WriteAt(int contentIndex, bool masked)
+        {
+            while (activeRangeIndex < ranges.Count && contentIndex >= ranges[activeRangeIndex].End)
+                activeRangeIndex++;
+            if (activeRangeIndex >= ranges.Count || contentIndex < ranges[activeRangeIndex].Start)
+                return;
+
+            var ch = content[contentIndex];
+            builders[activeRangeIndex].Append(masked && ch is not ('\r' or '\n') ? ' ' : ch);
+        }
+
+        void WriteRange(int start, int length, bool masked)
+        {
+            for (var offset = 0; offset < length; offset++)
+                WriteAt(start + offset, masked);
+        }
+
+        var index = 0;
+        while (index < content.Length && activeRangeIndex < ranges.Count)
+        {
+            var ch = content[index];
+            var isLineBreak = IsCppPhysicalLineBreak(content, index);
+            var isSplicedLineBreak = isLineBreak && IsCppSplicedLineBreak(content, index);
+
+            if (rawStringTerminator != null)
+            {
+                if (content.AsSpan(index).StartsWith(rawStringTerminator, StringComparison.Ordinal))
+                {
+                    WriteRange(index, rawStringTerminator.Length, masked: true);
+                    index += rawStringTerminator.Length;
+                    rawStringTerminator = null;
+                    continue;
+                }
+
+                WriteAt(index, masked: true);
+                index++;
+                continue;
+            }
+
+            if (inBlockComment)
+            {
+                if (ch == '*' && index + 1 < content.Length && content[index + 1] == '/')
+                {
+                    WriteRange(index, 2, masked: true);
+                    index += 2;
+                    inBlockComment = false;
+                    continue;
+                }
+
+                WriteAt(index, masked: true);
+                if (isLineBreak)
+                    onlyWhitespaceOnLine = true;
+                index++;
+                continue;
+            }
+
+            if (inLineComment)
+            {
+                WriteAt(index, masked: true);
+                if (isLineBreak && !isSplicedLineBreak)
+                {
+                    inLineComment = false;
+                    onlyWhitespaceOnLine = true;
+                }
+                index++;
+                continue;
+            }
+
+            if (quote != '\0')
+            {
+                if (ch == '\\' && index + 1 < content.Length)
+                {
+                    WriteAt(index, masked: true);
+                    if (content[index + 1] == '\r' && index + 2 < content.Length && content[index + 2] == '\n')
+                    {
+                        WriteRange(index + 1, 2, masked: true);
+                        index += 3;
+                    }
+                    else
+                    {
+                        WriteAt(index + 1, masked: true);
+                        index += 2;
+                    }
+                    continue;
+                }
+
+                WriteAt(index, masked: true);
+                if (ch == quote)
+                    quote = '\0';
+                else if (isLineBreak && !isSplicedLineBreak)
+                {
+                    quote = '\0';
+                    onlyWhitespaceOnLine = true;
+                }
+                index++;
+                continue;
+            }
+
+            if (inMaskedDirective)
+            {
+                WriteAt(index, masked: true);
+                if (isLineBreak && !isSplicedLineBreak)
+                {
+                    inMaskedDirective = false;
+                    onlyWhitespaceOnLine = true;
+                }
+                index++;
+                continue;
+            }
+
+            if (isLineBreak)
+            {
+                WriteAt(index, masked: false);
+                if (!isSplicedLineBreak)
+                    onlyWhitespaceOnLine = true;
+                index++;
+                continue;
+            }
+
+            if (onlyWhitespaceOnLine && ch is ' ' or '\t' or '\f' or '\v')
+            {
+                WriteAt(index, masked: false);
+                index++;
+                continue;
+            }
+
+            if (onlyWhitespaceOnLine && ch == '#' && maskPreprocessorPayloads)
+            {
+                inMaskedDirective = true;
+                WriteAt(index, masked: true);
+                index++;
+                continue;
+            }
+
+            if (ch == '/' && index + 1 < content.Length)
+            {
+                if (content[index + 1] == '/')
+                {
+                    WriteRange(index, 2, masked: true);
+                    index += 2;
+                    inLineComment = true;
+                    continue;
+                }
+                if (content[index + 1] == '*')
+                {
+                    WriteRange(index, 2, masked: true);
+                    index += 2;
+                    inBlockComment = true;
+                    continue;
+                }
+            }
+
+            if (TryGetCppRawStringStart(content, index, out var rawTerminator, out var rawOpeningLength))
+            {
+                WriteRange(index, rawOpeningLength, masked: true);
+                index += rawOpeningLength;
+                rawStringTerminator = rawTerminator;
+                onlyWhitespaceOnLine = false;
+                continue;
+            }
+
+            if (ch is '"' or '\'')
+            {
+                quote = ch;
+                onlyWhitespaceOnLine = false;
+                WriteAt(index, masked: true);
+                index++;
+                continue;
+            }
+
+            WriteAt(index, masked: false);
+            onlyWhitespaceOnLine = false;
+            index++;
+        }
+
+        var result = new string[builders.Length];
+        for (var rangeIndex = 0; rangeIndex < builders.Length; rangeIndex++)
+            result[rangeIndex] = builders[rangeIndex].ToString();
+        return result;
+    }
+
+    private static bool IsCppPhysicalLineBreak(string content, int index)
+        => content[index] == '\n' || (content[index] == '\r' && (index + 1 >= content.Length || content[index + 1] != '\n'));
+
+    private static bool IsCppSplicedLineBreak(string content, int index)
+    {
+        var precedingIndex = index - 1;
+        if (content[index] == '\n' && precedingIndex >= 0 && content[precedingIndex] == '\r')
+            precedingIndex--;
+        return precedingIndex >= 0 && content[precedingIndex] == '\\';
+    }
+
+    private static bool TryGetCppRawStringStart(
+        string content,
+        int index,
+        out string terminator,
+        out int openingLength)
+    {
+        terminator = string.Empty;
+        openingLength = 0;
+        if (content[index] != 'R' || index + 1 >= content.Length || content[index + 1] != '"')
+            return false;
+
+        const int maxDelimiterLength = 16;
+        var delimiterStart = index + 2;
+        var delimiterEndLimit = Math.Min(content.Length, delimiterStart + maxDelimiterLength + 1);
+        for (var cursor = delimiterStart; cursor < delimiterEndLimit; cursor++)
+        {
+            var ch = content[cursor];
+            if (ch == '(')
+            {
+                var delimiter = content[delimiterStart..cursor];
+                terminator = ")" + delimiter + "\"";
+                openingLength = cursor - index + 1;
+                return true;
+            }
+
+            if (char.IsWhiteSpace(ch) || ch is '\\' or ')')
+                return false;
+        }
+
+        return false;
     }
 
     private static IReadOnlyDictionary<int, IReadOnlyList<JsTaggedTemplateHit>>? GroupJsTaggedTemplatesByLine(

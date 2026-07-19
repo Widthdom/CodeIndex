@@ -9,6 +9,7 @@ namespace CodeIndex.Cli;
 public static partial class IndexCommandRunner
 {
     internal const int DryRunFileSampleLimit = 100;
+    internal const int DryRunLanguageDetectionLimit = 100;
     internal const int DryRunErrorSampleLimit = 100;
     internal const int DefaultDryRunPathLimit = 100_000;
     internal const int MaxDryRunPathLimit = 1_000_000;
@@ -131,6 +132,8 @@ public static partial class IndexCommandRunner
         var candidatePathsTruncated = false;
         var dryRunPathLimit = options.DryRunPathLimit;
         var langCounts = new Dictionary<string, int>();
+        var languageDetectionSamples = new List<IndexLanguageDetectionJsonResult>();
+        var languageDetectionTotal = 0;
         if (authoritativeFullScan)
         {
             unknownExtensionTotal = dryScanMetadata.UnknownExtensionFiles.Count;
@@ -192,6 +195,18 @@ public static partial class IndexCommandRunner
             }
 
             dryFileCount++;
+            if (probe.DetectionSource is { } detectionSource && probe.DetectionConfidence is { } detectionConfidence)
+            {
+                languageDetectionTotal++;
+                if (languageDetectionSamples.Count < DryRunLanguageDetectionLimit)
+                {
+                    languageDetectionSamples.Add(new IndexLanguageDetectionJsonResult(
+                        displayRelativePath,
+                        probe.Language,
+                        FileIndexer.GetLanguageDetectionSourceCode(detectionSource),
+                        FileIndexer.GetLanguageDetectionConfidenceCode(detectionConfidence)));
+                }
+            }
             retainedRelativePaths.Add(dbRelativePath);
             if (!authoritativeFullScan)
             {
@@ -280,6 +295,10 @@ public static partial class IndexCommandRunner
                 FileSamplesTruncated = candidatePathsTruncated || dryFileCount > dryFileSamples.Count,
                 FileSampleLimit = DryRunFileSampleLimit,
                 Languages = langCounts,
+                LanguageDetectionsTotal = languageDetectionTotal,
+                LanguageDetections = languageDetectionSamples.Count > 0 ? languageDetectionSamples : null,
+                LanguageDetectionsTruncated = languageDetectionTotal > languageDetectionSamples.Count,
+                LanguageDetectionLimit = DryRunLanguageDetectionLimit,
                 ErrorsTotal = errorCount,
                 Errors = errorSamples.Count > 0 ? errorSamples : null,
                 ErrorsTruncated = errorCount > errorSamples.Count,
@@ -297,6 +316,11 @@ public static partial class IndexCommandRunner
             CommandOutputWriter.WriteLine($"  projected purges  {projectedPurges,6}");
             foreach (var (lang, count) in langCounts.OrderByDescending(kv => kv.Value))
                 CommandOutputWriter.WriteLine($"  {lang,-12} {count,6}");
+            foreach (var detection in languageDetectionSamples)
+            {
+                CommandOutputWriter.WriteLine(
+                    $"  header detection {detection.Path}: {detection.Language} ({detection.Source}, confidence {detection.Confidence})");
+            }
         }
         return CommandExitCodes.Success;
     }
@@ -660,7 +684,9 @@ public static partial class IndexCommandRunner
                 record.Checksum,
                 loaded.Warning,
                 Unsupported: false,
-                UnknownExtension: false);
+                UnknownExtension: false,
+                DetectionSource: loaded.LanguageDetection.Source,
+                DetectionConfidence: loaded.LanguageDetection.Confidence);
         }
         catch (Exception ex)
         {
@@ -901,10 +927,12 @@ public static partial class IndexCommandRunner
         string? Checksum,
         string? Error,
         bool Unsupported,
-        bool UnknownExtension)
+        bool UnknownExtension,
+        FileIndexer.LanguageDetectionSource? DetectionSource,
+        FileIndexer.LanguageDetectionConfidence? DetectionConfidence)
     {
-        public static DryRunFileProbe FromError(string message) => new(false, string.Empty, null, message, Unsupported: false, UnknownExtension: false);
-        public static DryRunFileProbe FromUnsupported() => new(false, string.Empty, null, null, Unsupported: true, UnknownExtension: false);
-        public static DryRunFileProbe FromUnknownExtension() => new(false, string.Empty, null, null, Unsupported: false, UnknownExtension: true);
+        public static DryRunFileProbe FromError(string message) => new(false, string.Empty, null, message, Unsupported: false, UnknownExtension: false, null, null);
+        public static DryRunFileProbe FromUnsupported() => new(false, string.Empty, null, null, Unsupported: true, UnknownExtension: false, null, null);
+        public static DryRunFileProbe FromUnknownExtension() => new(false, string.Empty, null, null, Unsupported: false, UnknownExtension: true, null, null);
     }
 }

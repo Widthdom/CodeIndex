@@ -513,54 +513,68 @@ public partial class FileIndexer
 
     private const int CppHeaderDetectionByteBudget = 48 * 1024;
     private const int CppHeaderDetectionSampleByteBudget = CppHeaderDetectionByteBudget / 3;
-    private const int CppHeaderDetectionContextCharacters = 2 * 1024;
 
     private readonly record struct CppHeaderDetectionResult(bool IsCpp, bool UsedStrategicSampling);
 
     private static CppHeaderDetectionResult DetectCppHeaderLanguage(string content)
     {
-        if (FitsUtf8ByteBudget(content, CppHeaderDetectionByteBudget))
-            return new CppHeaderDetectionResult(ContainsCppHeaderMarker(content, firstScoredLine: 0), false);
+        var usedStrategicSampling = !FitsUtf8ByteBudget(content, CppHeaderDetectionByteBudget);
+        IReadOnlyList<ReferenceExtractor.CppLexicalRange> ranges = usedStrategicSampling
+            ? BuildCppHeaderDetectionRanges(content)
+            : [new ReferenceExtractor.CppLexicalRange(0, content.Length)];
+        var maskedSamples = ReferenceExtractor.MaskCppLexicalRanges(
+            content,
+            ranges,
+            maskPreprocessorPayloads: true);
 
-        var approximateScoredCharacters = CppHeaderDetectionSampleByteBudget - CppHeaderDetectionContextCharacters;
-        var scoreTargets = new[]
+        foreach (var maskedSample in maskedSamples)
         {
-            0,
-            Math.Max(0, (content.Length / 2) - (approximateScoredCharacters / 2)),
-            Math.Max(0, content.Length - approximateScoredCharacters),
-        };
-        var sampledStarts = new HashSet<int>();
-
-        foreach (var target in scoreTargets)
-        {
-            var scoreStart = FindLineStartAtOrAfter(content, target);
-            if (scoreStart >= content.Length)
-                continue;
-
-            var contextStart = scoreStart == 0
-                ? 0
-                : FindLineStartAtOrAfter(content, Math.Max(0, scoreStart - CppHeaderDetectionContextCharacters));
-            if (!sampledStarts.Add(contextStart))
-                continue;
-
-            var sampleEnd = AdvanceByUtf8ByteBudget(content, contextStart, CppHeaderDetectionSampleByteBudget);
-            var firstScoredLine = CountNewlines(content.AsSpan(contextStart, scoreStart - contextStart));
-            if (ContainsCppHeaderMarker(content[contextStart..sampleEnd], firstScoredLine))
-                return new CppHeaderDetectionResult(true, true);
+            if (ContainsCppHeaderMarker(maskedSample))
+                return new CppHeaderDetectionResult(true, usedStrategicSampling);
         }
 
-        return new CppHeaderDetectionResult(false, true);
+        return new CppHeaderDetectionResult(false, usedStrategicSampling);
     }
 
-    private static bool ContainsCppHeaderMarker(string content, int firstScoredLine)
+    private static IReadOnlyList<ReferenceExtractor.CppLexicalRange> BuildCppHeaderDetectionRanges(string content)
+    {
+        var midpoint = content.Length / 2;
+        var candidateStarts = new[]
+        {
+            0,
+            RetreatByUtf8ByteBudget(content, midpoint, CppHeaderDetectionSampleByteBudget / 2),
+            RetreatByUtf8ByteBudget(content, content.Length, CppHeaderDetectionSampleByteBudget),
+        };
+        Array.Sort(candidateStarts);
+
+        var mergedRanges = new List<ReferenceExtractor.CppLexicalRange>(candidateStarts.Length);
+        foreach (var start in candidateStarts)
+        {
+            var end = AdvanceByUtf8ByteBudget(content, start, CppHeaderDetectionSampleByteBudget);
+            if (end <= start)
+                continue;
+
+            if (mergedRanges.Count > 0 && start <= mergedRanges[^1].End)
+            {
+                var previous = mergedRanges[^1];
+                mergedRanges[^1] = new ReferenceExtractor.CppLexicalRange(previous.Start, Math.Max(previous.End, end));
+            }
+            else
+            {
+                mergedRanges.Add(new ReferenceExtractor.CppLexicalRange(start, end));
+            }
+        }
+
+        return mergedRanges;
+    }
+
+    private static bool ContainsCppHeaderMarker(string content)
     {
         var lines = content.Split('\n');
-        var maskedLines = ReferenceExtractor.MaskCppLexicalLinesForDetection(lines);
-        MaskCppHeaderPreprocessorPayloads(maskedLines);
 
-        for (var lineIndex = firstScoredLine; lineIndex < maskedLines.Length; lineIndex++)
+        foreach (var maskedLine in lines)
         {
-            var line = maskedLines[lineIndex].AsSpan();
+            var line = maskedLine.AsSpan();
             if (line.Length > 0 && line[^1] == '\r')
                 line = line[..^1];
             if (LooksLikeCppHeaderLine(line))
@@ -568,22 +582,6 @@ public partial class FileIndexer
         }
 
         return false;
-    }
-
-    private static void MaskCppHeaderPreprocessorPayloads(string[] lines)
-    {
-        var inDirectiveContinuation = false;
-        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
-        {
-            var line = lines[lineIndex].AsSpan();
-            var isDirective = inDirectiveContinuation || line.TrimStart().StartsWith("#", StringComparison.Ordinal);
-            if (!isDirective)
-                continue;
-
-            var trimmedLine = line.TrimEnd();
-            inDirectiveContinuation = !trimmedLine.IsEmpty && trimmedLine[^1] == '\\';
-            lines[lineIndex] = string.Empty;
-        }
     }
 
     private static bool FitsUtf8ByteBudget(string content, int byteBudget)
@@ -626,27 +624,43 @@ public partial class FileIndexer
         return index;
     }
 
-    private static int FindLineStartAtOrAfter(string content, int index)
+    private static int RetreatByUtf8ByteBudget(string content, int end, int byteBudget)
     {
-        if (index <= 0)
-            return 0;
-        if (index >= content.Length)
-            return content.Length;
-
-        var newlineIndex = content.IndexOf('\n', index);
-        return newlineIndex < 0 ? content.Length : newlineIndex + 1;
-    }
-
-    private static int CountNewlines(ReadOnlySpan<char> content)
-    {
-        var count = 0;
-        foreach (var ch in content)
+        var byteCount = 0;
+        var index = end;
+        while (index > 0)
         {
-            if (ch == '\n')
-                count++;
+            var charCount = 1;
+            var candidateIndex = index - 1;
+            int currentByteCount;
+            var ch = content[candidateIndex];
+            if (char.IsLowSurrogate(ch) && candidateIndex > 0 && char.IsHighSurrogate(content[candidateIndex - 1]))
+            {
+                currentByteCount = 4;
+                charCount = 2;
+                candidateIndex--;
+            }
+            else if (ch <= 0x7f)
+            {
+                currentByteCount = 1;
+            }
+            else if (ch <= 0x7ff)
+            {
+                currentByteCount = 2;
+            }
+            else
+            {
+                currentByteCount = 3;
+            }
+
+            if (byteCount + currentByteCount > byteBudget)
+                break;
+
+            byteCount += currentByteCount;
+            index -= charCount;
         }
 
-        return count;
+        return index;
     }
 
     private static bool LooksLikeCppHeaderLine(ReadOnlySpan<char> line)
