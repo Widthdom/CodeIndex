@@ -665,6 +665,14 @@ internal sealed class IndexFullScanSummaryJsonResult
     public long ChunksTotal { get; init; }
     public long SymbolsTotal { get; init; }
     public long ReferencesTotal { get; init; }
+    public long FilesExtracted { get; init; }
+    public long FilesPersisted { get; init; }
+    public long ChunksExtracted { get; init; }
+    public long ChunksPersisted { get; init; }
+    public long SymbolsExtracted { get; init; }
+    public long SymbolsPersisted { get; init; }
+    public long ReferencesExtracted { get; init; }
+    public long ReferencesPersisted { get; init; }
     public int FilesScanned { get; init; }
     public int FilesSkipped { get; init; }
     public int FilesPurged { get; init; }
@@ -710,6 +718,9 @@ internal sealed class IndexUpdateJsonResult : IVersionedJsonResult
     public IndexUpdateSummaryJsonResult Summary { get; init; } = new();
     public IndexSymbolKindFilterJsonResult SymbolKindFilter { get; init; } = new();
     public bool GraphTableAvailable { get; init; }
+    public bool GraphDataCurrent { get; init; }
+    public bool IndexComplete { get; init; }
+    public string? ErrorCode { get; init; }
     public bool IssuesTableAvailable { get; init; }
     public bool SqlGraphContractReady { get; init; }
     public string? SqlGraphContractDegradedReason { get; init; }
@@ -729,6 +740,7 @@ internal sealed class IndexUpdateJsonResult : IVersionedJsonResult
     public string? CwdAtFinalize { get; init; }
     public string? CwdDriftNotice { get; init; }
     public List<CliJsonMessage>? Errors { get; init; }
+    public List<StatusIndexFileError>? FileErrors { get; init; }
     public List<CliJsonMessage>? Warnings { get; init; }
     public IndexMemoryTimelineJsonResult? MemoryTimeline { get; init; }
     public long ElapsedMs { get; init; }
@@ -742,6 +754,9 @@ internal sealed class IndexFullScanJsonResult : IVersionedJsonResult
     public IndexFullScanSummaryJsonResult Summary { get; init; } = new();
     public IndexSymbolKindFilterJsonResult SymbolKindFilter { get; init; } = new();
     public bool GraphTableAvailable { get; init; }
+    public bool GraphDataCurrent { get; init; }
+    public bool IndexComplete { get; init; }
+    public string? ErrorCode { get; init; }
     public bool IssuesTableAvailable { get; init; }
     public bool SqlGraphContractReady { get; init; }
     public string? SqlGraphContractDegradedReason { get; init; }
@@ -765,6 +780,7 @@ internal sealed class IndexFullScanJsonResult : IVersionedJsonResult
     public string? CwdAtFinalize { get; init; }
     public string? CwdDriftNotice { get; init; }
     public List<CliJsonMessage>? Errors { get; init; }
+    public List<StatusIndexFileError>? FileErrors { get; init; }
     public List<CliJsonMessage>? Warnings { get; init; }
     public IndexMemoryTimelineJsonResult? MemoryTimeline { get; init; }
     public long ElapsedMs { get; init; }
@@ -896,6 +912,8 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(IndexFreshnessCheckResult))]
 [JsonSerializable(typeof(IndexFullScanJsonResult))]
 [JsonSerializable(typeof(IndexFullScanSummaryJsonResult))]
+[JsonSerializable(typeof(StatusIndexFileError))]
+[JsonSerializable(typeof(List<StatusIndexFileError>))]
 [JsonSerializable(typeof(IndexMemorySampleJsonResult))]
 [JsonSerializable(typeof(IndexMemoryTimelineJsonResult))]
 [JsonSerializable(typeof(IndexUpdateJsonResult))]

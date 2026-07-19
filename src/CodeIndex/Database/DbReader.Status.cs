@@ -130,11 +130,21 @@ public partial class DbReader
             dbSizeBytes,
             dbPragmaSettings.AutoVacuum));
         var lastIndexRun = GetLastIndexRun();
+        var indexCompleteness = TryGetMetaStringInternal(DbContext.IndexCompletenessMetaKey);
+        var indexIncompleteReasons = ParseMetaStringList(TryGetMetaStringInternal(DbContext.IndexIncompleteReasonsMetaKey));
         var batchInProgress = string.Equals(
             TryGetMetaStringInternal(DbContext.BatchInProgressMetaKey),
             "true",
             StringComparison.OrdinalIgnoreCase);
         var lastFailedOrPartialIndexRun = GetLastFailedOrPartialIndexRun(batchInProgress);
+        var indexComplete = !batchInProgress
+            && !string.Equals(indexCompleteness, "incomplete", StringComparison.OrdinalIgnoreCase);
+        if (batchInProgress)
+        {
+            indexIncompleteReasons ??= [];
+            if (!indexIncompleteReasons.Contains("batch_in_progress", StringComparer.Ordinal))
+                indexIncompleteReasons.Add("batch_in_progress");
+        }
 
         var result = new StatusResult
         {
@@ -158,9 +168,12 @@ public partial class DbReader
             Languages = langs,
             SymbolsByLanguage = symbolsByLanguage.Count > 0 ? symbolsByLanguage : null,
             GraphTableAvailable = _hasReferencesTable,
+            GraphDataCurrent = _hasReferencesTable && indexComplete,
             IssuesTableAvailable = _hasIssuesPhysicalTable,
             FileIssuesDataCurrent = _hasIssuesTable,
             MigrationInProgress = batchInProgress,
+            IndexComplete = indexComplete,
+            IndexIncompleteReasons = indexComplete ? null : indexIncompleteReasons,
             HotspotFamilyReady = hotspotFamilySignal.Ready,
             HotspotFamilyDegradedReason = hotspotFamilySignal.DegradedReason,
             LanguageReadiness = languageReadiness.Count > 0 ? languageReadiness : null,

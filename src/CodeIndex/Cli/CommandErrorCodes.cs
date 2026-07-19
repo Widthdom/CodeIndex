@@ -77,4 +77,7 @@ internal static class CommandErrorCodes
 
     /// <summary>Suggestion sidecar storage could not be resolved, created, read, or written safely.</summary>
     public const string SuggestionStoreUnavailable = "E021_SUGGESTION_STORE_UNAVAILABLE";
+
+    /// <summary>Indexing committed a usable but incomplete generation because one or more files failed.</summary>
+    public const string IndexPartial = "E022_INDEX_PARTIAL";
 }

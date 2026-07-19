@@ -1260,11 +1260,18 @@ public class StatusResult
     /// や issues の 0 件は「本当に 0 件」なのか「テーブルが無いから 0 件」なのか区別できない。
     /// </summary>
     public bool GraphTableAvailable { get; set; } = true;
+    [JsonPropertyName("graph_data_current")]
+    public bool GraphDataCurrent { get; set; } = true;
     public bool IssuesTableAvailable { get; set; } = true;
     [JsonPropertyName("file_issues_data_current")]
     public bool FileIssuesDataCurrent { get; set; } = true;
     [JsonPropertyName("migration_in_progress")]
     public bool MigrationInProgress { get; set; }
+    [JsonPropertyName("index_complete")]
+    public bool IndexComplete { get; set; } = true;
+    [JsonPropertyName("index_incomplete_reasons")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? IndexIncompleteReasons { get; set; }
     /// <summary>
     /// True when authoritative cross-file hotspot-family grouping metadata is current for every
     /// marker-capable language currently indexed in this DB. False means `hotspots` can still
@@ -1540,8 +1547,10 @@ public sealed class StatusHeadFreshness
             if (!workspaceCheck.Checked)
                 return "check_unavailable";
             if (!workspaceCheck.MatchesWorkspace)
-                return IsHeadChanged(status, workspaceCheck) ? "head_changed" : "stale";
-            return "fresh";
+                return IsHeadChanged(status, workspaceCheck)
+                    ? "head_changed"
+                    : status.IndexComplete ? "stale" : "stale_and_incomplete";
+            return status.IndexComplete ? "fresh" : "fresh_but_incomplete";
         }
 
         if (status.WorktreeHeadChanged == true)
@@ -1553,6 +1562,8 @@ public sealed class StatusHeadFreshness
 
     private static string? ResolveStateReason(StatusResult status, IndexFreshnessCheckResult? workspaceCheck)
     {
+        if (!status.IndexComplete && workspaceCheck?.Checked == true && workspaceCheck.MatchesWorkspace)
+            return "index_incomplete";
         if (workspaceCheck is not null)
             return string.IsNullOrWhiteSpace(workspaceCheck.Reason) ? null : workspaceCheck.Reason;
         if (status.WorktreeHeadChanged == true)
@@ -1723,6 +1734,26 @@ public sealed class StatusFailedOrPartialIndexRun
     [JsonPropertyName("recovery_hint")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? RecoveryHint { get; set; }
+    [JsonPropertyName("file_errors")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<StatusIndexFileError>? FileErrors { get; set; }
+}
+
+public sealed class StatusIndexFileError
+{
+    public string File { get; set; } = string.Empty;
+    public string Category { get; set; } = string.Empty;
+    public string Phase { get; set; } = string.Empty;
+    public string Detail { get; set; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? Line { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? Column { get; set; }
+}
+
+[JsonSerializable(typeof(List<StatusIndexFileError>))]
+internal sealed partial class StatusMetadataJsonContext : JsonSerializerContext
+{
 }
 
 public sealed class StatusRepairCommand

@@ -3,6 +3,7 @@ using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 
@@ -1703,8 +1704,10 @@ public partial class DbReader
         var reason = TryGetMetaStringInternal(DbContext.LastFailedIndexRunReasonMetaKey);
         var progressPersisted = ParseMetaBool(TryGetMetaStringInternal(DbContext.LastFailedIndexRunProgressPersistedMetaKey));
         var recoveryHint = TryGetMetaStringInternal(DbContext.LastFailedIndexRunRecoveryHintMetaKey);
+        var fileErrors = ParseStatusIndexFileErrors(TryGetMetaStringInternal(DbContext.LastFailedIndexRunFileErrorsMetaKey));
         if (status == null && mode == null && startedAt == null && durationMs == null && filesProcessed == null
-            && filesTotal == null && errorCode == null && reason == null && progressPersisted == null && recoveryHint == null)
+            && filesTotal == null && errorCode == null && reason == null && progressPersisted == null && recoveryHint == null
+            && fileErrors == null)
         {
             return batchInProgress
                 ? new StatusFailedOrPartialIndexRun
@@ -1727,6 +1730,7 @@ public partial class DbReader
             Reason = reason,
             ProgressPersisted = progressPersisted,
             RecoveryHint = recoveryHint,
+            FileErrors = fileErrors,
         };
     }
 
@@ -1861,6 +1865,21 @@ public partial class DbReader
             return null;
 
         return JsonStringListCodec.Deserialize(raw);
+    }
+
+    private static List<StatusIndexFileError>? ParseStatusIndexFileErrors(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+
+        try
+        {
+            return JsonSerializer.Deserialize(raw, StatusMetadataJsonContext.Default.ListStatusIndexFileError);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static long? ParseMetaLong(string? raw)
