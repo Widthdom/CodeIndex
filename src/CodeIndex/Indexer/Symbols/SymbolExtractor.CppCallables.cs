@@ -84,6 +84,7 @@ public static partial class SymbolExtractor
         string Name,
         string? ReturnType,
         string Signature,
+        bool IsExplicitSpecialization,
         int NameLine,
         int StartLine,
         int StartColumn,
@@ -202,6 +203,14 @@ public static partial class SymbolExtractor
         return false;
     }
 
+    private static bool IsCppCallableTypeSymbol(SymbolRecord symbol) =>
+        symbol.Kind is "class" or "struct" or "union"
+        || (symbol.Kind == "specialization"
+            && symbol.Signature is { } signature
+            && (ContainsCppKeyword(signature, "class")
+                || ContainsCppKeyword(signature, "struct")
+                || ContainsCppKeyword(signature, "union")));
+
     private static CppCallableTypeIndex BuildCppCallableTypeIndex(
         IReadOnlyList<SymbolRecord> symbols,
         int lineCount)
@@ -210,7 +219,7 @@ public static partial class SymbolExtractor
         var byLine = new SymbolRecord?[lineCount + 1];
         foreach (var symbol in symbols)
         {
-            if (symbol.Kind is not ("class" or "struct" or "union"))
+            if (!IsCppCallableTypeSymbol(symbol))
                 continue;
 
             byName.TryAdd(symbol.Name, symbol);
@@ -241,6 +250,7 @@ public static partial class SymbolExtractor
     {
         var ranges = symbols
             .Where(static symbol => symbol.Kind is "function" or "specialization"
+                && !IsCppCallableTypeSymbol(symbol)
                 && symbol.BodyStartLine.HasValue
                 && symbol.BodyEndLine.HasValue
                 && symbol.BodyEndLine.Value > symbol.BodyStartLine.Value)
@@ -349,6 +359,7 @@ public static partial class SymbolExtractor
             name,
             ReturnType: null,
             BuildCppCallableSignature(buffer.Raw.AsSpan(0, terminatorIndex + 1)),
+            IsExplicitSpecialization: false,
             NameLine: nameLineIndex + 1,
             StartLine: startLine,
             StartColumn: nameColumn,
@@ -441,7 +452,18 @@ public static partial class SymbolExtractor
                 case ']' when squareDepth > 0:
                     squareDepth--;
                     break;
-                case ';' or '{' or '}' when seenParen && parenDepth == 0 && squareDepth == 0:
+                case '{' when seenParen && parenDepth == 0 && squareDepth == 0:
+                    var snapshot = text.ToString();
+                    if (IsCppRequiresExpressionBrace(snapshot, 0, index))
+                    {
+                        var requiresExpressionEnd = FindCppMatchingDelimiter(snapshot, index, '{', '}');
+                        if (requiresExpressionEnd < 0)
+                            return false;
+                        index = requiresExpressionEnd;
+                        break;
+                    }
+                    return true;
+                case ';' or '}' when seenParen && parenDepth == 0 && squareDepth == 0:
                     return true;
             }
         }
@@ -511,6 +533,12 @@ public static partial class SymbolExtractor
                 continue;
             }
 
+            if (IsCppConversionTypeIdParenthesis(prefix, structural, closeParenIndex))
+            {
+                index = closeParenIndex;
+                continue;
+            }
+
             if (!TryFindCppCallableHeaderTerminator(
                     structural,
                     closeParenIndex + 1,
@@ -550,6 +578,9 @@ public static partial class SymbolExtractor
                 prefix.Name,
                 NormalizeCppCallableMetadata(returnType),
                 signature,
+                IsCppExplicitFunctionSpecialization(
+                    structural.AsSpan(0, index),
+                    prefix),
                 nameLine,
                 startLine,
                 startColumn,
@@ -562,6 +593,54 @@ public static partial class SymbolExtractor
         }
 
         return false;
+    }
+
+    private static bool IsCppConversionTypeIdParenthesis(
+        CppCallablePrefix prefix,
+        string structural,
+        int closeParenIndex)
+    {
+        if (!prefix.Name.StartsWith("operator ", StringComparison.Ordinal)
+            || CppNamedOperatorOverloads.Contains(prefix.Name))
+        {
+            return false;
+        }
+
+        var cursor = closeParenIndex + 1;
+        while (cursor < structural.Length && char.IsWhiteSpace(structural[cursor]))
+            cursor++;
+        return cursor < structural.Length && structural[cursor] == '(';
+    }
+
+    private static bool IsCppExplicitFunctionSpecialization(
+        ReadOnlySpan<char> rawPrefix,
+        CppCallablePrefix prefix)
+    {
+        var cursor = 0;
+        while (cursor < rawPrefix.Length && char.IsWhiteSpace(rawPrefix[cursor]))
+            cursor++;
+        if (!rawPrefix[cursor..].StartsWith("template", StringComparison.Ordinal))
+            return false;
+        cursor += "template".Length;
+        while (cursor < rawPrefix.Length && char.IsWhiteSpace(rawPrefix[cursor]))
+            cursor++;
+        if (cursor >= rawPrefix.Length || rawPrefix[cursor++] != '<')
+            return false;
+        while (cursor < rawPrefix.Length && char.IsWhiteSpace(rawPrefix[cursor]))
+            cursor++;
+        if (cursor >= rawPrefix.Length || rawPrefix[cursor] != '>')
+            return false;
+        if (prefix.QualifiedContainerName != null
+            && string.Equals(prefix.Name, prefix.QualifiedContainerName, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var suffixStart = prefix.NameOffset + prefix.Name.Length;
+        if (suffixStart < 0 || suffixStart > rawPrefix.Length)
+            return false;
+        var suffix = rawPrefix[suffixStart..].Trim();
+        return !suffix.IsEmpty && suffix[0] == '<';
     }
 
     private static bool IsCppOperatorPunctuation(string text, int index)
@@ -903,10 +982,12 @@ public static partial class SymbolExtractor
                 case ']' when squareDepth > 0:
                     squareDepth--;
                     break;
-                case '<' when !IsCppOperatorPunctuation(text, index):
+                case '<' when parenDepth == 0
+                    && squareDepth == 0
+                    && !IsCppOperatorPunctuation(text, index):
                     angleDepth++;
                     break;
-                case '>' when angleDepth > 0:
+                case '>' when parenDepth == 0 && squareDepth == 0 && angleDepth > 0:
                     angleDepth--;
                     break;
                 case ':' when parenDepth == 0 && squareDepth == 0 && angleDepth == 0:
@@ -921,6 +1002,15 @@ public static partial class SymbolExtractor
                     terminator = ';';
                     return true;
                 case '{' when parenDepth == 0 && squareDepth == 0 && angleDepth == 0:
+                    if (IsCppRequiresExpressionBrace(text, startIndex, index))
+                    {
+                        var requiresExpressionEnd = FindCppMatchingDelimiter(text, index, '{', '}');
+                        if (requiresExpressionEnd < 0)
+                            return false;
+                        index = requiresExpressionEnd;
+                        continue;
+                    }
+
                     if (constructorInitializerSeen)
                     {
                         var initializerEnd = FindCppMatchingDelimiter(text, index, '{', '}');
@@ -944,6 +1034,38 @@ public static partial class SymbolExtractor
         }
 
         return false;
+    }
+
+    private static bool IsCppRequiresExpressionBrace(string text, int startIndex, int braceIndex)
+    {
+        var requiresIndex = -1;
+        for (var index = startIndex; index < braceIndex; index++)
+        {
+            if (StartsWithCppKeyword(text, index, "requires"))
+            {
+                requiresIndex = index;
+                index += "requires".Length - 1;
+            }
+        }
+        if (requiresIndex < 0)
+            return false;
+
+        var cursor = requiresIndex + "requires".Length;
+        while (cursor < braceIndex && char.IsWhiteSpace(text[cursor]))
+            cursor++;
+        if (cursor == braceIndex)
+            return true;
+        if (text[cursor] != '(')
+            return false;
+
+        var parameterEnd = FindCppMatchingDelimiter(text, cursor, '(', ')');
+        if (parameterEnd < 0 || parameterEnd >= braceIndex)
+            return false;
+        cursor = parameterEnd + 1;
+        while (cursor < braceIndex && char.IsWhiteSpace(text[cursor]))
+            cursor++;
+        return cursor == braceIndex
+            && ContainsCppKeyword(text.AsSpan(startIndex, requiresIndex - startIndex), "requires");
     }
 
     private static string? TryExtractCppTrailingReturnType(
@@ -1124,8 +1246,13 @@ public static partial class SymbolExtractor
                 existing.StartColumn = candidate.StartColumn;
             }
             existing.EndLine = Math.Max(existing.EndLine, candidate.EndLine);
-            existing.BodyStartLine ??= candidate.BodyStartLine;
-            existing.BodyEndLine ??= candidate.BodyEndLine;
+            if (candidate.BodyEndLine.HasValue
+                && (!existing.BodyEndLine.HasValue
+                    || candidate.BodyEndLine.Value > existing.BodyEndLine.Value))
+            {
+                existing.BodyStartLine = candidate.BodyStartLine;
+                existing.BodyEndLine = candidate.BodyEndLine;
+            }
             existing.ContainerName ??= candidate.ContainerName;
             existing.ContainerKind ??= candidate.ContainerKind;
             extractionState.Record(existing);
@@ -1135,7 +1262,7 @@ public static partial class SymbolExtractor
         var candidateSymbol = new SymbolRecord
         {
             FileId = fileId,
-            Kind = "function",
+            Kind = candidate.IsExplicitSpecialization ? "specialization" : "function",
             Name = candidate.Name,
             Line = candidate.NameLine,
             StartLine = candidate.StartLine,
@@ -1147,6 +1274,7 @@ public static partial class SymbolExtractor
             ReturnType = candidate.ReturnType,
             ContainerName = candidate.ContainerName,
             ContainerKind = candidate.ContainerKind,
+            FamilyKey = candidate.IsExplicitSpecialization ? candidate.Name : null,
         };
         AddSymbolRecord(
             symbols,

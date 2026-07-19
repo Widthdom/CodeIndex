@@ -7673,6 +7673,61 @@ public partial class SymbolExtractorTests
         Assert.DoesNotContain(callables, s => s.Name is "Q_OBJECT" or "Q_PROPERTY");
     }
 
+    [Fact]
+    public void Extract_Cpp_HandlesConstrainedAndSpecializedBalancedDeclarators()
+    {
+        var content = """
+            template <typename T>
+            void constrained(T value) requires requires(T item) {
+                item.run();
+            } {
+                value.run();
+            }
+
+            template <int N>
+            struct Box;
+
+            template <>
+            struct Box<1> {
+                Box() noexcept(1 < 2);
+                ~Box();
+                operator bool() requires (1 < 2);
+                operator decltype(make_value())() const;
+            };
+
+            template <typename T>
+            auto save(T value) -> T;
+
+            template <>
+            auto save<int>
+            (int value) -> int;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        var callables = symbols
+            .Where(s => s.Kind is "function" or "specialization")
+            .ToList();
+
+        var constrained = Assert.Single(callables, s => s.Name == "constrained");
+        Assert.NotNull(constrained.BodyStartLine);
+        Assert.Equal(6, constrained.BodyEndLine);
+        Assert.DoesNotContain(callables, s => s.Name == "run");
+
+        Assert.Contains(callables, s => s.Kind == "function" && s.Name == "Box" && s.ContainerName == "Box");
+        Assert.Contains(callables, s => s.Kind == "function" && s.Name == "~Box" && s.ContainerName == "Box");
+        Assert.Contains(callables, s => s.Kind == "function" && s.Name == "operator bool" && s.ReturnType == "bool");
+        Assert.Contains(
+            callables,
+            s => s.Kind == "function"
+                && s.Name == "operator decltype(make_value())"
+                && s.ReturnType == "decltype(make_value())");
+
+        var specialization = Assert.Single(callables, s => s.Name == "save" && s.Line == 23);
+        Assert.Equal("specialization", specialization.Kind);
+        Assert.Equal("save", specialization.FamilyKey);
+        Assert.Equal("int", specialization.ReturnType);
+    }
+
 #if NET8_0
     [Fact]
 #else
