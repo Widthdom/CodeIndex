@@ -705,6 +705,34 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void DetectLanguage_ExplicitOverrideWinsBuiltInExactPrefixAndExtensionRules_Issue4613()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap_authoritative");
+        LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        try
+        {
+            TestProjectHelper.WriteTextFile(
+                project.Root,
+                LanguageMapOverrides.WorkspaceFileName,
+                "entries:\n"
+                + "- extension: .toml\n  language: exact_override\n"
+                + "- extension: .dev\n  language: prefix_override\n"
+                + "- extension: .cs\n  language: extension_override\n");
+            var exactPath = TestProjectHelper.WriteTextFile(project.Root, "pyproject.toml", "[project]\n");
+            var prefixPath = TestProjectHelper.WriteTextFile(project.Root, "Dockerfile.dev", "FROM scratch\n");
+            var extensionPath = TestProjectHelper.WriteTextFile(project.Root, "Program.cs", "class Program {}\n");
+
+            Assert.Equal("exact_override", FileIndexer.DetectLanguage(exactPath));
+            Assert.Equal("prefix_override", FileIndexer.DetectLanguage(prefixPath));
+            Assert.Equal("extension_override", FileIndexer.DetectLanguage(extensionPath));
+        }
+        finally
+        {
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        }
+    }
+
+    [Fact]
     public void DetectLanguage_ExtensionlessFile_DoesNotLoadLanguageMapOverrides()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap_extensionless");
@@ -828,7 +856,7 @@ public partial class FileIndexerTests
             Assert.True(parentProbeCount > 0);
 
             Assert.Equal("ruby", indexer.TryDetectLanguageForIndexing(childPath).Language);
-            Assert.Equal(parentProbeCount, stampProbeCount);
+            Assert.Equal(parentProbeCount + 1, stampProbeCount);
         }
         finally
         {
@@ -872,6 +900,86 @@ public partial class FileIndexerTests
         finally
         {
             LanguageMapOverrides.ConfigPathStampProbeForTesting = null;
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        }
+    }
+
+    [Fact]
+    public void TryDetectLanguageForIndexing_ProbeFailureBlocksParentOverrideInheritance_Issue4613()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap_child_probe_failure");
+        var parentDir = project.Root;
+        var childDir = TestProjectHelper.CreateDirectory(parentDir, "src");
+        var childConfigPath = Path.Combine(childDir, LanguageMapOverrides.WorkspaceFileName);
+        const string extension = ".issue4613blocked";
+        LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        try
+        {
+            TestProjectHelper.WriteTextFile(
+                parentDir,
+                LanguageMapOverrides.WorkspaceFileName,
+                $"entries:\n- extension: {extension}\n  language: ruby\n");
+            File.WriteAllText(
+                childConfigPath,
+                $"entries:\n- extension: {extension}\n  language: python\n");
+            var parentPath = TestProjectHelper.WriteTextFile(parentDir, "parent" + extension, "parent\n");
+            var childPath = TestProjectHelper.WriteTextFile(childDir, "child" + extension, "child\n");
+            var indexer = new FileIndexer(parentDir);
+
+            Assert.Equal("ruby", indexer.TryDetectLanguageForIndexing(parentPath).Language);
+
+            LanguageMapOverrides.ConfigPathStampProbeForTesting = path =>
+            {
+                if (string.Equals(path, childConfigPath, StringComparison.Ordinal))
+                    throw new UnauthorizedAccessException("simulated access denial");
+            };
+
+            Assert.Null(indexer.TryDetectLanguageForIndexing(childPath).Language);
+            var result = LanguageMapOverrides.LoadEffectiveMapFromDirectoryWithDiagnostics(childDir);
+            var diagnostic = Assert.Single(
+                result.Diagnostics,
+                item => item.Code == "language_map_probe_failed");
+            Assert.Equal("access_denied", diagnostic.Reason);
+            Assert.True(diagnostic.BlocksParentFallback);
+            Assert.False(result.Map.ContainsKey(extension));
+        }
+        finally
+        {
+            LanguageMapOverrides.ConfigPathStampProbeForTesting = null;
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        }
+    }
+
+    [Fact]
+    public void TryDetectLanguageForIndexing_NonFileChildConfigBlocksParentOverrideInheritance_Issue4613()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap_child_non_file");
+        var parentDir = project.Root;
+        var childDir = TestProjectHelper.CreateDirectory(parentDir, "src");
+        const string extension = ".issue4613nonfile";
+        LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        try
+        {
+            TestProjectHelper.WriteTextFile(
+                parentDir,
+                LanguageMapOverrides.WorkspaceFileName,
+                $"entries:\n- extension: {extension}\n  language: ruby\n");
+            Directory.CreateDirectory(Path.Combine(childDir, LanguageMapOverrides.WorkspaceFileName));
+            var childPath = TestProjectHelper.WriteTextFile(childDir, "child" + extension, "child\n");
+
+            var indexer = new FileIndexer(parentDir);
+
+            Assert.Null(indexer.TryDetectLanguageForIndexing(childPath).Language);
+            var result = LanguageMapOverrides.LoadEffectiveMapFromDirectoryWithDiagnostics(childDir);
+            var diagnostic = Assert.Single(
+                result.Diagnostics,
+                item => item.Code == "language_map_probe_failed");
+            Assert.Equal("not_regular_file", diagnostic.Reason);
+            Assert.True(diagnostic.BlocksParentFallback);
+            Assert.False(result.Map.ContainsKey(extension));
+        }
+        finally
+        {
             LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
         }
     }
@@ -929,7 +1037,7 @@ public partial class FileIndexerTests
         var tempDir = project.Root;
         try
         {
-            var unreadablePath = Path.Combine(tempDir, "unreadable-langmap.yaml");
+            var unreadablePath = Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName);
             var fallbackPath = Path.Combine(tempDir, "fallback-langmap.yaml");
             File.WriteAllText(unreadablePath, "entries:\n- extension: bad\n  language: ruby\n");
             File.WriteAllText(fallbackPath, "entries:\n- extension: ok\n  language: python\n");
@@ -949,10 +1057,19 @@ public partial class FileIndexerTests
                 warnings,
                 warning => warning.Contains("could not be read", StringComparison.Ordinal)
                     && warning.Contains("IOException", StringComparison.Ordinal));
+
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+            var result = LanguageMapOverrides.LoadEffectiveMapFromDirectoryWithDiagnostics(tempDir);
+            var diagnostic = Assert.Single(
+                result.Diagnostics,
+                item => item.Code == "language_map_read_failed");
+            Assert.Equal("io_error", diagnostic.Reason);
+            Assert.True(diagnostic.BlocksParentFallback);
         }
         finally
         {
             LanguageMapOverrides.OpenOverrideFileForTesting = null;
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
         }
     }
 

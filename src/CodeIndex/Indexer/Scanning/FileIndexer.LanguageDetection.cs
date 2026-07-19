@@ -233,7 +233,7 @@ public partial class FileIndexer
     /// 全ファイルパターン（拡張子とファイル名）と対応する言語名のマッピングを返す。
     /// </summary>
     public static IReadOnlyDictionary<string, string> GetLanguageExtensions()
-        => GetLanguageExtensions(workspaceRoot: null);
+        => GetLanguageExtensions(workspaceRoot: null, out _);
 
     public static IReadOnlyCollection<string> GetDetectedLanguageNames()
         => GetDetectedLanguageNames(workspaceRoot: null);
@@ -249,9 +249,16 @@ public partial class FileIndexer
         => ContentDetectedLanguageBuckets;
 
     internal static IReadOnlyDictionary<string, string> GetLanguageExtensions(string? workspaceRoot)
+        => GetLanguageExtensions(workspaceRoot, out _);
+
+    internal static IReadOnlyDictionary<string, string> GetLanguageExtensions(
+        string? workspaceRoot,
+        out IReadOnlyList<LanguageMapOverrides.Diagnostic> languageMapDiagnostics)
     {
         var pluginExtensions = ExtractorPluginRegistry.GetLanguageExtensions(workspaceRoot);
-        var languageMapOverrides = LanguageMapOverrides.LoadEffectiveMap(workspaceRoot);
+        var languageMapOverrideResult = LanguageMapOverrides.LoadEffectiveMapWithDiagnostics(workspaceRoot);
+        var languageMapOverrides = languageMapOverrideResult.Map;
+        languageMapDiagnostics = languageMapOverrideResult.Diagnostics;
         var capacity = LangMap.Count
             + DisplayOnlyLanguageExtensions.Length
             + FileNameMap.Count
@@ -343,7 +350,8 @@ public partial class FileIndexer
         var parent = Directory.GetParent(startDirectory)?.FullName;
         if (string.IsNullOrEmpty(parent)
             || !_languageMapOverrideCache.TryGetValue(parent, out var parentOverrides)
-            || LanguageMapOverrideFileExists(startDirectory))
+            || LanguageMapOverrides.ProbeWorkspaceConfigFile(startDirectory)
+                != LanguageMapOverrides.ConfigProbeStatus.Missing)
         {
             return false;
         }
@@ -351,18 +359,6 @@ public partial class FileIndexer
         overrides = parentOverrides;
         _languageMapOverrideCache[startDirectory] = overrides;
         return true;
-    }
-
-    private static bool LanguageMapOverrideFileExists(string directory)
-    {
-        try
-        {
-            return File.Exists(Path.Combine(directory, LanguageMapOverrides.WorkspaceFileName));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
-        {
-            return false;
-        }
     }
 
     internal static string? GetReusableDetectedLanguage(
@@ -408,11 +404,20 @@ public partial class FileIndexer
         Func<string?, IReadOnlyDictionary<string, string>>? languageMapOverrideResolver = null,
         bool fileNameIgnoreCase = true)
     {
-        // Exact filename matching beats extension lookup so manifest-style filenames like
-        // `pyproject.toml` can map to a dependency category instead of the generic file type.
-        // `pyproject.toml` のようなマニフェスト系ファイル名が、汎用拡張子ではなく
-        // dependency category に紐づくよう、完全一致ファイル名を拡張子より先に判定する。
         var fileName = Path.GetFileName(filePath);
+        var ext = Path.GetExtension(fileName);
+
+        // Trusted explicit suffix overrides are authoritative for extensions, exact special
+        // filenames that contain a suffix, and suffixed prefix variants.
+        // 信頼済みの明示 suffix override は拡張子、suffix を含む完全一致 special filename、
+        // suffix 付き prefix variant のいずれでも最優先する。
+        if (TryDetectLanguageOverride(filePath, fileName, languageMapOverrideResolver, out var overrideLang))
+            return new LanguageDetectionResult(FileProbeStatus.Supported, overrideLang);
+
+        // Exact filename matching beats built-in extension lookup so manifest-style filenames
+        // like `pyproject.toml` map to a dependency category instead of the generic file type.
+        // `pyproject.toml` のような manifest 系 filename が汎用 extension ではなく dependency
+        // category に紐づくよう、built-in の完全一致 filename を extension より先に判定する。
         if (TryGetExactFileNameLanguage(fileName, fileNameIgnoreCase, out var nameLang))
             return new LanguageDetectionResult(FileProbeStatus.Supported, nameLang);
 
@@ -422,10 +427,6 @@ public partial class FileIndexer
         // `Dockerfile.` のような末尾ドットだけの形には一致させないため、サフィックスは1文字以上必須。
         if (TryGetFileNamePrefixLanguage(fileName, fileNameIgnoreCase, out var prefixLang))
             return new LanguageDetectionResult(FileProbeStatus.Supported, prefixLang);
-
-        var ext = Path.GetExtension(fileName);
-        if (TryDetectLanguageOverride(filePath, fileName, languageMapOverrideResolver, out var overrideLang))
-            return new LanguageDetectionResult(FileProbeStatus.Supported, overrideLang);
 
         if (ShebangAmbiguousExtensions.Contains(ext))
         {

@@ -29,10 +29,10 @@ public partial class McpServer
                 return CreateToolErrorResponse(id, $"Invalid language capability '{capability}'. Use one of: symbols, graph, references.");
         }
 
-        (Dictionary<string, (List<string> Extensions, List<string> Aliases, bool Symbols, bool References, bool Graph, List<string> CapabilityGaps, List<LanguageUnsupportedGuidance> UnsupportedGuidance)> Languages, int SymbolLanguageCount, int ReferenceLanguageCount) BuildCatalog(string? workspaceRoot)
+        (Dictionary<string, (List<string> Extensions, List<string> Aliases, bool Symbols, bool References, bool Graph, List<string> CapabilityGaps, List<LanguageUnsupportedGuidance> UnsupportedGuidance)> Languages, int SymbolLanguageCount, int ReferenceLanguageCount, IReadOnlyList<LanguageMapOverrides.Diagnostic> Diagnostics) BuildCatalog(string? workspaceRoot)
         {
             ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(workspaceRoot);
-            var langExtensions = FileIndexer.GetLanguageExtensions(workspaceRoot);
+            var langExtensions = FileIndexer.GetLanguageExtensions(workspaceRoot, out var diagnostics);
             var symbolLangs = SymbolExtractor.GetSupportedLanguages(workspaceRoot);
             var referenceLangs = ReferenceExtractor.GetSupportedLanguages(workspaceRoot);
             var languages = new Dictionary<string, (List<string> Extensions, List<string> Aliases, bool Symbols, bool References, bool Graph, List<string> CapabilityGaps, List<LanguageUnsupportedGuidance> UnsupportedGuidance)>(StringComparer.Ordinal);
@@ -72,7 +72,7 @@ public partial class McpServer
                     LanguageCapabilitySupport.BuildUnsupportedGuidance(lang, hasSymbols, hasReferences, hasReferences));
             }
 
-            return (languages, symbolLangs.Count, referenceLangs.Count);
+            return (languages, symbolLangs.Count, referenceLangs.Count, diagnostics);
         }
 
         JsonNode BuildResponse(HashSet<string>? indexedLanguages, string? workspaceRoot)
@@ -127,7 +127,16 @@ public partial class McpServer
                     ["filename_case_policy"] = "filesystem",
                     ["filename_case_source"] = "path_case_sensitive",
                     ["extension_case_policy"] = "case_insensitive",
+                    ["precedence"] = new JsonArray(QueryCommandRunner.LanguageDetectionPrecedence
+                        .Select(value => JsonValue.Create(value)).ToArray()),
                 },
+                ["language_map_diagnostics"] = new JsonArray(catalog.Diagnostics.Select(diagnostic => (JsonNode)new JsonObject
+                {
+                    ["code"] = diagnostic.Code,
+                    ["config"] = diagnostic.Config,
+                    ["reason"] = diagnostic.Reason,
+                    ["blocks_parent_fallback"] = diagnostic.BlocksParentFallback,
+                }).ToArray()),
                 ["filters"] = new JsonObject
                 {
                     ["indexedOnly"] = indexedOnly,

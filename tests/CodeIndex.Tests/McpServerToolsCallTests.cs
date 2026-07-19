@@ -5761,7 +5761,15 @@ public partial class McpServerTests
 
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
         Assert.Contains("languages supported", text);
-        var languages = response["result"]!["structuredContent"]!["languages"]!.AsArray();
+        var structured = response["result"]!["structuredContent"]!;
+        var precedence = structured["detection_policy"]!["precedence"]!.AsArray()
+            .Select(value => value!.GetValue<string>())
+            .ToList();
+        Assert.Equal("language_map_override", precedence[0]);
+        Assert.True(precedence.IndexOf("exact_filename") < precedence.IndexOf("built_in_extension"));
+        Assert.NotNull(structured["language_map_diagnostics"]);
+
+        var languages = structured["languages"]!.AsArray();
         Assert.True(languages.Count > 20); // We support 30+ languages
 
         // Verify a known language has the right capabilities / 既知の言語の機能を検証

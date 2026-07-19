@@ -2715,7 +2715,12 @@ Downstream users can add lightweight language support without rebuilding
 
 - extension aliases are read from `~/.config/cdidx/langmap.yaml` and the first
   workspace ancestor `.cdidx-langmap.yaml`; workspace entries override user
-  entries;
+  entries. A trusted suffix override is evaluated before built-in exact-filename,
+  filename-prefix, and extension rules. If the closest workspace map cannot be
+  probed or read, ancestor workspace lookup stops for that subtree instead of
+  reusing a parent map; `languages --json` and the MCP `languages` tool expose
+  the sanitized failure in `language_map_diagnostics` and publish the effective
+  order in `detection_policy.precedence`;
 - regex-backed symbol patterns are read from `.cdidx/patterns/*.yaml` and
   `~/.config/cdidx/patterns/*.yaml`; sidecars must be regular files under
   non-symlink pattern directories, discovery accepts at most 128 candidates per
@@ -4997,6 +5002,11 @@ cleared range を証明するテストが必要です。Bounded accumulation pat
 
 - 拡張子 alias は `~/.config/cdidx/langmap.yaml` と、最初に見つかった workspace
   祖先の `.cdidx-langmap.yaml` から読み込まれ、workspace 側が user 側を上書きします。
+  信頼済み suffix override は built-in の完全一致 filename、filename-prefix、extension rule
+  より先に評価されます。最も近い workspace map を probe または read できない場合、その subtree
+  では親 map を再利用せず ancestor workspace 探索を停止します。`languages --json` と MCP の
+  `languages` tool は sanitization 済み失敗を `language_map_diagnostics` に公開し、実効順序を
+  `detection_policy.precedence` で示します。
 - regex ベースのシンボルパターンは `.cdidx/patterns/*.yaml` と
   `~/.config/cdidx/patterns/*.yaml` から読み込まれます。sidecar は symlink ではない
   pattern directory 配下の通常ファイルのみが対象で、探索候補は pattern directory ごとに

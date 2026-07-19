@@ -2924,6 +2924,55 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunLanguages_JsonReportsOverridePrecedenceAndStructuredProbeDiagnostics_Issue4613()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            using var project = TestProjectHelper.CreateTempProjectScope("cdidx_languages_langmap_diagnostics");
+            var originalDirectory = Environment.CurrentDirectory;
+            var configPath = Path.Combine(project.Root, LanguageMapOverrides.WorkspaceFileName);
+            try
+            {
+                File.WriteAllText(configPath, "entries:\n- extension: .custom\n  language: ruby\n");
+                var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+                Environment.CurrentDirectory = project.Root;
+                LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+                LanguageMapOverrides.ConfigPathStampProbeForTesting = path =>
+                {
+                    if (string.Equals(path, configPath, StringComparison.Ordinal))
+                        throw new UnauthorizedAccessException("simulated access denial");
+                };
+
+                var (exitCode, stdout, stderr) = CaptureConsole(
+                    () => QueryCommandRunner.RunLanguages(["--db", dbPath, "--json"], _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Contains("warning", stderr, StringComparison.OrdinalIgnoreCase);
+                using var document = ParseJsonOutput(stdout);
+                var precedence = document.RootElement.GetProperty("detection_policy")
+                    .GetProperty("precedence")
+                    .EnumerateArray()
+                    .Select(value => value.GetString())
+                    .ToList();
+                Assert.Equal("language_map_override", precedence[0]);
+                Assert.True(precedence.IndexOf("exact_filename") < precedence.IndexOf("built_in_extension"));
+
+                var diagnostic = Assert.Single(document.RootElement.GetProperty("language_map_diagnostics").EnumerateArray());
+                Assert.Equal("language_map_probe_failed", diagnostic.GetProperty("code").GetString());
+                Assert.Equal(LanguageMapOverrides.WorkspaceFileName, diagnostic.GetProperty("config").GetString());
+                Assert.Equal("access_denied", diagnostic.GetProperty("reason").GetString());
+                Assert.True(diagnostic.GetProperty("blocks_parent_fallback").GetBoolean());
+            }
+            finally
+            {
+                LanguageMapOverrides.ConfigPathStampProbeForTesting = null;
+                LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+                Environment.CurrentDirectory = originalDirectory;
+            }
+        }
+    }
+
+    [Fact]
     public void RunLanguages_JsonReportsMatlabAndPrologSymbolOnlyCapabilities_Issue4612()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));

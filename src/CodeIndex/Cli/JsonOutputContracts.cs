@@ -559,11 +559,19 @@ internal sealed record LanguageEntryJsonResult(
 internal sealed record LanguageDetectionPolicyJsonResult(
     [property: JsonPropertyName("filename_case_policy")] string FilenameCasePolicy,
     [property: JsonPropertyName("filename_case_source")] string FilenameCaseSource,
-    [property: JsonPropertyName("extension_case_policy")] string ExtensionCasePolicy);
+    [property: JsonPropertyName("extension_case_policy")] string ExtensionCasePolicy,
+    [property: JsonPropertyName("precedence")] List<string> Precedence);
+
+internal sealed record LanguageMapDiagnosticJsonResult(
+    [property: JsonPropertyName("code")] string Code,
+    [property: JsonPropertyName("config")] string Config,
+    [property: JsonPropertyName("reason")] string Reason,
+    [property: JsonPropertyName("blocks_parent_fallback")] bool BlocksParentFallback);
 
 internal sealed record LanguagesJsonResult(
     [property: JsonPropertyName("languages")] List<LanguageEntryJsonResult> Languages,
     [property: JsonPropertyName("detection_policy")] LanguageDetectionPolicyJsonResult DetectionPolicy,
+    [property: JsonPropertyName("language_map_diagnostics")] List<LanguageMapDiagnosticJsonResult> LanguageMapDiagnostics,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed class IndexDryRunJsonResult : IVersionedJsonResult
@@ -894,6 +902,7 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(JsonStreamDoneResult))]
 [JsonSerializable(typeof(LanguageEntryJsonResult))]
 [JsonSerializable(typeof(LanguageDetectionPolicyJsonResult))]
+[JsonSerializable(typeof(LanguageMapDiagnosticJsonResult))]
 [JsonSerializable(typeof(LanguageUnsupportedGuidance))]
 [JsonSerializable(typeof(LanguagesJsonResult))]
 [JsonSerializable(typeof(LspLocation))]
