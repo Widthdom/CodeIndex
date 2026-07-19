@@ -3,6 +3,7 @@
 
 main() {
     info "cdidx installer"
+    require_installer_commands
     if [ "${SELF_TEST_LOCAL_MIRROR:-0}" != "1" ]; then
         if ! validate_normal_install_dir; then
             exit 1

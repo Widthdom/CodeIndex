@@ -32,12 +32,13 @@ internal static partial class ProgramRunner
     private const string InstallerScriptAssetName = "install.sh";
     private const string UpgradeInstallerDirectoryPrefix = "cdidx-install-";
     private const string ReleaseChecksumAssetName = "sha256sums.txt";
+    private const string ReleaseAttestationSignerWorkflow = "github.com/Widthdom/CodeIndex/.github/workflows/release.yml";
     private const long MaxInstallerScriptBytes = 1024 * 1024;
     internal const long MaxReleaseChecksumBytes = 256 * 1024;
     private const int InstallerSuppressedOutputDrainBufferChars = 4096;
     internal const int InstallerSuppressedOutputTailChars = 4096;
-    private const string UpgradeInstallerVerification = "same_release_sha256_manifest";
-    private const string UpgradeInstallerTrustBoundary = "install.sh is verified against sha256sums.txt from the same GitHub release asset namespace; no independent signature is currently available.";
+    private const string UpgradeInstallerVerification = "github_attestation_and_sha256_manifest";
+    private const string UpgradeInstallerTrustBoundary = "When installation runs, sha256sums.txt and install.sh must verify against the pinned CodeIndex release workflow and selected tag before the manifest checksum is trusted or installer code is executed; compat bypasses are reported separately.";
     internal const int WorkspaceVersionPinMaxBytes = 4096;
     internal const int WorkspaceVersionPinMaxSkippedBlankLines = 16;
     internal const int WorkspaceVersionPinMaxLineChars = 256;
@@ -54,6 +55,7 @@ internal static partial class ProgramRunner
         CliFlagSchema.GetTopLevelValueOptionNames();
     private static readonly AsyncLocal<TimeProvider?> ScopedTimeProviderForTesting = new();
     private static readonly AsyncLocal<Func<HttpClient>?> ScopedUpgradeHttpClientFactoryForTesting = new();
+    private static readonly AsyncLocal<Func<string, string, CancellationToken, bool>?> ScopedUpgradeAssetProvenanceVerifierForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedTestExtractorFileLengthCheckedForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedDeleteInstallDirectoryWriteProbeForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedDeleteUpgradeInstallerScriptForTesting = new();
@@ -69,6 +71,12 @@ internal static partial class ProgramRunner
     {
         get => ScopedUpgradeHttpClientFactoryForTesting.Value ?? CreateUpgradeHttpClient;
         set => ScopedUpgradeHttpClientFactoryForTesting.Value = value == CreateUpgradeHttpClient ? null : value;
+    }
+
+    internal static Func<string, string, CancellationToken, bool> UpgradeAssetProvenanceVerifier
+    {
+        get => ScopedUpgradeAssetProvenanceVerifierForTesting.Value ?? VerifyUpgradeAssetProvenance;
+        set => ScopedUpgradeAssetProvenanceVerifierForTesting.Value = value == VerifyUpgradeAssetProvenance ? null : value;
     }
 
     internal static Action<string>? TestExtractorFileLengthCheckedForTesting
@@ -3525,7 +3533,7 @@ internal static partial class ProgramRunner
         CancellationToken cancellationToken = default)
     {
         var checkOnly = false;
-        var wantsJson = false;
+        var wantsJson = cmdArgs.Contains("--json", StringComparer.Ordinal);
         var selectedChannel = "stable";
         var includePrerelease = false;
         var selectionSource = "latest";
@@ -3540,7 +3548,6 @@ internal static partial class ProgramRunner
             }
             if (arg == "--json")
             {
-                wantsJson = true;
                 continue;
             }
             if (arg == "--prerelease")
@@ -3553,10 +3560,10 @@ internal static partial class ProgramRunner
             if (arg == "--channel")
             {
                 if (i + 1 >= cmdArgs.Length)
-                    return WriteUpgradeUsageError("--channel requires a value: stable, latest, or prerelease.");
+                    return WriteUpgradeUsageError("--channel requires a value: stable, latest, or prerelease.", wantsJson, jsonOptions);
 
                 if (!TryApplyUpgradeChannel(cmdArgs[++i], out selectedChannel, out includePrerelease, out var channelError))
-                    return WriteUpgradeUsageError(channelError);
+                    return WriteUpgradeUsageError(channelError, wantsJson, jsonOptions);
 
                 selectionSource = selectedChannel;
                 continue;
@@ -3564,7 +3571,7 @@ internal static partial class ProgramRunner
             if (arg.StartsWith("--channel=", StringComparison.Ordinal))
             {
                 if (!TryApplyUpgradeChannel(arg["--channel=".Length..], out selectedChannel, out includePrerelease, out var channelError))
-                    return WriteUpgradeUsageError(channelError);
+                    return WriteUpgradeUsageError(channelError, wantsJson, jsonOptions);
 
                 selectionSource = selectedChannel;
                 continue;
@@ -3572,10 +3579,10 @@ internal static partial class ProgramRunner
             if (arg == "--version")
             {
                 if (i + 1 >= cmdArgs.Length)
-                    return WriteUpgradeUsageError("--version requires a release tag such as v1.29.0.");
+                    return WriteUpgradeUsageError("--version requires a release tag such as v1.29.0.", wantsJson, jsonOptions);
 
                 if (!TryNormalizeReleaseTag(cmdArgs[++i], out explicitVersion, out var versionError))
-                    return WriteUpgradeUsageError(versionError);
+                    return WriteUpgradeUsageError(versionError, wantsJson, jsonOptions);
 
                 selectionSource = "explicit_version";
                 continue;
@@ -3583,13 +3590,16 @@ internal static partial class ProgramRunner
             if (arg.StartsWith("--version=", StringComparison.Ordinal))
             {
                 if (!TryNormalizeReleaseTag(arg["--version=".Length..], out explicitVersion, out var versionError))
-                    return WriteUpgradeUsageError(versionError);
+                    return WriteUpgradeUsageError(versionError, wantsJson, jsonOptions);
 
                 selectionSource = "explicit_version";
                 continue;
             }
-            return WriteUpgradeUsageError($"upgrade does not accept '{arg}'.");
+            return WriteUpgradeUsageError($"upgrade does not accept '{arg}'.", wantsJson, jsonOptions);
         }
+
+        if (!TryGetUpgradeVerificationPolicy(out var verificationPolicy, out var verificationPolicyError))
+            return WriteUpgradeUsageError(verificationPolicyError, wantsJson, jsonOptions);
 
         if (explicitVersion != null && IsPrereleaseTag(explicitVersion) && selectedChannel == "stable")
         {
@@ -3622,6 +3632,7 @@ internal static partial class ProgramRunner
                         selectedChannel,
                         selectionSource,
                         includePrerelease,
+                        verificationPolicy,
                         installAttempted: false,
                         installExitCode: null,
                         error: null),
@@ -3637,6 +3648,8 @@ internal static partial class ProgramRunner
         }
 
         var selectedReleaseTag = result.LatestVersion!;
+        bool? manifestProvenanceVerified = null;
+        bool? installerProvenanceVerified = null;
 
         if (OperatingSystem.IsWindows())
         {
@@ -3649,6 +3662,7 @@ internal static partial class ProgramRunner
                         selectedChannel,
                         selectionSource,
                         includePrerelease,
+                        verificationPolicy,
                         installAttempted: false,
                         installExitCode: null,
                         error: "windows_handoff_required",
@@ -3675,6 +3689,7 @@ internal static partial class ProgramRunner
                         selectedChannel,
                         selectionSource,
                         includePrerelease,
+                        verificationPolicy,
                         installAttempted: false,
                         installExitCode: null,
                         error: "unsupported_platform"),
@@ -3699,6 +3714,7 @@ internal static partial class ProgramRunner
                         selectedChannel,
                         selectionSource,
                         includePrerelease,
+                        verificationPolicy,
                         installAttempted: false,
                         installExitCode: null,
                         error: "install_directory_not_writable",
@@ -3718,19 +3734,31 @@ internal static partial class ProgramRunner
 
         string? scriptDirectory = null;
         string? scriptPath = null;
+        string? checksumManifestPath = null;
         try
         {
             scriptDirectory = DataDirectorySecurity.CreateSensitiveTempDirectory(UpgradeInstallerDirectoryPrefix).FullName;
             scriptPath = Path.Combine(scriptDirectory, "install.sh");
+            checksumManifestPath = Path.Combine(scriptDirectory, ReleaseChecksumAssetName);
             using (var client = UpgradeHttpClientFactory())
             {
-                var checksumManifest = DownloadReleaseChecksumManifestAsync(
+                DownloadReleaseChecksumManifestToFileAsync(
                         client,
                         selectedReleaseTag,
+                        checksumManifestPath,
                         TimeSpan.FromSeconds(20),
                         cancellationToken)
                     .GetAwaiter()
                     .GetResult();
+                RequireUpgradeAssetProvenance(
+                    checksumManifestPath,
+                    ReleaseChecksumAssetName,
+                    selectedReleaseTag,
+                    verificationPolicy,
+                    wantsJson,
+                    cancellationToken,
+                    out manifestProvenanceVerified);
+                var checksumManifest = File.ReadAllText(checksumManifestPath, Encoding.UTF8);
                 var expectedInstallerSha256 = GetReleaseAssetChecksum(checksumManifest, InstallerScriptAssetName);
 
                 DownloadInstallerScriptAsync(
@@ -3741,6 +3769,14 @@ internal static partial class ProgramRunner
                         cancellationToken)
                     .GetAwaiter()
                     .GetResult();
+                RequireUpgradeAssetProvenance(
+                    scriptPath,
+                    InstallerScriptAssetName,
+                    selectedReleaseTag,
+                    verificationPolicy,
+                    wantsJson,
+                    cancellationToken,
+                    out installerProvenanceVerified);
                 if (!wantsJson)
                     CommandErrorWriter.WriteStderr($"Verifying {InstallerScriptAssetName} checksum...");
                 VerifyFileSha256(scriptPath, expectedInstallerSha256, InstallerScriptAssetName, cancellationToken);
@@ -3766,10 +3802,13 @@ internal static partial class ProgramRunner
                         selectedChannel,
                         selectionSource,
                         includePrerelease,
+                        verificationPolicy,
                         installAttempted: true,
                         installExitCode: installExitCode,
                         error: error,
-                        installerResult: installerResult),
+                        installerResult: installerResult,
+                        manifestProvenanceVerified: manifestProvenanceVerified,
+                        installerProvenanceVerified: installerProvenanceVerified),
                     jsonOptions));
             }
             return installExitCode;
@@ -3788,9 +3827,12 @@ internal static partial class ProgramRunner
                         selectedChannel,
                         selectionSource,
                         includePrerelease,
+                        verificationPolicy,
                         installAttempted: false,
                         installExitCode: null,
-                        error: ex.GetType().Name),
+                        error: ex.GetType().Name,
+                        manifestProvenanceVerified: manifestProvenanceVerified,
+                        installerProvenanceVerified: installerProvenanceVerified),
                     jsonOptions));
             }
             else
@@ -3810,12 +3852,16 @@ internal static partial class ProgramRunner
         }
     }
 
-    private static int WriteUpgradeUsageError(string message)
-    {
-        CommandErrorWriter.WriteStderr($"Error: {message}");
-        CommandErrorWriter.WriteStderr("Hint: use `cdidx upgrade [--check-only] [--channel stable|latest|prerelease] [--prerelease] [--version vX.Y.Z]`.");
-        return CommandExitCodes.UsageError;
-    }
+    private static int WriteUpgradeUsageError(
+        string message,
+        bool wantsJson,
+        JsonSerializerOptions jsonOptions)
+        => CommandErrorWriter.WriteJsonOrHuman(
+            wantsJson,
+            jsonOptions,
+            message,
+            CommandExitCodes.UsageError,
+            "use `cdidx upgrade [--check-only] [--channel stable|latest|prerelease] [--prerelease] [--version vX.Y.Z]`.");
 
     private static bool TryApplyUpgradeChannel(
         string rawChannel,
@@ -3968,6 +4014,85 @@ internal static partial class ProgramRunner
         CodeIndex.ProcessLaunchPolicy.AddArguments(startInfo, fullScriptPath, releaseTag);
         CodeIndex.SubprocessEnvironmentPolicy.ApplyUpgradeInstallerEnvironment(startInfo);
         startInfo.Environment["CDIDX_INSTALL_DIR"] = installDir;
+        return startInfo;
+    }
+
+    private static bool TryGetUpgradeVerificationPolicy(out string verificationPolicy, out string error)
+    {
+        var policy = EnvironmentAccess.GetProcessEnvironmentVariable("CDIDX_VERIFY_POLICY");
+        if (string.IsNullOrEmpty(policy) || string.Equals(policy, "strict", StringComparison.Ordinal))
+        {
+            verificationPolicy = "strict";
+            error = string.Empty;
+            return true;
+        }
+        if (string.Equals(policy, "compat", StringComparison.Ordinal))
+        {
+            verificationPolicy = "compat";
+            error = string.Empty;
+            return true;
+        }
+
+        verificationPolicy = string.Empty;
+        error = $"CDIDX_VERIFY_POLICY must be 'compat' or 'strict' (got '{policy}').";
+        return false;
+    }
+
+    private static void RequireUpgradeAssetProvenance(
+        string assetPath,
+        string assetName,
+        string releaseTag,
+        string verificationPolicy,
+        bool suppressOutput,
+        CancellationToken cancellationToken,
+        out bool? verified)
+    {
+        var compat = string.Equals(verificationPolicy, "compat", StringComparison.Ordinal);
+        verified = UpgradeAssetProvenanceVerifier(assetPath, releaseTag, cancellationToken);
+
+        if (verified == true)
+        {
+            if (!suppressOutput)
+                CommandErrorWriter.WriteStderr($"Verified independent release provenance for {assetName}.");
+            return;
+        }
+
+        if (!compat)
+            throw new InvalidDataException($"Independent release provenance verification failed for {assetName}; installer execution is blocked.");
+
+        if (!suppressOutput)
+            CommandErrorWriter.WriteStderr($"Warning: AUDIT: CDIDX_VERIFY_POLICY=compat permits {assetName} without independent release provenance verification.");
+    }
+
+    private static bool VerifyUpgradeAssetProvenance(string assetPath, string releaseTag, CancellationToken cancellationToken)
+    {
+        var startInfo = CreateUpgradeAttestationStartInfo(assetPath, releaseTag);
+        var result = RunInstallerProcessDetailed(
+            startInfo,
+            TimeSpan.FromSeconds(30),
+            cancellationToken,
+            suppressOutput: true);
+        return result.ExitCode == CommandExitCodes.Success;
+    }
+
+    internal static ProcessStartInfo CreateUpgradeAttestationStartInfo(string assetPath, string releaseTag)
+    {
+        var fullAssetPath = Path.GetFullPath(assetPath);
+        var startInfo = CodeIndex.ProcessLaunchPolicy.CreateNoShellStartInfo(
+            fileName: "gh",
+            workingDirectory: Path.GetDirectoryName(fullAssetPath) ?? string.Empty);
+        CodeIndex.ProcessLaunchPolicy.AddArguments(
+            startInfo,
+            "attestation",
+            "verify",
+            fullAssetPath,
+            "-R",
+            "Widthdom/CodeIndex",
+            "--signer-workflow",
+            ReleaseAttestationSignerWorkflow,
+            "--source-ref",
+            $"refs/tags/{releaseTag}");
+        CodeIndex.SubprocessEnvironmentPolicy.ApplyUpgradeInstallerEnvironment(startInfo);
         return startInfo;
     }
 
@@ -4261,12 +4386,15 @@ internal static partial class ProgramRunner
         string selectedChannel,
         string selectionSource,
         bool includePrerelease,
+        string verificationPolicy,
         bool installAttempted,
         int? installExitCode,
         string? error,
         UpgradeHandoff? handoff = null,
         InstallerProcessResult? installerResult = null,
-        string? installDirectoryError = null)
+        string? installDirectoryError = null,
+        bool? manifestProvenanceVerified = null,
+        bool? installerProvenanceVerified = null)
         => new(
             result.CurrentVersion,
             result.LatestVersion,
@@ -4291,7 +4419,36 @@ internal static partial class ProgramRunner
             installerResult is { ExitCode: not CommandExitCodes.Success } ? installerResult.StdoutTail : null,
             installerResult is { ExitCode: not CommandExitCodes.Success } ? installerResult.StderrTail : null,
             installerResult is { ExitCode: not CommandExitCodes.Success } ? installerResult.OutputTruncated : null,
-            installDirectoryError);
+            installDirectoryError,
+            result.LatestVersion is null ? null : verificationPolicy,
+            manifestProvenanceVerified,
+            installerProvenanceVerified,
+            GetUpgradeVerificationStatus(
+                result.LatestVersion,
+                verificationPolicy,
+                manifestProvenanceVerified,
+                installerProvenanceVerified),
+            string.Equals(verificationPolicy, "compat", StringComparison.Ordinal)
+                && (manifestProvenanceVerified == false || installerProvenanceVerified == false)
+                ? "compat_provenance_bypass"
+                : null);
+
+    private static string? GetUpgradeVerificationStatus(
+        string? selectedVersion,
+        string verificationPolicy,
+        bool? manifestProvenanceVerified,
+        bool? installerProvenanceVerified)
+    {
+        if (selectedVersion is null)
+            return null;
+        if (manifestProvenanceVerified == true && installerProvenanceVerified == true)
+            return "verified";
+        if (manifestProvenanceVerified == false || installerProvenanceVerified == false)
+            return string.Equals(verificationPolicy, "compat", StringComparison.Ordinal)
+                ? "compat_bypass"
+                : "verification_failed";
+        return "not_attempted";
+    }
 
     internal static string BuildReleasePageUrl(string releaseTag)
         => string.Format(
@@ -4341,6 +4498,38 @@ internal static partial class ProgramRunner
             MaxReleaseChecksumBytes,
             downloadScope.Token).ConfigureAwait(false);
         return Encoding.UTF8.GetString(bytes);
+    }
+
+    internal static async Task DownloadReleaseChecksumManifestToFileAsync(
+        HttpClient client,
+        string releaseTag,
+        string manifestPath,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        using var downloadScope = OperationTimeoutScope.Create(
+            OperationTimeoutCategories.UpgradeDownload,
+            timeout,
+            cancellationToken);
+        using var response = await GitHubHttpClientFactory.SendWithRetryAsync(
+            client,
+            () =>
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, BuildReleaseAssetUrl(releaseTag, ReleaseChecksumAssetName));
+                GitHubHttpClientFactory.ApplyReleaseDownloadHeaders(request.Headers);
+                return request;
+            },
+            HttpCompletionOption.ResponseHeadersRead,
+            downloadScope.Token).ConfigureAwait(false);
+        await GitHubHttpClientFactory.EnsureSuccessStatusCodeWithBoundedDiagnosticsAsync(
+            response,
+            ReleaseChecksumAssetName,
+            downloadScope.Token).ConfigureAwait(false);
+        await BoundedHttpContentReader.WriteToPrivateFileAsync(
+            response.Content,
+            manifestPath,
+            MaxReleaseChecksumBytes,
+            downloadScope.Token).ConfigureAwait(false);
     }
 
     internal static string GetReleaseAssetChecksum(string checksumManifest, string assetName)
