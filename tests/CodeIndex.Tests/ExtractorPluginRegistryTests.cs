@@ -971,6 +971,7 @@ public class ExtractorPluginRegistryTests
             finally
             {
                 ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.CollectReleasedAssemblyLoadContexts();
                 TestProjectHelper.DeleteDirectory(workspaceA);
                 TestProjectHelper.DeleteDirectory(workspaceB);
             }
@@ -1015,6 +1016,7 @@ public class ExtractorPluginRegistryTests
             finally
             {
                 ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.CollectReleasedAssemblyLoadContexts();
                 TestProjectHelper.DeleteDirectory(root);
             }
         }
@@ -1058,6 +1060,7 @@ public class ExtractorPluginRegistryTests
                 allowCommit.Set();
                 ExtractorPluginRegistry.WorkspacePluginLoadedBeforeCommitForTesting = null;
                 ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.CollectReleasedAssemblyLoadContexts();
                 TestProjectHelper.DeleteDirectory(workspace);
             }
         }
@@ -1108,6 +1111,7 @@ public class ExtractorPluginRegistryTests
                 allowCommit.Set();
                 ExtractorPluginRegistry.WorkspacePluginLoadedBeforeCommitForTesting = null;
                 ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.CollectReleasedAssemblyLoadContexts();
                 TestProjectHelper.DeleteDirectory(workspace);
             }
         }
@@ -1141,7 +1145,7 @@ public class ExtractorPluginRegistryTests
                 var olderSequence = ExtractorPluginRegistry.WorkspaceReloadSequenceForTests();
 
                 ExtractorPluginRegistry.WorkspacePluginLoadedBeforeCommitForTesting = null;
-                File.Delete(pluginPath);
+                env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "0");
                 var newerReload = new Thread(() => ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(workspace));
                 newerReload.Start();
                 Assert.True(SpinWait.SpinUntil(
@@ -1160,6 +1164,7 @@ public class ExtractorPluginRegistryTests
                 allowCommit.Set();
                 ExtractorPluginRegistry.WorkspacePluginLoadedBeforeCommitForTesting = null;
                 ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.CollectReleasedAssemblyLoadContexts();
                 TestProjectHelper.DeleteDirectory(workspace);
             }
         }

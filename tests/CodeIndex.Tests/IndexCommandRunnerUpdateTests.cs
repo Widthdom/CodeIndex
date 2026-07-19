@@ -67,6 +67,7 @@ public partial class IndexCommandRunnerTests
             finally
             {
                 ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.CollectReleasedAssemblyLoadContexts();
                 SqliteConnection.ClearAllPools();
                 DeleteDirectory(projectRoot);
             }

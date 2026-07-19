@@ -300,6 +300,13 @@ internal static class TestProjectHelper
         Thread.Sleep(100);
     }
 
+    internal static void CollectReleasedAssemblyLoadContexts()
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+    }
+
     private static void ClearAttributes(string path)
     {
         if (!Directory.Exists(path))
