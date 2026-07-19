@@ -59,20 +59,25 @@ public static partial class QueryCommandRunner
             BuildLanguageCatalog(string? workspaceRoot)
         {
             ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(workspaceRoot);
-            var langExtensions = FileIndexer.GetLanguageExtensions(workspaceRoot, out var diagnostics);
+            var languagePatterns = FileIndexer.GetLanguagePatterns(workspaceRoot, out var diagnostics);
             var symbolLangs = SymbolExtractor.GetSupportedLanguages(workspaceRoot);
             var graphLangs = ReferenceExtractor.GetSupportedLanguages(workspaceRoot);
 
             // Build a consolidated view: language -> capability flags and gaps.
             // 統合ビュー: 言語 -> capability flag と gap。
             var allLangs = new Dictionary<string, LanguageSupportInfo>(StringComparer.Ordinal);
-            foreach (var (ext, lang) in langExtensions)
+            foreach (var pattern in languagePatterns)
             {
+                var lang = pattern.Language;
                 if (!allLangs.TryGetValue(lang, out var info))
                 {
                     var hasSymbols = symbolLangs.Contains(lang);
                     var hasReferences = graphLangs.Contains(lang);
                     info = new LanguageSupportInfo(
+                        [],
+                        [],
+                        [],
+                        [],
                         [],
                         GetLanguageAliases(lang).ToList(),
                         hasSymbols,
@@ -82,7 +87,25 @@ public static partial class QueryCommandRunner
                         LanguageCapabilitySupport.BuildUnsupportedGuidance(lang, hasSymbols, hasReferences, hasReferences));
                     allLangs[lang] = info;
                 }
-                info.Extensions.Add(ext);
+
+                switch (pattern.Kind)
+                {
+                    case FileIndexer.LanguagePatternKind.Extension:
+                        info.Extensions.Add(pattern.Pattern);
+                        break;
+                    case FileIndexer.LanguagePatternKind.ExactFilename:
+                        info.ExactFilenames.Add(pattern.Pattern);
+                        break;
+                    case FileIndexer.LanguagePatternKind.FilenamePrefixPattern:
+                        info.FilenamePrefixPatterns.Add(pattern.Pattern);
+                        break;
+                }
+                if (!info.LegacyPatterns.Contains(pattern.Pattern, StringComparer.Ordinal))
+                    info.LegacyPatterns.Add(pattern.Pattern);
+                info.PatternProvenance.Add(new LanguagePatternProvenanceJsonResult(
+                    pattern.Pattern,
+                    GetLanguagePatternKindName(pattern.Kind),
+                    pattern.Source));
             }
 
             foreach (var lang in FileIndexer.GetContentDetectedLanguageBuckets())
@@ -93,6 +116,10 @@ public static partial class QueryCommandRunner
                 var hasSymbols = symbolLangs.Contains(lang);
                 var hasReferences = graphLangs.Contains(lang);
                 allLangs[lang] = new LanguageSupportInfo(
+                    [],
+                    [],
+                    [],
+                    [],
                     [],
                     GetLanguageAliases(lang).ToList(),
                     hasSymbols,
@@ -146,6 +173,13 @@ public static partial class QueryCommandRunner
                 var entries = filtered.Select(kv => new LanguageEntryJsonResult(
                     kv.Key,
                     kv.Value.Extensions.OrderBy(e => e).ToList(),
+                    kv.Value.ExactFilenames.OrderBy(value => value, StringComparer.Ordinal).ToList(),
+                    kv.Value.FilenamePrefixPatterns.OrderBy(value => value, StringComparer.Ordinal).ToList(),
+                    kv.Value.LegacyPatterns.OrderBy(value => value, StringComparer.Ordinal).ToList(),
+                    kv.Value.PatternProvenance
+                        .OrderBy(value => value.Kind, StringComparer.Ordinal)
+                        .ThenBy(value => value.Pattern, StringComparer.Ordinal)
+                        .ToList(),
                     kv.Value.Aliases.OrderBy(a => a).ToList(),
                     kv.Value.Symbols,
                     kv.Value.References,
@@ -163,7 +197,7 @@ public static partial class QueryCommandRunner
             }
             else
             {
-                // Fixed-width Extensions column for short lists; spill long lists onto a continuation
+                // Fixed-width Patterns column for short lists; spill long lists onto a continuation
                 // line so the Symbols / Graph columns are never swallowed by a wide extension string.
                 // 拡張子が短い場合は固定幅テーブル、長い場合は継続行に退避させることで、
                 // Symbols / Graph 列が拡張子文字列に埋もれないようにする。
@@ -172,17 +206,17 @@ public static partial class QueryCommandRunner
                 var showIndexedCounts = indexedLanguageCounts != null;
                 if (showIndexedCounts)
                 {
-                    Console.WriteLine($"{"Language",-14} {"Extensions",-36} {"Aliases",-12} {"Indexed",-7} {"Symbols",-9} {"Refs",-5} {"Graph",-7}");
+                    Console.WriteLine($"{"Language",-14} {"Patterns",-36} {"Aliases",-12} {"Indexed",-7} {"Symbols",-9} {"Refs",-5} {"Graph",-7}");
                     Console.WriteLine(new string('-', 93));
                 }
                 else
                 {
-                    Console.WriteLine($"{"Language",-14} {"Extensions",-36} {"Aliases",-12} {"Symbols",-9} {"Refs",-5} {"Graph",-7}");
+                    Console.WriteLine($"{"Language",-14} {"Patterns",-36} {"Aliases",-12} {"Symbols",-9} {"Refs",-5} {"Graph",-7}");
                     Console.WriteLine(new string('-', 85));
                 }
                 foreach (var (lang, info) in filtered)
                 {
-                    var exts = string.Join(" ", info.Extensions.OrderBy(e => e));
+                    var exts = string.Join(" ", info.LegacyPatterns.OrderBy(e => e));
                     var aliases = string.Join(" ", info.Aliases.OrderBy(a => a));
                     var aliasCell = string.IsNullOrWhiteSpace(aliases) ? "-" : aliases;
                     var indexedCount = GetIndexedLanguageCount(indexedLanguageCounts, lang);
@@ -203,7 +237,7 @@ public static partial class QueryCommandRunner
                             Console.WriteLine($"{lang,-14} {"",-36} {"",-12} {indexedCell,-7} {sym,-9} {refs,-5} {graph,-7}");
                         else
                             Console.WriteLine($"{lang,-14} {"",-36} {"",-12} {sym,-9} {refs,-5} {graph,-7}");
-                        Console.WriteLine($"  Extensions: {exts}");
+                        Console.WriteLine($"  Patterns: {exts}");
                         if (!string.IsNullOrWhiteSpace(aliases))
                             Console.WriteLine($"  Aliases: {aliases}");
                         if (info.CapabilityGaps.Count > 0)
@@ -219,12 +253,25 @@ public static partial class QueryCommandRunner
 
     private sealed record LanguageSupportInfo(
         List<string> Extensions,
+        List<string> ExactFilenames,
+        List<string> FilenamePrefixPatterns,
+        List<string> LegacyPatterns,
+        List<LanguagePatternProvenanceJsonResult> PatternProvenance,
         List<string> Aliases,
         bool Symbols,
         bool References,
         bool Graph,
         List<string> CapabilityGaps,
         List<LanguageUnsupportedGuidance> UnsupportedGuidance);
+
+    private static string GetLanguagePatternKindName(FileIndexer.LanguagePatternKind kind)
+        => kind switch
+        {
+            FileIndexer.LanguagePatternKind.Extension => "extension",
+            FileIndexer.LanguagePatternKind.ExactFilename => "exact_filename",
+            FileIndexer.LanguagePatternKind.FilenamePrefixPattern => "filename_prefix_pattern",
+            _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
+        };
 
     internal static readonly string[] LanguageDetectionPrecedence =
     [

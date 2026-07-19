@@ -5831,14 +5831,39 @@ public partial class McpServerTests
         Assert.True(dependencyManifest["reference_extraction"]!.GetValue<bool>());
         Assert.True(dependencyManifest["graph_queries"]!.GetValue<bool>());
         Assert.DoesNotContain("missing-symbols", dependencyManifest["capability_gaps"]!.AsArray().Select(e => e!.GetValue<string>()));
-        Assert.Contains("Directory.Packages.props", dependencyManifest["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
+        Assert.Contains("Directory.Packages.props", dependencyManifest["exact_filenames"]!.AsArray().Select(e => e!.GetValue<string>()));
 
         var dependencyLock = languages.First(l => l!["lang"]!.GetValue<string>() == "dependency_lock")!;
         Assert.True(dependencyLock["symbol_extraction"]!.GetValue<bool>());
         Assert.True(dependencyLock["reference_extraction"]!.GetValue<bool>());
         Assert.True(dependencyLock["graph_queries"]!.GetValue<bool>());
         Assert.DoesNotContain("missing-symbols", dependencyLock["capability_gaps"]!.AsArray().Select(e => e!.GetValue<string>()));
-        Assert.Contains("packages.lock.json", dependencyLock["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
+        Assert.Contains("packages.lock.json", dependencyLock["exact_filenames"]!.AsArray().Select(e => e!.GetValue<string>()));
+    }
+
+    [Fact]
+    public void ToolsCall_Languages_SeparatesFilenamePatternKindsAndKeepsLegacyPatterns_Issue4617()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"languages","arguments":{}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var languages = response["result"]!["structuredContent"]!["languages"]!.AsArray();
+        var dockerfile = languages.Single(entry => entry!["lang"]!.GetValue<string>() == "dockerfile")!;
+        var extensions = dockerfile["extensions"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
+        var exactFilenames = dockerfile["exact_filenames"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
+        var prefixPatterns = dockerfile["filename_prefix_patterns"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
+        var legacyPatterns = dockerfile["legacy_patterns"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
+
+        Assert.DoesNotContain("Dockerfile", extensions);
+        Assert.Contains("Dockerfile", exactFilenames);
+        Assert.Contains("Dockerfile.<suffix>", prefixPatterns);
+        Assert.Contains("Dockerfile", legacyPatterns);
+        Assert.Contains("Dockerfile.<suffix>", legacyPatterns);
+        Assert.Contains(
+            dockerfile["pattern_provenance"]!.AsArray(),
+            item => item!["pattern"]!.GetValue<string>() == "Dockerfile"
+                && item["kind"]!.GetValue<string>() == "exact_filename"
+                && item["source"]!.GetValue<string>() == "built_in");
     }
 
     [Fact]
