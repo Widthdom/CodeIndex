@@ -4,8 +4,10 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Runtime.CompilerServices;
 using System.Runtime.Versioning;
 using System.Runtime.InteropServices;
+using System.Reflection;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -18,6 +20,84 @@ namespace CodeIndex.Tests;
 
 public partial class IndexCommandRunnerTests
 {
+    [Fact]
+    public void Run_UpdateMode_PreservesUnchangedWorkspacePluginReferences_Issue4602()
+    {
+        var projectRoot = CreateTempProject();
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "1");
+                AssertUpdatePreservesUnchangedWorkspacePluginReferences(projectRoot);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                SqliteConnection.ClearAllPools();
+                DeleteDirectory(projectRoot);
+            }
+        }
+
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void AssertUpdatePreservesUnchangedWorkspacePluginReferences(string projectRoot)
+    {
+        var pluginPath = Path.Combine(projectRoot, ".cdidx", "plugins", "workspace-plugin.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(pluginPath)!);
+        TestProjectHelper.CopyAssemblyFixtureWithDependencies(Assembly.GetExecutingAssembly().Location, pluginPath);
+        File.WriteAllText(Path.Combine(projectRoot, "stable.collectible"), "workspace reference\n");
+        var changedPath = Path.Combine(projectRoot, "changed.cs");
+        File.WriteAllText(changedPath, "public class Changed { }\n");
+
+        var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json", "--force"]);
+        Assert.Equal(CommandExitCodes.Success, initialExitCode);
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        Assert.Equal(1, ReadWorkspacePluginReferenceCount(dbPath));
+
+        File.WriteAllText(changedPath, "public class Changed { public void Updated() { } }\n");
+        File.SetLastWriteTimeUtc(changedPath, DateTime.UtcNow.AddSeconds(2));
+        var (updateExitCode, _) = RunAndCaptureJson([projectRoot, "--files", "changed.cs", "--json"]);
+
+        Assert.Equal(CommandExitCodes.Success, updateExitCode);
+        Assert.Equal(1, ReadWorkspacePluginReferenceCount(dbPath));
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+        {
+            db.TryMigrateForRead();
+            var reader = new DbReader(db.Connection, db.IsReadOnly);
+            var reference = Assert.Single(reader.SearchReferences(
+                "WorkspacePluginTarget",
+                lang: "collectibledsl",
+                exact: true));
+            Assert.Equal("stable.collectible", reference.Path);
+        }
+        var (statusExitCode, status) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+        Assert.Equal(CommandExitCodes.Success, statusExitCode);
+        Assert.Contains(
+            status.GetProperty("graph_supported_languages").EnumerateArray(),
+            language => language.GetString() == "collectibledsl");
+        Assert.Equal(1, ExtractorPluginRegistry.WorkspacePluginWorkerCountForTests(projectRoot));
+    }
+
+    private static int ReadWorkspacePluginReferenceCount(string dbPath)
+    {
+        SqliteConnection.ClearAllPools();
+        using var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT COUNT(*)
+            FROM symbol_references r
+            JOIN files f ON f.id = r.file_id
+            WHERE f.lang = 'collectibledsl'
+              AND r.symbol_name = 'WorkspacePluginTarget'
+            """;
+        return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+    }
+
     [Fact]
     public void Run_UpdateMode_NoOpRepairsMissingReferenceIdentityContract()
     {

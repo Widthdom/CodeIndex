@@ -4,13 +4,17 @@ namespace CodeIndex.Indexer.Extensibility;
 
 public static partial class ExtractorPluginRegistry
 {
-    private static void LoadPluginAssemblies(IEnumerable<string> directories)
+    internal static Action? WorkspacePluginLoadedBeforeCommitForTesting { get; set; }
+
+    private static void LoadPluginAssemblies(
+        IEnumerable<string> directories,
+        PatternWorkspaceState? workspaceState = null)
     {
-        foreach (var pluginPath in EnumeratePluginAssemblyPaths(directories))
-            TryLoadPlugin(pluginPath);
+        foreach (var pluginPath in EnumeratePluginAssemblyPaths(directories, workspaceState))
+            TryLoadPlugin(pluginPath, workspaceState);
     }
 
-    private static void TryLoadPlugin(string pluginPath)
+    private static void TryLoadPlugin(string pluginPath, PatternWorkspaceState? workspaceState = null)
     {
         var fullPath = pluginPath;
         ExecutableExtensionStagingHandle? staging = null;
@@ -18,8 +22,11 @@ public static partial class ExtractorPluginRegistry
         try
         {
             fullPath = Path.GetFullPath(pluginPath);
-            if (!PluginAssemblyCandidateIsWithinBudget(fullPath))
+            if (WorkspacePluginIsAlreadyLoaded(workspaceState, fullPath)
+                || !PluginAssemblyCandidateIsWithinBudget(workspaceState, fullPath))
+            {
                 return;
+            }
 
             var pluginDirectory = Path.GetDirectoryName(fullPath) ?? string.Empty;
             if (!ExecutableExtensionBoundary.TryStageFile(
@@ -29,7 +36,8 @@ public static partial class ExtractorPluginRegistry
                     out staging,
                     out var boundaryFailure))
             {
-                RecordDiagnostic(
+                RecordPluginDiagnostic(
+                    workspaceState,
                     "plugin",
                     fullPath,
                     typeName: null,
@@ -42,10 +50,11 @@ public static partial class ExtractorPluginRegistry
 
             if (!PluginMetadataInspector.TryInspect(staging!.StagedPath, out var metadata, out var metadataError))
             {
-                if (PluginLoadAttemptIsCached(fullPath, staging.Fingerprint))
+                if (PluginLoadAttemptIsCached(workspaceState, fullPath, staging.Fingerprint))
                     return;
-                RecordPluginLoadAttempt(fullPath, staging.Fingerprint, succeeded: false);
-                RecordDiagnostic(
+                RecordPluginLoadAttempt(workspaceState, fullPath, staging.Fingerprint, succeeded: false);
+                RecordPluginDiagnostic(
+                    workspaceState,
                     "plugin",
                     fullPath,
                     typeName: null,
@@ -58,10 +67,11 @@ public static partial class ExtractorPluginRegistry
 
             if (!metadata.HasMarker)
             {
-                if (PluginLoadAttemptIsCached(fullPath, staging.Fingerprint))
+                if (PluginLoadAttemptIsCached(workspaceState, fullPath, staging.Fingerprint))
                     return;
-                RecordPluginLoadAttempt(fullPath, staging.Fingerprint, succeeded: false);
-                RecordDiagnostic(
+                RecordPluginLoadAttempt(workspaceState, fullPath, staging.Fingerprint, succeeded: false);
+                RecordPluginDiagnostic(
+                    workspaceState,
                     "plugin",
                     fullPath,
                     typeName: null,
@@ -75,10 +85,11 @@ public static partial class ExtractorPluginRegistry
             if (metadata.MinApiVersion > CurrentApiVersion
                 || metadata.MaxApiVersion < CurrentApiVersion)
             {
-                if (PluginLoadAttemptIsCached(fullPath, staging.Fingerprint))
+                if (PluginLoadAttemptIsCached(workspaceState, fullPath, staging.Fingerprint))
                     return;
-                RecordPluginLoadAttempt(fullPath, staging.Fingerprint, succeeded: false);
-                RecordDiagnostic(
+                RecordPluginLoadAttempt(workspaceState, fullPath, staging.Fingerprint, succeeded: false);
+                RecordPluginDiagnostic(
+                    workspaceState,
                     "plugin",
                     fullPath,
                     typeName: null,
@@ -96,7 +107,8 @@ public static partial class ExtractorPluginRegistry
                     out var stagedFingerprint,
                     out var dependencyFailure))
             {
-                RecordDiagnostic(
+                RecordPluginDiagnostic(
+                    workspaceState,
                     "plugin",
                     fullPath,
                     typeName: null,
@@ -107,7 +119,7 @@ public static partial class ExtractorPluginRegistry
                 return;
             }
 
-            if (PluginLoadAttemptIsCached(fullPath, stagedFingerprint))
+            if (PluginLoadAttemptIsCached(workspaceState, fullPath, stagedFingerprint))
                 return;
 
             worker = new ExtractorPluginWorkerClient(
@@ -117,11 +129,12 @@ public static partial class ExtractorPluginRegistry
             var manifestResult = worker.LoadManifest();
             if (!manifestResult.Success || manifestResult.Response?.Manifest == null)
             {
-                RecordPluginLoadAttempt(fullPath, stagedFingerprint, succeeded: false);
+                RecordPluginLoadAttempt(workspaceState, fullPath, stagedFingerprint, succeeded: false);
                 var typeLimitExceeded = StringComparer.Ordinal.Equals(
                     manifestResult.ErrorCategory,
                     "plugin_type_limit_exceeded");
-                RecordDiagnostic(
+                RecordPluginDiagnostic(
+                    workspaceState,
                     "plugin",
                     fullPath,
                     typeName: null,
@@ -134,7 +147,8 @@ public static partial class ExtractorPluginRegistry
 
             foreach (var diagnostic in manifestResult.Response.Diagnostics ?? [])
             {
-                RecordDiagnostic(
+                RecordPluginDiagnostic(
+                    workspaceState,
                     "plugin_type",
                     fullPath,
                     diagnostic.TypeName,
@@ -144,27 +158,79 @@ public static partial class ExtractorPluginRegistry
                     category: diagnostic.Category);
             }
 
-            LoadedPluginState? replacedState;
-            lock (Gate)
-            {
-                replacedState = LoadedPluginStates.FirstOrDefault(
-                    state => string.Equals(state.Path, fullPath, PathCasing.ComparisonFor(fullPath)));
-                if (replacedState != null)
-                    RemoveLoadedPluginStateUnderLock(replacedState);
+            if (workspaceState != null)
+                WorkspacePluginLoadedBeforeCommitForTesting?.Invoke();
 
-                var registrations = RegisterPluginManifest(manifestResult.Response.Manifest, worker, fullPath);
-                pluginAssemblyCount++;
-                LoadedPluginWorkers.Add(worker);
-                LoadedPluginStagingHandles.Add(staging!);
-                LoadedPluginStates.Add(new(
-                    fullPath,
-                    stagedFingerprint,
-                    worker,
-                    staging!,
-                    registrations));
-                RecordPluginLoadAttemptUnderLock(fullPath, stagedFingerprint, succeeded: true);
-                worker = null;
-                staging = null;
+            LoadedPluginState? replacedState;
+            if (workspaceState == null)
+            {
+                lock (Gate)
+                {
+                    replacedState = LoadedPluginStates.FirstOrDefault(
+                        state => string.Equals(state.Path, fullPath, PathCasing.ComparisonFor(fullPath)));
+                    if (replacedState != null)
+                        RemoveLoadedPluginStateUnderLock(replacedState, workspaceState: null);
+
+                    var registrations = RegisterPluginManifest(
+                        manifestResult.Response.Manifest,
+                        worker,
+                        fullPath,
+                        workspaceState: null);
+                    pluginAssemblyCount++;
+                    LoadedPluginWorkers.Add(worker);
+                    LoadedPluginStagingHandles.Add(staging!);
+                    LoadedPluginStates.Add(new(
+                        fullPath,
+                        stagedFingerprint,
+                        worker,
+                        staging!,
+                        registrations));
+                    RecordPluginLoadAttemptUnderLock(
+                        PluginLoadAttempts,
+                        fullPath,
+                        stagedFingerprint,
+                        succeeded: true);
+                    PublishUserExtractorSnapshot();
+                    worker = null;
+                    staging = null;
+                }
+
+                lock (DefaultPatternWorkspace.Gate)
+                    DefaultPatternWorkspace.PublishSnapshot();
+            }
+            else
+            {
+                lock (workspaceState.Gate)
+                {
+                    if (workspaceState.Retired)
+                        return;
+
+                    replacedState = workspaceState.PluginStates.FirstOrDefault(
+                        state => string.Equals(state.Path, fullPath, PathCasing.ComparisonFor(fullPath)));
+                    if (replacedState != null)
+                        RemoveLoadedPluginStateUnderLock(replacedState, workspaceState);
+
+                    var registrations = RegisterPluginManifest(
+                        manifestResult.Response.Manifest,
+                        worker,
+                        fullPath,
+                        workspaceState);
+                    workspaceState.PluginStates.Add(new(
+                        fullPath,
+                        stagedFingerprint,
+                        worker,
+                        staging!,
+                        registrations));
+                    workspaceState.PluginAssemblyCount = workspaceState.PluginStates.Count;
+                    RecordPluginLoadAttemptUnderLock(
+                        workspaceState.PluginLoadAttempts,
+                        fullPath,
+                        stagedFingerprint,
+                        succeeded: true);
+                    workspaceState.PublishSnapshot();
+                    worker = null;
+                    staging = null;
+                }
             }
 
             replacedState?.Worker.Dispose();
@@ -173,7 +239,8 @@ public static partial class ExtractorPluginRegistry
         catch (Exception ex)
         {
             var diagnostic = ExtensionLoadDiagnosticClassifier.ClassifyAssemblyLoad("Plugin assembly load", ex);
-            RecordDiagnostic(
+            RecordPluginDiagnostic(
+                workspaceState,
                 "plugin",
                 fullPath,
                 typeName: null,
@@ -186,6 +253,19 @@ public static partial class ExtractorPluginRegistry
         {
             worker?.Dispose();
             staging?.Dispose();
+        }
+    }
+
+    private static bool WorkspacePluginIsAlreadyLoaded(PatternWorkspaceState? workspaceState, string fullPath)
+    {
+        if (workspaceState == null)
+            return false;
+
+        lock (workspaceState.Gate)
+        {
+            return workspaceState.Retired
+                   || workspaceState.PluginStates.Any(
+                       state => string.Equals(state.Path, fullPath, PathCasing.ComparisonFor(fullPath)));
         }
     }
 
@@ -205,7 +285,16 @@ public static partial class ExtractorPluginRegistry
         LoadedPluginStagingHandles.Clear();
     }
 
-    private static bool PluginAssemblyCandidateIsWithinBudget(string fullPath)
+    private static void DisposePluginStates(IEnumerable<LoadedPluginState> states)
+    {
+        foreach (var state in states)
+        {
+            state.Worker.Dispose();
+            state.Staging.Dispose();
+        }
+    }
+
+    private static bool PluginAssemblyCandidateIsWithinBudget(PatternWorkspaceState? workspaceState, string fullPath)
     {
         FileInfo fileInfo;
         try
@@ -214,7 +303,8 @@ public static partial class ExtractorPluginRegistry
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
         {
-            RecordDiagnostic(
+            RecordPluginDiagnostic(
+                workspaceState,
                 "plugin",
                 fullPath,
                 typeName: null,
@@ -227,7 +317,8 @@ public static partial class ExtractorPluginRegistry
 
         if (!fileInfo.Exists)
         {
-            RecordDiagnostic(
+            RecordPluginDiagnostic(
+                workspaceState,
                 "plugin",
                 fullPath,
                 typeName: null,
@@ -240,7 +331,8 @@ public static partial class ExtractorPluginRegistry
 
         if ((fileInfo.Attributes & FileAttributes.Directory) != 0)
         {
-            RecordDiagnostic(
+            RecordPluginDiagnostic(
+                workspaceState,
                 "plugin",
                 fullPath,
                 typeName: null,
@@ -253,7 +345,8 @@ public static partial class ExtractorPluginRegistry
 
         if (FileSystemBoundary.IsSymlinkOrReparsePoint(fileInfo))
         {
-            RecordDiagnostic(
+            RecordPluginDiagnostic(
+                workspaceState,
                 "plugin",
                 fullPath,
                 typeName: null,
@@ -266,7 +359,8 @@ public static partial class ExtractorPluginRegistry
 
         if (fileInfo.Length > MaxPluginAssemblyBytes)
         {
-            RecordDiagnostic(
+            RecordPluginDiagnostic(
+                workspaceState,
                 "plugin",
                 fullPath,
                 typeName: null,
@@ -283,7 +377,8 @@ public static partial class ExtractorPluginRegistry
     private static IReadOnlyList<PluginRegistration> RegisterPluginManifest(
         IReadOnlyList<ExtractorPluginWorkerManifestEntry> manifest,
         ExtractorPluginWorkerClient worker,
-        string pluginPath)
+        string pluginPath,
+        PatternWorkspaceState? workspaceState)
     {
         var registrations = new List<PluginRegistration>();
         foreach (var entry in manifest)
@@ -293,7 +388,8 @@ public static partial class ExtractorPluginRegistry
                 var proxy = new IsolatedPluginExtractorProxy(
                     entry,
                     worker,
-                    (typeName, category, message) => RecordDiagnostic(
+                    (typeName, category, message) => RecordPluginDiagnostic(
+                        workspaceState,
                         "plugin_type",
                         pluginPath,
                         typeName,
@@ -307,10 +403,12 @@ public static partial class ExtractorPluginRegistry
                 var referenceLanguage = entry.SupportsReferences
                     ? NormalizePluginLanguage(((IReferenceExtractor)proxy).Language)
                     : string.Empty;
+                var symbolExtractors = workspaceState?.WorkspaceSymbolExtractors ?? SymbolExtractors;
+                var referenceExtractors = workspaceState?.WorkspaceReferenceExtractors ?? ReferenceExtractors;
                 if (entry.SupportsSymbols)
-                    SymbolExtractors[symbolLanguage] = proxy;
+                    symbolExtractors[symbolLanguage] = proxy;
                 if (entry.SupportsReferences)
-                    ReferenceExtractors[referenceLanguage] = proxy;
+                    referenceExtractors[referenceLanguage] = proxy;
                 registrations.Add(new(
                     entry.SupportsSymbols ? symbolLanguage : null,
                     entry.SupportsReferences ? referenceLanguage : null,
@@ -320,7 +418,8 @@ public static partial class ExtractorPluginRegistry
             }
             catch (Exception ex)
             {
-                RecordDiagnostic(
+                RecordPluginDiagnostic(
+                    workspaceState,
                     "plugin_type",
                     pluginPath,
                     entry.TypeName,
@@ -334,53 +433,112 @@ public static partial class ExtractorPluginRegistry
         return registrations;
     }
 
-    private static void RemoveLoadedPluginStateUnderLock(LoadedPluginState state)
+    private static void RemoveLoadedPluginStateUnderLock(
+        LoadedPluginState state,
+        PatternWorkspaceState? workspaceState)
     {
+        var symbolExtractors = workspaceState?.WorkspaceSymbolExtractors ?? SymbolExtractors;
+        var referenceExtractors = workspaceState?.WorkspaceReferenceExtractors ?? ReferenceExtractors;
         foreach (var registration in state.Registrations)
         {
             if (registration.SupportsSymbols
                 && registration.SymbolLanguage != null
-                && SymbolExtractors.TryGetValue(registration.SymbolLanguage, out var symbolExtractor)
+                && symbolExtractors.TryGetValue(registration.SymbolLanguage, out var symbolExtractor)
                 && ReferenceEquals(symbolExtractor, registration.Proxy))
             {
-                SymbolExtractors.Remove(registration.SymbolLanguage);
+                symbolExtractors.Remove(registration.SymbolLanguage);
             }
 
             if (registration.SupportsReferences
                 && registration.ReferenceLanguage != null
-                && ReferenceExtractors.TryGetValue(registration.ReferenceLanguage, out var referenceExtractor)
+                && referenceExtractors.TryGetValue(registration.ReferenceLanguage, out var referenceExtractor)
                 && ReferenceEquals(referenceExtractor, registration.Proxy))
             {
-                ReferenceExtractors.Remove(registration.ReferenceLanguage);
+                referenceExtractors.Remove(registration.ReferenceLanguage);
             }
         }
 
-        LoadedPluginStates.Remove(state);
-        LoadedPluginWorkers.Remove(state.Worker);
-        LoadedPluginStagingHandles.Remove(state.Staging);
-        pluginAssemblyCount--;
-    }
-
-    private static void RecordPluginLoadAttempt(string path, string fingerprint, bool succeeded)
-    {
-        lock (Gate)
-            RecordPluginLoadAttemptUnderLock(path, fingerprint, succeeded);
-    }
-
-    private static bool PluginLoadAttemptIsCached(string path, string fingerprint)
-    {
-        lock (Gate)
+        if (workspaceState == null)
         {
-            return PluginLoadAttempts.Any(
-                attempt => string.Equals(attempt.Path, path, PathCasing.ComparisonFor(path))
-                           && StringComparer.Ordinal.Equals(attempt.Fingerprint, fingerprint));
+            LoadedPluginStates.Remove(state);
+            LoadedPluginWorkers.Remove(state.Worker);
+            LoadedPluginStagingHandles.Remove(state.Staging);
+            pluginAssemblyCount--;
+        }
+        else
+        {
+            workspaceState.PluginStates.Remove(state);
+            workspaceState.PluginAssemblyCount = workspaceState.PluginStates.Count;
         }
     }
 
-    private static void RecordPluginLoadAttemptUnderLock(string path, string fingerprint, bool succeeded)
+    private static void RecordPluginLoadAttempt(
+        PatternWorkspaceState? workspaceState,
+        string path,
+        string fingerprint,
+        bool succeeded)
     {
-        PluginLoadAttempts.RemoveAll(
+        if (workspaceState == null)
+        {
+            lock (Gate)
+                RecordPluginLoadAttemptUnderLock(PluginLoadAttempts, path, fingerprint, succeeded);
+            return;
+        }
+
+        lock (workspaceState.Gate)
+            RecordPluginLoadAttemptUnderLock(workspaceState.PluginLoadAttempts, path, fingerprint, succeeded);
+    }
+
+    private static bool PluginLoadAttemptIsCached(
+        PatternWorkspaceState? workspaceState,
+        string path,
+        string fingerprint)
+    {
+        if (workspaceState == null)
+        {
+            lock (Gate)
+                return PluginLoadAttemptIsCachedUnderLock(PluginLoadAttempts, path, fingerprint);
+        }
+
+        lock (workspaceState.Gate)
+            return PluginLoadAttemptIsCachedUnderLock(workspaceState.PluginLoadAttempts, path, fingerprint);
+    }
+
+    private static bool PluginLoadAttemptIsCachedUnderLock(
+        IReadOnlyCollection<PluginLoadAttempt> attempts,
+        string path,
+        string fingerprint)
+        => attempts.Any(
+            attempt => string.Equals(attempt.Path, path, PathCasing.ComparisonFor(path))
+                       && StringComparer.Ordinal.Equals(attempt.Fingerprint, fingerprint));
+
+    private static void RecordPluginLoadAttemptUnderLock(
+        List<PluginLoadAttempt> attempts,
+        string path,
+        string fingerprint,
+        bool succeeded)
+    {
+        attempts.RemoveAll(
             attempt => string.Equals(attempt.Path, path, PathCasing.ComparisonFor(path)));
-        PluginLoadAttempts.Add(new(path, fingerprint, succeeded));
+        attempts.Add(new(path, fingerprint, succeeded));
+    }
+
+    private static void RecordPluginDiagnostic(
+        PatternWorkspaceState? workspaceState,
+        string kind,
+        string path,
+        string? typeName,
+        string severity,
+        string message,
+        bool countsAsSkippedFile,
+        string category)
+    {
+        if (workspaceState == null)
+        {
+            RecordDiagnostic(kind, path, typeName, severity, message, countsAsSkippedFile, category);
+            return;
+        }
+
+        RecordPatternDiagnostic(workspaceState, kind, path, typeName, severity, message, countsAsSkippedFile, category);
     }
 }

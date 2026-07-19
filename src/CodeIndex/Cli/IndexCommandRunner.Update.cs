@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
 
@@ -141,7 +142,8 @@ public static partial class IndexCommandRunner
         var mutualRecursionRefreshNeeded = !options.SymbolsOnly
             && !writer.ReferenceIdentityContractMatchesCurrent();
         var purgedRefs = 0;
-        var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages();
+        ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
+        var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages(projectRoot);
         using var postExtractionHooks = new LazyDisposable<PostExtractionHookRunner>(
             () => PostExtractionHookRunner.DiscoverDefault(
                 options.MaxFileSizeBytes,
@@ -910,7 +912,8 @@ public static partial class IndexCommandRunner
                             record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
                             cancellationToken,
                             maxReferenceCount: options.MaxReferencesPerFile + 1,
-                            conflictMarkerLine: loaded.ConflictMarkerLine);
+                            conflictMarkerLine: loaded.ConflictMarkerLine,
+                            workspaceRoot: projectRoot);
                         references = referenceExtraction.References;
                         referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                     }

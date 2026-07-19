@@ -1,4 +1,5 @@
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Cli;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
@@ -91,6 +92,7 @@ public partial class DbReader : IDisposable
     private HashSet<string>? _csharpGlobalUsingStaticTargets;
     private HashSet<string>? _csharpGlobalUsingNamespaces;
     private Dictionary<string, CSharpUsingAliasScope>? _csharpGlobalUsingAliasesByName;
+    private IReadOnlyCollection<string>? _workspaceSupportedReferenceLanguages;
     internal readonly bool _hasReferencesTable;
     internal readonly bool _hasHotspotReferenceCountsTable;
     internal readonly bool _hasIssuesTable;
@@ -1615,9 +1617,9 @@ public partial class DbReader : IDisposable
     private static bool AllowSqlLeafFallbackForQuery(string query)
         => !SqlNameResolver.HasQualifier(query);
 
-    private static string BuildGraphSupportedLanguagePredicate(SqliteCommand cmd, string fileAlias, string parameterPrefix)
+    private string BuildGraphSupportedLanguagePredicate(SqliteCommand cmd, string fileAlias, string parameterPrefix)
     {
-        var supportedLanguages = ReferenceExtractor.GetSupportedLanguages()
+        var supportedLanguages = GetWorkspaceSupportedReferenceLanguages()
             .OrderBy(lang => lang, StringComparer.Ordinal)
             .ToList();
         if (supportedLanguages.Count == 0)
@@ -1633,6 +1635,30 @@ public partial class DbReader : IDisposable
 
         return $"{fileAlias}.lang IN ({string.Join(", ", parameterNames)})";
     }
+
+    private IReadOnlyCollection<string> GetWorkspaceSupportedReferenceLanguages()
+    {
+        if (_workspaceSupportedReferenceLanguages != null)
+            return _workspaceSupportedReferenceLanguages;
+
+        var workspaceRoot = GetIndexedProjectRoot();
+        ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(workspaceRoot);
+        _workspaceSupportedReferenceLanguages = ReferenceExtractor.GetSupportedLanguages(workspaceRoot);
+        return _workspaceSupportedReferenceLanguages;
+    }
+
+    internal string? GetIndexedProjectRoot()
+        => TryGetMetaString(_conn, DbContext.IndexedProjectRootMetaKey);
+
+    internal bool SupportsReferenceLanguage(string? lang)
+        => ReferenceExtractor.SupportsLanguage(lang, GetWorkspaceSupportedReferenceLanguages());
+
+    internal bool? SupportsSymbolGraph(string? lang, string? kind, string? containerKind)
+        => ReferenceExtractor.SupportsSymbolGraph(
+            lang,
+            kind,
+            containerKind,
+            GetWorkspaceSupportedReferenceLanguages());
 
     private static QueryCountResult ExecuteCountSummary(SqliteCommand cmd)
     {

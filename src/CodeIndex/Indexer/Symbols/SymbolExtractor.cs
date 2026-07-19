@@ -2410,8 +2410,11 @@ public static partial class SymbolExtractor
     /// シンボル抽出パターンを持つ言語のセットを返す。
     /// </summary>
     public static IReadOnlyCollection<string> GetSupportedLanguages()
+        => GetSupportedLanguages(workspaceRoot: null);
+
+    internal static IReadOnlyCollection<string> GetSupportedLanguages(string? workspaceRoot)
     {
-        var pluginLanguages = ExtractorPluginRegistry.SymbolLanguages;
+        var pluginLanguages = ExtractorPluginRegistry.GetSymbolLanguages(workspaceRoot);
         var capacity = BuiltInSymbolLanguages.Length + AdditionalSymbolLanguages.Length + pluginLanguages.Count;
         var languages = new List<string>(capacity);
         var seen = new HashSet<string>(capacity, StringComparer.Ordinal);
@@ -2625,7 +2628,7 @@ public static partial class SymbolExtractor
 
         if (pluginLanguage != null
             && !PatternCache.ContainsKey(pluginLanguage)
-            && ExtractorPluginRegistry.TryGetSymbolExtractor(pluginLanguage, out var pluginExtractor))
+            && ExtractorPluginRegistry.TryGetSymbolExtractor(pluginLanguage, projectRoot, out var pluginExtractor))
         {
             var pluginSymbols = pluginExtractor.Extract(
                     fileId,

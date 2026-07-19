@@ -1,7 +1,9 @@
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using CodeIndex.Cli;
+using CodeIndex.Database;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 
@@ -78,7 +80,7 @@ public class ExtractorPluginRegistryTests
                     File.WriteAllText(Path.Combine(pluginDir, $"plugin-{i:D3}.dll"), "not a real dll");
 
                 var paths = ExtractorPluginRegistry.EnumeratePluginAssemblyPathsForTests([pluginDir]);
-                var status = ExtractorPluginRegistry.GetStatusSnapshot();
+                var status = ExtractorPluginRegistry.GetStatusSnapshot(projectRoot);
 
                 Assert.Equal(ExtractorPluginRegistry.MaxPluginAssemblyCandidatesPerDirectory, paths.Count);
                 Assert.Equal(1, status.DiagnosticCount);
@@ -679,7 +681,13 @@ public class ExtractorPluginRegistryTests
 
                 ExtractorPluginRegistry.LoadPluginForTests(Assembly.GetExecutingAssembly().Location);
 
-                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", out var extractor));
+                var loaded = ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", out var extractor);
+                Assert.True(
+                    loaded,
+                    string.Join(
+                        Environment.NewLine,
+                        ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics?.Select(
+                            diagnostic => $"{diagnostic.Category}: {diagnostic.Message}") ?? []));
                 Assert.IsType<IsolatedPluginExtractorProxy>(extractor);
                 var symbols = extractor.Extract(
                     42,
@@ -818,6 +826,43 @@ public class ExtractorPluginRegistryTests
     }
 
     [Fact]
+    public void PatternConfigPathIdentity_FollowsFilesystemCasingPolicy_Issue4597()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_pattern_path_casing_4597");
+        lock (TestConsoleLock.Gate)
+        {
+            lock (PathCasingTestLock.Gate)
+            {
+                var originalProbe = PathCasing.IgnoreCaseProbeForTesting;
+                try
+                {
+                    var upperPath = Path.Combine(projectRoot, "Patterns", "Rules.yaml");
+                    var lowerPath = Path.Combine(projectRoot, "patterns", "rules.yaml");
+
+                    ExtractorPluginRegistry.ResetForTests();
+                    PathCasing.ResetCacheForTests();
+                    PathCasing.IgnoreCaseProbeForTesting = _ => true;
+                    Assert.True(ExtractorPluginRegistry.TryMarkPatternConfigPathLoadedForTests(upperPath));
+                    Assert.False(ExtractorPluginRegistry.TryMarkPatternConfigPathLoadedForTests(lowerPath));
+
+                    ExtractorPluginRegistry.ResetForTests();
+                    PathCasing.ResetCacheForTests();
+                    PathCasing.IgnoreCaseProbeForTesting = _ => false;
+                    Assert.True(ExtractorPluginRegistry.TryMarkPatternConfigPathLoadedForTests(upperPath));
+                    Assert.True(ExtractorPluginRegistry.TryMarkPatternConfigPathLoadedForTests(lowerPath));
+                }
+                finally
+                {
+                    PathCasing.IgnoreCaseProbeForTesting = originalProbe;
+                    PathCasing.ResetCacheForTests();
+                    ExtractorPluginRegistry.ResetForTests();
+                    TestProjectHelper.DeleteDirectory(projectRoot);
+                }
+            }
+        }
+    }
+
+    [Fact]
     public void LoadPlugin_SkipsAssembliesAboveTypeInspectionLimit_Issue3790()
     {
         lock (TestConsoleLock.Gate)
@@ -860,8 +905,8 @@ public class ExtractorPluginRegistryTests
                         "language: \"broken\"\npatterns:\n  - kind: \"class\"\n    regex: \"(?<name>\"\n");
                 }
 
-                ExtractorPluginRegistry.LoadPatternConfigsForPath(Path.Combine(projectRoot, "sample.broken"));
-                var status = ExtractorPluginRegistry.GetStatusSnapshot();
+                ExtractorPluginRegistry.LoadPatternConfigsForPath(Path.Combine(projectRoot, "sample.broken"), projectRoot);
+                var status = ExtractorPluginRegistry.GetStatusSnapshot(projectRoot);
 
                 Assert.Equal(0, status.PatternConfigCount);
                 Assert.Equal(25, status.SkippedFileCount);
@@ -909,7 +954,7 @@ public class ExtractorPluginRegistryTests
                 Environment.CurrentDirectory = cwdRoot;
 
                 ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
-                var extensions = ExtractorPluginRegistry.LanguageExtensions;
+                var extensions = ExtractorPluginRegistry.GetLanguageExtensions(projectRoot);
 
                 Assert.Equal("projectdsl", extensions[".projecttoy"]);
                 Assert.False(extensions.ContainsKey(".cwdtoy"));
@@ -920,6 +965,675 @@ public class ExtractorPluginRegistryTests
                 ExtractorPluginRegistry.ResetForTests();
                 TestProjectHelper.DeleteDirectory(projectRoot);
                 TestProjectHelper.DeleteDirectory(cwdRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPatternConfigsForPath_StopsAtWorkspaceRootAndReportsProvenance_Issue4597()
+    {
+        var parentRoot = TestProjectHelper.CreateTempProject("extractor_registry_pattern_boundary_4597");
+        var workspaceRoot = Path.Combine(parentRoot, "workspace");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.Combine(workspaceRoot, "src"));
+                ExtractorPluginRegistry.ResetForTests();
+                WritePatternConfig(
+                    parentRoot,
+                    "parent.yaml",
+                    "language: \"parentdsl\"\nextensions:\n  - extension: \".parent\"\npatterns:\n  - kind: \"class\"\n    regex: \"^parent (?<name>\\\\w+)\"\n");
+                WritePatternConfig(
+                    workspaceRoot,
+                    "workspace.yaml",
+                    "language: \"workspacedsl\"\nextensions:\n  - extension: \".workspace\"\npatterns:\n  - kind: \"class\"\n    regex: \"^workspace (?<name>\\\\w+)\"\n");
+
+                ExtractorPluginRegistry.LoadPatternConfigsForPath(
+                    Path.Combine(workspaceRoot, "src", "sample.workspace"),
+                    workspaceRoot);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("workspacedsl", workspaceRoot, out _));
+                Assert.False(ExtractorPluginRegistry.TryGetSymbolExtractor("parentdsl", workspaceRoot, out _));
+                var config = Assert.Single(ExtractorPluginRegistry.GetStatusSnapshot(workspaceRoot).PatternConfigs!);
+                Assert.Equal("workspace", config.Source);
+                Assert.Equal("workspacedsl", config.Language);
+                Assert.Equal(1, config.RuleCount);
+                Assert.Equal(".cdidx/patterns/workspace.yaml", config.Path);
+                Assert.DoesNotContain(parentRoot, config.Path, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(parentRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPatternConfigsForProjectRoot_LoadsCaseDistinctFilesWhenFilesystemIsCaseSensitive_Issue4597()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_case_distinct_patterns_4597");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                if (PathCasing.IsIgnoreCase(projectRoot))
+                    return;
+
+                ExtractorPluginRegistry.ResetForTests();
+                WritePatternConfig(
+                    projectRoot,
+                    "Rules.yaml",
+                    "language: \"upperdsl\"\nextensions:\n  - extension: \".upper\"\npatterns:\n  - kind: \"class\"\n    regex: \"^upper (?<name>\\\\w+)\"\n");
+                WritePatternConfig(
+                    projectRoot,
+                    "rules.yaml",
+                    "language: \"lowerdsl\"\nextensions:\n  - extension: \".lower\"\npatterns:\n  - kind: \"class\"\n    regex: \"^lower (?<name>\\\\w+)\"\n");
+
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("upperdsl", projectRoot, out _));
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("lowerdsl", projectRoot, out _));
+                Assert.Equal(2, ExtractorPluginRegistry.GetStatusSnapshot(projectRoot).PatternConfigCount);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void PatternRuleBudgets_AreReleasedAndScopedPerWorkspace_Issue4595()
+    {
+        var workspaceA = TestProjectHelper.CreateTempProject("extractor_registry_pattern_budget_a_4595");
+        var workspaceB = TestProjectHelper.CreateTempProject("extractor_registry_pattern_budget_b_4595");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                var rulesA = string.Join(
+                    "\n",
+                    Enumerable.Range(0, ExtractorPluginRegistry.MaxPatternRulesTotal)
+                        .Select(i => $"  - kind: \"class\"\n    regex: \"^a{i} (?<name>\\\\w+)\""));
+                WritePatternConfig(
+                    workspaceA,
+                    "shared.yaml",
+                    $"language: \"shareddsl\"\nextensions:\n  - extension: \".shared\"\npatterns:\n{rulesA}\n");
+                WritePatternConfig(
+                    workspaceB,
+                    "shared.yaml",
+                    "language: \"shareddsl\"\nextensions:\n  - extension: \".shared\"\npatterns:\n  - kind: \"class\"\n    regex: \"^b (?<name>\\\\w+)\"\n");
+
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(workspaceA);
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(workspaceB);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspaceA, out var extractorA));
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspaceB, out var extractorB));
+                Assert.Equal(
+                    ExtractorPluginRegistry.MaxPatternRulesTotal,
+                    Assert.IsType<ConfiguredSymbolExtractor>(extractorA).PatternsForTests.Count);
+                Assert.Single(Assert.IsType<ConfiguredSymbolExtractor>(extractorB).PatternsForTests);
+                Assert.Single(extractorB.Extract(1, "b Beta", new ExtractionContext("shareddsl", "sample.shared")));
+
+                WritePatternConfig(
+                    workspaceA,
+                    "shared.yaml",
+                    "language: \"shareddsl\"\nextensions:\n  - extension: \".shared\"\npatterns:\n  - kind: \"class\"\n    regex: \"^reloaded (?<name>\\\\w+)\"\n");
+                ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(workspaceA);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspaceA, out var reloadedA));
+                Assert.Single(Assert.IsType<ConfiguredSymbolExtractor>(reloadedA).PatternsForTests);
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspaceB, out var unchangedB));
+                Assert.Same(extractorB, unchangedB);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(workspaceA);
+                TestProjectHelper.DeleteDirectory(workspaceB);
+            }
+        }
+    }
+
+    [Fact]
+    public void PatternRuleBudget_ReservesCapacityForHigherPrecedenceUserPatterns_Issue4595()
+    {
+        var workspace = TestProjectHelper.CreateTempProject("extractor_registry_pattern_precedence_workspace_4595");
+        var userPatterns = TestProjectHelper.CreateTempProject("extractor_registry_pattern_precedence_user_4595");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.UserPatternDirectoryOverrideForTests = userPatterns;
+                var workspaceRules = string.Join(
+                    "\n",
+                    Enumerable.Range(0, ExtractorPluginRegistry.MaxPatternRulesTotal)
+                        .Select(i => $"  - kind: \"class\"\n    regex: \"^workspace{i} (?<name>\\\\w+)\""));
+                WritePatternConfig(
+                    workspace,
+                    "workspace.yaml",
+                    $"language: \"workspacedsl\"\nextensions:\n  - extension: \".workspace\"\npatterns:\n{workspaceRules}\n");
+                File.WriteAllText(
+                    Path.Combine(userPatterns, "user.yaml"),
+                    "language: \"userdsl\"\nextensions:\n  - extension: \".user\"\npatterns:\n  - kind: \"class\"\n    regex: \"^user (?<name>\\\\w+)\"\n");
+
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(workspace);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("userdsl", workspace, out var userExtractor));
+                Assert.Single(Assert.IsType<ConfiguredSymbolExtractor>(userExtractor).PatternsForTests);
+                Assert.False(ExtractorPluginRegistry.TryGetSymbolExtractor("workspacedsl", workspace, out _));
+                var status = ExtractorPluginRegistry.GetStatusSnapshot(workspace);
+                var config = Assert.Single(status.PatternConfigs!);
+                Assert.Equal("user", config.Source);
+                Assert.Contains(status.Diagnostics!, diagnostic =>
+                    diagnostic.Category == "invalid_pattern_config"
+                    && diagnostic.Message.Contains("too many pattern rules", StringComparison.Ordinal));
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(workspace);
+                TestProjectHelper.DeleteDirectory(userPatterns);
+            }
+        }
+    }
+
+    [Fact]
+    public void PatternTimeoutCooldown_DoesNotCrossWorkspaceSnapshots_Issue4595()
+    {
+        var workspaceA = TestProjectHelper.CreateTempProject("extractor_registry_pattern_timeout_a_4595");
+        var workspaceB = TestProjectHelper.CreateTempProject("extractor_registry_pattern_timeout_b_4595");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                const string config = "language: \"shareddsl\"\nextensions:\n  - extension: \".shared\"\npatterns:\n  - kind: \"class\"\n    regex: \"^(a+)+$\"\n";
+                WritePatternConfig(workspaceA, "shared.yaml", config);
+                WritePatternConfig(workspaceB, "shared.yaml", config);
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(workspaceA);
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(workspaceB);
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspaceA, out var extractorA));
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspaceB, out var extractorB));
+                Assert.NotSame(extractorA, extractorB);
+
+                var stderr = ConsoleCapture.CaptureError(() =>
+                {
+                    var slowLine = new string('a', 10_000) + "!";
+                    Assert.Empty(extractorA.Extract(1, slowLine, new ExtractionContext("shareddsl", "a.shared")));
+                    Assert.Empty(extractorA.Extract(2, slowLine, new ExtractionContext("shareddsl", "a2.shared")));
+                });
+
+                var recovered = Assert.Single(
+                    extractorB.Extract(3, "aaaa", new ExtractionContext("shareddsl", "b.shared")));
+                Assert.Equal("aaaa", recovered.Name);
+                Assert.Single(stderr.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
+                    .Where(line => line.Contains("timed out", StringComparison.Ordinal)));
+                Assert.Contains(
+                    ExtractorPluginRegistry.GetStatusSnapshot(workspaceA).Diagnostics!,
+                    diagnostic => diagnostic.Category == "pattern_regex_timeout");
+                Assert.DoesNotContain(
+                    ExtractorPluginRegistry.GetStatusSnapshot(workspaceB).Diagnostics ?? [],
+                    diagnostic => diagnostic.Category == "pattern_regex_timeout");
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(workspaceA);
+                TestProjectHelper.DeleteDirectory(workspaceB);
+            }
+        }
+    }
+
+    [Fact]
+    public void WorkspaceSnapshots_IsolateSameLanguageSequentiallyAndAcrossReload_Issue4602()
+    {
+        var workspaceA = TestProjectHelper.CreateTempProject("extractor_registry_snapshot_a_4602");
+        var workspaceB = TestProjectHelper.CreateTempProject("extractor_registry_snapshot_b_4602");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                var extractorA = new SnapshotSymbolExtractor("shareddsl", "workspace-a");
+                var extractorB = new SnapshotSymbolExtractor("shareddsl", "workspace-b");
+                var referenceA = new SnapshotReferenceExtractor("shareddsl", "reference-a");
+                var referenceB = new SnapshotReferenceExtractor("shareddsl", "reference-b");
+                ExtractorPluginRegistry.RegisterForWorkspaceForTests(workspaceA, extractorA);
+                ExtractorPluginRegistry.RegisterForWorkspaceForTests(workspaceB, extractorB);
+                ExtractorPluginRegistry.RegisterForWorkspaceForTests(workspaceA, referenceA);
+                ExtractorPluginRegistry.RegisterForWorkspaceForTests(workspaceB, referenceB);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspaceA, out var resolvedA));
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspaceB, out var resolvedB));
+                Assert.Same(extractorA, resolvedA);
+                Assert.Same(extractorB, resolvedB);
+                Assert.True(ExtractorPluginRegistry.TryGetReferenceExtractor(
+                    "shareddsl",
+                    workspaceA,
+                    "a.shared",
+                    out var resolvedReferenceA));
+                Assert.True(ExtractorPluginRegistry.TryGetReferenceExtractor(
+                    "shareddsl",
+                    workspaceB,
+                    "b.shared",
+                    out var resolvedReferenceB));
+                Assert.Same(referenceA, resolvedReferenceA);
+                Assert.Same(referenceB, resolvedReferenceB);
+                Assert.Equal(
+                    "reference-a",
+                    Assert.Single(CodeIndex.Indexer.ReferenceExtractor.ExtractNormalized(
+                        1,
+                        "shareddsl",
+                        "reference-a",
+                        hasOversizeLine: false,
+                        symbols: [],
+                        path: "a.shared",
+                        workspaceRoot: workspaceA)).SymbolName);
+                Assert.Equal(
+                    "reference-b",
+                    Assert.Single(CodeIndex.Indexer.ReferenceExtractor.ExtractNormalized(
+                        2,
+                        "shareddsl",
+                        "reference-b",
+                        hasOversizeLine: false,
+                        symbols: [],
+                        path: "b.shared",
+                        workspaceRoot: workspaceB)).SymbolName);
+                Assert.Equal("workspace-a", Assert.Single(resolvedA.Extract(1, "", new ExtractionContext("shareddsl", "a.shared"))).Name);
+                Assert.Equal("workspace-b", Assert.Single(resolvedB.Extract(2, "", new ExtractionContext("shareddsl", "b.shared"))).Name);
+
+                var lateUserExtractor = new SnapshotSymbolExtractor("shareddsl", "late-user");
+                ExtractorPluginRegistry.Register(lateUserExtractor);
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspaceA, out var stillActiveA));
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspaceB, out var stillActiveB));
+                Assert.Same(extractorA, stillActiveA);
+                Assert.Same(extractorB, stillActiveB);
+
+                ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(workspaceA);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspaceA, out var reloadedA));
+                Assert.Same(lateUserExtractor, reloadedA);
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspaceB, out var unchangedB));
+                Assert.Same(extractorB, unchangedB);
+                Assert.Equal("workspace-b", Assert.Single(unchangedB.Extract(3, "", new ExtractionContext("shareddsl", "b2.shared"))).Name);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(workspaceA);
+                TestProjectHelper.DeleteDirectory(workspaceB);
+            }
+        }
+    }
+
+    [Fact]
+    public void WorkspaceSnapshots_IsolateSameLanguageDuringConcurrentRegistration_Issue4602()
+    {
+        var workspaceA = TestProjectHelper.CreateTempProject("extractor_registry_snapshot_concurrent_a_4602");
+        var workspaceB = TestProjectHelper.CreateTempProject("extractor_registry_snapshot_concurrent_b_4602");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                var extractorA = new SnapshotSymbolExtractor("shareddsl", "workspace-a");
+                var extractorB = new SnapshotSymbolExtractor("shareddsl", "workspace-b");
+
+                Parallel.Invoke(
+                    () => ExtractorPluginRegistry.RegisterForWorkspaceForTests(workspaceA, extractorA),
+                    () => ExtractorPluginRegistry.RegisterForWorkspaceForTests(workspaceB, extractorB));
+
+                Parallel.For(0, 64, _ =>
+                {
+                    Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspaceA, out var resolvedA));
+                    Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspaceB, out var resolvedB));
+                    Assert.Same(extractorA, resolvedA);
+                    Assert.Same(extractorB, resolvedB);
+                });
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(workspaceA);
+                TestProjectHelper.DeleteDirectory(workspaceB);
+            }
+        }
+    }
+
+    [Fact]
+    public void WorkspacePluginWorkers_AreOwnedByTheirImmutableSnapshots_Issue4602()
+    {
+        var workspaceA = TestProjectHelper.CreateTempProject("extractor_registry_plugin_snapshot_a_4602");
+        var workspaceB = TestProjectHelper.CreateTempProject("extractor_registry_plugin_snapshot_b_4602");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "1");
+                var pluginA = Path.Combine(workspaceA, ".cdidx", "plugins", "snapshot-plugin.dll");
+                var pluginB = Path.Combine(workspaceB, ".cdidx", "plugins", "snapshot-plugin.dll");
+                Directory.CreateDirectory(Path.GetDirectoryName(pluginA)!);
+                Directory.CreateDirectory(Path.GetDirectoryName(pluginB)!);
+                CopyPluginFixture(pluginA);
+                CopyPluginFixture(pluginB);
+
+                AssertWorkspacePluginWorkersAreOwnedByImmutableSnapshots(workspaceA, workspaceB);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(workspaceA);
+                TestProjectHelper.DeleteDirectory(workspaceB);
+            }
+        }
+    }
+
+    [Fact]
+    public void WorkspaceSnapshots_EvictLeastRecentlyUsedPluginWorkersAtBound_Issue4602()
+    {
+        var root = TestProjectHelper.CreateTempProject("extractor_registry_snapshot_lru_4602");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "1");
+                var firstWorkspace = Path.Combine(root, "workspace-0");
+                var pluginPath = Path.Combine(firstWorkspace, ".cdidx", "plugins", "snapshot-plugin.dll");
+                Directory.CreateDirectory(Path.GetDirectoryName(pluginPath)!);
+                CopyPluginFixture(pluginPath);
+                AssertLeastRecentlyUsedPluginWorkerIsEvicted(root, firstWorkspace);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(root);
+            }
+        }
+    }
+
+    [Fact]
+    public void WorkspacePluginLoad_CannotCommitAfterSnapshotReplacement_Issue4602()
+    {
+        var workspace = TestProjectHelper.CreateTempProject("extractor_registry_snapshot_reload_race_4602");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
+            using var loaded = new ManualResetEventSlim();
+            using var allowCommit = new ManualResetEventSlim();
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "1");
+                var pluginPath = Path.Combine(workspace, ".cdidx", "plugins", "snapshot-plugin.dll");
+                Directory.CreateDirectory(Path.GetDirectoryName(pluginPath)!);
+                CopyPluginFixture(pluginPath);
+                ExtractorPluginRegistry.WorkspacePluginLoadedBeforeCommitForTesting = () =>
+                {
+                    loaded.Set();
+                    allowCommit.Wait();
+                };
+
+                var loading = new Thread(() => ExtractorPluginRegistry.LoadPluginsForProjectRoot(workspace));
+                loading.Start();
+                Assert.True(loaded.Wait(TimeSpan.FromSeconds(10)));
+                env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "0");
+                ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(workspace);
+                allowCommit.Set();
+                Assert.True(loading.Join(TimeSpan.FromSeconds(10)));
+
+                Assert.Equal(0, ExtractorPluginRegistry.GetStatusSnapshot(workspace).RetainedLoadContextCount);
+                Assert.False(ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", workspace, out _));
+            }
+            finally
+            {
+                allowCommit.Set();
+                ExtractorPluginRegistry.WorkspacePluginLoadedBeforeCommitForTesting = null;
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(workspace);
+            }
+        }
+    }
+
+    [Fact]
+    public void WorkspaceReload_CannotCommitAfterSnapshotRelease_Issue4602()
+    {
+        var workspace = TestProjectHelper.CreateTempProject("extractor_registry_snapshot_release_race_4602");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
+            using var loaded = new ManualResetEventSlim();
+            using var allowCommit = new ManualResetEventSlim();
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "1");
+                var pluginPath = Path.Combine(workspace, ".cdidx", "plugins", "snapshot-plugin.dll");
+                Directory.CreateDirectory(Path.GetDirectoryName(pluginPath)!);
+                CopyPluginFixture(pluginPath);
+                ExtractorPluginRegistry.WorkspacePluginLoadedBeforeCommitForTesting = () =>
+                {
+                    loaded.Set();
+                    allowCommit.Wait();
+                };
+
+                var generation = ExtractorPluginRegistry.WorkspaceGenerationForTests();
+                var reloading = new Thread(() => ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(workspace));
+                reloading.Start();
+                Assert.True(loaded.Wait(TimeSpan.FromSeconds(10)));
+
+                var releasing = new Thread(ExtractorPluginRegistry.ReleaseWorkspaceSnapshots);
+                releasing.Start();
+                Assert.True(SpinWait.SpinUntil(
+                    () => ExtractorPluginRegistry.WorkspaceGenerationForTests() > generation,
+                    TimeSpan.FromSeconds(10)));
+                allowCommit.Set();
+
+                Assert.True(reloading.Join(TimeSpan.FromSeconds(10)));
+                Assert.True(releasing.Join(TimeSpan.FromSeconds(10)));
+                Assert.Equal(0, ExtractorPluginRegistry.WorkspaceSnapshotCountForTests());
+                Assert.Equal(0, ExtractorPluginRegistry.GetStatusSnapshot(workspace).RetainedLoadContextCount);
+                Assert.False(ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", workspace, out _));
+            }
+            finally
+            {
+                allowCommit.Set();
+                ExtractorPluginRegistry.WorkspacePluginLoadedBeforeCommitForTesting = null;
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(workspace);
+            }
+        }
+    }
+
+    [Fact]
+    public void WorkspaceReload_OlderGenerationCannotOverwriteNewerReload_Issue4602()
+    {
+        var workspace = TestProjectHelper.CreateTempProject("extractor_registry_snapshot_reload_generation_4602");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
+            using var loaded = new ManualResetEventSlim();
+            using var allowCommit = new ManualResetEventSlim();
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "1");
+                var pluginPath = Path.Combine(workspace, ".cdidx", "plugins", "snapshot-plugin.dll");
+                Directory.CreateDirectory(Path.GetDirectoryName(pluginPath)!);
+                CopyPluginFixture(pluginPath);
+                ExtractorPluginRegistry.WorkspacePluginLoadedBeforeCommitForTesting = () =>
+                {
+                    loaded.Set();
+                    allowCommit.Wait();
+                };
+
+                var olderReload = new Thread(() => ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(workspace));
+                olderReload.Start();
+                Assert.True(loaded.Wait(TimeSpan.FromSeconds(10)));
+                var olderSequence = ExtractorPluginRegistry.WorkspaceReloadSequenceForTests();
+
+                ExtractorPluginRegistry.WorkspacePluginLoadedBeforeCommitForTesting = null;
+                env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "0");
+                var newerReload = new Thread(() => ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(workspace));
+                newerReload.Start();
+                Assert.True(SpinWait.SpinUntil(
+                    () => ExtractorPluginRegistry.WorkspaceReloadSequenceForTests() > olderSequence,
+                    TimeSpan.FromSeconds(10)));
+                allowCommit.Set();
+
+                Assert.True(olderReload.Join(TimeSpan.FromSeconds(10)));
+                Assert.True(newerReload.Join(TimeSpan.FromSeconds(10)));
+                Assert.Equal(1, ExtractorPluginRegistry.WorkspaceSnapshotCountForTests());
+                Assert.Equal(0, ExtractorPluginRegistry.GetStatusSnapshot(workspace).RetainedLoadContextCount);
+                Assert.False(ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", workspace, out _));
+            }
+            finally
+            {
+                allowCommit.Set();
+                ExtractorPluginRegistry.WorkspacePluginLoadedBeforeCommitForTesting = null;
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(workspace);
+            }
+        }
+    }
+
+    [Fact]
+    public void WorkspaceReferenceLanguages_AreResolvedFromTheActiveSnapshot_Issue4602()
+    {
+        var workspaceA = TestProjectHelper.CreateTempProject("extractor_registry_reference_languages_a_4602");
+        var workspaceB = TestProjectHelper.CreateTempProject("extractor_registry_reference_languages_b_4602");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.RegisterForWorkspaceForTests(
+                    workspaceA,
+                    new SnapshotReferenceExtractor("referencea", "reference-a"));
+                ExtractorPluginRegistry.RegisterForWorkspaceForTests(
+                    workspaceB,
+                    new SnapshotReferenceExtractor("referenceb", "reference-b"));
+
+                Assert.Contains("referencea", CodeIndex.Indexer.ReferenceExtractor.GetSupportedLanguages(workspaceA));
+                Assert.DoesNotContain("referenceb", CodeIndex.Indexer.ReferenceExtractor.GetSupportedLanguages(workspaceA));
+                Assert.Contains("referenceb", CodeIndex.Indexer.ReferenceExtractor.GetSupportedLanguages(workspaceB));
+                Assert.DoesNotContain("referencea", CodeIndex.Indexer.ReferenceExtractor.GetSupportedLanguages(workspaceB));
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(workspaceA);
+                TestProjectHelper.DeleteDirectory(workspaceB);
+            }
+        }
+    }
+
+    [Fact]
+    public void DbReader_ExplicitLanguageSupportUsesIndexedWorkspaceSnapshot_Issue4602()
+    {
+        var workspace = TestProjectHelper.CreateTempProject("extractor_registry_db_reference_language_4602");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.RegisterForWorkspaceForTests(
+                    workspace,
+                    new SnapshotReferenceExtractor("workspacereference", "workspace-reference"));
+                var dbPath = TestProjectHelper.CreateProjectDb(workspace);
+                using (var writeDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                {
+                    var writer = new DbWriter(writeDb.Connection);
+                    var fileId = writer.UpsertFile(new FileRecord
+                    {
+                        Path = "sample.shared",
+                        Lang = "workspacereference",
+                        Lines = 1,
+                        Modified = new DateTime(2026, 7, 19, 0, 0, 0, DateTimeKind.Utc),
+                    });
+                    writer.InsertSymbols([
+                        new SymbolRecord
+                        {
+                            FileId = fileId,
+                            Kind = "function",
+                            Name = "WorkspaceTarget",
+                            Line = 1,
+                            StartLine = 1,
+                            EndLine = 1,
+                        },
+                    ]);
+                    writer.MarkGraphReady();
+                }
+
+                using var db = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+                db.TryMigrateForRead();
+                using var reader = new DbReader(db.Connection, db.IsReadOnly);
+
+                Assert.False(CodeIndex.Indexer.ReferenceExtractor.SupportsLanguage("workspacereference"));
+                Assert.True(reader.SupportsReferenceLanguage("workspacereference"));
+                Assert.True(reader.SupportsSymbolGraph("workspacereference", "function", null));
+                Assert.Single(reader.GetUnusedSymbols(10, null, "workspacereference", null, null, false));
+                Assert.Equal(1, reader.CountUnusedSymbols(null, "workspacereference", null, null, false).Count);
+                Assert.True(reader.AnalyzeSymbol("WorkspaceTarget", lang: "workspacereference", exact: true).GraphSupported);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(workspace);
+            }
+        }
+    }
+
+    [Fact]
+    public void WorkspaceSnapshots_ExposeAndApplyRegistrationPrecedence_Issue4602()
+    {
+        var workspace = TestProjectHelper.CreateTempProject("extractor_registry_snapshot_precedence_4602");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                var userExtractor = new SnapshotSymbolExtractor("shareddsl", "user", ".precedence");
+                var workspaceExtractor = new SnapshotSymbolExtractor("shareddsl", "workspace", ".precedence");
+                var workspaceCollisionExtractor = new SnapshotSymbolExtractor("workspacecollision", "workspace-collision", ".precedence");
+                ExtractorPluginRegistry.Register(userExtractor);
+                ExtractorPluginRegistry.RegisterForWorkspaceForTests(workspace, workspaceExtractor);
+                ExtractorPluginRegistry.RegisterForWorkspaceForTests(workspace, workspaceCollisionExtractor);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("shareddsl", workspace, out var resolved));
+                Assert.Same(userExtractor, resolved);
+                Assert.True(ExtractorPluginRegistry.TryGetLanguageForExtension(".precedence", workspace, out var extensionLanguage));
+                Assert.Equal("shareddsl", extensionLanguage);
+                var status = ExtractorPluginRegistry.GetStatusSnapshot(workspace);
+                Assert.Equal("workspace", status.SnapshotScope);
+                Assert.Equal(
+                    ["built_in", "user_plugin", "user_pattern", "workspace_plugin", "workspace_pattern"],
+                    status.RegistrationPrecedence);
+
+                var builtInOverride = new SnapshotSymbolExtractor("csharp", "plugin-override");
+                ExtractorPluginRegistry.Register(builtInOverride);
+                var symbols = CodeIndex.Indexer.SymbolExtractor.Extract(
+                    1,
+                    "csharp",
+                    "class BuiltInWins {}",
+                    "sample.cs",
+                    workspace);
+                Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "BuiltInWins");
+                Assert.Equal(0, builtInOverride.ExtractionCount);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(workspace);
             }
         }
     }
@@ -939,13 +1653,161 @@ public class ExtractorPluginRegistryTests
                     "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"(?<name>\"\n");
 
                 ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
-                var diagnostic = Assert.Single(ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!);
+                var diagnostic = Assert.Single(ExtractorPluginRegistry.GetStatusSnapshot(projectRoot).Diagnostics!);
 
                 Assert.Equal(".cdidx/patterns/broken.yaml", diagnostic.Path);
                 Assert.Equal("invalid_pattern_config", diagnostic.Category);
                 Assert.DoesNotContain(projectRoot, diagnostic.Path, StringComparison.Ordinal);
                 Assert.Contains("invalid regex", diagnostic.Message, StringComparison.Ordinal);
                 Assert.DoesNotContain("(?<name>", diagnostic.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPatternConfig_InvalidRegexDoesNotConsumeBudgetAndRepairedContentRetries_Issue4593()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_transactional_pattern_4593");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                var patternPath = Path.Combine(projectRoot, ".cdidx", "patterns", "transactional.yaml");
+                WritePatternConfig(
+                    projectRoot,
+                    "transactional.yaml",
+                    "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"(?<name>\"\n");
+
+                Parallel.For(
+                    fromInclusive: 0,
+                    toExclusive: 4,
+                    _ => ExtractorPluginRegistry.LoadPatternConfigForTests(patternPath));
+                ExtractorPluginRegistry.LoadPatternConfigForTests(patternPath);
+
+                var rejectedStatus = ExtractorPluginRegistry.GetStatusSnapshot();
+                Assert.Equal(0, rejectedStatus.PatternConfigCount);
+                Assert.Equal(1, rejectedStatus.DiagnosticCount);
+                Assert.False(ExtractorPluginRegistry.TryGetSymbolExtractor("toydsl", out _));
+
+                var rules = string.Join(
+                    "\n",
+                    Enumerable.Range(0, ExtractorPluginRegistry.MaxPatternRulesTotal)
+                        .Select(i => $"  - kind: \"class\"\n    regex: \"^entity{i} (?<name>\\\\w+)\""));
+                WritePatternConfig(
+                    projectRoot,
+                    "transactional.yaml",
+                    $"language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n{rules}\n");
+
+                Parallel.For(
+                    fromInclusive: 0,
+                    toExclusive: 4,
+                    _ => ExtractorPluginRegistry.LoadPatternConfigForTests(patternPath));
+
+                var loadedStatus = ExtractorPluginRegistry.GetStatusSnapshot();
+                Assert.Equal(1, loadedStatus.PatternConfigCount);
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("toydsl", out var extractor));
+                Assert.Equal(
+                    ExtractorPluginRegistry.MaxPatternRulesTotal,
+                    Assert.IsType<ConfiguredSymbolExtractor>(extractor).PatternsForTests.Count);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPatternConfig_AcceptedSidecarIsNotReopenedDuringLaterProbes_Issue4593()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_loaded_pattern_probe_4593");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                var patternPath = Path.Combine(projectRoot, ".cdidx", "patterns", "accepted.yaml");
+                WritePatternConfig(
+                    projectRoot,
+                    "accepted.yaml",
+                    "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
+
+                ExtractorPluginRegistry.LoadPatternConfigForTests(patternPath);
+                File.Delete(patternPath);
+                ExtractorPluginRegistry.LoadPatternConfigForTests(patternPath);
+
+                var status = ExtractorPluginRegistry.GetStatusSnapshot();
+                Assert.Equal(1, status.PatternConfigCount);
+                Assert.Equal(0, status.DiagnosticCount);
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("toydsl", out _));
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPatternConfig_RejectsUnknownSymbolKindBeforeRegistration_Issue4593()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_unknown_kind_4593");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                WritePatternConfig(
+                    projectRoot,
+                    "unknown-kind.yaml",
+                    "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"not_a_symbol_kind\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
+
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
+
+                var status = ExtractorPluginRegistry.GetStatusSnapshot(projectRoot);
+                Assert.Equal(0, status.PatternConfigCount);
+                Assert.False(ExtractorPluginRegistry.TryGetSymbolExtractor("toydsl", out _));
+                var diagnostic = Assert.Single(status.Diagnostics!);
+                Assert.Equal("invalid_pattern_config", diagnostic.Category);
+                Assert.Contains("unknown symbol kind", diagnostic.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPatternConfig_TransientMissingFileCanBeLoadedAfterCreation_Issue4593()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_transient_read_4593");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                var patternPath = Path.Combine(projectRoot, ".cdidx", "patterns", "later.yaml");
+
+                ExtractorPluginRegistry.LoadPatternConfigForTests(patternPath);
+                WritePatternConfig(
+                    projectRoot,
+                    "later.yaml",
+                    "language: \"laterdsl\"\nextensions:\n  - extension: \".later\"\npatterns:\n  - kind: \"class\"\n    regex: \"^later (?<name>\\\\w+)\"\n");
+
+                ExtractorPluginRegistry.LoadPatternConfigForTests(patternPath);
+
+                Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot().PatternConfigCount);
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("laterdsl", out _));
             }
             finally
             {
@@ -970,7 +1832,7 @@ public class ExtractorPluginRegistryTests
                     WritePatternConfig(projectRoot, "case.yaml", content);
 
                     ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
-                    var status = ExtractorPluginRegistry.GetStatusSnapshot();
+                    var status = ExtractorPluginRegistry.GetStatusSnapshot(projectRoot);
 
                     Assert.Equal(0, status.PatternConfigCount);
                     Assert.Equal(1, status.SkippedFileCount);
@@ -1007,7 +1869,7 @@ public class ExtractorPluginRegistryTests
                     $"language: \"toydsl\"\nextensions:\n  - extension: \"{extension}\"\npatterns:\n  - kind: \"class\"\n    regex: \"^(?<name>\\\\w+)\"\n");
 
                 ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
-                var diagnostic = Assert.Single(ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!);
+                var diagnostic = Assert.Single(ExtractorPluginRegistry.GetStatusSnapshot(projectRoot).Diagnostics!);
 
                 Assert.Contains("extension scalar is too long", diagnostic.Message, StringComparison.Ordinal);
                 Assert.Contains((ExtractorPluginRegistry.MaxPatternExtensionLength + 1).ToString(), diagnostic.Message, StringComparison.Ordinal);
@@ -1035,7 +1897,7 @@ public class ExtractorPluginRegistryTests
                     "language: \"timeoutdsl\"\nextensions:\n  - extension: \".timeouttoy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^(a+)+$\"\n");
 
                 ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
-                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("timeoutdsl", out var extractor));
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("timeoutdsl", projectRoot, out var extractor));
 
                 var stderr = ConsoleCapture.CaptureError(() =>
                 {
@@ -1047,7 +1909,7 @@ public class ExtractorPluginRegistryTests
                     Assert.Empty(symbols);
                 });
                 var diagnostic = Assert.Single(
-                    ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!,
+                    ExtractorPluginRegistry.GetStatusSnapshot(projectRoot).Diagnostics!,
                     item => item.Category == "pattern_regex_timeout");
 
                 Assert.Equal("pattern", diagnostic.Kind);
@@ -1067,7 +1929,7 @@ public class ExtractorPluginRegistryTests
     }
 
     [Fact]
-    public void LoadPatternConfigs_SanitizesKindInRegexLengthRejection_Issue3821()
+    public void LoadPatternConfigs_SanitizesUnknownKindRejection_Issues3821And4593()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_pattern_kind_sanitized_3821");
         lock (TestConsoleLock.Gate)
@@ -1081,10 +1943,10 @@ public class ExtractorPluginRegistryTests
                     $"language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"/private/secret/kind\"\n    regex: \"{new string('x', ExtractorPluginRegistry.MaxPatternRegexLength + 1)}\"\n");
 
                 ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
-                var diagnostic = Assert.Single(ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!);
+                var diagnostic = Assert.Single(ExtractorPluginRegistry.GetStatusSnapshot(projectRoot).Diagnostics!);
 
                 Assert.Equal("invalid_pattern_config", diagnostic.Category);
-                Assert.Contains("regex for kind", diagnostic.Message, StringComparison.Ordinal);
+                Assert.Contains("unknown symbol kind", diagnostic.Message, StringComparison.Ordinal);
                 Assert.DoesNotContain("/private/secret", diagnostic.Message, StringComparison.Ordinal);
             }
             finally
@@ -1095,6 +1957,58 @@ public class ExtractorPluginRegistryTests
         }
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void AssertWorkspacePluginWorkersAreOwnedByImmutableSnapshots(
+        string workspaceA,
+        string workspaceB)
+    {
+        ExtractorPluginRegistry.LoadPluginsForProjectRoot(workspaceA);
+        ExtractorPluginRegistry.LoadPluginsForProjectRoot(workspaceB);
+        var loadedA = ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", workspaceA, out var extractorA);
+        Assert.True(
+            loadedA,
+            string.Join(
+                Environment.NewLine,
+                ExtractorPluginRegistry.GetStatusSnapshot(workspaceA).Diagnostics?.Select(
+                    diagnostic => $"{diagnostic.Category}: {diagnostic.Message}") ?? []));
+        Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", workspaceB, out var extractorB));
+        Assert.NotSame(extractorA, extractorB);
+        Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot(workspaceA).PluginAssemblyCount);
+        Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot(workspaceB).PluginAssemblyCount);
+        Assert.Equal(1, ExtractorPluginRegistry.WorkspacePluginWorkerCountForTests(workspaceA));
+        Assert.Equal(1, ExtractorPluginRegistry.WorkspacePluginWorkerCountForTests(workspaceB));
+        Assert.Equal(0, ExtractorPluginRegistry.GetStatusSnapshot(workspaceA).RetainedLoadContextCount);
+        Assert.Equal(0, ExtractorPluginRegistry.GetStatusSnapshot(workspaceB).RetainedLoadContextCount);
+
+        ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(workspaceA);
+
+        Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", workspaceB, out var unchangedB));
+        Assert.Same(extractorB, unchangedB);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void AssertLeastRecentlyUsedPluginWorkerIsEvicted(
+        string root,
+        string firstWorkspace)
+    {
+        ExtractorPluginRegistry.LoadPluginsForProjectRoot(firstWorkspace);
+        Assert.Equal(1, ExtractorPluginRegistry.WorkspacePluginWorkerCountForTests(firstWorkspace));
+
+        for (var i = 1; i <= ExtractorPluginRegistry.MaxRetainedWorkspaceSnapshots; i++)
+        {
+            var workspace = Path.Combine(root, $"workspace-{i}");
+            ExtractorPluginRegistry.RegisterForWorkspaceForTests(
+                workspace,
+                new SnapshotSymbolExtractor($"lru{i}", $"workspace-{i}"));
+        }
+
+        Assert.Equal(
+            ExtractorPluginRegistry.MaxRetainedWorkspaceSnapshots,
+            ExtractorPluginRegistry.WorkspaceSnapshotCountForTests());
+        Assert.Equal(0, ExtractorPluginRegistry.WorkspacePluginWorkerCountForTests(firstWorkspace));
+        Assert.False(ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", firstWorkspace, out _));
+    }
+
     private static void WritePatternConfig(string projectRoot, string fileName, string content)
     {
         var path = Path.Combine(projectRoot, ".cdidx", "patterns", fileName);
@@ -1103,24 +2017,7 @@ public class ExtractorPluginRegistryTests
     }
 
     private static void CopyPluginFixture(string pluginPath)
-    {
-        var sourceAssembly = Assembly.GetExecutingAssembly().Location;
-        var sourceDirectory = Path.GetDirectoryName(sourceAssembly)!;
-        var destinationDirectory = Path.GetDirectoryName(pluginPath)!;
-        Directory.CreateDirectory(destinationDirectory);
-        foreach (var dependencyPath in Directory.EnumerateFiles(sourceDirectory, "*.dll", SearchOption.TopDirectoryOnly))
-        {
-            if (string.Equals(dependencyPath, sourceAssembly, StringComparison.Ordinal))
-                continue;
-
-            File.Copy(
-                dependencyPath,
-                Path.Combine(destinationDirectory, Path.GetFileName(dependencyPath)),
-                overwrite: true);
-        }
-
-        File.Copy(sourceAssembly, pluginPath, overwrite: true);
-    }
+        => TestProjectHelper.CopyAssemblyFixtureWithDependencies(Assembly.GetExecutingAssembly().Location, pluginPath);
 
     private static string BuildPatternConfigWithOverlongScalar(string scalarName)
     {
@@ -1131,6 +2028,53 @@ public class ExtractorPluginRegistryTests
             "kind" => $"language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"{new string('k', ExtractorPluginRegistry.MaxPatternKindLength + 1)}\"\n    regex: \"^(?<name>\\\\w+)\"\n",
             _ => throw new ArgumentOutOfRangeException(nameof(scalarName), scalarName, null),
         };
+    }
+
+    private sealed class SnapshotSymbolExtractor(string language, string symbolName, string extension = ".shared") : ISymbolExtractor
+    {
+        private int extractionCount;
+
+        public string Language { get; } = language;
+        public IReadOnlyCollection<string> FileExtensions { get; } = [extension];
+        internal int ExtractionCount => Volatile.Read(ref extractionCount);
+
+        public IReadOnlyList<SymbolRecord> Extract(long fileId, string source, ExtractionContext context)
+        {
+            Interlocked.Increment(ref extractionCount);
+            return
+            [
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "class",
+                    Name = symbolName,
+                    Line = 1,
+                    StartLine = 1,
+                    EndLine = 1,
+                    Signature = symbolName,
+                },
+            ];
+        }
+    }
+
+    private sealed class SnapshotReferenceExtractor(string language, string symbolName) : CodeIndex.Indexer.Extensibility.IReferenceExtractor
+    {
+        public string Language { get; } = language;
+        public IReadOnlyCollection<string> FileExtensions { get; } = [".shared"];
+
+        public IReadOnlyList<ReferenceRecord> Extract(long fileId, string source, ExtractionContext context)
+            =>
+            [
+                new ReferenceRecord
+                {
+                    FileId = fileId,
+                    SymbolName = symbolName,
+                    ReferenceKind = "call",
+                    Line = 1,
+                    Column = 1,
+                    Context = source,
+                },
+            ];
     }
 }
 
@@ -1168,6 +2112,27 @@ public sealed class CrashingPluginSymbolExtractor : ISymbolExtractor
     public string Language => "crashingplugindsl";
 
     public IReadOnlyList<SymbolRecord> Extract(long fileId, string source, ExtractionContext context) => [];
+}
+
+public sealed class CollectiblePluginReferenceExtractor : IReferenceExtractor
+{
+    public string Language => "collectibledsl";
+
+    public IReadOnlyCollection<string> FileExtensions => [".collectible"];
+
+    public IReadOnlyList<ReferenceRecord> Extract(long fileId, string source, ExtractionContext context)
+        =>
+        [
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "WorkspacePluginTarget",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = 1,
+                Context = source,
+            },
+        ];
 }
 
 public sealed class ThrowingPluginSymbolExtractor : ISymbolExtractor

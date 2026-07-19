@@ -274,6 +274,25 @@ include stable `id`, `callback_budget_ms`, and the worker-only
 `load_context_lifecycle`. `extractors.diagnostics[]` and
 `hook_diagnostics[]` include sanitized `category` machine codes alongside
 bounded paths and messages.
+`extractors.pattern_configs[]` reports each accepted sidecar with a sanitized
+`path`, its `source` (`workspace` or `user`), normalized `language`, and
+`rule_count`. Workspace discovery never walks above the explicit workspace
+root, and path identity follows the active filesystem's case-sensitivity.
+Configured extractors are published as immutable workspace snapshots: the
+128-rule budget is per workspace, reindexing replaces and releases the prior
+snapshot, and a timed-out rule enters a bounded one-minute cooldown only in
+the workspace that observed the timeout.
+Plugin and pattern registrations with the same language are also resolved from
+that immutable snapshot. `extractors.snapshot_scope` identifies whether status
+describes a `user` or `workspace` snapshot, and
+`extractors.registration_precedence` exposes the highest-to-lowest order:
+`built_in`, `user_plugin`, `user_pattern`, `workspace_plugin`, then
+`workspace_pattern`. Reloading one workspace never mutates another workspace's
+active snapshot. Reference purging, status/language reporting, and database graph
+queries resolve their supported-language set from that same active snapshot.
+Long-running hosts retain at most 32 workspace snapshots using LRU eviction;
+evicted, replaced, and shutdown snapshots are retired terminally so late plugin
+loads are rejected and collectible contexts can unload.
 Accepted extension trust overrides such as `CDIDX_TRUST_WORKSPACE_PLUGINS` and
 `CDIDX_HOOKS_DIR` are also reported in sanitized `trust_overrides[]` entries.
 Default and overridden plugin/hook directories share one executable-content
@@ -576,6 +595,22 @@ type discovery、construction、callback はすべて bounded worker 内で実�
 stable な `id`、`callback_budget_ms`、worker-only の `load_context_lifecycle` を含みます。
 `extractors.diagnostics[]` と `hook_diagnostics[]` は、
 bounded な path と message に加えて sanitization 済みの `category` machine code を含みます。
+`extractors.pattern_configs[]` は、受理された各 sidecar について sanitization 済みの
+`path`、`source`（`workspace` または `user`）、正規化済み `language`、`rule_count` を
+報告します。workspace の探索は明示された workspace root より上へ進まず、path identity は
+実際の filesystem の case-sensitivity に従います。configured extractor は immutable な
+workspace snapshot として公開されます。128-rule budget は workspace ごとに独立し、reindex は
+以前の snapshot を置換して解放し、timeout した rule はその timeout を観測した workspace 内だけで
+上限付きの1分間 cooldown に入ります。
+同じ language の plugin / pattern 登録も、その immutable snapshot から解決されます。
+`extractors.snapshot_scope` は status が `user` / `workspace` のどちらの snapshot を表すかを示し、
+  `extractors.registration_precedence` は高い順に `built_in`、`user_plugin`、`user_pattern`、
+  `workspace_plugin`、`workspace_pattern` を公開します。一方の workspace を reload しても、
+  他 workspace の active snapshot は変更されません。reference purge、status/language reporting、
+  database graph query の supported-language 集合も同じ active snapshot から解決されます。
+  長時間実行 host が保持する workspace snapshot は LRU で最大32件に制限され、evict・replace・
+  shutdown 済み snapshot は terminal に retire されるため、遅延 plugin load は拒否され、
+  collectible context を unload できます。
 受理された `CDIDX_TRUST_WORKSPACE_PLUGINS` や `CDIDX_HOOKS_DIR` などの
 拡張信頼境界 override は、sanitization 済みの `trust_overrides[]` entry としても報告されます。
 既定および override の plugin / hook directory は単一の executable-content
