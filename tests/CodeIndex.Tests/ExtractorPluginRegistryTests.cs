@@ -377,7 +377,14 @@ public class ExtractorPluginRegistryTests
                 InheritanceFlags.None,
                 PropagationFlags.None,
                 AccessControlType.Allow));
+            security.AddAccessRule(new FileSystemAccessRule(
+                new SecurityIdentifier(WellKnownSidType.WorldSid, null),
+                FileSystemRights.CreateFiles,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.InheritOnly,
+                AccessControlType.Allow));
             new DirectoryInfo(pluginDirectory).SetAccessControl(security);
+            Assert.True(ExecutableExtensionBoundary.TryValidateDirectory(pluginDirectory, out _, out _));
             Assert.True(ExecutableExtensionBoundary.TryStageFile(
                 pluginDirectory,
                 pluginPath,

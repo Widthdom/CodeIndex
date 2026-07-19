@@ -372,6 +372,7 @@ internal static class ExecutableExtensionBoundary
                          typeof(SecurityIdentifier)))
             {
                 if (rule.AccessControlType != AccessControlType.Allow
+                    || (rule.PropagationFlags & PropagationFlags.InheritOnly) != 0
                     || (rule.FileSystemRights & unsafeRights) == 0
                     || rule.IdentityReference is not SecurityIdentifier principal
                     || IsTrustedWindowsPrincipal(principal, currentUser, allowCreatorOwner: true))
