@@ -78,8 +78,11 @@ public static class SearchSnippetFormatter
     {
         ArgumentNullException.ThrowIfNull(queryContext);
 
-        var excerpt = BuildExcerpt(result.Content, queryContext, result.StartLine, maxLines, caseSensitive, maxLineWidth, lang ?? result.Lang, focusMode, exposeLiteralHighlights, preferredMatchLine);
-        var matchFacets = BuildMatchFacets(result, queryContext, caseSensitive, lang ?? result.Lang, exposeLiteralHighlights);
+        var effectiveLang = lang ?? result.Lang;
+        var matchFacets = BuildMatchFacets(result, queryContext, caseSensitive, effectiveLang, exposeLiteralHighlights);
+        var effectivePreferredMatchLine = preferredMatchLine
+            ?? SelectPreferredCodeMatchLine(queryContext.ForLanguage(effectiveLang).NormalizedQuery, focusMode, matchFacets);
+        var excerpt = BuildExcerpt(result.Content, queryContext, result.StartLine, maxLines, caseSensitive, maxLineWidth, effectiveLang, focusMode, exposeLiteralHighlights, effectivePreferredMatchLine);
         AttachHighlightOrigins(excerpt.Highlights, matchFacets);
         return new CompactSearchResult
         {
@@ -129,6 +132,41 @@ public static class SearchSnippetFormatter
             EnclosingSymbolEndLine = result.EnclosingSymbolEndLine,
             EnclosingContainerName = result.EnclosingContainerName,
         };
+    }
+
+    private static int? SelectPreferredCodeMatchLine(
+        string query,
+        SearchSnippetFocusMode focusMode,
+        IReadOnlyList<SearchMatchFacet> matchFacets)
+    {
+        if (focusMode != SearchSnippetFocusMode.Quality || !IsIdentifierLikeQuery(query))
+            return null;
+
+        return matchFacets
+            .Where(facet => string.Equals(facet.Origin, SearchMatchClassifier.Code, StringComparison.Ordinal))
+            .Select(facet => (int?)facet.Line)
+            .FirstOrDefault();
+    }
+
+    private static bool IsIdentifierLikeQuery(string query)
+    {
+        var value = query.Trim();
+        if (value.Length == 0)
+            return false;
+
+        if (!char.IsLetter(value[0]) && value[0] != '_')
+            return false;
+
+        for (var index = 1; index < value.Length; index++)
+        {
+            var character = value[index];
+            if (char.IsLetterOrDigit(character) || character == '_')
+                continue;
+
+            return false;
+        }
+
+        return true;
     }
 
     private static List<SearchMatchFacet> BuildMatchFacets(SearchResult result, SearchSnippetQueryContext queryContext, bool caseSensitive, string? lang, bool exposeLiteralHighlights)
@@ -375,6 +413,12 @@ public static class SearchSnippetFormatter
             });
         }
 
+        var nextMatchIndex = matchIndexes
+            .Where(index => index > focusEnd)
+            .Select(index => (int?)index)
+            .FirstOrDefault()
+            ?? matchScan.FirstDroppedMatchIndex;
+
         return new SearchSnippetExcerpt
         {
             StartLine = absoluteStartLine + start,
@@ -392,7 +436,7 @@ public static class SearchSnippetFormatter
             FocusLine = matchIndexes.Count > 0 ? absoluteStartLine + focusStart : null,
             FocusColumn = focusColumn,
             FocusReason = focusReason,
-            NextMatchLine = matchScan.FirstDroppedMatchIndex.HasValue ? absoluteStartLine + matchScan.FirstDroppedMatchIndex.Value : null,
+            NextMatchLine = nextMatchIndex.HasValue ? absoluteStartLine + nextMatchIndex.Value : null,
             TruncationContext = new SearchTruncationContext
             {
                 LineCount = truncatedLineCount,

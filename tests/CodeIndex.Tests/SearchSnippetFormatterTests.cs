@@ -510,6 +510,40 @@ public class SearchSnippetFormatterTests
         Assert.Equal(2, compact.NextMatch.RemainingMatchLineCount);
     }
 
+    [Theory]
+    [InlineData("PascalCase", "PascalCase();", 13, "code", 15, 3)]
+    [InlineData("snake_case", "snake_case();", 13, "code", 15, 3)]
+    [InlineData("plain phrase", "plain phrase;", 10, "comment", 13, 2)]
+    public void ToCompactResult_IdentifierQueriesPreferCodeOriginsOverCommentsAndStrings_Issue4618(
+        string query,
+        string codeExpression,
+        int expectedFocusLine,
+        string expectedFocusOrigin,
+        int expectedNextMatchLine,
+        int expectedDroppedMatchLineCount)
+    {
+        var result = new SearchResult
+        {
+            Path = "src/app.cs",
+            Lang = "csharp",
+            StartLine = 10,
+            EndLine = 15,
+            Content = $"// {query}\nvar text = \"{query}\";\nvar padding = 0;\n{codeExpression}\nvar gap = 0;\n{codeExpression}",
+            Score = -1.0,
+        };
+
+        var compact = SearchSnippetFormatter.ToCompactResult(result, query, maxLines: 2);
+
+        Assert.Equal(expectedFocusLine, compact.FocusLine);
+        Assert.Equal("full_query", compact.FocusReason);
+        var focusHighlight = Assert.Single(compact.Highlights, highlight => highlight.Line == expectedFocusLine);
+        Assert.Equal([expectedFocusOrigin], focusHighlight.MatchOrigins);
+        Assert.Equal(expectedDroppedMatchLineCount, compact.DroppedMatchLineCount);
+        Assert.NotNull(compact.NextMatch);
+        Assert.Equal(expectedNextMatchLine, compact.NextMatch.Line);
+        Assert.Equal(expectedDroppedMatchLineCount, compact.NextMatch.RemainingMatchLineCount);
+    }
+
     [Fact]
     public void ToCompactResult_ReportsTruncationContext_WhenMultipleSnippetLinesAreClamped()
     {
