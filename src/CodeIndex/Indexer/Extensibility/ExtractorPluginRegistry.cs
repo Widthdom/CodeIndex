@@ -48,6 +48,27 @@ public static partial class ExtractorPluginRegistry
     internal static TimeSpan? WorkerOperationBudgetForTesting { get; set; }
     internal static string? UserPluginDirectoryForTesting { get; set; }
     private static bool suppressDefaultPluginDiscoveryForTesting;
+    private static readonly AsyncLocal<bool> AuthorizedConfigurationScope = new();
+
+    internal static IDisposable BeginAuthorizedConfigurationScope()
+    {
+        var previous = AuthorizedConfigurationScope.Value;
+        AuthorizedConfigurationScope.Value = true;
+        return new AuthorizedConfigurationScopeLease(previous);
+    }
+
+    private sealed class AuthorizedConfigurationScopeLease(bool previous) : IDisposable
+    {
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+            AuthorizedConfigurationScope.Value = previous;
+            _disposed = true;
+        }
+    }
 
     public static IReadOnlyCollection<string> SymbolLanguages
         => GetSymbolLanguages(workspaceRoot: null);
@@ -377,6 +398,98 @@ public static partial class ExtractorPluginRegistry
         }
     }
 
+    internal static void ReloadAuthorizedPatternConfigsForProjectRoot(
+        string projectRoot,
+        Func<string, IEnumerable<string>> enumerateFileSystemEntries,
+        Func<string, FileStream> openFile)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
+        ArgumentNullException.ThrowIfNull(enumerateFileSystemEntries);
+        ArgumentNullException.ThrowIfNull(openFile);
+
+        var fullRoot = Path.GetFullPath(projectRoot);
+        var state = StagePatternWorkspace(fullRoot, includeUserConfiguration: false);
+        var committed = false;
+        try
+        {
+            LoadAuthorizedPatternConfigsFromDirectory(
+                state,
+                fullRoot,
+                enumerateFileSystemEntries,
+                openFile);
+
+            committed = TryReplacePatternWorkspace(state);
+        }
+        finally
+        {
+            if (!committed)
+                AbandonPatternWorkspace(state);
+        }
+    }
+
+    internal static void LoadAuthorizedPatternConfigsForDirectory(
+        string projectRoot,
+        string directory,
+        Func<string, IEnumerable<string>> enumerateFileSystemEntries,
+        Func<string, FileStream> openFile)
+    {
+        var fullRoot = Path.GetFullPath(projectRoot);
+        var fullDirectory = Path.GetFullPath(directory);
+        if (!PathCasing.IsFullPathEqualOrParent(fullRoot, fullDirectory))
+            return;
+
+        PatternWorkspaceState? state;
+        lock (Gate)
+        {
+            state = PatternWorkspaces.FirstOrDefault(candidate =>
+                !candidate.IncludeUserConfiguration
+                && PathCasing.PathsEqual(candidate.WorkspaceRoot!, fullRoot));
+        }
+
+        if (state == null)
+            return;
+
+        LoadAuthorizedPatternConfigsFromDirectory(
+            state,
+            fullDirectory,
+            enumerateFileSystemEntries,
+            openFile);
+    }
+
+    private static void LoadAuthorizedPatternConfigsFromDirectory(
+        PatternWorkspaceState state,
+        string directory,
+        Func<string, IEnumerable<string>> enumerateFileSystemEntries,
+        Func<string, FileStream> openFile)
+    {
+        var patternDirectory = Path.Combine(directory, ".cdidx", "patterns");
+        if (!Directory.Exists(patternDirectory))
+            return;
+
+        var candidateCount = 0;
+        foreach (var path in enumerateFileSystemEntries(patternDirectory))
+        {
+            var extension = Path.GetExtension(path);
+            if (!string.Equals(extension, ".yaml", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(extension, ".yml", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (candidateCount >= MaxPatternConfigCandidatesPerDirectory)
+            {
+                ReportPatternDirectorySkipped(
+                    state,
+                    patternDirectory,
+                    $"too many pattern config candidates (maximum {MaxPatternConfigCandidatesPerDirectory} per directory)");
+                break;
+            }
+
+            candidateCount++;
+            TryLoadPatternConfig(state, path, "workspace", openFile);
+        }
+    }
+
     private static void LoadWorkspacePlugins(PatternWorkspaceState state, string fullRoot)
     {
         if (!WorkspacePluginsTrusted())
@@ -462,6 +575,8 @@ public static partial class ExtractorPluginRegistry
 
     private static void EnsurePluginsLoaded()
     {
+        if (AuthorizedConfigurationScope.Value)
+            return;
         if (Volatile.Read(ref suppressDefaultPluginDiscoveryForTesting))
             return;
         if (Volatile.Read(ref pluginsLoaded))
@@ -479,6 +594,8 @@ public static partial class ExtractorPluginRegistry
 
     private static void RefreshDefaultPlugins()
     {
+        if (AuthorizedConfigurationScope.Value)
+            return;
         if (Volatile.Read(ref suppressDefaultPluginDiscoveryForTesting))
             return;
 

@@ -56,6 +56,8 @@ public partial class McpServer
     internal static Action<string>? McpIndexFileContentLoadForTesting { get; set; }
     internal static Action? McpIndexAuthorizationCompletedForTesting { get; set; }
     internal static Action<string>? McpIndexEntryOpenBoundaryForTesting { get; set; }
+    internal static Action<string>? McpIndexDirectoryEnumerationBoundaryForTesting { get; set; }
+    internal static Action<string>? McpIndexDirectoryEnumerationCompletedForTesting { get; set; }
     internal static Action? McpIndexPostExtractionHookDiscoveryForTesting { get; set; }
     internal static Action? McpIndexFtsOptimizeForTesting { get; set; }
     internal static Action? McpIndexCSharpPrepassForTesting { get; set; }

@@ -242,10 +242,14 @@ diagnostic; they are not advertised as live MCP status after the server stops.
 
 MCP `index` binds authorization to the canonical directory and filesystem
 identity captured before traversal and keeps a no-follow root handle for the
-run. Directory listings and file reads compare the pre-open identity, the
-opened handle identity, and post-open canonical containment; a link or identity
-change stops the run with a `permission_denied` tool error before content is
-read. Successful and dry-run structured results, and audit JSONL records for
+run. Directory listings are performed relative to the retained directory handle
+on Linux, macOS, and Windows; file reads compare the pre-open identity, the opened
+handle identity, and post-open canonical containment. A link or identity change
+stops the run with a `permission_denied` tool error before content is read.
+Language-map and pattern sidecars are confined to the authorized project tree,
+opened through the same identity-bound seam, and cached separately from wider
+CLI/user configuration. Executable workspace plugins are not discovered by MCP
+indexing. Successful and dry-run structured results, and audit JSONL records for
 post-authorization failures, expose the same opaque `checked_root_identity` token.
 If a containing Git repository is outside the authorized roots, ignore-rule
 discovery stays at the requested project root instead of reading its parent.
@@ -599,12 +603,15 @@ abandoned count と deadline 状態は sink の shutdown result と上限付き 
 diagnostic で報告し、server 停止後に live MCP status として公開しません。
 
 MCP `index` は走査前に取得した canonical directory と filesystem identity に
-認可を結び付け、run 中は no-follow の root handle を保持します。directory listing と
-file read では、open 前の identity、実際に開いた handle の identity、open 後の canonical
-containment を照合し、link または identity が変化した場合は内容を読む前に
-`permission_denied` tool error で処理を停止します。成功時と dry-run の structured
-result、および認可後に失敗した場合の audit JSONL record は、同じ opaque な
-`checked_root_identity` token を公開します。包含する Git repository が認可 root 外の
+認可を結び付け、run 中は no-follow の root handle を保持します。directory listing は
+Linux / macOS / Windows のすべてで保持中の directory handle を基準に行い、file read では
+open 前の identity、実際に開いた handle の identity、open 後の canonical containment を
+照合します。link または identity が変化した場合は内容を読む前に `permission_denied`
+tool error で処理を停止します。language-map / pattern sidecar は認可済み project tree 内に
+限定して同じ identity-bound seam から開き、より広い CLI / user 設定とは別 snapshot に
+cache します。MCP indexing では executable workspace plugin を探索しません。成功時と
+dry-run の structured result、および認可後に失敗した場合の audit JSONL record は、同じ
+opaque な `checked_root_identity` token を公開します。包含する Git repository が認可 root 外の
 場合、ignore-rule discovery は親を読まず、要求された project root 内に留まります。
 
 MCP rate limiting が有効な場合、direct な `tools/call` request はすべて tool 名、

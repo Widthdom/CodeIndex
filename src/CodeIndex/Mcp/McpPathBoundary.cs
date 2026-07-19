@@ -19,6 +19,8 @@ internal static class McpPathBoundary
         private readonly SafeFileHandle _rootHandle;
         private readonly Func<string, bool> _isPathAuthorized;
         private readonly Action<string>? _entryOpenBoundary;
+        private readonly Action<string>? _directoryEnumerationBoundary;
+        private readonly Action<string>? _directoryEnumerationCompleted;
 
         internal IndexRootAuthorization(
             string requestedPath,
@@ -26,7 +28,9 @@ internal static class McpPathBoundary
             FileIndexer.FileIdentity rootIdentity,
             SafeFileHandle rootHandle,
             Func<string, bool> isPathAuthorized,
-            Action<string>? entryOpenBoundary)
+            Action<string>? entryOpenBoundary,
+            Action<string>? directoryEnumerationBoundary,
+            Action<string>? directoryEnumerationCompleted)
         {
             _requestedPath = requestedPath;
             CanonicalPath = canonicalPath;
@@ -34,6 +38,8 @@ internal static class McpPathBoundary
             _rootHandle = rootHandle;
             _isPathAuthorized = isPathAuthorized;
             _entryOpenBoundary = entryOpenBoundary;
+            _directoryEnumerationBoundary = directoryEnumerationBoundary;
+            _directoryEnumerationCompleted = directoryEnumerationCompleted;
             CheckedRootIdentity = CreateRootIdentityToken(rootIdentity);
         }
 
@@ -42,6 +48,7 @@ internal static class McpPathBoundary
 
         internal void EnsureAuthorizedEntry(string path)
         {
+            path = LongPath.RemoveWindowsPrefix(path);
             EnsureStableRoot();
 
             if (!TryResolveExistingPath(path, out var canonicalEntry))
@@ -52,6 +59,7 @@ internal static class McpPathBoundary
 
         internal FileStream OpenAuthorizedRead(string path)
         {
+            path = LongPath.RemoveWindowsPrefix(path);
             var expectedIdentity = CaptureAuthorizedEntryIdentity(path);
             _entryOpenBoundary?.Invoke(path);
 
@@ -70,6 +78,7 @@ internal static class McpPathBoundary
 
         internal IEnumerable<string> EnumerateAuthorizedFileSystemEntries(string path)
         {
+            path = LongPath.RemoveWindowsPrefix(path);
             var expectedIdentity = CaptureAuthorizedEntryIdentity(path);
             _entryOpenBoundary?.Invoke(path);
             if (!FileIndexer.TryOpenDirectoryIdentityHandle(path, out var directoryHandle, out var openedIdentity))
@@ -89,13 +98,15 @@ internal static class McpPathBoundary
                     throw new McpIndexAuthorizationException(CheckedRootIdentity, "directory_identity_changed");
 
                 EnsureOpenedEntryIdentity(path, directoryHandle, expectedIdentity, "directory_identity_changed");
-                var enumerationPath = FileIndexer.TryGetDirectoryHandlePath(directoryHandle, out var handlePath)
-                    ? handlePath
-                    : path;
-                var entries = CodeIndex.FileSystemTraversalPolicy
-                    .EnumerateFileSystemEntries(LongPath.EnsureWindowsPrefix(enumerationPath))
-                    .Select(entry => Path.Combine(path, Path.GetFileName(LongPath.RemoveWindowsPrefix(entry))))
-                    .ToArray();
+                _directoryEnumerationBoundary?.Invoke(path);
+                if (!FileIndexer.TryEnumerateDirectoryHandleEntries(directoryHandle, out var entryNames))
+                {
+                    throw new McpIndexAuthorizationException(
+                        CheckedRootIdentity,
+                        "handle_bound_enumeration_unavailable");
+                }
+                _directoryEnumerationCompleted?.Invoke(path);
+                var entries = entryNames.Select(entryName => Path.Combine(path, entryName)).ToArray();
 
                 EnsureOpenedEntryIdentity(path, directoryHandle, expectedIdentity, "directory_identity_changed");
                 foreach (var entry in entries)
@@ -203,6 +214,8 @@ internal static class McpPathBoundary
         string requestedPath,
         Func<string, bool> isPathAuthorized,
         Action<string>? entryOpenBoundary,
+        Action<string>? directoryEnumerationBoundary,
+        Action<string>? directoryEnumerationCompleted,
         out IndexRootAuthorization? authorization,
         out string? error)
     {
@@ -232,7 +245,9 @@ internal static class McpPathBoundary
             identity,
             rootHandle,
             isPathAuthorized,
-            entryOpenBoundary);
+            entryOpenBoundary,
+            directoryEnumerationBoundary,
+            directoryEnumerationCompleted);
         error = null;
         return true;
     }
@@ -356,7 +371,8 @@ internal static class McpPathBoundary
     }
 }
 
-internal sealed class McpIndexAuthorizationException(string checkedRootIdentity, string reason) : Exception
+internal sealed class McpIndexAuthorizationException(string checkedRootIdentity, string reason)
+    : Exception, IFileSystemAuthorizationFailure
 {
     internal string CheckedRootIdentity { get; } = checkedRootIdentity;
     internal string Reason { get; } = reason;

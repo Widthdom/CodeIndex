@@ -280,7 +280,8 @@ public partial class FileIndexer
             _projectRoot,
             knownIndexability,
             LoadLanguageMapOverridesForIndexing,
-            _openReadForIndexContent);
+            _openReadForIndexContent,
+            allowPatternConfigDiscovery: !_bindConfigurationReadsToFileSystemIdentity);
 
     private IReadOnlyDictionary<string, string> LoadLanguageMapOverridesForIndexing(string? startDirectory)
     {
@@ -297,7 +298,12 @@ public partial class FileIndexer
             if (TryReuseParentLanguageMapOverrides(startDirectory, out cached))
                 return CacheLastLanguageMapOverrideLookup(startDirectory, cached);
 
-            var loaded = LanguageMapOverrides.LoadEffectiveMapFromDirectory(startDirectory);
+            var loaded = _bindConfigurationReadsToFileSystemIdentity
+                ? LanguageMapOverrides.LoadEffectiveMapFromDirectoryWithinScope(
+                    startDirectory,
+                    _projectRoot,
+                    _openReadForIndexContent)
+                : LanguageMapOverrides.LoadEffectiveMapFromDirectory(startDirectory);
             _languageMapOverrideCache[startDirectory] = loaded;
             return CacheLastLanguageMapOverrideLookup(startDirectory, loaded);
         }
@@ -329,11 +335,13 @@ public partial class FileIndexer
         return true;
     }
 
-    private static bool LanguageMapOverrideFileExists(string directory)
+    private bool LanguageMapOverrideFileExists(string directory)
     {
         try
         {
-            return File.Exists(Path.Combine(directory, LanguageMapOverrides.WorkspaceFileName));
+            var path = Path.Combine(directory, LanguageMapOverrides.WorkspaceFileName);
+            _pathAccessValidator?.Invoke(path);
+            return File.Exists(path);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
         {
@@ -382,7 +390,8 @@ public partial class FileIndexer
         string? projectRoot,
         FileProbeStatus? knownIndexability = null,
         Func<string?, IReadOnlyDictionary<string, string>>? languageMapOverrideResolver = null,
-        Func<string, FileStream>? openReadForIndexContent = null)
+        Func<string, FileStream>? openReadForIndexContent = null,
+        bool allowPatternConfigDiscovery = true)
     {
         // Exact filename matching beats extension lookup so manifest-style filenames like
         // `pyproject.toml` can map to a dependency category instead of the generic file type.
@@ -420,7 +429,8 @@ public partial class FileIndexer
 
         if (!string.IsNullOrEmpty(ext))
         {
-            ExtractorPluginRegistry.LoadPatternConfigsForPath(filePath, projectRoot);
+            if (allowPatternConfigDiscovery)
+                ExtractorPluginRegistry.LoadPatternConfigsForPath(filePath, projectRoot);
             if (ExtractorPluginRegistry.TryGetLanguageForExtension(ext, projectRoot, out pluginLang))
                 return new LanguageDetectionResult(FileProbeStatus.Supported, pluginLang);
 

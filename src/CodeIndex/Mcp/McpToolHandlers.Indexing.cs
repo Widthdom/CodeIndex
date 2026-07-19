@@ -99,6 +99,8 @@ public partial class McpServer
                 requestedProjectPath,
                 IsPathAuthorized,
                 McpIndexEntryOpenBoundaryForTesting,
+                McpIndexDirectoryEnumerationBoundaryForTesting,
+                McpIndexDirectoryEnumerationCompletedForTesting,
                 out var authorization,
                 out var authorizationError))
         {
@@ -106,6 +108,7 @@ public partial class McpServer
         }
 
         using var authorizedRoot = authorization!;
+        using var authorizedExtractorConfiguration = ExtractorPluginRegistry.BeginAuthorizedConfigurationScope();
         if (_currentIndexAuditContext.Value is { } auditContext)
             auditContext.CheckedRootIdentity = authorizedRoot.CheckedRootIdentity;
         McpIndexAuthorizationCompletedForTesting?.Invoke();
@@ -130,7 +133,8 @@ public partial class McpServer
                 generatedCodePatterns: IndexCommandRunner.ReadGeneratedCodePatternsFromEnvironment(),
                 pathAccessValidator: authorizedRoot.EnsureAuthorizedEntry,
                 openReadForIndexContent: authorizedRoot.OpenAuthorizedRead,
-                enumerateFileSystemEntries: authorizedRoot.EnumerateAuthorizedFileSystemEntries);
+                enumerateFileSystemEntries: authorizedRoot.EnumerateAuthorizedFileSystemEntries,
+                bindConfigurationReadsToFileSystemIdentity: true);
             var scan = dryRunIndexer.ScanFilesDetailed(cancellationToken: _currentRequestToken.Value);
             if (memorySamples != null)
                 memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
@@ -262,7 +266,8 @@ public partial class McpServer
             generatedCodePatterns: IndexCommandRunner.ReadGeneratedCodePatternsFromEnvironment(),
             pathAccessValidator: authorizedRoot.EnsureAuthorizedEntry,
             openReadForIndexContent: authorizedRoot.OpenAuthorizedRead,
-            enumerateFileSystemEntries: authorizedRoot.EnumerateAuthorizedFileSystemEntries);
+            enumerateFileSystemEntries: authorizedRoot.EnumerateAuthorizedFileSystemEntries,
+            bindConfigurationReadsToFileSystemIdentity: true);
         using var postExtractionHooks = new IndexCommandRunner.LazyDisposable<PostExtractionHookRunner>(() =>
         {
             McpIndexPostExtractionHookDiscoveryForTesting?.Invoke();

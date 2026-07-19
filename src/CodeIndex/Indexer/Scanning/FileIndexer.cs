@@ -71,6 +71,7 @@ public partial class FileIndexer
     private readonly GeneratedCodePatternMatcher _generatedCodePatterns;
     private readonly Action<string>? _pathAccessValidator;
     private readonly Func<string, FileStream> _openReadForIndexContent;
+    private readonly bool _bindConfigurationReadsToFileSystemIdentity;
     // Submodule working-tree paths declared in <ignoreRuleRoot>/.gitmodules, relative to
     // _projectRoot and slash-normalized. Used to override SkipDirs so that submodules
     // hosted under SkipDirs-named directories (e.g. vendor/foo) remain visible to the
@@ -191,7 +192,8 @@ public partial class FileIndexer
         int? maxDanglingFileSystemEntryScanCandidates = null,
         IReadOnlyList<string>? generatedCodePatterns = null,
         Action<string>? pathAccessValidator = null,
-        Func<string, FileStream>? openReadForIndexContent = null)
+        Func<string, FileStream>? openReadForIndexContent = null,
+        bool bindConfigurationReadsToFileSystemIdentity = false)
     {
         _projectRoot = Path.GetFullPath(projectRoot);
         _projectRootRelativePrefix = CreateProjectRootRelativePrefix(_projectRoot);
@@ -209,13 +211,24 @@ public partial class FileIndexer
         _contentLoader = new FileContentLoader(_maxFileSizeBytes, _openReadForIndexContent);
         _symlinkPolicy = symlinkPolicy;
         _pathAccessValidator = pathAccessValidator;
+        _bindConfigurationReadsToFileSystemIdentity = bindConfigurationReadsToFileSystemIdentity;
         _maxDanglingFileSystemEntryScanCandidates = Math.Max(
             1,
             maxDanglingFileSystemEntryScanCandidates ?? MaxDanglingFileSystemEntryScanCandidates);
         _generatedCodePatterns = GeneratedCodePatternMatcher.FromPatterns(generatedCodePatterns, ignoreCase);
         _pathAccessValidator?.Invoke(_projectRoot);
         _pathAccessValidator?.Invoke(_ignoreRuleRoot);
-        ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(_projectRoot);
+        if (_bindConfigurationReadsToFileSystemIdentity)
+        {
+            ExtractorPluginRegistry.ReloadAuthorizedPatternConfigsForProjectRoot(
+                _projectRoot,
+                _enumerateFileSystemEntries,
+                _openReadForIndexContent);
+        }
+        else
+        {
+            ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(_projectRoot);
+        }
         var pathComparer = _ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         (_submodulePaths, _submoduleAncestorPaths, _submoduleLoadWarnings) = LoadGitSubmodulePaths(_ignoreRuleRoot, _projectRoot, pathComparer);
     }
