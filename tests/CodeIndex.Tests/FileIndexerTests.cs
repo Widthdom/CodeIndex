@@ -1978,6 +1978,34 @@ public partial class FileIndexerTests
             FileIndexer.LanguageDetectionSource.HeaderLexicalFallback,
             FileIndexer.LanguageDetectionConfidence.Low);
 
+        const string spliceFormedDelimiterHeader = """
+            /\
+            / namespace line_comment_phantom { class Phantom {}; }
+            /\
+            * namespace block_comment_phantom { class Phantom {}; } *\
+            /
+            const char *text = R\
+            "tag(namespace raw_string_phantom { class Phantom {}; })tag\
+            ";
+            typedef struct real_c_type { int value; } real_c_type;
+            """;
+        AssertHeaderDetection(
+            spliceFormedDelimiterHeader,
+            "c",
+            FileIndexer.LanguageDetectionSource.HeaderLexicalFallback,
+            FileIndexer.LanguageDetectionConfidence.Low);
+
+        const string spliceFormedBlockCommentCloserHeader = """
+            /* comment closed through translation-phase splicing *\
+            /
+            namespace real_cpp { class RealType {}; }
+            """;
+        AssertHeaderDetection(
+            spliceFormedBlockCommentCloserHeader,
+            "cpp",
+            FileIndexer.LanguageDetectionSource.HeaderLexicalMarker,
+            FileIndexer.LanguageDetectionConfidence.High);
+
         const string mixedHeader = """
             typedef struct legacy_point { int x; int y; } legacy_point;
             #ifdef __cplusplus
@@ -2045,6 +2073,22 @@ public partial class FileIndexerTests
             "cpp",
             FileIndexer.LanguageDetectionSource.HeaderSampledLexicalMarker,
             FileIndexer.LanguageDetectionConfidence.Medium);
+
+        const int boundaryFixtureLength = 100_000;
+        const int middleSampleStart = (boundaryFixtureLength / 2) - ((48 * 1024 / 3) / 2);
+        var boundarySplitIdentifierPrefix = new string('x', middleSampleStart - 2);
+        const string boundarySplitIdentifier = "myclass value;\n";
+        var boundarySplitIdentifierHeader = boundarySplitIdentifierPrefix
+            + boundarySplitIdentifier
+            + new string(
+                'x',
+                boundaryFixtureLength - boundarySplitIdentifierPrefix.Length - boundarySplitIdentifier.Length);
+        Assert.Equal(boundaryFixtureLength, boundarySplitIdentifierHeader.Length);
+        AssertHeaderDetection(
+            boundarySplitIdentifierHeader,
+            "c",
+            FileIndexer.LanguageDetectionSource.HeaderSampledLexicalFallback,
+            FileIndexer.LanguageDetectionConfidence.Low);
 
         var multibyteHeader = "/*" + new string('界', 18_000) + "*/\n"
             + "namespace utf8_sampled { class Utf8Marker {}; }\n"

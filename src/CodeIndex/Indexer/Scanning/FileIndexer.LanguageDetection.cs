@@ -525,12 +525,17 @@ public partial class FileIndexer
         var maskedSamples = ReferenceExtractor.MaskCppLexicalRanges(
             content,
             ranges,
-            maskPreprocessorPayloads: true);
+            maskPreprocessorPayloads: true,
+            collapseLineSplices: true);
 
-        foreach (var maskedSample in maskedSamples)
+        for (var sampleIndex = 0; sampleIndex < maskedSamples.Length; sampleIndex++)
         {
-            if (ContainsCppHeaderMarker(maskedSample))
+            if (ContainsCppHeaderMarker(
+                maskedSamples[sampleIndex],
+                firstLineIsComplete: IsCppLogicalLineBoundary(content, ranges[sampleIndex].Start)))
+            {
                 return new CppHeaderDetectionResult(true, usedStrategicSampling);
+            }
         }
 
         return new CppHeaderDetectionResult(false, usedStrategicSampling);
@@ -568,20 +573,47 @@ public partial class FileIndexer
         return mergedRanges;
     }
 
-    private static bool ContainsCppHeaderMarker(string content)
+    private static bool ContainsCppHeaderMarker(string content, bool firstLineIsComplete)
     {
         var lines = content.Split('\n');
 
-        foreach (var maskedLine in lines)
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
-            var line = maskedLine.AsSpan();
+            var line = lines[lineIndex].AsSpan();
             if (line.Length > 0 && line[^1] == '\r')
                 line = line[..^1];
-            if (LooksLikeCppHeaderLine(line))
+            if (LooksLikeCppHeaderLine(line, allowLineStartMarkers: lineIndex > 0 || firstLineIsComplete))
                 return true;
         }
 
         return false;
+    }
+
+    private static bool IsCppLogicalLineBoundary(string content, int index)
+    {
+        if (index == 0)
+            return true;
+        if (index < 0 || index > content.Length)
+            return false;
+
+        var lineBreakIndex = index - 1;
+        if (content[lineBreakIndex] == '\n')
+            return !IsCppHeaderSplicedLineBreak(content, lineBreakIndex);
+        if (content[lineBreakIndex] == '\r')
+        {
+            return (index >= content.Length || content[index] != '\n')
+                && !IsCppHeaderSplicedLineBreak(content, lineBreakIndex);
+        }
+
+        return false;
+    }
+
+    private static bool IsCppHeaderSplicedLineBreak(string content, int lineBreakIndex)
+    {
+        var precedingIndex = lineBreakIndex - 1;
+        if (content[lineBreakIndex] == '\n' && precedingIndex >= 0 && content[precedingIndex] == '\r')
+            precedingIndex--;
+        return precedingIndex >= 0 && content[precedingIndex] == '\\';
     }
 
     private static bool FitsUtf8ByteBudget(string content, int byteBudget)
@@ -663,22 +695,23 @@ public partial class FileIndexer
         return index;
     }
 
-    private static bool LooksLikeCppHeaderLine(ReadOnlySpan<char> line)
+    private static bool LooksLikeCppHeaderLine(ReadOnlySpan<char> line, bool allowLineStartMarkers)
     {
         line = line.Trim();
         if (line.IsEmpty)
             return false;
 
-        if (line.StartsWith("namespace ", StringComparison.Ordinal)
-            || line.StartsWith("template ", StringComparison.Ordinal)
-            || line.StartsWith("template<", StringComparison.Ordinal)
-            || line.StartsWith("using ", StringComparison.Ordinal)
-            || line.StartsWith("class ", StringComparison.Ordinal)
-            || line.StartsWith("enum class ", StringComparison.Ordinal)
-            || line.StartsWith("enum struct ", StringComparison.Ordinal)
-            || line.StartsWith("public:", StringComparison.Ordinal)
-            || line.StartsWith("private:", StringComparison.Ordinal)
-            || line.StartsWith("protected:", StringComparison.Ordinal))
+        if (allowLineStartMarkers
+            && (line.StartsWith("namespace ", StringComparison.Ordinal)
+                || line.StartsWith("template ", StringComparison.Ordinal)
+                || line.StartsWith("template<", StringComparison.Ordinal)
+                || line.StartsWith("using ", StringComparison.Ordinal)
+                || line.StartsWith("class ", StringComparison.Ordinal)
+                || line.StartsWith("enum class ", StringComparison.Ordinal)
+                || line.StartsWith("enum struct ", StringComparison.Ordinal)
+                || line.StartsWith("public:", StringComparison.Ordinal)
+                || line.StartsWith("private:", StringComparison.Ordinal)
+                || line.StartsWith("protected:", StringComparison.Ordinal)))
         {
             return true;
         }

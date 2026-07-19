@@ -90,7 +90,8 @@ public static partial class ReferenceExtractor
             ? SplitContentLines(MaskCppLexicalRanges(
                 maskedContent,
                 [new CppLexicalRange(0, maskedContent.Length)],
-                maskPreprocessorPayloads: false)[0])
+                maskPreprocessorPayloads: false,
+                collapseLineSplices: false)[0])
             : language == "pascal"
             ? MaskPascalBlockCommentLines(structuralLines)
             : language == "haskell"
@@ -193,7 +194,8 @@ public static partial class ReferenceExtractor
     internal static string[] MaskCppLexicalRanges(
         string content,
         IReadOnlyList<CppLexicalRange> ranges,
-        bool maskPreprocessorPayloads)
+        bool maskPreprocessorPayloads,
+        bool collapseLineSplices)
     {
         if (ranges.Count == 0)
             return [];
@@ -231,8 +233,17 @@ public static partial class ReferenceExtractor
 
         void WriteRange(int start, int length, bool masked)
         {
-            for (var offset = 0; offset < length; offset++)
-                WriteAt(start + offset, masked);
+            var end = start + length;
+            for (var cursor = start; cursor < end; cursor++)
+            {
+                if (collapseLineSplices && TryGetCppLineSpliceLength(content, cursor, out var spliceLength))
+                {
+                    cursor += spliceLength - 1;
+                    continue;
+                }
+
+                WriteAt(cursor, masked);
+            }
         }
 
         var index = 0;
@@ -242,12 +253,20 @@ public static partial class ReferenceExtractor
             var isLineBreak = IsCppPhysicalLineBreak(content, index);
             var isSplicedLineBreak = isLineBreak && IsCppSplicedLineBreak(content, index);
 
+            if (TryGetCppLineSpliceLength(content, index, out var spliceLength))
+            {
+                if (!collapseLineSplices)
+                    WriteRange(index, spliceLength, masked: true);
+                index += spliceLength;
+                continue;
+            }
+
             if (rawStringTerminator != null)
             {
-                if (content.AsSpan(index).StartsWith(rawStringTerminator, StringComparison.Ordinal))
+                if (TryMatchCppLogicalSequence(content, index, rawStringTerminator, out var rawTerminatorEnd))
                 {
-                    WriteRange(index, rawStringTerminator.Length, masked: true);
-                    index += rawStringTerminator.Length;
+                    WriteRange(index, rawTerminatorEnd - index, masked: true);
+                    index = rawTerminatorEnd;
                     rawStringTerminator = null;
                     continue;
                 }
@@ -259,10 +278,10 @@ public static partial class ReferenceExtractor
 
             if (inBlockComment)
             {
-                if (ch == '*' && index + 1 < content.Length && content[index + 1] == '/')
+                if (TryMatchCppLogicalSequence(content, index, "*/", out var blockCommentEnd))
                 {
-                    WriteRange(index, 2, masked: true);
-                    index += 2;
+                    WriteRange(index, blockCommentEnd - index, masked: true);
+                    index = blockCommentEnd;
                     inBlockComment = false;
                     continue;
                 }
@@ -290,17 +309,8 @@ public static partial class ReferenceExtractor
             {
                 if (ch == '\\' && index + 1 < content.Length)
                 {
-                    WriteAt(index, masked: true);
-                    if (content[index + 1] == '\r' && index + 2 < content.Length && content[index + 2] == '\n')
-                    {
-                        WriteRange(index + 1, 2, masked: true);
-                        index += 3;
-                    }
-                    else
-                    {
-                        WriteAt(index + 1, masked: true);
-                        index += 2;
-                    }
+                    WriteRange(index, 2, masked: true);
+                    index += 2;
                     continue;
                 }
 
@@ -352,19 +362,19 @@ public static partial class ReferenceExtractor
                 continue;
             }
 
-            if (ch == '/' && index + 1 < content.Length)
+            if (ch == '/')
             {
-                if (content[index + 1] == '/')
+                if (TryMatchCppLogicalSequence(content, index, "//", out var lineCommentEnd))
                 {
-                    WriteRange(index, 2, masked: true);
-                    index += 2;
+                    WriteRange(index, lineCommentEnd - index, masked: true);
+                    index = lineCommentEnd;
                     inLineComment = true;
                     continue;
                 }
-                if (content[index + 1] == '*')
+                if (TryMatchCppLogicalSequence(content, index, "/*", out var blockCommentStartEnd))
                 {
-                    WriteRange(index, 2, masked: true);
-                    index += 2;
+                    WriteRange(index, blockCommentStartEnd - index, masked: true);
+                    index = blockCommentStartEnd;
                     inBlockComment = true;
                     continue;
                 }
@@ -410,6 +420,50 @@ public static partial class ReferenceExtractor
         return precedingIndex >= 0 && content[precedingIndex] == '\\';
     }
 
+    private static bool TryGetCppLineSpliceLength(string content, int index, out int length)
+    {
+        length = 0;
+        if (content[index] != '\\' || index + 1 >= content.Length)
+            return false;
+
+        if (content[index + 1] == '\n' || content[index + 1] == '\r')
+        {
+            length = content[index + 1] == '\r'
+                && index + 2 < content.Length
+                && content[index + 2] == '\n'
+                    ? 3
+                    : 2;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryMatchCppLogicalSequence(
+        string content,
+        int index,
+        ReadOnlySpan<char> sequence,
+        out int physicalEnd)
+    {
+        var cursor = index;
+        foreach (var expected in sequence)
+        {
+            while (cursor < content.Length && TryGetCppLineSpliceLength(content, cursor, out var spliceLength))
+                cursor += spliceLength;
+
+            if (cursor >= content.Length || content[cursor] != expected)
+            {
+                physicalEnd = index;
+                return false;
+            }
+
+            cursor++;
+        }
+
+        physicalEnd = cursor;
+        return true;
+    }
+
     private static bool TryGetCppRawStringStart(
         string content,
         int index,
@@ -418,18 +472,21 @@ public static partial class ReferenceExtractor
     {
         terminator = string.Empty;
         openingLength = 0;
-        if (content[index] != 'R' || index + 1 >= content.Length || content[index + 1] != '"')
+        if (!TryMatchCppLogicalSequence(content, index, "R\"", out var cursor))
             return false;
 
         const int maxDelimiterLength = 16;
-        var delimiterStart = index + 2;
-        var delimiterEndLimit = Math.Min(content.Length, delimiterStart + maxDelimiterLength + 1);
-        for (var cursor = delimiterStart; cursor < delimiterEndLimit; cursor++)
+        var delimiter = new StringBuilder(maxDelimiterLength);
+        while (delimiter.Length <= maxDelimiterLength)
         {
+            while (cursor < content.Length && TryGetCppLineSpliceLength(content, cursor, out var spliceLength))
+                cursor += spliceLength;
+            if (cursor >= content.Length)
+                return false;
+
             var ch = content[cursor];
             if (ch == '(')
             {
-                var delimiter = content[delimiterStart..cursor];
                 terminator = ")" + delimiter + "\"";
                 openingLength = cursor - index + 1;
                 return true;
@@ -437,6 +494,9 @@ public static partial class ReferenceExtractor
 
             if (char.IsWhiteSpace(ch) || ch is '\\' or ')')
                 return false;
+
+            delimiter.Append(ch);
+            cursor++;
         }
 
         return false;
