@@ -223,7 +223,17 @@ public partial class DbReader
     // traversal, so there is no maxDepth contract to align here.
     // issue #2121 監査: deps は上限付きの集計クエリであり depth-bounded traversal ではないため、
     // maxDepth の inclusive/exclusive 契約は持たない。
-    public List<FileDependencyResult> GetFileDependencies(int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool reverse = false, CancellationToken cancellationToken = default)
+    public List<FileDependencyResult> GetFileDependencies(
+        int limit = 50,
+        string? lang = null,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false,
+        bool reverse = false,
+        CancellationToken cancellationToken = default,
+        IReadOnlyList<string>? dependencySymbols = null,
+        IReadOnlyList<string>? dependencySymbolFamilies = null,
+        bool suppressDependencyNoise = false)
     {
         lang = NormalizeQueryLanguage(lang);
         if (!_hasReferencesTable) return new List<FileDependencyResult>();
@@ -265,13 +275,25 @@ public partial class DbReader
                     WHERE lrp.source_lang = 'csharp'
                       AND lrp.identity_scoped = 1
                       AND lrp.resolution_state IN ('resolved', 'resolved_group')
-                      AND lrp.source_path != target_file.path
-                    ORDER BY lrp.source_path, lrp.symbol_name, lrp.reference_id" + resolvedIdentityLimitSql + @"
+                      AND lrp.source_path != target_file.path"
+            : string.Empty;
+        if (hasResolvedReferenceTargets)
+        {
+            AppendDependencySymbolFilter(
+                cmd,
+                ref resolvedCSharpEdgesSql,
+                "lrp.symbol_name",
+                dependencySymbols,
+                dependencySymbolFamilies,
+                suppressDependencyNoise,
+                "resolvedDependency");
+            resolvedCSharpEdgesSql += @"
+                     ORDER BY lrp.source_path, lrp.symbol_name, lrp.reference_id" + resolvedIdentityLimitSql + @"
                 ) resolved
                 GROUP BY resolved.source_path, resolved.target_path, resolved.symbol_name
                 UNION ALL
-                "
-            : string.Empty;
+                ";
+        }
         // Aggregate logical reference sites per source-file/name first, then join that bounded
         // set to distinct target files. This avoids the per-reference × per-symbol explosion that
         // could exhaust SQLite temp-store on large indexes with many same-named symbols.
@@ -435,6 +457,24 @@ public partial class DbReader
                        is_metadata,
                        COUNT(*) AS ref_count
                 FROM logical_references
+                WHERE 1 = 1";
+        // C# reference names match the public dependency symbol, so filtering them here
+        // bounds source aggregation. Other languages may resolve an alias or path-like
+        // reference to a differently named target; retain those rows until target_files
+        // applies the public symbol filter.
+        // C# の reference 名は公開 dependency symbol と一致するため、ここで絞って source
+        // 集約を制限する。他言語は alias や path 形式の reference を異なる target 名へ
+        // 解決する場合があるため、target_files が公開 symbol filter を適用するまで保持する。
+        AppendDependencySymbolFilter(
+            cmd,
+            ref sql,
+            "symbol_name",
+            dependencySymbols,
+            dependencySymbolFamilies,
+            suppressDependencyNoise,
+            "sourceDependency",
+            "source_lang = 'csharp'");
+        sql += @"
                 GROUP BY source_file_id, source_path, source_lang, identity_scoped, symbol_name, symbol_segment_count, allow_leaf_fallback, raw_symbol_name, context, column_number, raw_reference_kind, logical_reference_kind, is_attribute_alias, is_metadata
             )";
         if (lang == "csharp")
@@ -469,6 +509,14 @@ public partial class DbReader
             }
             if (excludeTests)
                 sql += $" AND NOT {DependencyTestPathCondition("dst.path")}";
+            AppendDependencySymbolFilter(
+                cmd,
+                ref sql,
+                targetLogicalSymbolNameExpr,
+                dependencySymbols,
+                dependencySymbolFamilies,
+                suppressDependencyNoise,
+                "boundedTargetDependency");
             sql += @"
                 GROUP BY dst.path, " + targetLogicalSymbolNameExpr + @"
             ),
@@ -546,6 +594,15 @@ public partial class DbReader
         }
         if (excludeTests)
             sql += $" AND NOT {DependencyTestPathCondition($"{targetFilterAlias}.path")}";
+        AppendDependencySymbolFilter(
+            cmd,
+            ref sql,
+            targetLogicalSymbolNameExpr,
+            dependencySymbols,
+            dependencySymbolFamilies,
+            suppressDependencyNoise,
+            "targetDependency",
+            "dst.lang = 'csharp'");
         sql += @"
                 GROUP BY dst.path, dst.lang, " + targetLogicalSymbolNameExpr + @", " + targetLogicalSymbolSegmentCountExpr + @"
             ),
@@ -677,7 +734,16 @@ public partial class DbReader
                         WHERE py_import.file_id = snc.source_file_id
                           AND py_import.kind = 'import'
                           AND python_import_resolves(snc.source_path, tf.target_path, snc.symbol_name, snc.raw_reference_kind, snc.context, snc.column_number, " + pythonImportSignatureExpr + @")
-                  ))
+                  ))";
+        AppendDependencySymbolFilter(
+            cmd,
+            ref sql,
+            "tf.symbol_name",
+            dependencySymbols,
+            dependencySymbolFamilies,
+            suppressDependencyNoise,
+            "edgeDependency");
+        sql += @"
                 UNION ALL
                 -- Dockerfile stages are symbols within one file, so their dependency edge is
                 -- intentionally a self-file edge. Keep this exception stage-specific rather
@@ -714,6 +780,14 @@ public partial class DbReader
         }
         if (reverse && excludeTests)
             sql += $" AND NOT {DependencyTestPathCondition("self_dst.path")}";
+        AppendDependencySymbolFilter(
+            cmd,
+            ref sql,
+            "snc.symbol_name",
+            dependencySymbols,
+            dependencySymbolFamilies,
+            suppressDependencyNoise,
+            "dockerDependency");
         sql += @"
                 UNION ALL
                 SELECT snc.source_path,
@@ -723,9 +797,18 @@ public partial class DbReader
                 FROM bounded_source_name_counts snc
                 JOIN path_target_files ptf
                   ON ptf.target_path = markdown_resolve_path(snc.source_path, snc.symbol_name)
-                WHERE snc.source_lang IN ('msbuild', 'solution')
+                 WHERE snc.source_lang IN ('msbuild', 'solution')
                   AND snc.logical_reference_kind IN ('import', 'project_reference')
-                  AND snc.source_path != ptf.target_path
+                  AND snc.source_path != ptf.target_path";
+        AppendDependencySymbolFilter(
+            cmd,
+            ref sql,
+            "snc.symbol_name",
+            dependencySymbols,
+            dependencySymbolFamilies,
+            suppressDependencyNoise,
+            "pathDependency");
+        sql += @"
             ),
             edge_totals AS (
                 SELECT source_path,
@@ -783,17 +866,25 @@ public partial class DbReader
 
         var results = new List<FileDependencyResult>();
         cancellationToken.ThrowIfCancellationRequested();
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
+        using var cancellationRegistration = cancellationToken.Register(static state => ((SqliteCommand)state!).Cancel(), cmd);
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            results.Add(new FileDependencyResult
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
             {
-                SourcePath = reader.GetString(0),
-                TargetPath = reader.GetString(1),
-                ReferenceCount = reader.GetInt32(2),
-                Symbols = reader.GetString(3),
-            });
+                cancellationToken.ThrowIfCancellationRequested();
+                results.Add(new FileDependencyResult
+                {
+                    SourcePath = reader.GetString(0),
+                    TargetPath = reader.GetString(1),
+                    ReferenceCount = reader.GetInt32(2),
+                    Symbols = reader.GetString(3),
+                });
+            }
+        }
+        catch (SqliteException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(cancellationToken);
         }
         return RankDependencyResults(results, limit);
     }
@@ -820,7 +911,10 @@ public partial class DbReader
         IReadOnlyList<string>? excludePathPatterns = null,
         bool excludeTests = false,
         bool reverse = false,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlyList<string>? dependencySymbols = null,
+        IReadOnlyList<string>? dependencySymbolFamilies = null,
+        bool suppressDependencyNoise = false)
     {
         candidateRowCount = 0;
         lang = NormalizeQueryLanguage(lang);
@@ -863,6 +957,14 @@ public partial class DbReader
             sql += $" AND NOT {DependencyTestPathCondition("src.path")}";
             sql += $" AND NOT {DependencyTestPathCondition("dst.path")}";
         }
+        AppendDependencySymbolFilter(
+            cmd,
+            ref sql,
+            "r.symbol_name",
+            dependencySymbols,
+            dependencySymbolFamilies,
+            suppressDependencyNoise,
+            "cycleDependency");
         sql += @"
                 LIMIT @limit
             ),
@@ -911,22 +1013,94 @@ public partial class DbReader
         SqliteCommandPolicy.Add(cmd, "@symbolSampleLimit", DependencySymbolSampleLimit);
 
         var results = new List<FileDependencyResult>();
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
+        using var cancellationRegistration = cancellationToken.Register(static state => ((SqliteCommand)state!).Cancel(), cmd);
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            candidateRowCount++;
-            results.Add(new FileDependencyResult
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
             {
-                SourcePath = reader.GetString(0),
-                TargetPath = reader.GetString(1),
-                ReferenceCount = reader.GetInt32(2),
-                RankingScore = reader.GetInt32(2),
-                Symbols = reader.GetString(3),
-            });
+                cancellationToken.ThrowIfCancellationRequested();
+                candidateRowCount++;
+                results.Add(new FileDependencyResult
+                {
+                    SourcePath = reader.GetString(0),
+                    TargetPath = reader.GetString(1),
+                    ReferenceCount = reader.GetInt32(2),
+                    RankingScore = reader.GetInt32(2),
+                    Symbols = reader.GetString(3),
+                });
+            }
+        }
+        catch (SqliteException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(cancellationToken);
         }
         return results;
     }
+
+    internal static void AppendDependencySymbolFilter(
+        SqliteCommand cmd,
+        ref string sql,
+        string symbolSql,
+        IReadOnlyList<string>? dependencySymbols,
+        IReadOnlyList<string>? dependencySymbolFamilies,
+        bool suppressDependencyNoise,
+        string parameterPrefix,
+        string? filterScopeSql = null)
+    {
+        if (dependencySymbols is { Count: > 0 } || dependencySymbolFamilies is { Count: > 0 })
+        {
+            var predicates = new List<string>(
+                (dependencySymbols?.Count ?? 0) + (dependencySymbolFamilies?.Count ?? 0));
+            if (dependencySymbols != null)
+            {
+                for (var i = 0; i < dependencySymbols.Count; i++)
+                {
+                    var parameterName = $"@{parameterPrefix}Symbol{i}";
+                    predicates.Add($"({symbolSql}) = {parameterName}");
+                    SqliteCommandPolicy.Add(cmd, parameterName, dependencySymbols[i]);
+                }
+            }
+            if (dependencySymbolFamilies != null)
+            {
+                for (var i = 0; i < dependencySymbolFamilies.Count; i++)
+                {
+                    var parameterName = $"@{parameterPrefix}Family{i}";
+                    predicates.Add($"({symbolSql}) GLOB {parameterName}");
+                    SqliteCommandPolicy.Add(cmd, parameterName, EscapeSqliteGlobLiteral(dependencySymbolFamilies[i]) + "*");
+                }
+            }
+            AppendScopedDependencyPredicate(ref sql, "(" + string.Join(" OR ", predicates) + ")", filterScopeSql);
+        }
+
+        if (!suppressDependencyNoise)
+            return;
+
+        var noiseParameters = new List<string>(DependencyNoiseProfile.SymbolNames.Length);
+        for (var i = 0; i < DependencyNoiseProfile.SymbolNames.Length; i++)
+        {
+            var parameterName = $"@{parameterPrefix}Noise{i}";
+            noiseParameters.Add(parameterName);
+            SqliteCommandPolicy.Add(cmd, parameterName, DependencyNoiseProfile.SymbolNames[i]);
+        }
+        AppendScopedDependencyPredicate(
+            ref sql,
+            $"({symbolSql}) NOT IN ({string.Join(", ", noiseParameters)})",
+            filterScopeSql);
+    }
+
+    private static void AppendScopedDependencyPredicate(ref string sql, string predicate, string? filterScopeSql)
+    {
+        sql += filterScopeSql == null
+            ? " AND " + predicate
+            : $" AND (NOT ({filterScopeSql}) OR {predicate})";
+    }
+
+    private static string EscapeSqliteGlobLiteral(string value)
+        => value
+            .Replace("[", "[[]", StringComparison.Ordinal)
+            .Replace("*", "[*]", StringComparison.Ordinal)
+            .Replace("?", "[?]", StringComparison.Ordinal);
 
     private static string DependencyTestPathCondition(string pathSql)
         => "(" + TestPathCondition.Replace("f.path", pathSql) + $" OR lower({pathSql}) LIKE '%.test%/%')";

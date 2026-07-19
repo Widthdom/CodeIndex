@@ -5007,7 +5007,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunDeps_JsonFiltersNoiseSymbolsAndAddsMetadata_Issue3943()
+    public void RunDeps_JsonPushesSymbolFiltersIntoSqlAndAddsMetadata_Issues3943And4619()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_symbol_filter");
         var projectRoot = project.Root;
@@ -5041,23 +5041,23 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(1, json.GetProperty("count").GetInt32());
         Assert.Equal("src/Caller.cs", edge.GetProperty("source_path").GetString());
         Assert.Equal("src/Targets.cs", edge.GetProperty("target_path").GetString());
-        Assert.Equal(8, edge.GetProperty("reference_count").GetInt32());
+        Assert.Equal(1, edge.GetProperty("reference_count").GetInt32());
         Assert.True(edge.GetProperty("ranking_score").GetDouble() > 0.0);
         Assert.Equal("Domain.Alpha", edge.GetProperty("symbols").GetString());
         Assert.True(queryContext.GetProperty("suppress_noise").GetBoolean());
         Assert.Equal("Domain.Alpha", queryContext.GetProperty("symbol")[0].GetString());
         Assert.Equal("Domain.", queryContext.GetProperty("symbol_family")[0].GetString());
         Assert.True(symbolFilter.GetProperty("suppress_noise").GetBoolean());
-        Assert.Equal(2, symbolFilter.GetProperty("edges_before").GetInt32());
+        Assert.Equal(1, symbolFilter.GetProperty("edges_before").GetInt32());
         Assert.Equal(1, symbolFilter.GetProperty("edges_after").GetInt32());
-        Assert.Equal(1, symbolFilter.GetProperty("edges_removed").GetInt32());
-        Assert.Equal(9, symbolFilter.GetProperty("symbols_before").GetInt32());
+        Assert.Equal(0, symbolFilter.GetProperty("edges_removed").GetInt32());
+        Assert.Equal(1, symbolFilter.GetProperty("symbols_before").GetInt32());
         Assert.Equal(1, symbolFilter.GetProperty("symbols_after").GetInt32());
-        Assert.Equal(8, symbolFilter.GetProperty("symbols_removed").GetInt32());
+        Assert.Equal(0, symbolFilter.GetProperty("symbols_removed").GetInt32());
     }
 
     [Fact]
-    public void RunDeps_CyclesSuppressNoiseRemovesGenericAppendCycle_Issue4114()
+    public void RunDeps_CyclesPushesNoiseFilterBeforeCandidateLimit_Issues4114And4619()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_append_noise_cycle");
         var projectRoot = project.Root;
@@ -5090,11 +5090,11 @@ public partial class QueryCommandRunnerTests
         Assert.Empty(json.GetProperty("cycles").EnumerateArray());
         Assert.True(symbolFilter.GetProperty("suppress_noise").GetBoolean());
         Assert.Equal(0, symbolFilter.GetProperty("edges_after").GetInt32());
-        Assert.True(symbolFilter.GetProperty("symbols_removed").GetInt32() > 0);
+        Assert.Equal(0, symbolFilter.GetProperty("symbols_removed").GetInt32());
     }
 
     [Fact]
-    public void RunDeps_CyclesApplySymbolFilters_Issue3943()
+    public void RunDeps_CyclesPushesSymbolFiltersBeforeCandidateLimit_Issues3943And4619()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_cycles_symbol_filter");
         var projectRoot = project.Root;
@@ -5116,7 +5116,7 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(0, json.GetProperty("count").GetInt32());
         Assert.Empty(json.GetProperty("cycles").EnumerateArray());
         Assert.Equal("NoSuchSymbol", json.GetProperty("query_context").GetProperty("symbol")[0].GetString());
-        Assert.Equal(2, symbolFilter.GetProperty("edges_before").GetInt32());
+        Assert.Equal(0, symbolFilter.GetProperty("edges_before").GetInt32());
         Assert.Equal(0, symbolFilter.GetProperty("edges_after").GetInt32());
     }
 
