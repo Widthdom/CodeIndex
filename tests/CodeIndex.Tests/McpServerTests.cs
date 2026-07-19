@@ -4525,6 +4525,66 @@ public sealed class Caller
         }
     }
 
+    [Fact]
+    public async Task Dispose_DrainingServerRemainsActiveUntilShutdownCleanup_Issue4602()
+    {
+        _server.Dispose();
+        await WaitUntilAsync(
+            () => McpServer.ActiveServerCountForTests() == 0,
+            "fixture MCP server shutdown cleanup to complete");
+
+        ExtractorPluginRegistry.ResetForTests();
+        ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(_projectRoot);
+        var workspaceGeneration = ExtractorPluginRegistry.WorkspaceGenerationForTests();
+        Assert.Equal(1, ExtractorPluginRegistry.WorkspaceSnapshotCountForTests());
+
+        var callbackStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callbackCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseCallback = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var drainingServer = new McpServer(_dbPath, "test");
+        var otherServer = new McpServer(_dbPath, "test");
+        var registration = drainingServer.ShutdownTokenForTests.Register(() =>
+        {
+            callbackStarted.TrySetResult();
+#pragma warning disable xUnit1031
+            releaseCallback.Task.GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+            callbackCompleted.TrySetResult();
+        });
+
+        try
+        {
+            Assert.Equal(2, McpServer.ActiveServerCountForTests());
+
+            drainingServer.Dispose();
+            await callbackStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            Assert.Equal(2, McpServer.ActiveServerCountForTests());
+
+            otherServer.Dispose();
+            await WaitUntilAsync(
+                () => McpServer.ActiveServerCountForTests() == 1,
+                "non-draining MCP server shutdown cleanup to complete");
+
+            Assert.Equal(workspaceGeneration, ExtractorPluginRegistry.WorkspaceGenerationForTests());
+            Assert.Equal(1, ExtractorPluginRegistry.WorkspaceSnapshotCountForTests());
+        }
+        finally
+        {
+            releaseCallback.TrySetResult();
+            drainingServer.Dispose();
+            otherServer.Dispose();
+            await callbackCompleted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            await WaitUntilAsync(
+                () => McpServer.ActiveServerCountForTests() == 0,
+                "all MCP server shutdown cleanup to complete");
+            registration.Dispose();
+        }
+
+        Assert.True(ExtractorPluginRegistry.WorkspaceGenerationForTests() > workspaceGeneration);
+        Assert.Equal(0, ExtractorPluginRegistry.WorkspaceSnapshotCountForTests());
+        ExtractorPluginRegistry.ResetForTests();
+    }
+
     private static DbContext? GetSharedDbContextField(McpServer server)
     {
         var field = typeof(McpServer).GetField("_sharedDb",

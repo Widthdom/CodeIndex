@@ -6,7 +6,7 @@ namespace CodeIndex.Indexer.Extensibility;
 
 public static partial class ExtractorPluginRegistry
 {
-    internal static Action? WorkspacePluginLoadedBeforeCommitForTesting { get; set; }
+    internal static Action<AssemblyLoadContext>? WorkspacePluginLoadedBeforeCommitForTesting { get; set; }
 
     private static void LoadPluginAssemblies(
         IEnumerable<string> directories,
@@ -89,7 +89,7 @@ public static partial class ExtractorPluginRegistry
                 return;
 
             if (workspaceState != null)
-                WorkspacePluginLoadedBeforeCommitForTesting?.Invoke();
+                WorkspacePluginLoadedBeforeCommitForTesting?.Invoke(loadContext);
 
             if (workspaceState == null)
             {

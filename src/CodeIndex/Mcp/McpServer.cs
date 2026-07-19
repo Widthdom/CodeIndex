@@ -6411,8 +6411,6 @@ public partial class McpServer : IDisposable
             return;
         _disposed = true;
         CloseSharedDb();
-        lock (s_serverLifecycleGate)
-            s_activeServerCount--;
         var shutdownCancellationTask = RequestShutdownCancellation();
         if (shutdownCancellationTask.IsCompleted)
         {
@@ -6440,10 +6438,17 @@ public partial class McpServer : IDisposable
     {
         lock (s_serverLifecycleGate)
         {
+            s_activeServerCount--;
             if (s_activeServerCount == 0)
                 ExtractorPluginRegistry.ReleaseWorkspaceSnapshots();
         }
         DisposeShutdownCtsOnce();
+    }
+
+    internal static int ActiveServerCountForTests()
+    {
+        lock (s_serverLifecycleGate)
+            return s_activeServerCount;
     }
 
     private void DisposeShutdownCtsOnce()
