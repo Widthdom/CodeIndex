@@ -174,6 +174,74 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_ReferenceCapHitPersistsPerFileAndRunCompleteness_Issue4620()
+    {
+        var projectRoot = CreateTempProject();
+        var previousLimits = ReferenceExtractor.SafetyLimitsForTesting;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "def first():\n    pass\n\ndef second():\n    pass\n");
+            ReferenceExtractor.SafetyLimitsForTesting = new ReferenceExtractionSafetyLimits
+            {
+                MaxLookupSymbols = 1,
+                MaxLookupLines = 100,
+                MaxNamesPerLine = 100,
+                MaxContainerCandidates = 100,
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.False(json.GetProperty("reference_graph_complete").GetBoolean());
+            Assert.False(json.GetProperty("graph_data_current").GetBoolean());
+            Assert.Equal(1, json.GetProperty("reference_extraction_limits").GetProperty("max_lookup_symbols").GetInt32());
+            AssertReferenceCapHitSummary(json.GetProperty("reference_extraction_cap_hits"), "app.py");
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.False(statusJson.GetProperty("reference_graph_complete").GetBoolean());
+            Assert.False(statusJson.GetProperty("graph_data_current").GetBoolean());
+            Assert.Contains(
+                "reference_definition_lookup_symbol_budget_exceeded",
+                statusJson.GetProperty("reference_graph_incomplete_reasons").EnumerateArray().Select(value => value.GetString()));
+            AssertReferenceCapHitSummary(statusJson.GetProperty("reference_extraction_cap_hits"), "app.py");
+            AssertReferenceCapHitSummary(
+                statusJson.GetProperty("last_index_run").GetProperty("reference_extraction_cap_hits"),
+                "app.py");
+
+            var (checkExitCode, checkJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check=graph", "--json"]);
+            Assert.NotEqual(CommandExitCodes.Success, checkExitCode);
+            var repairCommand = Assert.Single(checkJson.GetProperty("repair_commands").EnumerateArray());
+            Assert.Equal("reference_graph_complete", repairCommand.GetProperty("reason").GetString());
+            Assert.Contains(
+                "cap-hitting",
+                repairCommand.GetProperty("safety_notes")[0].GetString(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            ReferenceExtractor.SafetyLimitsForTesting = previousLimits;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    private static void AssertReferenceCapHitSummary(JsonElement summary, string expectedFile)
+    {
+        Assert.True(summary.GetProperty("state_available").GetBoolean());
+        Assert.True(summary.GetProperty("hit_count").GetInt64() > 0);
+        Assert.Equal(1, summary.GetProperty("affected_file_count").GetInt64());
+        Assert.Contains(
+            "reference_definition_lookup_symbol_budget_exceeded",
+            summary.GetProperty("reasons").EnumerateArray().Select(value => value.GetString()));
+        var file = Assert.Single(summary.GetProperty("files").EnumerateArray());
+        Assert.Equal(expectedFile, file.GetProperty("file").GetString());
+        Assert.True(file.GetProperty("hit_count").GetInt64() > 0);
+    }
+
+    [Fact]
     public void Run_FullScan_RechecksIndexabilityBeforeContentRead()
     {
         if (OperatingSystem.IsWindows())

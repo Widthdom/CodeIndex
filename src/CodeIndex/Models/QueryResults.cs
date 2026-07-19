@@ -1262,6 +1262,15 @@ public class StatusResult
     public bool GraphTableAvailable { get; set; } = true;
     [JsonPropertyName("graph_data_current")]
     public bool GraphDataCurrent { get; set; } = true;
+    [JsonPropertyName("reference_extraction_limits")]
+    public ReferenceExtractionSafetyLimits ReferenceExtractionLimits { get; set; } = new();
+    [JsonPropertyName("reference_graph_complete")]
+    public bool ReferenceGraphComplete { get; set; } = true;
+    [JsonPropertyName("reference_graph_incomplete_reasons")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? ReferenceGraphIncompleteReasons { get; set; }
+    [JsonPropertyName("reference_extraction_cap_hits")]
+    public ReferenceExtractionCapHitSummary ReferenceExtractionCapHits { get; set; } = new();
     public bool IssuesTableAvailable { get; set; } = true;
     [JsonPropertyName("file_issues_data_current")]
     public bool FileIssuesDataCurrent { get; set; } = true;
@@ -1711,6 +1720,8 @@ public sealed class StatusLastIndexRun
     public long? DiagnosticCount { get; set; }
     [JsonPropertyName("diagnostics_truncated")]
     public bool? DiagnosticsTruncated { get; set; }
+    [JsonPropertyName("reference_extraction_cap_hits")]
+    public ReferenceExtractionCapHitSummary? ReferenceExtractionCapHits { get; set; }
 }
 
 public sealed class StatusFailedOrPartialIndexRun
@@ -1752,6 +1763,7 @@ public sealed class StatusIndexFileError
 }
 
 [JsonSerializable(typeof(List<StatusIndexFileError>))]
+[JsonSerializable(typeof(ReferenceExtractionCapHitSummary))]
 internal sealed partial class StatusMetadataJsonContext : JsonSerializerContext
 {
 }

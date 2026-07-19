@@ -586,7 +586,8 @@ public static partial class IndexCommandRunner
             rowsUpserted,
             rowsDeleted,
             memoryTimeline,
-            diagnostics: null);
+            diagnostics: null,
+            referenceExtractionCapHits: null);
 
     private static void StampLastIndexRunMetadata(
         DbWriter writer,
@@ -601,7 +602,8 @@ public static partial class IndexCommandRunner
         long rowsUpserted,
         long rowsDeleted,
         IndexMemoryTimelineJsonResult? memoryTimeline,
-        IReadOnlyList<string>? diagnostics)
+        IReadOnlyList<string>? diagnostics,
+        ReferenceExtractionCapHitSummary? referenceExtractionCapHits)
     {
         writer.SetMetaValues(
             (DbContext.LastIndexRunModeMetaKey, mode),
@@ -615,6 +617,9 @@ public static partial class IndexCommandRunner
             (DbContext.LastIndexRunBytesReadIncompleteMetaKey, (bytesReadSkippedFileCount > 0).ToString(System.Globalization.CultureInfo.InvariantCulture)),
             (DbContext.LastIndexRunRowsUpsertedMetaKey, rowsUpserted.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             (DbContext.LastIndexRunRowsDeletedMetaKey, rowsDeleted.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunReferenceExtractionCapHitsMetaKey, referenceExtractionCapHits == null
+                ? null
+                : JsonSerializer.Serialize(referenceExtractionCapHits, StatusMetadataJsonContext.Default.ReferenceExtractionCapHitSummary)),
             (DbContext.LastIndexRunPeakMemoryMbMetaKey, memoryTimeline == null
                 ? null
                 : (memoryTimeline.PeakWorkingSetBytes / (1024 * 1024)).ToString(System.Globalization.CultureInfo.InvariantCulture)));

@@ -1,3 +1,5 @@
+using CodeIndex.Indexer;
+
 namespace CodeIndex.Database;
 
 public partial class DbReader
@@ -139,6 +141,9 @@ public partial class DbReader
         var lastFailedOrPartialIndexRun = GetLastFailedOrPartialIndexRun(batchInProgress);
         var indexComplete = !batchInProgress
             && !string.Equals(indexCompleteness, "incomplete", StringComparison.OrdinalIgnoreCase);
+        var referenceExtractionCapHits = GetReferenceExtractionCapHits();
+        var referenceGraphComplete = referenceExtractionCapHits.StateAvailable
+            && referenceExtractionCapHits.HitCount == 0;
         if (batchInProgress)
         {
             indexIncompleteReasons ??= [];
@@ -168,7 +173,11 @@ public partial class DbReader
             Languages = langs,
             SymbolsByLanguage = symbolsByLanguage.Count > 0 ? symbolsByLanguage : null,
             GraphTableAvailable = _hasReferencesTable,
-            GraphDataCurrent = _hasReferencesTable && indexComplete,
+            GraphDataCurrent = _hasReferencesTable && indexComplete && referenceGraphComplete,
+            ReferenceExtractionLimits = ReferenceExtractor.GetSafetyLimits(),
+            ReferenceGraphComplete = referenceGraphComplete,
+            ReferenceGraphIncompleteReasons = referenceGraphComplete ? null : referenceExtractionCapHits.Reasons,
+            ReferenceExtractionCapHits = referenceExtractionCapHits,
             IssuesTableAvailable = _hasIssuesPhysicalTable,
             FileIssuesDataCurrent = _hasIssuesTable,
             MigrationInProgress = batchInProgress,

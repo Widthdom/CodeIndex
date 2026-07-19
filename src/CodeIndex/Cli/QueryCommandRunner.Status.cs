@@ -317,6 +317,14 @@ public static partial class QueryCommandRunner
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("Hint", status.LastFailedOrPartialIndexRun?.RecoveryHint
                         ?? "fix the reported file/extractor failure, then rerun the same index command; a rebuild is not required."));
                 }
+                if (!status.ReferenceGraphComplete)
+                {
+                    var reasons = status.ReferenceGraphIncompleteReasons is { Count: > 0 }
+                        ? string.Join(", ", status.ReferenceGraphIncompleteReasons.Take(4))
+                        : DbReader.ReferenceExtractionCapStateUnavailableReason;
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", $"reference graph is incomplete ({reasons}); absent callers/callees/deps/impact edges are not authoritative."));
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Hint", "inspect reference_extraction_cap_hits.files, reduce or exclude the generated/pathological source, then rerun indexing."));
+                }
                 if (!status.GraphTableAvailable)
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", "symbol_references table missing — reference / caller / callee / unused counts are degraded to 0."));
                 if (!status.IssuesTableAvailable)
@@ -441,6 +449,7 @@ public static partial class QueryCommandRunner
         {
             "graph_table_available" => !status.GraphTableAvailable,
             "graph_data_current" => !status.GraphDataCurrent,
+            "reference_graph_complete" => !status.ReferenceGraphComplete,
             "index_complete" => !status.IndexComplete,
             "issues_table_available" => !status.IssuesTableAvailable,
             "file_issues_data_current" => !status.FileIssuesDataCurrent,
@@ -463,6 +472,7 @@ public static partial class QueryCommandRunner
             "index_newer_than_reader" => status.IndexNewerThanReaderReason ?? fallback,
             "graph_table_available" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.GraphTableMissing).HumanText,
             "graph_data_current" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.GraphDataNotCurrent).HumanText,
+            "reference_graph_complete" => DegradationReasonCodes.GetMetadata(GetReferenceGraphDegradationRootCause(status)).HumanText,
             "index_complete" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.IndexIncomplete).HumanText,
             "issues_table_available" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.IssuesTableMissing).HumanText,
             "file_issues_data_current" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.FileIssuesDataStale).HumanText,
@@ -484,6 +494,7 @@ public static partial class QueryCommandRunner
             "migration_in_progress" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.MigrationInProgress).RecommendedAction,
             "index_newer_than_reader" => "Run status with a current cdidx binary, or rebuild the DB with the version you intend to use.",
             "graph_data_current" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.GraphDataNotCurrent).RecommendedAction,
+            "reference_graph_complete" => DegradationReasonCodes.GetMetadata(GetReferenceGraphDegradationRootCause(status)).RecommendedAction,
             "index_complete" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.IndexIncomplete).RecommendedAction,
             _ => fallback,
         };
@@ -511,7 +522,9 @@ public static partial class QueryCommandRunner
             result.Add(BuildStatusReadinessDegradation("index_complete", DegradationReasonCodes.IndexIncomplete, options, status));
         if (!status.GraphTableAvailable)
             result.Add(BuildStatusReadinessDegradation("graph_table_available", DegradationReasonCodes.GraphTableMissing, options, status));
-        if (!status.GraphDataCurrent && status.IndexComplete)
+        if (!status.ReferenceGraphComplete)
+            result.Add(BuildStatusReadinessDegradation("reference_graph_complete", GetReferenceGraphDegradationRootCause(status), options, status));
+        if (!status.GraphDataCurrent && status.IndexComplete && status.ReferenceGraphComplete)
             result.Add(BuildStatusReadinessDegradation("graph_data_current", DegradationReasonCodes.GraphDataNotCurrent, options, status));
         if (!status.IssuesTableAvailable)
             result.Add(BuildStatusReadinessDegradation("issues_table_available", DegradationReasonCodes.IssuesTableMissing, options, status));
@@ -531,6 +544,13 @@ public static partial class QueryCommandRunner
             result.Add(BuildStatusReadinessDegradation("index_newer_than_reader", DegradationReasonCodes.IndexNewerThanReader, options, status));
         return result;
     }
+
+    private static string GetReferenceGraphDegradationRootCause(StatusResult status)
+        => status.ReferenceGraphIncompleteReasons?.Contains(
+                DbReader.ReferenceExtractionCapStateUnavailableReason,
+                StringComparer.Ordinal) == true
+            ? DegradationReasonCodes.ReferenceExtractionCapStateUnavailable
+            : DegradationReasonCodes.ReferenceGraphIncomplete;
 
     private static StatusReadinessDegradation BuildStatusReadinessDegradation(string field, string rootCause, QueryCommandOptions options, StatusResult status)
     {
@@ -557,6 +577,7 @@ public static partial class QueryCommandRunner
     private static bool IsStatusDegraded(StatusResult status)
         => !status.GraphTableAvailable
            || !status.GraphDataCurrent
+           || !status.ReferenceGraphComplete
            || !status.IssuesTableAvailable
            || !status.FileIssuesDataCurrent
            || !status.SqlGraphContractReady
@@ -597,6 +618,8 @@ public static partial class QueryCommandRunner
 
         if (Includes("graph") && !status.GraphTableAvailable)
             failures.Add(new StatusCheckFailure("graph_table_available", false, "[degraded] graph_table_available=false"));
+        if (Includes("graph") && !status.ReferenceGraphComplete)
+            failures.Add(new StatusCheckFailure("reference_graph_complete", false, $"[degraded] reference_graph_complete=false reasons={string.Join(',', status.ReferenceGraphIncompleteReasons ?? [])}"));
         if (Includes("issues") && !status.IssuesTableAvailable)
             failures.Add(new StatusCheckFailure("issues_table_available", false, "[degraded] issues_table_available=false"));
         if (Includes("issues") && status.IssuesTableAvailable && !status.FileIssuesDataCurrent)
@@ -644,6 +667,14 @@ public static partial class QueryCommandRunner
                     failure.Name,
                     rebuild: false,
                     "Fix the reported file/extractor error first; successful rows remain persisted and a rebuild is not required."),
+                "reference_graph_complete" => BuildIndexRepairCommand(
+                    status,
+                    options,
+                    failure.Name,
+                    rebuild: false,
+                    GetReferenceGraphDegradationRootCause(status) == DegradationReasonCodes.ReferenceExtractionCapStateUnavailable
+                        ? "Refresh indexing to populate current per-file issue state before trusting reference-graph completeness."
+                        : "Reduce or exclude the cap-hitting generated/pathological source before rerunning indexing."),
                 "graph_table_available" or "issues_table_available" or "file_issues_data_current"
                     or "sql_graph_contract_ready" or "csharp_symbol_name_ready" or "csharp_metadata_target_ready"
                     => BuildIndexRepairCommand(

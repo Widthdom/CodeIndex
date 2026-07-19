@@ -1,5 +1,6 @@
 using System.Buffers;
 using CodeIndex.Indexer;
+using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
 using System.Text;
@@ -1664,10 +1665,13 @@ public partial class DbReader
         var diagnostics = ParseMetaStringList(TryGetMetaStringInternal(DbContext.LastIndexRunDiagnosticsMetaKey));
         var diagnosticCount = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunDiagnosticCountMetaKey));
         var diagnosticsTruncated = ParseMetaBool(TryGetMetaStringInternal(DbContext.LastIndexRunDiagnosticsTruncatedMetaKey));
+        var referenceExtractionCapHits = ParseReferenceExtractionCapHits(
+            TryGetMetaStringInternal(DbContext.LastIndexRunReferenceExtractionCapHitsMetaKey));
         if (mode == null && startedAt == null && durationMs == null && filesScanned == null && filesSkipped == null
             && parseErrors == null && bytesRead == null && bytesReadSkippedFileCount == null && bytesReadIncomplete == null
             && rowsUpserted == null && rowsDeleted == null && peakMemoryMb == null
-            && diagnostics == null && diagnosticCount == null && diagnosticsTruncated == null)
+            && diagnostics == null && diagnosticCount == null && diagnosticsTruncated == null
+            && referenceExtractionCapHits == null)
         {
             return null;
         }
@@ -1689,7 +1693,22 @@ public partial class DbReader
             Diagnostics = diagnostics,
             DiagnosticCount = diagnosticCount,
             DiagnosticsTruncated = diagnosticsTruncated,
+            ReferenceExtractionCapHits = referenceExtractionCapHits,
         };
+    }
+
+    private static ReferenceExtractionCapHitSummary? ParseReferenceExtractionCapHits(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+        try
+        {
+            return JsonSerializer.Deserialize(json, StatusMetadataJsonContext.Default.ReferenceExtractionCapHitSummary);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private StatusFailedOrPartialIndexRun? GetLastFailedOrPartialIndexRun(bool batchInProgress)

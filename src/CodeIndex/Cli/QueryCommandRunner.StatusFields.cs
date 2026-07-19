@@ -26,6 +26,12 @@ public static partial class QueryCommandRunner
             "successful graph rows remain queryable, but one or more files failed and graph coverage is incomplete.",
             "Fix the per-file error reported in `last_failed_or_partial_index_run`, then rerun the same index command; do not rebuild unless separately required."),
         new(
+            "reference_graph_complete",
+            "Reference extraction coverage",
+            "reference-extraction cap state is available and extraction completed without hitting a hard lookup or container-candidate safety cap.",
+            "reference-extraction cap state is unavailable, or one or more files hit a hard cap; absent graph edges are not authoritative in either case.",
+            "Inspect `reference_extraction_cap_hits.state_available`: when false, rerun `cdidx index <projectPath>` to populate current issue state; otherwise inspect `files`, reduce or exclude the cap-hitting generated/pathological source, and rerun indexing."),
+        new(
             "issues_table_available",
             "Validation issues table",
             "the file_issues table exists in this index.",

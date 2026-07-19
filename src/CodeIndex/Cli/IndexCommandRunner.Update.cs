@@ -1368,7 +1368,8 @@ public static partial class IndexCommandRunner
                 updated,
                 removed,
                 memoryTimelineForStamp,
-                indexRunDiagnostics);
+                indexRunDiagnostics,
+                new DbReader(writer.Connection).GetReferenceExtractionCapHits());
         }
         stopwatch.Stop();
         var memoryTimeline = BuildMemoryTimeline(memorySamples);
@@ -1388,6 +1389,9 @@ public static partial class IndexCommandRunner
         warnings += AddPostExtractionHookWarnings(postExtractionHooks.ValueIfCreated, warningList);
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
         var signalReader = new DbReader(writer.Connection);
+        var referenceExtractionCapHitsAfter = signalReader.GetReferenceExtractionCapHits();
+        var referenceGraphCompleteAfter = referenceExtractionCapHitsAfter.StateAvailable
+            && referenceExtractionCapHitsAfter.HitCount == 0;
         var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);
         var hotspotFamilySignalAfter = signalReader.GetHotspotFamilySignal(lang: null);
         var sqlGraphContractReadyAfter = sqlGraphContractSignalAfter.Ready;
@@ -1429,8 +1433,11 @@ public static partial class IndexCommandRunner
                 },
                 SymbolKindFilter = options.SymbolKindFilter.ToJsonResult(),
                 GraphTableAvailable = graphTableAvailableAfter,
-                GraphDataCurrent = errors == 0 && graphTableAvailableAfter,
+                GraphDataCurrent = errors == 0 && graphTableAvailableAfter && referenceGraphCompleteAfter,
                 IndexComplete = errors == 0,
+                ReferenceExtractionLimits = ReferenceExtractor.GetSafetyLimits(),
+                ReferenceGraphComplete = referenceGraphCompleteAfter,
+                ReferenceExtractionCapHits = referenceExtractionCapHitsAfter,
                 ErrorCode = errors > 0 ? CommandErrorCodes.IndexPartial : null,
                 IssuesTableAvailable = issuesTableAvailableAfter,
                 SqlGraphContractReady = sqlGraphContractReadyAfter,

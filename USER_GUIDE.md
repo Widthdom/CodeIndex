@@ -1608,6 +1608,7 @@ Run it at the start of AI-agent work to decide whether `.cdidx/codeindex.db` can
 `status --json` also reports readiness and availability metadata:
 
 - storage/index readiness: `fold_ready`, `fold_ready_reason`, `graph_table_available`, `graph_data_current`, `index_complete`, `index_incomplete_reasons`, `issues_table_available`;
+- reference-graph completeness: `reference_extraction_limits`, `reference_graph_complete`, `reference_graph_incomplete_reasons`, `reference_extraction_cap_hits`, and `last_index_run.reference_extraction_cap_hits`;
 - SQL graph readiness: `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`;
 - hotspot and C# metadata readiness: `hotspot_family_ready`, `hotspot_family_degraded_reason`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`;
 - worktree HEAD freshness (#1508 / #1512): `indexed_head_commit` (the HEAD SHA captured at the last successful full-scan) and `worktree_head_changed` (`true` when the runtime HEAD differs — detects per-worktree `git switch` / `git worktree add` that silently invalidate the index);
@@ -1615,6 +1616,18 @@ Run it at the start of AI-agent work to decide whether `.cdidx/codeindex.db` can
 - filesystem case-sensitivity (#1546): `path_case_sensitive` — `true` when the workspace volume treats `Foo.cs` and `foo.cs` as distinct files, `false` when case-insensitive. Stamped on every successful `cdidx index` (full scan AND partial update, plus MCP-driven indexes) from `core.ignorecase` + a live filesystem probe, replacing the prior OS-keyed heuristic. Use it to audit path-equality decisions on case-sensitive APFS, WSL NTFS / dev-drive, and ReFS mounts. Omitted on legacy DBs that pre-date the stamp.
 
 `hotspot_family_degraded_reason` may report `partial_family_key_population` when some indexed symbols still lack family keys, or `hotspot_family_marker_fingerprint_incomplete` when marker fingerprint traversal hit safety caps during the last index run; rebuild to restamp missing family keys, and narrow or ignore generated/vendor marker trees before rebuilding after an incomplete fingerprint.
+
+Reference extraction stops bounded lookup work at 50,000 symbols, 20,000 lines,
+512 names on one line, or 20,000 container candidates. CLI `languages --json` /
+`status --json` and the corresponding MCP responses expose those values under
+`reference_extraction_limits`. If a
+file reaches one of them, its stable diagnostic kind remains in `file_issues`,
+the current and last-run summaries count it in `reference_extraction_cap_hits`,
+and `reference_graph_complete` becomes false. JSON from callers, callees, deps,
+and the corresponding MCP tools repeat the incomplete reasons and set
+`degraded=true`; do not treat
+an empty result as proof that no edge exists until the offending generated or
+pathological files are narrowed/excluded and reindexed.
 
 Human `status` output includes a `Readiness:` section that translates these JSON field names into short labels such as `Unicode exact-name fold contract` and prints degraded reasons/remediation inline. Use `cdidx status --explain <field>` for the full description of one readiness field without opening the database; accepted field names include `graph_table_available`, `graph_data_current`, `index_complete`, `issues_table_available`, `sql_graph_contract_ready`, `hotspot_family_ready`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `fold_ready`, and `index_newer_than_reader`.
 
@@ -4657,6 +4670,7 @@ AI agent の作業開始時はこれを先に実行し、`.cdidx/codeindex.db` �
 `status --json` は readiness / availability metadata も返します。
 
 - storage / index: `fold_ready`、`fold_ready_reason`、`graph_table_available`、`graph_data_current`、`index_complete`、`index_incomplete_reasons`、`issues_table_available`
+- reference graph completeness: `reference_extraction_limits`、`reference_graph_complete`、`reference_graph_incomplete_reasons`、`reference_extraction_cap_hits`、`last_index_run.reference_extraction_cap_hits`
 - SQL graph: `sql_graph_contract_ready`、`sql_graph_contract_degraded_reason`
 - hotspot metadata: `hotspot_family_ready`、`hotspot_family_degraded_reason`
 - C# metadata: `csharp_symbol_name_ready`、`csharp_metadata_target_ready`
@@ -4665,6 +4679,17 @@ AI agent の作業開始時はこれを先に実行し、`.cdidx/codeindex.db` �
 - ファイルシステムの大小区別 (#1546): `path_case_sensitive` — ワークスペースの FS が `Foo.cs` と `foo.cs` を別ファイルとして扱うなら `true`、case-insensitive なら `false`。`core.ignorecase` と実 FS プローブを使って `cdidx index` の成功時 (full scan / partial update / MCP 経由 index) に毎回 stamp され、これまでの OS 系列だけに依存したヒューリスティックを置き換えます。case-sensitive APFS、WSL NTFS / dev-drive、ReFS マウントでのパス突き合わせ判定を監査するために使ってください。stamp 以前の legacy DB では省略されます。
 
 `hotspot_family_degraded_reason` は、一部の indexed symbol に family key が未設定の場合に `partial_family_key_population`、前回 index の marker fingerprint traversal が安全上限に到達した場合に `hotspot_family_marker_fingerprint_incomplete` を返すことがあります。未設定 family key は rebuild で restamp し、incomplete fingerprint の場合は過剰な project marker を含む generated/vendor tree を絞り込むか ignore してから rebuild してください。
+
+reference extraction は lookup symbol 50,000件、lookup line 20,000行、1行の name
+512件、container candidate 20,000件で上限付き処理を停止します。CLI の
+`languages --json` / `status --json` と対応する MCP response はこれらを
+`reference_extraction_limits` に公開します。file が
+いずれかへ到達すると stable diagnostic kind を `file_issues` に保持し、current / last-run
+の `reference_extraction_cap_hits` に件数を集約して `reference_graph_complete=false` にします。
+CLI/MCP の callers / callees / deps / impact response も incomplete reason と
+`degraded=true` を返します。
+該当する generated / pathological file を絞り込むか除外して再 index するまでは、空結果を
+edge が存在しない証拠として扱わないでください。
 
 人間向け `status` 出力には `Readiness:` セクションがあり、これらの JSON field 名を `Unicode exact-name fold contract` のような短いラベルに翻訳し、degraded reason と対処を同じ場所に表示します。`cdidx status --explain <field>` を使うと DB を開かずに 1 つの readiness field の詳細説明を確認できます。指定できる field には `graph_table_available`、`graph_data_current`、`index_complete`、`issues_table_available`、`sql_graph_contract_ready`、`hotspot_family_ready`、`csharp_symbol_name_ready`、`csharp_metadata_target_ready`、`fold_ready`、`index_newer_than_reader` があります。
 

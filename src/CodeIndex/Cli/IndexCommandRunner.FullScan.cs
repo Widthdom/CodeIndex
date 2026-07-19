@@ -90,7 +90,7 @@ public static partial class IndexCommandRunner
             Message = $"Reference extraction produced {referenceCount:N0} references, exceeding the --max-references-per-file limit of {maxReferencesPerFile:N0}; references were not indexed for this file. Exclude the generated/pathological file or raise --max-references-per-file if this is expected.",
         };
 
-    private static IReadOnlyList<FileIssue> AppendReferenceExtractionDiagnosticIssues(
+    internal static IReadOnlyList<FileIssue> AppendReferenceExtractionDiagnosticIssues(
         IReadOnlyList<FileIssue> issues,
         string path,
         IReadOnlyList<ReferenceExtractionDiagnostic> diagnostics)
@@ -2499,7 +2499,8 @@ public static partial class IndexCommandRunner
                 processed,
                 purged,
                 memoryTimelineForStamp,
-                indexRunDiagnostics);
+                indexRunDiagnostics,
+                new DbReader(writer.Connection).GetReferenceExtractionCapHits());
         }
         writer.ClearBatchInProgress();
         fullScanTxn.Commit();
@@ -2523,6 +2524,9 @@ public static partial class IndexCommandRunner
                 ? (freshCountFiles, freshCountChunks, freshCountSymbols, freshCountReferences)
                 : writer.GetCounts();
         var signalReader = new DbReader(writer.Connection);
+        var referenceExtractionCapHitsAfter = signalReader.GetReferenceExtractionCapHits();
+        var referenceGraphCompleteAfter = referenceExtractionCapHitsAfter.StateAvailable
+            && referenceExtractionCapHitsAfter.HitCount == 0;
         var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);
         var hotspotFamilySignalAfter = signalReader.GetHotspotFamilySignal(lang: null);
         var sqlGraphContractReadyAfter = sqlGraphContractSignalAfter.Ready;
@@ -2572,8 +2576,11 @@ public static partial class IndexCommandRunner
                 },
                 SymbolKindFilter = options.SymbolKindFilter.ToJsonResult(),
                 GraphTableAvailable = graphTableAvailableAfter,
-                GraphDataCurrent = errors == 0 && graphTableAvailableAfter,
+                GraphDataCurrent = errors == 0 && graphTableAvailableAfter && referenceGraphCompleteAfter,
                 IndexComplete = errors == 0,
+                ReferenceExtractionLimits = ReferenceExtractor.GetSafetyLimits(),
+                ReferenceGraphComplete = referenceGraphCompleteAfter,
+                ReferenceExtractionCapHits = referenceExtractionCapHitsAfter,
                 ErrorCode = errors > 0 ? CommandErrorCodes.IndexPartial : null,
                 IssuesTableAvailable = issuesTableAvailableAfter,
                 SqlGraphContractReady = sqlGraphContractReadyAfter,

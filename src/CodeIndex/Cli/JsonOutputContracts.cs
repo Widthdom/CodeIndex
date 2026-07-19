@@ -581,6 +581,7 @@ internal sealed record LanguagesJsonResult(
     [property: JsonPropertyName("languages")] List<LanguageEntryJsonResult> Languages,
     [property: JsonPropertyName("detection_policy")] LanguageDetectionPolicyJsonResult DetectionPolicy,
     [property: JsonPropertyName("language_map_diagnostics")] List<LanguageMapDiagnosticJsonResult> LanguageMapDiagnostics,
+    [property: JsonPropertyName("reference_extraction_limits")] ReferenceExtractionSafetyLimits ReferenceExtractionLimits,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed class IndexDryRunJsonResult : IVersionedJsonResult
@@ -720,6 +721,9 @@ internal sealed class IndexUpdateJsonResult : IVersionedJsonResult
     public bool GraphTableAvailable { get; init; }
     public bool GraphDataCurrent { get; init; }
     public bool IndexComplete { get; init; }
+    public ReferenceExtractionSafetyLimits ReferenceExtractionLimits { get; init; } = new();
+    public bool ReferenceGraphComplete { get; init; }
+    public ReferenceExtractionCapHitSummary ReferenceExtractionCapHits { get; init; } = new();
     public string? ErrorCode { get; init; }
     public bool IssuesTableAvailable { get; init; }
     public bool SqlGraphContractReady { get; init; }
@@ -756,6 +760,9 @@ internal sealed class IndexFullScanJsonResult : IVersionedJsonResult
     public bool GraphTableAvailable { get; init; }
     public bool GraphDataCurrent { get; init; }
     public bool IndexComplete { get; init; }
+    public ReferenceExtractionSafetyLimits ReferenceExtractionLimits { get; init; } = new();
+    public bool ReferenceGraphComplete { get; init; }
+    public ReferenceExtractionCapHitSummary ReferenceExtractionCapHits { get; init; } = new();
     public string? ErrorCode { get; init; }
     public bool IssuesTableAvailable { get; init; }
     public bool SqlGraphContractReady { get; init; }
@@ -917,6 +924,8 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(IndexMemorySampleJsonResult))]
 [JsonSerializable(typeof(IndexMemoryTimelineJsonResult))]
 [JsonSerializable(typeof(IndexUpdateJsonResult))]
+[JsonSerializable(typeof(ReferenceExtractionSafetyLimits))]
+[JsonSerializable(typeof(ReferenceExtractionCapHitSummary))]
 [JsonSerializable(typeof(IndexUpdateSummaryJsonResult))]
 [JsonSerializable(typeof(IndexWatchEventJsonResult))]
 [JsonSerializable(typeof(IndexWatchStartedJsonResult))]

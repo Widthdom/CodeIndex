@@ -21,6 +21,117 @@ namespace CodeIndex.Tests;
 
 public partial class McpServerTests
 {
+    [Theory]
+    [InlineData("callers", "{\"query\":\"Run\",\"countOnly\":true}")]
+    [InlineData("callees", "{\"query\":\"Run\"}")]
+    [InlineData("deps", "{}")]
+    [InlineData("impact_analysis", "{\"query\":\"Run\"}")]
+    public void ToolsCall_ReferenceGraphCommandsExposeCapHitIncompleteness_Issue4620(
+        string tool,
+        string argumentsJson)
+    {
+        var capKind = ReferenceExtractor.ReferenceSafetyCapDiagnosticKinds[0];
+        using (var command = _db.Connection.CreateCommand())
+        {
+            command.CommandText = """
+                INSERT INTO file_issues (file_id, kind, line, message)
+                SELECT id, @kind, 1, 'reference extraction safety cap reached'
+                FROM files
+                WHERE path = 'src/app.cs';
+                """;
+            command.Parameters.AddWithValue("@kind", capKind);
+            Assert.Equal(1, command.ExecuteNonQuery());
+        }
+
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 4620,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = tool,
+                ["arguments"] = JsonNode.Parse(argumentsJson),
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.False(structured["reference_graph_complete"]!.GetValue<bool>());
+        Assert.True(structured["degraded"]!.GetValue<bool>());
+        Assert.Equal(50_000, structured["reference_extraction_limits"]!["max_lookup_symbols"]!.GetValue<int>());
+        var capHits = structured["reference_extraction_cap_hits"]!;
+        Assert.True(capHits["state_available"]!.GetValue<bool>());
+        Assert.Equal(1, capHits["hit_count"]!.GetValue<long>());
+        Assert.Equal(1, capHits["affected_file_count"]!.GetValue<long>());
+        Assert.Contains(capKind, capHits["reasons"]!.AsArray().Select(reason => reason!.GetValue<string>()));
+        Assert.Contains(capKind, structured["reference_graph_incomplete_reasons"]!.AsArray().Select(reason => reason!.GetValue<string>()));
+    }
+
+    [Fact]
+    public void ToolsCall_LanguagesPublishesReferenceExtractionLimits_Issue4620()
+    {
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":4620,"method":"tools/call","params":{"name":"languages","arguments":{}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+        var limits = response["result"]!["structuredContent"]!["reference_extraction_limits"]!;
+
+        Assert.Equal(50_000, limits["max_lookup_symbols"]!.GetValue<int>());
+        Assert.Equal(20_000, limits["max_lookup_lines"]!.GetValue<int>());
+        Assert.Equal(512, limits["max_names_per_line"]!.GetValue<int>());
+        Assert.Equal(20_000, limits["max_container_candidates"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_IndexPersistsAndReturnsReferenceCapHitSummary_Issue4620()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_reference_cap_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_reference_cap_{Guid.NewGuid():N}.db");
+        var previousLimits = ReferenceExtractor.SafetyLimitsForTesting;
+        var previousContentLoadHook = McpServer.McpIndexFileContentLoadForTesting;
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "app.py"),
+                "def first():\n    pass\n\ndef second():\n    pass\n");
+            var testLimits = new ReferenceExtractionSafetyLimits
+            {
+                MaxLookupSymbols = 1,
+                MaxLookupLines = 100,
+                MaxNamesPerLine = 100,
+                MaxContainerCandidates = 100,
+            };
+            ReferenceExtractor.SafetyLimitsForTesting = testLimits;
+            McpServer.McpIndexFileContentLoadForTesting = _ =>
+                ReferenceExtractor.SafetyLimitsForTesting = testLimits;
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var response = CallIndex(server, fixtureDir);
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false);
+            Assert.False(structured["reference_graph_complete"]!.GetValue<bool>());
+            Assert.Equal(1, structured["reference_extraction_limits"]!["max_lookup_symbols"]!.GetValue<int>());
+            Assert.True(structured["reference_extraction_cap_hits"]!["hit_count"]!.GetValue<long>() > 0);
+
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var reader = new DbReader(verifyDb.Connection);
+            var lastRunCapHits = reader.GetStatus().LastIndexRun!.ReferenceExtractionCapHits!;
+            Assert.True(lastRunCapHits.HitCount > 0);
+            Assert.Equal("app.py", Assert.Single(lastRunCapHits.Files).File);
+        }
+        finally
+        {
+            McpServer.McpIndexFileContentLoadForTesting = previousContentLoadHook;
+            ReferenceExtractor.SafetyLimitsForTesting = previousLimits;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
     [Fact]
     public void ToolsCall_Search_ImmutableUriReportsStaleSnapshotRisk_Issue4555()
     {

@@ -326,6 +326,11 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   are broad runaway guards for known large symbol-extraction fixtures. Keep their budgets generous enough for full-suite load; tighten them only with focused optimization evidence, not as benchmark thresholds.
 - `ReferenceExtractorTests.Extract_CSharpLargePlainCallFile_CompletesWithinPracticalBudget`
   is a broad runaway guard for high-volume C# reference extraction on ordinary call lines. Treat its budget as a regression tripwire, not a benchmark target; keep it wide enough for noisy CI unless a focused optimization change justifies tightening it.
+- Reference-extraction cap coverage keeps the four published boundaries in one
+  small `ReferenceExtractorTests` fixture using test-only limits, and keeps the
+  full persistence/status path in one `IndexCommandRunnerTests` fixture. Graph
+  command propagation belongs to one shared callers/callees/deps/impact fixture;
+  do not allocate production-sized 50k/20k inputs to test these contracts (#4620).
 - Broad extractor `*CompletesWithinPracticalBudget` runaway guards run only on the primary `net8.0` test target. Keep focused functional extractor tests cross-target, but do not duplicate the large-fixture budget guards across every target framework unless the guard is specifically proving a target-framework-specific contract.
 - C# reflection-name extraction coverage keeps literal, constant-concatenation, dynamic, comment, and string-decoy cases in one source fixture so those parser boundaries share one symbol/reference pass.
 - C# BOM extraction keeps a simple leading-BOM import fixture plus one mixed-newline fixture that simultaneously covers leading and mid-file BOM handling across CRLF, bare CR, and LF boundaries; do not repeat separate extraction passes for newline subsets already present in the mixed fixture.
@@ -781,6 +786,10 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   SQL の MySQL definer と PostgreSQL return field 抽出は、固有の symbol 名で各契約を独立して検証できる場合、comment/string false-positive control を含む1つの mixed-dialect fixture を共有します。
   PostgreSQL の table、recursive CTE、`RETURNS TABLE` に対するクラッシュ回帰 coverage は各構文を単独で実行した後、同じメソッド内の複合抽出でも実行します。単一構文の失敗と相互作用による失敗を区別できるよう、両方の層を維持してください（#4610）。
   full scan の partial-generation coverage は、成功する C# graph / SQL fixture と同時に1件の上限付き extractor-phase failure を注入し、終了コード `11` / `--allow-partial`、extracted / persisted count、構造化 error location、database edge の生存、status completeness / currentness を1つの E2E method で検証します（#4609）。
+  reference-extraction cap coverage は test-only limit を使う小さな `ReferenceExtractorTests`
+  fixture 1件に4つの公開 boundary をまとめ、永続化から status までを1件の
+  `IndexCommandRunnerTests` fixture に保持します。graph command への伝播は callers / callees /
+  deps / impact 共通の1 fixture が所有し、50k / 20k規模の本番上限入力をテスト用に確保しません（#4620）。
   SQL qualified-name の空白 coverage は、procedure、view、enum type、schema、sequence、extension、synonym などの CREATE/ALTER kind を1つの fixture に置き、DDL matrix 全体の dot normalization を1回の抽出で検証します。
   XAML の `x:TypeArguments` coverage は、scalar、type markup、nested generic、multiline の値を1つの resource dictionary に置き、wrapped type には固有名を使って失敗診断を維持します。
   XAML の type-object element、type-property element、type markup extension は、形式ごとに固有の型名を持つ1つの resource dictionary を共有し、曖昧な assertion なしで3表現を1回の reader traversal で検証します。

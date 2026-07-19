@@ -1725,6 +1725,20 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatus_Explain_ReferenceGraphCompleteCoversUnavailableAndCapHitStates_Issue4620()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", "reference_graph_complete"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("state is unavailable", stdout, StringComparison.Ordinal);
+        Assert.Contains("one or more files hit a hard cap", stdout, StringComparison.Ordinal);
+        Assert.Contains("reference_extraction_cap_hits.state_available", stdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RunStatus_Explain_PrintsVisibleStatusFieldDescriptionWithoutDatabase_Issue3936()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
@@ -2360,6 +2374,45 @@ public partial class QueryCommandRunnerTests
             Assert.Contains(dbPath, repairArgs);
             Assert.NotEmpty(repairCommand.GetProperty("safety_notes").EnumerateArray());
             Assert.Contains("index stale", json.GetProperty("summary").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_CheckJson_ReferenceGraphUnavailableUsesRefreshGuidance_Issue4620()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_reference_cap_state_unavailable");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            const string content = "class App {}\n";
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), content);
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", content);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                new DbWriter(db.Connection).MarkGraphReady();
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--check=graph", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            Assert.Equal(2, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(
+                ["reference_graph_complete"],
+                json.GetProperty("failed_checks").EnumerateArray().Select(value => value.GetString()).ToArray());
+            Assert.Equal(
+                DegradationReasonCodes.ReferenceExtractionCapStateUnavailable,
+                json.GetProperty("degraded_root_cause").GetString());
+            var repairCommand = Assert.Single(json.GetProperty("repair_commands").EnumerateArray());
+            var safetyNote = repairCommand.GetProperty("safety_notes")[0].GetString();
+            Assert.Contains("populate current per-file issue state", safetyNote, StringComparison.Ordinal);
+            Assert.DoesNotContain("cap-hitting", safetyNote, StringComparison.Ordinal);
         }
         finally
         {

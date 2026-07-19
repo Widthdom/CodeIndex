@@ -240,6 +240,7 @@ public class Probe
         writer.MarkGraphReady();
         writer.MarkFoldReady();
         writer.MarkCSharpSymbolNameContractReady();
+        writer.MarkIssuesReady();
     }
 
     private static IReadOnlyList<(string Original, string Placeholder)> BuildPathReplacements(string projectRoot)

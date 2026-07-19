@@ -24,6 +24,8 @@ public static class DegradationReasonCodes
     public const string GraphTableMissing = "graph_table_available=false";
     public const string GraphDataNotCurrent = "graph_data_current=false";
     public const string IndexIncomplete = "index_complete=false";
+    public const string ReferenceGraphIncomplete = "reference_graph_complete=false";
+    public const string ReferenceExtractionCapStateUnavailable = "reference_extraction_cap_state_unavailable";
     public const string IssuesTableMissing = "issues_table_available=false";
     public const string FileIssuesDataStale = "file_issues_data_current=false";
     public const string CSharpSymbolNameNotReady = "csharp_symbol_name_ready=false";
@@ -51,6 +53,8 @@ public static class DegradationReasonCodes
         GraphTableMissing,
         GraphDataNotCurrent,
         IndexIncomplete,
+        ReferenceGraphIncomplete,
+        ReferenceExtractionCapStateUnavailable,
         IssuesTableMissing,
         FileIssuesDataStale,
         CSharpSymbolNameNotReady,
@@ -179,6 +183,16 @@ public static class DegradationReasonCodes
                 "One or more files failed while other file transactions were committed successfully.",
                 "Run `cdidx status --json`, fix `last_failed_or_partial_index_run.file_errors`, then rerun the same index command; a rebuild is not required.",
                 "Use `cdidx index <projectPath> --allow-partial` only when automation deliberately accepts an incomplete generation."),
+            ReferenceGraphIncomplete => new(
+                code,
+                "Reference extraction hit one or more hard safety caps, so missing callers, callees, dependencies, or impact edges are not authoritative absences.",
+                "Inspect `reference_extraction_cap_hits.files`, reduce or exclude the generated/pathological source, then rerun `cdidx index <projectPath>`.",
+                "Run `cdidx status --json` and use `reference_extraction_limits` and `reference_graph_incomplete_reasons` to identify the active cap before changing repository scope."),
+            ReferenceExtractionCapStateUnavailable => new(
+                code,
+                "Reference-extraction cap state is unavailable for this legacy or stale issue generation, so graph completeness cannot be established.",
+                "Run `cdidx index <projectPath>` to populate current per-file issue state before trusting missing callers, callees, dependencies, or impact edges.",
+                "Run `cdidx index <projectPath> --rebuild` only if a normal index refresh cannot restore current issue state."),
             IssuesTableMissing => new(
                 code,
                 "Validate output is degraded to empty because the file_issues table is missing.",
