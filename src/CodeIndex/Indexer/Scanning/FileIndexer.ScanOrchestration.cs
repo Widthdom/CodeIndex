@@ -1,3 +1,4 @@
+using CodeIndex.Cli;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -121,6 +122,17 @@ public partial class FileIndexer
     {
         cancellationToken.ThrowIfCancellationRequested();
         var relativeDir = ToRelativePath(dir);
+        try
+        {
+            _pathAccessValidator?.Invoke(dir);
+        }
+        catch (IOException ex)
+        {
+            scanState.Errors.Add(new ScanError(
+                relativeDir,
+                $"Could not scan directory due to {FileSystemTraversalFailure.DescribeReason(ex)}."));
+            return false;
+        }
 
         if (depth > MaxDirectoryTraversalDepth)
         {

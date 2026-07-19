@@ -137,7 +137,10 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   fixed sleep because fast lanes should not spend the full cap once the race has
   already been exercised. Shared-writer blocking tests signal once the worker
   task has started before asserting it remains blocked, instead of sleeping for
-  a fixed grace period.
+  a fixed grace period. The shared-writer serialization stress test uses a
+  restored test-only 30-second contention ceiling so a progressing but non-fair
+  semaphore schedule on a loaded Windows runner is not mistaken for a leaked
+  transaction; the dedicated timeout tests retain the production timeout contract.
 - `LegacySchemaMigrationTests.cs`
   End-to-end upgrade path: seeds a pre-column legacy DB, opens it through `TryMigrateForRead`, and exercises the read paths that touch nullable symbol ordinals (outline, symbol search, nearby, unused, analyze bundle) to lock in the real-world failure mode behind #58 / #49. Migration ownership coverage must also distinguish caller-owned transactions from owned transactions, propagate unrelated `BEGIN` errors, preserve populated foreign-key rows across rebuilds, and verify rollback, foreign-key restoration, and successful retry after injected failures.
 - `IndexCommandRunner*Tests.cs`, `QueryCommandRunner*Tests.cs`, `ProgramCliTests.cs`, `InstallScriptTests.cs`
@@ -449,7 +452,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - `ReportCommandRunnerTests.cs`
   Report log-tail fixtures should use the local log-directory and log-file helpers instead of repeating `Path.Combine(workDir, "logs")`, `Directory.CreateDirectory`, and ad hoc `File.WriteAllText` setup.
 - `PostExtractionHookTests.cs`
-  Post-extraction hook discovery, mutation, diagnostics, callback budgets, and collectible hook assembly cleanup. Heavy hook worker and collectible assembly-load integration tests use `ProductionRuntimeFactAttribute` and run only on the `net8.0` production target, while direct worker protocol and metadata tests remain cross-target. Timed-out and canceled callback tests use a hook delay shorter than their leak-observation window, not a full one-second absence check, so worker-kill regressions still write the completion marker before the assertion exits. These tests mutate hook-related environment variables and test-only callback budget state, so the class belongs to the `SQLite pool sensitive` non-parallel collection.
+  Post-extraction hook discovery, mutation, diagnostics, callback budgets, and collectible hook assembly cleanup. Heavy hook worker and collectible assembly-load integration tests use `ProductionRuntimeFactAttribute` and run only on the `net8.0` production target, while direct worker protocol and metadata tests remain cross-target. Timed-out and canceled callback tests use a hook delay shorter than their leak-observation window, not a full one-second absence check, so worker-kill regressions still write the completion marker before the assertion exits. Duplicate-hook isolation coverage gives the healthy worker a bounded five-second startup-and-callback budget while the selected slow hook blocks for 30 seconds, keeping the timeout distinction deterministic on loaded Windows runners. These tests mutate hook-related environment variables and test-only callback budget state, so the class belongs to the `SQLite pool sensitive` non-parallel collection.
 - `GitHubIssueReporterTests.cs`
   GitHub token resolution logic (CDIDX_GITHUB_TOKEN only; generic GITHUB_TOKEN is ignored), outbound code scrubbing, idempotency checks, and rate-limit diagnostics.
 - `PackagesLockTests.cs`
@@ -478,6 +481,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   FsCheck-driven property tests for parser-heavy paths called out in issue #1572: `ArgHelper.WantsHelp` and `ProgramRunner.IsProjectPathArg` never throw on arbitrary inputs; `FileIndexer.NormalizePathSeparators` is idempotent under double application; the literal-safe FTS5 sanitizer (`DbReader.SanitizeFtsQuery`) always emits a query that a real in-memory FTS5 virtual table can parse. They complement, not replace, the example-based tests in `ArgHelperTests.cs` / `QueryCommandRunnerTests.cs`.
 - `TestProjectHelper.cs`, `TestDeterminism.cs`, `RepositoryTestPaths.cs`, `TestConsoleLock.cs`
   Shared test helpers. Prefer `TestProjectHelper.CreateTempProjectScope` when a test owns a temporary project directory, including package-normalizer CLI, diagnostic, legacy-temp, size-limit, entry-name, external-attribute, path-casing, filesystem-traversal, workspace-manifest, active-workspace, workspace-use, config-show, DB path resolver, and file-indexer scan/probe fixtures; use `TestProjectHelper.DeleteDirectory` / `DeleteFile` for ordinary temp cleanup and `DeleteSqliteDatabaseFiles` when SQLite `-wal` / `-shm` sidecars must be removed with the database. Use `TestProjectHelper.WaitForFileSystemReleaseRetry` only inside bounded cleanup retry loops that are reacting to a failed filesystem delete. Use `TestDeterminism` for bounded polling, eventual assertions, blocked-task observation, same-start concurrent workers, and seeded random inputs. MCP indexing tests should route temporary codeindex DB cleanup through this helper as well. Do not copy local retry loops unless the test needs a genuinely specialized path shape such as Windows long-path fixtures.
+  MCP filesystem-authorization race tests place the swap at the actual file-open or handle-enumeration seam, including the early prefix read used for ambiguous `.m` / `.pl` language detection, restore double-swapped paths deterministically after enumeration, and assert that source files, language-map/pattern sidecars, and retained directory handles cannot inherit a wider cached authorization scope.
 
 ## Conventions
 
@@ -835,7 +839,10 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   2 秒上限だけを fallback として残します。race が既に十分 exercised された fast lane
   で上限時間を使い切らないよう、固定 sleep に戻さないでください。shared-writer
   blocking test は固定 grace period で sleep せず、worker task が開始したことを signal
-  してから blocked のままであることを検証します。
+  してから blocked のままであることを検証します。shared-writer serialization stress test
+  では、復元される test-only の 30 秒 contention 上限を使い、高負荷な Windows runner 上で
+  進行中の非公平な semaphore schedule を transaction leak と誤認しないようにします。
+  production timeout 契約は専用の timeout test で引き続き固定します。
 - `LegacySchemaMigrationTests.cs`
   エンドツーエンドのアップグレード経路: カラム追加前のレガシー DB を用意し、`TryMigrateForRead` 経由で開いてから NULL になりうるシンボル列を触る read path（outline、シンボル検索、近傍、unused、analyze バンドル）を一通り叩き、#58 / #49 の実機失敗モードを固定する。migration ownership の coverage では、caller-owned transaction と cdidx-owned transaction を区別し、無関係な `BEGIN` error を伝播させ、foreign key が設定された既存 row を rebuild 後も保持し、注入 failure 後の rollback、foreign key 復元、retry 成功まで検証する。
 - `IndexCommandRunner*Tests.cs`、`QueryCommandRunner*Tests.cs`、`ProgramCliTests.cs`、`InstallScriptTests.cs`
@@ -1143,7 +1150,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `ReportCommandRunnerTests.cs`
   report log-tail fixture では、`Path.Combine(workDir, "logs")`、`Directory.CreateDirectory`、ad hoc な `File.WriteAllText` setup を繰り返さず、ローカルの log directory / log file helper を使ってください。
 - `PostExtractionHookTests.cs`
-  post-extraction hook の discovery、mutation、diagnostics、callback budget、collectible hook assembly cleanup のテスト。重い hook worker と collectible assembly-load の integration test は `ProductionRuntimeFactAttribute` を使って `net8.0` production target でのみ実行し、direct worker protocol と metadata test は cross-target のままにします。timeout / cancel された callback のテストは、hook delay を leak-observation window より短くし、1 秒丸ごとの absence check には戻しません。worker kill の回帰がある場合は assertion が終わる前に completion marker が書かれるようにします。hook 関連の環境変数と test-only callback budget 状態を変更するため、このクラスは non-parallel な `SQLite pool sensitive` collection に入れます。
+  post-extraction hook の discovery、mutation、diagnostics、callback budget、collectible hook assembly cleanup のテスト。重い hook worker と collectible assembly-load の integration test は `ProductionRuntimeFactAttribute` を使って `net8.0` production target でのみ実行し、direct worker protocol と metadata test は cross-target のままにします。timeout / cancel された callback のテストは、hook delay を leak-observation window より短くし、1 秒丸ごとの absence check には戻しません。worker kill の回帰がある場合は assertion が終わる前に completion marker が書かれるようにします。duplicate-hook isolation coverage では正常な worker に bounded な 5 秒の startup-and-callback budget を与え、選択した slow hook は 30 秒 block させることで、高負荷な Windows runner でも timeout の区別を deterministic に保ちます。hook 関連の環境変数と test-only callback budget 状態を変更するため、このクラスは non-parallel な `SQLite pool sensitive` collection に入れます。
 - `GitHubIssueReporterTests.cs`
   GitHubトークン解決ロジック（CDIDX_GITHUB_TOKENのみ。汎用GITHUB_TOKENは無視）、送信前のコード scrubbing、冪等性チェック、rate-limit diagnostics を扱います。
 - `PackagesLockTests.cs`
@@ -1171,6 +1178,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   issue #1572 で挙げられたパーサー系経路に対する FsCheck 駆動の property テスト: `ArgHelper.WantsHelp` と `ProgramRunner.IsProjectPathArg` が任意入力で例外を投げないこと、`FileIndexer.NormalizePathSeparators` が二重適用で idempotent であること、literal-safe な FTS5 サニタイザ (`DbReader.SanitizeFtsQuery`) が常にインメモリ FTS5 仮想テーブルで parse 可能なクエリを出力すること。`ArgHelperTests.cs` / `QueryCommandRunnerTests.cs` の例ベーステストを置き換えるものではなく補完します。
 - `TestProjectHelper.cs`、`TestDeterminism.cs`、`RepositoryTestPaths.cs`、`TestConsoleLock.cs`
   共有テストヘルパー。package-normalizer CLI / diagnostic / legacy-temp / size-limit / entry-name / external-attribute / path-casing / filesystem-traversal / workspace-manifest / active-workspace / workspace-use / config-show / DB path resolver / file-indexer scan/probe fixture も含め、テストが一時 project directory を所有する場合は `TestProjectHelper.CreateTempProjectScope` を優先し、通常の temp cleanup は `TestProjectHelper.DeleteDirectory` / `DeleteFile`、SQLite の `-wal` / `-shm` sidecar を DB と一緒に消す必要がある場合は `DeleteSqliteDatabaseFiles` を使ってください。失敗した filesystem delete に反応する bounded cleanup retry loop の中だけ、`TestProjectHelper.WaitForFileSystemReleaseRetry` を使ってください。境界付きポーリング、最終的な条件成立のアサーション、ブロック中タスクの観測、同時開始するワーカー、固定シード乱数入力には `TestDeterminism` を使ってください。MCP indexing test の一時 codeindex DB cleanup もこの helper に寄せてください。Windows long-path fixture のように特殊な path shape が必要な場合を除き、ローカルの retry loop をコピーしないでください。
+  MCP filesystem 認可の race test は、曖昧な `.m` / `.pl` 言語判定で使う早期 prefix read を含む実際の file-open / handle-enumeration seam で差し替えを行い、double-swap した path を列挙後に決定的に復元し、source file、language-map / pattern sidecar、保持中 directory handle が、より広い cache 済み認可 scope を継承できないことを検証してください。
 
 ## 規約
 

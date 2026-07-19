@@ -20,6 +20,11 @@ namespace CodeIndex.Mcp;
 /// </summary>
 public partial class McpServer
 {
+    private sealed class IndexAuditContext
+    {
+        internal string? CheckedRootIdentity { get; set; }
+    }
+
     private const int DefaultBatchQueryResponseByteLimit = MaxLineByteLength;
     internal const int MaxBatchQueryResponseByteLimit = 10 * 1024 * 1024;
     internal const int MaxBatchQuerySize = 10;
@@ -49,6 +54,10 @@ public partial class McpServer
     internal const int MaxMcpIndexFailureMessageLength = 512;
     internal static Action<string>? McpIndexFileCommittedForTesting { get; set; }
     internal static Action<string>? McpIndexFileContentLoadForTesting { get; set; }
+    internal static Action? McpIndexAuthorizationCompletedForTesting { get; set; }
+    internal static Action<string>? McpIndexEntryOpenBoundaryForTesting { get; set; }
+    internal static Action<string>? McpIndexDirectoryEnumerationBoundaryForTesting { get; set; }
+    internal static Action<string>? McpIndexDirectoryEnumerationCompletedForTesting { get; set; }
     internal static Action? McpIndexPostExtractionHookDiscoveryForTesting { get; set; }
     internal static Action? McpIndexFtsOptimizeForTesting { get; set; }
     internal static Action? McpIndexCSharpPrepassForTesting { get; set; }

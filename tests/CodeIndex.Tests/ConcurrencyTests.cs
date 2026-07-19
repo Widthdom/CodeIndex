@@ -553,36 +553,45 @@ public class ConcurrencyTests : IDisposable
     [Fact]
     public async Task BeginTransaction_SharedWriterSerializesConcurrentScopes()
     {
-        var writer = new DbWriter(_db.Connection);
-        var errors = new ConcurrentBag<Exception>();
+        var originalTimeout = DbWriter.TransactionStateContentionTimeoutForTesting;
+        DbWriter.TransactionStateContentionTimeoutForTesting = TimeSpan.FromSeconds(30);
+        try
+        {
+            var writer = new DbWriter(_db.Connection);
+            var errors = new ConcurrentBag<Exception>();
 
-        await TestDeterminism.RunConcurrentlyAsync(
-            Enumerable.Range(0, 8).Select<int, Action>(worker => () =>
-            {
-                try
+            await TestDeterminism.RunConcurrentlyAsync(
+                Enumerable.Range(0, 8).Select<int, Action>(worker => () =>
                 {
-                    for (var i = 0; i < 20; i++)
+                    try
                     {
-                        using var txn = writer.BeginTransaction();
-                        writer.UpsertFile(new FileRecord
+                        for (var i = 0; i < 20; i++)
                         {
-                            Path = $"src/worker{worker}_{i}.cs",
-                            Lang = "csharp",
-                            Size = 10,
-                            Lines = 1,
-                            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
-                            Checksum = $"{worker}_{i}",
-                        });
-                        txn.Commit();
+                            using var txn = writer.BeginTransaction();
+                            writer.UpsertFile(new FileRecord
+                            {
+                                Path = $"src/worker{worker}_{i}.cs",
+                                Lang = "csharp",
+                                Size = 10,
+                                Lines = 1,
+                                Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+                                Checksum = $"{worker}_{i}",
+                            });
+                            txn.Commit();
+                        }
                     }
-                }
-                catch (Exception ex)
-                {
-                    errors.Add(ex);
-                }
-            }));
+                    catch (Exception ex)
+                    {
+                        errors.Add(ex);
+                    }
+                }));
 
-        Assert.True(errors.IsEmpty, string.Join(Environment.NewLine, errors.Select(e => e.ToString())));
+            Assert.True(errors.IsEmpty, string.Join(Environment.NewLine, errors.Select(e => e.ToString())));
+        }
+        finally
+        {
+            DbWriter.TransactionStateContentionTimeoutForTesting = originalTimeout;
+        }
     }
 
     [Fact]
