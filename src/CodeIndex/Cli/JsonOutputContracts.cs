@@ -556,8 +556,14 @@ internal sealed record LanguageEntryJsonResult(
     [property: JsonPropertyName("indexed_file_count")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? IndexedFileCount = null);
 
+internal sealed record LanguageDetectionPolicyJsonResult(
+    [property: JsonPropertyName("filename_case_policy")] string FilenameCasePolicy,
+    [property: JsonPropertyName("filename_case_source")] string FilenameCaseSource,
+    [property: JsonPropertyName("extension_case_policy")] string ExtensionCasePolicy);
+
 internal sealed record LanguagesJsonResult(
     [property: JsonPropertyName("languages")] List<LanguageEntryJsonResult> Languages,
+    [property: JsonPropertyName("detection_policy")] LanguageDetectionPolicyJsonResult DetectionPolicy,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed class IndexDryRunJsonResult : IVersionedJsonResult
@@ -887,6 +893,7 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(List<HookCommandWarningJsonResult>))]
 [JsonSerializable(typeof(JsonStreamDoneResult))]
 [JsonSerializable(typeof(LanguageEntryJsonResult))]
+[JsonSerializable(typeof(LanguageDetectionPolicyJsonResult))]
 [JsonSerializable(typeof(LanguageUnsupportedGuidance))]
 [JsonSerializable(typeof(LanguagesJsonResult))]
 [JsonSerializable(typeof(LspLocation))]

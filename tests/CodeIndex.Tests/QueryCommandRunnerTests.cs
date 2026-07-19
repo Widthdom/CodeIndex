@@ -2904,6 +2904,21 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunLanguages_JsonReportsFilesystemFilenameCasePolicy_Issue4601()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var policy = document.RootElement.GetProperty("detection_policy");
+        Assert.Equal("filesystem", policy.GetProperty("filename_case_policy").GetString());
+        Assert.Equal("path_case_sensitive", policy.GetProperty("filename_case_source").GetString());
+        Assert.Equal("case_insensitive", policy.GetProperty("extension_case_policy").GetString());
+    }
+
+    [Fact]
     public void RunSymbolsAndReferences_AcceptDependencyPackageKinds_Issue3899()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_dependency_package_kinds");

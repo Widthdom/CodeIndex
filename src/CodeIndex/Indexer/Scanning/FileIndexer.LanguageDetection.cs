@@ -279,7 +279,8 @@ public partial class FileIndexer
             _symlinkPolicy,
             _projectRoot,
             knownIndexability,
-            LoadLanguageMapOverridesForIndexing);
+            LoadLanguageMapOverridesForIndexing,
+            fileNameIgnoreCase: DirectoryUsesIgnoreCase(Path.GetDirectoryName(filePath) ?? _projectRoot));
 
     private IReadOnlyDictionary<string, string> LoadLanguageMapOverridesForIndexing(string? startDirectory)
     {
@@ -362,10 +363,10 @@ public partial class FileIndexer
             return !string.Equals(extension, ".h", StringComparison.OrdinalIgnoreCase);
 
         var fileName = Path.GetFileName(filePath);
-        if (FileNameMap.TryGetValue(fileName, out var nameLanguage))
+        if (TryGetExactFileNameLanguage(fileName, ignoreCase: true, out var nameLanguage))
             return string.Equals(language, nameLanguage, StringComparison.Ordinal);
 
-        if (TryGetFileNamePrefixLanguage(fileName, out var prefixLanguage))
+        if (TryGetFileNamePrefixLanguage(fileName, ignoreCase: true, out var prefixLanguage))
             return string.Equals(language, prefixLanguage, StringComparison.Ordinal);
 
         return false;
@@ -380,21 +381,22 @@ public partial class FileIndexer
         SymlinkPolicy symlinkPolicy,
         string? projectRoot,
         FileProbeStatus? knownIndexability = null,
-        Func<string?, IReadOnlyDictionary<string, string>>? languageMapOverrideResolver = null)
+        Func<string?, IReadOnlyDictionary<string, string>>? languageMapOverrideResolver = null,
+        bool fileNameIgnoreCase = true)
     {
         // Exact filename matching beats extension lookup so manifest-style filenames like
         // `pyproject.toml` can map to a dependency category instead of the generic file type.
         // `pyproject.toml` のようなマニフェスト系ファイル名が、汎用拡張子ではなく
         // dependency category に紐づくよう、完全一致ファイル名を拡張子より先に判定する。
         var fileName = Path.GetFileName(filePath);
-        if (FileNameMap.TryGetValue(fileName, out var nameLang))
+        if (TryGetExactFileNameLanguage(fileName, fileNameIgnoreCase, out var nameLang))
             return new LanguageDetectionResult(FileProbeStatus.Supported, nameLang);
 
         // Then try known filename prefixes for suffixed variants like Dockerfile.dev / Makefile.am.
         // The suffix must be non-empty so a bare `Dockerfile.` with trailing dot does not match.
         // Dockerfile.dev や Makefile.am のようなサフィックス付き変種を検出する。
         // `Dockerfile.` のような末尾ドットだけの形には一致させないため、サフィックスは1文字以上必須。
-        if (TryGetFileNamePrefixLanguage(fileName, out var prefixLang))
+        if (TryGetFileNamePrefixLanguage(fileName, fileNameIgnoreCase, out var prefixLang))
             return new LanguageDetectionResult(FileProbeStatus.Supported, prefixLang);
 
         var ext = Path.GetExtension(fileName);
@@ -428,16 +430,31 @@ public partial class FileIndexer
         return TryDetectLanguageFromShebang(filePath, symlinkPolicy, projectRoot, knownIndexability);
     }
 
-    private static bool TryGetFileNamePrefixLanguage(string fileName, out string language)
+    private static bool TryGetExactFileNameLanguage(string fileName, bool ignoreCase, out string language)
+    {
+        var map = ignoreCase ? FileNameMapIgnoreCase : FileNameMap;
+        if (map.TryGetValue(fileName, out var detectedLanguage))
+        {
+            language = detectedLanguage;
+            return true;
+        }
+
+        language = string.Empty;
+        return false;
+    }
+
+    private static bool TryGetFileNamePrefixLanguage(string fileName, bool ignoreCase, out string language)
     {
         language = string.Empty;
-        if (!CouldMatchFileNamePrefix(fileName))
+        if (!CouldMatchFileNamePrefix(fileName, ignoreCase))
             return false;
+
+        var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
         foreach (var (prefix, prefixLanguage) in FileNamePrefixMap)
         {
             if (fileName.Length > prefix.Length &&
-                fileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                fileName.StartsWith(prefix, comparison))
             {
                 language = prefixLanguage;
                 return true;
@@ -447,12 +464,14 @@ public partial class FileIndexer
         return false;
     }
 
-    private static bool CouldMatchFileNamePrefix(string fileName)
+    private static bool CouldMatchFileNamePrefix(string fileName, bool ignoreCase)
     {
         if (fileName.Length <= "Makefile.".Length)
             return false;
 
-        return fileName[0] is 'D' or 'd' or 'C' or 'c' or 'M' or 'm' or 'G' or 'g';
+        return ignoreCase
+            ? fileName[0] is 'D' or 'd' or 'C' or 'c' or 'M' or 'm' or 'G' or 'g'
+            : fileName[0] is 'D' or 'C' or 'M' or 'G';
     }
 
     private static bool TryDetectLanguageOverride(

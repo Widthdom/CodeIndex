@@ -121,7 +121,10 @@ public static partial class QueryCommandRunner
                     kv.Value.CapabilityGaps,
                     kv.Value.UnsupportedGuidance,
                     GetIndexedLanguageCount(indexedLanguageCounts, kv.Key))).ToList();
-                Console.WriteLine(SerializeQueryJson(new LanguagesJsonResult(entries), CliJsonSerializerContextFactory.Create(jsonOptions).LanguagesJsonResult, jsonOptions));
+                Console.WriteLine(SerializeQueryJson(
+                    new LanguagesJsonResult(entries, BuildLanguageDetectionPolicy()),
+                    CliJsonSerializerContextFactory.Create(jsonOptions).LanguagesJsonResult,
+                    jsonOptions));
             }
             else
             {
@@ -187,6 +190,12 @@ public static partial class QueryCommandRunner
         bool Graph,
         List<string> CapabilityGaps,
         List<LanguageUnsupportedGuidance> UnsupportedGuidance);
+
+    private static LanguageDetectionPolicyJsonResult BuildLanguageDetectionPolicy()
+        => new(
+            FilenameCasePolicy: "filesystem",
+            FilenameCaseSource: "path_case_sensitive",
+            ExtensionCasePolicy: "case_insensitive");
 
     private static bool HasLanguageLookup(QueryCommandOptions options)
         => options.LanguageLookups.Count > 0 || options.LanguageExtensionLookups.Count > 0 || options.LanguageAliasLookups.Count > 0;
@@ -284,6 +293,7 @@ public static partial class QueryCommandRunner
             ["language_count"] = languages.Count,
             ["total_language_count"] = totalLanguageCount,
             ["capability_counts"] = BuildLanguageCapabilityCounts(languages),
+            ["detection_policy"] = BuildLanguageDetectionPolicyNode(),
         };
 
         if (options.OutputFormat == OutputFormatCount)
@@ -350,4 +360,12 @@ public static partial class QueryCommandRunner
             array.Add(value);
         return array;
     }
+
+    private static JsonObject BuildLanguageDetectionPolicyNode()
+        => new()
+        {
+            ["filename_case_policy"] = "filesystem",
+            ["filename_case_source"] = "path_case_sensitive",
+            ["extension_case_policy"] = "case_insensitive",
+        };
 }

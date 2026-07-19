@@ -105,6 +105,12 @@ public partial class McpServer
             var payload = new JsonObject
             {
                 ["languages"] = languagesArray,
+                ["detection_policy"] = new JsonObject
+                {
+                    ["filename_case_policy"] = "filesystem",
+                    ["filename_case_source"] = "path_case_sensitive",
+                    ["extension_case_policy"] = "case_insensitive",
+                },
                 ["filters"] = new JsonObject
                 {
                     ["indexedOnly"] = indexedOnly,
