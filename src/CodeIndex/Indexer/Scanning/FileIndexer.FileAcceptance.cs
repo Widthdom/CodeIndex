@@ -94,6 +94,8 @@ public partial class FileIndexer
             return false;
         }
 
+        _pathAccessValidator?.Invoke(file);
+
         // Include files with a known extension/filename or an extensionless recognized shebang
         // 既知の拡張子・既知ファイル名、または拡張子なしで shebang を認識できるファイルを含める
         var language = TryDetectLanguageForIndexing(file, knownIndexability: indexability);

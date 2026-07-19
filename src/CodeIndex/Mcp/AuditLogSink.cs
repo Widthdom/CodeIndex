@@ -755,6 +755,8 @@ internal sealed class AuditLogSink : IDisposable
 
         if (evt.ResultCount is { } rc)
             jw.WriteNumber("result_count", rc);
+        if (evt.CheckedRootIdentity is { } checkedRootIdentity)
+            jw.WriteString("checked_root_identity", checkedRootIdentity);
 
         jw.WriteNumber("elapsed_ms", Math.Round(evt.ElapsedMs, 3));
         jw.WriteNumber("error_code", evt.ErrorCode);
@@ -1207,5 +1209,6 @@ internal sealed class AuditLogSink : IDisposable
         bool CallerNameTruncated = false,
         int? CallerVersionLength = null,
         bool CallerVersionTruncated = false,
-        string? RequestIdType = null);
+        string? RequestIdType = null,
+        string? CheckedRootIdentity = null);
 }
