@@ -18,5 +18,7 @@ public static partial class QueryCommandRunner
         ["sql"] = ["tsql", "t-sql", "transact-sql", "transactsql", "sqlserver", "mssql"],
         ["xml"] = ["xaml", "axaml"],
         ["assembly"] = ["asm", "assembler", "nasm", "gas", "gnuasm", "gnu assembler"],
+        ["matlab"] = ["octave", "gnu octave"],
+        ["prolog"] = ["swi-prolog", "swipl"],
     };
 }

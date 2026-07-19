@@ -1691,6 +1691,18 @@ public static partial class SymbolExtractor
             new("function", new Regex(@"^\s*(?:(?:my|state)\s+)?sub\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b(?:\s*:[^{;]+)?", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
             new("function", new Regex(@"^\s*(?:method|fun)\s+(?<name>" + PerlIdentifierPattern + @")\b(?:\s*:[^{;]+)?", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
         ],
+        ["matlab"] =
+        [
+            new("class", new Regex(@"^\s*classdef\s*(?:\([^)]*\)\s*)?(?<name>[A-Za-z]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*function\s+(?:(?:\[[^\]]+\]|[A-Za-z]\w*)\s*=\s*)?(?<name>[A-Za-z]\w*)\s*(?:\(|$)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import", new Regex(@"^\s*import\s+(?<name>[A-Za-z]\w*(?:\.[A-Za-z*]\w*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+        ],
+        ["prolog"] =
+        [
+            new("namespace", new Regex(@"^\s*:-\s*module\s*\(\s*(?<name>[a-z][A-Za-z0-9_]*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import", new Regex(@"^\s*:-\s*use_module\s*\(\s*(?<name>[a-z][A-Za-z0-9_]*(?:\([^)]*\))?)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*(?:\([^\r\n.]*\))?\s*(?::-|-->|\.)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+        ],
         ["c"] =
         [
             new("function", new Regex(CFunctionStartBlacklistPattern + CFunctionReturnTypePattern + CFunctionNameBlacklistPattern + @"(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),

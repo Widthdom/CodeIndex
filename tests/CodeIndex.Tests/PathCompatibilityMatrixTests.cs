@@ -45,6 +45,92 @@ public sealed class PathCompatibilityMatrixTests
         }
     }
 
+    [Theory]
+    [InlineData(false, 0)]
+    [InlineData(true, 2)]
+    public void FileNameLanguageMatrix_UsesSeededFilesystemCasePolicy(bool ignoreCase, int expectedFileCount)
+    {
+        using var workspace = MatrixWorkspace.Create("cdidx_filename_case_matrix");
+        workspace.WriteText("dockerfile", "FROM scratch\n");
+        workspace.WriteText("makefile.dev", "all:\n\t@true\n");
+        var indexer = new FileIndexer(
+            workspace.Root,
+            ignoreCase,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: _ => ignoreCase);
+
+        var result = indexer.ScanFilesDetailed();
+
+        Assert.Equal(expectedFileCount, result.Files.Count);
+        if (ignoreCase)
+        {
+            Assert.Equal("dockerfile", result.FileLanguages[workspace.FullPath("dockerfile")]);
+            Assert.Equal("makefile", result.FileLanguages[workspace.FullPath("makefile.dev")]);
+        }
+    }
+
+    [Fact]
+    public void CaseProbeMatrix_NumericRootUsesPrivateChildWithoutMutatingAncestor()
+    {
+        using var workspace = MatrixWorkspace.Create("cdidx_case_probe_parent");
+        var numericRoot = workspace.FullPath("12345");
+        Directory.CreateDirectory(numericRoot);
+
+        Assert.False(CaseSensitivityProbeDirectory.TryCreateLeafNameCaseVariant(numericRoot, out var unchanged));
+        Assert.Equal(numericRoot, unchanged);
+
+        _ = CaseSensitivityProbeDirectory.ProbeIgnoreCase(numericRoot, "case-probe-test-");
+
+        Assert.False(Directory.Exists(Path.Combine(numericRoot, CaseSensitivityProbeDirectory.DataDirectoryName)));
+    }
+
+    [Fact]
+    public void CaseProbeMatrix_ExistingCdidxFileDoesNotBlockPrivateChild_Issue4601()
+    {
+        using var workspace = MatrixWorkspace.Create("cdidx_case_probe_file");
+        var dataPath = workspace.FullPath(CaseSensitivityProbeDirectory.DataDirectoryName);
+        File.WriteAllText(dataPath, "reserved");
+
+        _ = CaseSensitivityProbeDirectory.ProbeIgnoreCase(workspace.Root, "case-probe-test-");
+
+        Assert.Equal("reserved", File.ReadAllText(dataPath));
+        Assert.Empty(Directory.GetDirectories(
+            workspace.Root,
+            $"{CaseSensitivityProbeDirectory.IsolatedProbeDirectoryPrefix}*",
+            SearchOption.TopDirectoryOnly));
+    }
+
+    [Fact]
+    public void CaseProbeMatrix_ConcurrentProbesDoNotLeaveSharedArtifacts_Issue4601()
+    {
+        using var workspace = MatrixWorkspace.Create("cdidx_case_probe_parallel");
+
+        Parallel.For(0, 32, _ =>
+            CaseSensitivityProbeDirectory.ProbeIgnoreCase(workspace.Root, "case-probe-test-"));
+
+        Assert.False(Directory.Exists(Path.Combine(workspace.Root, CaseSensitivityProbeDirectory.DataDirectoryName)));
+        Assert.Empty(Directory.GetDirectories(
+            workspace.Root,
+            $"{CaseSensitivityProbeDirectory.IsolatedProbeDirectoryPrefix}*",
+            SearchOption.TopDirectoryOnly));
+    }
+
+    [Fact]
+    public void CaseProbeMatrix_ExistingChildProbeIgnoresParentSiblingCaseCollision_Issue4601()
+    {
+        using var workspace = MatrixWorkspace.Create("cdidx_case_probe_sibling_collision");
+        if (CaseSensitivityProbeDirectory.ProbeIgnoreCase(workspace.Root, "case-probe-test-"))
+            return;
+
+        var target = workspace.FullPath("foo");
+        Directory.CreateDirectory(target);
+        Directory.CreateDirectory(workspace.FullPath("foO"));
+        File.WriteAllText(Path.Combine(target, "dockerfile"), "FROM scratch\n");
+
+        Assert.False(CaseSensitivityProbeDirectory.ProbeExistingChildIgnoreCase(target));
+    }
+
     public static TheoryData<string, string, string, string> LongPathCases()
     {
         var data = new TheoryData<string, string, string, string>();

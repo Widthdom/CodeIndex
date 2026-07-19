@@ -45,6 +45,34 @@ public class IndexFreshnessCheckerTests
 public class IndexFreshnessProbeOverrideTests
 {
     [Fact]
+    public void Check_CustomInWorkspaceDbDoesNotEnterWorkspaceScan_Issue4611()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_custom_db");
+        var dbPath = Path.Combine(projectRoot, "index.json");
+        try
+        {
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            db.InitializeSchema();
+            var reader = new DbReader(db);
+
+            var result = IndexFreshnessChecker.Check(
+                reader,
+                projectRoot,
+                pathCaseSensitive: true,
+                internalIndexDatabasePath: dbPath);
+
+            Assert.True(result.Checked);
+            Assert.True(result.MatchesWorkspace);
+            Assert.Equal(0, result.WorkspaceFileCount);
+            Assert.Equal(0, result.ScanErrorCount);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Check_StampedPathCaseSensitivityAvoidsFilesystemWriteProbe_Issue3828()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_case_stamp");

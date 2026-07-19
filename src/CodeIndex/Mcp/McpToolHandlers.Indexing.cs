@@ -59,7 +59,8 @@ public partial class McpServer
                 maxFileBytes,
                 directoryIgnoreCaseProbe: null,
                 symlinkPolicy: symlinkPolicy,
-                generatedCodePatterns: IndexCommandRunner.ReadGeneratedCodePatternsFromEnvironment());
+                generatedCodePatterns: IndexCommandRunner.ReadGeneratedCodePatternsFromEnvironment(),
+                internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(_dbPath));
             var scan = dryRunIndexer.ScanFilesDetailed(cancellationToken: _currentRequestToken.Value);
             if (memorySamples != null)
                 memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
@@ -182,7 +183,8 @@ public partial class McpServer
             maxFileBytes,
             directoryIgnoreCaseProbe: null,
             symlinkPolicy: symlinkPolicy,
-            generatedCodePatterns: IndexCommandRunner.ReadGeneratedCodePatternsFromEnvironment());
+            generatedCodePatterns: IndexCommandRunner.ReadGeneratedCodePatternsFromEnvironment(),
+            internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(_dbPath));
         using var postExtractionHooks = new IndexCommandRunner.LazyDisposable<PostExtractionHookRunner>(() =>
         {
             McpIndexPostExtractionHookDiscoveryForTesting?.Invoke();

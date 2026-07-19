@@ -12,9 +12,48 @@ public partial class FileIndexer
             && !ExtractorPluginRegistry.TryGetLanguageForExtension(extension, out _);
     }
 
-    private static bool IsInternalIndexArtifactPath(string relativePath)
-        => relativePath.Equals(".cdidx", StringComparison.Ordinal)
-            || relativePath.StartsWith(".cdidx/", StringComparison.Ordinal);
+    private bool IsInternalIndexArtifactPath(string relativePath)
+    {
+        if (_internalIndexDatabaseRelativePath is null)
+            return false;
+
+        var comparison = _ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (relativePath.Equals(_internalIndexDatabaseRelativePath, comparison))
+            return true;
+        if (!relativePath.StartsWith(_internalIndexDatabaseRelativePath, comparison))
+            return false;
+
+        var suffix = relativePath[_internalIndexDatabaseRelativePath.Length..];
+        return suffix.Equals("-wal", comparison)
+            || suffix.Equals("-shm", comparison)
+            || suffix.Equals("-journal", comparison)
+            || suffix.Equals(".lock", comparison)
+            || suffix.Equals(".lock.info", comparison)
+            || suffix.Equals(".checkpoints", comparison)
+            || suffix.StartsWith(".checkpoints/", comparison)
+            || suffix.StartsWith(".restore-tmp-", comparison)
+            || suffix.StartsWith(".restore-backup-", comparison);
+    }
+
+    private static string? ResolveInternalIndexDatabaseRelativePath(
+        string projectRoot,
+        string? internalIndexDatabasePath)
+    {
+        if (string.Equals(internalIndexDatabasePath, ":memory:", StringComparison.Ordinal))
+            return null;
+
+        var configuredPath = internalIndexDatabasePath
+            ?? Path.Combine(projectRoot, CaseSensitivityProbeDirectory.DataDirectoryName, "codeindex.db");
+        var absolutePath = Path.IsPathFullyQualified(configuredPath)
+            ? Path.GetFullPath(configuredPath)
+            : Path.GetFullPath(Path.Combine(projectRoot, configuredPath));
+        var relativePath = NormalizePathSeparators(Path.GetRelativePath(projectRoot, absolutePath));
+        return relativePath.Equals("..", StringComparison.Ordinal)
+            || relativePath.StartsWith("../", StringComparison.Ordinal)
+            || Path.IsPathRooted(relativePath)
+            ? null
+            : relativePath;
+    }
 
     private PathFilterKind GetDirectoryFilterKind(
         string dir,
@@ -24,6 +63,9 @@ public partial class FileIndexer
     {
         if (!isProjectRoot)
         {
+            if (IsInternalIndexArtifactPath(relativeDir))
+                return PathFilterKind.ExcludedByDefaultDirectory;
+
             var dirName = Path.GetFileName(Path.TrimEndingDirectorySeparator(dir.AsSpan()));
             if (IsDefaultExcludedDirectoryName(dirName) && !IsSubmoduleOrAncestor(relativeDir))
                 return PathFilterKind.ExcludedByDefaultDirectory;

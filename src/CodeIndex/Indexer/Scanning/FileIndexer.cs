@@ -69,6 +69,7 @@ public partial class FileIndexer
     private readonly SymlinkPolicy _symlinkPolicy;
     private readonly int _maxDanglingFileSystemEntryScanCandidates;
     private readonly GeneratedCodePatternMatcher _generatedCodePatterns;
+    private readonly string? _internalIndexDatabaseRelativePath;
     // Submodule working-tree paths declared in <ignoreRuleRoot>/.gitmodules, relative to
     // _projectRoot and slash-normalized. Used to override SkipDirs so that submodules
     // hosted under SkipDirs-named directories (e.g. vendor/foo) remain visible to the
@@ -187,7 +188,8 @@ public partial class FileIndexer
         Func<string, IEnumerable<string>>? enumerateFileSystemEntries = null,
         SymlinkPolicy symlinkPolicy = SymlinkPolicy.None,
         int? maxDanglingFileSystemEntryScanCandidates = null,
-        IReadOnlyList<string>? generatedCodePatterns = null)
+        IReadOnlyList<string>? generatedCodePatterns = null,
+        string? internalIndexDatabasePath = null)
     {
         _projectRoot = Path.GetFullPath(projectRoot);
         _projectRootRelativePrefix = CreateProjectRootRelativePrefix(_projectRoot);
@@ -207,6 +209,9 @@ public partial class FileIndexer
             1,
             maxDanglingFileSystemEntryScanCandidates ?? MaxDanglingFileSystemEntryScanCandidates);
         _generatedCodePatterns = GeneratedCodePatternMatcher.FromPatterns(generatedCodePatterns, ignoreCase);
+        _internalIndexDatabaseRelativePath = ResolveInternalIndexDatabaseRelativePath(
+            _projectRoot,
+            internalIndexDatabasePath);
         ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(_projectRoot);
         var pathComparer = _ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         (_submodulePaths, _submoduleAncestorPaths, _submoduleLoadWarnings) = LoadGitSubmodulePaths(_ignoreRuleRoot, _projectRoot, pathComparer);

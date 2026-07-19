@@ -42,6 +42,32 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRun_CustomInWorkspaceDbDoesNotProbeDatabase_Issue4611()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "class App {}\n");
+            var dbPath = Path.Combine(projectRoot, "index.json");
+            var (indexExitCode, _) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(0, json.GetProperty("errors_total").GetInt32());
+            Assert.Equal(0, json.GetProperty("unknown_extension_total").GetInt32());
+            Assert.Equal(1, json.GetProperty("languages").GetProperty("csharp").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DryRunWithRebuildAndMemoryTrace_SkipsConfirmationAndPreservesWorkspace_Issue4580()
     {
         var projectRoot = CreateTempProject();

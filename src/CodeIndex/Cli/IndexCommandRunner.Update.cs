@@ -76,10 +76,12 @@ public static partial class IndexCommandRunner
 
         var typeScriptJavaScriptConfigChanged = ContainsJavaScriptTypeScriptConfigPath(targetPaths);
         var extractorConfigurationChanged = ContainsExtractorConfigurationPath(projectRoot, targetPaths);
+        var ambiguousLanguageProjectMarkerChanged = targetPaths.Any(FileIndexer.IsAmbiguousLanguageProjectMarkerPath);
         if (relevantIgnoreFileChanged
             || ContainsIgnoreFilePath(targetPaths)
             || typeScriptJavaScriptConfigChanged
-            || extractorConfigurationChanged)
+            || extractorConfigurationChanged
+            || ambiguousLanguageProjectMarkerChanged)
         {
             if (extractorConfigurationChanged)
                 ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(projectRoot);
@@ -90,7 +92,9 @@ public static partial class IndexCommandRunner
                     ? "extractor configuration changes"
                     : typeScriptJavaScriptConfigChanged
                         ? "JavaScript/TypeScript config changes"
-                        : "ignore-file changes";
+                        : ambiguousLanguageProjectMarkerChanged
+                            ? "ambiguous-language project marker changes"
+                            : "ignore-file changes";
                 CommandOutputWriter.WriteLine($"  Detected {reason}; falling back to a full scan to keep the index aligned.");
                 CommandOutputWriter.WriteLine();
             }
@@ -125,7 +129,7 @@ public static partial class IndexCommandRunner
                 showNextSteps: false,
                 cancellationToken,
                 forceJavaScriptTypeScriptRefresh: typeScriptJavaScriptConfigChanged,
-                forceExtractorRefresh: extractorConfigurationChanged);
+                forceExtractorRefresh: extractorConfigurationChanged || ambiguousLanguageProjectMarkerChanged);
         }
 
         if (!options.Json && !options.Quiet)

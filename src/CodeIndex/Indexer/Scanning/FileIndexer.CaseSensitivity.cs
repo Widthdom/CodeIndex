@@ -13,26 +13,11 @@ public partial class FileIndexer
             if (FileSystemIgnoreCaseProbeForTesting is { } probeOverride)
                 return probeOverride(normalizedRoot);
 
-            if (TryProbeExistingDirectoryPath(normalizedRoot, out var ignoreCase))
-                return ignoreCase;
+            var existingDirectoryIgnoreCase = ProbeExistingDirectoryIgnoreCase(normalizedRoot);
+            if (existingDirectoryIgnoreCase.HasValue)
+                return existingDirectoryIgnoreCase.Value;
 
-            using var probe = CaseSensitivityProbeDirectory.CreateProbePathScope(normalizedRoot, "case-probe-");
-            var probePath = probe.Path;
-            FileWriteProbe.WriteEmptyFile(probePath);
-            try
-            {
-                if (TryCreateCaseVariant(probePath, out var probeVariant))
-                    return File.Exists(LongPath.EnsureWindowsPrefix(probeVariant));
-            }
-            finally
-            {
-                FileWriteProbe.DeleteFileIfExists(probePath);
-            }
-
-            throw new CaseSensitivityProbeException(
-                "Failed to create a case-variant path for filesystem case-sensitivity probing.",
-                normalizedRoot,
-                probePath: probePath);
+            return CaseSensitivityProbeDirectory.ProbeIgnoreCase(normalizedRoot, "case-probe-");
         }
         catch (CaseSensitivityProbeException)
         {
@@ -47,16 +32,6 @@ public partial class FileIndexer
         }
     }
 
-    private static bool TryProbeExistingDirectoryPath(string path, out bool ignoreCase)
-    {
-        ignoreCase = false;
-        if (!TryCreateCaseVariant(path, out var variant))
-            return false;
-
-        ignoreCase = Directory.Exists(LongPath.EnsureWindowsPrefix(variant));
-        return true;
-    }
-
     private static bool IsCaseSensitivityProbeFailure(Exception ex)
         => ex is ArgumentException
             or IOException
@@ -64,34 +39,12 @@ public partial class FileIndexer
             or NotSupportedException
             or System.Security.SecurityException;
 
-    private static bool TryCreateCaseVariant(string path, out string variant)
-    {
-        var chars = path.ToCharArray();
-        for (var i = chars.Length - 1; i >= 0; i--)
-        {
-            var ch = chars[i];
-            if (!char.IsLetter(ch))
-                continue;
-
-            chars[i] = char.IsUpper(ch)
-                ? char.ToLowerInvariant(ch)
-                : char.ToUpperInvariant(ch);
-            variant = new string(chars);
-            return true;
-        }
-
-        variant = path;
-        return false;
-    }
-
     private static bool? ProbeExistingDirectoryIgnoreCase(string directory)
     {
         try
         {
             var normalizedDirectory = NormalizeDirectoryCaseProbePath(directory);
-            return TryCreateCaseVariant(normalizedDirectory, out var variant)
-                ? Directory.Exists(LongPath.EnsureWindowsPrefix(variant))
-                : null;
+            return CaseSensitivityProbeDirectory.ProbeExistingChildIgnoreCase(normalizedDirectory);
         }
         catch
         {
