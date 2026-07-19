@@ -1044,6 +1044,7 @@ public class ConsoleUiTests
         Assert.Contains("python", output);
         Assert.Contains("--kind) COMPREPLY=($(compgen -W \"", output);
         Assert.Contains("function", output);
+        Assert.Contains("type_parameter", output);
         Assert.Contains("type_reference", output);
         Assert.Contains("razor_event_binding", output);
     }

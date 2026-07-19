@@ -347,7 +347,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Python `isinstance`/`issubclass` runtime type checks share single-type and tuple forms in one module fixture, with function containers retaining case-level assertions.
 - Python class-header type references share single-base, multiple-base, and metaclass forms in one module fixture, distinguished by class container.
 - Python annotation coverage shares direct and generic return, parameter, and local-variable forms in one module fixture, with function containers preserving each assertion.
-- Python typing-factory coverage shares `TypeAlias`, `NewType`, bounded `TypeVar`, and constrained `TypeVar` declarations in one module fixture with unique target types.
+- Python semantic-type symbol coverage shares PEP 695 aliases, `TypeAlias`, `NewType`, `TypeVar`, `ParamSpec`, `TypeVarTuple`, and real imports in one module fixture, asserting dedicated kinds and import-filter exclusion; typing-factory reference coverage keeps unique target types in its shared module fixture.
 - Python advanced-typing coverage shares multiline/commented `TypeVar`, `ParamSpec`, callable annotations, variadic tuple unpacking, and literal unions in one logical-header fixture with unique type names.
 - Python type-introspection helper coverage shares direct/qualified `get_type_hints`, dataclass/attrs field lookup, and Pydantic `TypeAdapter` in one module fixture with unique targets.
 - Python exception type-reference coverage shares bare/chained raises, single/tuple except clauses, `pytest.raises`, and `contextlib.suppress` in one module fixture.
@@ -1043,7 +1043,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - Python の `isinstance`/`issubclass` runtime type check は単一型と tuple 形式を1つの module fixture で共有し、function container ごとの検証を維持します。
 - Python class header の type reference は単一 base、複数 base、metaclass 形式を1つの module fixture で共有し、class container で区別します。
 - Python annotation coverage は direct/generic の return、parameter、local variable 形式を1つの module fixture で共有し、function container ごとの検証を維持します。
-- Python typing factory の coverage は `TypeAlias`、`NewType`、bound 付き `TypeVar`、constraint 付き `TypeVar` を一意な target type を持つ1つの module fixture で共有します。
+- Python semantic-type symbol coverage は PEP 695 alias、`TypeAlias`、`NewType`、`TypeVar`、`ParamSpec`、`TypeVarTuple`、実際の import を1つの module fixture で共有し、専用 kind と import filter からの除外を検証します。typing factory の reference coverage は一意な target type を持つ共有 module fixture を維持します。
 - Python advanced typing coverage は multiline/comment 付き `TypeVar`、`ParamSpec`、callable annotation、variadic tuple unpack、literal union を一意な型名を持つ1つの logical-header fixture で共有します。
 - Python type introspection helper coverage は direct/qualified `get_type_hints`、dataclass/attrs field lookup、Pydantic `TypeAdapter` を一意な target を持つ1つの module fixture で共有します。
 - Python exception の type-reference coverage は bare/chained raise、single/tuple except、`pytest.raises`、`contextlib.suppress` を1つの module fixture で共有します。

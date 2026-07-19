@@ -511,6 +511,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `test.method` | Test methods detected by test-aware extraction | Callable definition; participates in callers/callees through reference rows |
 | `trait` | Trait declarations in languages that distinguish traits from interfaces | Definition target and container |
 | `type` | Type declarations where a narrower class/interface/struct/enum kind is not available | Definition target |
+| `type_parameter` | Python `TypeVar`, `ParamSpec`, and `TypeVarTuple` declarations | Type-like definition target for declared type parameters |
 | `typealias` | Type alias declarations | Definition target for alias names |
 | `union` | Union declarations | Definition target and container |
 | `user` | Dockerfile `USER` values | Container runtime search symbol |
@@ -518,6 +519,11 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `variable` | Variable bindings | Search/filter symbol |
 | `volume` | Dockerfile `VOLUME` paths | Container storage search symbol |
 | `workdir` | Dockerfile `WORKDIR` paths | Container filesystem search symbol |
+
+`SymbolKindCatalog.CompatibilityKindFamilies` maps both `typealias` and
+`type_parameter` to the broad `type` family for consumers that only understand
+the older coarse taxonomy. The persisted `kind` remains semantic, and `--kind`
+filters remain exact, so `--kind import` does not include local type declarations.
 
 `symbol_references.reference_kind` uses this separate reference taxonomy:
 
@@ -3337,6 +3343,7 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | `test.method` | test-aware extraction が検出した test method | Callable definition。reference row 経由で callers/callees に参加 |
 | `trait` | trait を interface と区別する言語の trait declaration | Definition target and container |
 | `type` | より狭い class / interface / struct / enum kind が使えない type declaration | Definition target |
+| `type_parameter` | Python の `TypeVar`、`ParamSpec`、`TypeVarTuple` declaration | 宣言された type parameter の type-like definition target |
 | `typealias` | type alias declaration | alias name の definition target |
 | `union` | union declaration | Definition target and container |
 | `user` | Dockerfile `USER` value | container runtime search symbol |
@@ -3344,6 +3351,12 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | `variable` | variable binding | Search/filter symbol |
 | `volume` | Dockerfile `VOLUME` path | container storage search symbol |
 | `workdir` | Dockerfile `WORKDIR` path | container filesystem search symbol |
+
+古い粗い taxonomy だけを理解する consumer 向けに、
+`SymbolKindCatalog.CompatibilityKindFamilies` は `typealias` と
+`type_parameter` の両方を広い `type` family へ mapping します。永続化される
+`kind` は semantic な値を維持し、`--kind` filter も完全一致のままなので、
+`--kind import` にローカル type declaration は含まれません。
 
 `symbol_references.reference_kind` は別の reference taxonomy を使います。
 
