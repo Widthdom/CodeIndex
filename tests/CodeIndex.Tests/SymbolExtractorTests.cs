@@ -1613,6 +1613,63 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_SqlPostgreSqlTableRecursiveCteAndReturnsTableFunction_DoNotThrow_Issue4610()
+    {
+        const string createTable = """
+            CREATE TABLE audit.events (
+                event_id bigint PRIMARY KEY,
+                parent_id bigint
+            );
+            """;
+        const string recursiveCte = """
+            WITH RECURSIVE event_tree AS (
+                SELECT event_id, parent_id, 0 AS depth
+                FROM audit.events
+                WHERE parent_id IS NULL
+                UNION ALL
+                SELECT child.event_id, child.parent_id, tree.depth + 1
+                FROM audit.events AS child
+                JOIN event_tree AS tree ON tree.event_id = child.parent_id
+            )
+            SELECT event_id, depth FROM event_tree;
+            """;
+        const string returnsTableFunction = """
+            CREATE FUNCTION audit.walk_events(root_id bigint)
+            RETURNS TABLE(event_id bigint, "window)" text, amount numeric(18, 4), depth integer)
+            LANGUAGE plpgsql
+            AS $$
+            BEGIN
+                RETURN QUERY
+                SELECT events.event_id, 0
+                FROM audit.events AS events
+                WHERE events.event_id = root_id;
+            END;
+            $$;
+            """;
+
+        foreach (var content in new[] { createTable, recursiveCte, returnsTableFunction })
+        {
+            var symbols = SymbolExtractor.Extract(1, "sql", content);
+            var references = ReferenceExtractor.ExtractDetailed(1, "sql", content, symbols);
+            Assert.Empty(references.Diagnostics);
+        }
+
+        var combined = string.Join('\n', createTable, recursiveCte, returnsTableFunction);
+        var combinedSymbols = SymbolExtractor.Extract(1, "sql", combined);
+        var combinedReferences = ReferenceExtractor.ExtractDetailed(1, "sql", combined, combinedSymbols);
+
+        Assert.Contains(combinedSymbols, symbol => symbol.Kind == "class" && symbol.Name == "audit.events");
+        Assert.Contains(combinedSymbols, symbol => symbol.Kind == "function" && symbol.Name == "audit.walk_events");
+        Assert.Contains(combinedSymbols, symbol => symbol.Kind == "class" && symbol.Name == "event_tree");
+        Assert.Contains(combinedSymbols, symbol => symbol.Kind == "field" && symbol.Name == "event_id" && symbol.ContainerName == "audit.walk_events");
+        Assert.Contains(combinedSymbols, symbol => symbol.Kind == "field" && symbol.Name == "window)" && symbol.ContainerName == "audit.walk_events");
+        Assert.Contains(combinedSymbols, symbol => symbol.Kind == "field" && symbol.Name == "amount" && symbol.ReturnType == "numeric(18, 4)" && symbol.ContainerName == "audit.walk_events");
+        Assert.Contains(combinedSymbols, symbol => symbol.Kind == "field" && symbol.Name == "depth" && symbol.ContainerName == "audit.walk_events");
+        Assert.Contains(combinedReferences.References, reference => reference.SymbolName == "events");
+        Assert.Empty(combinedReferences.Diagnostics);
+    }
+
+    [Fact]
     public void Extract_CobolProgramId_DetectsProgramSymbol()
     {
         const string content = """

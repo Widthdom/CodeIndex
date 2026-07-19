@@ -1140,7 +1140,7 @@ SQL-specific symbol extraction:
 | MySQL backtick identifiers | Backtick-quoted identifiers are treated as case-preserving symbol names. |
 | Unquoted identifiers | Continue through existing case-insensitive lookup paths. |
 | MySQL `DEFINER=user@host` | Emits `definer` symbols. |
-| PostgreSQL `RETURNS TABLE(...)` / `OUT` parameters | Emit function-scoped `field` symbols for synthetic result columns. |
+| PostgreSQL `RETURNS TABLE(...)` / `OUT` parameters | Emit function-scoped `field` symbols for synthetic result columns. `RETURNS TABLE` column lists are scanned with bounded, quote-aware parenthesis balancing so nested type modifiers and unsupported trailing syntax cannot abort the file extractor. |
 
 Supported symbol kinds by language:
 
@@ -4003,7 +4003,7 @@ SQL 固有の symbol extraction:
 | MySQL backtick identifier | case-preserving symbol name として扱います。 |
 | unquoted identifier | 既存の case-insensitive lookup path を通ります。 |
 | MySQL `DEFINER=user@host` | `definer` symbol を出力します。 |
-| PostgreSQL `RETURNS TABLE(...)` / `OUT` parameter | synthetic result column 用に function-scoped `field` symbol を出力します。 |
+| PostgreSQL `RETURNS TABLE(...)` / `OUT` parameter | synthetic result column 用に function-scoped `field` symbol を出力します。`RETURNS TABLE` の列リストは上限付き・quote-aware な括弧対応で走査するため、ネストした型修飾子や未対応の後続構文が file extractor 全体を中断しません。 |
 
 言語別対応シンボル種別:
 
