@@ -17,7 +17,10 @@ public partial class FileIndexer
         Missing,
     }
 
-    internal readonly record struct LanguageDetectionResult(FileProbeStatus Status, string? Language);
+    internal readonly record struct LanguageDetectionResult(
+        FileProbeStatus Status,
+        string? Language,
+        string? DetectionSource = null);
 
     public enum ScanIssueSeverity
     {

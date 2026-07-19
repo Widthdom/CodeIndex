@@ -214,6 +214,10 @@ public partial class FileIndexer
     [
         (".S", "assembly"),
     ];
+    private static readonly HashSet<string> ShebangAmbiguousExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".t",
+    };
     private static readonly IReadOnlyDictionary<string, string> EmptyLanguageMapOverrides =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -403,6 +407,18 @@ public partial class FileIndexer
         if (TryDetectLanguageOverride(filePath, fileName, languageMapOverrideResolver, out var overrideLang))
             return new LanguageDetectionResult(FileProbeStatus.Supported, overrideLang);
 
+        if (ShebangAmbiguousExtensions.Contains(ext))
+        {
+            var shebangLanguage = TryDetectLanguageFromShebang(filePath, symlinkPolicy, projectRoot, knownIndexability);
+            if (shebangLanguage.Status == FileProbeStatus.Supported)
+                return shebangLanguage;
+            if (knownIndexability.HasValue
+                && shebangLanguage.Status is FileProbeStatus.Missing or FileProbeStatus.ProbeFailed)
+            {
+                return shebangLanguage;
+            }
+        }
+
         if (LangMap.TryGetValue(ext, out var lang))
         {
             if (lang == "c" && string.Equals(ext, ".h", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(content))
@@ -424,7 +440,7 @@ public partial class FileIndexer
             if (ExtractorPluginRegistry.TryGetLanguageForExtension(ext, projectRoot, out pluginLang))
                 return new LanguageDetectionResult(FileProbeStatus.Supported, pluginLang);
 
-            return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
+            return TryDetectLanguageFromShebang(filePath, symlinkPolicy, projectRoot, knownIndexability);
         }
 
         return TryDetectLanguageFromShebang(filePath, symlinkPolicy, projectRoot, knownIndexability);

@@ -14,7 +14,8 @@ internal static class IndexFreshnessChecker
         DbReader reader,
         string? projectRoot,
         CancellationToken cancellationToken = default,
-        bool? pathCaseSensitive = null)
+        bool? pathCaseSensitive = null,
+        string? internalIndexDatabasePath = null)
     {
         if (string.IsNullOrWhiteSpace(projectRoot))
         {
@@ -65,7 +66,8 @@ internal static class IndexFreshnessChecker
             ignoreRuleRoot,
             maxFileSizeBytes: null,
             directoryIgnoreCaseProbe: null,
-            symlinkPolicy: symlinkPolicy);
+            symlinkPolicy: symlinkPolicy,
+            internalIndexDatabasePath: internalIndexDatabasePath);
         var scan = indexer.ScanFilesDetailed(cancellationToken: cancellationToken);
         foreach (var error in scan.Errors)
         {

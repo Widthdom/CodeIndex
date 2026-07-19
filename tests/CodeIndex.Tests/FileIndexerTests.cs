@@ -1520,14 +1520,94 @@ public partial class FileIndexerTests
     }
 
     [Fact]
-    public void DetectLanguage_UnknownExtensionWithShebang_ReturnsNull()
+    public void DetectLanguage_UnknownExtensionWithShebang_ReturnsLanguageAndSource_Issue4611()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
         var tempDir = project.Root;
         var path = Path.Combine(tempDir, "notes.txt");
-        File.WriteAllText(path, "#!/usr/bin/env bash\necho hi\n");
+        File.WriteAllText(path, "#!/usr/bin/env python3\nprint('hi')\n");
+
+        var detection = FileIndexer.TryDetectLanguage(path);
+
+        Assert.Equal(FileIndexer.FileProbeStatus.Supported, detection.Status);
+        Assert.Equal("python", detection.Language);
+        Assert.Equal("shebang", detection.DetectionSource);
+    }
+
+    [Fact]
+    public void DetectLanguage_AmbiguousTclShebangOverridesTFileDefault_Issue4611()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_shebang_tcl");
+        var path = TestProjectHelper.WriteTextFile(
+            project.Root,
+            "command.t",
+            "#!/usr/bin/env tclsh\nproc greet {} { puts hello }\n");
+
+        var detection = FileIndexer.TryDetectLanguage(path);
+        var scan = new FileIndexer(project.Root).ScanFilesDetailed();
+
+        Assert.Equal(FileIndexer.FileProbeStatus.Supported, detection.Status);
+        Assert.Equal("tcl", detection.Language);
+        Assert.Equal("shebang", detection.DetectionSource);
+        Assert.Equal("tcl", scan.FileLanguages[path]);
+    }
+
+    [Fact]
+    public void DetectLanguage_ExplicitOverrideBeatsAmbiguousShebang_Issue4611()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_shebang_override");
+        LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        try
+        {
+            TestProjectHelper.WriteTextFile(
+                project.Root,
+                LanguageMapOverrides.WorkspaceFileName,
+                "entries:\n  - extension: \".t\"\n    language: \"ruby\"\n");
+            var path = TestProjectHelper.WriteTextFile(
+                project.Root,
+                "command.t",
+                "#!/usr/bin/env tclsh\nputs hello\n");
+
+            Assert.Equal("ruby", FileIndexer.DetectLanguage(path));
+        }
+        finally
+        {
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        }
+    }
+
+    [Fact]
+    public void DetectLanguage_MalformedAmbiguousShebangFallsBackToExtension_Issue4611()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_shebang_malformed");
+        var path = TestProjectHelper.WriteTextFile(project.Root, "legacy.t", "#!\nuse strict;\n");
+
+        Assert.Equal("perl", FileIndexer.DetectLanguage(path));
+    }
+
+    [Fact]
+    public void DetectLanguage_BinaryUnknownExtensionDoesNotTrustShebangPrefix_Issue4611()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_shebang_binary");
+        var path = TestProjectHelper.ProjectPath(project.Root, "payload.txt");
+        File.WriteAllBytes(path, [(byte)'#', (byte)'!', (byte)'/', (byte)'u', (byte)'s', (byte)'r', (byte)'/', (byte)'b', (byte)'i', (byte)'n', (byte)'/', (byte)'p', (byte)'y', (byte)'t', (byte)'h', (byte)'o', (byte)'n', 0]);
 
         Assert.Null(FileIndexer.DetectLanguage(path));
+    }
+
+    [Fact]
+    public void DetectLanguage_StrongExtensionWinsConflictingShebang_Issue4611()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_shebang_conflict");
+        var path = TestProjectHelper.WriteTextFile(
+            project.Root,
+            "worker.rb",
+            "#!/usr/bin/env python3\nputs 'ruby'\n");
+
+        var detection = FileIndexer.TryDetectLanguage(path);
+
+        Assert.Equal("ruby", detection.Language);
+        Assert.Null(detection.DetectionSource);
     }
 
     [Fact]
@@ -3529,7 +3609,7 @@ public partial class FileIndexerTests
     }
 
     [Fact]
-    public void ScanFiles_ExcludesUnknownExtensionEvenWhenShebangLooksSupported()
+    public void ScanFiles_IncludesUnknownExtensionWhenShebangLooksSupported_Issue4611()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
         var tempDir = project.Root;
@@ -3547,7 +3627,27 @@ public partial class FileIndexerTests
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(["script"], files);
+        Assert.Equal(["notes.txt", "script"], files);
+    }
+
+    [Fact]
+    public void ScanFiles_ExcludesInternalIndexArtifactsBeforeUnknownExtensionShebangProbe_Issue4611()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_internal_artifacts");
+        var internalDirectory = TestProjectHelper.ProjectPath(project.Root, ".cdidx");
+        Directory.CreateDirectory(internalDirectory);
+        File.WriteAllText(
+            Path.Combine(internalDirectory, "codeindex.db.lock"),
+            "#!/usr/bin/env bash\necho internal\n");
+        File.WriteAllText(
+            Path.Combine(internalDirectory, "codeindex.db.lock.info"),
+            "#!/usr/bin/env bash\necho internal metadata\n");
+        File.WriteAllText(TestProjectHelper.ProjectPath(project.Root, "tool.txt"), "#!/usr/bin/env bash\necho public\n");
+
+        var result = new FileIndexer(project.Root).ScanFilesDetailed();
+
+        Assert.Equal(["tool.txt"], result.Files.Select(Path.GetFileName).ToArray());
+        Assert.Empty(result.Errors);
     }
 
     [Fact]

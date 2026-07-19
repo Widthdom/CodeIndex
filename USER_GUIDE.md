@@ -2279,7 +2279,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 - Node module layouts: `.cjs` / `.mjs` are JavaScript; `.cts` / `.mts`, including `.d.cts` / `.d.mts`, are TypeScript.
 - Dependency manifests and lockfiles: use `--lang dependency_manifest` or `--lang dependency_lock` for dependency/security audits. `Directory.Packages.props`, `packages.config`, `requirements.txt`, `pyproject.toml`, `packages.lock.json`, and npm `package-lock.json` / `npm-shrinkwrap.json` expose package symbols and `dependency` references with version, scope, and direct/transitive metadata where the format provides it.
 - Solution and application manifests: `.sln` files expose project entries as symbols and project path references; `.manifest` files expose assembly identity, requested execution level, supported OS, and long-path settings as symbols.
-- Extensionless scripts: files with recognized shebangs are indexed for shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`), Python, Ruby, Node.js, PHP, Lua, and PowerShell.
+- Shebang scripts: recognized first-line shebangs index extensionless and unknown-extension files for shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`), Python, Ruby, Perl, Tcl (`tclsh`, `wish`), Node.js, PHP, Lua, and PowerShell. Explicit language-map overrides remain authoritative; for ambiguous `.t` files, a recognized shebang overrides the Perl default, while strong known extensions continue to win conflicts.
 
 ### Language extraction matrix
 
@@ -5293,7 +5293,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 - Node モジュール構成: `.cjs` / `.mjs` は JavaScript、`.cts` / `.mts`（`.d.cts` / `.d.mts` を含む）は TypeScript として扱います。
 - Dependency manifest / lockfile: dependency / security audit では `--lang dependency_manifest` または `--lang dependency_lock` を使います。`Directory.Packages.props`、`packages.config`、`requirements.txt`、`pyproject.toml`、`packages.lock.json`、npm の `package-lock.json` / `npm-shrinkwrap.json` は、format が提供する範囲で version、scope、direct/transitive metadata を持つ package symbol と `dependency` reference を公開します。
 - ソリューションとアプリケーションマニフェスト: `.sln` は project entry をシンボルとして公開し、project path を参照として記録します。`.manifest` は assembly identity、requested execution level、supported OS、long-path 設定をシンボルとして公開します。
-- 拡張子なしスクリプト: 先頭行の shebang が shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`)、Python、Ruby、Node.js、PHP、Lua、PowerShell として認識できれば index 対象です。
+- shebang script: 先頭行の shebang を認識できる拡張子なし/未知拡張子ファイルは、shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`)、Python、Ruby、Perl、Tcl (`tclsh`, `wish`)、Node.js、PHP、Lua、PowerShell として index 対象です。明示的な language-map override は常に優先し、曖昧な `.t` では認識済み shebang が Perl の既定値を上書きします。一方、曖昧でない既知拡張子は競合する shebang より優先されます。
 
 ### 言語別 extraction matrix
 

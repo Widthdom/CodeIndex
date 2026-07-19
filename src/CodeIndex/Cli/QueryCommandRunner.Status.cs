@@ -117,7 +117,11 @@ public static partial class QueryCommandRunner
                 status.MacProfileDiagnostics = macProfile.Diagnostics.ToList();
             if (options.CheckWorkspace)
             {
-                status.WorkspaceCheck = IndexFreshnessChecker.Check(reader, status.ProjectRoot, cancellationToken);
+                status.WorkspaceCheck = IndexFreshnessChecker.Check(
+                    reader,
+                    status.ProjectRoot,
+                    cancellationToken,
+                    internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(options.DbPath));
                 status.IndexMatchesWorkspace = status.WorkspaceCheck.Checked
                     ? status.WorkspaceCheck.MatchesWorkspace
                     : null;
