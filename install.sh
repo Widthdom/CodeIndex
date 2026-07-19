@@ -617,6 +617,8 @@ validate_network_policy() {
 
 run_curl_with_optional_loopback_bypass() {
     local url="$1"
+    local retry_count="${CURL_ATTEMPT_RETRY_COUNT:-$CURL_RETRY_COUNT}"
+    local max_time_seconds="${CURL_ATTEMPT_MAX_TIME_SECONDS:-$CURL_MAX_TIME_SECONDS}"
     shift
 
     if ! validate_network_policy; then
@@ -628,10 +630,10 @@ run_curl_with_optional_loopback_bypass() {
         # the initial URL confined to a validated loopback authority, reject
         # every redirect, and bypass proxy state.
         curl --noproxy 127.0.0.1,localhost --proto '=http,https' --proto-redir '=https' --max-redirs 0 \
-            --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" --max-time "$CURL_MAX_TIME_SECONDS" \
+            --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" --max-time "$max_time_seconds" \
             --speed-limit "$CURL_LOW_SPEED_LIMIT_BYTES" --speed-time "$CURL_LOW_SPEED_TIME_SECONDS" \
-            --retry "$CURL_RETRY_COUNT" --retry-delay "$CURL_RETRY_DELAY_SECONDS" \
-            --retry-max-time "$CURL_MAX_TIME_SECONDS" "$@"
+            --retry "$retry_count" --retry-delay "$CURL_RETRY_DELAY_SECONDS" \
+            --retry-max-time "$max_time_seconds" "$@"
         return
     fi
 
@@ -644,10 +646,10 @@ run_curl_with_optional_loopback_bypass() {
     esac
 
     curl --proto '=https' --proto-redir '=https' \
-        --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" --max-time "$CURL_MAX_TIME_SECONDS" \
+        --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" --max-time "$max_time_seconds" \
         --speed-limit "$CURL_LOW_SPEED_LIMIT_BYTES" --speed-time "$CURL_LOW_SPEED_TIME_SECONDS" \
-        --retry "$CURL_RETRY_COUNT" --retry-delay "$CURL_RETRY_DELAY_SECONDS" \
-        --retry-max-time "$CURL_MAX_TIME_SECONDS" "$@"
+        --retry "$retry_count" --retry-delay "$CURL_RETRY_DELAY_SECONDS" \
+        --retry-max-time "$max_time_seconds" "$@"
 }
 
 has_explicit_self_test_install_dir() {
@@ -958,13 +960,25 @@ read_bounded_file_sample() {
     printf '\n[cdidx installer truncated %s: showing first %s of %s bytes]\n' "$label" "$max_bytes" "$byte_count"
 }
 
+is_retryable_http_code() {
+    case "$1" in
+        408|429|500|502|503|504) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 curl_http_get() {
     local url="$1"
     local output_path="$2"
     local source_label="${3:-remote host}"
     local max_bytes="${4:-$LATEST_RELEASE_RESPONSE_MAX_BYTES}"
-    local http_code curl_status reader_status downloaded_bytes
+    local http_code curl_status reader_status downloaded_bytes stderr_text
     local transfer_dir curl_stderr body_fifo reader_pid bounded_probe_bytes
+    local attempt max_attempts retry_started_seconds elapsed_seconds remaining_seconds retryable
+
+    if ! validate_network_policy; then
+        return 1
+    fi
 
     probe_temp_root
     need_cmd mkfifo
@@ -981,7 +995,7 @@ curl_http_get() {
     fi
     curl_stderr="${transfer_dir}/curl.stderr"
     body_fifo="${transfer_dir}/response.body.pipe"
-    if ! : > "$curl_stderr" || ! mkfifo "$body_fifo"; then
+    if ! : > "$curl_stderr"; then
         rm -f "$body_fifo" "$curl_stderr"
         rmdir "$transfer_dir"
         TRANSFER_DIR_CLEANUP=""
@@ -991,43 +1005,85 @@ curl_http_get() {
     verify_temp_path_space "$curl_stderr"
 
     # `curl --max-filesize` did not stop unknown-length/chunked bodies before
-    # curl 8.4. Stream through a private FIFO and retain only max+1 bytes so
-    # the sentinel byte closes the reader and forces curl to stop writing.
+    # curl 8.4. Stream each attempt through a fresh private FIFO and retain only
+    # max+1 bytes. Curl's internal retry cannot safely target a FIFO because it
+    # cannot rewind a failed response, so retries are bounded explicitly below.
     bounded_probe_bytes=$((max_bytes + 1))
-    head -c "$bounded_probe_bytes" "$body_fifo" > "$output_path" &
-    reader_pid=$!
-    # Keep one writer open so the reader also receives EOF when curl fails
-    # before opening the FIFO (for example, DNS or protocol-policy failure).
-    if ! exec 8> "$body_fifo"; then
-        kill "$reader_pid" 2>/dev/null || true
-        wait "$reader_pid" 2>/dev/null || true
-        rm -f "$body_fifo" "$curl_stderr"
-        rmdir "$transfer_dir"
-        TRANSFER_DIR_CLEANUP=""
-        report_error "Failed to open bounded response capture while fetching ${source_label} at $url."
-        return 1
-    fi
+    attempt=0
+    max_attempts=$((CURL_RETRY_COUNT + 1))
+    retry_started_seconds=$SECONDS
+    while [ "$attempt" -lt "$max_attempts" ]; do
+        attempt=$((attempt + 1))
+        elapsed_seconds=$((SECONDS - retry_started_seconds))
+        remaining_seconds=$((CURL_MAX_TIME_SECONDS - elapsed_seconds))
+        if [ "$remaining_seconds" -le 0 ]; then
+            curl_status=28
+            reader_status=0
+            http_code="000"
+            break
+        fi
 
-    curl_status=0
-    http_code="$(run_curl_with_optional_loopback_bypass "$url" -sSL --max-filesize "$max_bytes" -o "$body_fifo" -w '%{http_code}' "$url" 2>"$curl_stderr")" || curl_status=$?
-    exec 8>&-
-    reader_status=0
-    wait "$reader_pid" || reader_status=$?
+        rm -f "$body_fifo"
+        if ! : > "$curl_stderr" || ! mkfifo "$body_fifo"; then
+            rm -f "$body_fifo" "$curl_stderr"
+            rmdir "$transfer_dir"
+            TRANSFER_DIR_CLEANUP=""
+            report_error "Failed to prepare bounded response capture while fetching ${source_label} at $url."
+            return 1
+        fi
 
-    if ! downloaded_bytes="$(file_size_bytes "$output_path")"; then
-        rm -f "$body_fifo" "$curl_stderr"
-        rmdir "$transfer_dir"
-        TRANSFER_DIR_CLEANUP=""
-        report_error "Failed to inspect downloaded byte count for ${source_label} at $url."
-        return 1
-    fi
-    if [ "${downloaded_bytes:-0}" -gt "$max_bytes" ]; then
-        rm -f "$body_fifo" "$curl_stderr"
-        rmdir "$transfer_dir"
-        TRANSFER_DIR_CLEANUP=""
-        report_error "Download from ${source_label} at $url exceeded the ${max_bytes} byte limit. [download_size_exceeded]"
-        return 1
-    fi
+        head -c "$bounded_probe_bytes" "$body_fifo" > "$output_path" &
+        reader_pid=$!
+        # Keep one writer open so the reader also receives EOF when curl fails
+        # before opening the FIFO (for example, DNS or protocol-policy failure).
+        if ! exec 8> "$body_fifo"; then
+            kill "$reader_pid" 2>/dev/null || true
+            wait "$reader_pid" 2>/dev/null || true
+            rm -f "$body_fifo" "$curl_stderr"
+            rmdir "$transfer_dir"
+            TRANSFER_DIR_CLEANUP=""
+            report_error "Failed to open bounded response capture while fetching ${source_label} at $url."
+            return 1
+        fi
+
+        curl_status=0
+        http_code="$(CURL_ATTEMPT_RETRY_COUNT=0 CURL_ATTEMPT_MAX_TIME_SECONDS="$remaining_seconds" run_curl_with_optional_loopback_bypass "$url" -sSL --max-filesize "$max_bytes" -o "$body_fifo" -w '%{http_code}' "$url" 2>"$curl_stderr")" || curl_status=$?
+        exec 8>&-
+        reader_status=0
+        wait "$reader_pid" || reader_status=$?
+
+        if ! downloaded_bytes="$(file_size_bytes "$output_path")"; then
+            rm -f "$body_fifo" "$curl_stderr"
+            rmdir "$transfer_dir"
+            TRANSFER_DIR_CLEANUP=""
+            report_error "Failed to inspect downloaded byte count for ${source_label} at $url."
+            return 1
+        fi
+        if [ "${downloaded_bytes:-0}" -gt "$max_bytes" ]; then
+            rm -f "$body_fifo" "$curl_stderr"
+            rmdir "$transfer_dir"
+            TRANSFER_DIR_CLEANUP=""
+            report_error "Download from ${source_label} at $url exceeded the ${max_bytes} byte limit. [download_size_exceeded]"
+            return 1
+        fi
+
+        retryable=0
+        if is_retryable_http_code "$http_code" || [ "$curl_status" -eq 28 ]; then
+            retryable=1
+        fi
+        if [ "$retryable" -eq 0 ] || [ "$attempt" -ge "$max_attempts" ]; then
+            break
+        fi
+
+        elapsed_seconds=$((SECONDS - retry_started_seconds))
+        remaining_seconds=$((CURL_MAX_TIME_SECONDS - elapsed_seconds))
+        if [ "$CURL_RETRY_DELAY_SECONDS" -ge "$remaining_seconds" ]; then
+            break
+        fi
+        if [ "$CURL_RETRY_DELAY_SECONDS" -gt 0 ]; then
+            sleep "$CURL_RETRY_DELAY_SECONDS"
+        fi
+    done
 
     if [ "$curl_status" -eq 0 ] && [ "$reader_status" -eq 0 ]; then
         rm -f "$body_fifo" "$curl_stderr"
@@ -1037,7 +1093,7 @@ curl_http_get() {
         return 0
     fi
 
-    local stderr_text=""
+    stderr_text=""
     if [ -f "$curl_stderr" ]; then
         stderr_text="$(read_bounded_file_sample "$curl_stderr" "$CURL_STDERR_SAMPLE_BYTES" "curl stderr for ${source_label}")"
     fi

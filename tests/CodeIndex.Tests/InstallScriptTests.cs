@@ -1132,7 +1132,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("--proto =http,https --proto-redir =https --max-redirs 0", curlArguments);
         Assert.Contains("--connect-timeout 12 --max-time 240", curlArguments);
         Assert.Contains("--speed-limit 2048 --speed-time 45", curlArguments);
-        Assert.Contains("--retry 3 --retry-delay 2 --retry-max-time 240", curlArguments);
+        Assert.Contains("--retry 0 --retry-delay 2 --retry-max-time 240", curlArguments);
 
         var (publicHttpExitCode, publicHttpStdout, publicHttpStderr) = RunInstallerSnippet(
             $$"""
@@ -1176,7 +1176,11 @@ public sealed class InstallScriptTests : IDisposable
             }
 
             curl_http_get "https://downloads.example.test/stalled" "{{outputPath}}" "configured release host"
-            """);
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_NETWORK_RETRY_COUNT"] = "0",
+            });
 
         Assert.Equal(1, timeoutExitCode);
         Assert.Contains("curl: (28) Operation too slow", timeoutStderr);
@@ -1301,6 +1305,48 @@ public sealed class InstallScriptTests : IDisposable
         {
             downgradeTarget.Stop();
         }
+    }
+
+    [ProductionCliFact]
+    public void InstallerNetworkPolicy_RetryUsesFreshBoundedOutput_Issue4604()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var retryServer = new LoopbackTcpTestServer(2, async (client, attempt, cancellationToken) =>
+        {
+            await using var stream = client.GetStream();
+            await ReadHttpRequestHeadersAsync(stream, cancellationToken);
+
+            var bodyText = attempt == 0 ? "partial-failed-attempt" : "valid-response";
+            var body = Encoding.ASCII.GetBytes(bodyText);
+            var declaredLength = attempt == 0 ? body.Length + 100 : body.Length;
+            var status = attempt == 0 ? "503 Service Unavailable" : "200 OK";
+            var headers = Encoding.ASCII.GetBytes(
+                $"HTTP/1.1 {status}\r\nContent-Length: {declaredLength}\r\nConnection: close\r\n\r\n");
+            await stream.WriteAsync(headers, cancellationToken);
+            await stream.WriteAsync(body, cancellationToken);
+            await stream.FlushAsync(cancellationToken);
+        });
+
+        var outputPath = Path.Combine(_tempRoot, "retried_response.txt");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            http_code="$(curl_http_get "http://127.0.0.1:{{retryServer.Port}}/retry" "{{outputPath}}" "retry loopback test server")"
+            printf 'HTTP:%s\n' "$http_code"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_NETWORK_MAX_TIME_SECONDS"] = "10",
+                ["CDIDX_NETWORK_RETRY_COUNT"] = "1",
+                ["CDIDX_NETWORK_RETRY_DELAY_SECONDS"] = "0",
+            });
+
+        retryServer.WaitForCompletion();
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("HTTP:200", stdout);
+        Assert.Equal("valid-response", File.ReadAllText(outputPath));
     }
 
     [ProductionCliFact]
@@ -6310,7 +6356,13 @@ public sealed class InstallScriptTests : IDisposable
         private readonly Task _serverTask;
 
         public LoopbackTcpTestServer(Func<TcpClient, CancellationToken, Task> handler)
+            : this(1, (client, _, cancellationToken) => handler(client, cancellationToken))
         {
+        }
+
+        public LoopbackTcpTestServer(int connectionCount, Func<TcpClient, int, CancellationToken, Task> handler)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(connectionCount, 1);
             _listener = new TcpListener(IPAddress.Loopback, 0);
             _listener.Start();
             Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
@@ -6318,8 +6370,11 @@ public sealed class InstallScriptTests : IDisposable
             {
                 try
                 {
-                    using var client = await _listener.AcceptTcpClientAsync(_cancellation.Token);
-                    await handler(client, _cancellation.Token);
+                    for (var attempt = 0; attempt < connectionCount; attempt++)
+                    {
+                        using var client = await _listener.AcceptTcpClientAsync(_cancellation.Token);
+                        await handler(client, attempt, _cancellation.Token);
+                    }
                 }
                 catch (OperationCanceledException) when (_cancellation.IsCancellationRequested)
                 {

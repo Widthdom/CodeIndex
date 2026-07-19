@@ -93,14 +93,15 @@ public sealed class InstallScriptSafetyLintTests
         var curlWrapper = ExtractShellFunction(activeText, "run_curl_with_optional_loopback_bypass");
         Assert.Contains("--proto '=http,https' --proto-redir '=https' --max-redirs 0", curlWrapper, StringComparison.Ordinal);
         Assert.Contains("--proto '=https' --proto-redir '=https'", curlWrapper, StringComparison.Ordinal);
-        Assert.Contains("--connect-timeout \"$CURL_CONNECT_TIMEOUT_SECONDS\" --max-time \"$CURL_MAX_TIME_SECONDS\"", curlWrapper, StringComparison.Ordinal);
+        Assert.Contains("--connect-timeout \"$CURL_CONNECT_TIMEOUT_SECONDS\" --max-time \"$max_time_seconds\"", curlWrapper, StringComparison.Ordinal);
         Assert.Contains("--speed-limit \"$CURL_LOW_SPEED_LIMIT_BYTES\" --speed-time \"$CURL_LOW_SPEED_TIME_SECONDS\"", curlWrapper, StringComparison.Ordinal);
-        Assert.Contains("--retry \"$CURL_RETRY_COUNT\" --retry-delay \"$CURL_RETRY_DELAY_SECONDS\"", curlWrapper, StringComparison.Ordinal);
-        Assert.Contains("--retry-max-time \"$CURL_MAX_TIME_SECONDS\"", curlWrapper, StringComparison.Ordinal);
+        Assert.Contains("--retry \"$retry_count\" --retry-delay \"$CURL_RETRY_DELAY_SECONDS\"", curlWrapper, StringComparison.Ordinal);
+        Assert.Contains("--retry-max-time \"$max_time_seconds\"", curlWrapper, StringComparison.Ordinal);
 
         var downloadBody = ExtractShellFunction(activeText, "curl_http_get");
         Assert.Contains("head -c \"$bounded_probe_bytes\" \"$body_fifo\" > \"$output_path\" &", downloadBody, StringComparison.Ordinal);
-        Assert.Contains("run_curl_with_optional_loopback_bypass \"$url\" -sSL --max-filesize \"$max_bytes\" -o \"$body_fifo\" -w '%{http_code}' \"$url\" 2>\"$curl_stderr\"", downloadBody, StringComparison.Ordinal);
+        Assert.Contains("CURL_ATTEMPT_RETRY_COUNT=0 CURL_ATTEMPT_MAX_TIME_SECONDS=\"$remaining_seconds\" run_curl_with_optional_loopback_bypass", downloadBody, StringComparison.Ordinal);
+        Assert.Contains("max_attempts=$((CURL_RETRY_COUNT + 1))", downloadBody, StringComparison.Ordinal);
         Assert.Contains("read_bounded_file_sample \"$curl_stderr\" \"$CURL_STDERR_SAMPLE_BYTES\" \"curl stderr for ${source_label}\"", downloadBody, StringComparison.Ordinal);
 
         var doctorProbeBody = ExtractShellFunction(activeText, "probe_doctor_url");
