@@ -272,6 +272,25 @@ and `load_context_lifecycle` to show that hook contexts are collectible and
 unloaded when the hook runner is disposed. `extractors.diagnostics[]` and
 `hook_diagnostics[]` include sanitized `category` machine codes alongside
 bounded paths and messages.
+`extractors.pattern_configs[]` reports each accepted sidecar with a sanitized
+`path`, its `source` (`workspace` or `user`), normalized `language`, and
+`rule_count`. Workspace discovery never walks above the explicit workspace
+root, and path identity follows the active filesystem's case-sensitivity.
+Configured extractors are published as immutable workspace snapshots: the
+128-rule budget is per workspace, reindexing replaces and releases the prior
+snapshot, and a timed-out rule enters a bounded one-minute cooldown only in
+the workspace that observed the timeout.
+Plugin and pattern registrations with the same language are also resolved from
+that immutable snapshot. `extractors.snapshot_scope` identifies whether status
+describes a `user` or `workspace` snapshot, and
+`extractors.registration_precedence` exposes the highest-to-lowest order:
+`built_in`, `user_plugin`, `user_pattern`, `workspace_plugin`, then
+`workspace_pattern`. Reloading one workspace never mutates another workspace's
+active snapshot. Reference purging, status/language reporting, and database graph
+queries resolve their supported-language set from that same active snapshot.
+Long-running hosts retain at most 32 workspace snapshots using LRU eviction;
+evicted, replaced, and shutdown snapshots are retired terminally so late plugin
+loads are rejected and collectible contexts can unload.
 Accepted extension trust overrides such as `CDIDX_TRUST_WORKSPACE_PLUGINS`,
 `CDIDX_HOOKS_DIR`, and `CDIDX_GIT_EXECUTABLE` are also reported in sanitized
 `trust_overrides[]` entries.
@@ -283,18 +302,19 @@ override is accepted only for a regular non-symlink/non-reparse file; POSIX
 files and their canonical ancestor directories must be owned by the current
 user or root and must not be group- or other-writable, except for root-owned
 sticky ancestors such as `/tmp` and multi-user Nix stores. Windows paths must
-have trusted owner/write ACLs and be a valid PE image. Every accepted candidate must successfully identify itself via
-`git --version`. An invalid explicit override fails closed
-instead of falling back to a different Git binary. CLI and MCP `status` expose
-the sanitized selection under `git_executable`, including `source`, `accepted`,
-the stable `reason`, `owner_only_writable`, `unix_mode`, `executable`, `owner`,
-`owner_trusted`, and `ancestor_directories_trusted`.
-Git metadata resolution applies the same component-by-component regular-entry boundary to normal
-`.git` directories, worktree `.git` files, their `gitdir` targets, and
-`commondir` targets, so untrusted symlink/reparse/device redirection is rejected before
-`info/exclude` or hooks can be written. Existing `info`, `exclude`, `hooks`, and
-hook-file descendants are revalidated immediately before their metadata write;
-multi-link metadata files are rejected and exclude updates use atomic replacement.
+have trusted owner/write ACLs and be a valid PE image. Every accepted candidate
+must successfully identify itself via `git --version`. An invalid explicit
+override fails closed instead of falling back to a different Git binary. CLI
+and MCP `status` expose the sanitized selection under `git_executable`, including
+`source`, `accepted`, the stable `reason`, `owner_only_writable`, `unix_mode`,
+`executable`, `owner`, `owner_trusted`, and `ancestor_directories_trusted`.
+Git metadata resolution applies the same component-by-component regular-entry
+boundary to normal `.git` directories, worktree `.git` files, their `gitdir`
+targets, and `commondir` targets, so untrusted symlink/reparse/device redirection
+is rejected before `info/exclude` or hooks can be written. Existing `info`,
+`exclude`, `hooks`, and hook-file descendants are revalidated immediately before
+their metadata write; multi-link metadata files are rejected and exclude updates
+use atomic replacement.
 
 Successful CLI and MCP index runs can also persist bounded
 `last_index_run.diagnostics` when best-effort metadata writes fail after the
@@ -589,6 +609,22 @@ context は unload されます。`hooks[]` entry は `callback_budget_ms` と
 `load_context_lifecycle` を含み、hook context が collectible で hook runner の dispose 時に
 unload されることを示します。`extractors.diagnostics[]` と `hook_diagnostics[]` は、
 bounded な path と message に加えて sanitization 済みの `category` machine code を含みます。
+`extractors.pattern_configs[]` は、受理された各 sidecar について sanitization 済みの
+`path`、`source`（`workspace` または `user`）、正規化済み `language`、`rule_count` を
+報告します。workspace の探索は明示された workspace root より上へ進まず、path identity は
+実際の filesystem の case-sensitivity に従います。configured extractor は immutable な
+workspace snapshot として公開されます。128-rule budget は workspace ごとに独立し、reindex は
+以前の snapshot を置換して解放し、timeout した rule はその timeout を観測した workspace 内だけで
+上限付きの1分間 cooldown に入ります。
+同じ language の plugin / pattern 登録も、その immutable snapshot から解決されます。
+`extractors.snapshot_scope` は status が `user` / `workspace` のどちらの snapshot を表すかを示し、
+  `extractors.registration_precedence` は高い順に `built_in`、`user_plugin`、`user_pattern`、
+  `workspace_plugin`、`workspace_pattern` を公開します。一方の workspace を reload しても、
+  他 workspace の active snapshot は変更されません。reference purge、status/language reporting、
+  database graph query の supported-language 集合も同じ active snapshot から解決されます。
+  長時間実行 host が保持する workspace snapshot は LRU で最大32件に制限され、evict・replace・
+  shutdown 済み snapshot は terminal に retire されるため、遅延 plugin load は拒否され、
+  collectible context を unload できます。
 受理された `CDIDX_TRUST_WORKSPACE_PLUGINS`、`CDIDX_HOOKS_DIR`、
 `CDIDX_GIT_EXECUTABLE` などの拡張信頼境界 override は、sanitization 済みの
 `trust_overrides[]` entry としても報告されます。
@@ -599,17 +635,17 @@ portable installation では、process environment の `CDIDX_GIT_EXECUTABLE` �
 symlink / reparse point ではない file だけを受理します。POSIX では file と canonical な
 ancestor directory が current user または root の所有で、group / other writable でないことを
 要求しますが、`/tmp` や multi-user Nix store のような root 所有の sticky ancestor は受理します。
-Windows では信頼済み owner / write ACL と有効な PE image を要求します。さらに受理前に `git --version` が成功し、
-Git として自己識別できることを確認します。不正な明示
-override は別の Git binary へ fallback せず fail-closed になります。CLI / MCP の
-`status` は sanitization 済みの選択結果を `git_executable` として公開し、`source`、
-`accepted`、stable な `reason`、`owner_only_writable`、`unix_mode`、`executable`、
-`owner`、`owner_trusted`、`ancestor_directories_trusted` を
-含みます。Git metadata 解決も通常 repo の `.git` directory、worktree の `.git` file、
-その `gitdir` target と `commondir` target に component ごとの同じ regular-entry boundary を適用するため、
-信頼されない symlink / reparse point / device による redirect は `info/exclude` や hook の書込み前に
-拒否されます。既存の `info`、`exclude`、`hooks`、hook file descendant は metadata を
-書き込む直前にも再検証され、multi-link metadata file は拒否され、exclude 更新は atomic replacement を使います。
+Windows では信頼済み owner / write ACL と有効な PE image を要求します。さらに受理前に
+`git --version` が成功し、Git として自己識別できることを確認します。不正な明示 override は
+別の Git binary へ fallback せず fail-closed になります。CLI / MCP の `status` は
+sanitization 済みの選択結果を `git_executable` として公開し、`source`、`accepted`、
+stable な `reason`、`owner_only_writable`、`unix_mode`、`executable`、`owner`、
+`owner_trusted`、`ancestor_directories_trusted` を含みます。Git metadata 解決も通常 repo の
+`.git` directory、worktree の `.git` file、その `gitdir` target と `commondir` target に
+component ごとの同じ regular-entry boundary を適用するため、信頼されない symlink /
+reparse point / device による redirect は `info/exclude` や hook の書込み前に拒否されます。
+既存の `info`、`exclude`、`hooks`、hook file descendant は metadata を書き込む直前にも
+再検証され、multi-link metadata file は拒否され、exclude 更新は atomic replacement を使います。
 
 成功した CLI / MCP index run は、index data 自体の書き込みが成功した後に
 best-effort metadata write が失敗した場合、上限付きの

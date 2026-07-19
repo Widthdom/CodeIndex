@@ -2,6 +2,8 @@ using System.Reflection;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
@@ -2448,6 +2450,94 @@ public partial class QueryCommandRunnerTests
         var csharp = document.RootElement.GetProperty("languages").EnumerateArray()
             .Single(lang => lang.GetProperty("lang").GetString() == "csharp");
         Assert.Equal(2, csharp.GetProperty("indexed_file_count").GetInt64());
+    }
+
+    [Fact]
+    public void RunLanguages_DefaultDatabaseUsesIndexedWorkspaceExtractorSnapshot_Issue4602()
+    {
+        using var databaseProject = TestProjectHelper.CreateTempProjectScope("cdidx_languages_default_db_4602");
+        using var indexedProject = TestProjectHelper.CreateTempProjectScope("cdidx_languages_indexed_root_4602");
+        var dbPath = TestProjectHelper.CreateProjectDb(databaseProject.Root);
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+        {
+            var writer = new DbWriter(db.Connection);
+            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, indexedProject.Root);
+        }
+        lock (TestConsoleLock.Gate)
+        {
+            var originalDirectory = Environment.CurrentDirectory;
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.RegisterForWorkspaceForTests(
+                    indexedProject.Root,
+                    new WorkspaceCatalogSymbolExtractor("workspacecatalog", ".workspacecatalog"));
+                Assert.Contains("workspacecatalog", SymbolExtractor.GetSupportedLanguages(indexedProject.Root));
+                Assert.Contains("workspacecatalog", FileIndexer.GetLanguageExtensions(indexedProject.Root).Values);
+                Environment.CurrentDirectory = databaseProject.Root;
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                    QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                using var document = ParseJsonOutput(stdout);
+                var workspaceLanguage = Assert.Single(
+                    document.RootElement.GetProperty("languages").EnumerateArray(),
+                    language => language.GetProperty("lang").GetString() == "workspacecatalog");
+                Assert.True(workspaceLanguage.GetProperty("symbol_extraction").GetBoolean());
+                Assert.Contains(
+                    ".workspacecatalog",
+                    workspaceLanguage.GetProperty("extensions").EnumerateArray().Select(extension => extension.GetString()));
+            }
+            finally
+            {
+                Environment.CurrentDirectory = originalDirectory;
+                ExtractorPluginRegistry.ResetForTests();
+            }
+        }
+    }
+
+    [Fact]
+    public void RunStatus_HumanSupportSummaryUsesIndexedWorkspaceSnapshot_Issue4602()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_status_workspace_snapshot_4602");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.RegisterForWorkspaceForTests(
+                    project.Root,
+                    new WorkspaceCatalogSymbolExtractor("statuscatalog", ".statuscatalog"));
+                var expectedDetected = FileIndexer.GetLanguageExtensions(project.Root).Values.Distinct().Count();
+                var expectedSymbols = SymbolExtractor.GetSupportedLanguages(project.Root).Count;
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                    QueryCommandRunner.RunStatus(["--db", dbPath], _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Contains(
+                    $"{expectedDetected} detected, {expectedSymbols} with symbols",
+                    stdout,
+                    StringComparison.Ordinal);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+            }
+        }
+    }
+
+    private sealed class WorkspaceCatalogSymbolExtractor(string language, string extension) : ISymbolExtractor
+    {
+        public string Language { get; } = language;
+        public IReadOnlyCollection<string> FileExtensions { get; } = [extension];
+
+        public IReadOnlyList<SymbolRecord> Extract(long fileId, string source, ExtractionContext context)
+            => [];
     }
 
     [Theory]

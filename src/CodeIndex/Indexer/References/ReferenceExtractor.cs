@@ -827,8 +827,11 @@ public static partial class ReferenceExtractor
     };
 
     public static IReadOnlyCollection<string> GetSupportedLanguages()
+        => GetSupportedLanguages(workspaceRoot: null);
+
+    internal static IReadOnlyCollection<string> GetSupportedLanguages(string? workspaceRoot)
     {
-        var pluginLanguages = ExtractorPluginRegistry.ReferenceLanguages;
+        var pluginLanguages = ExtractorPluginRegistry.GetReferenceLanguages(workspaceRoot);
         var capacity = RegisteredLanguages.Count + AdditionalReferenceLanguages.Length + pluginLanguages.Count;
         var languages = new List<string>(capacity);
         var seen = new HashSet<string>(capacity, StringComparer.Ordinal);
@@ -905,13 +908,18 @@ public static partial class ReferenceExtractor
     }
 
     public static bool SupportsLanguage(string? lang)
+        => SupportsLanguage(lang, GetSupportedLanguages(workspaceRoot: null));
+
+    internal static bool SupportsLanguage(
+        string? lang,
+        IReadOnlyCollection<string> supportedLanguages)
     {
         var normalized = NormalizeLanguage(lang);
-        if (normalized != null && Extractors.ContainsKey(normalized))
+        if (normalized != null && supportedLanguages.Contains(normalized, StringComparer.Ordinal))
             return true;
 
         return NormalizePluginLanguage(lang) is string pluginLanguage
-            && ExtractorPluginRegistry.TryGetReferenceExtractor(pluginLanguage, out _);
+            && supportedLanguages.Contains(pluginLanguage, StringComparer.Ordinal);
     }
 
     /// <summary>
@@ -937,6 +945,18 @@ public static partial class ReferenceExtractor
             return null;
 
         return SupportsLanguage(lang);
+    }
+
+    internal static bool? SupportsSymbolGraph(
+        string? lang,
+        string? kind,
+        string? containerKind,
+        IReadOnlyCollection<string> supportedLanguages)
+    {
+        if (lang == null)
+            return null;
+
+        return SupportsLanguage(lang, supportedLanguages);
     }
 
     public static string? GetUnsupportedSymbolKind(string? lang, string? kind, string? containerKind)
@@ -1021,7 +1041,8 @@ public static partial class ReferenceExtractor
         IReadOnlyList<SymbolRecord>? workspaceSymbols = null,
         CancellationToken cancellationToken = default,
         int? maxReferenceCount = null,
-        int? conflictMarkerLine = null)
+        int? conflictMarkerLine = null,
+        string? workspaceRoot = null)
         => ExtractDetailedNormalized(
             fileId,
             lang,
@@ -1032,7 +1053,8 @@ public static partial class ReferenceExtractor
             workspaceSymbols,
             cancellationToken,
             maxReferenceCount,
-            conflictMarkerLine).References;
+            conflictMarkerLine,
+            workspaceRoot).References;
 
     public static ReferenceExtractionResult ExtractDetailed(
         long fileId,
@@ -1054,7 +1076,8 @@ public static partial class ReferenceExtractor
             path,
             workspaceSymbols,
             cancellationToken,
-            maxReferenceCount);
+            maxReferenceCount,
+            workspaceRoot: null);
 
     internal static ReferenceExtractionResult ExtractDetailedNormalized(
         long fileId,
@@ -1066,7 +1089,8 @@ public static partial class ReferenceExtractor
         IReadOnlyList<SymbolRecord>? workspaceSymbols = null,
         CancellationToken cancellationToken = default,
         int? maxReferenceCount = null,
-        int? conflictMarkerLine = null)
+        int? conflictMarkerLine = null,
+        string? workspaceRoot = null)
         => ExtractDetailedCore(
             fileId,
             lang,
@@ -1078,7 +1102,8 @@ public static partial class ReferenceExtractor
             path,
             workspaceSymbols,
             cancellationToken,
-            maxReferenceCount);
+            maxReferenceCount,
+            workspaceRoot);
 
     private static ReferenceExtractionResult ExtractDetailedCore(
         long fileId,
@@ -1091,14 +1116,15 @@ public static partial class ReferenceExtractor
         string? path,
         IReadOnlyList<SymbolRecord>? workspaceSymbols,
         CancellationToken cancellationToken,
-        int? maxReferenceCount)
+        int? maxReferenceCount,
+        string? workspaceRoot)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var requestedLanguage = lang;
         if (!TryGetExtractor(lang, out var extractor, out var normalizedLanguage))
         {
             var pluginLanguage = NormalizePluginLanguage(lang);
-            if (pluginLanguage == null || !ExtractorPluginRegistry.TryGetReferenceExtractor(pluginLanguage, out var pluginExtractor))
+            if (pluginLanguage == null || !ExtractorPluginRegistry.TryGetReferenceExtractor(pluginLanguage, workspaceRoot, path, out var pluginExtractor))
                 return new ReferenceExtractionResult([], []);
 
             if (string.IsNullOrEmpty(content))

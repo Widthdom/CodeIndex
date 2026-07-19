@@ -114,9 +114,9 @@ public static partial class QueryCommandRunner
         return true;
     }
 
-    private static void WriteGraphSupportHint(string? lang)
+    private static void WriteGraphSupportHint(string? lang, DbReader reader)
     {
-        if (lang != null && !ReferenceExtractor.SupportsLanguage(lang))
+        if (lang != null && !reader.SupportsReferenceLanguage(lang))
             CommandErrorWriter.WriteStderr($"Note: call-graph queries are not indexed for '{lang}'. Use search, definition, excerpt, or files instead.");
     }
 

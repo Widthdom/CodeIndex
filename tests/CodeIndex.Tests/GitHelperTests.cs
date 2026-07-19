@@ -1200,8 +1200,7 @@ public class GitHelperTests : IDisposable
             GitHelper.TrustedGitExecutableCandidatePathsForTests()
                 .Where(File.Exists)
                 .Take(1));
-        var portableGitDir = Path.Combine(_tempDir, "windows-portable-git");
-        Directory.CreateDirectory(portableGitDir);
+        var portableGitDir = TestProjectHelper.CreateTrustedWindowsGitDirectory("cdidx_windows_portable_git");
         var portableGitPath = Path.Combine(portableGitDir, "git.exe");
         File.Copy(trustedGit, portableGitPath);
 
@@ -1244,6 +1243,7 @@ public class GitHelperTests : IDisposable
         {
             GitHelper.GitVersionProbeForTesting = oldProbe;
             GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
+            TestProjectHelper.DeleteDirectory(portableGitDir);
         }
     }
 

@@ -1462,8 +1462,8 @@ public partial class McpServer
                     status.IndexAgeSeconds = Math.Max(0, (long)Math.Round((GetUtcNow() - status.IndexedAt.Value).TotalSeconds, MidpointRounding.AwayFromZero));
             }
             ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(status.ProjectRoot);
-            status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
-            status.Extractors = ExtractorPluginRegistry.GetStatusSnapshot();
+            status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages(status.ProjectRoot).OrderBy(l => l).ToList();
+            status.Extractors = ExtractorPluginRegistry.GetStatusSnapshot(status.ProjectRoot);
             status.GitExecutable = GitHelper.GetGitExecutableStatus();
             var postExtractionHookSnapshot = PostExtractionHookRunner.DiscoverDefaultMetadata();
             var postExtractionHooks = postExtractionHookSnapshot.Hooks;

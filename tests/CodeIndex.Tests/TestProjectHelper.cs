@@ -1,5 +1,10 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using System.Runtime.Loader;
+using System.Runtime.Versioning;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
+using System.Security.Principal;
 using System.Text;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -24,6 +29,50 @@ internal static class TestProjectHelper
 
     internal static TempProjectScope CreateTempProjectScope(string prefix)
         => new(CreateTempProject(prefix));
+
+    internal static string CreateTrustedWindowsGitDirectory(string prefix)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("Trusted Windows Git fixtures require Windows.");
+
+        return CreateTrustedWindowsGitDirectoryCore(prefix);
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static string CreateTrustedWindowsGitDirectoryCore(string prefix)
+    {
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (string.IsNullOrWhiteSpace(userProfile))
+            throw new InvalidOperationException("The current Windows user profile is unavailable.");
+
+        var directoryPath = Path.Combine(userProfile, $"{prefix}_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directoryPath);
+
+        using var identity = WindowsIdentity.GetCurrent(TokenAccessLevels.Query);
+        var currentUser = identity.User
+            ?? throw new InvalidOperationException("The current Windows user SID is unavailable.");
+        var trustedPrincipals = new SecurityIdentifier[]
+        {
+            currentUser,
+            new(WellKnownSidType.LocalSystemSid, domainSid: null),
+            new(WellKnownSidType.BuiltinAdministratorsSid, domainSid: null),
+        };
+        var security = new DirectorySecurity();
+        security.SetOwner(currentUser);
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        foreach (var principal in trustedPrincipals)
+        {
+            security.AddAccessRule(new FileSystemAccessRule(
+                principal,
+                FileSystemRights.FullControl,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+        }
+
+        FileSystemAclExtensions.SetAccessControl(new DirectoryInfo(directoryPath), security);
+        return directoryPath;
+    }
 
     internal static string CreateTempDbPath(string prefix)
         => Path.Combine(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}.db");
@@ -298,6 +347,35 @@ internal static class TestProjectHelper
         // Windows and SQLite can release file handles just after a failed cleanup attempt.
         // Keep that bounded blocking delay in one helper instead of scattering fixed sleeps.
         Thread.Sleep(100);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal static void CaptureAssemblyLoadContextWeakReferences(
+        IEnumerable<AssemblyLoadContext> loadContexts,
+        ICollection<WeakReference> weakReferences)
+    {
+        foreach (var loadContext in loadContexts)
+            weakReferences.Add(new WeakReference(loadContext, trackResurrection: false));
+    }
+
+    internal static void AssertReleasedAssemblyLoadContexts(IReadOnlyCollection<WeakReference> weakReferences)
+    {
+        const int maxCollectionAttempts = 10;
+        for (var attempt = 0; attempt < maxCollectionAttempts; attempt++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            if (weakReferences.All(reference => !reference.IsAlive))
+                return;
+
+            Thread.Sleep(10);
+        }
+
+        Assert.All(
+            weakReferences,
+            reference => Assert.False(reference.IsAlive, "Collectible AssemblyLoadContext remained alive after bounded collection."));
     }
 
     private static void ClearAttributes(string path)

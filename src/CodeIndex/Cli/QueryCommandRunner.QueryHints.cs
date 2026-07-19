@@ -37,7 +37,9 @@ public static partial class QueryCommandRunner
         // FindClosestMatch は候補集合に同名がいれば入力をそのまま返すため、例えば Java は
         // サポート対象だが index 済みでない場合の `--lang java` で自己提案を出してしまう。
         var suggestion = ConsoleUi.FindClosestMatch(lang, status.Languages.Keys)
-                         ?? ConsoleUi.FindClosestMatch(lang, ReferenceExtractor.GetSupportedLanguages());
+                         ?? ConsoleUi.FindClosestMatch(
+                             lang,
+                             ReferenceExtractor.GetSupportedLanguages(reader.GetIndexedProjectRoot()));
         if (suggestion != null && !string.Equals(suggestion, lang, StringComparison.OrdinalIgnoreCase))
             CommandErrorWriter.WriteStderr($"Did you mean: --lang {suggestion}?");
     }
@@ -46,7 +48,7 @@ public static partial class QueryCommandRunner
     {
         if (string.IsNullOrWhiteSpace(lang))
             return;
-        if (SymbolExtractor.GetSupportedLanguages().Contains(lang, StringComparer.Ordinal))
+        if (SymbolExtractor.GetSupportedLanguages(reader.GetIndexedProjectRoot()).Contains(lang, StringComparer.Ordinal))
             return;
 
         var status = reader.GetStatus();

@@ -732,6 +732,7 @@ public partial class QueryCommandRunnerTests
     public void RunStatus_Json_ReportsAcceptedExtensionTrustOverrides_3735()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_trust_overrides_3735");
+        string? windowsGitDirectory = null;
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(
@@ -742,7 +743,12 @@ public partial class QueryCommandRunnerTests
             {
                 var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
                 var hooksDir = Path.Combine(projectRoot, "hooks");
-                var gitPath = Path.Combine(projectRoot, OperatingSystem.IsWindows() ? "git.exe" : "git");
+                windowsGitDirectory = OperatingSystem.IsWindows()
+                    ? TestProjectHelper.CreateTrustedWindowsGitDirectory("cdidx_status_git_3735")
+                    : null;
+                var gitPath = Path.Combine(
+                    windowsGitDirectory ?? projectRoot,
+                    OperatingSystem.IsWindows() ? "git.exe" : "git");
                 Directory.CreateDirectory(hooksDir);
                 File.WriteAllText(
                     gitPath,
@@ -820,6 +826,8 @@ public partial class QueryCommandRunnerTests
             }
             finally
             {
+                if (windowsGitDirectory != null)
+                    TestProjectHelper.DeleteDirectory(windowsGitDirectory);
                 TestProjectHelper.DeleteDirectory(projectRoot);
             }
         }

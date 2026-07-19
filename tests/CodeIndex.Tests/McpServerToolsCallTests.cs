@@ -3449,6 +3449,7 @@ public partial class McpServerTests
     [ExternalProcessFact]
     public void ToolsCall_StatusCompact_ReportsAcceptedExtensionTrustOverrides_3735()
     {
+        string? windowsGitDirectory = null;
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(
@@ -3456,59 +3457,72 @@ public partial class McpServerTests
                 ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable,
                 GitHelper.GitExecutableEnvironmentVariable);
             var hooksDir = Path.Combine(_projectRoot, "hooks");
-            var gitPath = Path.Combine(_projectRoot, OperatingSystem.IsWindows() ? "git.exe" : "git");
-            Directory.CreateDirectory(hooksDir);
-            File.WriteAllText(
-                gitPath,
-                OperatingSystem.IsWindows()
-                    ? "not a portable executable"
-                    : "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'git version 2.0.0'; exit 0; fi\nexit 1\n");
-            if (!OperatingSystem.IsWindows())
+            try
             {
-                File.SetUnixFileMode(
+                windowsGitDirectory = OperatingSystem.IsWindows()
+                    ? TestProjectHelper.CreateTrustedWindowsGitDirectory("cdidx_mcp_status_git_3735")
+                    : null;
+                var gitPath = Path.Combine(
+                    windowsGitDirectory ?? _projectRoot,
+                    OperatingSystem.IsWindows() ? "git.exe" : "git");
+                Directory.CreateDirectory(hooksDir);
+                File.WriteAllText(
                     gitPath,
-                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-            }
-            env.Set(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hooksDir);
-            env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "on");
-            env.Set(GitHelper.GitExecutableEnvironmentVariable, gitPath);
+                    OperatingSystem.IsWindows()
+                        ? "not a portable executable"
+                        : "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'git version 2.0.0'; exit 0; fi\nexit 1\n");
+                if (!OperatingSystem.IsWindows())
+                {
+                    File.SetUnixFileMode(
+                        gitPath,
+                        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                }
+                env.Set(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hooksDir);
+                env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "on");
+                env.Set(GitHelper.GitExecutableEnvironmentVariable, gitPath);
 
-            var response = _server.HandleMessage(JsonNode.Parse(
-                """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{"format":"compact"}}}""")!)!;
+                var response = _server.HandleMessage(JsonNode.Parse(
+                    """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{"format":"compact"}}}""")!)!;
 
-            var trustOverrides = response["result"]!["structuredContent"]!["trust_overrides"]!.AsArray();
-            Assert.Equal(OperatingSystem.IsWindows() ? 2 : 3, trustOverrides.Count);
-            Assert.Contains(
-                trustOverrides,
-                item => item?["kind"]?.GetValue<string>() == "workspace_plugin_directory"
-                        && item["environment_variable"]!.GetValue<string>() == ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable
-                        && item["value"]!.GetValue<string>() == "on");
-            var hookOverride = Assert.Single(
-                trustOverrides,
-                item => item?["kind"]?.GetValue<string>() == "hook_directory_override");
-            Assert.Equal(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hookOverride!["environment_variable"]!.GetValue<string>());
-            Assert.EndsWith("hooks", hookOverride["path"]!.GetValue<string>(), StringComparison.Ordinal);
-            Assert.DoesNotContain(_projectRoot, hookOverride["path"]!.GetValue<string>(), StringComparison.Ordinal);
-
-            var gitExecutable = response["result"]!["structuredContent"]!["git_executable"]!;
-            Assert.Equal("environment_override", gitExecutable["source"]!.GetValue<string>());
-            if (OperatingSystem.IsWindows())
-            {
-                Assert.False(gitExecutable["accepted"]!.GetValue<bool>());
-                Assert.Equal("invalid_executable_format", gitExecutable["reason"]!.GetValue<string>());
-                Assert.DoesNotContain(trustOverrides, item => item?["kind"]?.GetValue<string>() == "git_executable");
-            }
-            else
-            {
-                Assert.True(gitExecutable["accepted"]!.GetValue<bool>());
-                Assert.Equal("accepted", gitExecutable["reason"]!.GetValue<string>());
-                Assert.Equal("current_user", gitExecutable["owner"]!.GetValue<string>());
-                Assert.True(gitExecutable["owner_trusted"]!.GetValue<bool>());
-                Assert.True(gitExecutable["ancestor_directories_trusted"]!.GetValue<bool>());
-                var gitOverride = Assert.Single(
+                var trustOverrides = response["result"]!["structuredContent"]!["trust_overrides"]!.AsArray();
+                Assert.Equal(OperatingSystem.IsWindows() ? 2 : 3, trustOverrides.Count);
+                Assert.Contains(
                     trustOverrides,
-                    item => item?["kind"]?.GetValue<string>() == "git_executable");
-                Assert.Equal(GitHelper.GitExecutableEnvironmentVariable, gitOverride!["environment_variable"]!.GetValue<string>());
+                    item => item?["kind"]?.GetValue<string>() == "workspace_plugin_directory"
+                            && item["environment_variable"]!.GetValue<string>() == ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable
+                            && item["value"]!.GetValue<string>() == "on");
+                var hookOverride = Assert.Single(
+                    trustOverrides,
+                    item => item?["kind"]?.GetValue<string>() == "hook_directory_override");
+                Assert.Equal(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hookOverride!["environment_variable"]!.GetValue<string>());
+                Assert.EndsWith("hooks", hookOverride["path"]!.GetValue<string>(), StringComparison.Ordinal);
+                Assert.DoesNotContain(_projectRoot, hookOverride["path"]!.GetValue<string>(), StringComparison.Ordinal);
+
+                var gitExecutable = response["result"]!["structuredContent"]!["git_executable"]!;
+                Assert.Equal("environment_override", gitExecutable["source"]!.GetValue<string>());
+                if (OperatingSystem.IsWindows())
+                {
+                    Assert.False(gitExecutable["accepted"]!.GetValue<bool>());
+                    Assert.Equal("invalid_executable_format", gitExecutable["reason"]!.GetValue<string>());
+                    Assert.DoesNotContain(trustOverrides, item => item?["kind"]?.GetValue<string>() == "git_executable");
+                }
+                else
+                {
+                    Assert.True(gitExecutable["accepted"]!.GetValue<bool>());
+                    Assert.Equal("accepted", gitExecutable["reason"]!.GetValue<string>());
+                    Assert.Equal("current_user", gitExecutable["owner"]!.GetValue<string>());
+                    Assert.True(gitExecutable["owner_trusted"]!.GetValue<bool>());
+                    Assert.True(gitExecutable["ancestor_directories_trusted"]!.GetValue<bool>());
+                    var gitOverride = Assert.Single(
+                        trustOverrides,
+                        item => item?["kind"]?.GetValue<string>() == "git_executable");
+                    Assert.Equal(GitHelper.GitExecutableEnvironmentVariable, gitOverride!["environment_variable"]!.GetValue<string>());
+                }
+            }
+            finally
+            {
+                if (windowsGitDirectory != null)
+                    TestProjectHelper.DeleteDirectory(windowsGitDirectory);
             }
         }
     }
@@ -5817,6 +5831,45 @@ public partial class McpServerTests
         Assert.True(dependencyLock["graph_queries"]!.GetValue<bool>());
         Assert.DoesNotContain("missing-symbols", dependencyLock["capability_gaps"]!.AsArray().Select(e => e!.GetValue<string>()));
         Assert.Contains("packages.lock.json", dependencyLock["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
+    }
+
+    [Fact]
+    public void ToolsCall_Languages_DefaultCatalogUsesIndexedWorkspaceSnapshot_Issue4602()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.RegisterForWorkspaceForTests(
+                    _projectRoot,
+                    new McpWorkspaceCatalogSymbolExtractor());
+                Assert.Contains("mcpcatalog", SymbolExtractor.GetSupportedLanguages(_projectRoot));
+                Assert.Contains("mcpcatalog", FileIndexer.GetLanguageExtensions(_projectRoot).Values);
+
+                var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"languages","arguments":{}}}""")!;
+                var response = _server.HandleMessage(request)!;
+
+                var language = Assert.Single(
+                    response["result"]!["structuredContent"]!["languages"]!.AsArray(),
+                    entry => entry?["lang"]?.GetValue<string>() == "mcpcatalog")!;
+                Assert.True(language["symbol_extraction"]!.GetValue<bool>());
+                Assert.Contains(".mcpcatalog", language["extensions"]!.AsArray().Select(extension => extension!.GetValue<string>()));
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+            }
+        }
+    }
+
+    private sealed class McpWorkspaceCatalogSymbolExtractor : ISymbolExtractor
+    {
+        public string Language => "mcpcatalog";
+        public IReadOnlyCollection<string> FileExtensions => [".mcpcatalog"];
+
+        public IReadOnlyList<SymbolRecord> Extract(long fileId, string source, ExtractionContext context)
+            => [];
     }
 
     [Fact]

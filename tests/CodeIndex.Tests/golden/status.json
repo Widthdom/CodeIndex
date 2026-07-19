@@ -123,7 +123,15 @@
     "skipped_file_count": 0,
     "diagnostic_count": 0,
     "diagnostic_limit": 20,
-    "diagnostics_truncated": false
+    "diagnostics_truncated": false,
+    "snapshot_scope": "workspace",
+    "registration_precedence": [
+      "built_in",
+      "user_plugin",
+      "user_pattern",
+      "workspace_plugin",
+      "workspace_pattern"
+    ]
   },
   "version": null,
   "summary": "1 files, 3 symbols, 0 refs across 1 languages (csharp); index fresh, DEGRADED",
