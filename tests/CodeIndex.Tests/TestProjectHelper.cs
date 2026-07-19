@@ -80,6 +80,25 @@ internal static class TestProjectHelper
     internal static string CreateTempFilePath(string prefix, string extension)
         => Path.Combine(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}{extension}");
 
+    internal static void CopyAssemblyFixtureWithDependencies(string sourceAssembly, string destinationAssembly)
+    {
+        var sourceDirectory = Path.GetDirectoryName(sourceAssembly)!;
+        var destinationDirectory = Path.GetDirectoryName(destinationAssembly)!;
+        Directory.CreateDirectory(destinationDirectory);
+        foreach (var dependencyPath in Directory.EnumerateFiles(sourceDirectory, "*.dll", SearchOption.TopDirectoryOnly))
+        {
+            if (string.Equals(dependencyPath, sourceAssembly, StringComparison.Ordinal))
+                continue;
+
+            File.Copy(
+                dependencyPath,
+                Path.Combine(destinationDirectory, Path.GetFileName(dependencyPath)),
+                overwrite: true);
+        }
+
+        File.Copy(sourceAssembly, destinationAssembly, overwrite: true);
+    }
+
     internal static string ProjectPath(string projectRoot, params string[] relativeSegments)
     {
         if (string.IsNullOrWhiteSpace(projectRoot))

@@ -80,7 +80,16 @@ internal static class PostExtractionHookDirectoryResolver
             return new PostExtractionHookDirectoryResolution(null, diagnostics, []);
         }
 
-        AddUnixPermissionDiagnostic(fullPath, diagnostics);
+        if (!ExecutableExtensionBoundary.TryValidateDirectory(fullPath, out _, out var boundaryFailure))
+        {
+            diagnostics.Add(PostExtractionHookDiagnosticFactory.Create(
+                fullPath,
+                null,
+                $"Hook directory override rejected: {boundaryFailure.Message}",
+                category: boundaryFailure.Category));
+            return new PostExtractionHookDirectoryResolution(null, diagnostics, []);
+        }
+
         if (includeAcceptedOverrideDiagnostic)
         {
             diagnostics.Add(PostExtractionHookDiagnosticFactory.Create(
@@ -97,32 +106,5 @@ internal static class PostExtractionHookDirectoryResolver
         }
 
         return new PostExtractionHookDirectoryResolution(fullPath, diagnostics, trustOverrides);
-    }
-
-    private static void AddUnixPermissionDiagnostic(string fullPath, List<PostExtractionHookDiagnostic> diagnostics)
-    {
-        if (OperatingSystem.IsWindows())
-            return;
-
-        try
-        {
-            var mode = File.GetUnixFileMode(fullPath);
-            if ((mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
-            {
-                diagnostics.Add(PostExtractionHookDiagnosticFactory.Create(
-                    fullPath,
-                    null,
-                    "Hook directory override warning: directory is group- or world-writable; only trusted users should be able to modify hook assemblies.",
-                    category: "hook_directory_override_unsafe_permissions"));
-            }
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
-        {
-            diagnostics.Add(PostExtractionHookDiagnosticFactory.Create(
-                fullPath,
-                null,
-                "Hook directory override warning: directory permissions could not be inspected.",
-                category: "hook_directory_override_permission_inspection_failed"));
-        }
     }
 }

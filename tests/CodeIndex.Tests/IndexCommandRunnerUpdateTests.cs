@@ -24,7 +24,6 @@ public partial class IndexCommandRunnerTests
     public void Run_UpdateMode_PreservesUnchangedWorkspacePluginReferences_Issue4602()
     {
         var projectRoot = CreateTempProject();
-        var weakLoadContexts = new List<WeakReference>();
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
@@ -32,12 +31,11 @@ public partial class IndexCommandRunnerTests
             {
                 ExtractorPluginRegistry.ResetForTests();
                 env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "1");
-                AssertUpdatePreservesUnchangedWorkspacePluginReferences(projectRoot, weakLoadContexts);
+                AssertUpdatePreservesUnchangedWorkspacePluginReferences(projectRoot);
             }
             finally
             {
                 ExtractorPluginRegistry.ResetForTests();
-                TestProjectHelper.AssertReleasedAssemblyLoadContexts(weakLoadContexts);
                 SqliteConnection.ClearAllPools();
                 DeleteDirectory(projectRoot);
             }
@@ -46,13 +44,11 @@ public partial class IndexCommandRunnerTests
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private void AssertUpdatePreservesUnchangedWorkspacePluginReferences(
-        string projectRoot,
-        ICollection<WeakReference> weakLoadContexts)
+    private void AssertUpdatePreservesUnchangedWorkspacePluginReferences(string projectRoot)
     {
         var pluginPath = Path.Combine(projectRoot, ".cdidx", "plugins", "workspace-plugin.dll");
         Directory.CreateDirectory(Path.GetDirectoryName(pluginPath)!);
-        File.Copy(Assembly.GetExecutingAssembly().Location, pluginPath);
+        TestProjectHelper.CopyAssemblyFixtureWithDependencies(Assembly.GetExecutingAssembly().Location, pluginPath);
         File.WriteAllText(Path.Combine(projectRoot, "stable.collectible"), "workspace reference\n");
         var changedPath = Path.Combine(projectRoot, "changed.cs");
         File.WriteAllText(changedPath, "public class Changed { }\n");
@@ -83,9 +79,7 @@ public partial class IndexCommandRunnerTests
         Assert.Contains(
             status.GetProperty("graph_supported_languages").EnumerateArray(),
             language => language.GetString() == "collectibledsl");
-        TestProjectHelper.CaptureAssemblyLoadContextWeakReferences(
-            ExtractorPluginRegistry.WorkspacePluginLoadContextsForTests(projectRoot),
-            weakLoadContexts);
+        Assert.Equal(1, ExtractorPluginRegistry.WorkspacePluginWorkerCountForTests(projectRoot));
     }
 
     private static int ReadWorkspacePluginReferenceCount(string dbPath)

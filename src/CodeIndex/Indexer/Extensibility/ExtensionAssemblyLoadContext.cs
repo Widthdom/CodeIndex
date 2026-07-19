@@ -6,11 +6,14 @@ namespace CodeIndex.Indexer.Extensibility;
 internal sealed class ExtensionAssemblyLoadContext : AssemblyLoadContext
 {
     private readonly AssemblyDependencyResolver resolver;
+    private readonly string assemblyDirectory;
 
     internal ExtensionAssemblyLoadContext(string name, string mainAssemblyPath)
         : base(name, isCollectible: true)
     {
-        resolver = new AssemblyDependencyResolver(Path.GetFullPath(mainAssemblyPath));
+        var fullMainAssemblyPath = Path.GetFullPath(mainAssemblyPath);
+        resolver = new AssemblyDependencyResolver(fullMainAssemblyPath);
+        assemblyDirectory = Path.GetDirectoryName(fullMainAssemblyPath) ?? string.Empty;
     }
 
     protected override Assembly? Load(AssemblyName assemblyName)
@@ -19,8 +22,18 @@ internal sealed class ExtensionAssemblyLoadContext : AssemblyLoadContext
         if (sharedAssembly != null)
             return sharedAssembly;
 
-        var assemblyPath = resolver.ResolveAssemblyToPath(assemblyName);
+        var assemblyPath = resolver.ResolveAssemblyToPath(assemblyName)
+                           ?? ResolveStagedSiblingAssembly(assemblyName);
         return assemblyPath == null ? null : LoadFromAssemblyPath(assemblyPath);
+    }
+
+    private string? ResolveStagedSiblingAssembly(AssemblyName assemblyName)
+    {
+        if (string.IsNullOrWhiteSpace(assemblyName.Name) || string.IsNullOrEmpty(assemblyDirectory))
+            return null;
+
+        var candidate = Path.Combine(assemblyDirectory, assemblyName.Name + ".dll");
+        return File.Exists(candidate) ? candidate : null;
     }
 
     protected override IntPtr LoadUnmanagedDll(string unmanagedDllName)
