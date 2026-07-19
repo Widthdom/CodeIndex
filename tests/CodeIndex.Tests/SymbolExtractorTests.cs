@@ -7536,17 +7536,84 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Cpp_DetectsClassBodyMembers()
+    public void Extract_Cpp_DetectsBalancedCallableDeclarators()
     {
-        // C++: constructors, destructors, operator overloads / C++: コンストラクタ、デストラクタ、演算子オーバーロード
-        var content = "class Handler { Handler(); ~Handler(); Handler operator+(const Handler& other) const; };";
+        var content = """
+            template <typename T>
+            class Handler {
+            public:
+                explicit Handler(T value) noexcept;
+                ~Handler() noexcept;
+                explicit operator bool() const noexcept;
+                [[nodiscard]] auto transform(
+                    T value,
+                    int (*predicate)(T)
+                ) const & noexcept -> std::vector<T>;
+            };
+
+            template <typename T>
+            Handler<T>::Handler(T value) noexcept {}
+
+            template <typename T>
+            Handler<T>::~Handler() noexcept {}
+
+            template <typename T>
+            Handler<T>::operator bool() const noexcept { return true; }
+
+            template <typename T>
+            auto Handler<T>::transform(
+                T value,
+                int (*predicate)(T)
+            ) const & noexcept -> std::vector<T> { return { value }; }
+
+            int helper(int value) { return value; }
+
+            int caller() {
+                Handler<int> handler(1);
+                helper(1);
+                static_assert(sizeof(Handler<int>) > 0);
+                return helper(1);
+            }
+            """;
 
         var symbols = SymbolExtractor.Extract(1, "cpp", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Handler" && s.ContainerName == "Handler");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "~Handler" && s.ContainerName == "Handler");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator+" && s.ContainerName == "Handler");
+        var callables = symbols.Where(s => s.Kind == "function").ToList();
+        Assert.DoesNotContain(callables, s => s.Name == "int");
+        Assert.Equal(
+            ["Handler", "caller", "helper", "operator bool", "transform", "~Handler"],
+            callables.Select(s => s.Name).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
+        Assert.All(callables, s =>
+        {
+            Assert.InRange(s.Line, 1, content.Count(ch => ch == '\n') + 1);
+            Assert.True(s.StartLine <= s.Line);
+            Assert.True(s.EndLine >= s.Line);
+        });
+
+        Assert.Equal(2, callables.Count(s => s.Name == "Handler"));
+        Assert.All(callables.Where(s => s.Name == "Handler"), s => Assert.Null(s.ReturnType));
+        Assert.Contains(callables, s => s.Name == "Handler" && s.BodyStartLine.HasValue);
+        Assert.Equal(2, callables.Count(s => s.Name == "~Handler"));
+        Assert.All(callables.Where(s => s.Name == "~Handler"), s => Assert.Null(s.ReturnType));
+        Assert.Contains(callables, s => s.Name == "~Handler" && s.BodyStartLine.HasValue);
+
+        var conversionOperators = callables.Where(s => s.Name == "operator bool").ToList();
+        Assert.Equal(2, conversionOperators.Count);
+        Assert.All(conversionOperators, s => Assert.Equal("bool", s.ReturnType));
+        Assert.Contains(conversionOperators, s => s.BodyStartLine.HasValue);
+
+        var transforms = callables.Where(s => s.Name == "transform").ToList();
+        Assert.Equal(2, transforms.Count);
+        Assert.All(transforms, s => Assert.Equal("std::vector<T>", s.ReturnType));
+        Assert.Contains(transforms, s => s.Signature?.Contains("int (*predicate)(T)", StringComparison.Ordinal) == true);
+        Assert.Contains(transforms, s => s.BodyStartLine.HasValue);
+
+        Assert.Single(callables, s => s.Name == "helper" && s.ReturnType == "int");
+        Assert.Single(callables, s => s.Name == "caller" && s.ReturnType == "int");
+        Assert.All(callables.Where(s => s.Name is "Handler" or "~Handler" or "operator bool" or "transform"),
+            s => Assert.Equal("Handler", s.ContainerName));
+        Assert.DoesNotContain(callables, s => s.Name is "handler" or "static_assert" or "sizeof" or "predicate");
     }
 
     [Fact]

@@ -2034,6 +2034,8 @@ public static partial class SymbolExtractor
         if (lang == "cpp")
             ExtractCppSameLineClassBodyMembers(fileId, lines, symbols);
         if (lang == "cpp")
+            ExtractCppBalancedCallableSymbols(fileId, lines, structuralLines, symbols, extractionState);
+        if (lang == "cpp")
             ExtractCppFriendDeclarationSymbols(fileId, lines, symbols, extractionState);
         if (lang is "verilog" or "systemverilog")
             ExtractHdlInlineParameterSymbols(fileId, lines, symbols, extractionState);

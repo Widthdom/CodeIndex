@@ -2263,6 +2263,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 **Symbol notes**
 
 - C/C++ headers: `.h` stays on the C path unless the file has clear C++ markers such as `namespace`, `template`, `using`, `class`, or `std::`; those headers are promoted to `cpp` at index time.
+- C++ callables: balanced declarators preserve constructors, destructors, conversion operators, ordinary functions, and trailing-return functions as navigable function symbols. Trailing return types populate `return_type` metadata.
 - Cython and CUDA: Cython `cdef` / `cpdef` declarations, `cimport` entries, and extern declarations are indexed as symbols. CUDA files reuse C++ symbols and classify `__global__`, `__device__`, and `__host__` functions with CUDA-specific sub-kinds.
 - Shaders: GLSL, HLSL, Metal, and WGSL entry points, structs, type aliases, resource bindings, constant buffers, samplers, textures, and uniform/input/output declarations are indexed as symbols.
 - HDL: Verilog, SystemVerilog, and VHDL module/package/type/function/resource declarations are indexed as symbols. References and graph queries are not advertised for HDL yet.
@@ -5282,6 +5283,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 **シンボル抽出メモ**
 
 - C/C++ ヘッダー: `.h` は既定では C として扱います。`namespace`、`template`、`using`、`class`、`std::` などの明確な C++ マーカーがある場合だけ、index 時に `cpp` へ昇格します。
+- C++ callable: 括弧の対応を考慮した declarator 解析により、constructor、destructor、conversion operator、通常関数、後置戻り値関数を移動可能な function シンボルとして保持します。後置戻り値は `return_type` メタデータへ格納します。
 - Cython と CUDA: Cython の `cdef` / `cpdef` 宣言、`cimport`、extern 宣言をシンボルとして索引します。CUDA ファイルは C++ のシンボル抽出を再利用し、`__global__`、`__device__`、`__host__` 関数に CUDA 固有の sub-kind を付けます。
 - Shaders: GLSL、HLSL、Metal、WGSL の entry point、struct、type alias、resource binding、constant buffer、sampler、texture、uniform/input/output 宣言をシンボルとして索引します。
 - HDL: Verilog、SystemVerilog、VHDL の module / package / type / function / resource 宣言をシンボルとして索引します。HDL の references と graph queries はまだ対応として広告しません。
