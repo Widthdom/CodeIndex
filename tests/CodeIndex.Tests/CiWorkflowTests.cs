@@ -158,6 +158,8 @@ public class CiWorkflowTests
         AssertDoesNotContainAny(releaseWorkflow, "Add-MpPreference", "Get-MpPreference");
         AssertContainsAll(
             setupScript,
+            "if (-not $env:USERPROFILE)",
+            "$tempRoot = Join-Path $env:USERPROFILE \"cdidx-test-temp\"",
             "\"TMP=$tempRoot\"",
             "\"TEMP=$tempRoot\"",
             "$tempAcl.SetAccessRuleProtection($true, $false)",
@@ -166,7 +168,10 @@ public class CiWorkflowTests
             "Add-MpPreference -ExclusionPath $entry.Path -ErrorAction Stop",
             "Get-MpPreference",
             "Windows Defender exclusion audit:",
-            "GitHub-hosted runner temp root used by actions and pinned TMP/TEMP.");
+            "GitHub-hosted runner temp root used by actions.");
+        AssertDoesNotContainAny(
+            setupScript,
+            "$tempRoot = Join-Path $env:RUNNER_TEMP \"cdidx-temp\"");
     }
 
     [Fact]

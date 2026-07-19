@@ -6,11 +6,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-if (-not $env:RUNNER_TEMP) {
-  throw "RUNNER_TEMP is required to configure the Windows test host."
+if (-not $env:USERPROFILE) {
+  throw "USERPROFILE is required to configure the Windows test host."
 }
 
-$tempRoot = Join-Path $env:RUNNER_TEMP "cdidx-temp"
+$tempRoot = Join-Path $env:USERPROFILE "cdidx-test-temp"
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
 $currentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
@@ -56,7 +56,7 @@ $candidates = @(
   },
   [pscustomobject]@{
     Path = $env:RUNNER_TEMP
-    Reason = "GitHub-hosted runner temp root used by actions and pinned TMP/TEMP."
+    Reason = "GitHub-hosted runner temp root used by actions."
   },
   [pscustomobject]@{
     Path = $env:TEMP
