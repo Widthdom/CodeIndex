@@ -2,8 +2,12 @@ using System.Text;
 
 namespace CodeIndex.Indexer;
 
-internal sealed partial class FileContentLoader(long maxFileSizeBytes)
+internal sealed partial class FileContentLoader(
+    long maxFileSizeBytes,
+    Func<string, FileStream>? openReadForIndexContent = null)
 {
+    private readonly Func<string, FileStream> _openReadForIndexContent =
+        openReadForIndexContent ?? BoundedFile.OpenReadForIndexContent;
     private const int GitLfsPointerMaxBytes = 1024;
     private static ReadOnlySpan<byte> GitLfsPointerPrefix => "version https://git-lfs.github.com/spec/v1"u8;
     private static ReadOnlySpan<byte> GitLfsExtensionPrefix => "ext-"u8;

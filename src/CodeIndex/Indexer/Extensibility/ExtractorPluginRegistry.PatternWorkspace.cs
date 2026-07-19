@@ -5,12 +5,13 @@ namespace CodeIndex.Indexer.Extensibility;
 
 public static partial class ExtractorPluginRegistry
 {
-    private sealed class PatternWorkspaceState(string? workspaceRoot)
+    private sealed class PatternWorkspaceState(string? workspaceRoot, bool includeUserConfiguration = true)
     {
         private ExtractorWorkspaceSnapshot snapshot = ExtractorWorkspaceSnapshot.Empty;
 
         internal object Gate { get; } = new();
         internal string? WorkspaceRoot { get; } = workspaceRoot;
+        internal bool IncludeUserConfiguration { get; } = includeUserConfiguration;
         internal Dictionary<string, ISymbolExtractor> PatternSymbolExtractors { get; } = new(StringComparer.Ordinal);
         internal Dictionary<string, string> PatternSources { get; } = new(StringComparer.Ordinal);
         internal Dictionary<string, ISymbolExtractor> WorkspaceSymbolExtractors { get; } = new(StringComparer.Ordinal);
@@ -42,7 +43,9 @@ public static partial class ExtractorPluginRegistry
                 return;
             }
 
-            var user = GetUserExtractorSnapshot();
+            var user = IncludeUserConfiguration
+                ? GetUserExtractorSnapshot()
+                : UserExtractorSnapshot.Empty;
             var symbolExtractors = new Dictionary<string, ISymbolExtractor>(StringComparer.Ordinal);
             var referenceExtractors = new Dictionary<string, IReferenceExtractor>(StringComparer.Ordinal);
 
@@ -187,25 +190,30 @@ public static partial class ExtractorPluginRegistry
     private static long workspaceReloadSequence;
     private static long workspaceGeneration;
 
-    private static PatternWorkspaceState CreatePatternWorkspace(string workspaceRoot)
+    private static PatternWorkspaceState CreatePatternWorkspace(
+        string workspaceRoot,
+        bool includeUserConfiguration = true)
     {
-        var state = new PatternWorkspaceState(workspaceRoot);
+        var state = new PatternWorkspaceState(workspaceRoot, includeUserConfiguration);
         lock (state.Gate)
             state.PublishSnapshot();
         return state;
     }
 
-    private static PatternWorkspaceState StagePatternWorkspace(string workspaceRoot)
+    private static PatternWorkspaceState StagePatternWorkspace(
+        string workspaceRoot,
+        bool includeUserConfiguration = true)
     {
         PatternWorkspaceState state;
         List<PatternWorkspaceState> superseded;
         lock (Gate)
         {
-            state = CreatePatternWorkspace(workspaceRoot);
+            state = CreatePatternWorkspace(workspaceRoot, includeUserConfiguration);
             state.ReloadSequence = ++workspaceReloadSequence;
             state.WorkspaceGeneration = workspaceGeneration;
             superseded = PendingPatternWorkspaces
                 .Where(candidate => PathCasing.PathsEqual(candidate.WorkspaceRoot!, workspaceRoot))
+                .Where(candidate => candidate.IncludeUserConfiguration == includeUserConfiguration)
                 .ToList();
             foreach (var candidate in superseded)
                 PendingPatternWorkspaces.Remove(candidate);
@@ -232,9 +240,11 @@ public static partial class ExtractorPluginRegistry
         {
             var wasPending = PendingPatternWorkspaces.Remove(state);
             var index = PatternWorkspaces.FindIndex(existing =>
-                PathCasing.PathsEqual(existing.WorkspaceRoot!, state.WorkspaceRoot!));
+                PathCasing.PathsEqual(existing.WorkspaceRoot!, state.WorkspaceRoot!)
+                && existing.IncludeUserConfiguration == state.IncludeUserConfiguration);
             var newerPendingExists = PendingPatternWorkspaces.Any(candidate =>
                 PathCasing.PathsEqual(candidate.WorkspaceRoot!, state.WorkspaceRoot!)
+                && candidate.IncludeUserConfiguration == state.IncludeUserConfiguration
                 && candidate.ReloadSequence > state.ReloadSequence);
             var newerActiveExists = index >= 0
                 && PatternWorkspaces[index].ReloadSequence > state.ReloadSequence;
@@ -279,7 +289,8 @@ public static partial class ExtractorPluginRegistry
         lock (Gate)
         {
             var existing = PatternWorkspaces.FirstOrDefault(candidate =>
-                PathCasing.PathsEqual(candidate.WorkspaceRoot!, workspaceRoot));
+                PathCasing.PathsEqual(candidate.WorkspaceRoot!, workspaceRoot)
+                && candidate.IncludeUserConfiguration);
             if (existing != null)
             {
                 TouchPatternWorkspace(existing);
@@ -298,16 +309,24 @@ public static partial class ExtractorPluginRegistry
 
     private static ExtractorWorkspaceSnapshot GetPatternSnapshot(string? workspaceRoot)
     {
+        var authorizedConfigurationOnly = AuthorizedConfigurationScope.Value;
         if (string.IsNullOrWhiteSpace(workspaceRoot))
-            return DefaultPatternWorkspace.GetSnapshot();
+            return authorizedConfigurationOnly
+                ? ExtractorWorkspaceSnapshot.Empty
+                : DefaultPatternWorkspace.GetSnapshot();
 
         var fullRoot = Path.GetFullPath(workspaceRoot);
         lock (Gate)
         {
             var state = PatternWorkspaces.FirstOrDefault(candidate =>
-                PathCasing.PathsEqual(candidate.WorkspaceRoot!, fullRoot));
+                PathCasing.PathsEqual(candidate.WorkspaceRoot!, fullRoot)
+                && candidate.IncludeUserConfiguration == !authorizedConfigurationOnly);
             if (state == null)
-                return DefaultPatternWorkspace.GetSnapshot();
+            {
+                return authorizedConfigurationOnly
+                    ? ExtractorWorkspaceSnapshot.Empty
+                    : DefaultPatternWorkspace.GetSnapshot();
+            }
 
             TouchPatternWorkspace(state);
             return state.GetSnapshot();
@@ -316,18 +335,26 @@ public static partial class ExtractorPluginRegistry
 
     private static ExtractorWorkspaceSnapshot GetWorkspaceSnapshotForPath(string? path)
     {
+        var authorizedConfigurationOnly = AuthorizedConfigurationScope.Value;
         if (string.IsNullOrWhiteSpace(path))
-            return DefaultPatternWorkspace.GetSnapshot();
+            return authorizedConfigurationOnly
+                ? ExtractorWorkspaceSnapshot.Empty
+                : DefaultPatternWorkspace.GetSnapshot();
 
         var fullPath = Path.GetFullPath(path);
         lock (Gate)
         {
             var state = PatternWorkspaces
                 .Where(candidate => PathCasing.IsFullPathEqualOrParent(candidate.WorkspaceRoot!, fullPath))
+                .Where(candidate => candidate.IncludeUserConfiguration == !authorizedConfigurationOnly)
                 .OrderByDescending(candidate => candidate.WorkspaceRoot!.Length)
                 .FirstOrDefault();
             if (state == null)
-                return DefaultPatternWorkspace.GetSnapshot();
+            {
+                return authorizedConfigurationOnly
+                    ? ExtractorWorkspaceSnapshot.Empty
+                    : DefaultPatternWorkspace.GetSnapshot();
+            }
 
             TouchPatternWorkspace(state);
             return state.GetSnapshot();

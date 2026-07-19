@@ -43,6 +43,7 @@ public class AuditLogSinkTests
         Assert.False(root.TryGetProperty("request_id_length", out _));
         Assert.False(root.TryGetProperty("arg_values", out _));
         Assert.False(root.TryGetProperty("error", out _));
+        Assert.False(root.TryGetProperty("checked_root_identity", out _));
 
         Assert.Equal(2, root.GetProperty("arg_keys").GetArrayLength());
         Assert.Equal("query", root.GetProperty("arg_keys")[0].GetString());
