@@ -281,18 +281,20 @@ custom-prefix, or portable installations, set `CDIDX_GIT_EXECUTABLE` in the
 process environment to the absolute path of `git` (`git.exe` on Windows). The
 override is accepted only for a regular non-symlink/non-reparse file; POSIX
 files and their canonical ancestor directories must be owned by the current
-user or root and must not be group- or other-writable. Windows paths must be a
-valid PE image. Every accepted candidate must successfully identify itself via
+user or root and must not be group- or other-writable, except for root-owned
+sticky ancestors such as `/tmp` and multi-user Nix stores. Windows paths must
+have trusted owner/write ACLs and be a valid PE image. Every accepted candidate must successfully identify itself via
 `git --version`. An invalid explicit override fails closed
 instead of falling back to a different Git binary. CLI and MCP `status` expose
 the sanitized selection under `git_executable`, including `source`, `accepted`,
 the stable `reason`, `owner_only_writable`, `unix_mode`, `executable`, `owner`,
 `owner_trusted`, and `ancestor_directories_trusted`.
-Git metadata resolution applies the same regular-entry boundary to normal
+Git metadata resolution applies the same component-by-component regular-entry boundary to normal
 `.git` directories, worktree `.git` files, their `gitdir` targets, and
-`commondir` targets, so symlink/reparse/device redirection is rejected before
+`commondir` targets, so untrusted symlink/reparse/device redirection is rejected before
 `info/exclude` or hooks can be written. Existing `info`, `exclude`, `hooks`, and
-hook-file descendants are revalidated immediately before their metadata write.
+hook-file descendants are revalidated immediately before their metadata write;
+multi-link metadata files are rejected and exclude updates use atomic replacement.
 
 Successful CLI and MCP index runs can also persist bounded
 `last_index_run.diagnostics` when best-effort metadata writes fail after the
@@ -596,17 +598,18 @@ portable installation では、process environment の `CDIDX_GIT_EXECUTABLE` �
 `git`（Windows は `git.exe`）の絶対パスを設定してください。override は regular かつ
 symlink / reparse point ではない file だけを受理します。POSIX では file と canonical な
 ancestor directory が current user または root の所有で、group / other writable でないことを
-要求し、Windows では有効な PE image を要求します。さらに受理前に `git --version` が成功し、
+要求しますが、`/tmp` や multi-user Nix store のような root 所有の sticky ancestor は受理します。
+Windows では信頼済み owner / write ACL と有効な PE image を要求します。さらに受理前に `git --version` が成功し、
 Git として自己識別できることを確認します。不正な明示
 override は別の Git binary へ fallback せず fail-closed になります。CLI / MCP の
 `status` は sanitization 済みの選択結果を `git_executable` として公開し、`source`、
 `accepted`、stable な `reason`、`owner_only_writable`、`unix_mode`、`executable`、
 `owner`、`owner_trusted`、`ancestor_directories_trusted` を
 含みます。Git metadata 解決も通常 repo の `.git` directory、worktree の `.git` file、
-その `gitdir` target と `commondir` target に同じ regular-entry boundary を適用するため、
-symlink / reparse point / device による redirect は `info/exclude` や hook の書込み前に
+その `gitdir` target と `commondir` target に component ごとの同じ regular-entry boundary を適用するため、
+信頼されない symlink / reparse point / device による redirect は `info/exclude` や hook の書込み前に
 拒否されます。既存の `info`、`exclude`、`hooks`、hook file descendant は metadata を
-書き込む直前にも再検証されます。
+書き込む直前にも再検証され、multi-link metadata file は拒否され、exclude 更新は atomic replacement を使います。
 
 成功した CLI / MCP index run は、index data 自体の書き込みが成功した後に
 best-effort metadata write が失敗した場合、上限付きの

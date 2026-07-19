@@ -160,14 +160,13 @@ public static partial class GitHelper
             : TrustedGitExecutable.Value.Status;
     }
 
-    internal static IReadOnlyList<ExtensionTrustOverride> GetAcceptedTrustOverrides()
+    internal static IReadOnlyList<ExtensionTrustOverride> GetAcceptedTrustOverrides(GitExecutableStatus status)
     {
-        var status = GetGitExecutableStatus();
         if (!status.Accepted || !string.Equals(status.Source, "environment_override", StringComparison.Ordinal))
             return [];
 
         var modeDetail = status.UnixMode == null
-            ? "regular non-reparse executable with trusted ancestors"
+            ? "regular non-reparse executable with trusted owner/write ACLs and ancestors"
             : $"{status.Owner ?? "trusted"}-owned, owner-only-writable mode {status.UnixMode} executable with trusted ancestors";
         return
         [
@@ -312,13 +311,26 @@ public static partial class GitHelper
             var windowsAncestorsTrusted = TryValidateGitExecutableAncestors(fullPath, effectiveUserId: null);
             if (!windowsAncestorsTrusted)
                 return RejectedGitExecutable(source, "ancestor_untrusted", diagnosticPath, null, null, null, null, null, windowsAncestorsTrusted);
+            if (!TryValidateWindowsExecutableAcl(fullPath, out var windowsOwner, out var windowsOwnerTrusted))
+            {
+                return RejectedGitExecutable(
+                    source,
+                    "acl_untrusted",
+                    diagnosticPath,
+                    null,
+                    null,
+                    null,
+                    windowsOwner,
+                    windowsOwnerTrusted,
+                    false);
+            }
             if (!TryValidateWindowsExecutableImage(fullPath))
-                return RejectedGitExecutable(source, "invalid_executable_format", diagnosticPath, null, null, false, null, null, windowsAncestorsTrusted);
+                return RejectedGitExecutable(source, "invalid_executable_format", diagnosticPath, null, null, false, windowsOwner, windowsOwnerTrusted, windowsAncestorsTrusted);
 
             var windowsExecutable = TryProbeGitVersion(fullPath);
             return windowsExecutable
-                ? AcceptedGitExecutable(source, fullPath, diagnosticPath, null, null, windowsExecutable, null, null, windowsAncestorsTrusted)
-                : RejectedGitExecutable(source, "execution_probe_failed", diagnosticPath, null, null, windowsExecutable, null, null, windowsAncestorsTrusted);
+                ? AcceptedGitExecutable(source, fullPath, diagnosticPath, null, null, windowsExecutable, windowsOwner, windowsOwnerTrusted, windowsAncestorsTrusted)
+                : RejectedGitExecutable(source, "execution_probe_failed", diagnosticPath, null, null, windowsExecutable, windowsOwner, windowsOwnerTrusted, windowsAncestorsTrusted);
         }
 
         if (!TryResolveRealUnixPath(fullPath, out fullPath))
@@ -530,17 +542,94 @@ public static partial class GitHelper
         try
         {
             canonicalPath = PathCasing.NormalizeBoundaryPath(Path.GetFullPath(path));
-            var attributes = File.GetAttributes(LongPath.EnsureWindowsPrefix(canonicalPath));
-            if (FileSystemBoundary.IsSymlinkOrReparsePoint(attributes) || FileSystemBoundary.IsDevice(attributes))
+            if (!TryValidateGitMetadataPathComponents(canonicalPath, expectDirectory))
                 return false;
 
-            return ((attributes & FileAttributes.Directory) != 0) == expectDirectory;
+            if (!OperatingSystem.IsWindows())
+            {
+                if (!TryResolveRealUnixPathCore(canonicalPath, out var resolvedPath)
+                    || !TryValidateGitMetadataPathComponents(resolvedPath, expectDirectory))
+                {
+                    return false;
+                }
+            }
+
+            if (!expectDirectory
+                && (!FileIndexer.TryGetFileLinkCount(LongPath.EnsureWindowsPrefix(canonicalPath), out var linkCount)
+                    || linkCount != 1))
+            {
+                return false;
+            }
+
+            return true;
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException or CodeIndexException)
         {
             canonicalPath = string.Empty;
             return false;
         }
+    }
+
+    private static bool TryValidateGitMetadataPathComponents(string fullPath, bool expectDirectory)
+    {
+        var root = Path.GetPathRoot(fullPath);
+        if (string.IsNullOrEmpty(root))
+            return false;
+
+        var relativePath = fullPath[root.Length..];
+        var segments = relativePath.Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries);
+        var current = root;
+        for (var index = 0; index < segments.Length; index++)
+        {
+            current = Path.Combine(current, segments[index]);
+            var attributes = File.GetAttributes(LongPath.EnsureWindowsPrefix(current));
+            if (FileSystemBoundary.IsDevice(attributes))
+            {
+                return false;
+            }
+
+            if (FileSystemBoundary.IsSymlinkOrReparsePoint(attributes))
+            {
+                if (index == segments.Length - 1 || !IsTrustedSystemMetadataLink(current))
+                    return false;
+                continue;
+            }
+
+            var isDirectory = (attributes & FileAttributes.Directory) != 0;
+            if (index < segments.Length - 1 && !isDirectory)
+                return false;
+            if (index == segments.Length - 1 && isDirectory != expectDirectory)
+                return false;
+        }
+
+        if (segments.Length > 0)
+            return true;
+
+        var rootAttributes = File.GetAttributes(LongPath.EnsureWindowsPrefix(root));
+        return !FileSystemBoundary.IsSymlinkOrReparsePoint(rootAttributes)
+               && !FileSystemBoundary.IsDevice(rootAttributes)
+               && ((rootAttributes & FileAttributes.Directory) != 0) == expectDirectory;
+    }
+
+    private static bool IsTrustedSystemMetadataLink(string path)
+    {
+        if (OperatingSystem.IsWindows())
+            return false;
+
+        var parent = Directory.GetParent(path)?.FullName;
+        if (string.IsNullOrEmpty(parent)
+            || !FileIndexer.TryGetUnixFileOwnerId(LongPath.EnsureWindowsPrefix(path), out var linkOwner)
+            || linkOwner != 0
+            || !FileIndexer.TryGetUnixFileOwnerId(LongPath.EnsureWindowsPrefix(parent), out var parentOwner)
+            || parentOwner != 0)
+        {
+            return false;
+        }
+
+        var parentMode = File.GetUnixFileMode(LongPath.EnsureWindowsPrefix(parent));
+        return (parentMode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) == 0;
     }
 
     internal static bool TryResolveGitMetadataChildPath(

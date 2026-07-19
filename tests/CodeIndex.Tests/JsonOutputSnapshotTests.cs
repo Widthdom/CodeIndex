@@ -62,12 +62,8 @@ public class Probe
     public void RunStatus_JsonOutput_MatchesGolden()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_snapshot_status");
-        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
         try
         {
-            var gitExecutablePath = Path.Combine(projectRoot, OperatingSystem.IsWindows() ? "git.exe" : "git");
-            File.WriteAllText(gitExecutablePath, "snapshot-only test override");
-            GitHelper.GitExecutablePathOverride = gitExecutablePath;
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/Lib.cs", "csharp", LibSource);
 
@@ -85,7 +81,6 @@ public class Probe
         }
         finally
         {
-            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }

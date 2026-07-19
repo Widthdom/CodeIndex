@@ -1471,7 +1471,7 @@ public partial class McpServer
                 status.HookDiagnostics = postExtractionHookSnapshot.Diagnostics.ToList();
             var trustOverrides = ExtractorPluginRegistry.GetAcceptedTrustOverrides(status.ProjectRoot)
                 .Concat(postExtractionHookSnapshot.TrustOverrides)
-                .Concat(GitHelper.GetAcceptedTrustOverrides())
+                .Concat(GitHelper.GetAcceptedTrustOverrides(status.GitExecutable))
                 .ToList();
             if (trustOverrides.Count > 0)
                 status.TrustOverrides = trustOverrides;

@@ -6287,6 +6287,36 @@ public sealed class Caller
         }
     }
 
+    [ExternalProcessFact]
+    public void Run_WithHardLinkedGitExcludeFile_RefusesExternalExcludeWrite_Issue4599()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var externalDirectory = TestProjectHelper.CreateTempProject("cdidx_external_hardlink_exclude");
+        var externalExclude = Path.Combine(externalDirectory, "exclude");
+        var excludePath = Path.Combine(projectRoot, ".git", "info", "exclude");
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(externalExclude, "external sentinel\n");
+            TestProjectHelper.DeleteFile(excludePath);
+            CreateHardLink(externalExclude, excludePath);
+
+            var exitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("external sentinel\n", File.ReadAllText(externalExclude));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteFile(excludePath);
+            DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(externalDirectory);
+        }
+    }
+
     [Fact]
     public void Run_WithAbsoluteDbPathOutsideProject_DoesNotWriteAbsolutePathToGitExclude()
     {

@@ -180,6 +180,29 @@ public class HookCommandRunnerTests
         }
     }
 
+    [ExternalProcessFact]
+    public void Hooks_Uninstall_WithMissingHooksDirectory_RemainsIdempotent_Issue4599()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("hook_uninstall_missing_hooks");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            TestProjectHelper.DeleteDirectory(Path.Combine(projectRoot, ".git", "hooks"));
+
+            var (exitCode, stdout, stderr) = RunHooksAndCaptureStreams(
+                ["uninstall", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal("absent", document.RootElement.GetProperty("status").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void Hooks_UnknownOption_TruncatesOversizedToken()
     {

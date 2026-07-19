@@ -71,7 +71,7 @@ public static class HookCommandRunner
         return options.Command switch
         {
             "install" => Install(options, jsonOptions, projectPath, gitDir, hooksDir, hookPath, chainedHookPath),
-            "uninstall" => Uninstall(options, jsonOptions, projectPath, gitDir, hookPath, chainedHookPath),
+            "uninstall" => Uninstall(options, jsonOptions, projectPath, gitDir, hooksDir, hookPath, chainedHookPath),
             "status" => Status(options, jsonOptions, projectPath, hookPath, chainedHookPath),
             _ => UnknownCommand(options, jsonOptions, projectPath)
         };
@@ -189,9 +189,22 @@ public static class HookCommandRunner
                    out chainedHookPath);
     }
 
-    private static int Uninstall(HookCommandOptions options, JsonSerializerOptions jsonOptions, string projectPath, string gitDir, string hookPath, string chainedHookPath)
+    private static int Uninstall(HookCommandOptions options, JsonSerializerOptions jsonOptions, string projectPath, string gitDir, string hooksDir, string hookPath, string chainedHookPath)
     {
         var warnings = new List<HookCommandWarningJsonResult>();
+        if (!Directory.Exists(LongPath.EnsureWindowsPrefix(hooksDir)))
+        {
+            return WriteResult(
+                options.Json,
+                jsonOptions,
+                "absent",
+                "cdidx pre-commit hook is not installed",
+                projectPath,
+                hookPath,
+                null,
+                CommandExitCodes.Success);
+        }
+
         if (!TryResolveHookWritePaths(gitDir, out _, out hookPath, out chainedHookPath))
             return WriteResult(options.Json, jsonOptions, "error", "unsafe Git hook file path", projectPath, null, null, CommandExitCodes.InstallError);
 

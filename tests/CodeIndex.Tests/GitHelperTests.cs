@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using CodeIndex.Cli;
 using CodeIndex.Indexer;
 
@@ -224,6 +226,31 @@ public class GitHelperTests : IDisposable
 
         Assert.Null(directTargetResult);
         Assert.Null(commonDirectoryResult);
+    }
+
+    [Fact]
+    public void WorktreeWithIntermediateSymlinkedMetadataComponent_ReturnsNull_Issue4599()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var realContainer = Path.Combine(_tempDir, "real-container");
+        var realCommonDir = Path.Combine(realContainer, "repository", ".git");
+        var realWorktreeGitDir = Path.Combine(realCommonDir, "worktrees", "linked");
+        Directory.CreateDirectory(realWorktreeGitDir);
+        File.WriteAllText(Path.Combine(realWorktreeGitDir, "commondir"), "../..");
+
+        var containerLink = Path.Combine(_tempDir, "container-link");
+        Directory.CreateSymbolicLink(containerLink, realContainer);
+        var projectRoot = Path.Combine(_tempDir, "intermediate-link-project");
+        Directory.CreateDirectory(projectRoot);
+        File.WriteAllText(
+            Path.Combine(projectRoot, ".git"),
+            $"gitdir: {Path.Combine(containerLink, "repository", ".git", "worktrees", "linked")}");
+
+        var result = GitHelper.ResolveGitCommonDir(projectRoot);
+
+        Assert.Null(result);
     }
 
     [Fact]
@@ -1001,7 +1028,11 @@ public class GitHelperTests : IDisposable
             return;
 
         var repoDir = Path.Combine(_tempDir, "portable-git-repo");
-        var portableGitDir = Path.Combine(_tempDir, relativePrefix);
+        var portableRoot = Path.Combine(
+            Path.DirectorySeparatorChar.ToString(),
+            "tmp",
+            $"cdidx_issue4599_{Guid.NewGuid():N}");
+        var portableGitDir = Path.Combine(portableRoot, relativePrefix);
         Directory.CreateDirectory(repoDir);
         Directory.CreateDirectory(portableGitDir);
         WriteFakeGitThatReturnsChangedFile(portableGitDir, "portable.txt");
@@ -1015,7 +1046,7 @@ public class GitHelperTests : IDisposable
         {
             var changedFiles = GitHelper.GetChangedFilesFromCommit(repoDir, "0123456789abcdef");
             var status = GitHelper.GetGitExecutableStatus();
-            var trustOverride = Assert.Single(GitHelper.GetAcceptedTrustOverrides());
+            var trustOverride = Assert.Single(GitHelper.GetAcceptedTrustOverrides(status));
 
             Assert.Equal(["portable.txt"], changedFiles);
             Assert.Equal("environment_override", status.Source);
@@ -1034,6 +1065,7 @@ public class GitHelperTests : IDisposable
         finally
         {
             GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
+            TestProjectHelper.DeleteDirectory(portableRoot);
         }
     }
 
@@ -1064,7 +1096,7 @@ public class GitHelperTests : IDisposable
             Assert.Equal("shared_writable", sharedWritable.Reason);
             Assert.False(sharedWritable.OwnerOnlyWritable);
             Assert.Null(sharedWritable.Executable);
-            Assert.Empty(GitHelper.GetAcceptedTrustOverrides());
+            Assert.Empty(GitHelper.GetAcceptedTrustOverrides(sharedWritable));
 
             File.SetUnixFileMode(portableGitPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
             var nonExecutable = GitHelper.GetGitExecutableStatus();
@@ -1117,6 +1149,100 @@ public class GitHelperTests : IDisposable
         }
         finally
         {
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
+        }
+    }
+
+    [Fact]
+    public void GitExecutableTrustOverride_UsesSingleStatusSnapshot_Issue4599()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var portableGitDir = Path.Combine(_tempDir, "single-status-snapshot");
+        Directory.CreateDirectory(portableGitDir);
+        var portableGitPath = Path.Combine(portableGitDir, "git");
+        File.WriteAllText(portableGitPath, "#!/bin/sh\nexit 1\n");
+        File.SetUnixFileMode(
+            portableGitPath,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        using var env = EnvironmentVariableScope.Capture(GitHelper.GitExecutableEnvironmentVariable);
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        var oldProbe = GitHelper.GitVersionProbeForTesting;
+        var probeCount = 0;
+        GitHelper.GitExecutablePathOverride = null;
+        GitHelper.GitVersionProbeForTesting = _ => ++probeCount == 1;
+        env.Set(GitHelper.GitExecutableEnvironmentVariable, portableGitPath);
+        try
+        {
+            var status = GitHelper.GetGitExecutableStatus();
+            var trustOverride = Assert.Single(GitHelper.GetAcceptedTrustOverrides(status));
+
+            Assert.True(status.Accepted);
+            Assert.Equal(1, probeCount);
+            Assert.Equal(GitHelper.GitExecutableEnvironmentVariable, trustOverride.EnvironmentVariable);
+        }
+        finally
+        {
+            GitHelper.GitVersionProbeForTesting = oldProbe;
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
+        }
+    }
+
+    [Fact]
+    public void GitExecutableEnvironmentOverride_WindowsRequiresTrustedAclBeforeProbe_Issue4599()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var trustedGit = Assert.Single(
+            GitHelper.TrustedGitExecutableCandidatePathsForTests()
+                .Where(File.Exists)
+                .Take(1));
+        var portableGitDir = Path.Combine(_tempDir, "windows-portable-git");
+        Directory.CreateDirectory(portableGitDir);
+        var portableGitPath = Path.Combine(portableGitDir, "git.exe");
+        File.Copy(trustedGit, portableGitPath);
+
+        using var env = EnvironmentVariableScope.Capture(GitHelper.GitExecutableEnvironmentVariable);
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        var oldProbe = GitHelper.GitVersionProbeForTesting;
+        var probeCount = 0;
+        GitHelper.GitExecutablePathOverride = null;
+        GitHelper.GitVersionProbeForTesting = _ =>
+        {
+            probeCount++;
+            return true;
+        };
+        env.Set(GitHelper.GitExecutableEnvironmentVariable, portableGitPath);
+        try
+        {
+            var accepted = GitHelper.GetGitExecutableStatus();
+
+            Assert.True(accepted.Accepted);
+            Assert.True(accepted.OwnerTrusted);
+            Assert.True(accepted.AncestorDirectoriesTrusted);
+            Assert.Equal(1, probeCount);
+
+            var fileInfo = new FileInfo(portableGitPath);
+            var security = FileSystemAclExtensions.GetAccessControl(fileInfo);
+            security.AddAccessRule(new FileSystemAccessRule(
+                new SecurityIdentifier(WellKnownSidType.WorldSid, domainSid: null),
+                FileSystemRights.WriteData,
+                AccessControlType.Allow));
+            FileSystemAclExtensions.SetAccessControl(fileInfo, security);
+            probeCount = 0;
+
+            var rejected = GitHelper.GetGitExecutableStatus();
+
+            Assert.False(rejected.Accepted);
+            Assert.Equal("acl_untrusted", rejected.Reason);
+            Assert.Equal(0, probeCount);
+        }
+        finally
+        {
+            GitHelper.GitVersionProbeForTesting = oldProbe;
             GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
         }
     }

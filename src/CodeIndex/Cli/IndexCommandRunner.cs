@@ -1269,19 +1269,17 @@ public static partial class IndexCommandRunner
                 throw new IOException("Git metadata exclude path became unsafe before write.");
             }
 
-            ioExcludeFile = LongPath.EnsureWindowsPrefix(excludeFile);
-
-            using var stream = new FileStream(
-                ioExcludeFile,
-                FileMode.Append,
-                FileAccess.Write,
-                FileShare.Read);
-            using var sw = new StreamWriter(stream);
+            var updatedContent = new System.Text.StringBuilder(existingContent);
             if (existingContent.Length > 0 && !existingContent.EndsWith('\n'))
-                sw.WriteLine();
-            sw.WriteLine("# cdidx (CodeIndex) — auto-generated");
+                updatedContent.AppendLine();
+            updatedContent.AppendLine("# cdidx (CodeIndex) — auto-generated");
             foreach (var pattern in missing)
-                sw.WriteLine(pattern);
+                updatedContent.AppendLine(pattern);
+
+            AtomicFileWriter.WriteText(
+                excludeFile,
+                updatedContent.ToString(),
+                new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

@@ -5,6 +5,9 @@ namespace CodeIndex.Indexer;
 
 public partial class FileIndexer
 {
+    private const int LinuxAtCurrentWorkingDirectory = -100;
+    private const int LinuxAtSymlinkNoFollow = 0x100;
+    private const uint LinuxStatxBasicStats = 0x07ff;
     private static readonly bool IsLinuxPlatform = OperatingSystem.IsLinux();
     private static readonly bool IsMacOSPlatform = OperatingSystem.IsMacOS();
     private static readonly bool IsFileIdentityWindowsPlatform = OperatingSystem.IsWindows();
@@ -69,11 +72,45 @@ public partial class FileIndexer
                 return true;
             }
 
-            if (StatLinux(path, out var linuxStat) != 0)
+            if (!TryGetLinuxStatx(path, out var linuxStat))
                 return false;
 
             ownerId = linuxStat.Uid;
             return true;
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    internal static bool TryGetFileLinkCount(string path, out ulong linkCount)
+    {
+        linkCount = 0;
+        if (IsLinuxPlatform)
+        {
+            if (!TryGetLinuxStatx(path, out var linuxStat))
+                return false;
+
+            linkCount = linuxStat.LinkCount;
+            return true;
+        }
+
+        return TryGetFileIdentity(path, out _, out linkCount);
+    }
+
+    private static bool TryGetLinuxStatx(string path, out LinuxStatx stat)
+    {
+        stat = default;
+        try
+        {
+            return StatxLinux(
+                       LinuxAtCurrentWorkingDirectory,
+                       path,
+                       LinuxAtSymlinkNoFollow,
+                       LinuxStatxBasicStats,
+                       out stat)
+                   == 0;
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
         {
@@ -110,6 +147,14 @@ public partial class FileIndexer
 
     [DllImport("libc", EntryPoint = "stat", SetLastError = true)]
     private static extern int StatMac(string path, out MacStat stat);
+
+    [DllImport("libc", EntryPoint = "statx", SetLastError = true)]
+    private static extern int StatxLinux(
+        int directoryFileDescriptor,
+        string path,
+        int flags,
+        uint mask,
+        out LinuxStatx stat);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern SafeFileHandle CreateFile(
@@ -162,6 +207,16 @@ public partial class FileIndexer
         public long Unused0;
         public long Unused1;
         public long Unused2;
+    }
+
+    [StructLayout(LayoutKind.Explicit, Size = 256)]
+    private struct LinuxStatx
+    {
+        [FieldOffset(16)]
+        public uint LinkCount;
+
+        [FieldOffset(20)]
+        public uint Uid;
     }
 
     [StructLayout(LayoutKind.Sequential)]
