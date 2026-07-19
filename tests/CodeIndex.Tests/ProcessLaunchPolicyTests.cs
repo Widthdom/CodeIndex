@@ -103,4 +103,35 @@ public class SubprocessEnvironmentPolicyTests
         Assert.False(startInfo.Environment.ContainsKey("CDIDX_TEST_SUBPROCESS_POLICY_3910"));
         Assert.False(startInfo.Environment.ContainsKey("CDIDX_SECRET_SUBPROCESS_POLICY_3910"));
     }
+
+    [Fact]
+    public void SubprocessEnvironmentPolicy_UpgradeForwardsBoundedNetworkSettings_Issue4604()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_NETWORK_CONNECT_TIMEOUT_SECONDS",
+            "CDIDX_NETWORK_LOW_SPEED_LIMIT_BYTES",
+            "CDIDX_NETWORK_LOW_SPEED_TIME_SECONDS",
+            "CDIDX_NETWORK_MAX_TIME_SECONDS",
+            "CDIDX_NETWORK_RETRY_COUNT",
+            "CDIDX_NETWORK_RETRY_DELAY_SECONDS",
+            "CDIDX_SECRET_SUBPROCESS_POLICY_4604");
+        env.Set("CDIDX_NETWORK_CONNECT_TIMEOUT_SECONDS", "12");
+        env.Set("CDIDX_NETWORK_LOW_SPEED_LIMIT_BYTES", "2048");
+        env.Set("CDIDX_NETWORK_LOW_SPEED_TIME_SECONDS", "45");
+        env.Set("CDIDX_NETWORK_MAX_TIME_SECONDS", "240");
+        env.Set("CDIDX_NETWORK_RETRY_COUNT", "3");
+        env.Set("CDIDX_NETWORK_RETRY_DELAY_SECONDS", "2");
+        env.Set("CDIDX_SECRET_SUBPROCESS_POLICY_4604", "secret");
+        var startInfo = ProcessLaunchPolicy.CreateNoShellStartInfo();
+
+        SubprocessEnvironmentPolicy.ApplyUpgradeInstallerEnvironment(startInfo);
+
+        Assert.Equal("12", startInfo.Environment["CDIDX_NETWORK_CONNECT_TIMEOUT_SECONDS"]);
+        Assert.Equal("2048", startInfo.Environment["CDIDX_NETWORK_LOW_SPEED_LIMIT_BYTES"]);
+        Assert.Equal("45", startInfo.Environment["CDIDX_NETWORK_LOW_SPEED_TIME_SECONDS"]);
+        Assert.Equal("240", startInfo.Environment["CDIDX_NETWORK_MAX_TIME_SECONDS"]);
+        Assert.Equal("3", startInfo.Environment["CDIDX_NETWORK_RETRY_COUNT"]);
+        Assert.Equal("2", startInfo.Environment["CDIDX_NETWORK_RETRY_DELAY_SECONDS"]);
+        Assert.False(startInfo.Environment.ContainsKey("CDIDX_SECRET_SUBPROCESS_POLICY_4604"));
+    }
 }
