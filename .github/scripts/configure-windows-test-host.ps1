@@ -13,6 +13,32 @@ if (-not $env:RUNNER_TEMP) {
 $tempRoot = Join-Path $env:RUNNER_TEMP "cdidx-temp"
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
+$currentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+try {
+  $currentUser = $currentIdentity.User
+  if (-not $currentUser) {
+    throw "The current Windows user SID is unavailable."
+  }
+
+  $tempAcl = [System.Security.AccessControl.DirectorySecurity]::new()
+  $tempAcl.SetOwner($currentUser)
+  $tempAcl.SetAccessRuleProtection($true, $false)
+  $inheritanceFlags =
+    [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+    [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+  $tempAcl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
+    $currentUser,
+    [System.Security.AccessControl.FileSystemRights]::FullControl,
+    $inheritanceFlags,
+    [System.Security.AccessControl.PropagationFlags]::None,
+    [System.Security.AccessControl.AccessControlType]::Allow))
+  Set-Acl -LiteralPath $tempRoot -AclObject $tempAcl
+  Write-Host "Protected Windows test temp ACL for current user: $currentUser"
+}
+finally {
+  $currentIdentity.Dispose()
+}
+
 if ($env:GITHUB_ENV) {
   "TMP=$tempRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
   "TEMP=$tempRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
