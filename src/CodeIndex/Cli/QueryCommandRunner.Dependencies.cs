@@ -561,7 +561,11 @@ public static partial class QueryCommandRunner
                             options,
                             zeroSqlGraphSignal,
                             zeroSymbolFilter,
-                            payload => AddDependencyCycleAnalysisJsonFields(payload, zeroAnalysis));
+                            payload =>
+                            {
+                                AddDependencyCycleAnalysisJsonFields(payload, zeroAnalysis);
+                                AddDependencyGraphAvailabilityJsonFields(payload, reader._hasReferencesTable);
+                            });
                         return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
                     }
                     if (options.Json)
@@ -573,6 +577,7 @@ public static partial class QueryCommandRunner
                             payload["cycles"] = new JsonArray();
                         AddDependencyCycleAnalysisJsonFields(payload, zeroAnalysis);
                         AddDependencySchemaJsonFields(payload, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter);
+                        AddDependencyGraphAvailabilityJsonFields(payload, reader._hasReferencesTable);
                         AddFreshnessHint(payload, reader);
                         WriteGraphLiveness("deps", "write_output", options, depsFormat, rows: 0, cycleCount: 0, machineReadable: machineReadable);
                         var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions);
@@ -581,6 +586,7 @@ public static partial class QueryCommandRunner
 
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No dependency cycles found", options));
                     WriteSqlGraphContractWarningIfNeeded(json: false, zeroSqlGraphSignal, reader, options);
+                    WriteDegradedGraphZeroResult(reader, "cycles", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                     return ZeroResultExitCode(options);
                 }
                 if (depsFormat is OutputFormatJsonGraph)
@@ -1243,6 +1249,16 @@ public static partial class QueryCommandRunner
         payload["query_context"] = BuildQueryContextJson(options, jsonOptions);
         AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
         AddDependencySymbolFilterJsonFields(payload, symbolFilter, jsonOptions);
+    }
+
+    private static void AddDependencyGraphAvailabilityJsonFields(JsonObject payload, bool graphTableAvailable)
+    {
+        payload["graph_table_available"] = graphTableAvailable;
+        if (graphTableAvailable)
+            return;
+
+        payload["degraded"] = true;
+        payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
     }
 
     private static void AddDependencySymbolFilterJsonFields(JsonObject payload, DependencySymbolFilterSummary symbolFilter, JsonSerializerOptions jsonOptions)

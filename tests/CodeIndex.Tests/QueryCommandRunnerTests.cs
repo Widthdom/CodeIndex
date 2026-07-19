@@ -5062,8 +5062,8 @@ public partial class QueryCommandRunnerTests
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_append_noise_cycle");
         var projectRoot = project.Root;
         var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-        InsertFileWithSymbolsAndReferences(dbPath, "src/BoundedLineReader.cs", ["Append"], ["Append"]);
-        InsertFileWithSymbolsAndReferences(dbPath, "src/BoundedTextWriter.cs", ["Append"], ["Append"]);
+        InsertFileWithSymbolsAndReferences(dbPath, "src/BoundedLineReader.cs", ["append"], ["append"]);
+        InsertFileWithSymbolsAndReferences(dbPath, "src/BoundedTextWriter.cs", ["append"], ["append"]);
         MarkDependencyGraphReady(dbPath);
 
         var (defaultExitCode, defaultStdout, defaultStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(

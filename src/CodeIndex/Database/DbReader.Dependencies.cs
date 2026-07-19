@@ -979,7 +979,16 @@ public partial class DbReader
                 JOIN files dst ON s.file_id = dst.id
                  AND dst.path = candidate_edges.target_path
                 WHERE src.path != dst.path
-                  AND src.lang = dst.lang
+                  AND src.lang = dst.lang";
+        AppendDependencySymbolFilter(
+            cmd,
+            ref sql,
+            "r.symbol_name",
+            dependencySymbols,
+            dependencySymbolFamilies,
+            suppressDependencyNoise,
+            "cycleAggregate");
+        sql += @"
             ),
             distinct_edge_symbols AS (
                 SELECT DISTINCT source_path,
@@ -1085,7 +1094,7 @@ public partial class DbReader
         }
         AppendScopedDependencyPredicate(
             ref sql,
-            $"({symbolSql}) NOT IN ({string.Join(", ", noiseParameters)})",
+            $"({symbolSql}) COLLATE NOCASE NOT IN ({string.Join(", ", noiseParameters)})",
             filterScopeSql);
     }
 

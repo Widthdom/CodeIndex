@@ -196,6 +196,77 @@ public partial class DbReaderTests
         Assert.Equal(symbolNames[^1], scopedDependency.Symbols);
     }
 
+    [Fact]
+    public void GetFileDependencies_LowercaseNoiseIsSuppressedInLimitedNormalAndCycleQueries_Issue4619()
+    {
+        var firstFileId = InsertSyntheticDependencyFile("src/FirstNoise.cs");
+        var secondFileId = InsertSyntheticDependencyFile("src/SecondNoise.cs");
+        foreach (var fileId in new[] { firstFileId, secondFileId })
+        {
+            _writer.InsertSymbols([
+                new SymbolRecord { FileId = fileId, Kind = "class", Name = "append", Line = 1, StartLine = 1, EndLine = 1 },
+            ]);
+            _writer.InsertReferences([
+                new ReferenceRecord
+                {
+                    FileId = fileId,
+                    SymbolName = "append",
+                    ReferenceKind = "call",
+                    Line = 1,
+                    Column = 1,
+                    Context = "append()",
+                },
+            ]);
+        }
+
+        var dependencies = _reader.GetFileDependencies(
+            limit: 1,
+            lang: "csharp",
+            suppressDependencyNoise: true);
+        var cycleCandidates = _reader.GetFileDependencyCycleCandidates(
+            limit: 1,
+            out var candidateRowCount,
+            lang: "csharp",
+            suppressDependencyNoise: true);
+
+        Assert.Empty(dependencies);
+        Assert.Empty(cycleCandidates);
+        Assert.Equal(0, candidateRowCount);
+    }
+
+    [Fact]
+    public void GetFileDependencyCycleCandidates_AggregatesOnlyFilteredSymbols_Issue4619()
+    {
+        var firstFileId = InsertSyntheticDependencyFile("src/FirstMixedCycle.cs");
+        var secondFileId = InsertSyntheticDependencyFile("src/SecondMixedCycle.cs");
+        foreach (var fileId in new[] { firstFileId, secondFileId })
+        {
+            _writer.InsertSymbols([
+                new SymbolRecord { FileId = fileId, Kind = "class", Name = "Wanted", Line = 1, StartLine = 1, EndLine = 1 },
+                new SymbolRecord { FileId = fileId, Kind = "class", Name = "Other", Line = 2, StartLine = 2, EndLine = 2 },
+            ]);
+            _writer.InsertReferences([
+                new ReferenceRecord { FileId = fileId, SymbolName = "Wanted", ReferenceKind = "call", Line = 1, Column = 1, Context = "Wanted()" },
+                new ReferenceRecord { FileId = fileId, SymbolName = "Other", ReferenceKind = "call", Line = 2, Column = 1, Context = "Other()" },
+            ]);
+        }
+
+        var cycleCandidates = _reader.GetFileDependencyCycleCandidates(
+            limit: 10,
+            out var candidateRowCount,
+            lang: "csharp",
+            dependencySymbols: ["Wanted"]);
+
+        Assert.Equal(2, candidateRowCount);
+        Assert.Equal(2, cycleCandidates.Count);
+        Assert.All(cycleCandidates, candidate =>
+        {
+            Assert.Equal(1, candidate.ReferenceCount);
+            Assert.Equal(1, candidate.RankingScore);
+            Assert.Equal("Wanted", candidate.Symbols);
+        });
+    }
+
     [ProductionRuntimeFact]
     public void GetFileDependencies_ExactSymbolScopeStaysWithinLatencyAndAllocationBudgets_Issue4619()
     {
