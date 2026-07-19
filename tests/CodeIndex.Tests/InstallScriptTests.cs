@@ -1075,6 +1075,128 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [ProductionCliFact]
+    public void InstallerNetworkPolicy_BoundsTransfersAndCategorizesProtocolAndTimeout_Issue4604()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var curlArgumentsPath = Path.Combine(_tempRoot, "network_policy_curl_args.txt");
+        var outputPath = Path.Combine(_tempRoot, "network_policy_output.txt");
+        var (successExitCode, successStdout, successStderr) = RunInstallerSnippet(
+            $$"""
+            curl() {
+                printf '%s\n' "$*" > "{{curlArgumentsPath}}"
+                local output_path=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            shift
+                            ;;
+                    esac
+                done
+                : > "$output_path"
+                printf '200'
+            }
+
+            http_code="$(curl_http_get "http://127.0.0.1:18765/release" "{{outputPath}}" "local self-test mirror")"
+            printf 'HTTP=%s\n' "$http_code"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_NETWORK_CONNECT_TIMEOUT_SECONDS"] = "12",
+                ["CDIDX_NETWORK_MAX_TIME_SECONDS"] = "240",
+                ["CDIDX_NETWORK_LOW_SPEED_LIMIT_BYTES"] = "2048",
+                ["CDIDX_NETWORK_LOW_SPEED_TIME_SECONDS"] = "45",
+                ["CDIDX_NETWORK_RETRY_COUNT"] = "3",
+                ["CDIDX_NETWORK_RETRY_DELAY_SECONDS"] = "2",
+            });
+
+        Assert.Equal(0, successExitCode);
+        Assert.Equal($"HTTP=200{Environment.NewLine}", successStdout);
+        Assert.Empty(successStderr);
+        var curlArguments = File.ReadAllText(curlArgumentsPath);
+        Assert.Contains("--noproxy 127.0.0.1,localhost", curlArguments);
+        Assert.Contains("--proto =http,https --proto-redir =https --max-redirs 0", curlArguments);
+        Assert.Contains("--connect-timeout 12 --max-time 240", curlArguments);
+        Assert.Contains("--speed-limit 2048 --speed-time 45", curlArguments);
+        Assert.Contains("--retry 3 --retry-delay 2 --retry-max-time 240", curlArguments);
+
+        var (publicHttpExitCode, publicHttpStdout, publicHttpStderr) = RunInstallerSnippet(
+            $$"""
+            curl() {
+                printf 'UNREACHABLE\n'
+                return 0
+            }
+
+            curl_http_get "http://downloads.example.test/release" "{{outputPath}}" "configured release host"
+            """);
+
+        Assert.Equal(1, publicHttpExitCode);
+        Assert.DoesNotContain("UNREACHABLE", publicHttpStdout);
+        Assert.Contains("non-HTTPS public URL", publicHttpStderr);
+        Assert.Contains("[protocol_rejected]", publicHttpStderr);
+
+        var (redirectExitCode, _, redirectStderr) = RunInstallerSnippet(
+            $$"""
+            curl() {
+                case "$*" in
+                    *"--proto =https --proto-redir =https"*) ;;
+                    *) printf 'missing HTTPS protocol policy\n' >&2; return 99 ;;
+                esac
+                printf 'curl: (1) Protocol "http" disabled (in redirect)\n' >&2
+                return 1
+            }
+
+            curl_http_get "https://downloads.example.test/release" "{{outputPath}}" "configured release host"
+            """);
+
+        Assert.Equal(1, redirectExitCode);
+        Assert.Contains("Protocol \"http\" disabled (in redirect)", redirectStderr);
+        Assert.Contains("Public release and API traffic must remain HTTPS", redirectStderr);
+        Assert.Contains("[protocol_rejected]", redirectStderr);
+
+        var (timeoutExitCode, _, timeoutStderr) = RunInstallerSnippet(
+            $$"""
+            curl() {
+                printf 'curl: (28) Operation too slow\n' >&2
+                return 28
+            }
+
+            curl_http_get "https://downloads.example.test/stalled" "{{outputPath}}" "configured release host"
+            """);
+
+        Assert.Equal(1, timeoutExitCode);
+        Assert.Contains("curl: (28) Operation too slow", timeoutStderr);
+        Assert.Contains("Installer network timeout", timeoutStderr);
+        Assert.Contains("[network_timeout]", timeoutStderr);
+
+        var (invalidConfigExitCode, invalidConfigStdout, invalidConfigStderr) = RunInstallerSnippet(
+            $$"""
+            curl() {
+                printf 'UNREACHABLE\n'
+                return 0
+            }
+
+            curl_http_get "https://downloads.example.test/release" "{{outputPath}}" "configured release host"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_NETWORK_RETRY_COUNT"] = "99",
+            });
+
+        Assert.Equal(1, invalidConfigExitCode);
+        Assert.DoesNotContain("UNREACHABLE", invalidConfigStdout);
+        Assert.Contains("Invalid CDIDX_NETWORK_RETRY_COUNT: expected an integer from 0 to 5, got 99", invalidConfigStderr);
+    }
+
+    [ProductionCliFact]
     public void DownloadAndInstall_ForbiddenGitHubAssetDownload_PrintsGitHubAndAllowListHints()
     {
         if (OperatingSystem.IsWindows())

@@ -83,11 +83,18 @@ public sealed class InstallScriptSafetyLintTests
             .ToArray();
 
         Assert.Equal(
-            ["curl --noproxy 127.0.0.1,localhost \"$@\"", "curl \"$@\""],
+            [
+                "curl --noproxy 127.0.0.1,localhost --proto '=http,https' --proto-redir '=https' --max-redirs 0 \\",
+                "curl --proto '=https' --proto-redir '=https' \\",
+            ],
             rawCurlLines);
         var curlWrapper = ExtractShellFunction(activeText, "run_curl_with_optional_loopback_bypass");
-        Assert.Contains("curl --noproxy 127.0.0.1,localhost \"$@\"", curlWrapper, StringComparison.Ordinal);
-        Assert.Contains("curl \"$@\"", curlWrapper, StringComparison.Ordinal);
+        Assert.Contains("--proto '=http,https' --proto-redir '=https' --max-redirs 0", curlWrapper, StringComparison.Ordinal);
+        Assert.Contains("--proto '=https' --proto-redir '=https'", curlWrapper, StringComparison.Ordinal);
+        Assert.Contains("--connect-timeout \"$CURL_CONNECT_TIMEOUT_SECONDS\" --max-time \"$CURL_MAX_TIME_SECONDS\"", curlWrapper, StringComparison.Ordinal);
+        Assert.Contains("--speed-limit \"$CURL_LOW_SPEED_LIMIT_BYTES\" --speed-time \"$CURL_LOW_SPEED_TIME_SECONDS\"", curlWrapper, StringComparison.Ordinal);
+        Assert.Contains("--retry \"$CURL_RETRY_COUNT\" --retry-delay \"$CURL_RETRY_DELAY_SECONDS\"", curlWrapper, StringComparison.Ordinal);
+        Assert.Contains("--retry-max-time \"$CURL_MAX_TIME_SECONDS\"", curlWrapper, StringComparison.Ordinal);
 
         var downloadBody = ExtractShellFunction(activeText, "curl_http_get");
         Assert.Contains("run_curl_with_optional_loopback_bypass \"$url\" -sSL -o \"$output_path\" -w '%{http_code}' \"$url\" 2>\"$curl_stderr\"", downloadBody, StringComparison.Ordinal);

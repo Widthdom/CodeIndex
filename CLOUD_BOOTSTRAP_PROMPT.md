@@ -57,6 +57,16 @@ Example:
 CDIDX_GITHUB_BASE_URL="https://mirror.example.invalid" CDIDX_GITHUB_API_BASE_URL="https://mirror.example.invalid/api" bash ./install.sh vX.Y.Z
 ```
 
+Public release and API URLs, including every redirect, must remain HTTPS. The
+only HTTP exception is the installer's built-in loopback self-test on
+`127.0.0.1` / `localhost`. Network operations use bounded connect, total, and
+low-speed timeouts plus bounded retries. Constrained environments may tune
+`CDIDX_NETWORK_CONNECT_TIMEOUT_SECONDS`, `CDIDX_NETWORK_MAX_TIME_SECONDS`,
+`CDIDX_NETWORK_LOW_SPEED_LIMIT_BYTES`,
+`CDIDX_NETWORK_LOW_SPEED_TIME_SECONDS`, `CDIDX_NETWORK_RETRY_COUNT`, and
+`CDIDX_NETWORK_RETRY_DELAY_SECONDS`; the installer rejects non-integer or
+out-of-range values instead of silently disabling a bound.
+
 Do not assume "Claude Code cloud has no outbound restrictions" just because it
 works there. A more common difference is that each environment has different
 egress policy / proxy allow-lists. In Codex sessions with this repository guard,
@@ -410,6 +420,16 @@ export PATH="$HOME/.local/bin:$PATH"
 ```bash
 CDIDX_GITHUB_BASE_URL="https://mirror.example.invalid" CDIDX_GITHUB_API_BASE_URL="https://mirror.example.invalid/api" bash ./install.sh vX.Y.Z
 ```
+
+公開リリース URL と API URL は、すべてのリダイレクトを含めて HTTPS のままに
+する必要があります。HTTP の例外は installer 組み込み self-test が使う
+`127.0.0.1` / `localhost` の loopback だけです。ネットワーク処理には connect・
+total・low-speed timeout と有界 retry が適用されます。制約のある環境では
+`CDIDX_NETWORK_CONNECT_TIMEOUT_SECONDS`、`CDIDX_NETWORK_MAX_TIME_SECONDS`、
+`CDIDX_NETWORK_LOW_SPEED_LIMIT_BYTES`、
+`CDIDX_NETWORK_LOW_SPEED_TIME_SECONDS`、`CDIDX_NETWORK_RETRY_COUNT`、
+`CDIDX_NETWORK_RETRY_DELAY_SECONDS` を調整できますが、整数でない値や範囲外の
+値は上限を黙って無効化せず installer が拒否します。
 
 なお、「Claude Code cloud では通る」ことだけで
 「外向き制限が一切ない」とは断定しないでください。実際には環境ごとに

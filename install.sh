@@ -20,6 +20,12 @@
 # Optional env vars / 任意環境変数:
 #   CDIDX_GITHUB_BASE_URL       Release download base URL override
 #   CDIDX_GITHUB_API_BASE_URL   API base URL override for latest-release lookup
+#   CDIDX_NETWORK_CONNECT_TIMEOUT_SECONDS Connect timeout (default: 10; max: 120)
+#   CDIDX_NETWORK_MAX_TIME_SECONDS Total transfer/retry budget (default: 300; max: 3600)
+#   CDIDX_NETWORK_LOW_SPEED_LIMIT_BYTES Low-speed threshold (default: 1024; max: 1048576)
+#   CDIDX_NETWORK_LOW_SPEED_TIME_SECONDS Low-speed timeout (default: 30; max: 300)
+#   CDIDX_NETWORK_RETRY_COUNT   Retry count (default: 2; max: 5)
+#   CDIDX_NETWORK_RETRY_DELAY_SECONDS Retry delay (default: 1; max: 60)
 #   CDIDX_VERIFY_POLICY=compat|strict Verification policy (default: compat)
 #   CDIDX_REQUIRE_ATTESTATION=1 Require GitHub provenance verification via gh
 #   CDIDX_STRICT_VERIFY=1       Require GPG checksum-manifest signature verification
@@ -85,6 +91,12 @@ GITHUB_BASE_URL="${CDIDX_GITHUB_BASE_URL:-https://github.com}"
 GITHUB_API_BASE_URL="${CDIDX_GITHUB_API_BASE_URL:-https://api.github.com}"
 CURL_STDERR_SAMPLE_BYTES=8192
 LATEST_RELEASE_RESPONSE_MAX_BYTES=65536
+CURL_CONNECT_TIMEOUT_SECONDS="${CDIDX_NETWORK_CONNECT_TIMEOUT_SECONDS:-10}"
+CURL_MAX_TIME_SECONDS="${CDIDX_NETWORK_MAX_TIME_SECONDS:-300}"
+CURL_LOW_SPEED_LIMIT_BYTES="${CDIDX_NETWORK_LOW_SPEED_LIMIT_BYTES:-1024}"
+CURL_LOW_SPEED_TIME_SECONDS="${CDIDX_NETWORK_LOW_SPEED_TIME_SECONDS:-30}"
+CURL_RETRY_COUNT="${CDIDX_NETWORK_RETRY_COUNT:-2}"
+CURL_RETRY_DELAY_SECONDS="${CDIDX_NETWORK_RETRY_DELAY_SECONDS:-1}"
 VERIFY_POLICY="${CDIDX_VERIFY_POLICY:-compat}"
 REQUIRE_ATTESTATION="${CDIDX_REQUIRE_ATTESTATION:-0}"
 STRICT_VERIFY="${CDIDX_STRICT_VERIFY:-0}"
@@ -514,14 +526,22 @@ release_host_diagnostic_label() {
 }
 
 is_loopback_url() {
+    local remainder authority port
     case "$1" in
-        http://127.0.0.1:*|https://127.0.0.1:*|http://localhost:*|https://localhost:*)
-            return 0
-            ;;
-        *)
-            return 1
-            ;;
+        http://*|https://*) remainder="${1#*://}" ;;
+        *) return 1 ;;
     esac
+
+    authority="${remainder%%/*}"
+    case "$authority" in
+        127.0.0.1:*|localhost:*) port="${authority#*:}" ;;
+        *) return 1 ;;
+    esac
+
+    case "$port" in
+        ""|*[!0-9]*) return 1 ;;
+    esac
+    [ "$port" -ge 1 ] && [ "$port" -le 65535 ]
 }
 
 append_loopback_no_proxy_list() {
@@ -540,14 +560,72 @@ prepare_loopback_no_proxy_env() {
     export NO_PROXY no_proxy
 }
 
-run_curl_with_optional_loopback_bypass() {
-    if is_loopback_url "$1"; then
-        shift
-        curl --noproxy 127.0.0.1,localhost "$@"
-    else
-        shift
-        curl "$@"
+validate_bounded_network_integer() {
+    local environment_variable="$1"
+    local value="$2"
+    local minimum="$3"
+    local maximum="$4"
+
+    case "$value" in
+        ""|*[!0-9]*)
+            report_error "Invalid ${environment_variable}: expected an integer from ${minimum} to ${maximum}, got ${value:-<empty>}."
+            return 1
+            ;;
+    esac
+
+    if [ "$value" -lt "$minimum" ] || [ "$value" -gt "$maximum" ]; then
+        report_error "Invalid ${environment_variable}: expected an integer from ${minimum} to ${maximum}, got ${value}."
+        return 1
     fi
+}
+
+validate_network_policy() {
+    validate_bounded_network_integer "CDIDX_NETWORK_CONNECT_TIMEOUT_SECONDS" "$CURL_CONNECT_TIMEOUT_SECONDS" 1 120 || return 1
+    validate_bounded_network_integer "CDIDX_NETWORK_MAX_TIME_SECONDS" "$CURL_MAX_TIME_SECONDS" 10 3600 || return 1
+    validate_bounded_network_integer "CDIDX_NETWORK_LOW_SPEED_LIMIT_BYTES" "$CURL_LOW_SPEED_LIMIT_BYTES" 1 1048576 || return 1
+    validate_bounded_network_integer "CDIDX_NETWORK_LOW_SPEED_TIME_SECONDS" "$CURL_LOW_SPEED_TIME_SECONDS" 1 300 || return 1
+    validate_bounded_network_integer "CDIDX_NETWORK_RETRY_COUNT" "$CURL_RETRY_COUNT" 0 5 || return 1
+    validate_bounded_network_integer "CDIDX_NETWORK_RETRY_DELAY_SECONDS" "$CURL_RETRY_DELAY_SECONDS" 0 60 || return 1
+
+    if [ "$CURL_CONNECT_TIMEOUT_SECONDS" -gt "$CURL_MAX_TIME_SECONDS" ]; then
+        report_error "Invalid installer network policy: CDIDX_NETWORK_CONNECT_TIMEOUT_SECONDS must not exceed CDIDX_NETWORK_MAX_TIME_SECONDS."
+        return 1
+    fi
+}
+
+run_curl_with_optional_loopback_bypass() {
+    local url="$1"
+    shift
+
+    if ! validate_network_policy; then
+        return 96
+    fi
+
+    if is_loopback_url "$url"; then
+        # Local installer self-tests are the only scoped HTTP exception. Keep
+        # the initial URL confined to a validated loopback authority, reject
+        # every redirect, and bypass proxy state.
+        curl --noproxy 127.0.0.1,localhost --proto '=http,https' --proto-redir '=https' --max-redirs 0 \
+            --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" --max-time "$CURL_MAX_TIME_SECONDS" \
+            --speed-limit "$CURL_LOW_SPEED_LIMIT_BYTES" --speed-time "$CURL_LOW_SPEED_TIME_SECONDS" \
+            --retry "$CURL_RETRY_COUNT" --retry-delay "$CURL_RETRY_DELAY_SECONDS" \
+            --retry-max-time "$CURL_MAX_TIME_SECONDS" "$@"
+        return
+    fi
+
+    case "$url" in
+        https://*) ;;
+        *)
+            report_error "Installer protocol policy rejected non-HTTPS public URL: ${url}. Configure an HTTPS release/API endpoint; only loopback self-tests may use HTTP. [protocol_rejected]"
+            return 97
+            ;;
+    esac
+
+    curl --proto '=https' --proto-redir '=https' \
+        --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" --max-time "$CURL_MAX_TIME_SECONDS" \
+        --speed-limit "$CURL_LOW_SPEED_LIMIT_BYTES" --speed-time "$CURL_LOW_SPEED_TIME_SECONDS" \
+        --retry "$CURL_RETRY_COUNT" --retry-delay "$CURL_RETRY_DELAY_SECONDS" \
+        --retry-max-time "$CURL_MAX_TIME_SECONDS" "$@"
 }
 
 has_explicit_self_test_install_dir() {
@@ -831,6 +909,10 @@ is_proxy_tunnel_403() {
     printf '%s' "$1" | grep -Eqi 'CONNECT tunnel failed, response 403|HTTP code 403 from proxy after CONNECT'
 }
 
+is_curl_protocol_rejection() {
+    printf '%s' "$1" | grep -Eqi 'protocol .* disabled|unsupported protocol|redirect.*protocol'
+}
+
 file_size_bytes() {
     wc -c < "$1" | tr -d '[:space:]'
 }
@@ -894,14 +976,20 @@ curl_http_get() {
             printf '%s\n' "$stderr_text" >&2
         fi
 
-        case "$curl_status" in
-            6|7|28|35|52|56)
+        if [ "$curl_status" -eq 97 ] || { [ "$curl_status" -eq 1 ] && is_curl_protocol_rejection "$stderr_text"; }; then
+            report_error "Installer protocol policy rejected the URL or redirect while fetching ${source_label} at $url. Public release and API traffic must remain HTTPS. [protocol_rejected]"
+        elif [ "$curl_status" -eq 28 ]; then
+            report_error "Installer network timeout while fetching ${source_label} at $url (curl exit 28). Check endpoint responsiveness or adjust the bounded CDIDX_NETWORK_* timeout settings. [network_timeout]"
+        else
+            case "$curl_status" in
+            6|7|35|52|56)
                 report_error "Network error reaching ${source_label} while fetching $url (curl exit $curl_status). Check your connection, proxy, or configured mirror."
                 ;;
             *)
                 report_error "curl failed while fetching ${source_label} at $url (exit $curl_status)."
                 ;;
-        esac
+            esac
+        fi
 
         return 1
     fi
@@ -2389,14 +2477,20 @@ probe_doctor_url() {
     if [ -n "$stderr_text" ]; then
         printf '%s\n' "$stderr_text" >&2
     fi
-    case "$curl_status" in
-        6|7|28|35|52|56)
+    if [ "$curl_status" -eq 97 ] || { [ "$curl_status" -eq 1 ] && is_curl_protocol_rejection "$stderr_text"; }; then
+        report_error "${label}: installer protocol policy rejected ${url} or one of its redirects. Public endpoints must remain HTTPS. [protocol_rejected]"
+    elif [ "$curl_status" -eq 28 ]; then
+        report_error "${label}: network timeout while reaching ${url} (curl exit 28). Check endpoint responsiveness or adjust the bounded CDIDX_NETWORK_* timeout settings. [network_timeout]"
+    else
+        case "$curl_status" in
+        6|7|35|52|56)
             report_error "${label}: network error (curl exit ${curl_status}) while reaching ${url}. Check your connection, proxy, or configured mirror."
             ;;
         *)
             report_error "${label}: curl exit ${curl_status} while reaching ${url}."
             ;;
-    esac
+        esac
+    fi
     return 1
 }
 
