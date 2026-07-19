@@ -57,6 +57,25 @@ Example:
 CDIDX_GITHUB_BASE_URL="https://mirror.example.invalid" CDIDX_GITHUB_API_BASE_URL="https://mirror.example.invalid/api" bash ./install.sh vX.Y.Z
 ```
 
+Public release and API URLs, including every redirect, must remain HTTPS. The
+only HTTP exception is the installer's built-in loopback self-test on
+`127.0.0.1` / `localhost`. Network operations use bounded connect, total, and
+low-speed timeouts plus bounded retries. Constrained environments may tune
+`CDIDX_NETWORK_CONNECT_TIMEOUT_SECONDS`, `CDIDX_NETWORK_MAX_TIME_SECONDS`,
+`CDIDX_NETWORK_LOW_SPEED_LIMIT_BYTES`,
+`CDIDX_NETWORK_LOW_SPEED_TIME_SECONDS`, `CDIDX_NETWORK_RETRY_COUNT`, and
+`CDIDX_NETWORK_RETRY_DELAY_SECONDS`; the installer rejects non-integer or
+out-of-range values instead of silently disabling a bound.
+
+Release inputs are also bounded before and after extraction. The installer
+caps release archives at 512 MiB and checksum/signature metadata at 1 MiB,
+including unknown-length responses while they are still streaming,
+rejects archives with more than 4,096 members, more than 1 GiB of declared or
+extracted regular-file data, more than 1.125 GiB of expanded tar stream, or a
+compression ratio above 250:1, and rejects links and other unsupported member
+types. Extraction uses a private mode-0700 staging directory, restrictive
+permissions, and ownership/permission-preserving behavior is disabled.
+
 Do not assume "Claude Code cloud has no outbound restrictions" just because it
 works there. A more common difference is that each environment has different
 egress policy / proxy allow-lists. In Codex sessions with this repository guard,
@@ -410,6 +429,24 @@ export PATH="$HOME/.local/bin:$PATH"
 ```bash
 CDIDX_GITHUB_BASE_URL="https://mirror.example.invalid" CDIDX_GITHUB_API_BASE_URL="https://mirror.example.invalid/api" bash ./install.sh vX.Y.Z
 ```
+
+公開リリース URL と API URL は、すべてのリダイレクトを含めて HTTPS のままに
+する必要があります。HTTP の例外は installer 組み込み self-test が使う
+`127.0.0.1` / `localhost` の loopback だけです。ネットワーク処理には connect・
+total・low-speed timeout と有界 retry が適用されます。制約のある環境では
+`CDIDX_NETWORK_CONNECT_TIMEOUT_SECONDS`、`CDIDX_NETWORK_MAX_TIME_SECONDS`、
+`CDIDX_NETWORK_LOW_SPEED_LIMIT_BYTES`、
+`CDIDX_NETWORK_LOW_SPEED_TIME_SECONDS`、`CDIDX_NETWORK_RETRY_COUNT`、
+`CDIDX_NETWORK_RETRY_DELAY_SECONDS` を調整できますが、整数でない値や範囲外の
+値は上限を黙って無効化せず installer が拒否します。
+
+release input は展開前後にも上限が適用されます。installer は release archive を
+512 MiB、checksum / signature metadata を 1 MiB に制限し、長さが事前に不明な
+response も転送中に上限で停止します。4,096 を超える member、
+宣言または実展開された regular-file data が 1 GiB を超える archive、展開後 tar
+stream が 1.125 GiB を超える archive、圧縮率が 250:1 を超える archive を拒否します。
+link とその他の未対応 member type も拒否し、mode 0700 の private staging directory、
+制限的な permission、owner / permission を引き継がない extraction を使用します。
 
 なお、「Claude Code cloud では通る」ことだけで
 「外向き制限が一切ない」とは断定しないでください。実際には環境ごとに

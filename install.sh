@@ -20,6 +20,12 @@
 # Optional env vars / 任意環境変数:
 #   CDIDX_GITHUB_BASE_URL       Release download base URL override
 #   CDIDX_GITHUB_API_BASE_URL   API base URL override for latest-release lookup
+#   CDIDX_NETWORK_CONNECT_TIMEOUT_SECONDS Connect timeout (default: 10; max: 120)
+#   CDIDX_NETWORK_MAX_TIME_SECONDS Total transfer/retry budget (default: 300; max: 3600)
+#   CDIDX_NETWORK_LOW_SPEED_LIMIT_BYTES Low-speed threshold (default: 1024; max: 1048576)
+#   CDIDX_NETWORK_LOW_SPEED_TIME_SECONDS Low-speed timeout (default: 30; max: 300)
+#   CDIDX_NETWORK_RETRY_COUNT   Retry count (default: 2; max: 5)
+#   CDIDX_NETWORK_RETRY_DELAY_SECONDS Retry delay (default: 1; max: 60)
 #   CDIDX_VERIFY_POLICY=compat|strict Verification policy (default: compat)
 #   CDIDX_REQUIRE_ATTESTATION=1 Require GitHub provenance verification via gh
 #   CDIDX_STRICT_VERIFY=1       Require GPG checksum-manifest signature verification
@@ -85,6 +91,21 @@ GITHUB_BASE_URL="${CDIDX_GITHUB_BASE_URL:-https://github.com}"
 GITHUB_API_BASE_URL="${CDIDX_GITHUB_API_BASE_URL:-https://api.github.com}"
 CURL_STDERR_SAMPLE_BYTES=8192
 LATEST_RELEASE_RESPONSE_MAX_BYTES=65536
+CURL_CONNECT_TIMEOUT_SECONDS="${CDIDX_NETWORK_CONNECT_TIMEOUT_SECONDS:-10}"
+CURL_MAX_TIME_SECONDS="${CDIDX_NETWORK_MAX_TIME_SECONDS:-300}"
+CURL_LOW_SPEED_LIMIT_BYTES="${CDIDX_NETWORK_LOW_SPEED_LIMIT_BYTES:-1024}"
+CURL_LOW_SPEED_TIME_SECONDS="${CDIDX_NETWORK_LOW_SPEED_TIME_SECONDS:-30}"
+CURL_RETRY_COUNT="${CDIDX_NETWORK_RETRY_COUNT:-2}"
+CURL_RETRY_DELAY_SECONDS="${CDIDX_NETWORK_RETRY_DELAY_SECONDS:-1}"
+RELEASE_ARCHIVE_MAX_BYTES=536870912
+RELEASE_METADATA_MAX_BYTES=1048576
+ARCHIVE_MEMBER_MAX_COUNT=4096
+ARCHIVE_DECLARED_MAX_BYTES=1073741824
+ARCHIVE_EXPANDED_STREAM_MAX_BYTES=1207959552
+ARCHIVE_COMPRESSION_RATIO_MAX=250
+EXTRACTED_PAYLOAD_MAX_BYTES=1073741824
+VALIDATED_ARCHIVE_DECLARED_BYTES=0
+VALIDATED_ARCHIVE_MEMBER_COUNT=0
 VERIFY_POLICY="${CDIDX_VERIFY_POLICY:-compat}"
 REQUIRE_ATTESTATION="${CDIDX_REQUIRE_ATTESTATION:-0}"
 STRICT_VERIFY="${CDIDX_STRICT_VERIFY:-0}"
@@ -95,6 +116,7 @@ RELEASE_GPG_FINGERPRINT="${CDIDX_RELEASE_GPG_FINGERPRINT:-$DEFAULT_RELEASE_GPG_F
 GITHUB_BASE_URL="${GITHUB_BASE_URL%/}"
 GITHUB_API_BASE_URL="${GITHUB_API_BASE_URL%/}"
 TMPDIR_CLEANUP=""
+TRANSFER_DIR_CLEANUP=""
 STAGE_DIR_CLEANUP=""
 BACKUP_DIR_CLEANUP=""
 LOCAL_MIRROR_DIR_CLEANUP=""
@@ -150,6 +172,9 @@ validate_published_release_rid() {
 }
 
 cleanup() {
+    if [ -n "$TRANSFER_DIR_CLEANUP" ]; then
+        rm -rf "$TRANSFER_DIR_CLEANUP"
+    fi
     if [ -n "$TMPDIR_CLEANUP" ]; then
         rm -rf "$TMPDIR_CLEANUP"
     fi
@@ -514,14 +539,22 @@ release_host_diagnostic_label() {
 }
 
 is_loopback_url() {
+    local remainder authority port
     case "$1" in
-        http://127.0.0.1:*|https://127.0.0.1:*|http://localhost:*|https://localhost:*)
-            return 0
-            ;;
-        *)
-            return 1
-            ;;
+        http://*|https://*) remainder="${1#*://}" ;;
+        *) return 1 ;;
     esac
+
+    authority="${remainder%%/*}"
+    case "$authority" in
+        127.0.0.1:*|localhost:*) port="${authority#*:}" ;;
+        *) return 1 ;;
+    esac
+
+    case "$port" in
+        ""|*[!0-9]*) return 1 ;;
+    esac
+    [ "$port" -ge 1 ] && [ "$port" -le 65535 ]
 }
 
 append_loopback_no_proxy_list() {
@@ -540,14 +573,83 @@ prepare_loopback_no_proxy_env() {
     export NO_PROXY no_proxy
 }
 
-run_curl_with_optional_loopback_bypass() {
-    if is_loopback_url "$1"; then
-        shift
-        curl --noproxy 127.0.0.1,localhost "$@"
-    else
-        shift
-        curl "$@"
+validate_bounded_network_integer() {
+    local environment_variable="$1"
+    local value="$2"
+    local minimum="$3"
+    local maximum="$4"
+    local maximum_digits="${#maximum}"
+
+    case "$value" in
+        ""|*[!0-9]*)
+            report_error "Invalid ${environment_variable}: expected an integer from ${minimum} to ${maximum}, got ${value:-<empty>}."
+            return 1
+            ;;
+    esac
+
+    # Reject values too wide for the small documented bounds before using
+    # shell integer operators. Otherwise an attacker-controlled digit string
+    # can overflow `test`, turn both comparisons into errors, and pass through.
+    if [ "${#value}" -gt "$maximum_digits" ]; then
+        report_error "Invalid ${environment_variable}: expected an integer from ${minimum} to ${maximum}, got ${value}."
+        return 1
     fi
+
+    if [ "$value" -lt "$minimum" ] || [ "$value" -gt "$maximum" ]; then
+        report_error "Invalid ${environment_variable}: expected an integer from ${minimum} to ${maximum}, got ${value}."
+        return 1
+    fi
+}
+
+validate_network_policy() {
+    validate_bounded_network_integer "CDIDX_NETWORK_CONNECT_TIMEOUT_SECONDS" "$CURL_CONNECT_TIMEOUT_SECONDS" 1 120 || return 1
+    validate_bounded_network_integer "CDIDX_NETWORK_MAX_TIME_SECONDS" "$CURL_MAX_TIME_SECONDS" 10 3600 || return 1
+    validate_bounded_network_integer "CDIDX_NETWORK_LOW_SPEED_LIMIT_BYTES" "$CURL_LOW_SPEED_LIMIT_BYTES" 1 1048576 || return 1
+    validate_bounded_network_integer "CDIDX_NETWORK_LOW_SPEED_TIME_SECONDS" "$CURL_LOW_SPEED_TIME_SECONDS" 1 300 || return 1
+    validate_bounded_network_integer "CDIDX_NETWORK_RETRY_COUNT" "$CURL_RETRY_COUNT" 0 5 || return 1
+    validate_bounded_network_integer "CDIDX_NETWORK_RETRY_DELAY_SECONDS" "$CURL_RETRY_DELAY_SECONDS" 0 60 || return 1
+
+    if [ "$CURL_CONNECT_TIMEOUT_SECONDS" -gt "$CURL_MAX_TIME_SECONDS" ]; then
+        report_error "Invalid installer network policy: CDIDX_NETWORK_CONNECT_TIMEOUT_SECONDS must not exceed CDIDX_NETWORK_MAX_TIME_SECONDS."
+        return 1
+    fi
+}
+
+run_curl_with_optional_loopback_bypass() {
+    local url="$1"
+    local retry_count="${CURL_ATTEMPT_RETRY_COUNT:-$CURL_RETRY_COUNT}"
+    local max_time_seconds="${CURL_ATTEMPT_MAX_TIME_SECONDS:-$CURL_MAX_TIME_SECONDS}"
+    shift
+
+    if ! validate_network_policy; then
+        return 96
+    fi
+
+    if is_loopback_url "$url"; then
+        # Local installer self-tests are the only scoped HTTP exception. Keep
+        # the initial URL confined to a validated loopback authority, reject
+        # every redirect, and bypass proxy state.
+        curl --noproxy 127.0.0.1,localhost --proto '=http,https' --proto-redir '=https' --max-redirs 0 \
+            --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" --max-time "$max_time_seconds" \
+            --speed-limit "$CURL_LOW_SPEED_LIMIT_BYTES" --speed-time "$CURL_LOW_SPEED_TIME_SECONDS" \
+            --retry "$retry_count" --retry-delay "$CURL_RETRY_DELAY_SECONDS" \
+            --retry-max-time "$max_time_seconds" "$@"
+        return
+    fi
+
+    case "$url" in
+        https://*) ;;
+        *)
+            report_error "Installer protocol policy rejected non-HTTPS public URL: ${url}. Configure an HTTPS release/API endpoint; only loopback self-tests may use HTTP. [protocol_rejected]"
+            return 97
+            ;;
+    esac
+
+    curl --proto '=https' --proto-redir '=https' \
+        --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" --max-time "$max_time_seconds" \
+        --speed-limit "$CURL_LOW_SPEED_LIMIT_BYTES" --speed-time "$CURL_LOW_SPEED_TIME_SECONDS" \
+        --retry "$retry_count" --retry-delay "$CURL_RETRY_DELAY_SECONDS" \
+        --retry-max-time "$max_time_seconds" "$@"
 }
 
 has_explicit_self_test_install_dir() {
@@ -831,6 +933,10 @@ is_proxy_tunnel_403() {
     printf '%s' "$1" | grep -Eqi 'CONNECT tunnel failed, response 403|HTTP code 403 from proxy after CONNECT'
 }
 
+is_curl_protocol_rejection() {
+    printf '%s' "$1" | grep -Eqi 'protocol .* disabled|unsupported protocol|redirect.*protocol'
+}
+
 file_size_bytes() {
     wc -c < "$1" | tr -d '[:space:]'
 }
@@ -854,57 +960,181 @@ read_bounded_file_sample() {
     printf '\n[cdidx installer truncated %s: showing first %s of %s bytes]\n' "$label" "$max_bytes" "$byte_count"
 }
 
+is_retryable_http_code() {
+    case "$1" in
+        408|429|500|502|503|504) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 curl_http_get() {
     local url="$1"
     local output_path="$2"
     local source_label="${3:-remote host}"
-    local http_code
-    local curl_stderr
+    local max_bytes="${4:-$LATEST_RELEASE_RESPONSE_MAX_BYTES}"
+    local http_code curl_status reader_status downloaded_bytes stderr_text
+    local transfer_dir curl_stderr body_fifo reader_pid bounded_probe_bytes
+    local attempt max_attempts retry_started_seconds elapsed_seconds remaining_seconds retryable
+
+    if ! validate_network_policy; then
+        return 1
+    fi
 
     probe_temp_root
-    if ! curl_stderr="$(mktemp)"; then
-        report_error "Failed to create temporary curl stderr capture while fetching ${source_label} at $url."
+    need_cmd mkfifo
+    if ! transfer_dir="$(mktemp -d)"; then
+        report_error "Failed to create private transfer staging while fetching ${source_label} at $url."
+        return 1
+    fi
+    TRANSFER_DIR_CLEANUP="$transfer_dir"
+    if ! chmod 700 "$transfer_dir"; then
+        rmdir "$transfer_dir"
+        TRANSFER_DIR_CLEANUP=""
+        report_error "Failed to restrict private transfer staging while fetching ${source_label} at $url."
+        return 1
+    fi
+    curl_stderr="${transfer_dir}/curl.stderr"
+    body_fifo="${transfer_dir}/response.body.pipe"
+    if ! : > "$curl_stderr"; then
+        rm -f "$body_fifo" "$curl_stderr"
+        rmdir "$transfer_dir"
+        TRANSFER_DIR_CLEANUP=""
+        report_error "Failed to prepare bounded response capture while fetching ${source_label} at $url."
         return 1
     fi
     verify_temp_path_space "$curl_stderr"
 
-    if http_code="$(run_curl_with_optional_loopback_bypass "$url" -sSL -o "$output_path" -w '%{http_code}' "$url" 2>"$curl_stderr")"; then
-        rm -f "$curl_stderr"
-        printf '%s' "$http_code"
-        return 0
-    else
-        local curl_status=$?
-        local stderr_text=""
-        if [ -f "$curl_stderr" ]; then
-            stderr_text="$(read_bounded_file_sample "$curl_stderr" "$CURL_STDERR_SAMPLE_BYTES" "curl stderr for ${source_label}")"
-            rm -f "$curl_stderr"
+    # `curl --max-filesize` did not stop unknown-length/chunked bodies before
+    # curl 8.4. Stream each attempt through a fresh private FIFO and retain only
+    # max+1 bytes. Curl's internal retry cannot safely target a FIFO because it
+    # cannot rewind a failed response, so retries are bounded explicitly below.
+    bounded_probe_bytes=$((max_bytes + 1))
+    attempt=0
+    max_attempts=$((CURL_RETRY_COUNT + 1))
+    retry_started_seconds=$SECONDS
+    while [ "$attempt" -lt "$max_attempts" ]; do
+        attempt=$((attempt + 1))
+        elapsed_seconds=$((SECONDS - retry_started_seconds))
+        remaining_seconds=$((CURL_MAX_TIME_SECONDS - elapsed_seconds))
+        if [ "$remaining_seconds" -le 0 ]; then
+            curl_status=28
+            reader_status=0
+            http_code="000"
+            break
         fi
 
-        if [ "$curl_status" -eq 56 ] && is_proxy_tunnel_403 "$stderr_text"; then
-            if [ -n "$stderr_text" ]; then
-                printf '%s\n' "$stderr_text" >&2
-            fi
-            report_error "CONNECT tunnel failed with HTTP 403 while reaching ${source_label} at $url (curl exit 56). This deny is happening in an upstream proxy/egress policy before TLS."
-            report_error "If every HTTPS endpoint fails with a CONNECT-stage HTTP 403, route substitution alone will not fix it."
-            report_error "Ask your network administrator to allow-list at least one required API or artifact host path."
+        rm -f "$body_fifo"
+        if ! : > "$curl_stderr" || ! mkfifo "$body_fifo"; then
+            rm -f "$body_fifo" "$curl_stderr"
+            rmdir "$transfer_dir"
+            TRANSFER_DIR_CLEANUP=""
+            report_error "Failed to prepare bounded response capture while fetching ${source_label} at $url."
             return 1
         fi
 
+        head -c "$bounded_probe_bytes" "$body_fifo" > "$output_path" &
+        reader_pid=$!
+        # Keep one writer open so the reader also receives EOF when curl fails
+        # before opening the FIFO (for example, DNS or protocol-policy failure).
+        if ! exec 8> "$body_fifo"; then
+            kill "$reader_pid" 2>/dev/null || true
+            wait "$reader_pid" 2>/dev/null || true
+            rm -f "$body_fifo" "$curl_stderr"
+            rmdir "$transfer_dir"
+            TRANSFER_DIR_CLEANUP=""
+            report_error "Failed to open bounded response capture while fetching ${source_label} at $url."
+            return 1
+        fi
+
+        curl_status=0
+        http_code="$(CURL_ATTEMPT_RETRY_COUNT=0 CURL_ATTEMPT_MAX_TIME_SECONDS="$remaining_seconds" run_curl_with_optional_loopback_bypass "$url" -sSL --max-filesize "$max_bytes" -o "$body_fifo" -w '%{http_code}' "$url" 2>"$curl_stderr")" || curl_status=$?
+        exec 8>&-
+        reader_status=0
+        wait "$reader_pid" || reader_status=$?
+
+        if ! downloaded_bytes="$(file_size_bytes "$output_path")"; then
+            rm -f "$body_fifo" "$curl_stderr"
+            rmdir "$transfer_dir"
+            TRANSFER_DIR_CLEANUP=""
+            report_error "Failed to inspect downloaded byte count for ${source_label} at $url."
+            return 1
+        fi
+        if [ "${downloaded_bytes:-0}" -gt "$max_bytes" ]; then
+            rm -f "$body_fifo" "$curl_stderr"
+            rmdir "$transfer_dir"
+            TRANSFER_DIR_CLEANUP=""
+            report_error "Download from ${source_label} at $url exceeded the ${max_bytes} byte limit. [download_size_exceeded]"
+            return 1
+        fi
+
+        retryable=0
+        if is_retryable_http_code "$http_code" || [ "$curl_status" -eq 28 ]; then
+            retryable=1
+        fi
+        if [ "$retryable" -eq 0 ] || [ "$attempt" -ge "$max_attempts" ]; then
+            break
+        fi
+
+        elapsed_seconds=$((SECONDS - retry_started_seconds))
+        remaining_seconds=$((CURL_MAX_TIME_SECONDS - elapsed_seconds))
+        if [ "$CURL_RETRY_DELAY_SECONDS" -ge "$remaining_seconds" ]; then
+            break
+        fi
+        if [ "$CURL_RETRY_DELAY_SECONDS" -gt 0 ]; then
+            sleep "$CURL_RETRY_DELAY_SECONDS"
+        fi
+    done
+
+    if [ "$curl_status" -eq 0 ] && [ "$reader_status" -eq 0 ]; then
+        rm -f "$body_fifo" "$curl_stderr"
+        rmdir "$transfer_dir"
+        TRANSFER_DIR_CLEANUP=""
+        printf '%s' "$http_code"
+        return 0
+    fi
+
+    stderr_text=""
+    if [ -f "$curl_stderr" ]; then
+        stderr_text="$(read_bounded_file_sample "$curl_stderr" "$CURL_STDERR_SAMPLE_BYTES" "curl stderr for ${source_label}")"
+    fi
+    rm -f "$body_fifo" "$curl_stderr"
+    rmdir "$transfer_dir"
+    TRANSFER_DIR_CLEANUP=""
+
+    if [ "$curl_status" -eq 56 ] && is_proxy_tunnel_403 "$stderr_text"; then
         if [ -n "$stderr_text" ]; then
             printf '%s\n' "$stderr_text" >&2
         fi
-
-        case "$curl_status" in
-            6|7|28|35|52|56)
-                report_error "Network error reaching ${source_label} while fetching $url (curl exit $curl_status). Check your connection, proxy, or configured mirror."
-                ;;
-            *)
-                report_error "curl failed while fetching ${source_label} at $url (exit $curl_status)."
-                ;;
-        esac
-
+        report_error "CONNECT tunnel failed with HTTP 403 while reaching ${source_label} at $url (curl exit 56). This deny is happening in an upstream proxy/egress policy before TLS."
+        report_error "If every HTTPS endpoint fails with a CONNECT-stage HTTP 403, route substitution alone will not fix it."
+        report_error "Ask your network administrator to allow-list at least one required API or artifact host path."
         return 1
     fi
+
+    if [ -n "$stderr_text" ]; then
+        printf '%s\n' "$stderr_text" >&2
+    fi
+
+    if [ "$curl_status" -eq 63 ]; then
+        report_error "Download from ${source_label} at $url exceeded the ${max_bytes} byte limit (curl exit 63). [download_size_exceeded]"
+    elif [ "$curl_status" -eq 97 ] || { [ "$curl_status" -eq 1 ] && is_curl_protocol_rejection "$stderr_text"; }; then
+        report_error "Installer protocol policy rejected the URL or redirect while fetching ${source_label} at $url. Public release and API traffic must remain HTTPS. [protocol_rejected]"
+    elif [ "$curl_status" -eq 28 ]; then
+        report_error "Installer network timeout while fetching ${source_label} at $url (curl exit 28). Check endpoint responsiveness or adjust the bounded CDIDX_NETWORK_* timeout settings. [network_timeout]"
+    elif [ "$reader_status" -ne 0 ] && [ "$curl_status" -eq 0 ]; then
+        report_error "Failed to write bounded response data from ${source_label} at $url."
+    else
+        case "$curl_status" in
+        6|7|35|52|56)
+            report_error "Network error reaching ${source_label} while fetching $url (curl exit $curl_status). Check your connection, proxy, or configured mirror."
+            ;;
+        *)
+            report_error "curl failed while fetching ${source_label} at $url (exit $curl_status)."
+            ;;
+        esac
+    fi
+
+    return 1
 }
 
 fetch_latest_release_version() {
@@ -924,7 +1154,9 @@ fetch_latest_release_version() {
     verify_temp_path_space "$response_file"
 
     local http_code
-    if ! http_code="$(curl_http_get "$api_url" "$response_file" "$api_label")"; then
+    # Keep the transfer bounded while preserving the more specific 64 KiB
+    # latest-release parsing diagnostic below.
+    if ! http_code="$(curl_http_get "$api_url" "$response_file" "$api_label" "$RELEASE_METADATA_MAX_BYTES")"; then
         rm -f "$response_file"
         return 1
     fi
@@ -1032,15 +1264,136 @@ calculate_sha256() {
 
 validate_archive_members() {
     local archive="$1"
-    local member
+    local names_file="${archive}.member-names"
+    local metadata_file="${archive}.member-metadata"
+    local archive_bytes expanded_stream_bytes expanded_probe_limit
+    local member name_count metadata_count metadata type size declared_bytes
 
-    tar tzf "$archive" | while IFS= read -r member || [ -n "$member" ]; do
+    if ! archive_bytes="$(file_size_bytes "$archive")"; then
+        report_error "Failed to inspect release archive byte count before extraction."
+        return 1
+    fi
+    if [ "${archive_bytes:-0}" -gt "$RELEASE_ARCHIVE_MAX_BYTES" ]; then
+        report_error "Release archive exceeds the ${RELEASE_ARCHIVE_MAX_BYTES} compressed-byte limit before extraction. [archive_download_size_exceeded]"
+        return 1
+    fi
+
+    expanded_probe_limit=$((ARCHIVE_EXPANDED_STREAM_MAX_BYTES + 1))
+    expanded_stream_bytes="$(
+        set +o pipefail
+        gzip -dc "$archive" 2>/dev/null | head -c "$expanded_probe_limit" | wc -c | tr -d '[:space:]'
+    )"
+    if [ "${expanded_stream_bytes:-0}" -gt "$ARCHIVE_EXPANDED_STREAM_MAX_BYTES" ]; then
+        report_error "Release archive expanded stream exceeds the ${ARCHIVE_EXPANDED_STREAM_MAX_BYTES} byte limit. [archive_expanded_size_exceeded]"
+        return 1
+    fi
+    if [ "${archive_bytes:-0}" -gt 0 ] && [ "${expanded_stream_bytes:-0}" -gt $((archive_bytes * ARCHIVE_COMPRESSION_RATIO_MAX)) ]; then
+        report_error "Release archive exceeds the ${ARCHIVE_COMPRESSION_RATIO_MAX}:1 compression-ratio limit. [archive_compression_ratio_exceeded]"
+        return 1
+    fi
+
+    if ! tar tzf "$archive" > "$names_file"; then
+        rm -f "$names_file" "$metadata_file"
+        report_error "Failed to list release archive member names before extraction."
+        return 1
+    fi
+
+    name_count="$(wc -l < "$names_file" | tr -d '[:space:]')"
+    if [ "${name_count:-0}" -gt "$ARCHIVE_MEMBER_MAX_COUNT" ]; then
+        rm -f "$names_file" "$metadata_file"
+        report_error "Release archive contains ${name_count} members, exceeding the ${ARCHIVE_MEMBER_MAX_COUNT} member limit. [archive_member_count_exceeded]"
+        return 1
+    fi
+
+    while IFS= read -r member || [ -n "$member" ]; do
         case "$member" in
             ""|/*|..|../*|*/../*|*/.. )
-                error "Release archive contains unsafe member path before extraction: ${member:-<empty>}"
+                rm -f "$names_file" "$metadata_file"
+                report_error "Release archive contains unsafe member path before extraction: ${member:-<empty>}"
+                return 1
                 ;;
         esac
-    done
+    done < "$names_file"
+
+    if ! tar tvzf "$archive" > "$metadata_file"; then
+        rm -f "$names_file" "$metadata_file"
+        report_error "Failed to inspect release archive member metadata before extraction."
+        return 1
+    fi
+
+    metadata_count=0
+    declared_bytes=0
+    while IFS= read -r metadata || [ -n "$metadata" ]; do
+        metadata_count=$((metadata_count + 1))
+        type="${metadata%"${metadata#?}"}"
+        case "$type" in
+            -|d) ;;
+            l|h)
+                rm -f "$names_file" "$metadata_file"
+                report_error "Release archive contains a link member; symlinks and hardlinks are not allowed (metadata: ${metadata}). [archive_link_rejected]"
+                return 1
+                ;;
+            *)
+                rm -f "$names_file" "$metadata_file"
+                report_error "Release archive contains unsupported member type '${type:-<empty>}' (metadata: ${metadata}). [archive_member_type_rejected]"
+                return 1
+                ;;
+        esac
+
+        if [ "$type" = "-" ]; then
+            size="$(printf '%s\n' "$metadata" | awk '{ if (index($2, "/") > 0) print $3; else print $5 }')"
+            case "$size" in
+                ""|*[!0-9]*)
+                    rm -f "$names_file" "$metadata_file"
+                    report_error "Could not parse declared size for a regular release archive member (metadata: ${metadata})."
+                    return 1
+                    ;;
+            esac
+            if [ "${#size}" -gt "${#ARCHIVE_DECLARED_MAX_BYTES}" ]; then
+                rm -f "$names_file" "$metadata_file"
+                report_error "Release archive declares a regular-file size that exceeds the ${ARCHIVE_DECLARED_MAX_BYTES} byte limit. [archive_declared_size_exceeded]"
+                return 1
+            fi
+            declared_bytes=$((declared_bytes + size))
+            if [ "$declared_bytes" -gt "$ARCHIVE_DECLARED_MAX_BYTES" ]; then
+                rm -f "$names_file" "$metadata_file"
+                report_error "Release archive declares ${declared_bytes} regular-file bytes, exceeding the ${ARCHIVE_DECLARED_MAX_BYTES} byte limit. [archive_declared_size_exceeded]"
+                return 1
+            fi
+        fi
+    done < "$metadata_file"
+
+    if [ "$metadata_count" -ne "$name_count" ]; then
+        rm -f "$names_file" "$metadata_file"
+        report_error "Release archive member-name and metadata counts differ (${name_count} names versus ${metadata_count} metadata rows); refusing ambiguous archive entries."
+        return 1
+    fi
+
+    VALIDATED_ARCHIVE_MEMBER_COUNT="$metadata_count"
+    VALIDATED_ARCHIVE_DECLARED_BYTES="$declared_bytes"
+    rm -f "$names_file" "$metadata_file"
+    return 0
+}
+
+validate_extracted_payload_size() {
+    local extract_dir="$1"
+    local actual_bytes unexpected_entry
+
+    unexpected_entry="$(find "$extract_dir" ! -type f ! -type d -print -quit)"
+    if [ -n "$unexpected_entry" ]; then
+        report_error "Extracted release payload contains an unsupported filesystem entry: ${unexpected_entry}. [extracted_member_type_rejected]"
+        return 1
+    fi
+
+    actual_bytes="$(find "$extract_dir" -type f -exec wc -c {} \; | awk '{ total += $1 } END { print total + 0 }')"
+    if [ "${actual_bytes:-0}" -gt "$EXTRACTED_PAYLOAD_MAX_BYTES" ]; then
+        report_error "Extracted release payload contains ${actual_bytes} file bytes, exceeding the ${EXTRACTED_PAYLOAD_MAX_BYTES} byte limit. [extracted_size_exceeded]"
+        return 1
+    fi
+    if [ "${actual_bytes:-0}" -ne "$VALIDATED_ARCHIVE_DECLARED_BYTES" ]; then
+        report_error "Extracted release payload byte count (${actual_bytes}) differs from the validated archive declaration (${VALIDATED_ARCHIVE_DECLARED_BYTES}). [extracted_size_mismatch]"
+        return 1
+    fi
 }
 
 verify_payload_manifest() {
@@ -1249,11 +1602,12 @@ download_release_file() {
     local url="$1"
     local output_path="$2"
     local description="$3"
+    local max_bytes="${4:-$RELEASE_ARCHIVE_MAX_BYTES}"
     local release_host_label
     release_host_label="$(release_host_diagnostic_label)"
 
     local http_code
-    if ! http_code="$(curl_http_get "$url" "$output_path" "$release_host_label")"; then
+    if ! http_code="$(curl_http_get "$url" "$output_path" "$release_host_label" "$max_bytes")"; then
         return 1
     fi
 
@@ -1289,11 +1643,12 @@ download_release_file() {
 download_optional_release_file() {
     local url="$1"
     local output_path="$2"
+    local max_bytes="${3:-$RELEASE_METADATA_MAX_BYTES}"
     local release_host_label
     release_host_label="$(release_host_diagnostic_label)"
 
     local http_code
-    if ! http_code="$(curl_http_get "$url" "$output_path" "$release_host_label")"; then
+    if ! http_code="$(curl_http_get "$url" "$output_path" "$release_host_label" "$max_bytes")"; then
         return 1
     fi
 
@@ -1407,6 +1762,8 @@ download_and_install() {
     need_cmd tar
     need_cmd mktemp
     need_cmd awk
+    need_cmd find
+    need_cmd gzip
 
     local archive_name="CodeIndex-${RID}.tar.gz"
     local base_url
@@ -1420,20 +1777,23 @@ download_and_install() {
     if ! tmpdir="$(mktemp -d)"; then
         error "Failed to create temporary working directory for install."
     fi
+    if ! chmod 700 "$tmpdir"; then
+        error "Failed to restrict installer working directory permissions."
+    fi
     verify_temp_path_space "$tmpdir"
     TMPDIR_CLEANUP="$tmpdir"
 
     info "Downloading ${archive_name}..."
-    download_release_file "$archive_url" "${tmpdir}/${archive_name}" "${archive_name}"
+    download_release_file "$archive_url" "${tmpdir}/${archive_name}" "${archive_name}" "$RELEASE_ARCHIVE_MAX_BYTES"
     verify_release_attestation "${tmpdir}/${archive_name}" "$archive_name"
 
     info "Downloading checksums..."
-    download_release_file "$checksums_url" "${tmpdir}/sha256sums.txt" "sha256sums.txt"
+    download_release_file "$checksums_url" "${tmpdir}/sha256sums.txt" "sha256sums.txt" "$RELEASE_METADATA_MAX_BYTES"
     verify_release_attestation "${tmpdir}/sha256sums.txt" "sha256sums.txt"
 
     if checksum_signature_supported; then
         info "Downloading checksum signature..."
-        if download_optional_release_file "$checksums_signature_url" "${tmpdir}/sha256sums.txt.asc"; then
+        if download_optional_release_file "$checksums_signature_url" "${tmpdir}/sha256sums.txt.asc" "$RELEASE_METADATA_MAX_BYTES"; then
             verify_checksum_signature "${tmpdir}/sha256sums.txt" "${tmpdir}/sha256sums.txt.asc"
         elif [ "$STRICT_VERIFY" = "1" ]; then
             error "Failed to download sha256sums.txt.asc while strict verification is enabled."
@@ -1463,10 +1823,17 @@ download_and_install() {
     # 展開用サブディレクトリを使い、アーカイブや checksum ファイルと混在させない。
     local extract_dir="${tmpdir}/extract"
     mkdir -p "$extract_dir"
+    if ! chmod 700 "$extract_dir"; then
+        error "Failed to restrict release extraction directory permissions."
+    fi
     info "Checking archive member paths..."
     validate_archive_members "${tmpdir}/${archive_name}"
     info "Extracting..."
-    tar xzf "${tmpdir}/${archive_name}" -C "$extract_dir"
+    (
+        umask 077
+        tar -xzkf "${tmpdir}/${archive_name}" -C "$extract_dir" --no-same-owner --no-same-permissions
+    )
+    validate_extracted_payload_size "$extract_dir"
     info "Verifying extracted payload..."
     verify_payload_manifest "$extract_dir"
 
@@ -2389,14 +2756,20 @@ probe_doctor_url() {
     if [ -n "$stderr_text" ]; then
         printf '%s\n' "$stderr_text" >&2
     fi
-    case "$curl_status" in
-        6|7|28|35|52|56)
+    if [ "$curl_status" -eq 97 ] || { [ "$curl_status" -eq 1 ] && is_curl_protocol_rejection "$stderr_text"; }; then
+        report_error "${label}: installer protocol policy rejected ${url} or one of its redirects. Public endpoints must remain HTTPS. [protocol_rejected]"
+    elif [ "$curl_status" -eq 28 ]; then
+        report_error "${label}: network timeout while reaching ${url} (curl exit 28). Check endpoint responsiveness or adjust the bounded CDIDX_NETWORK_* timeout settings. [network_timeout]"
+    else
+        case "$curl_status" in
+        6|7|35|52|56)
             report_error "${label}: network error (curl exit ${curl_status}) while reaching ${url}. Check your connection, proxy, or configured mirror."
             ;;
         *)
             report_error "${label}: curl exit ${curl_status} while reaching ${url}."
             ;;
-    esac
+        esac
+    fi
     return 1
 }
 

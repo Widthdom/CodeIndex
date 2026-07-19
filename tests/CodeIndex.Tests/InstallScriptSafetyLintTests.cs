@@ -18,6 +18,7 @@ public sealed class InstallScriptSafetyLintTests
         var allowedRmRfLines = new HashSet<string>(StringComparer.Ordinal)
         {
             "rm -rf \"$TMPDIR_CLEANUP\"",
+            "rm -rf \"$TRANSFER_DIR_CLEANUP\"",
             "rm -rf \"$STAGE_DIR_CLEANUP\"",
             "rm -rf \"$BACKUP_DIR_CLEANUP\"",
             "rm -rf \"$LOCAL_MIRROR_DIR_CLEANUP\"",
@@ -49,6 +50,7 @@ public sealed class InstallScriptSafetyLintTests
         var cleanupByLocalVariable = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["tmpdir"] = "TMPDIR_CLEANUP",
+            ["transfer_dir"] = "TRANSFER_DIR_CLEANUP",
             ["stage_dir"] = "STAGE_DIR_CLEANUP",
             ["backup_dir"] = "BACKUP_DIR_CLEANUP",
             ["local_mirror_root"] = "LOCAL_MIRROR_DIR_CLEANUP",
@@ -83,20 +85,52 @@ public sealed class InstallScriptSafetyLintTests
             .ToArray();
 
         Assert.Equal(
-            ["curl --noproxy 127.0.0.1,localhost \"$@\"", "curl \"$@\""],
+            [
+                "curl --noproxy 127.0.0.1,localhost --proto '=http,https' --proto-redir '=https' --max-redirs 0 \\",
+                "curl --proto '=https' --proto-redir '=https' \\",
+            ],
             rawCurlLines);
         var curlWrapper = ExtractShellFunction(activeText, "run_curl_with_optional_loopback_bypass");
-        Assert.Contains("curl --noproxy 127.0.0.1,localhost \"$@\"", curlWrapper, StringComparison.Ordinal);
-        Assert.Contains("curl \"$@\"", curlWrapper, StringComparison.Ordinal);
+        Assert.Contains("--proto '=http,https' --proto-redir '=https' --max-redirs 0", curlWrapper, StringComparison.Ordinal);
+        Assert.Contains("--proto '=https' --proto-redir '=https'", curlWrapper, StringComparison.Ordinal);
+        Assert.Contains("--connect-timeout \"$CURL_CONNECT_TIMEOUT_SECONDS\" --max-time \"$max_time_seconds\"", curlWrapper, StringComparison.Ordinal);
+        Assert.Contains("--speed-limit \"$CURL_LOW_SPEED_LIMIT_BYTES\" --speed-time \"$CURL_LOW_SPEED_TIME_SECONDS\"", curlWrapper, StringComparison.Ordinal);
+        Assert.Contains("--retry \"$retry_count\" --retry-delay \"$CURL_RETRY_DELAY_SECONDS\"", curlWrapper, StringComparison.Ordinal);
+        Assert.Contains("--retry-max-time \"$max_time_seconds\"", curlWrapper, StringComparison.Ordinal);
 
         var downloadBody = ExtractShellFunction(activeText, "curl_http_get");
-        Assert.Contains("run_curl_with_optional_loopback_bypass \"$url\" -sSL -o \"$output_path\" -w '%{http_code}' \"$url\" 2>\"$curl_stderr\"", downloadBody, StringComparison.Ordinal);
+        Assert.Contains("head -c \"$bounded_probe_bytes\" \"$body_fifo\" > \"$output_path\" &", downloadBody, StringComparison.Ordinal);
+        Assert.Contains("CURL_ATTEMPT_RETRY_COUNT=0 CURL_ATTEMPT_MAX_TIME_SECONDS=\"$remaining_seconds\" run_curl_with_optional_loopback_bypass", downloadBody, StringComparison.Ordinal);
+        Assert.Contains("max_attempts=$((CURL_RETRY_COUNT + 1))", downloadBody, StringComparison.Ordinal);
         Assert.Contains("read_bounded_file_sample \"$curl_stderr\" \"$CURL_STDERR_SAMPLE_BYTES\" \"curl stderr for ${source_label}\"", downloadBody, StringComparison.Ordinal);
 
         var doctorProbeBody = ExtractShellFunction(activeText, "probe_doctor_url");
         Assert.Contains("run_curl_with_optional_loopback_bypass \"$url\" -sSI -o /dev/null -w '%{http_code}' \"$url\" 2>\"$curl_stderr\"", doctorProbeBody, StringComparison.Ordinal);
         Assert.Contains("read_bounded_file_sample \"$curl_stderr\" \"$CURL_STDERR_SAMPLE_BYTES\" \"curl stderr for ${label}\"", doctorProbeBody, StringComparison.Ordinal);
         Assert.Contains("CURL_STDERR_SAMPLE_BYTES=8192", activeText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void InstallShellSafetyLint_RequiresPrivateBoundedArchiveExtraction_Issue4605()
+    {
+        var activeText = string.Join("\n", ActiveShellLines(ReadRepositoryText("install.sh")));
+        var validationBody = ExtractShellFunction(activeText, "validate_archive_members");
+        var extractionBody = ExtractShellFunction(activeText, "download_and_install");
+
+        Assert.Contains("RELEASE_ARCHIVE_MAX_BYTES=536870912", activeText, StringComparison.Ordinal);
+        Assert.Contains("ARCHIVE_MEMBER_MAX_COUNT=4096", activeText, StringComparison.Ordinal);
+        Assert.Contains("ARCHIVE_DECLARED_MAX_BYTES=1073741824", activeText, StringComparison.Ordinal);
+        Assert.Contains("ARCHIVE_EXPANDED_STREAM_MAX_BYTES=1207959552", activeText, StringComparison.Ordinal);
+        Assert.Contains("ARCHIVE_COMPRESSION_RATIO_MAX=250", activeText, StringComparison.Ordinal);
+        Assert.Contains("EXTRACTED_PAYLOAD_MAX_BYTES=1073741824", activeText, StringComparison.Ordinal);
+        Assert.Contains("[archive_link_rejected]", validationBody, StringComparison.Ordinal);
+        Assert.Contains("[archive_member_type_rejected]", validationBody, StringComparison.Ordinal);
+        Assert.Contains("chmod 700 \"$tmpdir\"", extractionBody, StringComparison.Ordinal);
+        Assert.Contains("chmod 700 \"$extract_dir\"", extractionBody, StringComparison.Ordinal);
+        Assert.Contains("download_release_file \"$archive_url\" \"${tmpdir}/${archive_name}\" \"${archive_name}\" \"$RELEASE_ARCHIVE_MAX_BYTES\"", extractionBody, StringComparison.Ordinal);
+        Assert.Contains("download_release_file \"$checksums_url\" \"${tmpdir}/sha256sums.txt\" \"sha256sums.txt\" \"$RELEASE_METADATA_MAX_BYTES\"", extractionBody, StringComparison.Ordinal);
+        Assert.Contains("tar -xzkf \"${tmpdir}/${archive_name}\" -C \"$extract_dir\" --no-same-owner --no-same-permissions", extractionBody, StringComparison.Ordinal);
+        Assert.Contains("validate_extracted_payload_size \"$extract_dir\"", extractionBody, StringComparison.Ordinal);
     }
 
     private static bool IsEvalCommand(string line)

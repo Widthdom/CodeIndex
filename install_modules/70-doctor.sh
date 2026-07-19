@@ -60,14 +60,20 @@ probe_doctor_url() {
     if [ -n "$stderr_text" ]; then
         printf '%s\n' "$stderr_text" >&2
     fi
-    case "$curl_status" in
-        6|7|28|35|52|56)
+    if [ "$curl_status" -eq 97 ] || { [ "$curl_status" -eq 1 ] && is_curl_protocol_rejection "$stderr_text"; }; then
+        report_error "${label}: installer protocol policy rejected ${url} or one of its redirects. Public endpoints must remain HTTPS. [protocol_rejected]"
+    elif [ "$curl_status" -eq 28 ]; then
+        report_error "${label}: network timeout while reaching ${url} (curl exit 28). Check endpoint responsiveness or adjust the bounded CDIDX_NETWORK_* timeout settings. [network_timeout]"
+    else
+        case "$curl_status" in
+        6|7|35|52|56)
             report_error "${label}: network error (curl exit ${curl_status}) while reaching ${url}. Check your connection, proxy, or configured mirror."
             ;;
         *)
             report_error "${label}: curl exit ${curl_status} while reaching ${url}."
             ;;
-    esac
+        esac
+    fi
     return 1
 }
 

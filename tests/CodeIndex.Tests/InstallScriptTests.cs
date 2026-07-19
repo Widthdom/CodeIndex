@@ -1,7 +1,13 @@
 using System.Diagnostics;
 using System.Formats.Tar;
 using System.IO.Compression;
+using System.Net;
+using System.Net.Security;
+using System.Net.Sockets;
 using System.Runtime.Versioning;
+using System.Security.Authentication;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using CodeIndex.Indexer;
 
@@ -1075,6 +1081,275 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [ProductionCliFact]
+    public void InstallerNetworkPolicy_BoundsTransfersAndCategorizesProtocolAndTimeout_Issue4604()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var curlArgumentsPath = Path.Combine(_tempRoot, "network_policy_curl_args.txt");
+        var outputPath = Path.Combine(_tempRoot, "network_policy_output.txt");
+        var (successExitCode, successStdout, successStderr) = RunInstallerSnippet(
+            $$"""
+            curl() {
+                printf '%s\n' "$*" > "{{curlArgumentsPath}}"
+                local output_path=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            shift
+                            ;;
+                    esac
+                done
+                : > "$output_path"
+                printf '200'
+            }
+
+            http_code="$(curl_http_get "http://127.0.0.1:18765/release" "{{outputPath}}" "local self-test mirror")"
+            printf 'HTTP=%s\n' "$http_code"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_NETWORK_CONNECT_TIMEOUT_SECONDS"] = "12",
+                ["CDIDX_NETWORK_MAX_TIME_SECONDS"] = "240",
+                ["CDIDX_NETWORK_LOW_SPEED_LIMIT_BYTES"] = "2048",
+                ["CDIDX_NETWORK_LOW_SPEED_TIME_SECONDS"] = "45",
+                ["CDIDX_NETWORK_RETRY_COUNT"] = "3",
+                ["CDIDX_NETWORK_RETRY_DELAY_SECONDS"] = "2",
+            });
+
+        Assert.Equal(0, successExitCode);
+        Assert.Equal($"HTTP=200{Environment.NewLine}", successStdout);
+        Assert.Empty(successStderr);
+        var curlArguments = File.ReadAllText(curlArgumentsPath);
+        Assert.Contains("--noproxy 127.0.0.1,localhost", curlArguments);
+        Assert.Contains("--proto =http,https --proto-redir =https --max-redirs 0", curlArguments);
+        Assert.Contains("--connect-timeout 12 --max-time 240", curlArguments);
+        Assert.Contains("--speed-limit 2048 --speed-time 45", curlArguments);
+        Assert.Contains("--retry 0 --retry-delay 2 --retry-max-time 240", curlArguments);
+
+        var (publicHttpExitCode, publicHttpStdout, publicHttpStderr) = RunInstallerSnippet(
+            $$"""
+            curl() {
+                printf 'UNREACHABLE\n'
+                return 0
+            }
+
+            curl_http_get "http://downloads.example.test/release" "{{outputPath}}" "configured release host"
+            """);
+
+        Assert.Equal(1, publicHttpExitCode);
+        Assert.DoesNotContain("UNREACHABLE", publicHttpStdout);
+        Assert.Contains("non-HTTPS public URL", publicHttpStderr);
+        Assert.Contains("[protocol_rejected]", publicHttpStderr);
+
+        var (redirectExitCode, _, redirectStderr) = RunInstallerSnippet(
+            $$"""
+            curl() {
+                case "$*" in
+                    *"--proto =https --proto-redir =https"*) ;;
+                    *) printf 'missing HTTPS protocol policy\n' >&2; return 99 ;;
+                esac
+                printf 'curl: (1) Protocol "http" disabled (in redirect)\n' >&2
+                return 1
+            }
+
+            curl_http_get "https://downloads.example.test/release" "{{outputPath}}" "configured release host"
+            """);
+
+        Assert.Equal(1, redirectExitCode);
+        Assert.Contains("Protocol \"http\" disabled (in redirect)", redirectStderr);
+        Assert.Contains("Public release and API traffic must remain HTTPS", redirectStderr);
+        Assert.Contains("[protocol_rejected]", redirectStderr);
+
+        var (timeoutExitCode, _, timeoutStderr) = RunInstallerSnippet(
+            $$"""
+            curl() {
+                printf 'curl: (28) Operation too slow\n' >&2
+                return 28
+            }
+
+            curl_http_get "https://downloads.example.test/stalled" "{{outputPath}}" "configured release host"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_NETWORK_RETRY_COUNT"] = "0",
+            });
+
+        Assert.Equal(1, timeoutExitCode);
+        Assert.Contains("curl: (28) Operation too slow", timeoutStderr);
+        Assert.Contains("Installer network timeout", timeoutStderr);
+        Assert.Contains("[network_timeout]", timeoutStderr);
+
+        var (invalidConfigExitCode, invalidConfigStdout, invalidConfigStderr) = RunInstallerSnippet(
+            $$"""
+            curl() {
+                printf 'UNREACHABLE\n'
+                return 0
+            }
+
+            curl_http_get "https://downloads.example.test/release" "{{outputPath}}" "configured release host"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_NETWORK_RETRY_COUNT"] = "99",
+            });
+
+        Assert.Equal(1, invalidConfigExitCode);
+        Assert.DoesNotContain("UNREACHABLE", invalidConfigStdout);
+        Assert.Contains("Invalid CDIDX_NETWORK_RETRY_COUNT: expected an integer from 0 to 5, got 99", invalidConfigStderr);
+
+        var (overflowExitCode, overflowStdout, overflowStderr) = RunInstallerSnippet(
+            $$"""
+            curl() {
+                printf 'UNREACHABLE\n'
+                return 0
+            }
+
+            curl_http_get "https://downloads.example.test/release" "{{outputPath}}" "configured release host"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_NETWORK_RETRY_COUNT"] = "999999999999999999999999",
+            });
+
+        Assert.Equal(1, overflowExitCode);
+        Assert.DoesNotContain("UNREACHABLE", overflowStdout);
+        Assert.DoesNotContain("integer expression expected", overflowStderr);
+        Assert.Contains("Invalid CDIDX_NETWORK_RETRY_COUNT: expected an integer from 0 to 5", overflowStderr);
+    }
+
+    [ProductionCliFact]
+    public void InstallerNetworkPolicy_RealStallAndHttpsDowngradeAreBlocked_Issue4604()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using (var stalledServer = new LoopbackTcpTestServer(async (client, cancellationToken) =>
+        {
+            await using var stream = client.GetStream();
+            await ReadHttpRequestHeadersAsync(stream, cancellationToken);
+            var prefix = Encoding.ASCII.GetBytes(
+                "HTTP/1.1 200 OK\r\nContent-Length: 1024\r\nConnection: close\r\n\r\nx");
+            await stream.WriteAsync(prefix, cancellationToken);
+            await stream.FlushAsync(cancellationToken);
+            await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
+        }))
+        {
+            var stalledOutputPath = Path.Combine(_tempRoot, "real_stalled_response.txt");
+            var stopwatch = Stopwatch.StartNew();
+            var (exitCode, _, stderr) = RunInstallerSnippet(
+                $$"""
+                curl_http_get "http://127.0.0.1:{{stalledServer.Port}}/stalled" "{{stalledOutputPath}}" "stalled loopback test server"
+                """,
+                new Dictionary<string, string?>
+                {
+                    ["CDIDX_NETWORK_CONNECT_TIMEOUT_SECONDS"] = "1",
+                    ["CDIDX_NETWORK_MAX_TIME_SECONDS"] = "10",
+                    ["CDIDX_NETWORK_LOW_SPEED_LIMIT_BYTES"] = "1024",
+                    ["CDIDX_NETWORK_LOW_SPEED_TIME_SECONDS"] = "1",
+                    ["CDIDX_NETWORK_RETRY_COUNT"] = "0",
+                });
+            stopwatch.Stop();
+
+            Assert.Equal(1, exitCode);
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(15), $"Stalled transfer took {stopwatch.Elapsed}.");
+            Assert.Contains("[network_timeout]", stderr);
+        }
+
+        using var certificate = CreateLoopbackServerCertificate("downloads.example.test");
+        var downgradeTarget = new TcpListener(IPAddress.Loopback, 0);
+        downgradeTarget.Start();
+        try
+        {
+            var downgradeTargetPort = ((IPEndPoint)downgradeTarget.LocalEndpoint).Port;
+            using var tlsRedirectServer = new LoopbackTcpTestServer(async (client, cancellationToken) =>
+            {
+                await using var ssl = new SslStream(client.GetStream(), leaveInnerStreamOpen: false);
+                await ssl.AuthenticateAsServerAsync(
+                    new SslServerAuthenticationOptions
+                    {
+                        ServerCertificate = certificate,
+                        EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+                    },
+                    cancellationToken);
+                await ReadHttpRequestHeadersAsync(ssl, cancellationToken);
+                var response = Encoding.ASCII.GetBytes(
+                    $"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{downgradeTargetPort}/downgraded\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                await ssl.WriteAsync(response, cancellationToken);
+                await ssl.FlushAsync(cancellationToken);
+            });
+
+            var redirectOutputPath = Path.Combine(_tempRoot, "real_redirect_response.txt");
+            var (exitCode, _, stderr) = RunInstallerSnippet(
+                $$"""
+                curl() {
+                    command curl --insecure --noproxy '*' --resolve "downloads.example.test:{{tlsRedirectServer.Port}}:127.0.0.1" "$@"
+                }
+
+                curl_http_get "https://downloads.example.test:{{tlsRedirectServer.Port}}/redirect" "{{redirectOutputPath}}" "TLS redirect test server"
+                """);
+
+            tlsRedirectServer.WaitForCompletion();
+            Assert.Equal(1, exitCode);
+            Assert.Contains("[protocol_rejected]", stderr);
+            Assert.False(downgradeTarget.Pending());
+        }
+        finally
+        {
+            downgradeTarget.Stop();
+        }
+    }
+
+    [ProductionCliFact]
+    public void InstallerNetworkPolicy_RetryUsesFreshBoundedOutput_Issue4604()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var retryServer = new LoopbackTcpTestServer(2, async (client, attempt, cancellationToken) =>
+        {
+            await using var stream = client.GetStream();
+            await ReadHttpRequestHeadersAsync(stream, cancellationToken);
+
+            var bodyText = attempt == 0 ? "partial-failed-attempt" : "valid-response";
+            var body = Encoding.ASCII.GetBytes(bodyText);
+            var declaredLength = attempt == 0 ? body.Length + 100 : body.Length;
+            var status = attempt == 0 ? "503 Service Unavailable" : "200 OK";
+            var headers = Encoding.ASCII.GetBytes(
+                $"HTTP/1.1 {status}\r\nContent-Length: {declaredLength}\r\nConnection: close\r\n\r\n");
+            await stream.WriteAsync(headers, cancellationToken);
+            await stream.WriteAsync(body, cancellationToken);
+            await stream.FlushAsync(cancellationToken);
+        });
+
+        var outputPath = Path.Combine(_tempRoot, "retried_response.txt");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            http_code="$(curl_http_get "http://127.0.0.1:{{retryServer.Port}}/retry" "{{outputPath}}" "retry loopback test server")"
+            printf 'HTTP:%s\n' "$http_code"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_NETWORK_MAX_TIME_SECONDS"] = "10",
+                ["CDIDX_NETWORK_RETRY_COUNT"] = "1",
+                ["CDIDX_NETWORK_RETRY_DELAY_SECONDS"] = "0",
+            });
+
+        retryServer.WaitForCompletion();
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("HTTP:200", stdout);
+        Assert.Equal("valid-response", File.ReadAllText(outputPath));
+    }
+
+    [ProductionCliFact]
     public void DownloadAndInstall_ForbiddenGitHubAssetDownload_PrintsGitHubAndAllowListHints()
     {
         if (OperatingSystem.IsWindows())
@@ -1811,6 +2086,191 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("OUTSIDE_MISSING", stdout);
         Assert.Contains("Release archive contains unsafe member path before extraction: ../escape_marker", stderr);
         Assert.False(File.Exists(outsidePath));
+    }
+
+    [ProductionCliFact]
+    public void ValidateArchiveMembers_RejectsLinksAndUnsupportedTypes_Issue4605()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var entryTypes = new[]
+        {
+            TarEntryType.SymbolicLink,
+            TarEntryType.HardLink,
+            TarEntryType.Fifo,
+        };
+
+        foreach (var entryType in entryTypes)
+        {
+            var archivePath = Path.Combine(_tempRoot, $"unsafe_{entryType}.tar.gz");
+            using (var archive = File.Create(archivePath))
+            using (var gzip = new GZipStream(archive, CompressionLevel.SmallestSize))
+            using (var writer = new TarWriter(gzip, leaveOpen: false))
+            {
+                var entry = new PaxTarEntry(entryType, $"unsafe-{entryType}");
+                if (entryType is TarEntryType.SymbolicLink or TarEntryType.HardLink)
+                    entry.LinkName = "cdidx";
+                writer.WriteEntry(entry);
+            }
+
+            var (exitCode, stdout, stderr) = RunInstallerSnippet(
+                $$"""
+                status=0
+                validate_archive_members "{{archivePath}}" || status=$?
+                printf 'STATUS:%s\n' "$status"
+                """,
+                enforceStrictMode: false);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("STATUS:1", stdout);
+            if (entryType is TarEntryType.SymbolicLink or TarEntryType.HardLink)
+                Assert.Contains("[archive_link_rejected]", stderr);
+            else
+                Assert.Contains("[archive_member_type_rejected]", stderr);
+        }
+    }
+
+    [ProductionCliFact]
+    public void ArchiveBudgets_RejectManyMembersDeclaredBytesGzipBombAndActualBytes_Issue4605()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var manyMembersArchive = Path.Combine(_tempRoot, "many_members.tar.gz");
+        using (var archive = File.Create(manyMembersArchive))
+        using (var gzip = new GZipStream(archive, CompressionLevel.SmallestSize))
+        using (var writer = new TarWriter(gzip, leaveOpen: false))
+        {
+            for (var i = 0; i < 3; i++)
+            {
+                using var data = new MemoryStream([unchecked((byte)i)]);
+                writer.WriteEntry(new PaxTarEntry(TarEntryType.RegularFile, $"file-{i}") { DataStream = data });
+            }
+        }
+
+        var (memberExitCode, memberStdout, memberStderr) = RunInstallerSnippet(
+            $$"""
+            ARCHIVE_MEMBER_MAX_COUNT=2
+            status=0
+            validate_archive_members "{{manyMembersArchive}}" || status=$?
+            printf 'STATUS:%s\n' "$status"
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, memberExitCode);
+        Assert.Contains("STATUS:1", memberStdout);
+        Assert.Contains("[archive_member_count_exceeded]", memberStderr);
+
+        var declaredArchive = Path.Combine(_tempRoot, "declared_bytes.tar.gz");
+        using (var archive = File.Create(declaredArchive))
+        using (var gzip = new GZipStream(archive, CompressionLevel.SmallestSize))
+        using (var writer = new TarWriter(gzip, leaveOpen: false))
+        using (var data = new MemoryStream(new byte[16]))
+            writer.WriteEntry(new PaxTarEntry(TarEntryType.RegularFile, "payload") { DataStream = data });
+
+        var (declaredExitCode, declaredStdout, declaredStderr) = RunInstallerSnippet(
+            $$"""
+            ARCHIVE_DECLARED_MAX_BYTES=8
+            status=0
+            validate_archive_members "{{declaredArchive}}" || status=$?
+            printf 'STATUS:%s\n' "$status"
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, declaredExitCode);
+        Assert.Contains("STATUS:1", declaredStdout);
+        Assert.Contains("[archive_declared_size_exceeded]", declaredStderr);
+
+        var gzipBombArchive = Path.Combine(_tempRoot, "gzip_bomb.tar.gz");
+        using (var archive = File.Create(gzipBombArchive))
+        using (var gzip = new GZipStream(archive, CompressionLevel.SmallestSize))
+        using (var writer = new TarWriter(gzip, leaveOpen: false))
+        using (var data = new MemoryStream(new byte[64 * 1024]))
+            writer.WriteEntry(new PaxTarEntry(TarEntryType.RegularFile, "zeros") { DataStream = data });
+
+        var (expandedExitCode, expandedStdout, expandedStderr) = RunInstallerSnippet(
+            $$"""
+            ARCHIVE_EXPANDED_STREAM_MAX_BYTES=1024
+            ARCHIVE_COMPRESSION_RATIO_MAX=1000000
+            status=0
+            validate_archive_members "{{gzipBombArchive}}" || status=$?
+            printf 'STATUS:%s\n' "$status"
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, expandedExitCode);
+        Assert.Contains("STATUS:1", expandedStdout);
+        Assert.Contains("[archive_expanded_size_exceeded]", expandedStderr);
+
+        var (gzipExitCode, gzipStdout, gzipStderr) = RunInstallerSnippet(
+            $$"""
+            ARCHIVE_EXPANDED_STREAM_MAX_BYTES=131072
+            ARCHIVE_COMPRESSION_RATIO_MAX=2
+            status=0
+            validate_archive_members "{{gzipBombArchive}}" || status=$?
+            printf 'STATUS:%s\n' "$status"
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, gzipExitCode);
+        Assert.Contains("STATUS:1", gzipStdout);
+        Assert.Contains("[archive_compression_ratio_exceeded]", gzipStderr);
+
+        var extractedDirectory = Path.Combine(_tempRoot, "oversized_extracted_payload");
+        Directory.CreateDirectory(extractedDirectory);
+        File.WriteAllText(Path.Combine(extractedDirectory, "payload"), "12345");
+        var (actualExitCode, actualStdout, actualStderr) = RunInstallerSnippet(
+            $$"""
+            VALIDATED_ARCHIVE_DECLARED_BYTES=5
+            EXTRACTED_PAYLOAD_MAX_BYTES=4
+            status=0
+            validate_extracted_payload_size "{{extractedDirectory}}" || status=$?
+            printf 'STATUS:%s\n' "$status"
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, actualExitCode);
+        Assert.Contains("STATUS:1", actualStdout);
+        Assert.Contains("[extracted_size_exceeded]", actualStderr);
+    }
+
+    [ProductionCliFact]
+    public void CurlHttpGet_RejectsOversizedDownloadedResponse_Issue4605()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var outputPath = Path.Combine(_tempRoot, "oversized_download.txt");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            curl() {
+                local output_path=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o) output_path="$2"; shift 2 ;;
+                        -w) shift 2 ;;
+                        *) shift ;;
+                    esac
+                done
+                local i=0
+                while [ "$i" -lt 1024 ]; do
+                    printf '123456789abcdef0' || return $?
+                    i=$((i + 1))
+                done > "$output_path"
+                printf '200'
+            }
+
+            LATEST_RELEASE_RESPONSE_MAX_BYTES=8
+            curl_http_get "https://downloads.example.test/oversized" "{{outputPath}}" "oversized test response"
+            printf 'UNREACHABLE\n'
+            """);
+
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("UNREACHABLE", stdout);
+        Assert.Contains("exceeded the 8 byte limit", stderr);
+        Assert.Contains("[download_size_exceeded]", stderr);
+        Assert.InRange(new FileInfo(outputPath).Length, 0, 9);
     }
 
     [ProductionCliFact]
@@ -5888,6 +6348,106 @@ public sealed class InstallScriptTests : IDisposable
         "70-doctor.sh",
         "90-dispatch.sh",
     ];
+
+    private sealed class LoopbackTcpTestServer : IDisposable
+    {
+        private readonly TcpListener _listener;
+        private readonly CancellationTokenSource _cancellation = new();
+        private readonly Task _serverTask;
+
+        public LoopbackTcpTestServer(Func<TcpClient, CancellationToken, Task> handler)
+            : this(1, (client, _, cancellationToken) => handler(client, cancellationToken))
+        {
+        }
+
+        public LoopbackTcpTestServer(int connectionCount, Func<TcpClient, int, CancellationToken, Task> handler)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(connectionCount, 1);
+            _listener = new TcpListener(IPAddress.Loopback, 0);
+            _listener.Start();
+            Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
+            _serverTask = Task.Run(async () =>
+            {
+                try
+                {
+                    for (var attempt = 0; attempt < connectionCount; attempt++)
+                    {
+                        using var client = await _listener.AcceptTcpClientAsync(_cancellation.Token);
+                        await handler(client, attempt, _cancellation.Token);
+                    }
+                }
+                catch (OperationCanceledException) when (_cancellation.IsCancellationRequested)
+                {
+                }
+                catch (ObjectDisposedException) when (_cancellation.IsCancellationRequested)
+                {
+                }
+                catch (SocketException) when (_cancellation.IsCancellationRequested)
+                {
+                }
+            });
+        }
+
+        public int Port { get; }
+
+        public void WaitForCompletion()
+        {
+            Assert.True(_serverTask.Wait(TimeSpan.FromSeconds(10)), "Loopback test server did not complete.");
+            _serverTask.GetAwaiter().GetResult();
+        }
+
+        public void Dispose()
+        {
+            _cancellation.Cancel();
+            _listener.Stop();
+            try
+            {
+                _serverTask.Wait(TimeSpan.FromSeconds(5));
+            }
+            catch (AggregateException aggregate) when (aggregate.InnerExceptions.All(
+                       exception => exception is OperationCanceledException or ObjectDisposedException or SocketException))
+            {
+            }
+            _cancellation.Dispose();
+        }
+    }
+
+    private static async Task ReadHttpRequestHeadersAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        var terminator = new byte[] { (byte)'\r', (byte)'\n', (byte)'\r', (byte)'\n' };
+        var matched = 0;
+        var buffer = new byte[1];
+        for (var readBytes = 0; readBytes < 65_536; readBytes++)
+        {
+            var read = await stream.ReadAsync(buffer, cancellationToken);
+            if (read == 0)
+                throw new IOException("Client closed before sending complete HTTP headers.");
+
+            matched = buffer[0] == terminator[matched]
+                ? matched + 1
+                : buffer[0] == terminator[0] ? 1 : 0;
+            if (matched == terminator.Length)
+                return;
+        }
+
+        throw new IOException("HTTP request headers exceeded the test-server limit.");
+    }
+
+    private static X509Certificate2 CreateLoopbackServerCertificate(string dnsName)
+    {
+        using var rsa = RSA.Create(2048);
+        var request = new CertificateRequest(
+            $"CN={dnsName}",
+            rsa,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+        var subjectAlternativeNames = new SubjectAlternativeNameBuilder();
+        subjectAlternativeNames.AddDnsName(dnsName);
+        request.CertificateExtensions.Add(subjectAlternativeNames.Build());
+        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, false));
+        request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, false));
+        return request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddHours(1));
+    }
 
     private static string NormalizeNewlines(string value)
         => value.Replace("\r\n", "\n", StringComparison.Ordinal);
