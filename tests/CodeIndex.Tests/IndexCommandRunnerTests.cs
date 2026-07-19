@@ -6229,6 +6229,64 @@ public sealed class Caller
         }
     }
 
+    [ExternalProcessFact]
+    public void Run_WithSymlinkedGitInfoDescendant_RefusesExternalExcludeWrite_Issue4599()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var externalInfoDirectory = TestProjectHelper.CreateTempProject("cdidx_external_git_info");
+        var infoLink = Path.Combine(projectRoot, ".git", "info");
+        try
+        {
+            RunGit(projectRoot, "init");
+            TestProjectHelper.DeleteDirectory(infoLink);
+            Directory.CreateSymbolicLink(infoLink, externalInfoDirectory);
+
+            var exitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.False(File.Exists(Path.Combine(externalInfoDirectory, "exclude")));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteFile(infoLink);
+            DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(externalInfoDirectory);
+        }
+    }
+
+    [ExternalProcessFact]
+    public void Run_WithSymlinkedGitExcludeFile_RefusesExternalExcludeWrite_Issue4599()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var externalDirectory = TestProjectHelper.CreateTempProject("cdidx_external_exclude_file");
+        var externalExclude = Path.Combine(externalDirectory, "exclude");
+        var excludeLink = Path.Combine(projectRoot, ".git", "info", "exclude");
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(externalExclude, "external sentinel\n");
+            TestProjectHelper.DeleteFile(excludeLink);
+            File.CreateSymbolicLink(excludeLink, externalExclude);
+
+            var exitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("external sentinel\n", File.ReadAllText(externalExclude));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteFile(excludeLink);
+            DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(externalDirectory);
+        }
+    }
+
     [Fact]
     public void Run_WithAbsoluteDbPathOutsideProject_DoesNotWriteAbsolutePathToGitExclude()
     {

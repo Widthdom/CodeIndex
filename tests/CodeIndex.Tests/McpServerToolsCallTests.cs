@@ -3446,7 +3446,7 @@ public partial class McpServerTests
         Assert.Equal(McpServer.MaxMcpPaginationOffset, limits["max_pagination_offset"]!.GetValue<int>());
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void ToolsCall_StatusCompact_ReportsAcceptedExtensionTrustOverrides_3735()
     {
         lock (TestConsoleLock.Gate)
@@ -3458,7 +3458,11 @@ public partial class McpServerTests
             var hooksDir = Path.Combine(_projectRoot, "hooks");
             var gitPath = Path.Combine(_projectRoot, OperatingSystem.IsWindows() ? "git.exe" : "git");
             Directory.CreateDirectory(hooksDir);
-            File.WriteAllText(gitPath, OperatingSystem.IsWindows() ? "not a portable executable" : "#!/bin/sh\nexit 1\n");
+            File.WriteAllText(
+                gitPath,
+                OperatingSystem.IsWindows()
+                    ? "not a portable executable"
+                    : "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'git version 2.0.0'; exit 0; fi\nexit 1\n");
             if (!OperatingSystem.IsWindows())
             {
                 File.SetUnixFileMode(
@@ -3473,7 +3477,7 @@ public partial class McpServerTests
                 """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{"format":"compact"}}}""")!)!;
 
             var trustOverrides = response["result"]!["structuredContent"]!["trust_overrides"]!.AsArray();
-            Assert.Equal(3, trustOverrides.Count);
+            Assert.Equal(OperatingSystem.IsWindows() ? 2 : 3, trustOverrides.Count);
             Assert.Contains(
                 trustOverrides,
                 item => item?["kind"]?.GetValue<string>() == "workspace_plugin_directory"
@@ -3488,12 +3492,24 @@ public partial class McpServerTests
 
             var gitExecutable = response["result"]!["structuredContent"]!["git_executable"]!;
             Assert.Equal("environment_override", gitExecutable["source"]!.GetValue<string>());
-            Assert.True(gitExecutable["accepted"]!.GetValue<bool>());
-            Assert.Equal("accepted", gitExecutable["reason"]!.GetValue<string>());
-            var gitOverride = Assert.Single(
-                trustOverrides,
-                item => item?["kind"]?.GetValue<string>() == "git_executable");
-            Assert.Equal(GitHelper.GitExecutableEnvironmentVariable, gitOverride!["environment_variable"]!.GetValue<string>());
+            if (OperatingSystem.IsWindows())
+            {
+                Assert.False(gitExecutable["accepted"]!.GetValue<bool>());
+                Assert.Equal("invalid_executable_format", gitExecutable["reason"]!.GetValue<string>());
+                Assert.DoesNotContain(trustOverrides, item => item?["kind"]?.GetValue<string>() == "git_executable");
+            }
+            else
+            {
+                Assert.True(gitExecutable["accepted"]!.GetValue<bool>());
+                Assert.Equal("accepted", gitExecutable["reason"]!.GetValue<string>());
+                Assert.Equal("current_user", gitExecutable["owner"]!.GetValue<string>());
+                Assert.True(gitExecutable["owner_trusted"]!.GetValue<bool>());
+                Assert.True(gitExecutable["ancestor_directories_trusted"]!.GetValue<bool>());
+                var gitOverride = Assert.Single(
+                    trustOverrides,
+                    item => item?["kind"]?.GetValue<string>() == "git_executable");
+                Assert.Equal(GitHelper.GitExecutableEnvironmentVariable, gitOverride!["environment_variable"]!.GetValue<string>());
+            }
         }
     }
 

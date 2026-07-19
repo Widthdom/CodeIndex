@@ -190,7 +190,7 @@ cancellation, and WAL snapshot-risk diagnostics.
 | Readiness and graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`. |
 | Workspace and HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`, `head_freshness`. |
 | Version and forward compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`. |
-| Unknown-extension and runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `db_file_mode`, `database_permission_policy`, `database_permission_diagnostics`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `query_context.check_mode`, `query_context.stale_after_seconds`, `process`, `last_index_run`, `last_workspace_freshened_at`, `last_index_run.bytes_read_skipped_file_count`, `last_index_run.bytes_read_incomplete`, `last_index_run.diagnostics`, `last_index_run.diagnostic_count`, `last_index_run.diagnostics_truncated`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`. |
+| Unknown-extension and runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `git_executable`, `path_case_sensitive`, `data_dir_mode`, `db_file_mode`, `database_permission_policy`, `database_permission_diagnostics`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `query_context.check_mode`, `query_context.stale_after_seconds`, `process`, `last_index_run`, `last_workspace_freshened_at`, `last_index_run.bytes_read_skipped_file_count`, `last_index_run.bytes_read_incomplete`, `last_index_run.diagnostics`, `last_index_run.diagnostic_count`, `last_index_run.diagnostics_truncated`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`. |
 | Database maintenance | `sqlite_connection_policy` (`active_mode`, `open_mode`, `immutable_uri`, WAL checkpoint/fallback fields), `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `busy_timeout_ms`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `prepared_command_cache` (`count`, `capacity`, `hit_count`, `miss_count`, `eviction_count`), `maintenance_guidance`. Query-only status reports `pooling=false` and either `read_only` or `immutable_read_only_uri`; checkpointed WAL databases use an immutable private snapshot, while non-empty WAL databases use a stable private main/WAL snapshot so source sidecars remain unchanged. Persistent private-snapshot copy failures report `query_only_snapshot_copy_failed` with temporary-storage capacity and permission guidance instead of being misreported as WAL churn. |
 | WAL checkpoint diagnostics | `read_only_fallback`, `wal_checkpoint_attempted`, `wal_checkpoint_succeeded`, `wal_checkpoint_skipped_reason`, `wal_checkpoint_failure_reason`, `wal_checkpoint_busy`, `wal_checkpoint_log_page_count`, `wal_checkpoint_checkpointed_page_count`, `wal_checkpoint_remaining_page_count`, `read_only_immutable_fallback`, `wal_stale_snapshot_risk`, `wal_stale_snapshot_reason`. |
 | Remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`. |
@@ -280,15 +280,19 @@ Git subprocesses do not resolve an arbitrary executable from `PATH`. On Nix,
 custom-prefix, or portable installations, set `CDIDX_GIT_EXECUTABLE` in the
 process environment to the absolute path of `git` (`git.exe` on Windows). The
 override is accepted only for a regular non-symlink/non-reparse file; POSIX
-files must have an execute bit and must not be group- or other-writable, while
-Windows paths must end in `.exe`. An invalid explicit override fails closed
+files and their canonical ancestor directories must be owned by the current
+user or root and must not be group- or other-writable. Windows paths must be a
+valid PE image. Every accepted candidate must successfully identify itself via
+`git --version`. An invalid explicit override fails closed
 instead of falling back to a different Git binary. CLI and MCP `status` expose
 the sanitized selection under `git_executable`, including `source`, `accepted`,
-the stable `reason`, `owner_only_writable`, `unix_mode`, and `executable`.
+the stable `reason`, `owner_only_writable`, `unix_mode`, `executable`, `owner`,
+`owner_trusted`, and `ancestor_directories_trusted`.
 Git metadata resolution applies the same regular-entry boundary to normal
 `.git` directories, worktree `.git` files, their `gitdir` targets, and
 `commondir` targets, so symlink/reparse/device redirection is rejected before
-`info/exclude` or hooks can be written.
+`info/exclude` or hooks can be written. Existing `info`, `exclude`, `hooks`, and
+hook-file descendants are revalidated immediately before their metadata write.
 
 Successful CLI and MCP index runs can also persist bounded
 `last_index_run.diagnostics` when best-effort metadata writes fail after the
@@ -504,7 +508,7 @@ immutable URI の選択、timeout、cancellation、WAL snapshot risk の diagnos
 | readiness / graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`。 |
 | workspace / HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`, `head_freshness`。 |
 | version / forward compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`。 |
-| unknown-extension / runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `db_file_mode`, `database_permission_policy`, `database_permission_diagnostics`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `query_context.check_mode`, `query_context.stale_after_seconds`, `process`, `last_index_run`, `last_workspace_freshened_at`, `last_index_run.bytes_read_skipped_file_count`, `last_index_run.bytes_read_incomplete`, `last_index_run.diagnostics`, `last_index_run.diagnostic_count`, `last_index_run.diagnostics_truncated`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`。 |
+| unknown-extension / runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `git_executable`, `path_case_sensitive`, `data_dir_mode`, `db_file_mode`, `database_permission_policy`, `database_permission_diagnostics`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `query_context.check_mode`, `query_context.stale_after_seconds`, `process`, `last_index_run`, `last_workspace_freshened_at`, `last_index_run.bytes_read_skipped_file_count`, `last_index_run.bytes_read_incomplete`, `last_index_run.diagnostics`, `last_index_run.diagnostic_count`, `last_index_run.diagnostics_truncated`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`。 |
 | database maintenance | `sqlite_connection_policy` (`active_mode`、`open_mode`、`immutable_uri`、WAL checkpoint / fallback field)、`db_size_bytes`、`wal_size_bytes`、`db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `busy_timeout_ms`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`)、`prepared_command_cache` (`count`, `capacity`, `hit_count`, `miss_count`, `eviction_count`)、`maintenance_guidance`。query-only status は `pooling=false` と、`read_only` または `immutable_read_only_uri` の mode を返します。checkpoint 済み WAL database は immutable な private snapshot、non-empty WAL database は安定した private main/WAL snapshot から読むため source sidecar は変化しません。private snapshot の永続的な copy failure は WAL churn と誤報せず、temporary storage の容量・権限を案内する `query_only_snapshot_copy_failed` を返します。 |
 | WAL checkpoint diagnostics | `read_only_fallback`、`wal_checkpoint_attempted`、`wal_checkpoint_succeeded`、`wal_checkpoint_skipped_reason`、`wal_checkpoint_failure_reason`、`wal_checkpoint_busy`、`wal_checkpoint_log_page_count`、`wal_checkpoint_checkpointed_page_count`、`wal_checkpoint_remaining_page_count`、`read_only_immutable_fallback`、`wal_stale_snapshot_risk`、`wal_stale_snapshot_reason`。 |
 | remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`。 |
@@ -590,15 +594,19 @@ bounded な path と message に加えて sanitization 済みの `category` mach
 Git subprocess は `PATH` から任意の実行ファイルを解決しません。Nix、custom-prefix、
 portable installation では、process environment の `CDIDX_GIT_EXECUTABLE` に
 `git`（Windows は `git.exe`）の絶対パスを設定してください。override は regular かつ
-symlink / reparse point ではない file だけを受理し、POSIX では execute bit があり
-group / other writable でないこと、Windows では `.exe` suffix を要求します。不正な明示
+symlink / reparse point ではない file だけを受理します。POSIX では file と canonical な
+ancestor directory が current user または root の所有で、group / other writable でないことを
+要求し、Windows では有効な PE image を要求します。さらに受理前に `git --version` が成功し、
+Git として自己識別できることを確認します。不正な明示
 override は別の Git binary へ fallback せず fail-closed になります。CLI / MCP の
 `status` は sanitization 済みの選択結果を `git_executable` として公開し、`source`、
-`accepted`、stable な `reason`、`owner_only_writable`、`unix_mode`、`executable` を
+`accepted`、stable な `reason`、`owner_only_writable`、`unix_mode`、`executable`、
+`owner`、`owner_trusted`、`ancestor_directories_trusted` を
 含みます。Git metadata 解決も通常 repo の `.git` directory、worktree の `.git` file、
 その `gitdir` target と `commondir` target に同じ regular-entry boundary を適用するため、
 symlink / reparse point / device による redirect は `info/exclude` や hook の書込み前に
-拒否されます。
+拒否されます。既存の `info`、`exclude`、`hooks`、hook file descendant は metadata を
+書き込む直前にも再検証されます。
 
 成功した CLI / MCP index run は、index data 自体の書き込みが成功した後に
 best-effort metadata write が失敗した場合、上限付きの

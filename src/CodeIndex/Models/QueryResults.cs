@@ -964,7 +964,16 @@ public sealed record GitExecutableStatus(
     string? UnixMode,
     [property: JsonPropertyName("executable")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    bool? Executable);
+    bool? Executable,
+    [property: JsonPropertyName("owner")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Owner,
+    [property: JsonPropertyName("owner_trusted")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    bool? OwnerTrusted,
+    [property: JsonPropertyName("ancestor_directories_trusted")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    bool? AncestorDirectoriesTrusted);
 
 public class StatusResult
 {

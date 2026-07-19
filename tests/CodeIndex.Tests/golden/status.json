@@ -107,7 +107,7 @@
     "zig"
   ],
   "git_executable": {
-    "source": "known_location",
+    "source": "normalized",
     "accepted": true,
     "reason": "accepted",
     "path": "\u003CGIT_EXECUTABLE\u003E",

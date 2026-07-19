@@ -991,14 +991,17 @@ public class GitHelperTests : IDisposable
         Assert.Contains("/Applications/Xcode.app/Contents/Developer/usr/bin/git", candidates);
     }
 
-    [ExternalProcessFact]
-    public void GitExecutableEnvironmentOverride_AcceptsPortableAbsoluteGit_Issue4599()
+    [ExternalProcessTheory]
+    [InlineData("nix/store/hash-git-2.0/bin")]
+    [InlineData("custom-prefix/bin")]
+    [InlineData("portable/bin")]
+    public void GitExecutableEnvironmentOverride_AcceptsNixCustomPrefixAndPortableAbsoluteGit_Issue4599(string relativePrefix)
     {
         if (OperatingSystem.IsWindows())
             return;
 
         var repoDir = Path.Combine(_tempDir, "portable-git-repo");
-        var portableGitDir = Path.Combine(_tempDir, "portable-git-bin");
+        var portableGitDir = Path.Combine(_tempDir, relativePrefix);
         Directory.CreateDirectory(repoDir);
         Directory.CreateDirectory(portableGitDir);
         WriteFakeGitThatReturnsChangedFile(portableGitDir, "portable.txt");
@@ -1022,6 +1025,9 @@ public class GitHelperTests : IDisposable
             Assert.True(status.OwnerOnlyWritable);
             Assert.Equal("0700", status.UnixMode);
             Assert.True(status.Executable);
+            Assert.Equal("current_user", status.Owner);
+            Assert.True(status.OwnerTrusted);
+            Assert.True(status.AncestorDirectoriesTrusted);
             Assert.Equal(GitHelper.GitExecutableEnvironmentVariable, trustOverride.EnvironmentVariable);
             Assert.Contains("mode 0700", trustOverride.Message, StringComparison.Ordinal);
         }
@@ -1031,7 +1037,7 @@ public class GitHelperTests : IDisposable
         }
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void GitExecutableEnvironmentOverride_ReportsUnsafeModeAndMissingExecuteBit_Issue4599()
     {
         if (OperatingSystem.IsWindows())
@@ -1057,7 +1063,7 @@ public class GitHelperTests : IDisposable
             Assert.False(sharedWritable.Accepted);
             Assert.Equal("shared_writable", sharedWritable.Reason);
             Assert.False(sharedWritable.OwnerOnlyWritable);
-            Assert.True(sharedWritable.Executable);
+            Assert.Null(sharedWritable.Executable);
             Assert.Empty(GitHelper.GetAcceptedTrustOverrides());
 
             File.SetUnixFileMode(portableGitPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
@@ -1080,6 +1086,34 @@ public class GitHelperTests : IDisposable
 
             Assert.False(unexpectedName.Accepted);
             Assert.Equal("unexpected_filename", unexpectedName.Reason);
+
+            env.Set(GitHelper.GitExecutableEnvironmentVariable, portableGitPath);
+            File.SetUnixFileMode(
+                portableGitPath,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            var wrongIdentity = GitHelper.GetGitExecutableStatus();
+
+            Assert.False(wrongIdentity.Accepted);
+            Assert.Equal("execution_probe_failed", wrongIdentity.Reason);
+            Assert.False(wrongIdentity.Executable);
+            Assert.Equal("current_user", wrongIdentity.Owner);
+            Assert.True(wrongIdentity.OwnerTrusted);
+            Assert.True(wrongIdentity.AncestorDirectoriesTrusted);
+
+            var originalDirectoryMode = File.GetUnixFileMode(portableGitDir);
+            try
+            {
+                File.SetUnixFileMode(portableGitDir, originalDirectoryMode | UnixFileMode.GroupWrite);
+                var unsafeAncestor = GitHelper.GetGitExecutableStatus();
+
+                Assert.False(unsafeAncestor.Accepted);
+                Assert.Equal("ancestor_untrusted", unsafeAncestor.Reason);
+                Assert.False(unsafeAncestor.AncestorDirectoriesTrusted);
+            }
+            finally
+            {
+                File.SetUnixFileMode(portableGitDir, originalDirectoryMode);
+            }
         }
         finally
         {
@@ -1660,6 +1694,10 @@ exit 1
         var script = Path.Combine(directory, "git");
         File.WriteAllText(script, """
 #!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf '%s\n' 'git version 2.0.0'
+  exit 0
+fi
 if [ "$1" = "rev-parse" ]; then
   if [ "$2" = "--symbolic-full-name" ]; then
     exit 0

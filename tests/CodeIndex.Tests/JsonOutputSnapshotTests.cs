@@ -62,8 +62,12 @@ public class Probe
     public void RunStatus_JsonOutput_MatchesGolden()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_snapshot_status");
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
         try
         {
+            var gitExecutablePath = Path.Combine(projectRoot, OperatingSystem.IsWindows() ? "git.exe" : "git");
+            File.WriteAllText(gitExecutablePath, "snapshot-only test override");
+            GitHelper.GitExecutablePathOverride = gitExecutablePath;
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/Lib.cs", "csharp", LibSource);
 
@@ -81,6 +85,7 @@ public class Probe
         }
         finally
         {
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
@@ -108,12 +113,15 @@ public class Probe
 
         if (root["git_executable"] is JsonObject gitExecutable)
         {
-            // Keep the public field shape pinned while normalizing OS-specific executable names
-            // and POSIX-only ownership/mode diagnostics. Dedicated Issue4599 tests cover those values.
-            if (gitExecutable["path"] is not null)
-                gitExecutable["path"] = "<GIT_EXECUTABLE>";
-            gitExecutable.Remove("owner_only_writable");
-            gitExecutable.Remove("unix_mode");
+            // Host Git availability and ambient CDIDX_GIT_EXECUTABLE are intentionally outside this
+            // golden contract. Normalize the complete selection state; dedicated Issue4599 tests pin
+            // accepted/rejected sources, owner/mode/ancestor trust, and execution-probe diagnostics.
+            gitExecutable.Clear();
+            gitExecutable["source"] = "normalized";
+            gitExecutable["accepted"] = true;
+            gitExecutable["reason"] = "accepted";
+            gitExecutable["path"] = "<GIT_EXECUTABLE>";
+            gitExecutable["executable"] = true;
         }
 
         return root.ToJsonString();

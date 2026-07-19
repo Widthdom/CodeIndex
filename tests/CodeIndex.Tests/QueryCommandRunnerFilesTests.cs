@@ -728,7 +728,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void RunStatus_Json_ReportsAcceptedExtensionTrustOverrides_3735()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_trust_overrides_3735");
@@ -744,7 +744,11 @@ public partial class QueryCommandRunnerTests
                 var hooksDir = Path.Combine(projectRoot, "hooks");
                 var gitPath = Path.Combine(projectRoot, OperatingSystem.IsWindows() ? "git.exe" : "git");
                 Directory.CreateDirectory(hooksDir);
-                File.WriteAllText(gitPath, OperatingSystem.IsWindows() ? "not a portable executable" : "#!/bin/sh\nexit 1\n");
+                File.WriteAllText(
+                    gitPath,
+                    OperatingSystem.IsWindows()
+                        ? "not a portable executable"
+                        : "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'git version 2.0.0'; exit 0; fi\nexit 1\n");
                 if (!OperatingSystem.IsWindows())
                 {
                     File.SetUnixFileMode(
@@ -763,25 +767,37 @@ public partial class QueryCommandRunnerTests
                 Assert.Equal(string.Empty, stderr);
                 using var document = JsonDocument.Parse(stdout);
                 var trustOverrides = document.RootElement.GetProperty("trust_overrides").EnumerateArray().ToArray();
-                Assert.Equal(3, trustOverrides.Length);
+                Assert.Equal(OperatingSystem.IsWindows() ? 2 : 3, trustOverrides.Length);
 
                 var gitExecutable = document.RootElement.GetProperty("git_executable");
                 Assert.Equal("environment_override", gitExecutable.GetProperty("source").GetString());
-                Assert.True(gitExecutable.GetProperty("accepted").GetBoolean());
-                Assert.Equal("accepted", gitExecutable.GetProperty("reason").GetString());
-                Assert.True(gitExecutable.GetProperty("executable").GetBoolean());
-                if (!OperatingSystem.IsWindows())
+                if (OperatingSystem.IsWindows())
                 {
+                    Assert.False(gitExecutable.GetProperty("accepted").GetBoolean());
+                    Assert.Equal("invalid_executable_format", gitExecutable.GetProperty("reason").GetString());
+                    Assert.False(gitExecutable.GetProperty("executable").GetBoolean());
+                    Assert.DoesNotContain(
+                        trustOverrides,
+                        item => item.GetProperty("kind").GetString() == "git_executable");
+                }
+                else
+                {
+                    Assert.True(gitExecutable.GetProperty("accepted").GetBoolean());
+                    Assert.Equal("accepted", gitExecutable.GetProperty("reason").GetString());
+                    Assert.True(gitExecutable.GetProperty("executable").GetBoolean());
                     Assert.True(gitExecutable.GetProperty("owner_only_writable").GetBoolean());
                     Assert.Equal("0700", gitExecutable.GetProperty("unix_mode").GetString());
-                }
+                    Assert.Equal("current_user", gitExecutable.GetProperty("owner").GetString());
+                    Assert.True(gitExecutable.GetProperty("owner_trusted").GetBoolean());
+                    Assert.True(gitExecutable.GetProperty("ancestor_directories_trusted").GetBoolean());
 
-                var gitOverride = Assert.Single(
-                    trustOverrides,
-                    item => item.GetProperty("kind").GetString() == "git_executable");
-                Assert.Equal(GitHelper.GitExecutableEnvironmentVariable, gitOverride.GetProperty("environment_variable").GetString());
-                Assert.Equal(Path.GetFileName(gitPath), gitOverride.GetProperty("path").GetString());
-                Assert.DoesNotContain(projectRoot, gitOverride.GetProperty("path").GetString(), StringComparison.Ordinal);
+                    var gitOverride = Assert.Single(
+                        trustOverrides,
+                        item => item.GetProperty("kind").GetString() == "git_executable");
+                    Assert.Equal(GitHelper.GitExecutableEnvironmentVariable, gitOverride.GetProperty("environment_variable").GetString());
+                    Assert.Equal(Path.GetFileName(gitPath), gitOverride.GetProperty("path").GetString());
+                    Assert.DoesNotContain(projectRoot, gitOverride.GetProperty("path").GetString(), StringComparison.Ordinal);
+                }
 
                 var pluginOverride = Assert.Single(
                     trustOverrides,
@@ -1710,6 +1726,20 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatus_Explain_PrintsGitExecutableDescriptionWithoutDatabase_Issue4599()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", "git_executable"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("Trusted Git executable selection (git_executable)", stdout);
+        Assert.Contains("git --version", stdout);
+        Assert.Contains(GitHelper.GitExecutableEnvironmentVariable, stdout);
+    }
+
+    [Fact]
     public void RunStatus_Explain_RejectsUnknownStatusField()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
@@ -1749,6 +1779,7 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("unknown_extension_file_count", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
         Assert.Contains("path_case_sensitive", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
         Assert.Contains("sqlite_connection_policy", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("git_executable", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
 
         var (policyExitCode, policyStdout, policyStderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
             ["--explain", "sqlite_connection_policy", "--json"],

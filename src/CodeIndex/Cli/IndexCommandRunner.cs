@@ -1194,7 +1194,33 @@ public static partial class IndexCommandRunner
             var gitDir = GitHelper.ResolveGitCommonDir(projectRoot, cancellationToken);
             if (gitDir == null) return;
 
-            var excludeFile = Path.Combine(gitDir, "info", "exclude");
+            if (!GitHelper.TryResolveGitMetadataChildPath(
+                    gitDir,
+                    "info",
+                    expectDirectory: true,
+                    allowMissing: true,
+                    out var infoDirectory))
+            {
+                throw new IOException("Unsafe Git metadata info directory.");
+            }
+
+            Directory.CreateDirectory(LongPath.EnsureWindowsPrefix(infoDirectory));
+            if (!GitHelper.TryResolveGitMetadataChildPath(
+                    gitDir,
+                    "info",
+                    expectDirectory: true,
+                    allowMissing: false,
+                    out infoDirectory)
+                || !GitHelper.TryResolveGitMetadataChildPath(
+                    infoDirectory,
+                    "exclude",
+                    expectDirectory: false,
+                    allowMissing: true,
+                    out var excludeFile))
+            {
+                throw new IOException("Unsafe Git metadata exclude path.");
+            }
+
             var dbAbsolutePath = Path.IsPathRooted(dbPath)
                 ? Path.GetFullPath(dbPath)
                 : Path.GetFullPath(Path.Combine(projectRoot, dbPath));
@@ -1227,7 +1253,23 @@ public static partial class IndexCommandRunner
             var missing = patterns.Where(p => !existingLines.Contains(p)).ToList();
             if (missing.Count == 0) return;
 
-            Directory.CreateDirectory(LongPath.EnsureWindowsPrefix(Path.GetDirectoryName(excludeFile)!));
+            if (!GitHelper.TryResolveGitMetadataChildPath(
+                    gitDir,
+                    "info",
+                    expectDirectory: true,
+                    allowMissing: false,
+                    out infoDirectory)
+                || !GitHelper.TryResolveGitMetadataChildPath(
+                    infoDirectory,
+                    "exclude",
+                    expectDirectory: false,
+                    allowMissing: true,
+                    out excludeFile))
+            {
+                throw new IOException("Git metadata exclude path became unsafe before write.");
+            }
+
+            ioExcludeFile = LongPath.EnsureWindowsPrefix(excludeFile);
 
             using var stream = new FileStream(
                 ioExcludeFile,

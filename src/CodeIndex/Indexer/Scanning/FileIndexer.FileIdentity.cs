@@ -52,6 +52,35 @@ public partial class FileIndexer
         }
     }
 
+    internal static bool TryGetUnixFileOwnerId(string path, out uint ownerId)
+    {
+        ownerId = 0;
+        if (!IsLinuxPlatform && !IsMacOSPlatform)
+            return false;
+
+        try
+        {
+            if (IsMacOSPlatform)
+            {
+                if (StatMac(path, out var stat) != 0)
+                    return false;
+
+                ownerId = stat.Uid;
+                return true;
+            }
+
+            if (StatLinux(path, out var linuxStat) != 0)
+                return false;
+
+            ownerId = linuxStat.Uid;
+            return true;
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            return false;
+        }
+    }
+
     private static bool TryGetWindowsFileIdentity(string path, out FileIdentity identity, out ulong linkCount)
     {
         identity = default;

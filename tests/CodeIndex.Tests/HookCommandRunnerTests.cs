@@ -95,6 +95,66 @@ public class HookCommandRunnerTests
     }
 
     [Fact]
+    public void Hooks_Install_RejectsSymlinkedHooksDescendantBeforeExternalWrite_Issue4599()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("hook_symlinked_hooks");
+        var externalHooksDir = TestProjectHelper.CreateTempProject("hook_external_hooks");
+        var gitDir = Path.Combine(projectRoot, ".git");
+        var hooksLink = Path.Combine(gitDir, "hooks");
+        try
+        {
+            Directory.CreateDirectory(gitDir);
+            Directory.CreateSymbolicLink(hooksLink, externalHooksDir);
+
+            var result = RunHooksAndCaptureStreams(["install", "--project", projectRoot]);
+
+            Assert.Equal(CommandExitCodes.InstallError, result.ExitCode);
+            Assert.False(File.Exists(Path.Combine(externalHooksDir, "pre-commit")));
+            Assert.Contains("unsafe Git hooks metadata path", result.StdErr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteFile(hooksLink);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(externalHooksDir);
+        }
+    }
+
+    [Fact]
+    public void Hooks_Install_RejectsSymlinkedHookFileBeforeExternalWrite_Issue4599()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("hook_symlinked_file");
+        var externalHook = Path.Combine(TestProjectHelper.CreateTempProject("hook_external_file"), "pre-commit");
+        var gitDir = Path.Combine(projectRoot, ".git");
+        var hooksDir = Path.Combine(gitDir, "hooks");
+        var hookLink = Path.Combine(hooksDir, "pre-commit");
+        try
+        {
+            Directory.CreateDirectory(hooksDir);
+            File.WriteAllText(externalHook, "external sentinel\n");
+            File.CreateSymbolicLink(hookLink, externalHook);
+
+            var result = RunHooksAndCaptureStreams(["install", "--project", projectRoot]);
+
+            Assert.Equal(CommandExitCodes.InstallError, result.ExitCode);
+            Assert.Equal("external sentinel\n", File.ReadAllText(externalHook));
+            Assert.Contains("unsafe Git hook file path", result.StdErr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteFile(hookLink);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(Path.GetDirectoryName(externalHook)!);
+        }
+    }
+
+    [Fact]
     public void Hooks_StatusJson_UsesSourceGeneratedSerializer()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("hook_status_json");
