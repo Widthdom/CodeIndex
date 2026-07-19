@@ -14,11 +14,11 @@ namespace CodeIndex.Tests;
 [Collection("Console sensitive")]
 public class ExtractorPluginRegistryTests
 {
-    private readonly string trustedPluginFixturePath;
+    private readonly string pluginAssemblyFixturePath;
 
     public ExtractorPluginRegistryTests(TrustedPluginAssemblyFixture trustedPluginAssembly)
     {
-        trustedPluginFixturePath = trustedPluginAssembly.PluginPath;
+        pluginAssemblyFixturePath = trustedPluginAssembly.PluginPath;
     }
 
     internal const string ThrowingPluginConstructorEnvironmentVariable = "CDIDX_TEST_THROWING_PLUGIN_CTOR";
@@ -568,7 +568,7 @@ public class ExtractorPluginRegistryTests
                 ExtractorPluginRegistry.WorkerOperationBudgetForTesting = TimeSpan.FromMilliseconds(500);
                 slow.Set(SlowPluginConstructorEnvironmentVariable, "1");
 
-                ExtractorPluginRegistry.LoadPluginForTests(trustedPluginFixturePath);
+                ExtractorPluginRegistry.LoadPluginForTests(pluginAssemblyFixturePath);
 
                 Assert.Contains(
                     ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!,
@@ -579,7 +579,7 @@ public class ExtractorPluginRegistryTests
                 crash.Set(CrashingPluginConstructorEnvironmentVariable, "1");
                 ExtractorPluginRegistry.ResetForTests();
                 crash.Set(CrashingPluginConstructorEnvironmentVariable, "1");
-                ExtractorPluginRegistry.LoadPluginForTests(trustedPluginFixturePath);
+                ExtractorPluginRegistry.LoadPluginForTests(pluginAssemblyFixturePath);
 
                 Assert.Contains(
                     ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!,
@@ -671,7 +671,7 @@ public class ExtractorPluginRegistryTests
                 ExtractorPluginRegistry.ResetForTests();
                 env.Set(ThrowingPluginConstructorEnvironmentVariable, "1");
 
-                ExtractorPluginRegistry.LoadPluginForTests(trustedPluginFixturePath);
+                ExtractorPluginRegistry.LoadPluginForTests(pluginAssemblyFixturePath);
 
                 var diagnostic = Assert.Single(
                     ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!,
@@ -698,7 +698,7 @@ public class ExtractorPluginRegistryTests
             {
                 ExtractorPluginRegistry.ResetForTests();
 
-                ExtractorPluginRegistry.LoadPluginForTests(trustedPluginFixturePath);
+                ExtractorPluginRegistry.LoadPluginForTests(pluginAssemblyFixturePath);
 
                 var loaded = ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", out var extractor);
                 Assert.True(
@@ -741,7 +741,7 @@ public class ExtractorPluginRegistryTests
             {
                 ExtractorPluginRegistry.ResetForTests();
 
-                ExtractorPluginRegistry.LoadPluginForTests(trustedPluginFixturePath);
+                ExtractorPluginRegistry.LoadPluginForTests(pluginAssemblyFixturePath);
 
                 Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("dualroleplugindsl", out var symbolExtractor));
                 Assert.True(ExtractorPluginRegistry.TryGetReferenceExtractor("dualroleplugindsl", out var referenceExtractor));
@@ -764,7 +764,7 @@ public class ExtractorPluginRegistryTests
             try
             {
                 ExtractorPluginRegistry.ResetForTests();
-                ExtractorPluginRegistry.LoadPluginForTests(trustedPluginFixturePath);
+                ExtractorPluginRegistry.LoadPluginForTests(pluginAssemblyFixturePath);
                 Assert.Equal(1, ExtractorPluginRegistry.PluginWorkerCountForTests());
 
                 ExtractorPluginRegistry.ResetForTests();
@@ -789,7 +789,7 @@ public class ExtractorPluginRegistryTests
             try
             {
                 ExtractorPluginRegistry.ResetForTests();
-                var pluginPath = trustedPluginFixturePath;
+                var pluginPath = pluginAssemblyFixturePath;
 
                 ExtractorPluginRegistry.LoadPluginForTests(pluginPath);
                 ExtractorPluginRegistry.LoadPluginForTests(pluginPath);
@@ -933,7 +933,7 @@ public class ExtractorPluginRegistryTests
                 ExtractorPluginRegistry.ResetForTests();
                 ExtractorPluginRegistry.TypeInspectionLimitForTesting = 1;
 
-                ExtractorPluginRegistry.LoadPluginForTests(trustedPluginFixturePath);
+                ExtractorPluginRegistry.LoadPluginForTests(pluginAssemblyFixturePath);
                 var diagnostic = Assert.Single(ExtractorPluginRegistry.GetStatusSnapshot().Diagnostics!);
 
                 Assert.Equal("plugin", diagnostic.Kind);
