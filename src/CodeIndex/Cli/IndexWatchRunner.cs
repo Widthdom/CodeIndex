@@ -75,24 +75,13 @@ internal static class IndexWatchRunner
         string resolvedDbPath,
         CancellationToken cancellationToken)
     {
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        ConsoleCancelEventHandler handler = (_, e) =>
-        {
-            e.Cancel = true;
-            cts.Cancel();
-        };
-        Console.CancelKeyPress += handler;
         try
         {
-            return RunCore(baseOptions, jsonOptions, projectRoot, resolvedDbPath, cts.Token);
+            return RunCore(baseOptions, jsonOptions, projectRoot, resolvedDbPath, cancellationToken);
         }
-        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             return CommandExitCodes.Success;
-        }
-        finally
-        {
-            Console.CancelKeyPress -= handler;
         }
     }
 

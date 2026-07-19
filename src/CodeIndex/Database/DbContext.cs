@@ -210,6 +210,7 @@ public class DbContext : IDisposable
     private PreparedCommandCache? _preparedCommands;
     private bool _suppressWriteWorkTracking = true;
     private bool _hasWriteWork;
+    private bool _suppressPlannerStatisticsMaintenanceOnClose;
     private bool _hasWalCheckpointableWriteWork;
     private bool _rebuildFtsAfterSchemaMigration;
     private readonly DbOpenIntent _openIntent;
@@ -3747,6 +3748,9 @@ public class DbContext : IDisposable
 
     internal sealed record PlannerStatisticsMaintenanceFailure(string CommandText, SqliteException Exception);
 
+    internal void SuppressPlannerStatisticsMaintenanceOnClose()
+        => Volatile.Write(ref _suppressPlannerStatisticsMaintenanceOnClose, true);
+
     internal PlannerStatisticsMaintenanceFailure? RunPlannerStatisticsMaintenance(
         bool forceAnalyze,
         CancellationToken cancellationToken = default)
@@ -3786,7 +3790,10 @@ public class DbContext : IDisposable
 
     private void RunOptimizeOnCloseIfNeeded()
     {
-        if (!_hasWriteWork || _isReadOnly || _cancellation.IsCancellationRequested)
+        if (!_hasWriteWork
+            || _isReadOnly
+            || _cancellation.IsCancellationRequested
+            || Volatile.Read(ref _suppressPlannerStatisticsMaintenanceOnClose))
             return;
 
         try

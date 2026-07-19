@@ -141,6 +141,11 @@ public partial class McpServer
         var priorIndexedProjectRoot = priorMeta[DbContext.IndexedProjectRootMetaKey];
         var priorSymbolKindFilterSignature = priorMeta[IndexCommandRunner.SymbolKindFilterMetaKey];
         var requestToken = _currentRequestToken.Value;
+        using var suppressDisposeMaintenanceOnCancellation = requestToken.CanBeCanceled
+            ? requestToken.UnsafeRegister(
+                static state => ((DbContext)state!).SuppressPlannerStatisticsMaintenanceOnClose(),
+                db)
+            : default;
         requestToken.ThrowIfCancellationRequested();
         // Capture git HEAD so subsequent queries can detect a worktree branch / HEAD switch
         // (`git switch other-branch` inside the worktree) without a `--check` workspace scan.
