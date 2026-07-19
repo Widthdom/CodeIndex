@@ -12,7 +12,11 @@ namespace CodeIndex.Indexer.Extensibility;
 
 public static partial class ExtractorPluginRegistry
 {
-    private static void TryLoadPatternConfig(PatternWorkspaceState state, string path, string source)
+    private static void TryLoadPatternConfig(
+        PatternWorkspaceState state,
+        string path,
+        string source,
+        Func<string, Stream>? openFile = null)
     {
         try
         {
@@ -23,11 +27,11 @@ public static partial class ExtractorPluginRegistry
                     return;
             }
 
-            var configText = TryReadPatternConfigText(state, path);
+            var configText = TryReadPatternConfigText(state, path, openFile);
             if (configText == null)
                 return;
 
-            var fingerprint = CreatePatternConfigFingerprint(path, configText);
+            var fingerprint = CreatePatternConfigFingerprint(path, configText, includeMetadata: openFile == null);
             lock (state.Gate)
             {
                 if (state.Retired
@@ -97,7 +101,7 @@ public static partial class ExtractorPluginRegistry
                 state.PublishSnapshot();
             }
         }
-        catch (Exception)
+        catch (Exception ex) when (ex is not IFileSystemAuthorizationFailure)
         {
             ReportPatternConfigRejected(state, path, "could not parse pattern config");
         }
@@ -188,15 +192,21 @@ public static partial class ExtractorPluginRegistry
             : PatternConfigParseResult.Skipped("missing language or regex patterns");
     }
 
-    private static PatternConfigFingerprint CreatePatternConfigFingerprint(string path, string configText)
+    private static PatternConfigFingerprint CreatePatternConfigFingerprint(
+        string path,
+        string configText,
+        bool includeMetadata)
     {
         long length = 0;
         long lastWriteUtcTicks = 0;
         try
         {
-            var fileInfo = new FileInfo(path);
-            length = fileInfo.Length;
-            lastWriteUtcTicks = fileInfo.LastWriteTimeUtc.Ticks;
+            if (includeMetadata)
+            {
+                var fileInfo = new FileInfo(path);
+                length = fileInfo.Length;
+                lastWriteUtcTicks = fileInfo.LastWriteTimeUtc.Ticks;
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
@@ -230,8 +240,17 @@ public static partial class ExtractorPluginRegistry
 
     private sealed record PatternConfigFingerprint(long Length, long LastWriteUtcTicks, string ContentHash);
 
-    private static string? TryReadPatternConfigText(PatternWorkspaceState state, string path)
+    private static string? TryReadPatternConfigText(
+        PatternWorkspaceState state,
+        string path,
+        Func<string, Stream>? openFile)
     {
+        if (openFile != null)
+        {
+            using var stream = openFile(path);
+            return TryReadBoundedPatternConfigText(state, path, stream);
+        }
+
         var fileInfo = new FileInfo(path);
         if (!fileInfo.Exists)
         {

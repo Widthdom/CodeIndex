@@ -25,6 +25,7 @@ public class PostExtractionHookTests
     internal const string PersistentDiscoveryDescendantPidPathEnvironmentVariable = "CDIDX_TEST_HOOK_DISCOVERY_DESCENDANT_PID_PATH";
     private const string TimedOutHookDelayMilliseconds = "150";
     private static readonly TimeSpan TimedOutHookLeakObservationWindow = TimeSpan.FromMilliseconds(400);
+    private static readonly TimeSpan DuplicateHookCallbackBudget = TimeSpan.FromSeconds(5);
 
     [ProductionRuntimeFact]
     public void Discover_LoadsHooksAndAllowsSymbolAndReferenceMutation()
@@ -155,7 +156,7 @@ public class PostExtractionHookTests
                 var moduleInitializerPidPath = Path.Combine(projectRoot, "module-initializer.pid");
                 moduleInitializer.Set(ModuleInitializerPidPathEnvironmentVariable, moduleInitializerPidPath);
                 selectiveSlow.Set(SelectiveSlowHookAssemblyEnvironmentVariable, Path.GetFileName(firstAssembly));
-                PostExtractionHookRunner.CallbackBudgetForTesting = () => TimeSpan.FromMilliseconds(250);
+                PostExtractionHookRunner.CallbackBudgetForTesting = () => DuplicateHookCallbackBudget;
 
                 using var runner = PostExtractionHookRunner.Discover(hooksDir);
                 var duplicateHooks = runner.Hooks

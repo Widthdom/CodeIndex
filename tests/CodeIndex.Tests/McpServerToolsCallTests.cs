@@ -6177,6 +6177,553 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Index_DryRunPreservesCheckedRootIdentityInResponseAndAudit_Issue4606()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_identity_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_identity");
+        var auditPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_identity_{Guid.NewGuid():N}.jsonl");
+        Directory.CreateDirectory(fixtureDir);
+        string? checkedRootIdentity = null;
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { }\n");
+            using (var sink = new AuditLogSink(auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false))
+            using (var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, sink))
+            {
+                var response = CallIndex(server, fixtureDir, arguments => arguments["dryRun"] = true);
+
+                Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+                checkedRootIdentity = response["result"]!["structuredContent"]!["checked_root_identity"]!.GetValue<string>();
+                Assert.StartsWith("fsid:v1:", checkedRootIdentity, StringComparison.Ordinal);
+            }
+
+            var auditRecord = Assert.Single(File.ReadAllLines(auditPath));
+            using var auditJson = JsonDocument.Parse(auditRecord);
+            Assert.Equal(
+                checkedRootIdentity,
+                auditJson.RootElement.GetProperty("checked_root_identity").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            if (File.Exists(auditPath))
+                File.Delete(auditPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_PostAuthorizationExceptionPreservesCheckedRootIdentityInAudit_Issue4606()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_audit_error_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_audit_error");
+        var auditPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_audit_error_{Guid.NewGuid():N}.jsonl");
+        Directory.CreateDirectory(fixtureDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { }\n");
+            using (var sink = new AuditLogSink(auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false))
+            using (var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, sink))
+            {
+                McpServer.McpIndexAuthorizationCompletedForTesting = () =>
+                    throw new InvalidOperationException("test-only post-authorization failure");
+
+                var response = CallIndex(server, fixtureDir);
+
+                Assert.True(response["result"]!["isError"]!.GetValue<bool>(), response.ToJsonString());
+                Assert.Equal(
+                    McpErrorEnvelope.CategoryInternalError,
+                    response["result"]!["structuredContent"]!["category"]!.GetValue<string>());
+            }
+
+            var auditRecord = Assert.Single(File.ReadAllLines(auditPath));
+            using var auditJson = JsonDocument.Parse(auditRecord);
+            Assert.StartsWith(
+                "fsid:v1:",
+                auditJson.RootElement.GetProperty("checked_root_identity").GetString(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            McpServer.McpIndexAuthorizationCompletedForTesting = null;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            if (File.Exists(auditPath))
+                File.Delete(auditPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_RejectsAuthorizedRootSymlinkSwap_Issue4606()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var allowedTarget = Path.Combine(Path.GetFullPath("."), $"mcp_index_swap_allowed_{Guid.NewGuid():N}");
+        var linkPath = Path.Combine(Path.GetFullPath("."), $"mcp_index_swap_link_{Guid.NewGuid():N}");
+        var outsideTarget = TestProjectHelper.CreateTempProject("cdidx_mcp_index_swap_outside");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_swap");
+        Directory.CreateDirectory(allowedTarget);
+        try
+        {
+            File.WriteAllText(Path.Combine(allowedTarget, "allowed.cs"), "public class Allowed { }\n");
+            File.WriteAllText(Path.Combine(outsideTarget, "outside.cs"), "public class Outside { }\n");
+            Directory.CreateSymbolicLink(linkPath, allowedTarget);
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            McpServer.McpIndexAuthorizationCompletedForTesting = () =>
+            {
+                Directory.Delete(linkPath);
+                Directory.CreateSymbolicLink(linkPath, outsideTarget);
+            };
+
+            var response = CallIndex(server, linkPath, arguments => arguments["dryRun"] = true);
+
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>(), response.ToJsonString());
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.Equal(McpErrorEnvelope.CategoryPermissionDenied, structured["category"]!.GetValue<string>());
+            Assert.Equal("requested_root_changed", structured["authorization_failure_reason"]!.GetValue<string>());
+            Assert.StartsWith(
+                "fsid:v1:",
+                structured["checked_root_identity"]!.GetValue<string>(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            McpServer.McpIndexAuthorizationCompletedForTesting = null;
+            if (Directory.Exists(linkPath))
+                Directory.Delete(linkPath);
+            TestProjectHelper.DeleteDirectory(allowedTarget);
+            TestProjectHelper.DeleteDirectory(outsideTarget);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_RejectsAuthorizedRootIdentityReplacement_Issue4606()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_identity_swap_{Guid.NewGuid():N}");
+        var originalDir = fixtureDir + "_original";
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_identity_swap");
+        Directory.CreateDirectory(fixtureDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "allowed.cs"), "public class Allowed { }\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            McpServer.McpIndexAuthorizationCompletedForTesting = () =>
+            {
+                Directory.Move(fixtureDir, originalDir);
+                Directory.CreateDirectory(fixtureDir);
+                File.WriteAllText(Path.Combine(fixtureDir, "replacement.cs"), "public class Replacement { }\n");
+            };
+
+            var response = CallIndex(server, fixtureDir, arguments => arguments["dryRun"] = true);
+
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>(), response.ToJsonString());
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.Equal(McpErrorEnvelope.CategoryPermissionDenied, structured["category"]!.GetValue<string>());
+            Assert.Equal("root_identity_changed", structured["authorization_failure_reason"]!.GetValue<string>());
+        }
+        finally
+        {
+            McpServer.McpIndexAuthorizationCompletedForTesting = null;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteDirectory(originalDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_RejectsFileReplacementAtAuthorizedOpenBoundary_Issue4606()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_file_swap_{Guid.NewGuid():N}");
+        var victimPath = Path.Combine(fixtureDir, "victim.cs");
+        var originalPath = Path.Combine(fixtureDir, "victim.original");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_file_swap");
+        Directory.CreateDirectory(fixtureDir);
+        try
+        {
+            File.WriteAllText(victimPath, "public class Allowed { }\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var swapped = 0;
+            McpServer.McpIndexEntryOpenBoundaryForTesting = path =>
+            {
+                if (!PathCasing.PathsEqual(path, victimPath)
+                    || Interlocked.Exchange(ref swapped, 1) != 0)
+                {
+                    return;
+                }
+
+                File.Move(victimPath, originalPath);
+                File.WriteAllText(victimPath, "public class Replacement { }\n");
+            };
+
+            var response = CallIndex(server, fixtureDir);
+
+            Assert.True(swapped == 1, response.ToJsonString());
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>(), response.ToJsonString());
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.True(
+                string.Equals(
+                    McpErrorEnvelope.CategoryPermissionDenied,
+                    structured["category"]!.GetValue<string>(),
+                    StringComparison.Ordinal),
+                response.ToJsonString());
+            Assert.Equal("entry_identity_changed", structured["authorization_failure_reason"]!.GetValue<string>());
+            Assert.StartsWith(
+                "fsid:v1:",
+                structured["checked_root_identity"]!.GetValue<string>(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            McpServer.McpIndexEntryOpenBoundaryForTesting = null;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_RejectsAmbiguousLanguageFileReplacementAtAuthorizedOpenBoundary_Issue4606()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_ambiguous_file_swap_{Guid.NewGuid():N}");
+        var victimPath = Path.Combine(fixtureDir, "victim.m");
+        var originalPath = Path.Combine(fixtureDir, "victim.original");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_ambiguous_file_swap");
+        Directory.CreateDirectory(fixtureDir);
+        try
+        {
+            File.WriteAllText(victimPath, "@interface Allowed\n@end\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var swapped = 0;
+            McpServer.McpIndexEntryOpenBoundaryForTesting = path =>
+            {
+                if (!PathCasing.PathsEqual(path, victimPath)
+                    || Interlocked.Exchange(ref swapped, 1) != 0)
+                {
+                    return;
+                }
+
+                File.Move(victimPath, originalPath);
+                File.WriteAllText(victimPath, "function replacement\nend\n");
+            };
+
+            var response = CallIndex(server, fixtureDir, arguments => arguments["dryRun"] = true);
+
+            Assert.Equal(1, swapped);
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>(), response.ToJsonString());
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.Equal(McpErrorEnvelope.CategoryPermissionDenied, structured["category"]!.GetValue<string>());
+            Assert.Equal("entry_identity_changed", structured["authorization_failure_reason"]!.GetValue<string>());
+        }
+        finally
+        {
+            McpServer.McpIndexEntryOpenBoundaryForTesting = null;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_RejectsDirectoryReplacementAtAuthorizedOpenBoundary_Issue4606()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_directory_swap_{Guid.NewGuid():N}");
+        var directoryPath = Path.Combine(fixtureDir, "src");
+        var originalPath = Path.Combine(fixtureDir, "src.original");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_directory_swap");
+        Directory.CreateDirectory(directoryPath);
+        try
+        {
+            File.WriteAllText(Path.Combine(directoryPath, "allowed.cs"), "public class Allowed { }\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var swapped = 0;
+            McpServer.McpIndexEntryOpenBoundaryForTesting = path =>
+            {
+                if (!PathCasing.PathsEqual(path, directoryPath)
+                    || Interlocked.Exchange(ref swapped, 1) != 0)
+                {
+                    return;
+                }
+
+                Directory.Move(directoryPath, originalPath);
+                Directory.CreateDirectory(directoryPath);
+                File.WriteAllText(Path.Combine(directoryPath, "replacement.cs"), "public class Replacement { }\n");
+            };
+
+            var response = CallIndex(server, fixtureDir, arguments => arguments["dryRun"] = true);
+
+            Assert.True(swapped == 1, response.ToJsonString());
+            Assert.True(response["result"]?["isError"]?.GetValue<bool>() == true, response.ToJsonString());
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.Equal(McpErrorEnvelope.CategoryPermissionDenied, structured["category"]!.GetValue<string>());
+            Assert.Equal("directory_identity_changed", structured["authorization_failure_reason"]!.GetValue<string>());
+        }
+        finally
+        {
+            McpServer.McpIndexEntryOpenBoundaryForTesting = null;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void IndexRootAuthorization_EnumeratesRetainedDirectoryHandleAcrossDoubleSwap_Issue4606()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_directory_double_swap_{Guid.NewGuid():N}");
+        var directoryPath = Path.Combine(fixtureDir, "content4606");
+        var heldOriginalPath = Path.Combine(fixtureDir, "content4606.original");
+        var replacementPath = Path.Combine(fixtureDir, "content4606.replacement");
+        Directory.CreateDirectory(directoryPath);
+        Directory.CreateDirectory(replacementPath);
+        try
+        {
+            File.WriteAllText(Path.Combine(directoryPath, "allowed.cs"), "public class Allowed { }\n");
+            File.WriteAllText(Path.Combine(replacementPath, "outside.cs"), "public class Outside { }\n");
+            var swapStarted = 0;
+            var swapCompleted = 0;
+            void BeforeEnumeration(string path)
+            {
+                if (!PathCasing.PathsEqual(path, directoryPath)
+                    || Interlocked.Exchange(ref swapStarted, 1) != 0)
+                {
+                    return;
+                }
+
+                Directory.Move(directoryPath, heldOriginalPath);
+                Directory.Move(replacementPath, directoryPath);
+            }
+            void AfterEnumeration(string path)
+            {
+                if (!PathCasing.PathsEqual(path, directoryPath)
+                    || Interlocked.Exchange(ref swapCompleted, 1) != 0)
+                {
+                    return;
+                }
+
+                Directory.Move(directoryPath, replacementPath);
+                Directory.Move(heldOriginalPath, directoryPath);
+            }
+
+            Assert.True(
+                McpPathBoundary.TryCaptureIndexRoot(
+                    fixtureDir,
+                    _ => true,
+                    entryOpenBoundary: null,
+                    directoryEnumerationBoundary: BeforeEnumeration,
+                    directoryEnumerationCompleted: AfterEnumeration,
+                    out var authorization,
+                    out var error),
+                error);
+            using (authorization)
+            {
+                var entries = authorization!.EnumerateAuthorizedFileSystemEntries(directoryPath).ToArray();
+                Assert.Equal("allowed.cs", Path.GetFileName(Assert.Single(entries)));
+            }
+
+            Assert.Equal(1, swapStarted);
+            Assert.Equal(1, swapCompleted);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_DoesNotReuseLanguageMapOutsideAuthorizedProjectScope_Issue4606()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_langmap_scope_{Guid.NewGuid():N}");
+        var projectPath = Path.Combine(fixtureDir, "client-root");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_langmap_scope");
+        Directory.CreateDirectory(projectPath);
+        LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(fixtureDir, LanguageMapOverrides.WorkspaceFileName),
+                "entries:\n- extension: custom\n  language: csharp\n");
+            File.WriteAllText(Path.Combine(projectPath, "outside.custom"), "public class Outside { }\n");
+            Assert.Equal(
+                "csharp",
+                LanguageMapOverrides.LoadEffectiveMapFromDirectory(projectPath)[".custom"]);
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var response = CallIndex(server, projectPath, arguments => arguments["dryRun"] = true);
+
+            Assert.Null(response["result"]!["isError"]);
+            var summary = response["result"]!["structuredContent"]!["summary"]!;
+            Assert.Equal(0, summary["files_scanned"]!.GetValue<int>());
+            Assert.Equal(1, summary["unknown_extension_file_count"]!.GetValue<int>());
+        }
+        finally
+        {
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_RejectsLanguageMapReplacementAtAuthorizedOpenBoundary_Issue4606()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_langmap_swap_{Guid.NewGuid():N}");
+        var configPath = Path.Combine(fixtureDir, LanguageMapOverrides.WorkspaceFileName);
+        var originalPath = configPath + ".original";
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_langmap_swap");
+        Directory.CreateDirectory(fixtureDir);
+        try
+        {
+            File.WriteAllText(configPath, "entries:\n- extension: custom\n  language: csharp\n");
+            File.WriteAllText(Path.Combine(fixtureDir, "app.custom"), "public class Allowed { }\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var swapped = 0;
+            McpServer.McpIndexEntryOpenBoundaryForTesting = path =>
+            {
+                if (!PathCasing.PathsEqual(path, configPath)
+                    || Interlocked.Exchange(ref swapped, 1) != 0)
+                {
+                    return;
+                }
+
+                File.Move(configPath, originalPath);
+                File.WriteAllText(configPath, "entries:\n- extension: custom\n  language: text\n");
+            };
+
+            var response = CallIndex(server, fixtureDir, arguments => arguments["dryRun"] = true);
+
+            Assert.Equal(1, swapped);
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>(), response.ToJsonString());
+            Assert.Equal(
+                "entry_identity_changed",
+                response["result"]!["structuredContent"]!["authorization_failure_reason"]!.GetValue<string>());
+        }
+        finally
+        {
+            McpServer.McpIndexEntryOpenBoundaryForTesting = null;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_RejectsPatternConfigReplacementAtAuthorizedOpenBoundary_Issue4606()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_pattern_swap_{Guid.NewGuid():N}");
+        var patternDirectory = Path.Combine(fixtureDir, ".cdidx", "patterns");
+        var configPath = Path.Combine(patternDirectory, "custom.yaml");
+        var originalPath = configPath + ".original";
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_pattern_swap");
+        Directory.CreateDirectory(patternDirectory);
+        try
+        {
+            File.WriteAllText(
+                configPath,
+                "language: custom\n- extension: .custom\n- kind: function\n  regex: '(?<name>Allowed)'\n");
+            File.WriteAllText(Path.Combine(fixtureDir, "app.custom"), "Allowed\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var swapped = 0;
+            McpServer.McpIndexEntryOpenBoundaryForTesting = path =>
+            {
+                if (!PathCasing.PathsEqual(path, configPath)
+                    || Interlocked.Exchange(ref swapped, 1) != 0)
+                {
+                    return;
+                }
+
+                File.Move(configPath, originalPath);
+                File.WriteAllText(configPath, "language: replacement\n");
+            };
+
+            var response = CallIndex(server, fixtureDir, arguments => arguments["dryRun"] = true);
+
+            Assert.Equal(1, swapped);
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>(), response.ToJsonString());
+            Assert.Equal(
+                "entry_identity_changed",
+                response["result"]!["structuredContent"]!["authorization_failure_reason"]!.GetValue<string>());
+        }
+        finally
+        {
+            McpServer.McpIndexEntryOpenBoundaryForTesting = null;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_LoadsProjectPatternConfigFromAuthorizedSnapshot_Issue4606()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_pattern_authorized_{Guid.NewGuid():N}");
+        var patternDirectory = Path.Combine(fixtureDir, ".cdidx", "patterns");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_pattern_authorized");
+        Directory.CreateDirectory(patternDirectory);
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(patternDirectory, "custom.yaml"),
+                "language: custom\n- extension: .custom\n- kind: function\n  regex: '(?<name>Allowed)'\n");
+            File.WriteAllText(Path.Combine(fixtureDir, "app.custom"), "Allowed\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var response = CallIndex(server, fixtureDir, arguments => arguments["dryRun"] = true);
+
+            Assert.Null(response["result"]!["isError"]);
+            var summary = response["result"]!["structuredContent"]!["summary"]!;
+            Assert.Equal(1, summary["files_scanned"]!.GetValue<int>());
+            Assert.Equal(0, summary["unknown_extension_file_count"]!.GetValue<int>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void IndexRootAuthorization_AcceptsWindowsLongPathSidecars_Issue4606()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_long_sidecar_{Guid.NewGuid():N}");
+        var deepDirectory = fixtureDir;
+        while (deepDirectory.Length < 270)
+            deepDirectory = Path.Combine(deepDirectory, "deep-segment");
+        Directory.CreateDirectory(LongPath.EnsureWindowsPrefix(deepDirectory));
+        try
+        {
+            foreach (var fileName in new[] { ".gitignore", ".gitmodules" })
+            {
+                var path = Path.Combine(deepDirectory, fileName);
+                File.WriteAllText(LongPath.EnsureWindowsPrefix(path), "# bounded\n");
+            }
+
+            Assert.True(
+                McpPathBoundary.TryCaptureIndexRoot(
+                    fixtureDir,
+                    _ => true,
+                    entryOpenBoundary: null,
+                    directoryEnumerationBoundary: null,
+                    directoryEnumerationCompleted: null,
+                    out var authorization,
+                    out var error),
+                error);
+            using (authorization)
+            {
+                foreach (var fileName in new[] { ".gitignore", ".gitmodules" })
+                {
+                    using var stream = authorization!.OpenAuthorizedRead(
+                        LongPath.EnsureWindowsPrefix(Path.Combine(deepDirectory, fileName)));
+                    Assert.True(stream.Length > 0);
+                }
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_RejectsScopedUnsupportedModesWithoutDryRun_Issue3543()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_scope_reject_{Guid.NewGuid():N}");
@@ -7089,11 +7636,12 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsCall_Index_WhenDbLockHeld_ReturnsBusyError()
+    public void ToolsCall_Index_WhenDbLockHeld_ReturnsBusyErrorAndAuditsCheckedRootIdentity_Issue4606()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_lock_fixture_{Guid.NewGuid():N}");
         Directory.CreateDirectory(fixtureDir);
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_lock");
+        var auditPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_lock_{Guid.NewGuid():N}.jsonl");
         var lockPath = McpIndexRunLock.ResolveLockPath(dbPath);
         Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
         var infoPath = lockPath + ".info";
@@ -7101,31 +7649,41 @@ public partial class McpServerTests
             infoPath,
             $$"""{"pid":{{Environment.ProcessId}},"since":"2026-01-02T03:04:05.0000000+00:00"}""");
         using var heldLock = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-        using var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
         try
         {
-            var request = new JsonObject
+            using (var sink = new AuditLogSink(auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false))
+            using (var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true, sink))
             {
-                ["jsonrpc"] = "2.0",
-                ["id"] = 1,
-                ["method"] = "tools/call",
-                ["params"] = new JsonObject
+                var request = new JsonObject
                 {
-                    ["name"] = "index",
-                    ["arguments"] = new JsonObject
+                    ["jsonrpc"] = "2.0",
+                    ["id"] = 1,
+                    ["method"] = "tools/call",
+                    ["params"] = new JsonObject
                     {
-                        ["path"] = fixtureDir
+                        ["name"] = "index",
+                        ["arguments"] = new JsonObject
+                        {
+                            ["path"] = fixtureDir
+                        }
                     }
-                }
-            };
+                };
 
-            var response = server.HandleMessage(request)!;
+                var response = server.HandleMessage(request)!;
 
-            Assert.True(response["result"]!["isError"]!.GetValue<bool>());
-            var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
-            Assert.Contains("index already running on this DB", text);
-            Assert.Contains($"pid {Environment.ProcessId}", text);
-            Assert.Contains("2026-01-02T03:04:05", text);
+                Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+                var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+                Assert.Contains("index already running on this DB", text);
+                Assert.Contains($"pid {Environment.ProcessId}", text);
+                Assert.Contains("2026-01-02T03:04:05", text);
+            }
+
+            var auditRecord = Assert.Single(File.ReadAllLines(auditPath));
+            using var auditJson = JsonDocument.Parse(auditRecord);
+            Assert.StartsWith(
+                "fsid:v1:",
+                auditJson.RootElement.GetProperty("checked_root_identity").GetString(),
+                StringComparison.Ordinal);
         }
         finally
         {
@@ -7134,6 +7692,8 @@ public partial class McpServerTests
             TestProjectHelper.DeleteFile(lockPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            if (File.Exists(auditPath))
+                File.Delete(auditPath);
         }
     }
 

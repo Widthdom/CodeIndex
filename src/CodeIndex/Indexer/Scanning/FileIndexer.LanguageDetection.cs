@@ -380,7 +380,10 @@ public partial class FileIndexer
             _projectRoot,
             knownIndexability,
             LoadLanguageMapOverridesForIndexing,
-            fileNameIgnoreCase: DirectoryUsesIgnoreCase(Path.GetDirectoryName(filePath) ?? _projectRoot));
+            openReadForIndexContent: _openReadForIndexContent,
+            allowPatternConfigDiscovery: !_bindConfigurationReadsToFileSystemIdentity,
+            fileNameIgnoreCase: DirectoryUsesIgnoreCase(Path.GetDirectoryName(filePath) ?? _projectRoot),
+            enumerateFileSystemEntries: _enumerateFileSystemEntries);
 
     private IReadOnlyDictionary<string, string> LoadLanguageMapOverridesForIndexing(string? startDirectory)
     {
@@ -397,7 +400,12 @@ public partial class FileIndexer
             if (TryReuseParentLanguageMapOverrides(startDirectory, out cached))
                 return CacheLastLanguageMapOverrideLookup(startDirectory, cached);
 
-            var loaded = LanguageMapOverrides.LoadEffectiveMapFromDirectory(startDirectory);
+            var loaded = _bindConfigurationReadsToFileSystemIdentity
+                ? LanguageMapOverrides.LoadEffectiveMapFromDirectoryWithinScope(
+                    startDirectory,
+                    _projectRoot,
+                    _openReadForIndexContent)
+                : LanguageMapOverrides.LoadEffectiveMapFromDirectory(startDirectory);
             _languageMapOverrideCache[startDirectory] = loaded;
             return CacheLastLanguageMapOverrideLookup(startDirectory, loaded);
         }
@@ -471,7 +479,10 @@ public partial class FileIndexer
         string? projectRoot,
         FileProbeStatus? knownIndexability = null,
         Func<string?, IReadOnlyDictionary<string, string>>? languageMapOverrideResolver = null,
-        bool fileNameIgnoreCase = true)
+        Func<string, FileStream>? openReadForIndexContent = null,
+        bool allowPatternConfigDiscovery = true,
+        bool fileNameIgnoreCase = true,
+        Func<string, IEnumerable<string>>? enumerateFileSystemEntries = null)
     {
         var fileName = Path.GetFileName(filePath);
         var ext = Path.GetExtension(fileName);
@@ -499,7 +510,12 @@ public partial class FileIndexer
 
         if (ShebangAmbiguousExtensions.Contains(ext))
         {
-            var shebangLanguage = TryDetectLanguageFromShebang(filePath, symlinkPolicy, projectRoot, knownIndexability);
+            var shebangLanguage = TryDetectLanguageFromShebang(
+                filePath,
+                symlinkPolicy,
+                projectRoot,
+                knownIndexability,
+                openReadForIndexContent);
             if (shebangLanguage.Status == FileProbeStatus.Supported)
                 return shebangLanguage;
             if (knownIndexability.HasValue
@@ -512,7 +528,14 @@ public partial class FileIndexer
         if (string.Equals(ext, ".m", StringComparison.OrdinalIgnoreCase)
             || string.Equals(ext, ".pl", StringComparison.OrdinalIgnoreCase))
         {
-            return TryDetectAmbiguousExtensionLanguage(filePath, ext, content, projectRoot, knownIndexability);
+            return TryDetectAmbiguousExtensionLanguage(
+                filePath,
+                ext,
+                content,
+                projectRoot,
+                knownIndexability,
+                openReadForIndexContent,
+                enumerateFileSystemEntries);
         }
 
         if (LangMap.TryGetValue(ext, out var lang))
@@ -532,14 +555,25 @@ public partial class FileIndexer
 
         if (!string.IsNullOrEmpty(ext))
         {
-            ExtractorPluginRegistry.LoadPatternConfigsForPath(filePath, projectRoot);
+            if (allowPatternConfigDiscovery)
+                ExtractorPluginRegistry.LoadPatternConfigsForPath(filePath, projectRoot);
             if (ExtractorPluginRegistry.TryGetLanguageForExtension(ext, projectRoot, out pluginLang))
                 return new LanguageDetectionResult(FileProbeStatus.Supported, pluginLang);
 
-            return TryDetectLanguageFromShebang(filePath, symlinkPolicy, projectRoot, knownIndexability);
+            return TryDetectLanguageFromShebang(
+                filePath,
+                symlinkPolicy,
+                projectRoot,
+                knownIndexability,
+                openReadForIndexContent);
         }
 
-        return TryDetectLanguageFromShebang(filePath, symlinkPolicy, projectRoot, knownIndexability);
+        return TryDetectLanguageFromShebang(
+            filePath,
+            symlinkPolicy,
+            projectRoot,
+            knownIndexability,
+            openReadForIndexContent);
     }
 
     private static bool TryGetExactFileNameLanguage(string fileName, bool ignoreCase, out string language)
