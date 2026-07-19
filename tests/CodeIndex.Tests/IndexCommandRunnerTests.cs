@@ -1901,19 +1901,19 @@ public sealed class Caller
     {
         var projectRoot = CreateTempProject();
         using var cts = new CancellationTokenSource();
-        var plannerReached = false;
+        var plannerCallCount = 0;
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('planner cancellation')\n");
             DbContext.PlannerStatisticsCommandCreatedForTesting = _ =>
             {
-                plannerReached = true;
+                plannerCallCount++;
                 cts.Cancel();
             };
 
             var (exitCode, _) = RunAndCaptureJson([projectRoot, "--json"], cts);
 
-            Assert.True(plannerReached);
+            Assert.Equal(1, plannerCallCount);
             Assert.Equal(CommandExitCodes.Success, exitCode);
         }
         finally

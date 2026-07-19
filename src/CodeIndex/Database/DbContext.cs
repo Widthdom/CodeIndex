@@ -3786,10 +3786,18 @@ public class DbContext : IDisposable
 
     private void RunOptimizeOnCloseIfNeeded()
     {
-        if (!_hasWriteWork || _isReadOnly)
+        if (!_hasWriteWork || _isReadOnly || _cancellation.IsCancellationRequested)
             return;
 
-        RunPlannerStatisticsMaintenance(forceAnalyze: false);
+        try
+        {
+            RunPlannerStatisticsMaintenance(forceAnalyze: false, _cancellation);
+        }
+        catch (OperationCanceledException) when (_cancellation.IsCancellationRequested)
+        {
+            // Dispose-time maintenance is best effort and must not outlive or fail the
+            // operation that owns this database context.
+        }
     }
 
     public void Dispose()
