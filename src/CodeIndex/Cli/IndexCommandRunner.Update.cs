@@ -124,7 +124,8 @@ public static partial class IndexCommandRunner
                 indexRunDiagnostics,
                 showNextSteps: false,
                 cancellationToken,
-                forceJavaScriptTypeScriptRefresh: typeScriptJavaScriptConfigChanged);
+                forceJavaScriptTypeScriptRefresh: typeScriptJavaScriptConfigChanged,
+                forceExtractorRefresh: extractorConfigurationChanged);
         }
 
         if (!options.Json && !options.Quiet)

@@ -4,6 +4,7 @@ using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -1352,6 +1353,59 @@ public class IndexWatchRunnerTests
         finally
         {
             DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCore_SubprojectObservesAncestorIgnoreFileChanges_Issue4592()
+    {
+        var repoRoot = CreateTempProject();
+        var projectRoot = Path.Combine(repoRoot, "subproj");
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        using var cts = new CancellationTokenSource();
+        using var ready = new ManualResetEventSlim();
+        Task<int>? loopTask = null;
+        try
+        {
+            TestProjectHelper.RunGit(repoRoot, "init");
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, "ignored.py"), "print('initially indexed')\n");
+            var initialJson = RunIndexAndCapture([projectRoot, "--db", dbPath, "--json"], out var initialExitCode);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Contains("\"status\":\"success\"", initialJson, StringComparison.Ordinal);
+            Assert.True(HasIndexedFile(dbPath, "ignored.py"));
+
+            var options = new IndexCommandOptions
+            {
+                ProjectPath = projectRoot,
+                DbPath = dbPath,
+                Json = true,
+                Quiet = true,
+                Watch = true,
+                WatchDebounceMs = 50,
+            };
+            IndexWatchRunner.WatchReadyForTesting = _ => ready.Set();
+            loopTask = IndexWatchRunner.RunCoreAsync(options, _jsonOptions, projectRoot, dbPath, cts.Token);
+
+            Assert.True(ready.Wait(TimeSpan.FromSeconds(15)), "The subproject watcher did not become ready.");
+            File.WriteAllText(Path.Combine(repoRoot, ".gitignore"), "subproj/ignored.py\n");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try { return !HasIndexedFile(dbPath, "ignored.py"); }
+                        catch (SqliteException) { return false; }
+                    },
+                    TimeSpan.FromSeconds(15)),
+                "The ancestor .gitignore change was not reconciled by the subproject watcher.");
+        }
+        finally
+        {
+            cts.Cancel();
+            if (loopTask is { IsCompleted: false })
+                SpinWait.SpinUntil(() => loopTask.IsCompleted, TimeSpan.FromSeconds(10));
+            IndexWatchRunner.WatchReadyForTesting = null;
+            DeleteDirectory(repoRoot);
         }
     }
 

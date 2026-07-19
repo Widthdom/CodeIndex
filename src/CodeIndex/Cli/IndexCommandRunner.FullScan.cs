@@ -836,7 +836,8 @@ public static partial class IndexCommandRunner
         List<string>? indexRunDiagnostics,
         bool showNextSteps,
         CancellationToken cancellationToken,
-        bool forceJavaScriptTypeScriptRefresh = false)
+        bool forceJavaScriptTypeScriptRefresh = false,
+        bool forceExtractorRefresh = false)
     {
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         var memorySamples = options.MemoryTrace ? new List<IndexMemorySampleJsonResult> { CaptureMemorySample("start", stopwatch) } : [];
@@ -1337,7 +1338,7 @@ public static partial class IndexCommandRunner
                 writer.InsertIssues(fileId, issues);
         }
 
-        var reusableIndexedFileStats = !options.Rebuild && !startedWithNoIndexedFiles
+        var reusableIndexedFileStats = !forceExtractorRefresh && !options.Rebuild && !startedWithNoIndexedFiles
             ? writer.LoadReusableIndexedFileStats(
                 options.MaxSymbolsPerFile,
                 options.MaxReferencesPerFile,
@@ -1347,7 +1348,7 @@ public static partial class IndexCommandRunner
 
         bool CanReuseCSharpPrepassTargetWithoutRead(CSharpStaticInterfacePrepass.FileTarget target)
         {
-            if (options.Rebuild || startedWithNoIndexedFiles || !symbolKindFilterMatchesPrior || !csharpSymbolNameContractMatchesCurrent)
+            if (forceExtractorRefresh || options.Rebuild || startedWithNoIndexedFiles || !symbolKindFilterMatchesPrior || !csharpSymbolNameContractMatchesCurrent)
                 return false;
             if (target.Language != "csharp")
                 return false;
@@ -1434,7 +1435,8 @@ public static partial class IndexCommandRunner
             freshCountReferences += referenceCount;
         }
 
-        var canSkipFullScanTargetsBeforeContentLoad = !options.Rebuild
+        var canSkipFullScanTargetsBeforeContentLoad = !forceExtractorRefresh
+            && !options.Rebuild
             && !startedWithNoIndexedFiles
             && !options.SymbolsOnly;
 
@@ -1865,7 +1867,7 @@ public static partial class IndexCommandRunner
                             ? item.GeneratedSuppressionIssue
                             : indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
                         long? existingId = null;
-                        if (!options.Rebuild && !startedWithNoIndexedFiles && !options.SymbolsOnly)
+                        if (!forceExtractorRefresh && !options.Rebuild && !startedWithNoIndexedFiles && !options.SymbolsOnly)
                         {
                             var targetRequiresRefresh = TargetRequiresJavaScriptTypeScriptRefresh(record.Lang, record.Path);
                             existingId = writer.GetReusableUnchangedFileId(

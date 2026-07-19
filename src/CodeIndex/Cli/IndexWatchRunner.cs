@@ -116,6 +116,7 @@ internal static class IndexWatchRunner
         var watchExitCode = CommandExitCodes.Success;
 
         FileSystemWatcher? watcher = null;
+        List<FileSystemWatcher>? ancestorIgnoreWatchers = null;
         try
         {
             watcher = new FileSystemWatcher(projectRoot)
@@ -180,6 +181,11 @@ internal static class IndexWatchRunner
             };
 
             watcher.EnableRaisingEvents = true;
+            ancestorIgnoreWatchers = CreateAncestorIgnoreWatchers(
+                projectRoot,
+                ignoreRuleRoot,
+                ignoreCase,
+                Enqueue);
             startupHandoff?.Invoke(Enqueue);
 
             // The initial command scan completed before this watcher was subscribed. Re-scan
@@ -255,6 +261,14 @@ internal static class IndexWatchRunner
         }
         finally
         {
+            if (ancestorIgnoreWatchers != null)
+            {
+                foreach (var ancestorWatcher in ancestorIgnoreWatchers)
+                {
+                    try { ancestorWatcher.EnableRaisingEvents = false; } catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException) { }
+                    ancestorWatcher.Dispose();
+                }
+            }
             if (watcher != null)
             {
                 try { watcher.EnableRaisingEvents = false; } catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException) { }
@@ -264,6 +278,67 @@ internal static class IndexWatchRunner
 
         EmitWatchStopped(baseOptions, jsonOptions);
         return watchExitCode;
+    }
+
+    private static List<FileSystemWatcher> CreateAncestorIgnoreWatchers(
+        string projectRoot,
+        string ignoreRuleRoot,
+        bool ignoreCase,
+        Action<string> enqueue)
+    {
+        var watchers = new List<FileSystemWatcher>();
+        var fullProjectRoot = Path.GetFullPath(projectRoot);
+        var fullIgnoreRuleRoot = Path.GetFullPath(ignoreRuleRoot);
+        var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (string.Equals(fullProjectRoot, fullIgnoreRuleRoot, comparison))
+            return watchers;
+
+        var relativeProjectRoot = Path.GetRelativePath(fullIgnoreRuleRoot, fullProjectRoot);
+        if (Path.IsPathRooted(relativeProjectRoot)
+            || relativeProjectRoot == ".."
+            || relativeProjectRoot.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+            || relativeProjectRoot.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal))
+        {
+            return watchers;
+        }
+
+        try
+        {
+            var directory = Directory.GetParent(fullProjectRoot);
+            while (directory != null)
+            {
+                var ancestorWatcher = new FileSystemWatcher(directory.FullName)
+                {
+                    IncludeSubdirectories = false,
+                    NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size,
+                };
+                watchers.Add(ancestorWatcher);
+                ancestorWatcher.Filters.Add(".gitignore");
+                ancestorWatcher.Filters.Add(".cdidxignore");
+                ancestorWatcher.Created += (_, e) => enqueue(e.FullPath);
+                ancestorWatcher.Changed += (_, e) => enqueue(e.FullPath);
+                ancestorWatcher.Deleted += (_, e) => enqueue(e.FullPath);
+                ancestorWatcher.Renamed += (_, e) =>
+                {
+                    enqueue(e.OldFullPath);
+                    enqueue(e.FullPath);
+                };
+                ancestorWatcher.EnableRaisingEvents = true;
+
+                if (string.Equals(directory.FullName, fullIgnoreRuleRoot, comparison))
+                    break;
+
+                directory = directory.Parent;
+            }
+        }
+        catch
+        {
+            foreach (var watcher in watchers)
+                watcher.Dispose();
+            throw;
+        }
+
+        return watchers;
     }
 
     private static int RunPartialUpdate(
