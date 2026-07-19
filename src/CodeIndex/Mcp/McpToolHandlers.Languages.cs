@@ -55,6 +55,23 @@ public partial class McpServer
                 info.Extensions.Add(ext);
             }
 
+            foreach (var lang in FileIndexer.GetContentDetectedLanguageBuckets())
+            {
+                if (languages.ContainsKey(lang))
+                    continue;
+
+                var hasSymbols = symbolLangs.Contains(lang);
+                var hasReferences = referenceLangs.Contains(lang);
+                languages[lang] = (
+                    new List<string>(),
+                    QueryCommandRunner.GetLanguageAliases(lang).ToList(),
+                    hasSymbols,
+                    hasReferences,
+                    hasReferences,
+                    LanguageCapabilitySupport.BuildGaps(hasSymbols, hasReferences, hasReferences),
+                    LanguageCapabilitySupport.BuildUnsupportedGuidance(lang, hasSymbols, hasReferences, hasReferences));
+            }
+
             return (languages, symbolLangs.Count, referenceLangs.Count);
         }
 

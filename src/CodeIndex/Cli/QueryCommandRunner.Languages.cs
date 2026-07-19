@@ -76,6 +76,23 @@ public static partial class QueryCommandRunner
                 info.Extensions.Add(ext);
             }
 
+            foreach (var lang in FileIndexer.GetContentDetectedLanguageBuckets())
+            {
+                if (allLangs.ContainsKey(lang))
+                    continue;
+
+                var hasSymbols = symbolLangs.Contains(lang);
+                var hasReferences = graphLangs.Contains(lang);
+                allLangs[lang] = new LanguageSupportInfo(
+                    [],
+                    GetLanguageAliases(lang).ToList(),
+                    hasSymbols,
+                    hasReferences,
+                    hasReferences,
+                    LanguageCapabilitySupport.BuildGaps(hasSymbols, hasReferences, hasReferences),
+                    LanguageCapabilitySupport.BuildUnsupportedGuidance(lang, hasSymbols, hasReferences, hasReferences));
+            }
+
             return allLangs.OrderBy(kv => kv.Key).ToList();
         }
 

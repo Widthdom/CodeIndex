@@ -57,7 +57,7 @@ public partial class FileIndexer
         [".cs"] = "csharp",
         [".cshtml"] = "csharp",  // Razor (ASP.NET MVC/Pages) / Razor テンプレート
         [".razor"] = "csharp",  // Blazor component / Blazor コンポーネント
-        [".m"] = "objc",
+        [".m"] = "ambiguous_m",
         [".mm"] = "objc",
         [".php"] = "php",
         [".s"] = "assembly", // Also used by Scheme; assembly is the more common default.
@@ -165,7 +165,7 @@ public partial class FileIndexer
         [".jl"] = "julia",
         [".nim"] = "nim",
         [".nims"] = "nim",
-        [".pl"] = "perl",
+        [".pl"] = "ambiguous_pl",
         [".pm"] = "perl",
         [".pod"] = "perl",
         [".psgi"] = "perl",
@@ -216,8 +216,15 @@ public partial class FileIndexer
     ];
     private static readonly HashSet<string> ShebangAmbiguousExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
+        ".m",
+        ".pl",
         ".t",
     };
+    private static readonly string[] ContentDetectedLanguageBuckets =
+    [
+        "matlab",
+        "prolog",
+    ];
     private static readonly IReadOnlyDictionary<string, string> EmptyLanguageMapOverrides =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -227,6 +234,19 @@ public partial class FileIndexer
     /// </summary>
     public static IReadOnlyDictionary<string, string> GetLanguageExtensions()
         => GetLanguageExtensions(workspaceRoot: null);
+
+    public static IReadOnlyCollection<string> GetDetectedLanguageNames()
+        => GetDetectedLanguageNames(workspaceRoot: null);
+
+    internal static IReadOnlyCollection<string> GetDetectedLanguageNames(string? workspaceRoot)
+        => GetLanguageExtensions(workspaceRoot).Values
+            .Concat(ContentDetectedLanguageBuckets)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(language => language, StringComparer.Ordinal)
+            .ToArray();
+
+    internal static IReadOnlyList<string> GetContentDetectedLanguageBuckets()
+        => ContentDetectedLanguageBuckets;
 
     internal static IReadOnlyDictionary<string, string> GetLanguageExtensions(string? workspaceRoot)
     {
@@ -417,6 +437,12 @@ public partial class FileIndexer
             {
                 return shebangLanguage;
             }
+        }
+
+        if (string.Equals(ext, ".m", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".pl", StringComparison.OrdinalIgnoreCase))
+        {
+            return TryDetectAmbiguousExtensionLanguage(filePath, ext, content, projectRoot, knownIndexability);
         }
 
         if (LangMap.TryGetValue(ext, out var lang))

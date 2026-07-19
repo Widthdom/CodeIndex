@@ -21,6 +21,44 @@ namespace CodeIndex.Tests;
 public partial class IndexCommandRunnerTests
 {
     [Fact]
+    public void Run_UpdateMode_AmbiguousProjectMarkerChangeReclassifiesExistingFiles_Issue4612()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "source.pl"), string.Empty);
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal("ambiguous_pl", ReadLanguage("source.pl"));
+
+            File.WriteAllText(Path.Combine(projectRoot, "Makefile.PL"), string.Empty);
+            var (updateExitCode, _) = RunAndCaptureJson(
+                [projectRoot, "--files", "Makefile.PL", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("perl", ReadLanguage("source.pl"));
+
+            string? ReadLanguage(string path)
+            {
+                SqliteConnection.ClearAllPools();
+                using var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False");
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "SELECT lang FROM files WHERE path = @path";
+                command.Parameters.AddWithValue("@path", path);
+                return Convert.ToString(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_PreservesUnchangedWorkspacePluginReferences_Issue4602()
     {
         var projectRoot = CreateTempProject();

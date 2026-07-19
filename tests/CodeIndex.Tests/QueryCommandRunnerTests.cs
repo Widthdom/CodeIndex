@@ -1622,6 +1622,10 @@ public partial class QueryCommandRunnerTests
     [InlineData("assembler", "assembly")]
     [InlineData("gas", "assembly")]
     [InlineData("gnu asm", "assembly")]
+    [InlineData("octave", "matlab")]
+    [InlineData("gnu octave", "matlab")]
+    [InlineData("swi-prolog", "prolog")]
+    [InlineData("swipl", "prolog")]
     public void NormalizeQueryLanguage_MapsCommonAliasesToCanonicalLanguages(string input, string expected)
     {
         Assert.Equal(expected, DbReader.NormalizeQueryLanguage(input));
@@ -2511,7 +2515,7 @@ public partial class QueryCommandRunnerTests
                 ExtractorPluginRegistry.RegisterForWorkspaceForTests(
                     project.Root,
                     new WorkspaceCatalogSymbolExtractor("statuscatalog", ".statuscatalog"));
-                var expectedDetected = FileIndexer.GetLanguageExtensions(project.Root).Values.Distinct().Count();
+                var expectedDetected = FileIndexer.GetDetectedLanguageNames(project.Root).Count;
                 var expectedSymbols = SymbolExtractor.GetSupportedLanguages(project.Root).Count;
 
                 var (exitCode, stdout, stderr) = CaptureConsole(() =>
@@ -2807,6 +2811,7 @@ public partial class QueryCommandRunnerTests
         var javascript = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "javascript");
         var typescript = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "typescript");
         var objc = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "objc");
+        var ambiguousM = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "ambiguous_m");
 
         Assert.Contains(".cjs", javascript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
         Assert.Contains(".mjs", javascript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
@@ -2814,8 +2819,8 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("jsx", javascript.GetProperty("aliases").EnumerateArray().Select(alias => alias.GetString()));
         Assert.Contains(".cts", typescript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
         Assert.Contains(".mts", typescript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
-        Assert.Contains(".m", objc.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
         Assert.Contains(".mm", objc.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+        Assert.Contains(".m", ambiguousM.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
     }
 
     [Fact]
@@ -2916,6 +2921,28 @@ public partial class QueryCommandRunnerTests
         Assert.Equal("filesystem", policy.GetProperty("filename_case_policy").GetString());
         Assert.Equal("path_case_sensitive", policy.GetProperty("filename_case_source").GetString());
         Assert.Equal("case_insensitive", policy.GetProperty("extension_case_policy").GetString());
+    }
+
+    [Fact]
+    public void RunLanguages_JsonReportsMatlabAndPrologSymbolOnlyCapabilities_Issue4612()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages").EnumerateArray()
+            .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
+        foreach (var language in new[] { "matlab", "prolog" })
+        {
+            Assert.True(languages[language].GetProperty("symbol_extraction").GetBoolean());
+            Assert.False(languages[language].GetProperty("reference_extraction").GetBoolean());
+            Assert.False(languages[language].GetProperty("graph_queries").GetBoolean());
+        }
+
+        Assert.Contains(".m", languages["ambiguous_m"].GetProperty("extensions").EnumerateArray().Select(value => value.GetString()));
+        Assert.Contains(".pl", languages["ambiguous_pl"].GetProperty("extensions").EnumerateArray().Select(value => value.GetString()));
     }
 
     [Fact]
@@ -3160,10 +3187,13 @@ public partial class QueryCommandRunnerTests
 
         var perlExts = languages["perl"].GetProperty("extensions").EnumerateArray()
             .Select(ext => ext.GetString()).ToList();
-        Assert.Contains(".pl", perlExts);
+        Assert.DoesNotContain(".pl", perlExts);
         Assert.Contains(".pm", perlExts);
         Assert.Contains(".pod", perlExts);
         Assert.Contains(".t", perlExts);
+        Assert.Contains(
+            ".pl",
+            languages["ambiguous_pl"].GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
 
         var msbuildExts = languages["msbuild"].GetProperty("extensions").EnumerateArray()
             .Select(ext => ext.GetString()).ToList();

@@ -1610,6 +1610,119 @@ public partial class FileIndexerTests
         Assert.Null(detection.DetectionSource);
     }
 
+    [Theory]
+    [InlineData("Widget.m", "#import <Foundation/Foundation.h>\n@interface Widget : NSObject\n@end\n", "objc")]
+    [InlineData("add.m", "function result = add(left, right)\nresult = left + right;\nend\n", "matlab")]
+    [InlineData("Worker.pl", "use strict;\nuse warnings;\nsub run { return 1; }\n", "perl")]
+    [InlineData("family.pl", "ancestor(X, Y) :- parent(X, Y).\n", "prolog")]
+    public void DetectLanguage_AmbiguousExtensionsUseStrongContentMarkers_Issue4612(
+        string fileName,
+        string content,
+        string expectedLanguage)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_ambiguous_content");
+        var path = TestProjectHelper.WriteTextFile(project.Root, fileName, content);
+
+        var detection = FileIndexer.TryDetectLanguage(path);
+        var scan = new FileIndexer(project.Root).ScanFilesDetailed();
+
+        Assert.Equal(FileIndexer.FileProbeStatus.Supported, detection.Status);
+        Assert.Equal(expectedLanguage, detection.Language);
+        Assert.Equal("content", detection.DetectionSource);
+        Assert.Equal(expectedLanguage, scan.FileLanguages[path]);
+    }
+
+    [Theory]
+    [InlineData("main :- run.\n")]
+    [InlineData("sentence --> noun_phrase.\n")]
+    public void DetectLanguage_ZeroArityPrologRulesAreStrongContentMarkers_Issue4612(string content)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_zero_arity_prolog");
+        var path = TestProjectHelper.WriteTextFile(project.Root, "rules.pl", content);
+
+        var detection = FileIndexer.TryDetectLanguage(path);
+
+        Assert.Equal(FileIndexer.FileProbeStatus.Supported, detection.Status);
+        Assert.Equal("prolog", detection.Language);
+        Assert.Equal("content", detection.DetectionSource);
+    }
+
+    [Fact]
+    public void DetectLanguage_Utf8CodePointSplitAtBoundedPrefixRemainsSupported_Issue4612()
+    {
+        const int probeByteLimit = 64 * 1024;
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_ambiguous_utf8_boundary");
+        var path = TestProjectHelper.ProjectPath(project.Root, "rules.pl");
+        var prologMarker = Encoding.UTF8.GetBytes("ancestor(X, Y) :- parent(X, Y).\n");
+        var bytes = new byte[probeByteLimit + 2];
+        prologMarker.CopyTo(bytes, 0);
+        Array.Fill(bytes, (byte)'x', prologMarker.Length, probeByteLimit - prologMarker.Length - 1);
+        bytes[probeByteLimit - 1] = 0xe2;
+        bytes[probeByteLimit] = 0x82;
+        bytes[probeByteLimit + 1] = 0xac;
+        File.WriteAllBytes(path, bytes);
+
+        var detection = FileIndexer.TryDetectLanguage(path);
+
+        Assert.Equal(FileIndexer.FileProbeStatus.Supported, detection.Status);
+        Assert.Equal("prolog", detection.Language);
+        Assert.Equal("content", detection.DetectionSource);
+    }
+
+    [Theory]
+    [InlineData("notes.m", "% deliberately weak markers only\nvalue = 1;\nend\n", "ambiguous_m")]
+    [InlineData("conflict.m", "#import <Foundation/Foundation.h>\nfunction result = add(left, right)\n", "ambiguous_m")]
+    [InlineData("facts.pl", "parent(alice, bob).\n", "ambiguous_pl")]
+    [InlineData("conflict.pl", "use strict;\nancestor(X, Y) :- parent(X, Y).\n", "ambiguous_pl")]
+    public void DetectLanguage_WeakOrConflictingMarkersRemainExplicitlyAmbiguous_Issue4612(
+        string fileName,
+        string content,
+        string expectedLanguage)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_ambiguous_unresolved");
+        var path = TestProjectHelper.WriteTextFile(project.Root, fileName, content);
+
+        var detection = FileIndexer.TryDetectLanguage(path);
+
+        Assert.Equal(expectedLanguage, detection.Language);
+        Assert.Equal("ambiguous", detection.DetectionSource);
+    }
+
+    [Theory]
+    [InlineData("Demo.xcodeproj", "source.m", "objc")]
+    [InlineData("model.slx", "source.m", "matlab")]
+    [InlineData("Makefile.PL", "source.pl", "perl")]
+    [InlineData("rules.prolog", "source.pl", "prolog")]
+    public void DetectLanguage_AmbiguousExtensionsUseConservativeProjectMarkers_Issue4612(
+        string markerName,
+        string fileName,
+        string expectedLanguage)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_ambiguous_project");
+        TestProjectHelper.WriteTextFile(project.Root, markerName, string.Empty);
+        var path = TestProjectHelper.WriteTextFile(project.Root, fileName, string.Empty);
+
+        var detection = FileIndexer.TryDetectLanguage(path);
+
+        Assert.Equal(expectedLanguage, detection.Language);
+        Assert.Equal("project", detection.DetectionSource);
+    }
+
+    [Fact]
+    public void DetectLanguage_PrologShebangOverridesAmbiguousPl_Issue4612()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_ambiguous_prolog_shebang");
+        var path = TestProjectHelper.WriteTextFile(
+            project.Root,
+            "tool.pl",
+            "#!/usr/bin/env swipl\n:- initialization(main).\nmain :- halt.\n");
+
+        var detection = FileIndexer.TryDetectLanguage(path);
+
+        Assert.Equal("prolog", detection.Language);
+        Assert.Equal("shebang", detection.DetectionSource);
+    }
+
     [Fact]
     public void DetectLanguage_LeadingWhitespacePseudoShebang_ReturnsNull()
     {
@@ -1810,7 +1923,7 @@ public partial class FileIndexerTests
         (".jl", "julia"),
         (".nim", "nim"),
         (".nims", "nim"),
-        (".pl", "perl"),
+        (".pl", "ambiguous_pl"),
         (".pm", "perl"),
         (".pod", "perl"),
         (".psgi", "perl"),
@@ -1823,7 +1936,7 @@ public partial class FileIndexerTests
 
     private static readonly (string Entry, string Language)[] ObjCLanguageMapEntries =
     [
-        (".m", "objc"),
+        (".m", "ambiguous_m"),
         (".mm", "objc"),
         (".hh", "cpp")
     ];

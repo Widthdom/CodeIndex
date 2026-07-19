@@ -1491,6 +1491,7 @@ Process exit codes are coarse (`0` success including valid zero-row queries, `1`
 
 ## Design decisions
 
+- **Ambiguous source extensions stay explicit** — `.m` and `.pl` are not assigned to Objective-C and Perl by default. `FileIndexer` checks an authoritative recognized shebang, then a 64 KiB bounded prefix for strong mutually exclusive Objective-C/MATLAB or Perl/Prolog markers, then at most 256 entries per ancestor directory for conservative project markers. Conflicting or weak evidence is indexed as `ambiguous_m` / `ambiguous_pl`; MATLAB and Prolog have conservative symbol patterns but deliberately advertise no reference/graph support (#4612).
 - **Lock-file dependency graphs model package relationships** — `packages.lock.json`, `package-lock.json`, and `npm-shrinkwrap.json` keep package declarations as symbols, but emit `dependency` references only for explicit parent-package to child-package entries. The parent package is stored as the reference container, so `callers` can identify which package requires a child and `deps` does not infer lock-file-to-lock-file similarity merely because two files contain the same resolved package set (#4409).
 - **No ORM** — Raw `Microsoft.Data.Sqlite` with parameterized queries. Keeps dependencies minimal and control explicit.
 - **Batch commits** — 500 records per transaction for write performance. Reduces fsync overhead.
@@ -4348,6 +4349,7 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
 
 ## 設計判断
 
+- **曖昧な source extension は曖昧なまま明示** — `.m` と `.pl` を既定で Objective-C / Perl に割り当てません。`FileIndexer` は authoritative な認識済み shebang、64 KiB 上限 prefix 内の相互排他的で強い Objective-C/MATLAB または Perl/Prolog marker、各 ancestor directory 最大 256 entry の保守的な project marker の順に確認します。競合または弱い証拠は `ambiguous_m` / `ambiguous_pl` として index し、MATLAB / Prolog は保守的な symbol pattern を持つ一方、reference / graph 対応を意図的に広告しません（#4612）。
 - **lock file の依存グラフは package 間の関係をモデル化** — `packages.lock.json`、`package-lock.json`、`npm-shrinkwrap.json` は package 宣言を symbol として保持しますが、`dependency` reference は明示された親 package → 子 package の項目だけに出力します。親 package を reference container に保存するため、`callers` はどの package が子 package を必要としているかを特定でき、`deps` は同じ resolved package 集合を持つだけの lock file 同士を類似関係として推論しません（#4409）。
 - **ORMなし** — `Microsoft.Data.Sqlite`でパラメータ化クエリを直接使用。依存関係を最小限に、制御を明確に。
 - **バッチコミット** — 書き込み性能のため1トランザクション500レコード。fsyncオーバーヘッドを削減。

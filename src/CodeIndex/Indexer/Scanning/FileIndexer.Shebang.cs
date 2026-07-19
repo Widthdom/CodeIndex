@@ -326,6 +326,8 @@ public partial class FileIndexer
         "ruby" => "ruby",
         "perl" => "perl",
         "tclsh" or "wish" => "tcl",
+        "matlab" or "octave" or "octave-cli" => "matlab",
+        "prolog" or "swipl" or "sicstus" or "gprolog" => "prolog",
         "php" => "php",
         "lua" => "lua",
         "pwsh" or "powershell" => "powershell",
