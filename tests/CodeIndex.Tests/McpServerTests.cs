@@ -8325,7 +8325,10 @@ public sealed class Caller
         var secret = "github_pat_" + "a".PadLeft(82, 'a');
         env.Set("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S", $"Bearer {secret}");
 
-        var stderr = ConsoleCapture.CaptureError(() => _ = new McpServer(_dbPath, ConsoleUi.LoadVersion()));
+        var stderr = ConsoleCapture.CaptureError(() =>
+        {
+            using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        });
 
         Assert.Contains("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S='Bearer <redacted>'", stderr);
         Assert.DoesNotContain(secret, stderr);
