@@ -9,6 +9,11 @@ public partial class FileIndexer
     private const int LinuxAtSymlinkNoFollow = 0x100;
     private const uint LinuxStatxBasicStats = 0x07ff;
     private const FileAttributes WindowsFileFlagBackupSemantics = (FileAttributes)0x02000000;
+    private const FileAttributes WindowsFileFlagOpenReparsePoint = (FileAttributes)0x00200000;
+    private const int LinuxOpenDirectory = 0x10000;
+    private const int LinuxOpenNoFollow = 0x20000;
+    private const int MacOpenDirectory = 0x100000;
+    private const int MacOpenNoFollow = 0x100;
     private static readonly bool IsLinuxPlatform = OperatingSystem.IsLinux();
     private static readonly bool IsMacOSPlatform = OperatingSystem.IsMacOS();
     private static readonly bool IsFileIdentityWindowsPlatform = OperatingSystem.IsWindows();
@@ -16,6 +21,115 @@ public partial class FileIndexer
 
     internal static bool TryGetFileIdentity(string path, out FileIdentity identity)
         => TryGetFileIdentity(path, out identity, out _);
+
+    internal static bool TryOpenDirectoryIdentityHandle(
+        string path,
+        out SafeFileHandle handle,
+        out FileIdentity identity)
+    {
+        handle = new SafeFileHandle(IntPtr.Zero, ownsHandle: true);
+        identity = default;
+        if (!FileIdentitySupportedPlatform)
+            return false;
+
+        try
+        {
+            if (IsFileIdentityWindowsPlatform)
+            {
+                handle.Dispose();
+                handle = CreateFile(
+                    path,
+                    desiredAccess: 0,
+                    shareMode: FileShare.ReadWrite | FileShare.Delete,
+                    securityAttributes: IntPtr.Zero,
+                    creationDisposition: FileMode.Open,
+                    flagsAndAttributes: WindowsFileFlagBackupSemantics | WindowsFileFlagOpenReparsePoint,
+                    templateFile: IntPtr.Zero);
+            }
+            else
+            {
+                var flags = IsLinuxPlatform
+                    ? LinuxOpenDirectory | LinuxOpenNoFollow
+                    : MacOpenDirectory | MacOpenNoFollow;
+                var descriptor = OpenUnix(path, flags);
+                if (descriptor < 0)
+                    return false;
+
+                handle.Dispose();
+                handle = new SafeFileHandle((IntPtr)descriptor, ownsHandle: true);
+            }
+
+            if (handle.IsInvalid || !TryGetFileIdentity(handle, out identity))
+            {
+                handle.Dispose();
+                handle = new SafeFileHandle(IntPtr.Zero, ownsHandle: true);
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            handle.Dispose();
+            handle = new SafeFileHandle(IntPtr.Zero, ownsHandle: true);
+            return false;
+        }
+    }
+
+    internal static bool TryGetFileIdentity(SafeFileHandle handle, out FileIdentity identity)
+    {
+        identity = default;
+        if (handle.IsInvalid || handle.IsClosed || !FileIdentitySupportedPlatform)
+            return false;
+
+        try
+        {
+            if (IsFileIdentityWindowsPlatform)
+            {
+                if (!GetFileInformationByHandle(handle, out var windowsInfo))
+                    return false;
+
+                var fileIndex = ((ulong)windowsInfo.FileIndexHigh << 32) | windowsInfo.FileIndexLow;
+                identity = new FileIdentity(windowsInfo.VolumeSerialNumber, fileIndex);
+                return true;
+            }
+
+            var descriptor = handle.DangerousGetHandle().ToInt32();
+            if (IsMacOSPlatform)
+            {
+                if (FStatMac(descriptor, out var macStat) != 0)
+                    return false;
+
+                identity = new FileIdentity((uint)macStat.DeviceId, macStat.Inode);
+                return true;
+            }
+
+            if (FStatLinux(descriptor, out var linuxStat) != 0)
+                return false;
+
+            identity = new FileIdentity(linuxStat.DeviceId, linuxStat.Inode);
+            return true;
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    internal static bool TryGetDirectoryHandlePath(SafeFileHandle handle, out string path)
+    {
+        path = string.Empty;
+        if (handle.IsInvalid || handle.IsClosed)
+            return false;
+
+        if (IsLinuxPlatform)
+        {
+            path = $"/proc/self/fd/{handle.DangerousGetHandle().ToInt32()}";
+            return true;
+        }
+
+        return false;
+    }
 
     internal static bool TryGetFileIdentity(string path, out FileIdentity identity, out ulong linkCount)
     {
@@ -150,6 +264,15 @@ public partial class FileIndexer
 
     [DllImport("libc", EntryPoint = "stat", SetLastError = true)]
     private static extern int StatMac(string path, out MacStat stat);
+
+    [DllImport("libc", EntryPoint = "fstat", SetLastError = true)]
+    private static extern int FStatLinux(int descriptor, out LinuxStat stat);
+
+    [DllImport("libc", EntryPoint = "fstat", SetLastError = true)]
+    private static extern int FStatMac(int descriptor, out MacStat stat);
+
+    [DllImport("libc", EntryPoint = "open", SetLastError = true)]
+    private static extern int OpenUnix(string path, int flags);
 
     [DllImport("libc", EntryPoint = "statx", SetLastError = true)]
     private static extern int StatxLinux(

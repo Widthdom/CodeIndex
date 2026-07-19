@@ -279,7 +279,8 @@ public partial class FileIndexer
             _symlinkPolicy,
             _projectRoot,
             knownIndexability,
-            LoadLanguageMapOverridesForIndexing);
+            LoadLanguageMapOverridesForIndexing,
+            _openReadForIndexContent);
 
     private IReadOnlyDictionary<string, string> LoadLanguageMapOverridesForIndexing(string? startDirectory)
     {
@@ -380,7 +381,8 @@ public partial class FileIndexer
         SymlinkPolicy symlinkPolicy,
         string? projectRoot,
         FileProbeStatus? knownIndexability = null,
-        Func<string?, IReadOnlyDictionary<string, string>>? languageMapOverrideResolver = null)
+        Func<string?, IReadOnlyDictionary<string, string>>? languageMapOverrideResolver = null,
+        Func<string, FileStream>? openReadForIndexContent = null)
     {
         // Exact filename matching beats extension lookup so manifest-style filenames like
         // `pyproject.toml` can map to a dependency category instead of the generic file type.
@@ -425,7 +427,12 @@ public partial class FileIndexer
             return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
         }
 
-        return TryDetectLanguageFromShebang(filePath, symlinkPolicy, projectRoot, knownIndexability);
+        return TryDetectLanguageFromShebang(
+            filePath,
+            symlinkPolicy,
+            projectRoot,
+            knownIndexability,
+            openReadForIndexContent);
     }
 
     private static bool TryGetFileNamePrefixLanguage(string fileName, out string language)

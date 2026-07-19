@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Security.Cryptography;
 using CodeIndex.Cli;
 using CodeIndex.Indexer;
+using Microsoft.Win32.SafeHandles;
 
 namespace CodeIndex.Mcp;
 
@@ -11,22 +12,28 @@ namespace CodeIndex.Mcp;
 /// </summary>
 internal static class McpPathBoundary
 {
-    internal sealed class IndexRootAuthorization
+    internal sealed class IndexRootAuthorization : IDisposable
     {
         private readonly string _requestedPath;
         private readonly FileIndexer.FileIdentity _rootIdentity;
+        private readonly SafeFileHandle _rootHandle;
         private readonly Func<string, bool> _isPathAuthorized;
+        private readonly Action<string>? _entryOpenBoundary;
 
         internal IndexRootAuthorization(
             string requestedPath,
             string canonicalPath,
             FileIndexer.FileIdentity rootIdentity,
-            Func<string, bool> isPathAuthorized)
+            SafeFileHandle rootHandle,
+            Func<string, bool> isPathAuthorized,
+            Action<string>? entryOpenBoundary)
         {
             _requestedPath = requestedPath;
             CanonicalPath = canonicalPath;
             _rootIdentity = rootIdentity;
+            _rootHandle = rootHandle;
             _isPathAuthorized = isPathAuthorized;
+            _entryOpenBoundary = entryOpenBoundary;
             CheckedRootIdentity = CreateRootIdentityToken(rootIdentity);
         }
 
@@ -35,20 +42,120 @@ internal static class McpPathBoundary
 
         internal void EnsureAuthorizedEntry(string path)
         {
-            var currentRequestedTarget = ResolveExistingDirectoryPath(_requestedPath);
-            if (!PathCasing.PathsEqual(currentRequestedTarget, CanonicalPath))
-                throw new McpIndexAuthorizationException(CheckedRootIdentity, "requested_root_changed");
-
-            if (!FileIndexer.TryGetFileIdentity(CanonicalPath, out var currentIdentity)
-                || currentIdentity != _rootIdentity)
-            {
-                throw new McpIndexAuthorizationException(CheckedRootIdentity, "root_identity_changed");
-            }
+            EnsureStableRoot();
 
             if (!TryResolveExistingPath(path, out var canonicalEntry))
                 throw new McpIndexEntryUnavailableException();
             if (!_isPathAuthorized(canonicalEntry))
                 throw new McpIndexAuthorizationException(CheckedRootIdentity, "entry_outside_authorized_roots");
+        }
+
+        internal FileStream OpenAuthorizedRead(string path)
+        {
+            var expectedIdentity = CaptureAuthorizedEntryIdentity(path);
+            _entryOpenBoundary?.Invoke(path);
+
+            var stream = BoundedFile.OpenReadForIndexContent(path);
+            try
+            {
+                EnsureOpenedEntryIdentity(path, stream.SafeFileHandle, expectedIdentity, "entry_identity_changed");
+                return stream;
+            }
+            catch
+            {
+                stream.Dispose();
+                throw;
+            }
+        }
+
+        internal IEnumerable<string> EnumerateAuthorizedFileSystemEntries(string path)
+        {
+            var expectedIdentity = CaptureAuthorizedEntryIdentity(path);
+            _entryOpenBoundary?.Invoke(path);
+            if (!FileIndexer.TryOpenDirectoryIdentityHandle(path, out var directoryHandle, out var openedIdentity))
+            {
+                if (FileIndexer.TryGetFileIdentity(path, out var currentIdentity)
+                    && currentIdentity != expectedIdentity)
+                {
+                    throw new McpIndexAuthorizationException(CheckedRootIdentity, "directory_identity_changed");
+                }
+
+                throw new McpIndexEntryUnavailableException();
+            }
+
+            using (directoryHandle)
+            {
+                if (openedIdentity != expectedIdentity)
+                    throw new McpIndexAuthorizationException(CheckedRootIdentity, "directory_identity_changed");
+
+                EnsureOpenedEntryIdentity(path, directoryHandle, expectedIdentity, "directory_identity_changed");
+                var enumerationPath = FileIndexer.TryGetDirectoryHandlePath(directoryHandle, out var handlePath)
+                    ? handlePath
+                    : path;
+                var entries = CodeIndex.FileSystemTraversalPolicy
+                    .EnumerateFileSystemEntries(LongPath.EnsureWindowsPrefix(enumerationPath))
+                    .Select(entry => Path.Combine(path, Path.GetFileName(LongPath.RemoveWindowsPrefix(entry))))
+                    .ToArray();
+
+                EnsureOpenedEntryIdentity(path, directoryHandle, expectedIdentity, "directory_identity_changed");
+                foreach (var entry in entries)
+                    EnsureAuthorizedEntry(entry);
+                return entries;
+            }
+        }
+
+        public void Dispose()
+            => _rootHandle.Dispose();
+
+        private FileIndexer.FileIdentity CaptureAuthorizedEntryIdentity(string path)
+        {
+            EnsureAuthorizedEntry(path);
+            if (!TryResolveExistingPath(path, out var canonicalEntry))
+                throw new McpIndexEntryUnavailableException();
+            if (!FileIndexer.TryGetFileIdentity(canonicalEntry, out var identity))
+            {
+                if (!File.Exists(path) && !Directory.Exists(path))
+                    throw new FileNotFoundException();
+                throw new McpIndexEntryUnavailableException();
+            }
+
+            return identity;
+        }
+
+        private void EnsureOpenedEntryIdentity(
+            string path,
+            SafeFileHandle openedHandle,
+            FileIndexer.FileIdentity expectedIdentity,
+            string identityChangedReason)
+        {
+            EnsureStableRoot();
+            if (!TryResolveExistingPath(path, out var canonicalEntry))
+                throw new McpIndexEntryUnavailableException();
+            if (!_isPathAuthorized(canonicalEntry))
+                throw new McpIndexAuthorizationException(CheckedRootIdentity, "entry_outside_authorized_roots");
+            if (!FileIndexer.TryGetFileIdentity(canonicalEntry, out var currentIdentity)
+                || !FileIndexer.TryGetFileIdentity(openedHandle, out var openedIdentity))
+            {
+                throw new McpIndexEntryUnavailableException();
+            }
+
+            if (currentIdentity != expectedIdentity || openedIdentity != expectedIdentity)
+                throw new McpIndexAuthorizationException(CheckedRootIdentity, identityChangedReason);
+        }
+
+        private void EnsureStableRoot()
+        {
+            var currentRequestedTarget = ResolveExistingDirectoryPath(_requestedPath);
+            if (!PathCasing.PathsEqual(currentRequestedTarget, CanonicalPath))
+                throw new McpIndexAuthorizationException(CheckedRootIdentity, "requested_root_changed");
+
+            if (!FileIndexer.TryGetFileIdentity(CanonicalPath, out var currentPathIdentity)
+                || !FileIndexer.TryGetFileIdentity(_rootHandle, out var currentHandleIdentity)
+                || currentPathIdentity != _rootIdentity
+                || currentHandleIdentity != _rootIdentity)
+            {
+                throw new McpIndexAuthorizationException(CheckedRootIdentity, "root_identity_changed");
+            }
         }
 
         private static string CreateRootIdentityToken(FileIndexer.FileIdentity identity)
@@ -95,6 +202,7 @@ internal static class McpPathBoundary
     internal static bool TryCaptureIndexRoot(
         string requestedPath,
         Func<string, bool> isPathAuthorized,
+        Action<string>? entryOpenBoundary,
         out IndexRootAuthorization? authorization,
         out string? error)
     {
@@ -112,7 +220,7 @@ internal static class McpPathBoundary
             return false;
         }
 
-        if (!FileIndexer.TryGetFileIdentity(canonicalPath, out var identity))
+        if (!FileIndexer.TryOpenDirectoryIdentityHandle(canonicalPath, out var rootHandle, out var identity))
         {
             error = "Directory identity could not be verified";
             return false;
@@ -122,7 +230,9 @@ internal static class McpPathBoundary
             Path.GetFullPath(requestedPath),
             canonicalPath,
             identity,
-            isPathAuthorized);
+            rootHandle,
+            isPathAuthorized,
+            entryOpenBoundary);
         error = null;
         return true;
     }

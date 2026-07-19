@@ -22,18 +22,44 @@ public partial class McpServer
         }
         catch (McpIndexAuthorizationException ex)
         {
-            return CreateToolErrorResponse(
-                id,
-                "MCP index authorization changed after validation; indexing stopped.",
-                category: McpErrorEnvelope.CategoryPermissionDenied,
-                suggestion: "Restore a stable directory mapping within the current working directory and MCP client roots, then retry.",
-                retrySafe: true,
-                extraData: new JsonObject
-                {
-                    ["authorization_failure_reason"] = ex.Reason,
-                    ["checked_root_identity"] = ex.CheckedRootIdentity,
-                });
+            return CreateIndexAuthorizationErrorResponse(id, ex);
         }
+        catch (AggregateException ex) when (TryExtractIndexAuthorizationException(ex, out var authorizationException))
+        {
+            return CreateIndexAuthorizationErrorResponse(id, authorizationException);
+        }
+    }
+
+    private JsonNode CreateIndexAuthorizationErrorResponse(
+        JsonNode? id,
+        McpIndexAuthorizationException exception)
+        => CreateToolErrorResponse(
+            id,
+            "MCP index authorization changed after validation; indexing stopped.",
+            category: McpErrorEnvelope.CategoryPermissionDenied,
+            suggestion: "Restore a stable directory mapping within the current working directory and MCP client roots, then retry.",
+            retrySafe: true,
+            extraData: new JsonObject
+            {
+                ["authorization_failure_reason"] = exception.Reason,
+                ["checked_root_identity"] = exception.CheckedRootIdentity,
+            });
+
+    private static bool TryExtractIndexAuthorizationException(
+        AggregateException exception,
+        out McpIndexAuthorizationException authorizationException)
+    {
+        foreach (var innerException in exception.Flatten().InnerExceptions)
+        {
+            if (innerException is McpIndexAuthorizationException matched)
+            {
+                authorizationException = matched;
+                return true;
+            }
+        }
+
+        authorizationException = null!;
+        return false;
     }
 
     private async Task<JsonNode> ExecuteIndexCoreAsync(JsonNode? id, JsonNode? args, JsonNode? progressToken)
@@ -72,13 +98,16 @@ public partial class McpServer
         if (!McpPathBoundary.TryCaptureIndexRoot(
                 requestedProjectPath,
                 IsPathAuthorized,
+                McpIndexEntryOpenBoundaryForTesting,
                 out var authorization,
                 out var authorizationError))
         {
             return CreateToolErrorResponse(id, authorizationError!);
         }
 
-        var authorizedRoot = authorization!;
+        using var authorizedRoot = authorization!;
+        if (_currentIndexAuditContext.Value is { } auditContext)
+            auditContext.CheckedRootIdentity = authorizedRoot.CheckedRootIdentity;
         McpIndexAuthorizationCompletedForTesting?.Invoke();
         authorizedRoot.EnsureAuthorizedEntry(authorizedRoot.CanonicalPath);
         var projectPath = authorizedRoot.CanonicalPath;
@@ -99,7 +128,9 @@ public partial class McpServer
                 directoryIgnoreCaseProbe: null,
                 symlinkPolicy: symlinkPolicy,
                 generatedCodePatterns: IndexCommandRunner.ReadGeneratedCodePatternsFromEnvironment(),
-                pathAccessValidator: authorizedRoot.EnsureAuthorizedEntry);
+                pathAccessValidator: authorizedRoot.EnsureAuthorizedEntry,
+                openReadForIndexContent: authorizedRoot.OpenAuthorizedRead,
+                enumerateFileSystemEntries: authorizedRoot.EnumerateAuthorizedFileSystemEntries);
             var scan = dryRunIndexer.ScanFilesDetailed(cancellationToken: _currentRequestToken.Value);
             if (memorySamples != null)
                 memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
@@ -229,7 +260,9 @@ public partial class McpServer
             directoryIgnoreCaseProbe: null,
             symlinkPolicy: symlinkPolicy,
             generatedCodePatterns: IndexCommandRunner.ReadGeneratedCodePatternsFromEnvironment(),
-            pathAccessValidator: authorizedRoot.EnsureAuthorizedEntry);
+            pathAccessValidator: authorizedRoot.EnsureAuthorizedEntry,
+            openReadForIndexContent: authorizedRoot.OpenAuthorizedRead,
+            enumerateFileSystemEntries: authorizedRoot.EnumerateAuthorizedFileSystemEntries);
         using var postExtractionHooks = new IndexCommandRunner.LazyDisposable<PostExtractionHookRunner>(() =>
         {
             McpIndexPostExtractionHookDiscoveryForTesting?.Invoke();

@@ -241,11 +241,12 @@ are returned by the sink shutdown result and emitted in the bounded stderr
 diagnostic; they are not advertised as live MCP status after the server stops.
 
 MCP `index` binds authorization to the canonical directory and filesystem
-identity captured before traversal. It revalidates the requested mapping, root
-identity, authorized client/CWD boundary, every traversed directory, and every
-file before content access; a link or identity change stops the run with a
-`permission_denied` tool error. Successful and dry-run structured results, and
-their audit JSONL records, expose the same opaque `checked_root_identity` token.
+identity captured before traversal and keeps a no-follow root handle for the
+run. Directory listings and file reads compare the pre-open identity, the
+opened handle identity, and post-open canonical containment; a link or identity
+change stops the run with a `permission_denied` tool error before content is
+read. Successful and dry-run structured results, and audit JSONL records for
+post-authorization failures, expose the same opaque `checked_root_identity` token.
 If a containing Git repository is outside the authorized roots, ignore-rule
 discovery stays at the requested project root instead of reading its parent.
 
@@ -598,10 +599,11 @@ abandoned count と deadline 状態は sink の shutdown result と上限付き 
 diagnostic で報告し、server 停止後に live MCP status として公開しません。
 
 MCP `index` は走査前に取得した canonical directory と filesystem identity に
-認可を結び付けます。要求 path の mapping、root identity、認可済み client/CWD
-boundary、走査する各 directory、内容を読む各 file を再検証し、link または identity
-が変化した場合は `permission_denied` tool error で処理を停止します。成功時と dry-run
-の structured result、および対応する audit JSONL record は、同じ opaque な
+認可を結び付け、run 中は no-follow の root handle を保持します。directory listing と
+file read では、open 前の identity、実際に開いた handle の identity、open 後の canonical
+containment を照合し、link または identity が変化した場合は内容を読む前に
+`permission_denied` tool error で処理を停止します。成功時と dry-run の structured
+result、および認可後に失敗した場合の audit JSONL record は、同じ opaque な
 `checked_root_identity` token を公開します。包含する Git repository が認可 root 外の
 場合、ignore-rule discovery は親を読まず、要求された project root 内に留まります。
 

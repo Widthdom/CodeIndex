@@ -145,7 +145,7 @@ public partial class FileIndexer
             ScanIssueSeverity.Warning));
     }
 
-    private static bool TryReadBoundedUtf8SidecarLines(
+    private bool TryReadBoundedUtf8SidecarLines(
         string path,
         int maxBytes,
         int maxLines,
@@ -159,7 +159,8 @@ public partial class FileIndexer
             maxLines,
             MaxGitmodulesLineChars,
             out lines,
-            out failure);
+            out failure,
+            openFile: _openReadForIndexContent);
         skippedReason = success ? string.Empty : failure.Reason;
         return success;
     }

@@ -6069,6 +6069,47 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Index_PostAuthorizationExceptionPreservesCheckedRootIdentityInAudit_Issue4606()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_audit_error_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_audit_error");
+        var auditPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_audit_error_{Guid.NewGuid():N}.jsonl");
+        Directory.CreateDirectory(fixtureDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { }\n");
+            using (var sink = new AuditLogSink(auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false))
+            using (var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, sink))
+            {
+                McpServer.McpIndexAuthorizationCompletedForTesting = () =>
+                    throw new InvalidOperationException("test-only post-authorization failure");
+
+                var response = CallIndex(server, fixtureDir);
+
+                Assert.True(response["result"]!["isError"]!.GetValue<bool>(), response.ToJsonString());
+                Assert.Equal(
+                    McpErrorEnvelope.CategoryInternalError,
+                    response["result"]!["structuredContent"]!["category"]!.GetValue<string>());
+            }
+
+            var auditRecord = Assert.Single(File.ReadAllLines(auditPath));
+            using var auditJson = JsonDocument.Parse(auditRecord);
+            Assert.StartsWith(
+                "fsid:v1:",
+                auditJson.RootElement.GetProperty("checked_root_identity").GetString(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            McpServer.McpIndexAuthorizationCompletedForTesting = null;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            if (File.Exists(auditPath))
+                File.Delete(auditPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_RejectsAuthorizedRootSymlinkSwap_Issue4606()
     {
         if (OperatingSystem.IsWindows())
@@ -6143,6 +6184,98 @@ public partial class McpServerTests
             McpServer.McpIndexAuthorizationCompletedForTesting = null;
             TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteDirectory(originalDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_RejectsFileReplacementAtAuthorizedOpenBoundary_Issue4606()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_file_swap_{Guid.NewGuid():N}");
+        var victimPath = Path.Combine(fixtureDir, "victim.cs");
+        var originalPath = Path.Combine(fixtureDir, "victim.original");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_file_swap");
+        Directory.CreateDirectory(fixtureDir);
+        try
+        {
+            File.WriteAllText(victimPath, "public class Allowed { }\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var swapped = 0;
+            McpServer.McpIndexEntryOpenBoundaryForTesting = path =>
+            {
+                if (!PathCasing.PathsEqual(path, victimPath)
+                    || Interlocked.Exchange(ref swapped, 1) != 0)
+                {
+                    return;
+                }
+
+                File.Move(victimPath, originalPath);
+                File.WriteAllText(victimPath, "public class Replacement { }\n");
+            };
+
+            var response = CallIndex(server, fixtureDir);
+
+            Assert.True(swapped == 1, response.ToJsonString());
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>(), response.ToJsonString());
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.True(
+                string.Equals(
+                    McpErrorEnvelope.CategoryPermissionDenied,
+                    structured["category"]!.GetValue<string>(),
+                    StringComparison.Ordinal),
+                response.ToJsonString());
+            Assert.Equal("entry_identity_changed", structured["authorization_failure_reason"]!.GetValue<string>());
+            Assert.StartsWith(
+                "fsid:v1:",
+                structured["checked_root_identity"]!.GetValue<string>(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            McpServer.McpIndexEntryOpenBoundaryForTesting = null;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_RejectsDirectoryReplacementAtAuthorizedOpenBoundary_Issue4606()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_directory_swap_{Guid.NewGuid():N}");
+        var directoryPath = Path.Combine(fixtureDir, "src");
+        var originalPath = Path.Combine(fixtureDir, "src.original");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_directory_swap");
+        Directory.CreateDirectory(directoryPath);
+        try
+        {
+            File.WriteAllText(Path.Combine(directoryPath, "allowed.cs"), "public class Allowed { }\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var swapped = 0;
+            McpServer.McpIndexEntryOpenBoundaryForTesting = path =>
+            {
+                if (!PathCasing.PathsEqual(path, directoryPath)
+                    || Interlocked.Exchange(ref swapped, 1) != 0)
+                {
+                    return;
+                }
+
+                Directory.Move(directoryPath, originalPath);
+                Directory.CreateDirectory(directoryPath);
+                File.WriteAllText(Path.Combine(directoryPath, "replacement.cs"), "public class Replacement { }\n");
+            };
+
+            var response = CallIndex(server, fixtureDir, arguments => arguments["dryRun"] = true);
+
+            Assert.True(swapped == 1, response.ToJsonString());
+            Assert.True(response["result"]?["isError"]?.GetValue<bool>() == true, response.ToJsonString());
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.Equal(McpErrorEnvelope.CategoryPermissionDenied, structured["category"]!.GetValue<string>());
+            Assert.Equal("directory_identity_changed", structured["authorization_failure_reason"]!.GetValue<string>());
+        }
+        finally
+        {
+            McpServer.McpIndexEntryOpenBoundaryForTesting = null;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
@@ -7060,11 +7193,12 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsCall_Index_WhenDbLockHeld_ReturnsBusyError()
+    public void ToolsCall_Index_WhenDbLockHeld_ReturnsBusyErrorAndAuditsCheckedRootIdentity_Issue4606()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_lock_fixture_{Guid.NewGuid():N}");
         Directory.CreateDirectory(fixtureDir);
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_lock");
+        var auditPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_lock_{Guid.NewGuid():N}.jsonl");
         var lockPath = McpIndexRunLock.ResolveLockPath(dbPath);
         Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
         var infoPath = lockPath + ".info";
@@ -7072,31 +7206,41 @@ public partial class McpServerTests
             infoPath,
             $$"""{"pid":{{Environment.ProcessId}},"since":"2026-01-02T03:04:05.0000000+00:00"}""");
         using var heldLock = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-        using var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
         try
         {
-            var request = new JsonObject
+            using (var sink = new AuditLogSink(auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false))
+            using (var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true, sink))
             {
-                ["jsonrpc"] = "2.0",
-                ["id"] = 1,
-                ["method"] = "tools/call",
-                ["params"] = new JsonObject
+                var request = new JsonObject
                 {
-                    ["name"] = "index",
-                    ["arguments"] = new JsonObject
+                    ["jsonrpc"] = "2.0",
+                    ["id"] = 1,
+                    ["method"] = "tools/call",
+                    ["params"] = new JsonObject
                     {
-                        ["path"] = fixtureDir
+                        ["name"] = "index",
+                        ["arguments"] = new JsonObject
+                        {
+                            ["path"] = fixtureDir
+                        }
                     }
-                }
-            };
+                };
 
-            var response = server.HandleMessage(request)!;
+                var response = server.HandleMessage(request)!;
 
-            Assert.True(response["result"]!["isError"]!.GetValue<bool>());
-            var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
-            Assert.Contains("index already running on this DB", text);
-            Assert.Contains($"pid {Environment.ProcessId}", text);
-            Assert.Contains("2026-01-02T03:04:05", text);
+                Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+                var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+                Assert.Contains("index already running on this DB", text);
+                Assert.Contains($"pid {Environment.ProcessId}", text);
+                Assert.Contains("2026-01-02T03:04:05", text);
+            }
+
+            var auditRecord = Assert.Single(File.ReadAllLines(auditPath));
+            using var auditJson = JsonDocument.Parse(auditRecord);
+            Assert.StartsWith(
+                "fsid:v1:",
+                auditJson.RootElement.GetProperty("checked_root_identity").GetString(),
+                StringComparison.Ordinal);
         }
         finally
         {
@@ -7105,6 +7249,8 @@ public partial class McpServerTests
             TestProjectHelper.DeleteFile(lockPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            if (File.Exists(auditPath))
+                File.Delete(auditPath);
         }
     }
 

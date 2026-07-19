@@ -70,6 +70,7 @@ public partial class FileIndexer
     private readonly int _maxDanglingFileSystemEntryScanCandidates;
     private readonly GeneratedCodePatternMatcher _generatedCodePatterns;
     private readonly Action<string>? _pathAccessValidator;
+    private readonly Func<string, FileStream> _openReadForIndexContent;
     // Submodule working-tree paths declared in <ignoreRuleRoot>/.gitmodules, relative to
     // _projectRoot and slash-normalized. Used to override SkipDirs so that submodules
     // hosted under SkipDirs-named directories (e.g. vendor/foo) remain visible to the
@@ -189,7 +190,8 @@ public partial class FileIndexer
         SymlinkPolicy symlinkPolicy = SymlinkPolicy.None,
         int? maxDanglingFileSystemEntryScanCandidates = null,
         IReadOnlyList<string>? generatedCodePatterns = null,
-        Action<string>? pathAccessValidator = null)
+        Action<string>? pathAccessValidator = null,
+        Func<string, FileStream>? openReadForIndexContent = null)
     {
         _projectRoot = Path.GetFullPath(projectRoot);
         _projectRootRelativePrefix = CreateProjectRootRelativePrefix(_projectRoot);
@@ -203,7 +205,8 @@ public partial class FileIndexer
         _languageMapOverrideCache = new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal);
         _nestedGitRepositoryCache = new Dictionary<string, bool>(StringComparer.Ordinal);
         _maxFileSizeBytes = ResolveMaxFileSizeBytes(maxFileSizeBytes);
-        _contentLoader = new FileContentLoader(_maxFileSizeBytes);
+        _openReadForIndexContent = openReadForIndexContent ?? BoundedFile.OpenReadForIndexContent;
+        _contentLoader = new FileContentLoader(_maxFileSizeBytes, _openReadForIndexContent);
         _symlinkPolicy = symlinkPolicy;
         _pathAccessValidator = pathAccessValidator;
         _maxDanglingFileSystemEntryScanCandidates = Math.Max(
