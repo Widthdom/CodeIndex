@@ -22,7 +22,7 @@ internal static class ConsoleCompletionRenderer
     /// 補完値用にFileIndexerからソート済みのユニークな言語名を取得する。
     /// </summary>
     internal static string GetCompletionLangs() =>
-        string.Join(" ", FileIndexer.GetLanguageExtensions().Values
+        string.Join(" ", FileIndexer.GetDetectedLanguageNames()
             .Append("bat")
             .Append("cmd")
             .Concat(QueryCommandRunner.GetCompletionLanguageAliases().Where(IsShellCompletionSafeLanguageValue))

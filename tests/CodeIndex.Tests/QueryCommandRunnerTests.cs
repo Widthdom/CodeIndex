@@ -1622,6 +1622,10 @@ public partial class QueryCommandRunnerTests
     [InlineData("assembler", "assembly")]
     [InlineData("gas", "assembly")]
     [InlineData("gnu asm", "assembly")]
+    [InlineData("octave", "matlab")]
+    [InlineData("gnu octave", "matlab")]
+    [InlineData("swi-prolog", "prolog")]
+    [InlineData("swipl", "prolog")]
     public void NormalizeQueryLanguage_MapsCommonAliasesToCanonicalLanguages(string input, string expected)
     {
         Assert.Equal(expected, DbReader.NormalizeQueryLanguage(input));
@@ -2511,7 +2515,7 @@ public partial class QueryCommandRunnerTests
                 ExtractorPluginRegistry.RegisterForWorkspaceForTests(
                     project.Root,
                     new WorkspaceCatalogSymbolExtractor("statuscatalog", ".statuscatalog"));
-                var expectedDetected = FileIndexer.GetLanguageExtensions(project.Root).Values.Distinct().Count();
+                var expectedDetected = FileIndexer.GetDetectedLanguageNames(project.Root).Count;
                 var expectedSymbols = SymbolExtractor.GetSupportedLanguages(project.Root).Count;
 
                 var (exitCode, stdout, stderr) = CaptureConsole(() =>
@@ -2807,6 +2811,7 @@ public partial class QueryCommandRunnerTests
         var javascript = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "javascript");
         var typescript = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "typescript");
         var objc = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "objc");
+        var ambiguousM = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "ambiguous_m");
 
         Assert.Contains(".cjs", javascript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
         Assert.Contains(".mjs", javascript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
@@ -2814,8 +2819,8 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("jsx", javascript.GetProperty("aliases").EnumerateArray().Select(alias => alias.GetString()));
         Assert.Contains(".cts", typescript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
         Assert.Contains(".mts", typescript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
-        Assert.Contains(".m", objc.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
         Assert.Contains(".mm", objc.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+        Assert.Contains(".m", ambiguousM.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
     }
 
     [Fact]
@@ -2894,13 +2899,240 @@ public partial class QueryCommandRunnerTests
         Assert.True(manifest.GetProperty("reference_extraction").GetBoolean());
         Assert.True(manifest.GetProperty("graph_queries").GetBoolean());
         Assert.DoesNotContain("missing-symbols", manifest.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()));
-        Assert.Contains("Directory.Packages.props", manifest.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+        Assert.Contains("Directory.Packages.props", manifest.GetProperty("exact_filenames").EnumerateArray().Select(value => value.GetString()));
 
         Assert.True(lockfile.GetProperty("symbol_extraction").GetBoolean());
         Assert.True(lockfile.GetProperty("reference_extraction").GetBoolean());
         Assert.True(lockfile.GetProperty("graph_queries").GetBoolean());
         Assert.DoesNotContain("missing-symbols", lockfile.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()));
-        Assert.Contains("packages.lock.json", lockfile.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+        Assert.Contains("packages.lock.json", lockfile.GetProperty("exact_filenames").EnumerateArray().Select(value => value.GetString()));
+    }
+
+    [Fact]
+    public void RunLanguages_JsonReportsFilesystemFilenameCasePolicy_Issue4601()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var policy = document.RootElement.GetProperty("detection_policy");
+        Assert.Equal("filesystem", policy.GetProperty("filename_case_policy").GetString());
+        Assert.Equal("path_case_sensitive", policy.GetProperty("filename_case_source").GetString());
+        Assert.Equal("case_insensitive", policy.GetProperty("extension_case_policy").GetString());
+    }
+
+    [Fact]
+    public void RunLanguages_JsonReportsOverridePrecedenceAndStructuredProbeDiagnostics_Issue4613()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            using var project = TestProjectHelper.CreateTempProjectScope("cdidx_languages_langmap_diagnostics");
+            var originalDirectory = Environment.CurrentDirectory;
+            var configPath = Path.Combine(project.Root, LanguageMapOverrides.WorkspaceFileName);
+            try
+            {
+                File.WriteAllText(configPath, "entries:\n- extension: .custom\n  language: ruby\n");
+                var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+                Environment.CurrentDirectory = project.Root;
+                LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+                LanguageMapOverrides.ConfigPathStampProbeForTesting = path =>
+                {
+                    if (string.Equals(path, configPath, StringComparison.Ordinal))
+                        throw new UnauthorizedAccessException("simulated access denial");
+                };
+
+                var (exitCode, stdout, stderr) = CaptureConsole(
+                    () => QueryCommandRunner.RunLanguages(["--db", dbPath, "--json"], _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Contains("warning", stderr, StringComparison.OrdinalIgnoreCase);
+                using var document = ParseJsonOutput(stdout);
+                var precedence = document.RootElement.GetProperty("detection_policy")
+                    .GetProperty("precedence")
+                    .EnumerateArray()
+                    .Select(value => value.GetString())
+                    .ToList();
+                Assert.Equal("language_map_override", precedence[0]);
+                Assert.True(precedence.IndexOf("exact_filename") < precedence.IndexOf("built_in_extension"));
+
+                var diagnostic = Assert.Single(document.RootElement.GetProperty("language_map_diagnostics").EnumerateArray());
+                Assert.Equal("language_map_probe_failed", diagnostic.GetProperty("code").GetString());
+                Assert.Equal(LanguageMapOverrides.WorkspaceFileName, diagnostic.GetProperty("config").GetString());
+                Assert.Equal("access_denied", diagnostic.GetProperty("reason").GetString());
+                Assert.True(diagnostic.GetProperty("blocks_parent_fallback").GetBoolean());
+            }
+            finally
+            {
+                LanguageMapOverrides.ConfigPathStampProbeForTesting = null;
+                LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+                Environment.CurrentDirectory = originalDirectory;
+            }
+        }
+    }
+
+    [Fact]
+    public void RunLanguages_JsonSeparatesPatternKindsAndRoundTripsDetection_Issue4617()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        foreach (var entry in document.RootElement.GetProperty("languages").EnumerateArray())
+        {
+            var language = entry.GetProperty("lang").GetString()!;
+            var extensions = entry.GetProperty("extensions").EnumerateArray()
+                .Select(value => value.GetString()!)
+                .ToList();
+            var exactFilenames = entry.GetProperty("exact_filenames").EnumerateArray()
+                .Select(value => value.GetString()!)
+                .ToList();
+            var prefixPatterns = entry.GetProperty("filename_prefix_patterns").EnumerateArray()
+                .Select(value => value.GetString()!)
+                .ToList();
+            var legacyPatterns = entry.GetProperty("legacy_patterns").EnumerateArray()
+                .Select(value => value.GetString()!)
+                .ToHashSet(StringComparer.Ordinal);
+
+            var splitPatterns = extensions
+                .Concat(exactFilenames)
+                .Concat(prefixPatterns)
+                .ToHashSet(StringComparer.Ordinal);
+            Assert.Equal(
+                splitPatterns.OrderBy(value => value, StringComparer.Ordinal),
+                legacyPatterns.OrderBy(value => value, StringComparer.Ordinal));
+
+            foreach (var extension in extensions)
+            {
+                Assert.StartsWith(".", extension, StringComparison.Ordinal);
+                Assert.True(
+                    string.Equals(language, FileIndexer.DetectLanguage("roundtrip" + extension), StringComparison.Ordinal),
+                    $"Extension '{extension}' did not round-trip to '{language}'.");
+            }
+            foreach (var filename in exactFilenames)
+            {
+                Assert.True(
+                    string.Equals(language, FileIndexer.DetectLanguage(filename), StringComparison.Ordinal),
+                    $"Exact filename '{filename}' did not round-trip to '{language}'.");
+            }
+            foreach (var pattern in prefixPatterns)
+            {
+                Assert.EndsWith("<suffix>", pattern, StringComparison.Ordinal);
+                var filename = pattern[..^"<suffix>".Length] + "roundtrip";
+                Assert.True(
+                    string.Equals(language, FileIndexer.DetectLanguage(filename), StringComparison.Ordinal),
+                    $"Filename prefix pattern '{pattern}' did not round-trip to '{language}'.");
+            }
+
+            foreach (var provenance in entry.GetProperty("pattern_provenance").EnumerateArray())
+            {
+                var pattern = provenance.GetProperty("pattern").GetString()!;
+                var kind = provenance.GetProperty("kind").GetString();
+                Assert.Contains(pattern, legacyPatterns);
+                Assert.True(kind switch
+                {
+                    "extension" => extensions.Contains(pattern, StringComparer.Ordinal),
+                    "exact_filename" => exactFilenames.Contains(pattern, StringComparer.Ordinal),
+                    "filename_prefix_pattern" => prefixPatterns.Contains(pattern, StringComparer.Ordinal),
+                    _ => false,
+                });
+                Assert.Contains(
+                    provenance.GetProperty("source").GetString(),
+                    new[] { "built_in", "plugin_or_pattern", "language_map_override" });
+            }
+        }
+    }
+
+    [Fact]
+    public void RunLanguages_JsonReportsLanguageMapOverrideProvenance_Issue4617()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            using var project = TestProjectHelper.CreateTempProjectScope("cdidx_languages_provenance");
+            var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+            try
+            {
+                TestProjectHelper.WriteTextFile(
+                    project.Root,
+                    LanguageMapOverrides.WorkspaceFileName,
+                    "entries:\n- extension: .cs\n  language: custom_csharp\n- extension: .toml\n  language: custom_toml\n");
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                    QueryCommandRunner.RunLanguages(["--db", dbPath, "--json"], _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                using var document = ParseJsonOutput(stdout);
+                var languages = document.RootElement.GetProperty("languages").EnumerateArray()
+                    .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
+                Assert.DoesNotContain(
+                    ".cs",
+                    languages["csharp"].GetProperty("extensions").EnumerateArray().Select(value => value.GetString()));
+                Assert.Contains(
+                    ".cs",
+                    languages["custom_csharp"].GetProperty("extensions").EnumerateArray().Select(value => value.GetString()));
+                var provenance = Assert.Single(
+                    languages["custom_csharp"].GetProperty("pattern_provenance").EnumerateArray(),
+                    item => item.GetProperty("pattern").GetString() == ".cs");
+                Assert.Equal("extension", provenance.GetProperty("kind").GetString());
+                Assert.Equal("language_map_override", provenance.GetProperty("source").GetString());
+
+                Assert.DoesNotContain("toml", languages.Keys);
+                Assert.Contains(
+                    ".toml",
+                    languages["custom_toml"].GetProperty("extensions").EnumerateArray().Select(value => value.GetString()));
+                var dependencyManifestFilenames = languages["dependency_manifest"]
+                    .GetProperty("exact_filenames")
+                    .EnumerateArray()
+                    .Select(value => value.GetString())
+                    .ToArray();
+                var customTomlFilenames = languages["custom_toml"]
+                    .GetProperty("exact_filenames")
+                    .EnumerateArray()
+                    .Select(value => value.GetString())
+                    .ToArray();
+                foreach (var fileName in new[] { "pyproject.toml", "Cargo.toml" })
+                {
+                    Assert.DoesNotContain(fileName, dependencyManifestFilenames);
+                    Assert.Contains(fileName, customTomlFilenames);
+                    var exactFilenameProvenance = Assert.Single(
+                        languages["custom_toml"].GetProperty("pattern_provenance").EnumerateArray(),
+                        item => item.GetProperty("pattern").GetString() == fileName);
+                    Assert.Equal("exact_filename", exactFilenameProvenance.GetProperty("kind").GetString());
+                    Assert.Equal("language_map_override", exactFilenameProvenance.GetProperty("source").GetString());
+                }
+            }
+            finally
+            {
+                LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+            }
+        }
+    }
+
+    [Fact]
+    public void RunLanguages_JsonReportsMatlabAndPrologSymbolOnlyCapabilities_Issue4612()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages").EnumerateArray()
+            .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
+        foreach (var language in new[] { "matlab", "prolog" })
+        {
+            Assert.True(languages[language].GetProperty("symbol_extraction").GetBoolean());
+            Assert.False(languages[language].GetProperty("reference_extraction").GetBoolean());
+            Assert.False(languages[language].GetProperty("graph_queries").GetBoolean());
+        }
+
+        Assert.Contains(".m", languages["ambiguous_m"].GetProperty("extensions").EnumerateArray().Select(value => value.GetString()));
+        Assert.Contains(".pl", languages["ambiguous_pl"].GetProperty("extensions").EnumerateArray().Select(value => value.GetString()));
     }
 
     [Fact]
@@ -3145,10 +3377,13 @@ public partial class QueryCommandRunnerTests
 
         var perlExts = languages["perl"].GetProperty("extensions").EnumerateArray()
             .Select(ext => ext.GetString()).ToList();
-        Assert.Contains(".pl", perlExts);
+        Assert.DoesNotContain(".pl", perlExts);
         Assert.Contains(".pm", perlExts);
         Assert.Contains(".pod", perlExts);
         Assert.Contains(".t", perlExts);
+        Assert.Contains(
+            ".pl",
+            languages["ambiguous_pl"].GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
 
         var msbuildExts = languages["msbuild"].GetProperty("extensions").EnumerateArray()
             .Select(ext => ext.GetString()).ToList();
@@ -3161,7 +3396,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunLanguages_HumanOutput_WideExtensionListSpillsOntoContinuationLine()
+    public void RunLanguages_HumanOutput_WidePatternListSpillsOntoContinuationLine()
     {
         // The human-readable table must not let long extension/file-name lists swallow the
         // Symbols / Graph columns. Instead, spill onto a continuation line so the row is readable.
@@ -3193,7 +3428,7 @@ public partial class QueryCommandRunnerTests
             Assert.DoesNotContain("Gemfile", header);
             Assert.DoesNotContain(".csproj", header);
             var continuation = lines[headerIndex + 1];
-            Assert.StartsWith("  Extensions: ", continuation);
+            Assert.StartsWith("  Patterns: ", continuation);
         }
 
         var yamlIndex = Array.FindIndex(lines, line => line.StartsWith("yaml ", StringComparison.Ordinal));

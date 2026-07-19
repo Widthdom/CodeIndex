@@ -1564,7 +1564,7 @@ public partial class DbReader : IDisposable
 
         foreach (var (pattern, lang) in languageExtensions)
             AddQueryLanguageAlias(aliases, pattern, lang);
-        foreach (var lang in languageExtensions.Values.Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (var lang in FileIndexer.GetDetectedLanguageNames())
             AddQueryLanguageAlias(aliases, lang, lang);
 
         AddQueryLanguageAlias(aliases, "c#", "csharp");
@@ -1593,6 +1593,10 @@ public partial class DbReader : IDisposable
         AddQueryLanguageAlias(aliases, "gas", "assembly");
         AddQueryLanguageAlias(aliases, "gnuasm", "assembly");
         AddQueryLanguageAlias(aliases, "gnu assembler", "assembly");
+        AddQueryLanguageAlias(aliases, "octave", "matlab");
+        AddQueryLanguageAlias(aliases, "gnu octave", "matlab");
+        AddQueryLanguageAlias(aliases, "swi-prolog", "prolog");
+        AddQueryLanguageAlias(aliases, "swipl", "prolog");
 
         return aliases;
     }

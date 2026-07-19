@@ -24,6 +24,9 @@ public partial class FileIndexer
             return false;
         }
 
+        if (IsInternalIndexArtifactPath(ToRelativePath(file)))
+            return false;
+
         if (seenFilePaths is not null)
         {
             var seenFilePathKey = GetSeenFilePathKey(file, filePathCameFromDirectoryEnumeration);

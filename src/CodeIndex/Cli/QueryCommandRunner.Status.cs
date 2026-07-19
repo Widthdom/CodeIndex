@@ -117,7 +117,11 @@ public static partial class QueryCommandRunner
                 status.MacProfileDiagnostics = macProfile.Diagnostics.ToList();
             if (options.CheckWorkspace)
             {
-                status.WorkspaceCheck = IndexFreshnessChecker.Check(reader, status.ProjectRoot, cancellationToken);
+                status.WorkspaceCheck = IndexFreshnessChecker.Check(
+                    reader,
+                    status.ProjectRoot,
+                    cancellationToken,
+                    internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(options.DbPath));
                 status.IndexMatchesWorkspace = status.WorkspaceCheck.Checked
                     ? status.WorkspaceCheck.MatchesWorkspace
                     : null;
@@ -340,7 +344,7 @@ public static partial class QueryCommandRunner
                         Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", BuildFoldNotReadyWarning(status.FoldReadyReason, BuildFoldBackfillCommand(options.DbPath, options.DbPathExplicit), BuildFoldRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit))));
                     }
                 }
-                var totalLangs = FileIndexer.GetLanguageExtensions(status.ProjectRoot).Values.Distinct().Count();
+                var totalLangs = FileIndexer.GetDetectedLanguageNames(status.ProjectRoot).Count;
                 var symbolLangs = SymbolExtractor.GetSupportedLanguages(status.ProjectRoot).Count;
                 Console.WriteLine(ConsoleUi.FormatSummaryLine("Support", $"{totalLangs} detected, {symbolLangs} with symbols, {status.GraphSupportedLanguages?.Count ?? 0} with graph"));
             }

@@ -72,6 +72,7 @@ public partial class FileIndexer
     private readonly Action<string>? _pathAccessValidator;
     private readonly Func<string, FileStream> _openReadForIndexContent;
     private readonly bool _bindConfigurationReadsToFileSystemIdentity;
+    private readonly string? _internalIndexDatabaseRelativePath;
     // Submodule working-tree paths declared in <ignoreRuleRoot>/.gitmodules, relative to
     // _projectRoot and slash-normalized. Used to override SkipDirs so that submodules
     // hosted under SkipDirs-named directories (e.g. vendor/foo) remain visible to the
@@ -193,7 +194,8 @@ public partial class FileIndexer
         IReadOnlyList<string>? generatedCodePatterns = null,
         Action<string>? pathAccessValidator = null,
         Func<string, FileStream>? openReadForIndexContent = null,
-        bool bindConfigurationReadsToFileSystemIdentity = false)
+        bool bindConfigurationReadsToFileSystemIdentity = false,
+        string? internalIndexDatabasePath = null)
     {
         _projectRoot = Path.GetFullPath(projectRoot);
         _projectRootRelativePrefix = CreateProjectRootRelativePrefix(_projectRoot);
@@ -216,6 +218,9 @@ public partial class FileIndexer
             1,
             maxDanglingFileSystemEntryScanCandidates ?? MaxDanglingFileSystemEntryScanCandidates);
         _generatedCodePatterns = GeneratedCodePatternMatcher.FromPatterns(generatedCodePatterns, ignoreCase);
+        _internalIndexDatabaseRelativePath = ResolveInternalIndexDatabaseRelativePath(
+            _projectRoot,
+            internalIndexDatabasePath);
         _pathAccessValidator?.Invoke(_projectRoot);
         _pathAccessValidator?.Invoke(_ignoreRuleRoot);
         if (_bindConfigurationReadsToFileSystemIdentity)

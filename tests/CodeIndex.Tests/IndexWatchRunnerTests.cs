@@ -339,6 +339,41 @@ public class IndexWatchRunnerTests
     }
 
     [Fact]
+    public void ClassifyWatchPath_CustomDbArtifactsUseSharedScannerExclusions_Issue4611()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "index.json");
+            Directory.CreateDirectory(dbPath + ".checkpoints");
+            File.WriteAllText(dbPath + ".checkpoints/state.json", "{}\n");
+            File.WriteAllText(dbPath + ".restore-tmp-session", string.Empty);
+            File.WriteAllText(dbPath + ".restore-backup-session", string.Empty);
+            foreach (var path in new[]
+            {
+                dbPath + ".checkpoints",
+                dbPath + ".checkpoints/state.json",
+                dbPath + ".restore-tmp-session",
+                dbPath + ".restore-backup-session",
+            })
+            {
+                Assert.Equal(
+                    IndexWatchRunner.WatchPathDisposition.Ignore,
+                    IndexWatchRunner.ClassifyWatchPathForTesting(
+                        projectRoot,
+                        dbPath,
+                        path,
+                        ignoreCase: false,
+                        dbPathExplicit: true));
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ShouldIgnoreWatchInternalPath_DataDirResolution_IgnoresResolvedDbParent_Issue4351()
     {
         var projectRoot = CreateTempProject();

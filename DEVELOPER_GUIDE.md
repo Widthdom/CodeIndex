@@ -1491,6 +1491,8 @@ Process exit codes are coarse (`0` success including valid zero-row queries, `1`
 
 ## Design decisions
 
+- **Language capability patterns remain typed at the integration boundary** — CLI/MCP `languages` rows expose suffix-only `extensions`, literal `exact_filenames`, and `<suffix>`-rendered `filename_prefix_patterns`. `legacy_patterns` preserves the former combined list during deprecation, and `pattern_provenance` identifies built-in, plugin/pattern, and language-map override ownership. Round-trip tests feed every advertised typed pattern back through `FileIndexer.DetectLanguage` (#4617).
+- **Ambiguous source extensions stay explicit** — `.m` and `.pl` are not assigned to Objective-C and Perl by default. `FileIndexer` checks an authoritative recognized shebang, then a 64 KiB bounded prefix for strong mutually exclusive Objective-C/MATLAB or Perl/Prolog markers, then at most 256 entries per ancestor directory for conservative project markers. Conflicting or weak evidence is indexed as `ambiguous_m` / `ambiguous_pl`; MATLAB and Prolog have conservative symbol patterns but deliberately advertise no reference/graph support (#4612).
 - **Lock-file dependency graphs model package relationships** — `packages.lock.json`, `package-lock.json`, and `npm-shrinkwrap.json` keep package declarations as symbols, but emit `dependency` references only for explicit parent-package to child-package entries. The parent package is stored as the reference container, so `callers` can identify which package requires a child and `deps` does not infer lock-file-to-lock-file similarity merely because two files contain the same resolved package set (#4409).
 - **No ORM** — Raw `Microsoft.Data.Sqlite` with parameterized queries. Keeps dependencies minimal and control explicit.
 - **Batch commits** — 500 records per transaction for write performance. Reduces fsync overhead.
@@ -2715,7 +2717,12 @@ Downstream users can add lightweight language support without rebuilding
 
 - extension aliases are read from `~/.config/cdidx/langmap.yaml` and the first
   workspace ancestor `.cdidx-langmap.yaml`; workspace entries override user
-  entries;
+  entries. A trusted suffix override is evaluated before built-in exact-filename,
+  filename-prefix, and extension rules. If the closest workspace map cannot be
+  probed or read, ancestor workspace lookup stops for that subtree instead of
+  reusing a parent map; `languages --json` and the MCP `languages` tool expose
+  the sanitized failure in `language_map_diagnostics` and publish the effective
+  order in `detection_policy.precedence`;
 - regex-backed symbol patterns are read from `.cdidx/patterns/*.yaml` and
   `~/.config/cdidx/patterns/*.yaml`; sidecars must be regular files under
   non-symlink pattern directories, discovery accepts at most 128 candidates per
@@ -4349,6 +4356,8 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
 
 ## 設計判断
 
+- **integration boundary では language capability pattern の型を維持** — CLI/MCP の `languages` 行は suffix のみの `extensions`、literal な `exact_filenames`、`<suffix>` 表記の `filename_prefix_patterns` を公開します。`legacy_patterns` は deprecation 中に従来の combined list を保持し、`pattern_provenance` は built-in、plugin/pattern、language-map override の所有元を示します。round-trip test は広告した全 typed pattern を `FileIndexer.DetectLanguage` に戻して検証します（#4617）。
+- **曖昧な source extension は曖昧なまま明示** — `.m` と `.pl` を既定で Objective-C / Perl に割り当てません。`FileIndexer` は authoritative な認識済み shebang、64 KiB 上限 prefix 内の相互排他的で強い Objective-C/MATLAB または Perl/Prolog marker、各 ancestor directory 最大 256 entry の保守的な project marker の順に確認します。競合または弱い証拠は `ambiguous_m` / `ambiguous_pl` として index し、MATLAB / Prolog は保守的な symbol pattern を持つ一方、reference / graph 対応を意図的に広告しません（#4612）。
 - **lock file の依存グラフは package 間の関係をモデル化** — `packages.lock.json`、`package-lock.json`、`npm-shrinkwrap.json` は package 宣言を symbol として保持しますが、`dependency` reference は明示された親 package → 子 package の項目だけに出力します。親 package を reference container に保存するため、`callers` はどの package が子 package を必要としているかを特定でき、`deps` は同じ resolved package 集合を持つだけの lock file 同士を類似関係として推論しません（#4409）。
 - **ORMなし** — `Microsoft.Data.Sqlite`でパラメータ化クエリを直接使用。依存関係を最小限に、制御を明確に。
 - **バッチコミット** — 書き込み性能のため1トランザクション500レコード。fsyncオーバーヘッドを削減。
@@ -4997,6 +5006,11 @@ cleared range を証明するテストが必要です。Bounded accumulation pat
 
 - 拡張子 alias は `~/.config/cdidx/langmap.yaml` と、最初に見つかった workspace
   祖先の `.cdidx-langmap.yaml` から読み込まれ、workspace 側が user 側を上書きします。
+  信頼済み suffix override は built-in の完全一致 filename、filename-prefix、extension rule
+  より先に評価されます。最も近い workspace map を probe または read できない場合、その subtree
+  では親 map を再利用せず ancestor workspace 探索を停止します。`languages --json` と MCP の
+  `languages` tool は sanitization 済み失敗を `language_map_diagnostics` に公開し、実効順序を
+  `detection_policy.precedence` で示します。
 - regex ベースのシンボルパターンは `.cdidx/patterns/*.yaml` と
   `~/.config/cdidx/patterns/*.yaml` から読み込まれます。sidecar は symlink ではない
   pattern directory 配下の通常ファイルのみが対象で、探索候補は pattern directory ごとに

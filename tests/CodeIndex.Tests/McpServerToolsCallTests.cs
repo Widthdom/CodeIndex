@@ -5761,7 +5761,15 @@ public partial class McpServerTests
 
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
         Assert.Contains("languages supported", text);
-        var languages = response["result"]!["structuredContent"]!["languages"]!.AsArray();
+        var structured = response["result"]!["structuredContent"]!;
+        var precedence = structured["detection_policy"]!["precedence"]!.AsArray()
+            .Select(value => value!.GetValue<string>())
+            .ToList();
+        Assert.Equal("language_map_override", precedence[0]);
+        Assert.True(precedence.IndexOf("exact_filename") < precedence.IndexOf("built_in_extension"));
+        Assert.NotNull(structured["language_map_diagnostics"]);
+
+        var languages = structured["languages"]!.AsArray();
         Assert.True(languages.Count > 20); // We support 30+ languages
 
         // Verify a known language has the right capabilities / 既知の言語の機能を検証
@@ -5823,14 +5831,39 @@ public partial class McpServerTests
         Assert.True(dependencyManifest["reference_extraction"]!.GetValue<bool>());
         Assert.True(dependencyManifest["graph_queries"]!.GetValue<bool>());
         Assert.DoesNotContain("missing-symbols", dependencyManifest["capability_gaps"]!.AsArray().Select(e => e!.GetValue<string>()));
-        Assert.Contains("Directory.Packages.props", dependencyManifest["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
+        Assert.Contains("Directory.Packages.props", dependencyManifest["exact_filenames"]!.AsArray().Select(e => e!.GetValue<string>()));
 
         var dependencyLock = languages.First(l => l!["lang"]!.GetValue<string>() == "dependency_lock")!;
         Assert.True(dependencyLock["symbol_extraction"]!.GetValue<bool>());
         Assert.True(dependencyLock["reference_extraction"]!.GetValue<bool>());
         Assert.True(dependencyLock["graph_queries"]!.GetValue<bool>());
         Assert.DoesNotContain("missing-symbols", dependencyLock["capability_gaps"]!.AsArray().Select(e => e!.GetValue<string>()));
-        Assert.Contains("packages.lock.json", dependencyLock["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
+        Assert.Contains("packages.lock.json", dependencyLock["exact_filenames"]!.AsArray().Select(e => e!.GetValue<string>()));
+    }
+
+    [Fact]
+    public void ToolsCall_Languages_SeparatesFilenamePatternKindsAndKeepsLegacyPatterns_Issue4617()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"languages","arguments":{}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var languages = response["result"]!["structuredContent"]!["languages"]!.AsArray();
+        var dockerfile = languages.Single(entry => entry!["lang"]!.GetValue<string>() == "dockerfile")!;
+        var extensions = dockerfile["extensions"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
+        var exactFilenames = dockerfile["exact_filenames"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
+        var prefixPatterns = dockerfile["filename_prefix_patterns"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
+        var legacyPatterns = dockerfile["legacy_patterns"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
+
+        Assert.DoesNotContain("Dockerfile", extensions);
+        Assert.Contains("Dockerfile", exactFilenames);
+        Assert.Contains("Dockerfile.<suffix>", prefixPatterns);
+        Assert.Contains("Dockerfile", legacyPatterns);
+        Assert.Contains("Dockerfile.<suffix>", legacyPatterns);
+        Assert.Contains(
+            dockerfile["pattern_provenance"]!.AsArray(),
+            item => item!["pattern"]!.GetValue<string>() == "Dockerfile"
+                && item["kind"]!.GetValue<string>() == "exact_filename"
+                && item["source"]!.GetValue<string>() == "built_in");
     }
 
     [Fact]
@@ -6229,6 +6262,47 @@ public partial class McpServerTests
                 "fsid:v1:",
                 structured["checked_root_identity"]!.GetValue<string>(),
                 StringComparison.Ordinal);
+        }
+        finally
+        {
+            McpServer.McpIndexEntryOpenBoundaryForTesting = null;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_RejectsAmbiguousLanguageFileReplacementAtAuthorizedOpenBoundary_Issue4606()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_ambiguous_file_swap_{Guid.NewGuid():N}");
+        var victimPath = Path.Combine(fixtureDir, "victim.m");
+        var originalPath = Path.Combine(fixtureDir, "victim.original");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_ambiguous_file_swap");
+        Directory.CreateDirectory(fixtureDir);
+        try
+        {
+            File.WriteAllText(victimPath, "@interface Allowed\n@end\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var swapped = 0;
+            McpServer.McpIndexEntryOpenBoundaryForTesting = path =>
+            {
+                if (!PathCasing.PathsEqual(path, victimPath)
+                    || Interlocked.Exchange(ref swapped, 1) != 0)
+                {
+                    return;
+                }
+
+                File.Move(victimPath, originalPath);
+                File.WriteAllText(victimPath, "function replacement\nend\n");
+            };
+
+            var response = CallIndex(server, fixtureDir, arguments => arguments["dryRun"] = true);
+
+            Assert.Equal(1, swapped);
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>(), response.ToJsonString());
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.Equal(McpErrorEnvelope.CategoryPermissionDenied, structured["category"]!.GetValue<string>());
+            Assert.Equal("entry_identity_changed", structured["authorization_failure_reason"]!.GetValue<string>());
         }
         finally
         {

@@ -20,25 +20,49 @@ internal static class LanguageMapOverrides
     internal static Func<string, Stream>? OpenOverrideFileForTesting { get; set; }
     internal static Action<string>? ConfigPathStampProbeForTesting { get; set; }
 
+    internal enum ConfigProbeStatus
+    {
+        Missing,
+        Present,
+        ProbeFailed,
+    }
+
+    internal sealed record Diagnostic(
+        string Code,
+        string Config,
+        string Reason,
+        bool BlocksParentFallback);
+
+    internal sealed record LoadResult(
+        IReadOnlyDictionary<string, string> Map,
+        IReadOnlyList<Diagnostic> Diagnostics);
+
     private readonly record struct ConfigPathCandidate(string Path, bool IsUserConfig);
 
     private readonly record struct ConfigPathStamp(
         string Path,
         bool IsUserConfig,
-        bool Exists,
+        ConfigProbeStatus Status,
         DateTime LastWriteTimeUtc,
-        long Length);
+        long Length,
+        string? FailureReason = null);
 
     private sealed record EffectiveMapCacheEntry(
         ConfigPathStamp[] Stamps,
-        IReadOnlyDictionary<string, string> Map);
+        LoadResult Result);
 
     internal static IReadOnlyDictionary<string, string> LoadEffectiveMap(string? startPath = null)
     {
-        return LoadEffectiveMapFromDirectory(ResolveStartDirectory(startPath));
+        return LoadEffectiveMapWithDiagnostics(startPath).Map;
     }
 
     internal static IReadOnlyDictionary<string, string> LoadEffectiveMapFromDirectory(string? startDirectory)
+        => LoadEffectiveMapFromDirectoryWithDiagnostics(startDirectory).Map;
+
+    internal static LoadResult LoadEffectiveMapWithDiagnostics(string? startPath = null)
+        => LoadEffectiveMapFromDirectoryWithDiagnostics(ResolveStartDirectory(startPath));
+
+    internal static LoadResult LoadEffectiveMapFromDirectoryWithDiagnostics(string? startDirectory)
     {
         startDirectory = NormalizeStartDirectory(startDirectory);
         EffectiveMapCacheEntry? cached;
@@ -52,21 +76,21 @@ internal static class LanguageMapOverrides
         {
             var refreshedStamps = RefreshConfigPathStamps(cached.Stamps);
             if (ConfigPathStampsEqual(cached.Stamps, refreshedStamps))
-                return cached.Map;
+                return cached.Result;
         }
 
         var candidates = CreateConfigPathCandidates(startDirectory);
         var stamps = GetConfigPathStamps(candidates);
-        var map = LoadEffectiveMapFromStamps(stamps, ReportWarningOnce);
+        var result = LoadEffectiveMapFromStamps(stamps, ReportWarningOnce);
 
         lock (EffectiveMapCacheLock)
         {
             if (EffectiveMapCache.Count >= MaxEffectiveMapCacheEntries)
                 EffectiveMapCache.Clear();
-            EffectiveMapCache[startDirectory] = new EffectiveMapCacheEntry(stamps, map);
+            EffectiveMapCache[startDirectory] = new EffectiveMapCacheEntry(stamps, result);
         }
 
-        return map;
+        return result;
     }
 
     internal static IReadOnlyDictionary<string, string> LoadEffectiveMapFromDirectoryWithinScope(
@@ -87,9 +111,18 @@ internal static class LanguageMapOverrides
         while (PathCasing.IsFullPathEqualOrParent(scopeRoot, directory))
         {
             var candidate = Path.Combine(directory, WorkspaceFileName);
-            if (File.Exists(candidate))
+            var probeStatus = ProbeWorkspaceConfigFile(directory);
+            if (probeStatus == ConfigProbeStatus.ProbeFailed)
+                break;
+            if (probeStatus == ConfigProbeStatus.Present)
             {
-                LoadInto(candidate, map, ReportWarningOnce, openFile);
+                LoadInto(
+                    candidate,
+                    map,
+                    ReportWarningOnce,
+                    diagnostics: null,
+                    blocksParentFallback: true,
+                    openFile: openFile);
                 break;
             }
 
@@ -131,32 +164,67 @@ internal static class LanguageMapOverrides
     {
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var path in configPaths)
-            LoadInto(path, map, reportWarning, openFile: null);
+            LoadInto(
+                path,
+                map,
+                reportWarning,
+                diagnostics: null,
+                blocksParentFallback: false,
+                openFile: null);
         return map;
     }
 
-    private static IReadOnlyDictionary<string, string> LoadEffectiveMapFromStamps(
+    private static LoadResult LoadEffectiveMapFromStamps(
         IReadOnlyList<ConfigPathStamp> stamps,
         Action<string, string?>? reportWarning)
     {
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var diagnostics = new List<Diagnostic>();
         foreach (var stamp in stamps)
         {
-            if (stamp.IsUserConfig)
+            if (stamp.Status == ConfigProbeStatus.ProbeFailed)
             {
-                if (stamp.Exists)
-                    LoadInto(stamp.Path, map, reportWarning, openFile: null);
+                var reason = stamp.FailureReason ?? "probe_failed";
+                diagnostics.Add(new Diagnostic(
+                    "language_map_probe_failed",
+                    DiagnosticSanitizer.ForPath(stamp.Path),
+                    reason,
+                    BlocksParentFallback: !stamp.IsUserConfig));
+                reportWarning?.Invoke(
+                    $"Skipped language-map override file {DiagnosticSanitizer.ForPath(stamp.Path)} because its metadata could not be read ({reason}).",
+                    $"{stamp.Path}\nprobe\n{reason}");
+                if (!stamp.IsUserConfig)
+                    break;
                 continue;
             }
 
-            if (!stamp.Exists)
+            if (stamp.IsUserConfig)
+            {
+                if (stamp.Status == ConfigProbeStatus.Present)
+                    LoadInto(
+                        stamp.Path,
+                        map,
+                        reportWarning,
+                        diagnostics,
+                        blocksParentFallback: false,
+                        openFile: null);
+                continue;
+            }
+
+            if (stamp.Status == ConfigProbeStatus.Missing)
                 continue;
 
-            LoadInto(stamp.Path, map, reportWarning, openFile: null);
+            LoadInto(
+                stamp.Path,
+                map,
+                reportWarning,
+                diagnostics,
+                blocksParentFallback: true,
+                openFile: null);
             break;
         }
 
-        return map;
+        return new LoadResult(map, diagnostics);
     }
 
     private static List<ConfigPathCandidate> CreateConfigPathCandidates(string startDirectory)
@@ -203,16 +271,68 @@ internal static class LanguageMapOverrides
         try
         {
             ConfigPathStampProbeForTesting?.Invoke(candidate.Path);
+            var ioPath = LongPath.EnsureWindowsPrefix(candidate.Path);
+            var attributes = File.GetAttributes(ioPath);
+            if ((attributes & FileAttributes.Directory) != 0
+                || FileSystemBoundary.IsSymlinkOrReparsePoint(attributes)
+                || FileSystemBoundary.IsDevice(attributes))
+            {
+                return ProbeFailedStamp(candidate, "not_regular_file");
+            }
+
             var info = new FileInfo(candidate.Path);
+            info.Refresh();
             return info.Exists
-                ? new ConfigPathStamp(candidate.Path, candidate.IsUserConfig, Exists: true, info.LastWriteTimeUtc, info.Length)
-                : new ConfigPathStamp(candidate.Path, candidate.IsUserConfig, Exists: false, DateTime.MinValue, 0);
+                ? new ConfigPathStamp(candidate.Path, candidate.IsUserConfig, ConfigProbeStatus.Present, info.LastWriteTimeUtc, info.Length)
+                : ProbeFailedStamp(candidate, "io_error");
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        catch (FileNotFoundException)
         {
-            return new ConfigPathStamp(candidate.Path, candidate.IsUserConfig, Exists: false, DateTime.MinValue, 0);
+            return HasDanglingLink(candidate.Path)
+                ? ProbeFailedStamp(candidate, "not_regular_file")
+                : MissingStamp(candidate);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return HasDanglingLink(candidate.Path)
+                ? ProbeFailedStamp(candidate, "not_regular_file")
+                : MissingStamp(candidate);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException or System.Security.SecurityException)
+        {
+            return ProbeFailedStamp(candidate, GetFailureReason(ex));
         }
     }
+
+    private static ConfigPathStamp MissingStamp(ConfigPathCandidate candidate)
+        => new(candidate.Path, candidate.IsUserConfig, ConfigProbeStatus.Missing, DateTime.MinValue, 0);
+
+    private static ConfigPathStamp ProbeFailedStamp(ConfigPathCandidate candidate, string reason)
+        => new(
+            candidate.Path,
+            candidate.IsUserConfig,
+            ConfigProbeStatus.ProbeFailed,
+            DateTime.MinValue,
+            0,
+            reason);
+
+    private static bool HasDanglingLink(string path)
+    {
+        try
+        {
+            return !string.IsNullOrEmpty(new FileInfo(path).LinkTarget)
+                || !string.IsNullOrEmpty(new DirectoryInfo(path).LinkTarget);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException or System.Security.SecurityException)
+        {
+            return false;
+        }
+    }
+
+    internal static ConfigProbeStatus ProbeWorkspaceConfigFile(string directory)
+        => GetConfigPathStamp(new ConfigPathCandidate(
+            Path.Combine(directory, WorkspaceFileName),
+            IsUserConfig: false)).Status;
 
     private static bool ConfigPathStampsEqual(IReadOnlyList<ConfigPathStamp> left, IReadOnlyList<ConfigPathStamp> right)
     {
@@ -243,16 +363,22 @@ internal static class LanguageMapOverrides
         string path,
         Dictionary<string, string> target,
         Action<string, string?>? reportWarning,
+        ICollection<Diagnostic>? diagnostics,
+        bool blocksParentFallback,
         Func<string, Stream>? openFile)
     {
-        if (!File.Exists(path))
-            return;
-
-        if (!TryReadBoundedUtf8Lines(path, openFile, out var lines, out var skippedReason))
+        if (!TryReadBoundedUtf8Lines(path, openFile, out var lines, out var failure))
         {
             reportWarning?.Invoke(
-                $"Skipped language-map override file {DiagnosticSanitizer.ForPath(path)} because {DiagnosticSanitizer.ForMessage(skippedReason)}.",
-                $"{path}\n{skippedReason}");
+                $"Skipped language-map override file {DiagnosticSanitizer.ForPath(path)} because {DiagnosticSanitizer.ForMessage(failure.Reason)}.",
+                $"{path}\n{failure.Reason}");
+            diagnostics?.Add(new Diagnostic(
+                failure.Kind == BoundedTextFileReadFailureKind.ReadFailed
+                    ? "language_map_read_failed"
+                    : "language_map_rejected",
+                DiagnosticSanitizer.ForPath(path),
+                GetFailureReason(failure),
+                blocksParentFallback));
             return;
         }
 
@@ -301,7 +427,7 @@ internal static class LanguageMapOverrides
         string path,
         Func<string, Stream>? openFile,
         out IReadOnlyList<string> lines,
-        out string skippedReason)
+        out BoundedTextFileReadFailure failure)
     {
         var success = BoundedLineReader.TryReadUtf8File(
             path,
@@ -309,11 +435,36 @@ internal static class LanguageMapOverrides
             MaxOverrideFileLines,
             MaxOverrideLineChars,
             out lines,
-            out var failure,
+            out failure,
             openFile ?? OpenOverrideFileForTesting);
-        skippedReason = success ? string.Empty : failure.Reason;
         return success;
     }
+
+    private static string GetFailureReason(BoundedTextFileReadFailure failure)
+        => failure.Kind switch
+        {
+            BoundedTextFileReadFailureKind.BytesExceeded => "bytes_exceeded",
+            BoundedTextFileReadFailureKind.LinesExceeded => "lines_exceeded",
+            BoundedTextFileReadFailureKind.LineLengthExceeded => "line_length_exceeded",
+            BoundedTextFileReadFailureKind.InvalidUtf8 => "invalid_utf8",
+            BoundedTextFileReadFailureKind.ReadFailed => failure.ExceptionType switch
+            {
+                nameof(UnauthorizedAccessException) => "access_denied",
+                nameof(NotSupportedException) => "unsupported_path",
+                _ => "io_error",
+            },
+            _ => "unknown",
+        };
+
+    private static string GetFailureReason(Exception exception)
+        => exception switch
+        {
+            UnauthorizedAccessException => "access_denied",
+            System.Security.SecurityException => "access_denied",
+            NotSupportedException => "unsupported_path",
+            ArgumentException => "invalid_path",
+            _ => "io_error",
+        };
 
     private static void ReportWarningOnce(string message, string? dedupeKey)
     {

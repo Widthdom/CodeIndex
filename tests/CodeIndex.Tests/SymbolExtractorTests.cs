@@ -32,6 +32,42 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Matlab_IndexesClassFunctionsAndImports_Issue4612()
+    {
+        const string content = """
+            import matlab.unittest.*
+            classdef Calculator
+            end
+            function result = add(left, right)
+                result = left + right;
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "matlab", content);
+
+        AssertSymbolsContain(symbols, "import", "matlab.unittest.*");
+        AssertSymbolsContain(symbols, "class", "Calculator");
+        AssertSymbolsContain(symbols, "function", "add");
+    }
+
+    [Fact]
+    public void Extract_Prolog_IndexesModuleImportsAndPredicates_Issue4612()
+    {
+        const string content = """
+            :- module(family, [ancestor/2]).
+            :- use_module(library(lists)).
+            parent(alice, bob).
+            ancestor(X, Y) :- parent(X, Y).
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "prolog", content);
+
+        AssertSymbolsContain(symbols, "namespace", "family");
+        AssertSymbolsContain(symbols, "import", "library(lists)");
+        AssertSymbolsContain(symbols, "function", "parent", "ancestor");
+    }
+
+    [Fact]
     public void Extract_CancelledToken_ThrowsBeforeWork()
     {
         using var cancellation = new CancellationTokenSource();
@@ -1276,6 +1312,7 @@ public partial class SymbolExtractorTests
             ["kotlin"] = "package demo\nclass Service { fun run(): Int = 1 }\n",
             ["lua"] = "local function run()\n  return 1\nend\n",
             ["makefile"] = "build:\n\t@echo build\n",
+            ["matlab"] = "function result = run()\n  result = 1;\nend\n",
             ["metal"] = "struct VertexOut { float4 position; };\nvertex VertexOut run(uint id) { return VertexOut(); }\n",
             ["msbuild"] = "<Project><Target Name=\"Build\" /></Project>\n",
             ["nim"] = "proc run*(): int =\n  1\n",
@@ -1286,6 +1323,7 @@ public partial class SymbolExtractorTests
             ["php"] = "<?php\nclass Service { function run() { return 1; } }\n",
             ["powershell"] = "function Invoke-Demo { return 1 }\n",
             ["protobuf"] = "message User { string name = 1; }\nservice Users { rpc Get(User) returns (User); }\n",
+            ["prolog"] = "run(Result) :- Result is 1.\n",
             ["python"] = "class Service:\n    def run(self):\n        return 1\n",
             ["r"] = "run <- function(x) {\n  x + 1\n}\n",
             ["racket"] = "(define (run x) x)\n",

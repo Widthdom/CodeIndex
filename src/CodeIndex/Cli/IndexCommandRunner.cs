@@ -369,7 +369,8 @@ public static partial class IndexCommandRunner
                     options.MaxFileSizeBytes,
                     directoryIgnoreCaseProbe: null,
                     symlinkPolicy: options.SymlinkPolicy,
-                    generatedCodePatterns: options.GeneratedCodePatterns);
+                    generatedCodePatterns: options.GeneratedCodePatterns,
+                    internalIndexDatabasePath: resolvedDbPath);
                 var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer, indexCancellation.Token);
                 var projectRoot = Path.GetFullPath(options.ProjectPath!);
 

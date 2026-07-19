@@ -7050,10 +7050,7 @@ public partial class McpServer : IDisposable
     }
 
     private static string DetectedLanguageList()
-        => string.Join(", ", FileIndexer.GetLanguageExtensions()
-            .Values
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(lang => lang, StringComparer.Ordinal));
+        => string.Join(", ", FileIndexer.GetDetectedLanguageNames());
 
     private static string SymbolLanguageList()
         => string.Join(", ", SymbolExtractor.GetSupportedLanguages()

@@ -4,7 +4,7 @@ namespace CodeIndex.Indexer;
 
 public partial class FileIndexer
 {
-    // Extensionless shebang detection reads at most the first physical line within this
+    // Shebang detection reads at most the first physical line within this
     // byte cap. NUL bytes or a line that reaches the cap without LF/CR are treated as
     // unsupported so binary executables and minified data are not parsed as scripts.
     private const int ShebangProbeByteLimit = 256;
@@ -13,11 +13,13 @@ public partial class FileIndexer
     private static readonly UnicodeEncoding StrictShebangUtf16BigEndianEncoding = new(bigEndian: true, byteOrderMark: false, throwOnInvalidBytes: true);
 
     /// <summary>
-    /// Try to infer a language from an extensionless script shebang.
-    /// This is a cheap fallback used only after extension and exact-filename checks fail.
+    /// Try to infer a language from a script shebang.
+    /// This is a cheap fallback for extensionless/unknown files and an authoritative signal
+    /// for explicitly ambiguous extensions after language-map overrides have been applied.
     /// It reads at most <see cref="ShebangProbeByteLimit"/> bytes from the first line;
     /// NUL bytes and over-cap first lines are treated as non-scripts.
-    /// 拡張子・完全一致ファイル名で判定できない場合だけ、拡張子なしスクリプトの shebang から言語を推定する。
+    /// 拡張子なし/未知のファイルでは fallback として、明示的に曖昧な拡張子では override 適用後の
+    /// authoritative signal として shebang から言語を推定する。
     /// </summary>
     private static LanguageDetectionResult TryDetectLanguageFromShebang(
         string filePath,
@@ -89,7 +91,7 @@ public partial class FileIndexer
 
             var language = MapShebangInterpreterToLanguage(interpreter);
             return language != null
-                ? new LanguageDetectionResult(FileProbeStatus.Supported, language)
+                ? new LanguageDetectionResult(FileProbeStatus.Supported, language, DetectionSource: "shebang")
                 : new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
         }
         catch (FileNotFoundException)
@@ -324,6 +326,10 @@ public partial class FileIndexer
         "bash" or "sh" or "zsh" or "fish" or "dash" or "ksh" or "ash" => "shell",
         "node" or "nodejs" => "javascript",
         "ruby" => "ruby",
+        "perl" => "perl",
+        "tclsh" or "wish" => "tcl",
+        "matlab" or "octave" or "octave-cli" => "matlab",
+        "prolog" or "swipl" or "sicstus" or "gprolog" => "prolog",
         "php" => "php",
         "lua" => "lua",
         "pwsh" or "powershell" => "powershell",

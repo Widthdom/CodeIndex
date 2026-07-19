@@ -134,7 +134,8 @@ public partial class McpServer
                 pathAccessValidator: authorizedRoot.EnsureAuthorizedEntry,
                 openReadForIndexContent: authorizedRoot.OpenAuthorizedRead,
                 enumerateFileSystemEntries: authorizedRoot.EnumerateAuthorizedFileSystemEntries,
-                bindConfigurationReadsToFileSystemIdentity: true);
+                bindConfigurationReadsToFileSystemIdentity: true,
+                internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(_dbPath));
             var scan = dryRunIndexer.ScanFilesDetailed(cancellationToken: _currentRequestToken.Value);
             if (memorySamples != null)
                 memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
@@ -267,7 +268,8 @@ public partial class McpServer
             pathAccessValidator: authorizedRoot.EnsureAuthorizedEntry,
             openReadForIndexContent: authorizedRoot.OpenAuthorizedRead,
             enumerateFileSystemEntries: authorizedRoot.EnumerateAuthorizedFileSystemEntries,
-            bindConfigurationReadsToFileSystemIdentity: true);
+            bindConfigurationReadsToFileSystemIdentity: true,
+            internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(_dbPath));
         using var postExtractionHooks = new IndexCommandRunner.LazyDisposable<PostExtractionHookRunner>(() =>
         {
             McpIndexPostExtractionHookDiscoveryForTesting?.Invoke();

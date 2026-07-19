@@ -144,26 +144,33 @@ internal static class PathCasing
             if (IgnoreCaseProbeForTesting is { } probeOverride)
                 return probeOverride(anchor);
 
-            if (Directory.Exists(anchor) && TryCreateCaseVariant(anchor, out var variant))
-                return Directory.Exists(variant);
-
-            using var probe = CaseSensitivityProbeDirectory.CreateProbePathScope(anchor, "case-probe-");
-            var probePath = probe.Path;
-            FileWriteProbe.WriteEmptyFile(probePath);
-            try
+            if (Directory.Exists(anchor))
             {
-                if (TryCreateCaseVariant(probePath, out var probeVariant))
-                    return File.Exists(LongPath.EnsureWindowsPrefix(probeVariant));
-            }
-            finally
-            {
-                FileWriteProbe.DeleteFileIfExists(probePath);
+                try
+                {
+                    if (CaseSensitivityProbeDirectory.ProbeExistingChildIgnoreCase(anchor) is { } existingChildIgnoreCase)
+                        return existingChildIgnoreCase;
+                }
+                catch (Exception ex) when (IsCaseSensitivityProbeFailure(ex))
+                {
+                    // Path-boundary comparisons may need to classify an unreadable child.
+                    // Its name belongs to the parent namespace, so use that namespace's
+                    // policy instead of trying to create a probe inside the unreadable child.
+                    // path boundary 比較では unreadable child 自体の分類が必要になる。
+                    // child 名は親 namespace に属するため、child 内への probe 作成ではなく
+                    // 親 namespace の policy を使う。
+                    var parent = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(anchor));
+                    if (!string.IsNullOrEmpty(parent)
+                        && !string.Equals(parent, anchor, StringComparison.Ordinal))
+                    {
+                        return ProbeIgnoreCase(parent);
+                    }
+
+                    throw;
+                }
             }
 
-            throw new CaseSensitivityProbeException(
-                "Failed to create a case-variant path for filesystem case-sensitivity probing.",
-                anchor,
-                probePath: probePath);
+            return CaseSensitivityProbeDirectory.ProbeIgnoreCase(anchor, "case-probe-");
         }
         catch (CaseSensitivityProbeException ex)
         {
@@ -203,22 +210,4 @@ internal static class PathCasing
             or NotSupportedException
             or System.Security.SecurityException;
 
-    private static bool TryCreateCaseVariant(string path, out string variant)
-    {
-        var chars = path.ToCharArray();
-        for (var i = chars.Length - 1; i >= 0; i--)
-        {
-            var ch = chars[i];
-            if (!char.IsLetter(ch))
-                continue;
-            chars[i] = char.IsUpper(ch)
-                ? char.ToLowerInvariant(ch)
-                : char.ToUpperInvariant(ch);
-            variant = new string(chars);
-            return true;
-        }
-
-        variant = path;
-        return false;
-    }
 }
