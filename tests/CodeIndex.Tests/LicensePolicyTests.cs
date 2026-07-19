@@ -148,13 +148,14 @@ public class LicensePolicyTests
 
         foreach (var legalNoticeFile in RootLegalNoticeFiles)
         {
-            Assert.Contains($@"[ -f ""${{INSTALL_DIR}}/{legalNoticeFile}"" ] || return 1", installer);
+            Assert.Contains($"\n        {legalNoticeFile} \\", installer);
             Assert.Contains($@"""${{INSTALL_DIR}}/{legalNoticeFile}""", uninstaller);
         }
 
-        Assert.Contains(@"[ -f ""${INSTALL_DIR}/LICENSES/FSL-1.1-ALv2.txt"" ] || return 1", installer);
-        Assert.Contains(@"[ -f ""${INSTALL_DIR}/LICENSES/Apache-2.0.txt"" ] || return 1", installer);
-        Assert.Contains(@"local optional_assets=""LICENSE COMMERCIAL_LICENSE.md INTEGRATION_POLICY.md TRADEMARKS.md LICENSES""", installer);
+        Assert.Contains("\n        LICENSES/FSL-1.1-ALv2.txt \\", installer);
+        Assert.Contains("\n        LICENSES/Apache-2.0.txt; do", installer);
+        Assert.Contains("verify_installed_manifest_asset \"$manifest_path\" \"$required_asset\" || return 1", installer);
+        Assert.Contains(@"local optional_assets=""LICENSE COMMERCIAL_LICENSE.md INTEGRATION_POLICY.md TRADEMARKS.md LICENSES MANIFEST.sha256""", installer);
         Assert.Contains(@"""${INSTALL_DIR}/LICENSES""", uninstaller);
 
         var (_, licenseSummary, licenseStderr) = ConsoleCapture.Capture(() =>

@@ -1,32 +1,142 @@
 
+INSTALLER_REQUIRED_COMMANDS="curl tar mktemp awk find gzip sed sort grep head uname mkdir chmod cp mv rm tr wc cat basename dirname"
+INSTALLED_CHECKSUMS_NAME=".cdidx-release-sha256sums.txt"
+INSTALLED_CHECKSUM_SIGNATURE_NAME=".cdidx-release-sha256sums.txt.asc"
+REUSE_FAILURE_ARTIFACT=""
+
+require_installer_commands() {
+    local required_command
+    for required_command in $INSTALLER_REQUIRED_COMMANDS; do
+        need_cmd "$required_command"
+    done
+}
+
+verify_installed_manifest_asset() {
+    local manifest_path="$1"
+    local asset="$2"
+    local installed_path="${INSTALL_DIR}/${asset}"
+    local expected actual
+
+    REUSE_FAILURE_ARTIFACT="$asset"
+    if [ ! -f "$installed_path" ] || [ -L "$installed_path" ]; then
+        return 1
+    fi
+    if [ "$asset" = "$BINARY_NAME" ] && [ ! -x "$installed_path" ]; then
+        return 1
+    fi
+
+    expected="$(awk -v name="$asset" '$2 == name { print $1; exit }' "$manifest_path")"
+    if ! printf '%s\n' "$expected" | grep -Eq '^[0-9a-fA-F]{64}$'; then
+        return 1
+    fi
+
+    actual="$(calculate_sha256 "$installed_path")"
+    [ "$actual" = "$expected" ]
+}
+
+verify_installed_checksum_provenance() {
+    local checksums_path="$1"
+    local signature_path="$2"
+    local gpg_status gpg_stderr actual_fingerprint expected_fingerprint
+    local attestation_verified=0
+    local signature_verified=0
+
+    if release_attestation_supported && has_cmd gh; then
+        if gh attestation verify "$checksums_path" \
+            -R "$REPO" \
+            --signer-workflow "$RELEASE_ATTESTATION_SIGNER_WORKFLOW" \
+            --source-ref "refs/tags/${VERSION}" > /dev/null 2>&1; then
+            attestation_verified=1
+        fi
+    fi
+
+    if [ -f "$signature_path" ] && [ ! -L "$signature_path" ] && has_cmd gpg && [ -n "$RELEASE_GPG_FINGERPRINT" ]; then
+        if gpg_status="$(mktemp)"; then
+            if gpg_stderr="$(mktemp)"; then
+                if gpg --batch --status-fd 1 --verify "$signature_path" "$checksums_path" > "$gpg_status" 2> "$gpg_stderr"; then
+                    actual_fingerprint="$(normalize_gpg_fingerprint "$(extract_validsig_fingerprint "$gpg_status")")"
+                    expected_fingerprint="$(normalize_gpg_fingerprint "$RELEASE_GPG_FINGERPRINT")"
+                    if [ -n "$actual_fingerprint" ] && [ "$actual_fingerprint" = "$expected_fingerprint" ]; then
+                        signature_verified=1
+                    fi
+                fi
+                rm -f "$gpg_stderr"
+            fi
+            rm -f "$gpg_status"
+        fi
+    fi
+
+    if [ "$REQUIRE_ATTESTATION" = "1" ] && [ "$attestation_verified" != "1" ]; then
+        return 1
+    fi
+    if [ "$STRICT_VERIFY" = "1" ] && [ "$signature_verified" != "1" ]; then
+        return 1
+    fi
+
+    [ "$attestation_verified" = "1" ] || [ "$signature_verified" = "1" ]
+}
+
+verify_installed_manifest_provenance() {
+    local manifest_path="${INSTALL_DIR}/MANIFEST.sha256"
+    local checksums_path="${INSTALL_DIR}/${INSTALLED_CHECKSUMS_NAME}"
+    local signature_path="${INSTALL_DIR}/${INSTALLED_CHECKSUM_SIGNATURE_NAME}"
+    local manifest_asset="CodeIndex-${RID}.MANIFEST.sha256"
+    local expected actual
+
+    REUSE_FAILURE_ARTIFACT="$INSTALLED_CHECKSUMS_NAME"
+    if [ ! -f "$checksums_path" ] || [ -L "$checksums_path" ]; then
+        return 1
+    fi
+    if ! verify_installed_checksum_provenance "$checksums_path" "$signature_path"; then
+        return 1
+    fi
+
+    REUSE_FAILURE_ARTIFACT="MANIFEST.sha256"
+    expected="$(awk -v name="$manifest_asset" '$2 == name { print $1; exit }' "$checksums_path")"
+    if ! printf '%s\n' "$expected" | grep -Eq '^[0-9a-fA-F]{64}$'; then
+        return 1
+    fi
+    actual="$(calculate_sha256 "$manifest_path")"
+    [ "$actual" = "$expected" ]
+}
+
 existing_install_is_reusable() {
+    local manifest_path="${INSTALL_DIR}/MANIFEST.sha256"
+    local native_asset required_asset
+
     if [ -z "$EXISTING_VERSION" ] || [ "$EXISTING_VERSION" = "0.0.0" ]; then
         return 1
     fi
 
-    if [ ! -f "${INSTALL_DIR}/version.json" ]; then
+    REUSE_FAILURE_ARTIFACT="MANIFEST.sha256"
+    if [ ! -f "$manifest_path" ] || [ -L "$manifest_path" ]; then
         return 1
     fi
-    if ! grep -Eq '"integrity_ok"[[:space:]]*:[[:space:]]*true' "${INSTALL_DIR}/version.json"; then
-        return 1
-    fi
-
-    [ -f "${INSTALL_DIR}/LICENSE" ] || return 1
-    [ -f "${INSTALL_DIR}/COMMERCIAL_LICENSE.md" ] || return 1
-    [ -f "${INSTALL_DIR}/INTEGRATION_POLICY.md" ] || return 1
-    [ -f "${INSTALL_DIR}/TRADEMARKS.md" ] || return 1
-    [ -f "${INSTALL_DIR}/LICENSES/FSL-1.1-ALv2.txt" ] || return 1
-    [ -f "${INSTALL_DIR}/LICENSES/Apache-2.0.txt" ] || return 1
+    verify_installed_manifest_provenance || return 1
 
     case "${OS_NAME:-}" in
-        linux)
-            [ -f "${INSTALL_DIR}/libe_sqlite3.so" ] || return 1
-            ;;
-        osx)
-            [ -f "${INSTALL_DIR}/libe_sqlite3.dylib" ] || return 1
+        linux) native_asset="libe_sqlite3.so" ;;
+        osx)   native_asset="libe_sqlite3.dylib" ;;
+        *)
+            REUSE_FAILURE_ARTIFACT="platform runtime asset"
+            return 1
             ;;
     esac
 
+    for required_asset in \
+        "$BINARY_NAME" \
+        version.json \
+        "$native_asset" \
+        LICENSE \
+        COMMERCIAL_LICENSE.md \
+        INTEGRATION_POLICY.md \
+        TRADEMARKS.md \
+        LICENSES/FSL-1.1-ALv2.txt \
+        LICENSES/Apache-2.0.txt; do
+        verify_installed_manifest_asset "$manifest_path" "$required_asset" || return 1
+    done
+
+    REUSE_FAILURE_ARTIFACT=""
     return 0
 }
 
@@ -182,6 +292,7 @@ verify_payload_manifest() {
     local extract_dir="$1"
     local manifest="${extract_dir}/MANIFEST.sha256"
     local manifest_paths line expected path actual extracted_paths
+    local release_manifest_name release_manifest_expected release_manifest_actual
 
     if [ ! -f "$manifest" ]; then
         if semver_ge "${VERSION#v}" "$MANIFEST_REQUIRED_VERSION"; then
@@ -190,6 +301,19 @@ verify_payload_manifest() {
 
         warn "Release payload is missing MANIFEST.sha256; falling back to archive-level checksum verification for legacy release ${VERSION}."
         return 0
+    fi
+
+    PAYLOAD_MANIFEST_AUTHENTICATED=0
+    release_manifest_name="CodeIndex-${RID}.MANIFEST.sha256"
+    release_manifest_expected="$(awk -v name="$release_manifest_name" '$2 == name { print $1; exit }' "${TMPDIR_CLEANUP}/sha256sums.txt")"
+    if printf '%s\n' "$release_manifest_expected" | grep -Eq '^[0-9a-fA-F]{64}$'; then
+        release_manifest_actual="$(calculate_sha256 "$manifest")"
+        if [ "$release_manifest_actual" != "$release_manifest_expected" ]; then
+            error "Authenticated payload manifest checksum mismatch for ${release_manifest_name}.\n  Expected: ${release_manifest_expected}\n  Actual:   ${release_manifest_actual}"
+        fi
+        PAYLOAD_MANIFEST_AUTHENTICATED=1
+    elif semver_ge "${VERSION#v}" "$AUTHENTICATED_MANIFEST_REQUIRED_VERSION"; then
+        error "Release checksum manifest does not authenticate ${release_manifest_name}. Refusing to install a release that cannot establish a reusable manifest trust root."
     fi
 
     if ! manifest_paths="$(mktemp)"; then
@@ -237,13 +361,6 @@ verify_payload_manifest() {
     rm -f "$manifest_paths" "$extracted_paths"
 }
 
-write_integrity_version_json() {
-    local target="$1"
-    local version="${VERSION#v}"
-
-    printf '{"version":"%s","integrity_ok":true}\n' "$version" > "$target"
-}
-
 restore_backed_up_files() {
     local backup_dir="$1"
     local install_dir="$2"
@@ -264,7 +381,7 @@ restore_backed_up_files() {
 
 is_expected_release_asset_name() {
     case "$1" in
-        "$BINARY_NAME"|version.json|libe_sqlite3.so|libe_sqlite3.dylib|LICENSE|COMMERCIAL_LICENSE.md|INTEGRATION_POLICY.md|TRADEMARKS.md|MANIFEST.sha256|LICENSES)
+        "$BINARY_NAME"|version.json|libe_sqlite3.so|libe_sqlite3.dylib|LICENSE|COMMERCIAL_LICENSE.md|INTEGRATION_POLICY.md|TRADEMARKS.md|MANIFEST.sha256|"$INSTALLED_CHECKSUMS_NAME"|"$INSTALLED_CHECKSUM_SIGNATURE_NAME"|LICENSES)
             return 0
             ;;
         *)
@@ -504,11 +621,9 @@ detect_existing_install() {
     EXISTING_BIN="${INSTALL_DIR}/${BINARY_NAME}"
     EXISTING_VERSION=""
 
-    if [ -x "$EXISTING_BIN" ]; then
-        local raw_version
-        raw_version="$("$EXISTING_BIN" --version 2>/dev/null || echo "unknown")"
-        # Strip any prefix like "cdidx " or "cdidx v" / プレフィックスを除去
-        EXISTING_VERSION="$(strip_version_prefix "$raw_version")"
+    if [ -f "${INSTALL_DIR}/version.json" ]; then
+        EXISTING_VERSION="$(grep '"version"' "${INSTALL_DIR}/version.json" | head -1 | sed 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)"
+        EXISTING_VERSION="$(strip_version_prefix "$EXISTING_VERSION")"
     fi
 
     return 0
@@ -518,7 +633,7 @@ check_existing() {
     if [ -n "$EXISTING_VERSION" ]; then
         local target_version="${VERSION#v}"
         if [ "$EXISTING_VERSION" = "$target_version" ]; then
-            if existing_install_is_reusable && [ "$EXPLICIT_VERSION_REQUESTED" != "1" ]; then
+            if [ "$EXPLICIT_VERSION_REQUESTED" != "1" ] && existing_install_is_reusable; then
                 info "cdidx $target_version is already installed at $EXISTING_BIN. Skipping."
                 exit 0
             fi
@@ -528,7 +643,11 @@ check_existing() {
                 return 0
             fi
 
-            info "Reinstalling cdidx $target_version because the existing install is incomplete..."
+            if [ -n "$REUSE_FAILURE_ARTIFACT" ]; then
+                info "Reinstalling cdidx $target_version because installed artifact integrity verification failed for ${REUSE_FAILURE_ARTIFACT}; downloading and staging a transactional replacement..."
+            else
+                info "Reinstalling cdidx $target_version because the existing install is incomplete..."
+            fi
             return 0
         fi
         info "Switching cdidx from $EXISTING_VERSION to ${VERSION#v}..."
@@ -540,12 +659,7 @@ check_existing() {
 # --- Download and verify / ダウンロード・検証 ---
 
 download_and_install() {
-    need_cmd curl
-    need_cmd tar
-    need_cmd mktemp
-    need_cmd awk
-    need_cmd find
-    need_cmd gzip
+    require_installer_commands
 
     local archive_name="CodeIndex-${RID}.tar.gz"
     local base_url
@@ -638,8 +752,9 @@ download_and_install() {
     #   it every command crashes with DllNotFoundException at startup.
     # Required assets are OS-specific, so we match on $OS_NAME instead of
     # "copy whatever happens to be in the archive". This keeps the installer
-    # compatible with bash 3.2 (the default /bin/bash on macOS) — no arrays,
-    # no `mapfile`, no `find` — and works for all currently published tarballs.
+    # compatible with bash 3.2 (the default /bin/bash on macOS) — no arrays or
+    # `mapfile` — and works for all currently published tarballs. The declared
+    # installer preflight includes `find`, which payload-manifest validation uses.
     # ランタイム資産をバイナリの隣へ配置する。必須資産が欠落している場合は、
     # 部分的に壊れたインストールを黙って進めず即時失敗させる（起動直後の
     # クラッシュを防ぐため）。
@@ -650,7 +765,8 @@ download_and_install() {
     #   無いと起動直後に DllNotFoundException で全コマンドが落ちる。
     # 必須資産は OS ごとに異なるため「アーカイブにあるものを何でも」ではなく
     # $OS_NAME で分岐する。macOS の既定 /bin/bash 3.2 でも動くよう、配列・
-    # `mapfile`・`find` は使わず、現行リリースの tarball 配置前提で実装する。
+    # `mapfile` は使わない。payload manifest 検証で使う `find` は installer の
+    # 宣言済み preflight dependency に含める。
     local required_assets
     case "$OS_NAME" in
         linux) required_assets="version.json libe_sqlite3.so"   ;;
@@ -667,7 +783,7 @@ download_and_install() {
     # しない。古い release archive を壊さず、新しい release では workflow
     # が検証する法務ファイルを確実にインストールできるようにする。
     local required_files="${BINARY_NAME} ${required_assets}"
-    local optional_assets="LICENSE COMMERCIAL_LICENSE.md INTEGRATION_POLICY.md TRADEMARKS.md LICENSES"
+    local optional_assets="LICENSE COMMERCIAL_LICENSE.md INTEGRATION_POLICY.md TRADEMARKS.md LICENSES MANIFEST.sha256"
     local staged_assets="$required_assets"
     local asset
     for asset in $required_files; do
@@ -704,7 +820,21 @@ download_and_install() {
             staged_assets="${staged_assets} ${asset}"
         fi
     done
-    write_integrity_version_json "${stage_dir}/version.json"
+    if [ "$PAYLOAD_MANIFEST_AUTHENTICATED" = "1" ]; then
+        cp "${tmpdir}/sha256sums.txt" "${stage_dir}/${INSTALLED_CHECKSUMS_NAME}"
+        staged_assets="${staged_assets} ${INSTALLED_CHECKSUMS_NAME}"
+        if [ -f "${tmpdir}/sha256sums.txt.asc" ]; then
+            cp "${tmpdir}/sha256sums.txt.asc" "${stage_dir}/${INSTALLED_CHECKSUM_SIGNATURE_NAME}"
+            staged_assets="${staged_assets} ${INSTALLED_CHECKSUM_SIGNATURE_NAME}"
+        fi
+        chmod 0444 "${stage_dir}/${INSTALLED_CHECKSUMS_NAME}"
+        if [ -f "${stage_dir}/${INSTALLED_CHECKSUM_SIGNATURE_NAME}" ]; then
+            chmod 0444 "${stage_dir}/${INSTALLED_CHECKSUM_SIGNATURE_NAME}"
+        fi
+    fi
+    if [ -f "${stage_dir}/MANIFEST.sha256" ]; then
+        chmod 0444 "${stage_dir}/MANIFEST.sha256"
+    fi
     chmod +x "${stage_dir}/${BINARY_NAME}"
     if ! verify_cdidx_binary "${stage_dir}/${BINARY_NAME}"; then
         return 1

@@ -195,12 +195,27 @@ public partial class ReleaseWorkflowTests
             "preflight:",
             "name: Validate release tag",
             "permissions:\n      contents: read",
+            "Manual releases must run this workflow from the same tag ref requested by tag_name",
+            "[ \"$REF_TYPE\" != \"tag\" ] || [ \"$REF_NAME\" != \"$tag\" ]",
             "ref=refs/tags/${tag}",
             "ref: ${{ needs.preflight.outputs.ref }}",
             "needs: [preflight, release]",
             "needs: [preflight, create-release]",
             "needs: [preflight, verify-release-install]");
         AssertDoesNotContainAny(workflow, "ref: ${{ inputs.tag_name || github.ref }}");
+    }
+
+    [Fact]
+    public void ReleaseWorkflow_AuthenticatesPerRidPayloadManifests_Issue4607()
+    {
+        var workflow = ReadReleaseWorkflow();
+
+        AssertContainsAll(
+            workflow,
+            "cp MANIFEST.sha256 \"../artifacts/CodeIndex-${{ matrix.rid }}.MANIFEST.sha256\"",
+            "Copy-Item publish\\MANIFEST.sha256 \"artifacts\\CodeIndex-${{ matrix.rid }}.MANIFEST.sha256\"",
+            "-name '*.MANIFEST.sha256'",
+            "release-files/*.MANIFEST.sha256");
     }
 
     [Fact]

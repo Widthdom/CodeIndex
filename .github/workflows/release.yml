@@ -315,6 +315,7 @@ jobs:
           done > .MANIFEST.sha256.tmp
           mv .MANIFEST.sha256.tmp MANIFEST.sha256
           touch -t 200001010000 MANIFEST.sha256
+          cp MANIFEST.sha256 "../artifacts/CodeIndex-${{ matrix.rid }}.MANIFEST.sha256"
           find . -type f | sed 's#^\./##' | LC_ALL=C sort > "../artifacts/CodeIndex-${{ matrix.rid }}.members"
           tar czf "../artifacts/CodeIndex-${{ matrix.rid }}.tar.gz" -T "../artifacts/CodeIndex-${{ matrix.rid }}.members"
           tar tzf "../artifacts/CodeIndex-${{ matrix.rid }}.tar.gz" | LC_ALL=C sort > "../artifacts/CodeIndex-${{ matrix.rid }}.actual-members"
@@ -338,6 +339,7 @@ jobs:
           }
           $manifestLines | Set-Content -NoNewline:$false -Encoding ascii publish\MANIFEST.sha256
           (Get-Item publish\MANIFEST.sha256).LastWriteTimeUtc = $fixedTimestamp
+          Copy-Item publish\MANIFEST.sha256 "artifacts\CodeIndex-${{ matrix.rid }}.MANIFEST.sha256"
           $files = Get-ChildItem publish -File -Recurse | Sort-Object FullName
           $relativeFiles = $files | ForEach-Object { [System.IO.Path]::GetRelativePath((Resolve-Path publish), $_.FullName) } | Sort-Object
           $zipPath = Resolve-Path artifacts
@@ -423,7 +425,7 @@ jobs:
           # ファイル。すべて release-files に集約することで sha256sums.txt が
           # supply-chain consumer と `cdidx upgrade` が使用前に検証する bytes を
           # カバーする。
-          find all-artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.cdx.json' \) -exec cp {} release-files/ \;
+          find all-artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.cdx.json' -o -name '*.MANIFEST.sha256' \) -exec cp {} release-files/ \;
           cp install.sh release-files/install.sh
           cd release-files
           expected_rids="linux-x64 linux-arm64 osx-arm64 win-x64 win-arm64"
@@ -570,6 +572,7 @@ jobs:
             release-files/*.tar.gz
             release-files/*.zip
             release-files/*.cdx.json
+            release-files/*.MANIFEST.sha256
             release-files/install.sh
             release-files/sha256sums.txt
             release-files/sha256sums.txt.asc

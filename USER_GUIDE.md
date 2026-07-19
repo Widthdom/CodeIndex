@@ -737,6 +737,18 @@ The `compat_provenance_bypass` audit code is emitted only for the explicit
 compat bypass, rather than mislabeling a strict failure or claiming that a
 check-only operation was verified.
 
+The shell installer declares and checks its required commands in one preflight
+list, including `find`, before release work begins. A verified payload's
+`MANIFEST.sha256` is installed read-only next to `cdidx`, together with the
+independently authenticated release checksum receipt (and detached signature
+when available). On a later no-version rerun, the installer first
+reauthenticates that receipt against the pinned release workflow/tag or pinned
+GPG signer, verifies the manifest digest recorded by the receipt, and only then
+rehashes the binary, version metadata, native SQLite asset, and installed
+notices. A missing or changed artifact is named before the replacement is fully
+downloaded and staged. Promotion uses per-file moves with rollback, so avoid
+concurrent `cdidx` invocations during that short maintenance window.
+
 ### Option A: One-liner install (no .NET required)
 
 Works in containers, CI, and any Linux/macOS environment — no .NET SDK needed.
@@ -3759,6 +3771,16 @@ tag に固定した GitHub release attestation で独立に検証します。Git
 全体 status を返します。`compat_provenance_bypass` audit code は明示的な compat bypass
 にだけ出力し、strict failure を誤分類したり check-only の操作を verified と誤表示したり
 しません。
+
+shell installer は `find` を含む必須 command を1つの preflight list で宣言し、release
+処理前に確認します。検証済み payload の `MANIFEST.sha256` は read-only で `cdidx` の
+隣に、独立に認証済みの release checksum receipt（利用可能なら detached signature も）
+と一緒に保存されます。後で version 指定なしで再実行すると、receipt を固定済み release
+workflow/tag または GPG signer に対して再認証し、receipt に記録された manifest digest
+を確認してから、binary、version metadata、native SQLite asset、installed notice を
+再ハッシュします。欠落・変更した artifact は replacement の完全な download と staging
+前に名前を出します。promotion は file ごとの move と rollback なので、その短い
+maintenance window 中は別の `cdidx` を同時実行しないでください。
 
 ### 方法A: ワンライナーインストール（.NET 不要）
 
