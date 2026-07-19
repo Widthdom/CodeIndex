@@ -109,6 +109,7 @@ public partial class FileIndexer
 
         try
         {
+            _pathAccessValidator?.Invoke(ignorePath);
             if (!TryReadBoundedUtf8SidecarLines(
                     prefixedIgnorePath,
                     MaxIgnoreFileBytes,

@@ -5889,6 +5889,7 @@ public partial class McpServer : IDisposable
                 ElapsedMs: elapsedMs,
                 ErrorCode: errorCode,
                 ErrorType: errorType ?? observedErrorType,
+                CheckedRootIdentity: ExtractCheckedRootIdentity(response),
                 ToolLength: toolDisplay.Truncated ? toolDisplay.OriginalLength : null,
                 ToolTruncated: toolDisplay.Truncated,
                 ArgKeyLengths: argKeyLengths,
@@ -5913,6 +5914,15 @@ public partial class McpServer : IDisposable
             // Best-effort: an audit failure must not break the tool call.
             // ベストエフォート: audit 失敗で本体ツール呼び出しを壊さない。
         }
+    }
+
+    private static string? ExtractCheckedRootIdentity(JsonNode response)
+    {
+        var node = response["result"]?["structuredContent"]?["checked_root_identity"]
+            ?? response["error"]?["data"]?["checked_root_identity"];
+        return node is JsonValue value && value.TryGetValue<string>(out var identity)
+            ? identity
+            : null;
     }
 
     /// <summary>

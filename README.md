@@ -240,6 +240,15 @@ rotation degrade MCP ping/health. Shutdown-only abandonment and deadline state
 are returned by the sink shutdown result and emitted in the bounded stderr
 diagnostic; they are not advertised as live MCP status after the server stops.
 
+MCP `index` binds authorization to the canonical directory and filesystem
+identity captured before traversal. It revalidates the requested mapping, root
+identity, authorized client/CWD boundary, every traversed directory, and every
+file before content access; a link or identity change stops the run with a
+`permission_denied` tool error. Successful and dry-run structured results, and
+their audit JSONL records, expose the same opaque `checked_root_identity` token.
+If a containing Git repository is outside the authorized roots, ignore-rule
+discovery stays at the requested project root instead of reading its parent.
+
 When MCP rate limiting is enabled, every direct `tools/call` first consumes one
 caller-wide coarse bucket before detailed tool-name, enablement, and argument
 validation. Canonical known tool names additionally retain secondary per-tool
@@ -580,6 +589,14 @@ ping は同じ object を `audit_log` として返します。この object は 
 rotation degradation は MCP ping / health を degraded にします。shutdown 専用の
 abandoned count と deadline 状態は sink の shutdown result と上限付き stderr
 diagnostic で報告し、server 停止後に live MCP status として公開しません。
+
+MCP `index` は走査前に取得した canonical directory と filesystem identity に
+認可を結び付けます。要求 path の mapping、root identity、認可済み client/CWD
+boundary、走査する各 directory、内容を読む各 file を再検証し、link または identity
+が変化した場合は `permission_denied` tool error で処理を停止します。成功時と dry-run
+の structured result、および対応する audit JSONL record は、同じ opaque な
+`checked_root_identity` token を公開します。包含する Git repository が認可 root 外の
+場合、ignore-rule discovery は親を読まず、要求された project root 内に留まります。
 
 MCP rate limiting が有効な場合、direct な `tools/call` request はすべて tool 名、
 enablement、argument の詳細検証前に caller-wide の coarse bucket を 1 つ消費します。

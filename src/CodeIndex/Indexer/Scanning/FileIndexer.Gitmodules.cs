@@ -11,7 +11,7 @@ public partial class FileIndexer
     // <ignoreRuleRoot>/.gitmodules を解析し、projectRoot 相対の submodule ワークツリーパスと
     // その祖先ディレクトリを返す。projectRoot 外の submodule は無視。.gitmodules が無い・
     // 読めない場合は空集合を返し、submodule の無いリポジトリと同じ形を保つ。
-    private static (HashSet<string> Paths, HashSet<string> AncestorPaths, IReadOnlyList<ScanError> Warnings) LoadGitSubmodulePaths(
+    private (HashSet<string> Paths, HashSet<string> AncestorPaths, IReadOnlyList<ScanError> Warnings) LoadGitSubmodulePaths(
         string ignoreRuleRoot, string projectRoot, StringComparer pathComparer)
     {
         var submodulePaths = new HashSet<string>(pathComparer);
@@ -20,9 +20,18 @@ public partial class FileIndexer
 
         var gitmodulesPath = Path.Combine(ignoreRuleRoot, ".gitmodules");
         var prefixedGitmodulesPath = LongPath.EnsureWindowsPrefix(gitmodulesPath);
+        var gitmodulesRelativePath = NormalizeIgnorePath(GetRelativePathFromProjectRoot(projectRoot, gitmodulesPath));
+        try
+        {
+            _pathAccessValidator?.Invoke(gitmodulesPath);
+        }
+        catch (IOException ex)
+        {
+            AddGitmodulesDiscoveryWarning(warnings, gitmodulesRelativePath, ex.GetType().Name);
+            return (submodulePaths, ancestorPaths, warnings);
+        }
         if (!File.Exists(prefixedGitmodulesPath))
             return (submodulePaths, ancestorPaths, warnings);
-        var gitmodulesRelativePath = NormalizeIgnorePath(GetRelativePathFromProjectRoot(projectRoot, gitmodulesPath));
 
         try
         {

@@ -49,6 +49,7 @@ public partial class McpServer
     internal const int MaxMcpIndexFailureMessageLength = 512;
     internal static Action<string>? McpIndexFileCommittedForTesting { get; set; }
     internal static Action<string>? McpIndexFileContentLoadForTesting { get; set; }
+    internal static Action? McpIndexAuthorizationCompletedForTesting { get; set; }
     internal static Action? McpIndexPostExtractionHookDiscoveryForTesting { get; set; }
     internal static Action? McpIndexFtsOptimizeForTesting { get; set; }
     internal static Action? McpIndexCSharpPrepassForTesting { get; set; }

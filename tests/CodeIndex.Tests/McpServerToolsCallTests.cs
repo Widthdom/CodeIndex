@@ -6033,6 +6033,121 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Index_DryRunPreservesCheckedRootIdentityInResponseAndAudit_Issue4606()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_identity_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_identity");
+        var auditPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_identity_{Guid.NewGuid():N}.jsonl");
+        Directory.CreateDirectory(fixtureDir);
+        string? checkedRootIdentity = null;
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { }\n");
+            using (var sink = new AuditLogSink(auditPath, AuditLogSink.DefaultMaxBytes, includeValues: false))
+            using (var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: false, sink))
+            {
+                var response = CallIndex(server, fixtureDir, arguments => arguments["dryRun"] = true);
+
+                Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+                checkedRootIdentity = response["result"]!["structuredContent"]!["checked_root_identity"]!.GetValue<string>();
+                Assert.StartsWith("fsid:v1:", checkedRootIdentity, StringComparison.Ordinal);
+            }
+
+            var auditRecord = Assert.Single(File.ReadAllLines(auditPath));
+            using var auditJson = JsonDocument.Parse(auditRecord);
+            Assert.Equal(
+                checkedRootIdentity,
+                auditJson.RootElement.GetProperty("checked_root_identity").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            if (File.Exists(auditPath))
+                File.Delete(auditPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_RejectsAuthorizedRootSymlinkSwap_Issue4606()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var allowedTarget = Path.Combine(Path.GetFullPath("."), $"mcp_index_swap_allowed_{Guid.NewGuid():N}");
+        var linkPath = Path.Combine(Path.GetFullPath("."), $"mcp_index_swap_link_{Guid.NewGuid():N}");
+        var outsideTarget = TestProjectHelper.CreateTempProject("cdidx_mcp_index_swap_outside");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_swap");
+        Directory.CreateDirectory(allowedTarget);
+        try
+        {
+            File.WriteAllText(Path.Combine(allowedTarget, "allowed.cs"), "public class Allowed { }\n");
+            File.WriteAllText(Path.Combine(outsideTarget, "outside.cs"), "public class Outside { }\n");
+            Directory.CreateSymbolicLink(linkPath, allowedTarget);
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            McpServer.McpIndexAuthorizationCompletedForTesting = () =>
+            {
+                Directory.Delete(linkPath);
+                Directory.CreateSymbolicLink(linkPath, outsideTarget);
+            };
+
+            var response = CallIndex(server, linkPath, arguments => arguments["dryRun"] = true);
+
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>(), response.ToJsonString());
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.Equal(McpErrorEnvelope.CategoryPermissionDenied, structured["category"]!.GetValue<string>());
+            Assert.Equal("requested_root_changed", structured["authorization_failure_reason"]!.GetValue<string>());
+            Assert.StartsWith(
+                "fsid:v1:",
+                structured["checked_root_identity"]!.GetValue<string>(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            McpServer.McpIndexAuthorizationCompletedForTesting = null;
+            if (Directory.Exists(linkPath))
+                Directory.Delete(linkPath);
+            TestProjectHelper.DeleteDirectory(allowedTarget);
+            TestProjectHelper.DeleteDirectory(outsideTarget);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_RejectsAuthorizedRootIdentityReplacement_Issue4606()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_identity_swap_{Guid.NewGuid():N}");
+        var originalDir = fixtureDir + "_original";
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_identity_swap");
+        Directory.CreateDirectory(fixtureDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "allowed.cs"), "public class Allowed { }\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            McpServer.McpIndexAuthorizationCompletedForTesting = () =>
+            {
+                Directory.Move(fixtureDir, originalDir);
+                Directory.CreateDirectory(fixtureDir);
+                File.WriteAllText(Path.Combine(fixtureDir, "replacement.cs"), "public class Replacement { }\n");
+            };
+
+            var response = CallIndex(server, fixtureDir, arguments => arguments["dryRun"] = true);
+
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>(), response.ToJsonString());
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.Equal(McpErrorEnvelope.CategoryPermissionDenied, structured["category"]!.GetValue<string>());
+            Assert.Equal("root_identity_changed", structured["authorization_failure_reason"]!.GetValue<string>());
+        }
+        finally
+        {
+            McpServer.McpIndexAuthorizationCompletedForTesting = null;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteDirectory(originalDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_RejectsScopedUnsupportedModesWithoutDryRun_Issue3543()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_scope_reject_{Guid.NewGuid():N}");

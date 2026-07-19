@@ -270,13 +270,16 @@ public partial class FileIndexer
 
     private int CountProjectMarkerFiles(string dir, IReadOnlyList<string> patterns)
     {
+        _pathAccessValidator?.Invoke(dir);
         var count = 0;
         var prefixedDir = LongPath.EnsureWindowsPrefix(dir);
         foreach (var pattern in patterns)
         {
             foreach (var markerFile in CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(prefixedDir, pattern))
             {
-                if (!IsProjectMarkerVisible(LongPath.RemoveWindowsPrefix(markerFile), activeIgnoreRules: null))
+                var unprefixedMarkerFile = LongPath.RemoveWindowsPrefix(markerFile);
+                _pathAccessValidator?.Invoke(unprefixedMarkerFile);
+                if (!IsProjectMarkerVisible(unprefixedMarkerFile, activeIgnoreRules: null))
                     continue;
 
                 count++;
@@ -319,6 +322,19 @@ public partial class FileIndexer
         {
             cancellationToken.ThrowIfCancellationRequested();
             var current = pendingDirectories.Pop();
+            try
+            {
+                _pathAccessValidator?.Invoke(current.Path);
+            }
+            catch (IOException ex)
+            {
+                var exceptionType = FileSystemTraversalFailure.ExceptionTypeName(ex);
+                AddProjectMarkerTraversalWarning(errors, current.Path, exceptionType);
+                MarkProjectMarkerTraversalTruncated(
+                    traversalState,
+                    $"traversal failed with {exceptionType}");
+                continue;
+            }
             if (GetDirectoryFilterKind(current.Path, current.RelativePath, current.IgnoreRules, current.IsProjectRoot) != PathFilterKind.None)
                 continue;
 
@@ -356,6 +372,7 @@ public partial class FileIndexer
                     {
                         cancellationToken.ThrowIfCancellationRequested();
                         var markerFile = LongPath.RemoveWindowsPrefix(enumeratedMarkerFile);
+                        _pathAccessValidator?.Invoke(markerFile);
                         if (!IsProjectMarkerVisible(markerFile, activeIgnoreRules))
                             continue;
 

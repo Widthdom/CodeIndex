@@ -16,6 +16,28 @@ public partial class McpServer
 {
     private async Task<JsonNode> ExecuteIndexAsync(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
     {
+        try
+        {
+            return await ExecuteIndexCoreAsync(id, args, progressToken).ConfigureAwait(false);
+        }
+        catch (McpIndexAuthorizationException ex)
+        {
+            return CreateToolErrorResponse(
+                id,
+                "MCP index authorization changed after validation; indexing stopped.",
+                category: McpErrorEnvelope.CategoryPermissionDenied,
+                suggestion: "Restore a stable directory mapping within the current working directory and MCP client roots, then retry.",
+                retrySafe: true,
+                extraData: new JsonObject
+                {
+                    ["authorization_failure_reason"] = ex.Reason,
+                    ["checked_root_identity"] = ex.CheckedRootIdentity,
+                });
+        }
+    }
+
+    private async Task<JsonNode> ExecuteIndexCoreAsync(JsonNode? id, JsonNode? args, JsonNode? progressToken)
+    {
         if (!TryReadMcpIndexRequestOptions(id, args, out var indexOptions, out var indexOptionsError))
             return indexOptionsError!;
 
@@ -29,7 +51,7 @@ public partial class McpServer
         var symbolKindFilter = indexOptions.SymbolKindFilter;
         var unsupportedModes = indexOptions.UnsupportedModes;
         var optionsPayload = indexOptions.OptionsPayload;
-        var projectPath = Path.GetFullPath(indexOptions.Path);
+        var requestedProjectPath = Path.GetFullPath(indexOptions.Path);
         var runStartedAtUtc = GetUtcNow();
         var runStopwatch = Stopwatch.StartNew();
         var memorySamples = memoryTrace
@@ -39,27 +61,45 @@ public partial class McpServer
         // Prevent path traversal — only allow indexing within current working directory
         // パストラバーサル防止 — カレントディレクトリ配下のみインデックスを許可
         var cwd = Path.GetFullPath(".");
-        if (!McpPathBoundary.IsPathWithinDirectory(cwd, projectPath))
+        if (!McpPathBoundary.IsPathWithinDirectory(cwd, requestedProjectPath))
             return CreateToolErrorResponse(id, "Path must be within the current working directory");
         await RefreshClientRootsIfNeededAsync().ConfigureAwait(false);
-        if (!IsPathWithinClientRoots(projectPath))
+        if (!IsPathWithinClientRoots(requestedProjectPath))
             return CreateToolErrorResponse(id, "Path must be within an MCP client root");
 
-        if (!Directory.Exists(projectPath))
-            return CreateToolErrorResponse(id, "Directory not found");
+        bool IsPathAuthorized(string path)
+            => McpPathBoundary.IsPathWithinDirectory(cwd, path) && IsPathWithinClientRoots(path);
+        if (!McpPathBoundary.TryCaptureIndexRoot(
+                requestedProjectPath,
+                IsPathAuthorized,
+                out var authorization,
+                out var authorizationError))
+        {
+            return CreateToolErrorResponse(id, authorizationError!);
+        }
+
+        var authorizedRoot = authorization!;
+        McpIndexAuthorizationCompletedForTesting?.Invoke();
+        authorizedRoot.EnsureAuthorizedEntry(authorizedRoot.CanonicalPath);
+        var projectPath = authorizedRoot.CanonicalPath;
 
         var unsupportedModesJson = BuildMcpIndexUnsupportedModesJson(unsupportedModes);
         if (dryRun)
         {
             var ignoreCase = GitHelper.ResolveIgnoreCase(projectPath, _currentRequestToken.Value);
+            var dryRunRepositoryRoot = GitHelper.TryGetRepositoryRoot(projectPath, _currentRequestToken.Value);
+            var dryRunIgnoreRuleRoot = dryRunRepositoryRoot != null && IsPathAuthorized(dryRunRepositoryRoot)
+                ? dryRunRepositoryRoot
+                : projectPath;
             var dryRunIndexer = new FileIndexer(
                 projectPath,
                 ignoreCase,
-                GitHelper.TryGetRepositoryRoot(projectPath, _currentRequestToken.Value) ?? Path.GetFullPath(projectPath),
+                dryRunIgnoreRuleRoot,
                 maxFileBytes,
                 directoryIgnoreCaseProbe: null,
                 symlinkPolicy: symlinkPolicy,
-                generatedCodePatterns: IndexCommandRunner.ReadGeneratedCodePatternsFromEnvironment());
+                generatedCodePatterns: IndexCommandRunner.ReadGeneratedCodePatternsFromEnvironment(),
+                pathAccessValidator: authorizedRoot.EnsureAuthorizedEntry);
             var scan = dryRunIndexer.ScanFilesDetailed(cancellationToken: _currentRequestToken.Value);
             if (memorySamples != null)
                 memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
@@ -67,6 +107,7 @@ public partial class McpServer
             var dryRunPayload = new JsonObject
             {
                 ["path"] = projectPath,
+                ["checked_root_identity"] = authorizedRoot.CheckedRootIdentity,
                 ["dry_run"] = true,
                 ["would_rebuild"] = rebuild,
                 ["max_file_bytes"] = maxFileBytes,
@@ -99,6 +140,7 @@ public partial class McpServer
                 ["unsupported_modes"] = unsupportedModesJson,
                 ["index_options"] = optionsPayload,
                 ["index_started"] = false,
+                ["checked_root_identity"] = authorizedRoot.CheckedRootIdentity,
             };
             return CreateToolErrorResponse(
                 id,
@@ -175,14 +217,19 @@ public partial class McpServer
 
         var writer = new DbWriter(db);
         writer.RecoverInterruptedFtsBulkLoadIfNeeded(requestToken);
+        var repositoryRoot = GitHelper.TryGetRepositoryRoot(projectPath, requestToken);
+        var ignoreRuleRoot = repositoryRoot != null && IsPathAuthorized(repositoryRoot)
+            ? repositoryRoot
+            : projectPath;
         var indexer = new FileIndexer(
             projectPath,
             GitHelper.ResolveIgnoreCase(projectPath, requestToken),
-            GitHelper.TryGetRepositoryRoot(projectPath, requestToken) ?? Path.GetFullPath(projectPath),
+            ignoreRuleRoot,
             maxFileBytes,
             directoryIgnoreCaseProbe: null,
             symlinkPolicy: symlinkPolicy,
-            generatedCodePatterns: IndexCommandRunner.ReadGeneratedCodePatternsFromEnvironment());
+            generatedCodePatterns: IndexCommandRunner.ReadGeneratedCodePatternsFromEnvironment(),
+            pathAccessValidator: authorizedRoot.EnsureAuthorizedEntry);
         using var postExtractionHooks = new IndexCommandRunner.LazyDisposable<PostExtractionHookRunner>(() =>
         {
             McpIndexPostExtractionHookDiscoveryForTesting?.Invoke();
@@ -265,6 +312,7 @@ public partial class McpServer
             string projectRoot,
             List<string> diagnostics,
             List<McpIndexDiagnostic> structuredDiagnostics,
+            Action<string> validatePath,
             IReadOnlyDictionary<string, long>? knownFileSizes = null)
         {
             long total = 0;
@@ -279,6 +327,7 @@ public partial class McpServer
 
                 try
                 {
+                    validatePath(filePath);
                     var info = new FileInfo(filePath);
                     if (info.Exists)
                         total += info.Length;
@@ -411,6 +460,8 @@ public partial class McpServer
             if (target.Language != "csharp")
                 return false;
 
+            authorizedRoot.EnsureAuthorizedEntry(target.FilePath);
+
             var existingFile = IndexedFileStatReuse.TryGetReusableUnchangedFile(
                 reusableIndexedFileStats!,
                 target.FilePath,
@@ -493,6 +544,7 @@ public partial class McpServer
             try
             {
                 requestToken.ThrowIfCancellationRequested();
+                authorizedRoot.EnsureAuthorizedEntry(filePath);
                 var allowStatReuse = !rebuild
                     && !startedWithNoIndexedFiles
                     && symbolKindFilterMatchesPrior
@@ -696,6 +748,12 @@ public partial class McpServer
                 ftsMutated = true;
                 McpIndexFileCommittedForTesting?.Invoke(record.Path);
             }
+            catch (McpIndexAuthorizationException)
+            {
+                if (fileBatchMarked || useFullRunBatchMarker)
+                    writer.ClearBatchInProgress();
+                throw;
+            }
             catch (FileIndexer.BinaryFileSkippedException ex)
             {
                 try
@@ -722,7 +780,7 @@ public partial class McpServer
                     CountFreshInsertedRows();
                     ftsMutated = true;
                 }
-                catch (Exception cleanupEx)
+                catch (Exception cleanupEx) when (cleanupEx is not McpIndexAuthorizationException)
                 {
                     errors++;
                     failures.Add(BuildIndexFileFailure(projectPath, filePath, cleanupEx, "record_skipped_binary"));
@@ -896,7 +954,13 @@ public partial class McpServer
             writer.WriteUnknownExtensionFileMetadata(scanResult.UnknownExtensionFiles);
             var bytesRead = knownReadableFileSizes.Count == files.Count
                 ? (BytesRead: knownReadableBytesRead, SkippedFileCount: 0)
-                : SumReadableFileBytes(files, projectPath, indexRunDiagnostics, mcpIndexDiagnostics, knownReadableFileSizes);
+                : SumReadableFileBytes(
+                        files,
+                        projectPath,
+                        indexRunDiagnostics,
+                        mcpIndexDiagnostics,
+                        authorizedRoot.EnsureAuthorizedEntry,
+                        knownReadableFileSizes);
             writer.SetMetaValues(
                 (DbContext.LastIndexRunModeMetaKey, rebuild ? "rebuild" : "mcp"),
                 (DbContext.LastIndexRunStartedAtMetaKey, runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture)),
@@ -1001,6 +1065,7 @@ public partial class McpServer
         var structured = new JsonObject
         {
             ["path"] = projectPath,
+            ["checked_root_identity"] = authorizedRoot.CheckedRootIdentity,
             ["rebuild"] = rebuild,
             ["dry_run"] = false,
             ["max_file_bytes"] = maxFileBytes,

@@ -8,6 +8,7 @@ public partial class FileIndexer
     private const int LinuxAtCurrentWorkingDirectory = -100;
     private const int LinuxAtSymlinkNoFollow = 0x100;
     private const uint LinuxStatxBasicStats = 0x07ff;
+    private const FileAttributes WindowsFileFlagBackupSemantics = (FileAttributes)0x02000000;
     private static readonly bool IsLinuxPlatform = OperatingSystem.IsLinux();
     private static readonly bool IsMacOSPlatform = OperatingSystem.IsMacOS();
     private static readonly bool IsFileIdentityWindowsPlatform = OperatingSystem.IsWindows();
@@ -128,7 +129,9 @@ public partial class FileIndexer
             shareMode: FileShare.ReadWrite | FileShare.Delete,
             securityAttributes: IntPtr.Zero,
             creationDisposition: FileMode.Open,
-            flagsAndAttributes: FileAttributes.Normal,
+            flagsAndAttributes: Directory.Exists(path)
+                ? WindowsFileFlagBackupSemantics
+                : FileAttributes.Normal,
             templateFile: IntPtr.Zero);
         if (handle.IsInvalid)
             return false;
