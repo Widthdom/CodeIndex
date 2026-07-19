@@ -542,6 +542,42 @@ public class SearchSnippetFormatterTests
         Assert.NotNull(compact.NextMatch);
         Assert.Equal(expectedNextMatchLine, compact.NextMatch.Line);
         Assert.Equal(expectedDroppedMatchLineCount, compact.NextMatch.RemainingMatchLineCount);
+
+        var expanded = SearchSnippetFormatter.ToCompactResult(result, query, maxLines: 8);
+
+        Assert.Equal([10, 11, 13, 15], expanded.MatchLines);
+        Assert.Equal(0, expanded.DroppedMatchLineCount);
+        Assert.Null(expanded.NextMatch);
+
+        var sameLineResult = new SearchResult
+        {
+            Path = "src/app.cs",
+            Lang = "csharp",
+            StartLine = 20,
+            EndLine = 20,
+            Content = $"var text = \"{query}\"; {new string('x', 200)}; {codeExpression}",
+            Score = -1.0,
+        };
+
+        var sameLine = SearchSnippetFormatter.ToCompactResult(sameLineResult, query, maxLines: 1, maxLineWidth: 80);
+        var expectedSameLineOrigin = expectedFocusOrigin == "code" ? "code" : "string_literal";
+        var sameLineFocusFacet = Assert.Single(
+            sameLine.MatchFacets,
+            facet => facet.Line == sameLine.FocusLine
+                && facet.Length == query.Length
+                && facet.Origin == expectedSameLineOrigin);
+
+        Assert.Equal(sameLineFocusFacet.Column, sameLine.FocusColumn);
+        if (expectedSameLineOrigin == "code")
+        {
+            Assert.Contains(codeExpression, sameLine.Snippet, StringComparison.Ordinal);
+            Assert.DoesNotContain($"\"{query}\"", sameLine.Snippet, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Contains($"\"{query}\"", sameLine.Snippet, StringComparison.Ordinal);
+            Assert.DoesNotContain(codeExpression, sameLine.Snippet, StringComparison.Ordinal);
+        }
     }
 
     [Fact]
