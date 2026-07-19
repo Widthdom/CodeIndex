@@ -106,6 +106,19 @@ public class Probe
                 pragmas["journal_mode"] = "wal";
         }
 
+        if (root["git_executable"] is JsonObject gitExecutable)
+        {
+            // Host Git availability and ambient CDIDX_GIT_EXECUTABLE are intentionally outside this
+            // golden contract. Normalize the complete selection state; dedicated Issue4599 tests pin
+            // accepted/rejected sources, owner/mode/ancestor trust, and execution-probe diagnostics.
+            gitExecutable.Clear();
+            gitExecutable["source"] = "normalized";
+            gitExecutable["accepted"] = true;
+            gitExecutable["reason"] = "accepted";
+            gitExecutable["path"] = "<GIT_EXECUTABLE>";
+            gitExecutable["executable"] = true;
+        }
+
         return root.ToJsonString();
     }
 

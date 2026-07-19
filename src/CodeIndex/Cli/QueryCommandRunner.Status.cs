@@ -135,12 +135,14 @@ public static partial class QueryCommandRunner
             ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(status.ProjectRoot);
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages(status.ProjectRoot).OrderBy(l => l).ToList();
             status.Extractors = ExtractorPluginRegistry.GetStatusSnapshot(status.ProjectRoot);
+            status.GitExecutable = GitHelper.GetGitExecutableStatus();
             var postExtractionHookSnapshot = PostExtractionHookRunner.DiscoverDefaultMetadata();
             var postExtractionHooks = postExtractionHookSnapshot.Hooks;
             if (postExtractionHookSnapshot.Diagnostics.Count > 0)
                 status.HookDiagnostics = postExtractionHookSnapshot.Diagnostics.ToList();
             var trustOverrides = ExtractorPluginRegistry.GetAcceptedTrustOverrides(status.ProjectRoot)
                 .Concat(postExtractionHookSnapshot.TrustOverrides)
+                .Concat(GitHelper.GetAcceptedTrustOverrides(status.GitExecutable))
                 .ToList();
             if (trustOverrides.Count > 0)
                 status.TrustOverrides = trustOverrides;
@@ -271,6 +273,16 @@ public static partial class QueryCommandRunner
                             : $" ({trustOverride.Path})";
                         Console.WriteLine(ConsoleUi.FormatSummaryLine("Trust", $"{trustOverride.Kind} via {trustOverride.EnvironmentVariable}{pathSuffix}"));
                     }
+                }
+                if (status.GitExecutable != null)
+                {
+                    var modeSuffix = status.GitExecutable.UnixMode == null
+                        ? string.Empty
+                        : $", mode {status.GitExecutable.UnixMode}";
+                    var gitSummary = status.GitExecutable.Accepted
+                        ? $"{status.GitExecutable.Source}: accepted{modeSuffix}"
+                        : $"{status.GitExecutable.Source}: rejected ({status.GitExecutable.Reason}{modeSuffix})";
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Git", gitSummary));
                 }
                 // #1546: surface the persisted filesystem case-sensitivity so operators can
                 // diagnose phantom path collapses on case-sensitive APFS / WSL / ReFS volumes.

@@ -1089,6 +1089,14 @@ public class ProgramRunnerTests
         Assert.Equal(EnvironmentVariableInventory.DomainTrustBoundary, toolAllowlist.Domain);
         Assert.Contains("fail closed", toolAllowlist.InvalidValueBehavior, StringComparison.OrdinalIgnoreCase);
 
+        var gitExecutable = Assert.Contains(GitHelper.GitExecutableEnvironmentVariable, byName);
+        Assert.Equal(EnvironmentVariableInventory.DomainTrustBoundary, gitExecutable.Domain);
+        Assert.Equal("git", gitExecutable.Category);
+        Assert.Equal(EnvironmentVariableInventory.SensitivityPublic, gitExecutable.Sensitivity);
+        Assert.Equal("security", gitExecutable.Policy);
+        Assert.Equal("no", gitExecutable.ConfigFileSupported);
+        Assert.Contains("fail closed", gitExecutable.InvalidValueBehavior, StringComparison.OrdinalIgnoreCase);
+
         var updateDisable = Assert.Contains(UpdateChecker.DisableEnvVar, byName);
         Assert.Equal(EnvironmentVariableInventory.DomainUpdateLogging, updateDisable.Domain);
         Assert.Contains("1 or true", updateDisable.InvalidValueBehavior, StringComparison.Ordinal);
