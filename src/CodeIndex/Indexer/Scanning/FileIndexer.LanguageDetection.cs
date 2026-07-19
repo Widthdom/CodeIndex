@@ -222,9 +222,12 @@ public partial class FileIndexer
     /// 全ファイルパターン（拡張子とファイル名）と対応する言語名のマッピングを返す。
     /// </summary>
     public static IReadOnlyDictionary<string, string> GetLanguageExtensions()
+        => GetLanguageExtensions(workspaceRoot: null);
+
+    internal static IReadOnlyDictionary<string, string> GetLanguageExtensions(string? workspaceRoot)
     {
-        var pluginExtensions = ExtractorPluginRegistry.LanguageExtensions;
-        var languageMapOverrides = LanguageMapOverrides.LoadEffectiveMap();
+        var pluginExtensions = ExtractorPluginRegistry.GetLanguageExtensions(workspaceRoot);
+        var languageMapOverrides = LanguageMapOverrides.LoadEffectiveMap(workspaceRoot);
         var capacity = LangMap.Count
             + DisplayOnlyLanguageExtensions.Length
             + FileNameMap.Count
@@ -410,13 +413,13 @@ public partial class FileIndexer
             return new LanguageDetectionResult(FileProbeStatus.Supported, lang);
         }
 
-        if (ExtractorPluginRegistry.TryGetLanguageForExtension(ext, out var pluginLang))
+        if (ExtractorPluginRegistry.TryGetLanguageForExtension(ext, projectRoot, out var pluginLang))
             return new LanguageDetectionResult(FileProbeStatus.Supported, pluginLang);
 
         if (!string.IsNullOrEmpty(ext))
         {
-            ExtractorPluginRegistry.LoadPatternConfigsForPath(filePath);
-            if (ExtractorPluginRegistry.TryGetLanguageForExtension(ext, out pluginLang))
+            ExtractorPluginRegistry.LoadPatternConfigsForPath(filePath, projectRoot);
+            if (ExtractorPluginRegistry.TryGetLanguageForExtension(ext, projectRoot, out pluginLang))
                 return new LanguageDetectionResult(FileProbeStatus.Supported, pluginLang);
 
             return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);

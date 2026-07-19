@@ -70,10 +70,10 @@ public static partial class QueryCommandRunner
         return WithDb(options, jsonOptions, reader =>
         {
             // Warn if user specified an unsupported language / 未対応言語の場合は警告
-            if (options.Lang != null && !ReferenceExtractor.SupportsLanguage(options.Lang) && !options.Json)
+            if (options.Lang != null && !reader.SupportsReferenceLanguage(options.Lang) && !options.Json)
                 CommandErrorWriter.WriteStderr($"Warning: '{options.Lang}' does not support reference extraction. Unused results are unavailable for this language.");
 
-            bool? graphSupported = options.Lang != null ? ReferenceExtractor.SupportsLanguage(options.Lang) : null;
+            bool? graphSupported = options.Lang != null ? reader.SupportsReferenceLanguage(options.Lang) : null;
             var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(options.Lang, graphSupported);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, unusedScope.PathPatterns, unusedScope.ExcludePaths, unusedScope.ExcludeTests);
             var zeroResultSqlGraphSignal = NarrowSqlGraphContractSignal(

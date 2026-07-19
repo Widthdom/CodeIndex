@@ -695,7 +695,13 @@ public partial class SymbolExtractorTests
                 var symbol = Assert.Single(symbols);
                 Assert.Equal("class", symbol.Kind);
                 Assert.Equal("Widget", symbol.Name);
-                Assert.Equal("toydsl", FileIndexer.DetectLanguage("demo.toy"));
+                Assert.Equal(
+                    "toydsl",
+                    FileIndexer.TryDetectLanguage(
+                        Path.Combine(tempDir, "demo.toy"),
+                        content: null,
+                        FileIndexer.SymlinkPolicy.None,
+                        tempDir).Language);
             }
             finally
             {

@@ -422,7 +422,7 @@ public partial class DbReader
         // symbol_references が無いレガシー read-only DB では全シンボルが未使用扱いになってしまうため、
         // ノイズを返すより空を返す。
         if (!_hasReferencesTable) return new List<UnusedSymbolResult>();
-        if (lang != null && !ReferenceExtractor.SupportsLanguage(lang))
+        if (lang != null && !SupportsReferenceLanguage(lang))
             return [];
         // Restrict to graph-supported languages to avoid false positives
         // (unsupported languages have no references indexed, so all symbols appear unused)
@@ -826,7 +826,7 @@ public partial class DbReader
     private IEnumerable<UnusedCandidateSymbol> FetchUnusedCandidateSymbols(int fetchLimit, int offset, int provisionalBucketOrder, string? kind, string? lang,
         IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
-        var graphLangs = ReferenceExtractor.GetSupportedLanguages()
+        var graphLangs = GetWorkspaceSupportedReferenceLanguages()
             .Where(value => !IsSqlLanguage(value))
             .ToList();
         var visibilitySql = $"lower({GetSymbolColumnSql("visibility", "''")})";
@@ -1209,7 +1209,7 @@ public partial class DbReader
     private List<UnusedSymbolResult> FetchUnusedCandidates(int fetchLimit, int provisionalBucketOrder, int offset, string? kind, string? lang,
         IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
-        var graphLangs = ReferenceExtractor.GetSupportedLanguages();
+        var graphLangs = GetWorkspaceSupportedReferenceLanguages();
         var visibilitySql = $"lower({GetSymbolColumnSql("visibility", "''")})";
         var signatureSql = $"lower({GetSymbolColumnSql("signature", "''")})";
         const string pathSql = "lower(f.path)";
@@ -1515,7 +1515,7 @@ public partial class DbReader
     {
         if (!_hasReferencesTable)
             return EmptyUnusedCountResult();
-        if (lang != null && !ReferenceExtractor.SupportsLanguage(lang))
+        if (lang != null && !SupportsReferenceLanguage(lang))
             return EmptyUnusedCountResult();
         if (!ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePathPatterns, excludeTests))
             return CountUnusedSymbolsDetailedWithoutSqlResolver(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters, bucketFilter, minConfidence, resultFilter);
@@ -1716,14 +1716,14 @@ public partial class DbReader
     {
         if (!_hasReferencesTable)
             return new QueryCountResult(0, 0);
-        if (lang != null && !ReferenceExtractor.SupportsLanguage(lang))
+        if (lang != null && !SupportsReferenceLanguage(lang))
             return new QueryCountResult(0, 0);
         if (bucketFilter != null || minConfidence != null)
             return CountFilteredUnusedSymbols(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters, bucketFilter, minConfidence);
         if (!ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePathPatterns, excludeTests))
             return CountUnusedSymbolsWithoutSqlResolver(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
 
-        var graphLangs = ReferenceExtractor.GetSupportedLanguages();
+        var graphLangs = GetWorkspaceSupportedReferenceLanguages();
         using var cmd = _conn.CreateCommand();
         var referenceLineJoin = ReferenceLineJoinSql("sr");
         var contextSql = ReferenceContextSql("sr");

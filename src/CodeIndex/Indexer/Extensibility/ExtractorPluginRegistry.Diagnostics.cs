@@ -6,10 +6,11 @@ namespace CodeIndex.Indexer.Extensibility;
 
 public static partial class ExtractorPluginRegistry
 {
-    private static void ReportPatternConfigRejected(string path, string reason)
+    private static void ReportPatternConfigRejected(PatternWorkspaceState state, string path, string reason)
     {
         CommandErrorWriter.WriteStderr($"[cdidx] Skipped pattern config '{DiagnosticSanitizer.ForPath(path)}': {DiagnosticSanitizer.ForMessage(reason)}.");
-        RecordDiagnostic(
+        RecordPatternDiagnostic(
+            state,
             "pattern",
             path,
             typeName: null,
@@ -19,10 +20,11 @@ public static partial class ExtractorPluginRegistry
             category: "invalid_pattern_config");
     }
 
-    private static void ReportPatternConfigSkipped(string path, string reason)
+    private static void ReportPatternConfigSkipped(PatternWorkspaceState state, string path, string reason)
     {
         CommandErrorWriter.WriteStderr($"[cdidx] Skipped pattern config '{DiagnosticSanitizer.ForPath(path)}': {DiagnosticSanitizer.ForMessage(reason)}.");
-        RecordDiagnostic(
+        RecordPatternDiagnostic(
+            state,
             "pattern",
             path,
             typeName: null,
@@ -32,13 +34,18 @@ public static partial class ExtractorPluginRegistry
             category: "pattern_config_incomplete");
     }
 
-    private static void ReportPatternDirectoryRejected(string path, string reason)
-        => ReportPatternDirectoryRejected(path, reason, "pattern_directory_rejected");
+    private static void ReportPatternDirectoryRejected(PatternWorkspaceState state, string path, string reason)
+        => ReportPatternDirectoryRejected(state, path, reason, "pattern_directory_rejected");
 
-    private static void ReportPatternDirectoryRejected(string path, string reason, string category)
+    private static void ReportPatternDirectoryRejected(
+        PatternWorkspaceState state,
+        string path,
+        string reason,
+        string category)
     {
         CommandErrorWriter.WriteStderr($"[cdidx] Skipped pattern directory '{DiagnosticSanitizer.ForPath(path)}': {DiagnosticSanitizer.ForMessage(reason)}.");
-        RecordDiagnostic(
+        RecordPatternDiagnostic(
+            state,
             "pattern_directory",
             path,
             typeName: null,
@@ -48,10 +55,11 @@ public static partial class ExtractorPluginRegistry
             category: category);
     }
 
-    private static void ReportPatternDirectorySkipped(string path, string reason)
+    private static void ReportPatternDirectorySkipped(PatternWorkspaceState state, string path, string reason)
     {
         CommandErrorWriter.WriteStderr($"[cdidx] Skipped pattern directory '{DiagnosticSanitizer.ForPath(path)}': {DiagnosticSanitizer.ForMessage(reason)}.");
-        RecordDiagnostic(
+        RecordPatternDiagnostic(
+            state,
             "pattern_directory",
             path,
             typeName: null,
@@ -61,9 +69,14 @@ public static partial class ExtractorPluginRegistry
             category: "pattern_candidate_limit_exceeded");
     }
 
-    private static void ReportPluginDirectorySkipped(string path, string reason, string category)
+    private static void ReportPluginDirectorySkipped(
+        PatternWorkspaceState? workspaceState,
+        string path,
+        string reason,
+        string category)
     {
-        RecordDiagnostic(
+        RecordPluginDiagnostic(
+            workspaceState,
             "plugin_directory",
             path,
             typeName: null,
@@ -73,9 +86,14 @@ public static partial class ExtractorPluginRegistry
             category: category);
     }
 
-    internal static void ReportPatternExtractorTimeout(string path, string language, string kind)
+    private static void ReportPatternExtractorTimeout(
+        PatternWorkspaceState state,
+        string path,
+        string language,
+        string kind)
     {
-        RecordDiagnostic(
+        RecordPatternDiagnostic(
+            state,
             "pattern",
             path,
             typeName: null,
@@ -83,6 +101,30 @@ public static partial class ExtractorPluginRegistry
             $"Pattern extractor timeout: language '{DiagnosticSanitizer.ForMessage(language)}' kind '{DiagnosticSanitizer.ForMessage(kind)}'.",
             countsAsSkippedFile: false,
             category: RegexTimeoutPolicy.ConfiguredPatternRegexTimeoutCategory);
+    }
+
+    private static void RecordPatternDiagnostic(
+        PatternWorkspaceState state,
+        string kind,
+        string path,
+        string? typeName,
+        string severity,
+        string message,
+        bool countsAsSkippedFile,
+        string category = "unspecified")
+    {
+        lock (state.Gate)
+        {
+            if (state.Retired)
+                return;
+
+            state.DiagnosticTotalCount++;
+            if (countsAsSkippedFile)
+                state.SkippedFileCount++;
+            var diagnostic = CreateDiagnostic(kind, path, typeName, severity, message, category);
+            AddBoundedDiagnostic(state.Diagnostics, diagnostic);
+            state.PublishSnapshot();
+        }
     }
 
     private static void RecordDiagnostic(
@@ -99,22 +141,38 @@ public static partial class ExtractorPluginRegistry
             diagnosticTotalCount++;
             if (countsAsSkippedFile)
                 skippedFileCount++;
-            var diagnostic = new ExtractorRegistryDiagnostic(
-                DiagnosticSanitizer.ForMessage(kind),
-                DiagnosticSanitizer.ForPath(path),
-                DiagnosticSanitizer.ForOptionalLabel(typeName),
-                DiagnosticSanitizer.ForMessage(severity),
-                DiagnosticSanitizer.ForMessage(category),
-                DiagnosticSanitizer.ForMessage(message));
-            if (Diagnostics.Count < DiagnosticLimit)
-            {
-                Diagnostics.Add(diagnostic);
-            }
-            else if (category.EndsWith("_candidate_limit_exceeded", StringComparison.Ordinal)
-                     && !Diagnostics.Any(item => item.Category == diagnostic.Category && item.Path == diagnostic.Path))
-            {
-                Diagnostics[^1] = diagnostic;
-            }
+            var diagnostic = CreateDiagnostic(kind, path, typeName, severity, message, category);
+            AddBoundedDiagnostic(Diagnostics, diagnostic);
+        }
+    }
+
+    private static ExtractorRegistryDiagnostic CreateDiagnostic(
+        string kind,
+        string path,
+        string? typeName,
+        string severity,
+        string message,
+        string category)
+        => new(
+            DiagnosticSanitizer.ForMessage(kind),
+            DiagnosticSanitizer.ForPath(path),
+            DiagnosticSanitizer.ForOptionalLabel(typeName),
+            DiagnosticSanitizer.ForMessage(severity),
+            DiagnosticSanitizer.ForMessage(category),
+            DiagnosticSanitizer.ForMessage(message));
+
+    private static void AddBoundedDiagnostic(
+        List<ExtractorRegistryDiagnostic> diagnostics,
+        ExtractorRegistryDiagnostic diagnostic)
+    {
+        if (diagnostics.Count < DiagnosticLimit)
+        {
+            diagnostics.Add(diagnostic);
+        }
+        else if (diagnostic.Category.EndsWith("_candidate_limit_exceeded", StringComparison.Ordinal)
+                 && !diagnostics.Any(item => item.Category == diagnostic.Category && item.Path == diagnostic.Path))
+        {
+            diagnostics[^1] = diagnostic;
         }
     }
 }
@@ -143,6 +201,13 @@ public sealed class ExtractorRegistryStatus
     public bool DiagnosticsTruncated { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<ExtractorRegistryDiagnostic>? Diagnostics { get; init; }
+    [JsonPropertyName("pattern_configs")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<PatternConfigStatus>? PatternConfigs { get; init; }
+    [JsonPropertyName("snapshot_scope")]
+    public string SnapshotScope { get; init; } = "user";
+    [JsonPropertyName("registration_precedence")]
+    public IReadOnlyList<string> RegistrationPrecedence { get; init; } = [];
 }
 
 public sealed record ExtractorRegistryDiagnostic(
@@ -152,6 +217,12 @@ public sealed record ExtractorRegistryDiagnostic(
     [property: JsonPropertyName("severity")] string Severity,
     [property: JsonPropertyName("category")] string Category,
     [property: JsonPropertyName("message")] string Message);
+
+public sealed record PatternConfigStatus(
+    [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("language")] string Language,
+    [property: JsonPropertyName("rule_count")] int RuleCount);
 
 public sealed record ExtensionTrustOverride(
     [property: JsonPropertyName("kind")] string Kind,

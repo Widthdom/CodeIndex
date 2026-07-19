@@ -1564,6 +1564,19 @@ Process exit codes are coarse (`0` success including valid zero-row queries, `1`
 
   Plugin DLL discovery is bounded to `ExtractorPluginRegistry.MaxPluginAssemblyCandidatesPerDirectory` candidates per directory and `ExtractorPluginRegistry.MaxPluginAssemblyCandidatesTotal` candidates per process. Each candidate must also be no larger than `ExtractorPluginRegistry.MaxPluginAssemblyBytes` bytes. Discovery truncation and oversize skips are reported through `status --json` / MCP `status` `extractors.diagnostics`.
 
+  Registrations are resolved from immutable workspace snapshots keyed by the
+  normalized workspace identity and language. Precedence is deterministic and
+  exposed by `extractors.registration_precedence`, highest first: built-in,
+  user plugin, user pattern, workspace plugin, workspace pattern. Workspace
+  plugin assembly contexts and diagnostics are owned by their snapshot;
+  replacing one snapshot starts unloading only that workspace's old contexts
+  and cannot rewrite another workspace's active registrations. Reference purge,
+  status/language reporting, and database graph predicates resolve supported
+  languages from the active workspace snapshot. Long-running hosts retain at
+  most 32 workspace snapshots with LRU eviction. Replacement, eviction, and MCP
+  shutdown terminally retire their snapshots; an in-flight plugin load that
+  reaches a retired state rejects its late commit and unloads its local context.
+
 <a id="reference-kind-filtering-matrix"></a>
 
 ## Reference-kind filtering matrix
@@ -2676,9 +2689,24 @@ Downstream users can add lightweight language support without rebuilding
 - regex-backed symbol patterns are read from `.cdidx/patterns/*.yaml` and
   `~/.config/cdidx/patterns/*.yaml`; sidecars must be regular files under
   non-symlink pattern directories, discovery accepts at most 128 candidates per
-  pattern directory, each file is capped at 64 KiB / 128 rules, the process
-  loads at most 128 configured rules total, and regex matches use a 100 ms
-  timeout;
+  pattern directory, each file is capped at 64 KiB / 128 rules, each immutable
+  workspace snapshot loads at most 128 configured rules total, and regex matches use a 100 ms
+  timeout. Each sidecar is parsed, compiled, and checked against
+  `SymbolKindCatalog` before its path, rules, or budget are committed. Rejected
+  content is fingerprinted to suppress duplicate diagnostics, while content or
+  metadata changes and transient read recovery are retried without restarting.
+    Workspace discovery requires an explicit trust root and stops after checking
+    that root; it never probes ancestors above it. Nested sidecars inside that
+    boundary are loaded for the current file in the bounded extraction worker.
+    Path identity follows the
+  active filesystem's case-sensitivity, so case-distinct sidecars remain
+  distinct on case-sensitive volumes. `status --json` reports accepted files in
+  `extractors.pattern_configs[]` with sanitized path, workspace/user provenance,
+  normalized language, and rule count. Reindexing atomically replaces the
+  workspace snapshot so the old rule budget and timeout state become
+  collectible without changing other workspaces. A timed-out rule is suppressed
+  by a bounded one-minute cooldown in its owning workspace snapshot and emits a
+  workspace-scoped diagnostic;
 - `cdidx test-extractor --language <lang> --file <path> --json` runs symbol
   extraction without building an index, and `--expect-symbols <json>` compares
   the extracted JSON to a fixture. The source and expectation files are capped
@@ -2706,7 +2734,9 @@ patterns:
 Each configured regex should expose a named `name` capture. If it does not,
 `cdidx` uses the full match text as the symbol name. Invalid, symlinked,
 oversized, or over-budget sidecar files are skipped with a stderr diagnostic so
-a broken local experiment does not prevent indexing.
+a broken local experiment does not prevent indexing. A rejected sidecar never
+consumes the rule budget or becomes registered, and repairing it makes the next
+discovery attempt eligible to load it.
 
 ## Debugging SQLite reader errors
 
@@ -4352,6 +4382,16 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
 
   Plugin DLL discovery は、directory ごとに `ExtractorPluginRegistry.MaxPluginAssemblyCandidatesPerDirectory` 件、process 全体で `ExtractorPluginRegistry.MaxPluginAssemblyCandidatesTotal` 件までに制限されます。各 candidate は `ExtractorPluginRegistry.MaxPluginAssemblyBytes` bytes 以下でなければなりません。discovery の切り詰めや oversized skip は、`status --json` / MCP `status` の `extractors.diagnostics` に報告されます。
 
+  登録は、正規化済み workspace identity と language を key にする immutable workspace snapshot
+  から解決されます。優先順位は決定的で、`extractors.registration_precedence` に高い順で
+  built-in、user plugin、user pattern、workspace plugin、workspace pattern として公開されます。
+  workspace plugin の assembly context と diagnostic は所有 snapshot に属し、snapshot の置換は
+  その workspace の古い context だけを unload 開始するため、他 workspace の active 登録を書き換えません。
+  reference purge、status/language reporting、database graph predicate の supported language は
+  active workspace snapshot から解決されます。長時間実行 host が保持する workspace snapshot は
+  LRU で最大32件です。replace、evict、MCP shutdown は snapshot を terminal に retire し、in-flight
+  plugin load が retired state に到達した場合は遅延 commit を拒否して local context を unload します。
+
 ## reference_kind フィルタの対応表
 
 グラフ系エントリポイントは、用途別に意図的に異なる `reference_kind` の部分集合だけを辿る。設計上の分割は **呼び出しグラフ vs 依存グラフ** に対応する。既定の `callers` / `callees` は実行可能な call、construction、subscription semantics に限定する一方、`hotspots` と `impact` は closure や generic invocation edge を含む、より広い依存関係寄りの traversal を維持する。`deps` と `impact` の heuristic file-level fallback はコンパイル時の依存グラフをモデル化するため、`[JsonConverter(typeof(User))]` や `@Inject(User.class)` も `User` への本物の依存として metadata エッジを含める。`deps` は forward / reverse とも同じ SQL 関数 (`DbReader.GetFileDependencies`) を共有するため、両方向で常に同じ kind 集合を出す。
@@ -4903,8 +4943,20 @@ cleared range を証明するテストが必要です。Bounded accumulation pat
 - regex ベースのシンボルパターンは `.cdidx/patterns/*.yaml` と
   `~/.config/cdidx/patterns/*.yaml` から読み込まれます。sidecar は symlink ではない
   pattern directory 配下の通常ファイルのみが対象で、探索候補は pattern directory ごとに
-  128 件まで、各ファイルは 64 KiB / 128 ルール、プロセス全体では configured rule 128 件に制限され、
-  regex match には 100 ms の timeout が付きます。
+  128 件まで、各ファイルは 64 KiB / 128 ルール、immutable な workspace snapshot ごとに
+  configured rule 128 件に制限され、
+  regex match には 100 ms の timeout が付きます。各 sidecar は path・rule・budget を commit する前に
+  一時状態で parse / compile され、`SymbolKindCatalog` に対して kind が検証されます。拒否された内容は
+  fingerprint によって重複診断を抑制し、内容または metadata の変更時、および一時的な read failure の
+  回復後にはプロセスを再起動せず再試行されます。workspace 探索には明示的な trust root が必要で、
+    その root を確認した時点で停止し、それより上の ancestor は探索しません。その境界内の nested
+    sidecar は、対象 file の上限付き extraction worker 内で読み込まれます。path identity は実際の
+  filesystem の case-sensitivity に従うため、case-sensitive volume では大小文字だけが異なる sidecar も
+  別々に扱われます。`status --json` の `extractors.pattern_configs[]` は、受理済み file の
+  sanitization 済み path、workspace/user provenance、正規化済み language、rule count を報告します。
+  reindex は workspace snapshot を atomically に置換するため、以前の rule budget と timeout state は
+  他 workspace を変更せず回収可能になります。timeout した rule は所有する workspace snapshot 内だけで
+  上限付きの1分間 cooldown に入り、workspace-scoped diagnostic を出します。
 - `cdidx test-extractor --language <lang> --file <path> --json` は index を作らずに
   symbol extraction だけを実行し、`--expect-symbols <json>` で fixture JSON と比較できます。
   source と expectation file はそれぞれ 4 MiB に制限されます。
@@ -4931,6 +4983,7 @@ patterns:
 各 regex は `name` という名前付き capture を公開することを推奨します。存在しない場合、
 `cdidx` は match 全体の文字列を symbol 名として使います。無効、symlink、過大、または
 上限超過の sidecar は stderr の診断付きで skip されるため、壊れたローカル実験が indexing を止めません。
+拒否された sidecar は rule budget を消費せず登録もされず、修復後の次回探索で load 対象に戻ります。
 
 ## SQLite reader のデバッグ
 

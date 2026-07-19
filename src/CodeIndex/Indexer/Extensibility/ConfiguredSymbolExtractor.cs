@@ -9,11 +9,13 @@ namespace CodeIndex.Indexer.Extensibility;
 internal sealed class ConfiguredSymbolExtractor(
     string language,
     IReadOnlyCollection<string> fileExtensions,
-    IReadOnlyList<ConfiguredSymbolExtractor.PatternRule> patterns) : ISymbolExtractor
+    IReadOnlyList<ConfiguredSymbolExtractor.PatternRule> patterns,
+    Action<string, string, string>? timeoutReporter = null) : ISymbolExtractor
 {
     private readonly object timeoutGate = new();
-    private readonly HashSet<PatternRule> disabledTimeoutPatterns = [];
+    private readonly Dictionary<PatternRule, long> disabledTimeoutPatterns = [];
     private readonly HashSet<string> timeoutWarnings = new(StringComparer.Ordinal);
+    private readonly Action<string, string, string> reportTimeout = timeoutReporter ?? ((_, _, _) => { });
 
     internal sealed record PatternRule(string Kind, Regex Regex, string SourcePath = "");
 
@@ -98,7 +100,15 @@ internal sealed class ConfiguredSymbolExtractor(
     private bool IsPatternDisabled(PatternRule pattern)
     {
         lock (timeoutGate)
-            return disabledTimeoutPatterns.Contains(pattern);
+        {
+            if (!disabledTimeoutPatterns.TryGetValue(pattern, out var disabledUntil))
+                return false;
+            if (System.Diagnostics.Stopwatch.GetTimestamp() < disabledUntil)
+                return true;
+
+            disabledTimeoutPatterns.Remove(pattern);
+            return false;
+        }
     }
 
     private void DisablePatternAfterTimeout(PatternRule pattern)
@@ -106,14 +116,16 @@ internal sealed class ConfiguredSymbolExtractor(
         var shouldReport = false;
         lock (timeoutGate)
         {
-            disabledTimeoutPatterns.Add(pattern);
+            disabledTimeoutPatterns[pattern] = System.Diagnostics.Stopwatch.GetTimestamp()
+                + (long)(ExtractorPluginRegistry.PatternTimeoutCooldown.TotalSeconds
+                         * System.Diagnostics.Stopwatch.Frequency);
             shouldReport = timeoutWarnings.Add(pattern.Kind + "\0" + pattern.Regex);
         }
 
         if (!shouldReport)
             return;
 
-        ExtractorPluginRegistry.ReportPatternExtractorTimeout(pattern.SourcePath, Language, pattern.Kind);
+        reportTimeout(pattern.SourcePath, Language, pattern.Kind);
         CommandErrorWriter.WriteStderr(
             RegexTimeoutPolicy.FormatConfiguredPatternTimeout(Language, pattern.Kind, ExtractorPluginRegistry.PatternRegexTimeout));
     }

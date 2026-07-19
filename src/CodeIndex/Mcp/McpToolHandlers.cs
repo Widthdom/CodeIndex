@@ -1065,7 +1065,7 @@ public partial class McpServer
         var graphLanguage = lang ?? (exact
             ? reader.GetExactGraphSupportedDefinitionLanguage(query, lang, pathPatterns, excludePaths, excludeTests)
             : null);
-        var graphSupported = graphLanguage == null ? (bool?)null : ReferenceExtractor.SupportsLanguage(graphLanguage);
+        var graphSupported = graphLanguage == null ? (bool?)null : reader.SupportsReferenceLanguage(graphLanguage);
         var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(graphLanguage, graphSupported);
         return (
             GraphLanguage: graphLanguage,

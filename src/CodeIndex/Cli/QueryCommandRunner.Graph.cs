@@ -104,7 +104,7 @@ public static partial class QueryCommandRunner
                 {
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No references found", options));
                     WriteExactZeroHint(exactZeroHint);
-                    WriteGraphSupportHint(options.Lang);
+                    WriteGraphSupportHint(options.Lang, reader);
                     WriteLangHint(options.Lang, reader);
                     WriteDegradedGraphZeroResult(reader, "references", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
@@ -258,7 +258,7 @@ public static partial class QueryCommandRunner
                 {
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No callers found", options));
                     WriteExactZeroHint(exactZeroHint);
-                    WriteGraphSupportHint(options.Lang);
+                    WriteGraphSupportHint(options.Lang, reader);
                     WriteLangHint(options.Lang, reader);
                     WriteDegradedGraphZeroResult(reader, "callers", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
@@ -410,7 +410,7 @@ public static partial class QueryCommandRunner
                 {
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No callees found", options));
                     WriteExactZeroHint(exactZeroHint);
-                    WriteGraphSupportHint(options.Lang);
+                    WriteGraphSupportHint(options.Lang, reader);
                     WriteLangHint(options.Lang, reader);
                     WriteDegradedGraphZeroResult(reader, "callees", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
