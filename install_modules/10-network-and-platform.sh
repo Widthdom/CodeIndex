@@ -233,6 +233,7 @@ validate_bounded_network_integer() {
     local value="$2"
     local minimum="$3"
     local maximum="$4"
+    local maximum_digits="${#maximum}"
 
     case "$value" in
         ""|*[!0-9]*)
@@ -240,6 +241,14 @@ validate_bounded_network_integer() {
             return 1
             ;;
     esac
+
+    # Reject values too wide for the small documented bounds before using
+    # shell integer operators. Otherwise an attacker-controlled digit string
+    # can overflow `test`, turn both comparisons into errors, and pass through.
+    if [ "${#value}" -gt "$maximum_digits" ]; then
+        report_error "Invalid ${environment_variable}: expected an integer from ${minimum} to ${maximum}, got ${value}."
+        return 1
+    fi
 
     if [ "$value" -lt "$minimum" ] || [ "$value" -gt "$maximum" ]; then
         report_error "Invalid ${environment_variable}: expected an integer from ${minimum} to ${maximum}, got ${value}."

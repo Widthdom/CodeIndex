@@ -1,7 +1,13 @@
 using System.Diagnostics;
 using System.Formats.Tar;
 using System.IO.Compression;
+using System.Net;
+using System.Net.Security;
+using System.Net.Sockets;
 using System.Runtime.Versioning;
+using System.Security.Authentication;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using CodeIndex.Indexer;
 
@@ -1194,6 +1200,107 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Equal(1, invalidConfigExitCode);
         Assert.DoesNotContain("UNREACHABLE", invalidConfigStdout);
         Assert.Contains("Invalid CDIDX_NETWORK_RETRY_COUNT: expected an integer from 0 to 5, got 99", invalidConfigStderr);
+
+        var (overflowExitCode, overflowStdout, overflowStderr) = RunInstallerSnippet(
+            $$"""
+            curl() {
+                printf 'UNREACHABLE\n'
+                return 0
+            }
+
+            curl_http_get "https://downloads.example.test/release" "{{outputPath}}" "configured release host"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_NETWORK_RETRY_COUNT"] = "999999999999999999999999",
+            });
+
+        Assert.Equal(1, overflowExitCode);
+        Assert.DoesNotContain("UNREACHABLE", overflowStdout);
+        Assert.DoesNotContain("integer expression expected", overflowStderr);
+        Assert.Contains("Invalid CDIDX_NETWORK_RETRY_COUNT: expected an integer from 0 to 5", overflowStderr);
+    }
+
+    [ProductionCliFact]
+    public void InstallerNetworkPolicy_RealStallAndHttpsDowngradeAreBlocked_Issue4604()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using (var stalledServer = new LoopbackTcpTestServer(async (client, cancellationToken) =>
+        {
+            await using var stream = client.GetStream();
+            await ReadHttpRequestHeadersAsync(stream, cancellationToken);
+            var prefix = Encoding.ASCII.GetBytes(
+                "HTTP/1.1 200 OK\r\nContent-Length: 1024\r\nConnection: close\r\n\r\nx");
+            await stream.WriteAsync(prefix, cancellationToken);
+            await stream.FlushAsync(cancellationToken);
+            await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
+        }))
+        {
+            var stalledOutputPath = Path.Combine(_tempRoot, "real_stalled_response.txt");
+            var stopwatch = Stopwatch.StartNew();
+            var (exitCode, _, stderr) = RunInstallerSnippet(
+                $$"""
+                curl_http_get "http://127.0.0.1:{{stalledServer.Port}}/stalled" "{{stalledOutputPath}}" "stalled loopback test server"
+                """,
+                new Dictionary<string, string?>
+                {
+                    ["CDIDX_NETWORK_CONNECT_TIMEOUT_SECONDS"] = "1",
+                    ["CDIDX_NETWORK_MAX_TIME_SECONDS"] = "10",
+                    ["CDIDX_NETWORK_LOW_SPEED_LIMIT_BYTES"] = "1024",
+                    ["CDIDX_NETWORK_LOW_SPEED_TIME_SECONDS"] = "1",
+                    ["CDIDX_NETWORK_RETRY_COUNT"] = "0",
+                });
+            stopwatch.Stop();
+
+            Assert.Equal(1, exitCode);
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(15), $"Stalled transfer took {stopwatch.Elapsed}.");
+            Assert.Contains("[network_timeout]", stderr);
+        }
+
+        using var certificate = CreateLoopbackServerCertificate("downloads.example.test");
+        var downgradeTarget = new TcpListener(IPAddress.Loopback, 0);
+        downgradeTarget.Start();
+        try
+        {
+            var downgradeTargetPort = ((IPEndPoint)downgradeTarget.LocalEndpoint).Port;
+            using var tlsRedirectServer = new LoopbackTcpTestServer(async (client, cancellationToken) =>
+            {
+                await using var ssl = new SslStream(client.GetStream(), leaveInnerStreamOpen: false);
+                await ssl.AuthenticateAsServerAsync(
+                    new SslServerAuthenticationOptions
+                    {
+                        ServerCertificate = certificate,
+                        EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+                    },
+                    cancellationToken);
+                await ReadHttpRequestHeadersAsync(ssl, cancellationToken);
+                var response = Encoding.ASCII.GetBytes(
+                    $"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{downgradeTargetPort}/downgraded\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                await ssl.WriteAsync(response, cancellationToken);
+                await ssl.FlushAsync(cancellationToken);
+            });
+
+            var redirectOutputPath = Path.Combine(_tempRoot, "real_redirect_response.txt");
+            var (exitCode, _, stderr) = RunInstallerSnippet(
+                $$"""
+                curl() {
+                    command curl --insecure --noproxy '*' --resolve "downloads.example.test:{{tlsRedirectServer.Port}}:127.0.0.1" "$@"
+                }
+
+                curl_http_get "https://downloads.example.test:{{tlsRedirectServer.Port}}/redirect" "{{redirectOutputPath}}" "TLS redirect test server"
+                """);
+
+            tlsRedirectServer.WaitForCompletion();
+            Assert.Equal(1, exitCode);
+            Assert.Contains("[protocol_rejected]", stderr);
+            Assert.False(downgradeTarget.Pending());
+        }
+        finally
+        {
+            downgradeTarget.Stop();
+        }
     }
 
     [ProductionCliFact]
@@ -6190,6 +6297,97 @@ public sealed class InstallScriptTests : IDisposable
         "70-doctor.sh",
         "90-dispatch.sh",
     ];
+
+    private sealed class LoopbackTcpTestServer : IDisposable
+    {
+        private readonly TcpListener _listener;
+        private readonly CancellationTokenSource _cancellation = new();
+        private readonly Task _serverTask;
+
+        public LoopbackTcpTestServer(Func<TcpClient, CancellationToken, Task> handler)
+        {
+            _listener = new TcpListener(IPAddress.Loopback, 0);
+            _listener.Start();
+            Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
+            _serverTask = Task.Run(async () =>
+            {
+                try
+                {
+                    using var client = await _listener.AcceptTcpClientAsync(_cancellation.Token);
+                    await handler(client, _cancellation.Token);
+                }
+                catch (OperationCanceledException) when (_cancellation.IsCancellationRequested)
+                {
+                }
+                catch (ObjectDisposedException) when (_cancellation.IsCancellationRequested)
+                {
+                }
+                catch (SocketException) when (_cancellation.IsCancellationRequested)
+                {
+                }
+            });
+        }
+
+        public int Port { get; }
+
+        public void WaitForCompletion()
+        {
+            Assert.True(_serverTask.Wait(TimeSpan.FromSeconds(10)), "Loopback test server did not complete.");
+            _serverTask.GetAwaiter().GetResult();
+        }
+
+        public void Dispose()
+        {
+            _cancellation.Cancel();
+            _listener.Stop();
+            try
+            {
+                _serverTask.Wait(TimeSpan.FromSeconds(5));
+            }
+            catch (AggregateException aggregate) when (aggregate.InnerExceptions.All(
+                       exception => exception is OperationCanceledException or ObjectDisposedException or SocketException))
+            {
+            }
+            _cancellation.Dispose();
+        }
+    }
+
+    private static async Task ReadHttpRequestHeadersAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        var terminator = new byte[] { (byte)'\r', (byte)'\n', (byte)'\r', (byte)'\n' };
+        var matched = 0;
+        var buffer = new byte[1];
+        for (var readBytes = 0; readBytes < 65_536; readBytes++)
+        {
+            var read = await stream.ReadAsync(buffer, cancellationToken);
+            if (read == 0)
+                throw new IOException("Client closed before sending complete HTTP headers.");
+
+            matched = buffer[0] == terminator[matched]
+                ? matched + 1
+                : buffer[0] == terminator[0] ? 1 : 0;
+            if (matched == terminator.Length)
+                return;
+        }
+
+        throw new IOException("HTTP request headers exceeded the test-server limit.");
+    }
+
+    private static X509Certificate2 CreateLoopbackServerCertificate(string dnsName)
+    {
+        using var rsa = RSA.Create(2048);
+        var request = new CertificateRequest(
+            $"CN={dnsName}",
+            rsa,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+        var subjectAlternativeNames = new SubjectAlternativeNameBuilder();
+        subjectAlternativeNames.AddDnsName(dnsName);
+        request.CertificateExtensions.Add(subjectAlternativeNames.Build());
+        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, false));
+        request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, false));
+        return request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddHours(1));
+    }
 
     private static string NormalizeNewlines(string value)
         => value.Replace("\r\n", "\n", StringComparison.Ordinal);
