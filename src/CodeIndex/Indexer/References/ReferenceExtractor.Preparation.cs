@@ -182,6 +182,15 @@ public static partial class ReferenceExtractor
         return preparedLines ?? referenceStructuralLines;
     }
 
+    internal static string[] MaskCppLexicalLinesForDetection(string[] lines)
+    {
+        var blockCommentMaskedLines = MaskCStyleBlockCommentLines("cpp", lines);
+        return PrepareReferenceLines(
+            "cpp",
+            blockCommentMaskedLines,
+            CreateReferenceLinePrepareOptions("cpp"));
+    }
+
     private static IReadOnlyDictionary<int, IReadOnlyList<JsTaggedTemplateHit>>? GroupJsTaggedTemplatesByLine(
         IReadOnlyList<JsTaggedTemplateHit>? jsTaggedTemplateHits)
     {

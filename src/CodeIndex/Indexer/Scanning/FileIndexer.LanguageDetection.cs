@@ -403,11 +403,38 @@ public partial class FileIndexer
 
         if (LangMap.TryGetValue(ext, out var lang))
         {
-            if (lang == "c" && string.Equals(ext, ".h", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(content))
+            if (lang == "c" && string.Equals(ext, ".h", StringComparison.OrdinalIgnoreCase))
             {
-                var cppHeaderLanguage = TryDetectCppHeaderLanguage(content);
-                if (cppHeaderLanguage != null)
-                    return new LanguageDetectionResult(FileProbeStatus.Supported, cppHeaderLanguage);
+                if (string.IsNullOrEmpty(content))
+                {
+                    return new LanguageDetectionResult(
+                        FileProbeStatus.Supported,
+                        lang,
+                        LanguageDetectionSource.HeaderExtensionFallback,
+                        LanguageDetectionConfidence.Low);
+                }
+
+                var cppHeaderDetection = DetectCppHeaderLanguage(content);
+                if (cppHeaderDetection.IsCpp)
+                {
+                    return new LanguageDetectionResult(
+                        FileProbeStatus.Supported,
+                        "cpp",
+                        cppHeaderDetection.UsedStrategicSampling
+                            ? LanguageDetectionSource.HeaderSampledLexicalMarker
+                            : LanguageDetectionSource.HeaderLexicalMarker,
+                        cppHeaderDetection.UsedStrategicSampling
+                            ? LanguageDetectionConfidence.Medium
+                            : LanguageDetectionConfidence.High);
+                }
+
+                return new LanguageDetectionResult(
+                    FileProbeStatus.Supported,
+                    lang,
+                    cppHeaderDetection.UsedStrategicSampling
+                        ? LanguageDetectionSource.HeaderSampledLexicalFallback
+                        : LanguageDetectionSource.HeaderLexicalFallback,
+                    LanguageDetectionConfidence.Low);
             }
 
             return new LanguageDetectionResult(FileProbeStatus.Supported, lang);
@@ -484,39 +511,148 @@ public partial class FileIndexer
         return false;
     }
 
-    private static string? TryDetectCppHeaderLanguage(string content)
+    private const int CppHeaderDetectionByteBudget = 48 * 1024;
+    private const int CppHeaderDetectionSampleByteBudget = CppHeaderDetectionByteBudget / 3;
+    private const int CppHeaderDetectionContextCharacters = 2 * 1024;
+
+    private readonly record struct CppHeaderDetectionResult(bool IsCpp, bool UsedStrategicSampling);
+
+    private static CppHeaderDetectionResult DetectCppHeaderLanguage(string content)
     {
-        const int maxLines = 200;
-        var remaining = content.AsSpan();
-        var inspectedLines = 0;
+        if (FitsUtf8ByteBudget(content, CppHeaderDetectionByteBudget))
+            return new CppHeaderDetectionResult(ContainsCppHeaderMarker(content, firstScoredLine: 0), false);
 
-        while (remaining.Length > 0 && inspectedLines < maxLines)
+        var approximateScoredCharacters = CppHeaderDetectionSampleByteBudget - CppHeaderDetectionContextCharacters;
+        var scoreTargets = new[]
         {
-            var newlineIndex = remaining.IndexOf('\n');
-            var line = newlineIndex >= 0 ? remaining[..newlineIndex] : remaining;
-            if (line.Length > 0 && line[^1] == '\r')
-                line = line[..^1];
+            0,
+            Math.Max(0, (content.Length / 2) - (approximateScoredCharacters / 2)),
+            Math.Max(0, content.Length - approximateScoredCharacters),
+        };
+        var sampledStarts = new HashSet<int>();
 
-            if (LooksLikeCppHeaderLine(line))
-                return "cpp";
+        foreach (var target in scoreTargets)
+        {
+            var scoreStart = FindLineStartAtOrAfter(content, target);
+            if (scoreStart >= content.Length)
+                continue;
 
-            if (newlineIndex < 0)
-                break;
+            var contextStart = scoreStart == 0
+                ? 0
+                : FindLineStartAtOrAfter(content, Math.Max(0, scoreStart - CppHeaderDetectionContextCharacters));
+            if (!sampledStarts.Add(contextStart))
+                continue;
 
-            remaining = remaining[(newlineIndex + 1)..];
-            inspectedLines++;
+            var sampleEnd = AdvanceByUtf8ByteBudget(content, contextStart, CppHeaderDetectionSampleByteBudget);
+            var firstScoredLine = CountNewlines(content.AsSpan(contextStart, scoreStart - contextStart));
+            if (ContainsCppHeaderMarker(content[contextStart..sampleEnd], firstScoredLine))
+                return new CppHeaderDetectionResult(true, true);
         }
 
-        return null;
+        return new CppHeaderDetectionResult(false, true);
+    }
+
+    private static bool ContainsCppHeaderMarker(string content, int firstScoredLine)
+    {
+        var lines = content.Split('\n');
+        var maskedLines = ReferenceExtractor.MaskCppLexicalLinesForDetection(lines);
+        MaskCppHeaderPreprocessorPayloads(maskedLines);
+
+        for (var lineIndex = firstScoredLine; lineIndex < maskedLines.Length; lineIndex++)
+        {
+            var line = maskedLines[lineIndex].AsSpan();
+            if (line.Length > 0 && line[^1] == '\r')
+                line = line[..^1];
+            if (LooksLikeCppHeaderLine(line))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static void MaskCppHeaderPreprocessorPayloads(string[] lines)
+    {
+        var inDirectiveContinuation = false;
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        {
+            var line = lines[lineIndex].AsSpan();
+            var isDirective = inDirectiveContinuation || line.TrimStart().StartsWith("#", StringComparison.Ordinal);
+            if (!isDirective)
+                continue;
+
+            var trimmedLine = line.TrimEnd();
+            inDirectiveContinuation = !trimmedLine.IsEmpty && trimmedLine[^1] == '\\';
+            lines[lineIndex] = string.Empty;
+        }
+    }
+
+    private static bool FitsUtf8ByteBudget(string content, int byteBudget)
+        => AdvanceByUtf8ByteBudget(content, 0, byteBudget) == content.Length;
+
+    private static int AdvanceByUtf8ByteBudget(string content, int start, int byteBudget)
+    {
+        var byteCount = 0;
+        var index = start;
+        while (index < content.Length)
+        {
+            var charCount = 1;
+            int currentByteCount;
+            var ch = content[index];
+            if (ch <= 0x7f)
+            {
+                currentByteCount = 1;
+            }
+            else if (ch <= 0x7ff)
+            {
+                currentByteCount = 2;
+            }
+            else if (char.IsHighSurrogate(ch) && index + 1 < content.Length && char.IsLowSurrogate(content[index + 1]))
+            {
+                currentByteCount = 4;
+                charCount = 2;
+            }
+            else
+            {
+                currentByteCount = 3;
+            }
+
+            if (byteCount + currentByteCount > byteBudget)
+                break;
+
+            byteCount += currentByteCount;
+            index += charCount;
+        }
+
+        return index;
+    }
+
+    private static int FindLineStartAtOrAfter(string content, int index)
+    {
+        if (index <= 0)
+            return 0;
+        if (index >= content.Length)
+            return content.Length;
+
+        var newlineIndex = content.IndexOf('\n', index);
+        return newlineIndex < 0 ? content.Length : newlineIndex + 1;
+    }
+
+    private static int CountNewlines(ReadOnlySpan<char> content)
+    {
+        var count = 0;
+        foreach (var ch in content)
+        {
+            if (ch == '\n')
+                count++;
+        }
+
+        return count;
     }
 
     private static bool LooksLikeCppHeaderLine(ReadOnlySpan<char> line)
     {
         line = line.Trim();
         if (line.IsEmpty)
-            return false;
-
-        if (line.StartsWith("//") || line.StartsWith("/*") || line.StartsWith("*"))
             return false;
 
         if (line.StartsWith("namespace ", StringComparison.Ordinal)

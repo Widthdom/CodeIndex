@@ -1931,6 +1931,83 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void TryDetectLanguage_CppHeaderLexicalDetectionMasksNonCodeAndSamplesBeyondBudget()
+    {
+        AssertHeaderDetection(
+            null,
+            "c",
+            FileIndexer.LanguageDetectionSource.HeaderExtensionFallback,
+            FileIndexer.LanguageDetectionConfidence.Low);
+
+        const string commentOnlyHeader = """
+            /*
+             * namespace phantom {
+             * class CommentOnly { public: std::vector<int> values; };
+             * }
+             */
+            struct real_c_type { int value; };
+            """;
+        AssertHeaderDetection(
+            commentOnlyHeader,
+            "c",
+            FileIndexer.LanguageDetectionSource.HeaderLexicalFallback,
+            FileIndexer.LanguageDetectionConfidence.Low);
+
+        const string macroHeader = """
+            #define CPP_TEXT "namespace phantom { class MacroString { public: std::vector<int> values; }; }"
+            #define DECLARE_CPP_TYPE(name) \
+                class name
+            typedef struct real_c_type { int value; } real_c_type;
+            """;
+        AssertHeaderDetection(
+            macroHeader,
+            "c",
+            FileIndexer.LanguageDetectionSource.HeaderLexicalFallback,
+            FileIndexer.LanguageDetectionConfidence.Low);
+
+        var longLicensePrefix = string.Concat(Enumerable.Repeat("// Licensed material for strategic sampling.\n", 1_800));
+        var cSuffix = string.Concat(Enumerable.Repeat("int legacy_padding_value_for_sampling;\n", 1_800));
+        var longLicenseHeader = longLicensePrefix + """
+            namespace sampled {
+            template <typename T> class BeyondLegacyLineCutoff {};
+            }
+            """ + cSuffix;
+        AssertHeaderDetection(
+            longLicenseHeader,
+            "cpp",
+            FileIndexer.LanguageDetectionSource.HeaderSampledLexicalMarker,
+            FileIndexer.LanguageDetectionConfidence.Medium);
+
+        const string mixedHeader = """
+            typedef struct legacy_point { int x; int y; } legacy_point;
+            #ifdef __cplusplus
+            namespace modern {
+            template <typename T> class PointAdapter {};
+            }
+            #endif
+            """;
+        AssertHeaderDetection(
+            mixedHeader,
+            "cpp",
+            FileIndexer.LanguageDetectionSource.HeaderLexicalMarker,
+            FileIndexer.LanguageDetectionConfidence.High);
+
+        static void AssertHeaderDetection(
+            string? content,
+            string expectedLanguage,
+            FileIndexer.LanguageDetectionSource expectedSource,
+            FileIndexer.LanguageDetectionConfidence expectedConfidence)
+        {
+            var detection = FileIndexer.TryDetectLanguage("sample.h", content);
+
+            Assert.Equal(FileIndexer.FileProbeStatus.Supported, detection.Status);
+            Assert.Equal(expectedLanguage, detection.Language);
+            Assert.Equal(expectedSource, detection.Source);
+            Assert.Equal(expectedConfidence, detection.Confidence);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_SkipsExcludedDirectories()
     {
         // Create a temp directory structure to test scanning
