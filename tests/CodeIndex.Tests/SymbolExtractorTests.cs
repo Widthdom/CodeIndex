@@ -7542,9 +7542,9 @@ public partial class SymbolExtractorTests
             template <typename T>
             class Handler {
             public:
-                explicit Handler(T value) noexcept;
+                explicit(false) Handler(T value) noexcept;
                 ~Handler() noexcept;
-                explicit operator bool() const noexcept;
+                explicit(true) operator bool() const noexcept;
                 [[nodiscard]] auto transform(
                     T value,
                     int (*predicate)(T)
@@ -7564,7 +7564,13 @@ public partial class SymbolExtractorTests
             auto Handler<T>::transform(
                 T value,
                 int (*predicate)(T)
-            ) const & noexcept -> std::vector<T> { return { value }; }
+            ) const & noexcept -> std::vector<T> {
+                Handler<T> local
+                (
+                    value
+                );
+                return { value };
+            }
 
             int helper(int value) { return value; }
 
@@ -7613,7 +7619,83 @@ public partial class SymbolExtractorTests
         Assert.Single(callables, s => s.Name == "caller" && s.ReturnType == "int");
         Assert.All(callables.Where(s => s.Name is "Handler" or "~Handler" or "operator bool" or "transform"),
             s => Assert.Equal("Handler", s.ContainerName));
-        Assert.DoesNotContain(callables, s => s.Name is "handler" or "static_assert" or "sizeof" or "predicate");
+        Assert.DoesNotContain(callables, s => s.Name is "handler" or "local" or "static_assert" or "sizeof" or "predicate");
+    }
+
+    [Fact]
+    public void Extract_Cpp_DetectsBalancedNamedAndPunctuationOperators()
+    {
+        var content = """
+            struct Stream {
+                bool operator <
+                (const Stream& other) const;
+                Stream& operator <<
+                (int value);
+                static void* operator new
+                (std::size_t size);
+                Stream operator co_await
+                () const;
+            };
+            """;
+
+        var callables = SymbolExtractor.Extract(1, "cpp", content)
+            .Where(s => s.Kind == "function")
+            .ToList();
+
+        Assert.Equal(
+            ["operator co_await", "operator new", "operator<", "operator<<"],
+            callables.Select(s => s.Name).Order(StringComparer.Ordinal));
+        Assert.Contains(callables, s => s.Name == "operator<" && s.ReturnType == "bool");
+        Assert.Contains(callables, s => s.Name == "operator<<" && s.ReturnType == "Stream&");
+        Assert.Contains(callables, s => s.Name == "operator new" && s.ReturnType == "void*");
+        Assert.Contains(callables, s => s.Name == "operator co_await" && s.ReturnType == "Stream");
+        Assert.All(callables, s => Assert.Equal("Stream", s.ContainerName));
+    }
+
+    [Fact]
+    public void Extract_Cpp_StandaloneMacrosDoNotPrefixOrCreateCallables()
+    {
+        var content = """
+            struct Widget {
+                Q_OBJECT
+                Q_PROPERTY(int ignored READ ignored)
+                int value() const;
+            };
+            """;
+
+        var callables = SymbolExtractor.Extract(1, "cpp", content)
+            .Where(s => s.Kind == "function")
+            .ToList();
+
+        var value = Assert.Single(callables, s => s.Name == "value");
+        Assert.Equal("int", value.ReturnType);
+        Assert.Equal("int value() const;", value.Signature);
+        Assert.DoesNotContain(callables, s => s.Name is "Q_OBJECT" or "Q_PROPERTY");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void Extract_Cpp_LongNonDeclaratorInput_UsesBoundedAllocations()
+    {
+        const int lineCount = 5_000;
+        var token = new string('A', 500);
+        var content = string.Join('\n', Enumerable.Range(0, lineCount).Select(i => $"{token}{i}"));
+        _ = SymbolExtractor.Extract(1, "cpp", "int warmup();");
+
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        var stopwatch = Stopwatch.StartNew();
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+        stopwatch.Stop();
+        var allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+
+        Assert.Empty(symbols);
+        Assert.InRange(allocatedBytes, 0, 64L * 1024 * 1024);
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(10),
+            $"Long non-declarator C++ extraction took {stopwatch.Elapsed.TotalSeconds:F2}s and allocated {allocatedBytes:N0} bytes.");
     }
 
     [Fact]

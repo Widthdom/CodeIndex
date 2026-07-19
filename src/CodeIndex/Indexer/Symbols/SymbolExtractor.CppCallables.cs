@@ -64,6 +64,15 @@ public static partial class SymbolExtractor
         "while",
     };
 
+    private static readonly HashSet<string> CppNamedOperatorOverloads = new(StringComparer.Ordinal)
+    {
+        "operator co_await",
+        "operator delete",
+        "operator delete[]",
+        "operator new",
+        "operator new[]",
+    };
+
     private readonly record struct CppCallablePrefix(
         string Name,
         string? ReturnType,
@@ -120,6 +129,7 @@ public static partial class SymbolExtractor
             if (structuralLine.IsEmpty
                 || structuralLine[0] is '#' or '}'
                 || IsCppAccessLabel(structuralLine)
+                || IsCppStandaloneMacroInvocation(structuralLine)
                 || (bodyRangeIndex < callableBodyRanges.Count
                     && callableBodyRanges[bodyRangeIndex].StartLine <= lineNumber))
             {
@@ -130,8 +140,12 @@ public static partial class SymbolExtractor
             if (buffer == null)
                 continue;
 
+            int? discoveredBodyEndLine = null;
             if (TryParseCppCallableCandidate(buffer, structuralLines, typeIndex, out var candidate))
+            {
                 MergeCppCallableCandidate(fileId, candidate, symbols, extractionState);
+                discoveredBodyEndLine = candidate.BodyEndLine;
+            }
 
             if (TryParseCppQualifiedConstructorCandidate(
                 buffer,
@@ -140,12 +154,53 @@ public static partial class SymbolExtractor
                 out candidate))
             {
                 MergeCppCallableCandidate(fileId, candidate, symbols, extractionState);
+                if (candidate.BodyEndLine is { } qualifiedBodyEndLine)
+                    discoveredBodyEndLine = Math.Max(discoveredBodyEndLine ?? 0, qualifiedBodyEndLine);
             }
+
+            if (discoveredBodyEndLine is { } bodyEndLine)
+                startLineIndex = Math.Max(startLineIndex, bodyEndLine - 1);
         }
     }
 
     private static bool IsCppAccessLabel(ReadOnlySpan<char> line) =>
         line is "public:" or "protected:" or "private:";
+
+    private static bool IsCppStandaloneMacroInvocation(ReadOnlySpan<char> line)
+    {
+        var cursor = 0;
+        var hasUppercase = false;
+        while (cursor < line.Length && (char.IsUpper(line[cursor]) || char.IsDigit(line[cursor]) || line[cursor] == '_'))
+        {
+            hasUppercase |= char.IsUpper(line[cursor]);
+            cursor++;
+        }
+
+        if (!hasUppercase || cursor == 0)
+            return false;
+        while (cursor < line.Length && char.IsWhiteSpace(line[cursor]))
+            cursor++;
+        if (cursor == line.Length)
+            return true;
+        if (line[cursor] != '(')
+            return false;
+
+        var depth = 0;
+        for (; cursor < line.Length; cursor++)
+        {
+            if (line[cursor] == '(')
+                depth++;
+            else if (line[cursor] == ')' && --depth == 0)
+            {
+                cursor++;
+                while (cursor < line.Length && char.IsWhiteSpace(line[cursor]))
+                    cursor++;
+                return cursor == line.Length;
+            }
+        }
+
+        return false;
+    }
 
     private static CppCallableTypeIndex BuildCppCallableTypeIndex(
         IReadOnlyList<SymbolRecord> symbols,
@@ -310,6 +365,9 @@ public static partial class SymbolExtractor
         IReadOnlyList<string> structuralLines,
         int startLineIndex)
     {
+        if (!HasCppCallableParenthesisLookahead(structuralLines, startLineIndex))
+            return null;
+
         var raw = new StringBuilder();
         var structural = new StringBuilder();
         var lineStarts = new List<int>();
@@ -326,13 +384,69 @@ public static partial class SymbolExtractor
             lineStarts.Add(raw.Length);
             raw.Append(lines[lineIndex]);
             structural.Append(structuralLines[lineIndex]);
-            if (raw.Length >= CppCallableScanCharacterLimit)
+            if (raw.Length >= CppCallableScanCharacterLimit
+                || HasCppCallableHeaderBoundary(structural))
+            {
                 break;
+            }
         }
 
         return raw.Length == 0
             ? null
             : new CppCallableScanBuffer(raw.ToString(), structural.ToString(), lineStarts.ToArray(), startLineIndex);
+    }
+
+    private static bool HasCppCallableParenthesisLookahead(
+        IReadOnlyList<string> structuralLines,
+        int startLineIndex)
+    {
+        var characterCount = 0;
+        var endLineIndex = Math.Min(structuralLines.Count, startLineIndex + CppCallableScanLineLimit);
+        for (var lineIndex = startLineIndex; lineIndex < endLineIndex; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            for (var column = 0; column < line.Length; column++)
+            {
+                if (++characterCount > CppCallableScanCharacterLimit)
+                    return false;
+                if (line[column] == '(')
+                    return true;
+                if (line[column] is ';' or '{' or '}')
+                    return false;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasCppCallableHeaderBoundary(StringBuilder text)
+    {
+        var parenDepth = 0;
+        var squareDepth = 0;
+        var seenParen = false;
+        for (var index = 0; index < text.Length; index++)
+        {
+            switch (text[index])
+            {
+                case '(':
+                    parenDepth++;
+                    seenParen = true;
+                    break;
+                case ')' when parenDepth > 0:
+                    parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']' when squareDepth > 0:
+                    squareDepth--;
+                    break;
+                case ';' or '{' or '}' when seenParen && parenDepth == 0 && squareDepth == 0:
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool TryParseCppCallableCandidate(
@@ -452,13 +566,19 @@ public static partial class SymbolExtractor
 
     private static bool IsCppOperatorPunctuation(string text, int index)
     {
-        var wordStart = index;
-        while (wordStart > 0 && char.IsWhiteSpace(text[wordStart - 1]))
-            wordStart--;
+        var wordEnd = index;
+        while (wordEnd > 0 && IsCppOverloadOperatorPunctuation(text[wordEnd - 1]))
+            wordEnd--;
+        while (wordEnd > 0 && char.IsWhiteSpace(text[wordEnd - 1]))
+            wordEnd--;
+        var wordStart = wordEnd;
         while (wordStart > 0 && char.IsLetter(text[wordStart - 1]))
             wordStart--;
-        return text.AsSpan(wordStart, index - wordStart).SequenceEqual("operator");
+        return text.AsSpan(wordStart, wordEnd - wordStart).SequenceEqual("operator");
     }
+
+    private static bool IsCppOverloadOperatorPunctuation(char ch) =>
+        ch is '!' or '%' or '&' or '*' or '+' or '-' or '/' or '<' or '=' or '>' or '^' or '|' or '~';
 
     private static int FindCppMatchingDelimiter(string text, int openIndex, char open, char close)
     {
@@ -549,7 +669,8 @@ public static partial class SymbolExtractor
                 return false;
             returnType = null;
         }
-        else if (name.StartsWith("operator ", StringComparison.Ordinal))
+        else if (name.StartsWith("operator ", StringComparison.Ordinal)
+            && !CppNamedOperatorOverloads.Contains(name))
         {
             if (containerName == null || !string.IsNullOrWhiteSpace(normalizedPrefix))
                 return false;
@@ -706,6 +827,18 @@ public static partial class SymbolExtractor
             if (!CppCallablePrefixModifiers.Contains(token))
                 break;
             cursor = tokenEnd;
+            if (token == "explicit")
+            {
+                while (cursor < normalized.Length && char.IsWhiteSpace(normalized[cursor]))
+                    cursor++;
+                if (cursor < normalized.Length && normalized[cursor] == '(')
+                {
+                    var conditionEnd = FindCppMatchingDelimiter(normalized, cursor, '(', ')');
+                    if (conditionEnd < 0)
+                        break;
+                    cursor = conditionEnd + 1;
+                }
+            }
         }
 
         return normalized[cursor..].Trim();
