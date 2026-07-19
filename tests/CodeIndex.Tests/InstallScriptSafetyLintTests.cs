@@ -97,13 +97,36 @@ public sealed class InstallScriptSafetyLintTests
         Assert.Contains("--retry-max-time \"$CURL_MAX_TIME_SECONDS\"", curlWrapper, StringComparison.Ordinal);
 
         var downloadBody = ExtractShellFunction(activeText, "curl_http_get");
-        Assert.Contains("run_curl_with_optional_loopback_bypass \"$url\" -sSL -o \"$output_path\" -w '%{http_code}' \"$url\" 2>\"$curl_stderr\"", downloadBody, StringComparison.Ordinal);
+        Assert.Contains("run_curl_with_optional_loopback_bypass \"$url\" -sSL --max-filesize \"$max_bytes\" -o \"$output_path\" -w '%{http_code}' \"$url\" 2>\"$curl_stderr\"", downloadBody, StringComparison.Ordinal);
         Assert.Contains("read_bounded_file_sample \"$curl_stderr\" \"$CURL_STDERR_SAMPLE_BYTES\" \"curl stderr for ${source_label}\"", downloadBody, StringComparison.Ordinal);
 
         var doctorProbeBody = ExtractShellFunction(activeText, "probe_doctor_url");
         Assert.Contains("run_curl_with_optional_loopback_bypass \"$url\" -sSI -o /dev/null -w '%{http_code}' \"$url\" 2>\"$curl_stderr\"", doctorProbeBody, StringComparison.Ordinal);
         Assert.Contains("read_bounded_file_sample \"$curl_stderr\" \"$CURL_STDERR_SAMPLE_BYTES\" \"curl stderr for ${label}\"", doctorProbeBody, StringComparison.Ordinal);
         Assert.Contains("CURL_STDERR_SAMPLE_BYTES=8192", activeText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void InstallShellSafetyLint_RequiresPrivateBoundedArchiveExtraction_Issue4605()
+    {
+        var activeText = string.Join("\n", ActiveShellLines(ReadRepositoryText("install.sh")));
+        var validationBody = ExtractShellFunction(activeText, "validate_archive_members");
+        var extractionBody = ExtractShellFunction(activeText, "download_and_install");
+
+        Assert.Contains("RELEASE_ARCHIVE_MAX_BYTES=536870912", activeText, StringComparison.Ordinal);
+        Assert.Contains("ARCHIVE_MEMBER_MAX_COUNT=4096", activeText, StringComparison.Ordinal);
+        Assert.Contains("ARCHIVE_DECLARED_MAX_BYTES=1073741824", activeText, StringComparison.Ordinal);
+        Assert.Contains("ARCHIVE_EXPANDED_STREAM_MAX_BYTES=1207959552", activeText, StringComparison.Ordinal);
+        Assert.Contains("ARCHIVE_COMPRESSION_RATIO_MAX=250", activeText, StringComparison.Ordinal);
+        Assert.Contains("EXTRACTED_PAYLOAD_MAX_BYTES=1073741824", activeText, StringComparison.Ordinal);
+        Assert.Contains("[archive_link_rejected]", validationBody, StringComparison.Ordinal);
+        Assert.Contains("[archive_member_type_rejected]", validationBody, StringComparison.Ordinal);
+        Assert.Contains("chmod 700 \"$tmpdir\"", extractionBody, StringComparison.Ordinal);
+        Assert.Contains("chmod 700 \"$extract_dir\"", extractionBody, StringComparison.Ordinal);
+        Assert.Contains("download_release_file \"$archive_url\" \"${tmpdir}/${archive_name}\" \"${archive_name}\" \"$RELEASE_ARCHIVE_MAX_BYTES\"", extractionBody, StringComparison.Ordinal);
+        Assert.Contains("download_release_file \"$checksums_url\" \"${tmpdir}/sha256sums.txt\" \"sha256sums.txt\" \"$RELEASE_METADATA_MAX_BYTES\"", extractionBody, StringComparison.Ordinal);
+        Assert.Contains("tar -xzkf \"${tmpdir}/${archive_name}\" -C \"$extract_dir\" --no-same-owner --no-same-permissions", extractionBody, StringComparison.Ordinal);
+        Assert.Contains("validate_extracted_payload_size \"$extract_dir\"", extractionBody, StringComparison.Ordinal);
     }
 
     private static bool IsEvalCommand(string line)

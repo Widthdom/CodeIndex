@@ -1936,6 +1936,186 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [ProductionCliFact]
+    public void ValidateArchiveMembers_RejectsLinksAndUnsupportedTypes_Issue4605()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var entryTypes = new[]
+        {
+            TarEntryType.SymbolicLink,
+            TarEntryType.HardLink,
+            TarEntryType.Fifo,
+        };
+
+        foreach (var entryType in entryTypes)
+        {
+            var archivePath = Path.Combine(_tempRoot, $"unsafe_{entryType}.tar.gz");
+            using (var archive = File.Create(archivePath))
+            using (var gzip = new GZipStream(archive, CompressionLevel.SmallestSize))
+            using (var writer = new TarWriter(gzip, leaveOpen: false))
+            {
+                var entry = new PaxTarEntry(entryType, $"unsafe-{entryType}");
+                if (entryType is TarEntryType.SymbolicLink or TarEntryType.HardLink)
+                    entry.LinkName = "cdidx";
+                writer.WriteEntry(entry);
+            }
+
+            var (exitCode, stdout, stderr) = RunInstallerSnippet(
+                $$"""
+                status=0
+                validate_archive_members "{{archivePath}}" || status=$?
+                printf 'STATUS:%s\n' "$status"
+                """,
+                enforceStrictMode: false);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("STATUS:1", stdout);
+            if (entryType is TarEntryType.SymbolicLink or TarEntryType.HardLink)
+                Assert.Contains("[archive_link_rejected]", stderr);
+            else
+                Assert.Contains("[archive_member_type_rejected]", stderr);
+        }
+    }
+
+    [ProductionCliFact]
+    public void ArchiveBudgets_RejectManyMembersDeclaredBytesGzipBombAndActualBytes_Issue4605()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var manyMembersArchive = Path.Combine(_tempRoot, "many_members.tar.gz");
+        using (var archive = File.Create(manyMembersArchive))
+        using (var gzip = new GZipStream(archive, CompressionLevel.SmallestSize))
+        using (var writer = new TarWriter(gzip, leaveOpen: false))
+        {
+            for (var i = 0; i < 3; i++)
+            {
+                using var data = new MemoryStream([unchecked((byte)i)]);
+                writer.WriteEntry(new PaxTarEntry(TarEntryType.RegularFile, $"file-{i}") { DataStream = data });
+            }
+        }
+
+        var (memberExitCode, memberStdout, memberStderr) = RunInstallerSnippet(
+            $$"""
+            ARCHIVE_MEMBER_MAX_COUNT=2
+            status=0
+            validate_archive_members "{{manyMembersArchive}}" || status=$?
+            printf 'STATUS:%s\n' "$status"
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, memberExitCode);
+        Assert.Contains("STATUS:1", memberStdout);
+        Assert.Contains("[archive_member_count_exceeded]", memberStderr);
+
+        var declaredArchive = Path.Combine(_tempRoot, "declared_bytes.tar.gz");
+        using (var archive = File.Create(declaredArchive))
+        using (var gzip = new GZipStream(archive, CompressionLevel.SmallestSize))
+        using (var writer = new TarWriter(gzip, leaveOpen: false))
+        using (var data = new MemoryStream(new byte[16]))
+            writer.WriteEntry(new PaxTarEntry(TarEntryType.RegularFile, "payload") { DataStream = data });
+
+        var (declaredExitCode, declaredStdout, declaredStderr) = RunInstallerSnippet(
+            $$"""
+            ARCHIVE_DECLARED_MAX_BYTES=8
+            status=0
+            validate_archive_members "{{declaredArchive}}" || status=$?
+            printf 'STATUS:%s\n' "$status"
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, declaredExitCode);
+        Assert.Contains("STATUS:1", declaredStdout);
+        Assert.Contains("[archive_declared_size_exceeded]", declaredStderr);
+
+        var gzipBombArchive = Path.Combine(_tempRoot, "gzip_bomb.tar.gz");
+        using (var archive = File.Create(gzipBombArchive))
+        using (var gzip = new GZipStream(archive, CompressionLevel.SmallestSize))
+        using (var writer = new TarWriter(gzip, leaveOpen: false))
+        using (var data = new MemoryStream(new byte[64 * 1024]))
+            writer.WriteEntry(new PaxTarEntry(TarEntryType.RegularFile, "zeros") { DataStream = data });
+
+        var (expandedExitCode, expandedStdout, expandedStderr) = RunInstallerSnippet(
+            $$"""
+            ARCHIVE_EXPANDED_STREAM_MAX_BYTES=1024
+            ARCHIVE_COMPRESSION_RATIO_MAX=1000000
+            status=0
+            validate_archive_members "{{gzipBombArchive}}" || status=$?
+            printf 'STATUS:%s\n' "$status"
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, expandedExitCode);
+        Assert.Contains("STATUS:1", expandedStdout);
+        Assert.Contains("[archive_expanded_size_exceeded]", expandedStderr);
+
+        var (gzipExitCode, gzipStdout, gzipStderr) = RunInstallerSnippet(
+            $$"""
+            ARCHIVE_EXPANDED_STREAM_MAX_BYTES=131072
+            ARCHIVE_COMPRESSION_RATIO_MAX=2
+            status=0
+            validate_archive_members "{{gzipBombArchive}}" || status=$?
+            printf 'STATUS:%s\n' "$status"
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, gzipExitCode);
+        Assert.Contains("STATUS:1", gzipStdout);
+        Assert.Contains("[archive_compression_ratio_exceeded]", gzipStderr);
+
+        var extractedDirectory = Path.Combine(_tempRoot, "oversized_extracted_payload");
+        Directory.CreateDirectory(extractedDirectory);
+        File.WriteAllText(Path.Combine(extractedDirectory, "payload"), "12345");
+        var (actualExitCode, actualStdout, actualStderr) = RunInstallerSnippet(
+            $$"""
+            VALIDATED_ARCHIVE_DECLARED_BYTES=5
+            EXTRACTED_PAYLOAD_MAX_BYTES=4
+            status=0
+            validate_extracted_payload_size "{{extractedDirectory}}" || status=$?
+            printf 'STATUS:%s\n' "$status"
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, actualExitCode);
+        Assert.Contains("STATUS:1", actualStdout);
+        Assert.Contains("[extracted_size_exceeded]", actualStderr);
+    }
+
+    [ProductionCliFact]
+    public void CurlHttpGet_RejectsOversizedDownloadedResponse_Issue4605()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var outputPath = Path.Combine(_tempRoot, "oversized_download.txt");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            curl() {
+                local output_path=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o) output_path="$2"; shift 2 ;;
+                        -w) shift 2 ;;
+                        *) shift ;;
+                    esac
+                done
+                printf '123456789' > "$output_path"
+                printf '200'
+            }
+
+            LATEST_RELEASE_RESPONSE_MAX_BYTES=8
+            curl_http_get "https://downloads.example.test/oversized" "{{outputPath}}" "oversized test response"
+            printf 'UNREACHABLE\n'
+            """);
+
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("UNREACHABLE", stdout);
+        Assert.Contains("exceeded the 8 byte limit", stderr);
+        Assert.Contains("[download_size_exceeded]", stderr);
+    }
+
+    [ProductionCliFact]
     public void DownloadAndInstall_ArchiveWithUnmanifestedFileFails()
     {
         if (OperatingSystem.IsWindows())

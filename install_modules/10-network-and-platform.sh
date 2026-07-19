@@ -608,6 +608,7 @@ curl_http_get() {
     local url="$1"
     local output_path="$2"
     local source_label="${3:-remote host}"
+    local max_bytes="${4:-$LATEST_RELEASE_RESPONSE_MAX_BYTES}"
     local http_code
     local curl_stderr
 
@@ -618,7 +619,18 @@ curl_http_get() {
     fi
     verify_temp_path_space "$curl_stderr"
 
-    if http_code="$(run_curl_with_optional_loopback_bypass "$url" -sSL -o "$output_path" -w '%{http_code}' "$url" 2>"$curl_stderr")"; then
+    if http_code="$(run_curl_with_optional_loopback_bypass "$url" -sSL --max-filesize "$max_bytes" -o "$output_path" -w '%{http_code}' "$url" 2>"$curl_stderr")"; then
+        local downloaded_bytes
+        if ! downloaded_bytes="$(file_size_bytes "$output_path")"; then
+            rm -f "$curl_stderr"
+            report_error "Failed to inspect downloaded byte count for ${source_label} at $url."
+            return 1
+        fi
+        if [ "${downloaded_bytes:-0}" -gt "$max_bytes" ]; then
+            rm -f "$curl_stderr"
+            report_error "Download from ${source_label} at $url exceeded the ${max_bytes} byte limit. [download_size_exceeded]"
+            return 1
+        fi
         rm -f "$curl_stderr"
         printf '%s' "$http_code"
         return 0
@@ -644,7 +656,9 @@ curl_http_get() {
             printf '%s\n' "$stderr_text" >&2
         fi
 
-        if [ "$curl_status" -eq 97 ] || { [ "$curl_status" -eq 1 ] && is_curl_protocol_rejection "$stderr_text"; }; then
+        if [ "$curl_status" -eq 63 ]; then
+            report_error "Download from ${source_label} at $url exceeded the ${max_bytes} byte limit (curl exit 63). [download_size_exceeded]"
+        elif [ "$curl_status" -eq 97 ] || { [ "$curl_status" -eq 1 ] && is_curl_protocol_rejection "$stderr_text"; }; then
             report_error "Installer protocol policy rejected the URL or redirect while fetching ${source_label} at $url. Public release and API traffic must remain HTTPS. [protocol_rejected]"
         elif [ "$curl_status" -eq 28 ]; then
             report_error "Installer network timeout while fetching ${source_label} at $url (curl exit 28). Check endpoint responsiveness or adjust the bounded CDIDX_NETWORK_* timeout settings. [network_timeout]"
@@ -680,7 +694,9 @@ fetch_latest_release_version() {
     verify_temp_path_space "$response_file"
 
     local http_code
-    if ! http_code="$(curl_http_get "$api_url" "$response_file" "$api_label")"; then
+    # Keep the transfer bounded while preserving the more specific 64 KiB
+    # latest-release parsing diagnostic below.
+    if ! http_code="$(curl_http_get "$api_url" "$response_file" "$api_label" "$RELEASE_METADATA_MAX_BYTES")"; then
         rm -f "$response_file"
         return 1
     fi

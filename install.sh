@@ -97,6 +97,15 @@ CURL_LOW_SPEED_LIMIT_BYTES="${CDIDX_NETWORK_LOW_SPEED_LIMIT_BYTES:-1024}"
 CURL_LOW_SPEED_TIME_SECONDS="${CDIDX_NETWORK_LOW_SPEED_TIME_SECONDS:-30}"
 CURL_RETRY_COUNT="${CDIDX_NETWORK_RETRY_COUNT:-2}"
 CURL_RETRY_DELAY_SECONDS="${CDIDX_NETWORK_RETRY_DELAY_SECONDS:-1}"
+RELEASE_ARCHIVE_MAX_BYTES=536870912
+RELEASE_METADATA_MAX_BYTES=1048576
+ARCHIVE_MEMBER_MAX_COUNT=4096
+ARCHIVE_DECLARED_MAX_BYTES=1073741824
+ARCHIVE_EXPANDED_STREAM_MAX_BYTES=1207959552
+ARCHIVE_COMPRESSION_RATIO_MAX=250
+EXTRACTED_PAYLOAD_MAX_BYTES=1073741824
+VALIDATED_ARCHIVE_DECLARED_BYTES=0
+VALIDATED_ARCHIVE_MEMBER_COUNT=0
 VERIFY_POLICY="${CDIDX_VERIFY_POLICY:-compat}"
 REQUIRE_ATTESTATION="${CDIDX_REQUIRE_ATTESTATION:-0}"
 STRICT_VERIFY="${CDIDX_STRICT_VERIFY:-0}"
@@ -940,6 +949,7 @@ curl_http_get() {
     local url="$1"
     local output_path="$2"
     local source_label="${3:-remote host}"
+    local max_bytes="${4:-$LATEST_RELEASE_RESPONSE_MAX_BYTES}"
     local http_code
     local curl_stderr
 
@@ -950,7 +960,18 @@ curl_http_get() {
     fi
     verify_temp_path_space "$curl_stderr"
 
-    if http_code="$(run_curl_with_optional_loopback_bypass "$url" -sSL -o "$output_path" -w '%{http_code}' "$url" 2>"$curl_stderr")"; then
+    if http_code="$(run_curl_with_optional_loopback_bypass "$url" -sSL --max-filesize "$max_bytes" -o "$output_path" -w '%{http_code}' "$url" 2>"$curl_stderr")"; then
+        local downloaded_bytes
+        if ! downloaded_bytes="$(file_size_bytes "$output_path")"; then
+            rm -f "$curl_stderr"
+            report_error "Failed to inspect downloaded byte count for ${source_label} at $url."
+            return 1
+        fi
+        if [ "${downloaded_bytes:-0}" -gt "$max_bytes" ]; then
+            rm -f "$curl_stderr"
+            report_error "Download from ${source_label} at $url exceeded the ${max_bytes} byte limit. [download_size_exceeded]"
+            return 1
+        fi
         rm -f "$curl_stderr"
         printf '%s' "$http_code"
         return 0
@@ -976,7 +997,9 @@ curl_http_get() {
             printf '%s\n' "$stderr_text" >&2
         fi
 
-        if [ "$curl_status" -eq 97 ] || { [ "$curl_status" -eq 1 ] && is_curl_protocol_rejection "$stderr_text"; }; then
+        if [ "$curl_status" -eq 63 ]; then
+            report_error "Download from ${source_label} at $url exceeded the ${max_bytes} byte limit (curl exit 63). [download_size_exceeded]"
+        elif [ "$curl_status" -eq 97 ] || { [ "$curl_status" -eq 1 ] && is_curl_protocol_rejection "$stderr_text"; }; then
             report_error "Installer protocol policy rejected the URL or redirect while fetching ${source_label} at $url. Public release and API traffic must remain HTTPS. [protocol_rejected]"
         elif [ "$curl_status" -eq 28 ]; then
             report_error "Installer network timeout while fetching ${source_label} at $url (curl exit 28). Check endpoint responsiveness or adjust the bounded CDIDX_NETWORK_* timeout settings. [network_timeout]"
@@ -1012,7 +1035,9 @@ fetch_latest_release_version() {
     verify_temp_path_space "$response_file"
 
     local http_code
-    if ! http_code="$(curl_http_get "$api_url" "$response_file" "$api_label")"; then
+    # Keep the transfer bounded while preserving the more specific 64 KiB
+    # latest-release parsing diagnostic below.
+    if ! http_code="$(curl_http_get "$api_url" "$response_file" "$api_label" "$RELEASE_METADATA_MAX_BYTES")"; then
         rm -f "$response_file"
         return 1
     fi
@@ -1120,15 +1145,131 @@ calculate_sha256() {
 
 validate_archive_members() {
     local archive="$1"
-    local member
+    local names_file="${archive}.member-names"
+    local metadata_file="${archive}.member-metadata"
+    local archive_bytes expanded_stream_bytes expanded_probe_limit
+    local member name_count metadata_count metadata type size declared_bytes
 
-    tar tzf "$archive" | while IFS= read -r member || [ -n "$member" ]; do
+    if ! archive_bytes="$(file_size_bytes "$archive")"; then
+        report_error "Failed to inspect release archive byte count before extraction."
+        return 1
+    fi
+    if [ "${archive_bytes:-0}" -gt "$RELEASE_ARCHIVE_MAX_BYTES" ]; then
+        report_error "Release archive exceeds the ${RELEASE_ARCHIVE_MAX_BYTES} compressed-byte limit before extraction. [archive_download_size_exceeded]"
+        return 1
+    fi
+
+    expanded_probe_limit=$((ARCHIVE_EXPANDED_STREAM_MAX_BYTES + 1))
+    expanded_stream_bytes="$(
+        set +o pipefail
+        gzip -dc "$archive" 2>/dev/null | head -c "$expanded_probe_limit" | wc -c | tr -d '[:space:]'
+    )"
+    if [ "${expanded_stream_bytes:-0}" -gt "$ARCHIVE_EXPANDED_STREAM_MAX_BYTES" ]; then
+        report_error "Release archive expanded stream exceeds the ${ARCHIVE_EXPANDED_STREAM_MAX_BYTES} byte limit. [archive_expanded_size_exceeded]"
+        return 1
+    fi
+    if [ "${archive_bytes:-0}" -gt 0 ] && [ "${expanded_stream_bytes:-0}" -gt $((archive_bytes * ARCHIVE_COMPRESSION_RATIO_MAX)) ]; then
+        report_error "Release archive exceeds the ${ARCHIVE_COMPRESSION_RATIO_MAX}:1 compression-ratio limit. [archive_compression_ratio_exceeded]"
+        return 1
+    fi
+
+    if ! tar tzf "$archive" > "$names_file"; then
+        rm -f "$names_file" "$metadata_file"
+        report_error "Failed to list release archive member names before extraction."
+        return 1
+    fi
+
+    name_count="$(wc -l < "$names_file" | tr -d '[:space:]')"
+    if [ "${name_count:-0}" -gt "$ARCHIVE_MEMBER_MAX_COUNT" ]; then
+        rm -f "$names_file" "$metadata_file"
+        report_error "Release archive contains ${name_count} members, exceeding the ${ARCHIVE_MEMBER_MAX_COUNT} member limit. [archive_member_count_exceeded]"
+        return 1
+    fi
+
+    while IFS= read -r member || [ -n "$member" ]; do
         case "$member" in
             ""|/*|..|../*|*/../*|*/.. )
-                error "Release archive contains unsafe member path before extraction: ${member:-<empty>}"
+                rm -f "$names_file" "$metadata_file"
+                report_error "Release archive contains unsafe member path before extraction: ${member:-<empty>}"
+                return 1
                 ;;
         esac
-    done
+    done < "$names_file"
+
+    if ! tar tvzf "$archive" > "$metadata_file"; then
+        rm -f "$names_file" "$metadata_file"
+        report_error "Failed to inspect release archive member metadata before extraction."
+        return 1
+    fi
+
+    metadata_count=0
+    declared_bytes=0
+    while IFS= read -r metadata || [ -n "$metadata" ]; do
+        metadata_count=$((metadata_count + 1))
+        type="${metadata%"${metadata#?}"}"
+        case "$type" in
+            -|d) ;;
+            l|h)
+                rm -f "$names_file" "$metadata_file"
+                report_error "Release archive contains a link member; symlinks and hardlinks are not allowed (metadata: ${metadata}). [archive_link_rejected]"
+                return 1
+                ;;
+            *)
+                rm -f "$names_file" "$metadata_file"
+                report_error "Release archive contains unsupported member type '${type:-<empty>}' (metadata: ${metadata}). [archive_member_type_rejected]"
+                return 1
+                ;;
+        esac
+
+        if [ "$type" = "-" ]; then
+            size="$(printf '%s\n' "$metadata" | awk '{ if (index($2, "/") > 0) print $3; else print $5 }')"
+            case "$size" in
+                ""|*[!0-9]*)
+                    rm -f "$names_file" "$metadata_file"
+                    report_error "Could not parse declared size for a regular release archive member (metadata: ${metadata})."
+                    return 1
+                    ;;
+            esac
+            declared_bytes=$((declared_bytes + size))
+            if [ "$declared_bytes" -gt "$ARCHIVE_DECLARED_MAX_BYTES" ]; then
+                rm -f "$names_file" "$metadata_file"
+                report_error "Release archive declares ${declared_bytes} regular-file bytes, exceeding the ${ARCHIVE_DECLARED_MAX_BYTES} byte limit. [archive_declared_size_exceeded]"
+                return 1
+            fi
+        fi
+    done < "$metadata_file"
+
+    if [ "$metadata_count" -ne "$name_count" ]; then
+        rm -f "$names_file" "$metadata_file"
+        report_error "Release archive member-name and metadata counts differ (${name_count} names versus ${metadata_count} metadata rows); refusing ambiguous archive entries."
+        return 1
+    fi
+
+    VALIDATED_ARCHIVE_MEMBER_COUNT="$metadata_count"
+    VALIDATED_ARCHIVE_DECLARED_BYTES="$declared_bytes"
+    rm -f "$names_file" "$metadata_file"
+    return 0
+}
+
+validate_extracted_payload_size() {
+    local extract_dir="$1"
+    local actual_bytes unexpected_entry
+
+    unexpected_entry="$(find "$extract_dir" ! -type f ! -type d -print -quit)"
+    if [ -n "$unexpected_entry" ]; then
+        report_error "Extracted release payload contains an unsupported filesystem entry: ${unexpected_entry}. [extracted_member_type_rejected]"
+        return 1
+    fi
+
+    actual_bytes="$(find "$extract_dir" -type f -exec wc -c {} \; | awk '{ total += $1 } END { print total + 0 }')"
+    if [ "${actual_bytes:-0}" -gt "$EXTRACTED_PAYLOAD_MAX_BYTES" ]; then
+        report_error "Extracted release payload contains ${actual_bytes} file bytes, exceeding the ${EXTRACTED_PAYLOAD_MAX_BYTES} byte limit. [extracted_size_exceeded]"
+        return 1
+    fi
+    if [ "${actual_bytes:-0}" -ne "$VALIDATED_ARCHIVE_DECLARED_BYTES" ]; then
+        report_error "Extracted release payload byte count (${actual_bytes}) differs from the validated archive declaration (${VALIDATED_ARCHIVE_DECLARED_BYTES}). [extracted_size_mismatch]"
+        return 1
+    fi
 }
 
 verify_payload_manifest() {
@@ -1337,11 +1478,12 @@ download_release_file() {
     local url="$1"
     local output_path="$2"
     local description="$3"
+    local max_bytes="${4:-$RELEASE_ARCHIVE_MAX_BYTES}"
     local release_host_label
     release_host_label="$(release_host_diagnostic_label)"
 
     local http_code
-    if ! http_code="$(curl_http_get "$url" "$output_path" "$release_host_label")"; then
+    if ! http_code="$(curl_http_get "$url" "$output_path" "$release_host_label" "$max_bytes")"; then
         return 1
     fi
 
@@ -1377,11 +1519,12 @@ download_release_file() {
 download_optional_release_file() {
     local url="$1"
     local output_path="$2"
+    local max_bytes="${3:-$RELEASE_METADATA_MAX_BYTES}"
     local release_host_label
     release_host_label="$(release_host_diagnostic_label)"
 
     local http_code
-    if ! http_code="$(curl_http_get "$url" "$output_path" "$release_host_label")"; then
+    if ! http_code="$(curl_http_get "$url" "$output_path" "$release_host_label" "$max_bytes")"; then
         return 1
     fi
 
@@ -1495,6 +1638,8 @@ download_and_install() {
     need_cmd tar
     need_cmd mktemp
     need_cmd awk
+    need_cmd find
+    need_cmd gzip
 
     local archive_name="CodeIndex-${RID}.tar.gz"
     local base_url
@@ -1508,20 +1653,23 @@ download_and_install() {
     if ! tmpdir="$(mktemp -d)"; then
         error "Failed to create temporary working directory for install."
     fi
+    if ! chmod 700 "$tmpdir"; then
+        error "Failed to restrict installer working directory permissions."
+    fi
     verify_temp_path_space "$tmpdir"
     TMPDIR_CLEANUP="$tmpdir"
 
     info "Downloading ${archive_name}..."
-    download_release_file "$archive_url" "${tmpdir}/${archive_name}" "${archive_name}"
+    download_release_file "$archive_url" "${tmpdir}/${archive_name}" "${archive_name}" "$RELEASE_ARCHIVE_MAX_BYTES"
     verify_release_attestation "${tmpdir}/${archive_name}" "$archive_name"
 
     info "Downloading checksums..."
-    download_release_file "$checksums_url" "${tmpdir}/sha256sums.txt" "sha256sums.txt"
+    download_release_file "$checksums_url" "${tmpdir}/sha256sums.txt" "sha256sums.txt" "$RELEASE_METADATA_MAX_BYTES"
     verify_release_attestation "${tmpdir}/sha256sums.txt" "sha256sums.txt"
 
     if checksum_signature_supported; then
         info "Downloading checksum signature..."
-        if download_optional_release_file "$checksums_signature_url" "${tmpdir}/sha256sums.txt.asc"; then
+        if download_optional_release_file "$checksums_signature_url" "${tmpdir}/sha256sums.txt.asc" "$RELEASE_METADATA_MAX_BYTES"; then
             verify_checksum_signature "${tmpdir}/sha256sums.txt" "${tmpdir}/sha256sums.txt.asc"
         elif [ "$STRICT_VERIFY" = "1" ]; then
             error "Failed to download sha256sums.txt.asc while strict verification is enabled."
@@ -1551,10 +1699,17 @@ download_and_install() {
     # 展開用サブディレクトリを使い、アーカイブや checksum ファイルと混在させない。
     local extract_dir="${tmpdir}/extract"
     mkdir -p "$extract_dir"
+    if ! chmod 700 "$extract_dir"; then
+        error "Failed to restrict release extraction directory permissions."
+    fi
     info "Checking archive member paths..."
     validate_archive_members "${tmpdir}/${archive_name}"
     info "Extracting..."
-    tar xzf "${tmpdir}/${archive_name}" -C "$extract_dir"
+    (
+        umask 077
+        tar -xzkf "${tmpdir}/${archive_name}" -C "$extract_dir" --no-same-owner --no-same-permissions
+    )
+    validate_extracted_payload_size "$extract_dir"
     info "Verifying extracted payload..."
     verify_payload_manifest "$extract_dir"
 
