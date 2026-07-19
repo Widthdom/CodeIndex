@@ -1641,11 +1641,24 @@ public partial class DbReader : IDisposable
         if (_workspaceSupportedReferenceLanguages != null)
             return _workspaceSupportedReferenceLanguages;
 
-        var workspaceRoot = TryGetMetaString(_conn, DbContext.IndexedProjectRootMetaKey);
+        var workspaceRoot = GetIndexedProjectRoot();
         ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(workspaceRoot);
         _workspaceSupportedReferenceLanguages = ReferenceExtractor.GetSupportedLanguages(workspaceRoot);
         return _workspaceSupportedReferenceLanguages;
     }
+
+    internal string? GetIndexedProjectRoot()
+        => TryGetMetaString(_conn, DbContext.IndexedProjectRootMetaKey);
+
+    internal bool SupportsReferenceLanguage(string? lang)
+        => ReferenceExtractor.SupportsLanguage(lang, GetWorkspaceSupportedReferenceLanguages());
+
+    internal bool? SupportsSymbolGraph(string? lang, string? kind, string? containerKind)
+        => ReferenceExtractor.SupportsSymbolGraph(
+            lang,
+            kind,
+            containerKind,
+            GetWorkspaceSupportedReferenceLanguages());
 
     private static QueryCountResult ExecuteCountSummary(SqliteCommand cmd)
     {

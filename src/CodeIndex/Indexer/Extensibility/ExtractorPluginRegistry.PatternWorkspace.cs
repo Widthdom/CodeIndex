@@ -29,6 +29,8 @@ public static partial class ExtractorPluginRegistry
         internal int PluginAssemblyCount { get; set; }
         internal bool Retired { get; private set; }
         internal long LastAccessSequence { get; set; }
+        internal long ReloadSequence { get; set; }
+        internal long WorkspaceGeneration { get; set; }
 
         internal ExtractorWorkspaceSnapshot GetSnapshot()
             => Volatile.Read(ref snapshot);
@@ -179,8 +181,11 @@ public static partial class ExtractorPluginRegistry
 
     private static readonly PatternWorkspaceState DefaultPatternWorkspace = new(workspaceRoot: null);
     private static readonly List<PatternWorkspaceState> PatternWorkspaces = [];
+    private static readonly List<PatternWorkspaceState> PendingPatternWorkspaces = [];
     private static UserExtractorSnapshot userExtractorSnapshot = UserExtractorSnapshot.Empty;
     private static long workspaceAccessSequence;
+    private static long workspaceReloadSequence;
+    private static long workspaceGeneration;
 
     private static PatternWorkspaceState CreatePatternWorkspace(string workspaceRoot)
     {
@@ -190,14 +195,57 @@ public static partial class ExtractorPluginRegistry
         return state;
     }
 
-    private static void ReplacePatternWorkspace(PatternWorkspaceState state)
+    private static PatternWorkspaceState StagePatternWorkspace(string workspaceRoot)
+    {
+        PatternWorkspaceState state;
+        List<PatternWorkspaceState> superseded;
+        lock (Gate)
+        {
+            state = CreatePatternWorkspace(workspaceRoot);
+            state.ReloadSequence = ++workspaceReloadSequence;
+            state.WorkspaceGeneration = workspaceGeneration;
+            superseded = PendingPatternWorkspaces
+                .Where(candidate => PathCasing.PathsEqual(candidate.WorkspaceRoot!, workspaceRoot))
+                .ToList();
+            foreach (var candidate in superseded)
+                PendingPatternWorkspaces.Remove(candidate);
+            while (PendingPatternWorkspaces.Count >= MaxRetainedWorkspaceSnapshots)
+            {
+                var oldest = PendingPatternWorkspaces.MinBy(candidate => candidate.ReloadSequence)!;
+                PendingPatternWorkspaces.Remove(oldest);
+                superseded.Add(oldest);
+            }
+            PendingPatternWorkspaces.Add(state);
+        }
+
+        foreach (var candidate in superseded.Distinct())
+            candidate.Retire();
+        return state;
+    }
+
+    private static bool TryReplacePatternWorkspace(PatternWorkspaceState state)
     {
         PatternWorkspaceState? replaced = null;
         PatternWorkspaceState? evicted = null;
+        var accepted = false;
         lock (Gate)
         {
+            var wasPending = PendingPatternWorkspaces.Remove(state);
             var index = PatternWorkspaces.FindIndex(existing =>
                 PathCasing.PathsEqual(existing.WorkspaceRoot!, state.WorkspaceRoot!));
+            var newerPendingExists = PendingPatternWorkspaces.Any(candidate =>
+                PathCasing.PathsEqual(candidate.WorkspaceRoot!, state.WorkspaceRoot!)
+                && candidate.ReloadSequence > state.ReloadSequence);
+            var newerActiveExists = index >= 0
+                && PatternWorkspaces[index].ReloadSequence > state.ReloadSequence;
+            if (!wasPending
+                || state.WorkspaceGeneration != workspaceGeneration
+                || newerPendingExists
+                || newerActiveExists)
+            {
+                return false;
+            }
+
             if (index >= 0)
             {
                 replaced = PatternWorkspaces[index];
@@ -208,11 +256,20 @@ public static partial class ExtractorPluginRegistry
 
             TouchPatternWorkspace(state);
             evicted = TrimPatternWorkspaces(state);
+            accepted = true;
         }
 
         replaced?.Retire();
         if (evicted != null && !ReferenceEquals(evicted, replaced))
             evicted.Retire();
+        return accepted;
+    }
+
+    private static void AbandonPatternWorkspace(PatternWorkspaceState state)
+    {
+        lock (Gate)
+            PendingPatternWorkspaces.Remove(state);
+        state.Retire();
     }
 
     private static PatternWorkspaceState GetOrCreatePatternWorkspace(string workspaceRoot)
@@ -304,9 +361,14 @@ public static partial class ExtractorPluginRegistry
         PatternWorkspaceState[] workspaces;
         lock (Gate)
         {
-            workspaces = PatternWorkspaces.ToArray();
+            workspaces = PatternWorkspaces
+                .Concat(PendingPatternWorkspaces)
+                .Distinct()
+                .ToArray();
             PatternWorkspaces.Clear();
+            PendingPatternWorkspaces.Clear();
             workspaceAccessSequence = 0;
+            workspaceGeneration++;
         }
 
         foreach (var workspace in workspaces)

@@ -327,8 +327,8 @@ public static partial class QueryCommandRunner
                         Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", BuildFoldNotReadyWarning(status.FoldReadyReason, BuildFoldBackfillCommand(options.DbPath, options.DbPathExplicit), BuildFoldRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit))));
                     }
                 }
-                var totalLangs = FileIndexer.GetLanguageExtensions().Values.Distinct().Count();
-                var symbolLangs = SymbolExtractor.GetSupportedLanguages().Count;
+                var totalLangs = FileIndexer.GetLanguageExtensions(status.ProjectRoot).Values.Distinct().Count();
+                var symbolLangs = SymbolExtractor.GetSupportedLanguages(status.ProjectRoot).Count;
                 Console.WriteLine(ConsoleUi.FormatSummaryLine("Support", $"{totalLangs} detected, {symbolLangs} with symbols, {status.GraphSupportedLanguages?.Count ?? 0} with graph"));
             }
 

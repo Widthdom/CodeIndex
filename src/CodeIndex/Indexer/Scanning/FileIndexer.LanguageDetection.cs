@@ -227,7 +227,7 @@ public partial class FileIndexer
     internal static IReadOnlyDictionary<string, string> GetLanguageExtensions(string? workspaceRoot)
     {
         var pluginExtensions = ExtractorPluginRegistry.GetLanguageExtensions(workspaceRoot);
-        var languageMapOverrides = LanguageMapOverrides.LoadEffectiveMap();
+        var languageMapOverrides = LanguageMapOverrides.LoadEffectiveMap(workspaceRoot);
         var capacity = LangMap.Count
             + DisplayOnlyLanguageExtensions.Length
             + FileNameMap.Count

@@ -32,6 +32,7 @@ namespace CodeIndex.Mcp;
 public partial class McpServer : IDisposable
 {
     private static int s_nextClientRequestId;
+    private static readonly object s_serverLifecycleGate = new();
     private static int s_activeServerCount;
     private readonly string _dbPath;
     private readonly bool _dbPathExplicit;
@@ -355,7 +356,8 @@ public partial class McpServer : IDisposable
             : maxConcurrency + DefaultMaxConcurrentFrameBacklog;
         _requestTimeout = DefaultRequestTimeout;
         _keepAliveInterval = ReadKeepAliveIntervalFromEnvironment();
-        Interlocked.Increment(ref s_activeServerCount);
+        lock (s_serverLifecycleGate)
+            s_activeServerCount++;
     }
 
     /// <summary>
@@ -6409,17 +6411,17 @@ public partial class McpServer : IDisposable
             return;
         _disposed = true;
         CloseSharedDb();
-        if (Interlocked.Decrement(ref s_activeServerCount) == 0)
-            ExtractorPluginRegistry.ReleaseWorkspaceSnapshots();
+        lock (s_serverLifecycleGate)
+            s_activeServerCount--;
         var shutdownCancellationTask = RequestShutdownCancellation();
         if (shutdownCancellationTask.IsCompleted)
         {
-            DisposeShutdownCtsOnce();
+            CompleteShutdownCleanup();
         }
         else
         {
             _ = shutdownCancellationTask.ContinueWith(
-                static (_, state) => ((McpServer)state!).DisposeShutdownCtsOnce(),
+                static (_, state) => ((McpServer)state!).CompleteShutdownCleanup(),
                 this,
                 CancellationToken.None,
                 TaskContinuationOptions.ExecuteSynchronously,
@@ -6432,6 +6434,16 @@ public partial class McpServer : IDisposable
         // `_sharedDbWriteGate` と同様に dispose せず、遅延完了時の例外を防ぐ (#3999, #4543)。
         _textWriterGate.Dispose();
         GC.SuppressFinalize(this);
+    }
+
+    private void CompleteShutdownCleanup()
+    {
+        lock (s_serverLifecycleGate)
+        {
+            if (s_activeServerCount == 0)
+                ExtractorPluginRegistry.ReleaseWorkspaceSnapshots();
+        }
+        DisposeShutdownCtsOnce();
     }
 
     private void DisposeShutdownCtsOnce()

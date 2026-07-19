@@ -165,7 +165,7 @@ public partial class McpServer
             {
                 AddSymbolRecoveryHint(payload, query, "impact_analysis", lang, null, PathEcho(pathPatterns));
                 AddFreshnessHint(payload, reader);
-                var graphReason = ReferenceExtractor.BuildGraphSupportReason(lang, lang != null ? ReferenceExtractor.SupportsLanguage(lang) : null);
+                var graphReason = ReferenceExtractor.BuildGraphSupportReason(lang, lang != null ? reader.SupportsReferenceLanguage(lang) : null);
                 if (graphReason != null)
                     payload["graph_support_reason"] = graphReason;
                 if (!analysis.GraphTableAvailable)

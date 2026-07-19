@@ -30,12 +30,15 @@ public static partial class QueryCommandRunner
         var json = options.Json || options.CountOnly || options.OutputFormat == OutputFormatCount || options.SummaryOnly;
 
         var loadIndexedCounts = options.LanguagesIndexedOnly || ShouldLoadLanguageIndexedCounts(options);
-        if (options.DbPathExplicit || loadIndexedCounts)
+        var configuredDatabaseAvailable = options.DbPathExplicit
+            || options.DbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
+            || File.Exists(LongPath.EnsureWindowsPrefix(options.DbPath));
+        if (configuredDatabaseAvailable || loadIndexedCounts)
         {
             return WithDb(options, jsonOptions, reader =>
             {
                 var status = reader.GetStatus();
-                var sorted = BuildLanguageCatalog(status.ProjectRoot);
+                var sorted = BuildLanguageCatalog(reader.GetIndexedProjectRoot());
                 var indexedLanguageCounts = loadIndexedCounts ? status.Languages : null;
                 return WriteLanguages(SelectLanguages(sorted, indexedLanguageCounts), sorted.Count, indexedLanguageCounts);
             });

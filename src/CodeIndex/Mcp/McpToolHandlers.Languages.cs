@@ -136,13 +136,19 @@ public partial class McpServer
             return CreateToolResult(id, summary, payload);
         }
 
-        if (!indexedOnly)
+        var configuredDatabaseAvailable = _dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(_dbPath, ":memory:", StringComparison.Ordinal)
+            || File.Exists(LongPath.EnsureWindowsPrefix(_dbPath));
+        if (!indexedOnly && !configuredDatabaseAvailable)
             return BuildResponse(null, workspaceRoot: null);
 
         return WithDbReader(id, args, reader =>
         {
             var status = reader.GetStatus();
-            return BuildResponse(new HashSet<string>(status.Languages.Keys, StringComparer.Ordinal), status.ProjectRoot);
+            var indexedLanguages = indexedOnly
+                ? new HashSet<string>(status.Languages.Keys, StringComparer.Ordinal)
+                : null;
+            return BuildResponse(indexedLanguages, reader.GetIndexedProjectRoot());
         });
     }
 

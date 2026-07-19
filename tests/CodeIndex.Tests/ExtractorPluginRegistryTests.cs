@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.Loader;
 using CodeIndex.Cli;
+using CodeIndex.Database;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 
@@ -1063,6 +1064,108 @@ public class ExtractorPluginRegistryTests
     }
 
     [Fact]
+    public void WorkspaceReload_CannotCommitAfterSnapshotRelease_Issue4602()
+    {
+        var workspace = TestProjectHelper.CreateTempProject("extractor_registry_snapshot_release_race_4602");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
+            using var loaded = new ManualResetEventSlim();
+            using var allowCommit = new ManualResetEventSlim();
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "1");
+                var pluginPath = Path.Combine(workspace, ".cdidx", "plugins", "snapshot-plugin.dll");
+                Directory.CreateDirectory(Path.GetDirectoryName(pluginPath)!);
+                File.Copy(Assembly.GetExecutingAssembly().Location, pluginPath);
+                ExtractorPluginRegistry.WorkspacePluginLoadedBeforeCommitForTesting = () =>
+                {
+                    loaded.Set();
+                    allowCommit.Wait();
+                };
+
+                var generation = ExtractorPluginRegistry.WorkspaceGenerationForTests();
+                var reloading = new Thread(() => ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(workspace));
+                reloading.Start();
+                Assert.True(loaded.Wait(TimeSpan.FromSeconds(10)));
+
+                var releasing = new Thread(ExtractorPluginRegistry.ReleaseWorkspaceSnapshots);
+                releasing.Start();
+                Assert.True(SpinWait.SpinUntil(
+                    () => ExtractorPluginRegistry.WorkspaceGenerationForTests() > generation,
+                    TimeSpan.FromSeconds(10)));
+                allowCommit.Set();
+
+                Assert.True(reloading.Join(TimeSpan.FromSeconds(10)));
+                Assert.True(releasing.Join(TimeSpan.FromSeconds(10)));
+                Assert.Equal(0, ExtractorPluginRegistry.WorkspaceSnapshotCountForTests());
+                Assert.Equal(0, ExtractorPluginRegistry.GetStatusSnapshot(workspace).RetainedLoadContextCount);
+                Assert.False(ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", workspace, out _));
+            }
+            finally
+            {
+                allowCommit.Set();
+                ExtractorPluginRegistry.WorkspacePluginLoadedBeforeCommitForTesting = null;
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(workspace);
+            }
+        }
+    }
+
+    [Fact]
+    public void WorkspaceReload_OlderGenerationCannotOverwriteNewerReload_Issue4602()
+    {
+        var workspace = TestProjectHelper.CreateTempProject("extractor_registry_snapshot_reload_generation_4602");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
+            using var loaded = new ManualResetEventSlim();
+            using var allowCommit = new ManualResetEventSlim();
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                env.Set(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable, "1");
+                var pluginPath = Path.Combine(workspace, ".cdidx", "plugins", "snapshot-plugin.dll");
+                Directory.CreateDirectory(Path.GetDirectoryName(pluginPath)!);
+                File.Copy(Assembly.GetExecutingAssembly().Location, pluginPath);
+                ExtractorPluginRegistry.WorkspacePluginLoadedBeforeCommitForTesting = () =>
+                {
+                    loaded.Set();
+                    allowCommit.Wait();
+                };
+
+                var olderReload = new Thread(() => ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(workspace));
+                olderReload.Start();
+                Assert.True(loaded.Wait(TimeSpan.FromSeconds(10)));
+                var olderSequence = ExtractorPluginRegistry.WorkspaceReloadSequenceForTests();
+
+                ExtractorPluginRegistry.WorkspacePluginLoadedBeforeCommitForTesting = null;
+                File.Delete(pluginPath);
+                var newerReload = new Thread(() => ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(workspace));
+                newerReload.Start();
+                Assert.True(SpinWait.SpinUntil(
+                    () => ExtractorPluginRegistry.WorkspaceReloadSequenceForTests() > olderSequence,
+                    TimeSpan.FromSeconds(10)));
+                allowCommit.Set();
+
+                Assert.True(olderReload.Join(TimeSpan.FromSeconds(10)));
+                Assert.True(newerReload.Join(TimeSpan.FromSeconds(10)));
+                Assert.Equal(1, ExtractorPluginRegistry.WorkspaceSnapshotCountForTests());
+                Assert.Equal(0, ExtractorPluginRegistry.GetStatusSnapshot(workspace).RetainedLoadContextCount);
+                Assert.False(ExtractorPluginRegistry.TryGetSymbolExtractor("collectibledsl", workspace, out _));
+            }
+            finally
+            {
+                allowCommit.Set();
+                ExtractorPluginRegistry.WorkspacePluginLoadedBeforeCommitForTesting = null;
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(workspace);
+            }
+        }
+    }
+
+    [Fact]
     public void WorkspaceReferenceLanguages_AreResolvedFromTheActiveSnapshot_Issue4602()
     {
         var workspaceA = TestProjectHelper.CreateTempProject("extractor_registry_reference_languages_a_4602");
@@ -1089,6 +1192,62 @@ public class ExtractorPluginRegistryTests
                 ExtractorPluginRegistry.ResetForTests();
                 TestProjectHelper.DeleteDirectory(workspaceA);
                 TestProjectHelper.DeleteDirectory(workspaceB);
+            }
+        }
+    }
+
+    [Fact]
+    public void DbReader_ExplicitLanguageSupportUsesIndexedWorkspaceSnapshot_Issue4602()
+    {
+        var workspace = TestProjectHelper.CreateTempProject("extractor_registry_db_reference_language_4602");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.RegisterForWorkspaceForTests(
+                    workspace,
+                    new SnapshotReferenceExtractor("workspacereference", "workspace-reference"));
+                var dbPath = TestProjectHelper.CreateProjectDb(workspace);
+                using (var writeDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                {
+                    var writer = new DbWriter(writeDb.Connection);
+                    var fileId = writer.UpsertFile(new FileRecord
+                    {
+                        Path = "sample.shared",
+                        Lang = "workspacereference",
+                        Lines = 1,
+                        Modified = new DateTime(2026, 7, 19, 0, 0, 0, DateTimeKind.Utc),
+                    });
+                    writer.InsertSymbols([
+                        new SymbolRecord
+                        {
+                            FileId = fileId,
+                            Kind = "function",
+                            Name = "WorkspaceTarget",
+                            Line = 1,
+                            StartLine = 1,
+                            EndLine = 1,
+                        },
+                    ]);
+                    writer.MarkGraphReady();
+                }
+
+                using var db = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+                db.TryMigrateForRead();
+                using var reader = new DbReader(db.Connection, db.IsReadOnly);
+
+                Assert.False(CodeIndex.Indexer.ReferenceExtractor.SupportsLanguage("workspacereference"));
+                Assert.True(reader.SupportsReferenceLanguage("workspacereference"));
+                Assert.True(reader.SupportsSymbolGraph("workspacereference", "function", null));
+                Assert.Single(reader.GetUnusedSymbols(10, null, "workspacereference", null, null, false));
+                Assert.Equal(1, reader.CountUnusedSymbols(null, "workspacereference", null, null, false).Count);
+                Assert.True(reader.AnalyzeSymbol("WorkspaceTarget", lang: "workspacereference", exact: true).GraphSupported);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(workspace);
             }
         }
     }

@@ -422,7 +422,7 @@ public partial class DbReader
         // symbol_references が無いレガシー read-only DB では全シンボルが未使用扱いになってしまうため、
         // ノイズを返すより空を返す。
         if (!_hasReferencesTable) return new List<UnusedSymbolResult>();
-        if (lang != null && !ReferenceExtractor.SupportsLanguage(lang))
+        if (lang != null && !SupportsReferenceLanguage(lang))
             return [];
         // Restrict to graph-supported languages to avoid false positives
         // (unsupported languages have no references indexed, so all symbols appear unused)
@@ -1515,7 +1515,7 @@ public partial class DbReader
     {
         if (!_hasReferencesTable)
             return EmptyUnusedCountResult();
-        if (lang != null && !ReferenceExtractor.SupportsLanguage(lang))
+        if (lang != null && !SupportsReferenceLanguage(lang))
             return EmptyUnusedCountResult();
         if (!ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePathPatterns, excludeTests))
             return CountUnusedSymbolsDetailedWithoutSqlResolver(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters, bucketFilter, minConfidence, resultFilter);
@@ -1716,7 +1716,7 @@ public partial class DbReader
     {
         if (!_hasReferencesTable)
             return new QueryCountResult(0, 0);
-        if (lang != null && !ReferenceExtractor.SupportsLanguage(lang))
+        if (lang != null && !SupportsReferenceLanguage(lang))
             return new QueryCountResult(0, 0);
         if (bucketFilter != null || minConfidence != null)
             return CountFilteredUnusedSymbols(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters, bucketFilter, minConfidence);

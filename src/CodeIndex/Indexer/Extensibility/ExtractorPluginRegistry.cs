@@ -253,6 +253,18 @@ public static partial class ExtractorPluginRegistry
             return PatternWorkspaces.Count;
     }
 
+    internal static long WorkspaceGenerationForTests()
+    {
+        lock (Gate)
+            return workspaceGeneration;
+    }
+
+    internal static long WorkspaceReloadSequenceForTests()
+    {
+        lock (Gate)
+            return workspaceReloadSequence;
+    }
+
     internal static IReadOnlyList<AssemblyLoadContext> WorkspacePluginLoadContextsForTests(string workspaceRoot)
     {
         var fullRoot = Path.GetFullPath(workspaceRoot);
@@ -324,10 +336,19 @@ public static partial class ExtractorPluginRegistry
             return;
 
         var fullRoot = Path.GetFullPath(projectRoot);
-        var state = CreatePatternWorkspace(fullRoot);
-        LoadWorkspacePlugins(state, fullRoot);
-        LoadPatternConfigsForProjectRoot(state, fullRoot);
-        ReplacePatternWorkspace(state);
+        var state = StagePatternWorkspace(fullRoot);
+        var committed = false;
+        try
+        {
+            LoadWorkspacePlugins(state, fullRoot);
+            LoadPatternConfigsForProjectRoot(state, fullRoot);
+            committed = TryReplacePatternWorkspace(state);
+        }
+        finally
+        {
+            if (!committed)
+                AbandonPatternWorkspace(state);
+        }
     }
 
     private static void LoadWorkspacePlugins(PatternWorkspaceState state, string fullRoot)

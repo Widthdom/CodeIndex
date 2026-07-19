@@ -142,7 +142,7 @@ public static partial class QueryCommandRunner
                     {
                         CommandErrorWriter.WriteStderr("Depth 0 requested: resolved the symbol only; callers were not traversed.");
                         WriteImpactResolutionHint(analysis);
-                        WriteGraphSupportHint(options.Lang);
+                        WriteGraphSupportHint(options.Lang, reader);
                     }
                     return StrictImpactExitCode(options, analysis, CommandExitCodes.Success);
                 }
@@ -252,7 +252,7 @@ public static partial class QueryCommandRunner
                 {
                     CommandErrorWriter.WriteStderr($"No impact found for '{analysis.Query}'.");
                     WriteImpactResolutionHint(analysis);
-                    WriteGraphSupportHint(options.Lang);
+                    WriteGraphSupportHint(options.Lang, reader);
                     WriteDegradedGraphZeroResult(reader, "callers", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
                 return StrictImpactExitCode(options, analysis, ZeroResultExitCode(options));

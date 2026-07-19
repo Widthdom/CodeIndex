@@ -908,13 +908,18 @@ public static partial class ReferenceExtractor
     }
 
     public static bool SupportsLanguage(string? lang)
+        => SupportsLanguage(lang, GetSupportedLanguages(workspaceRoot: null));
+
+    internal static bool SupportsLanguage(
+        string? lang,
+        IReadOnlyCollection<string> supportedLanguages)
     {
         var normalized = NormalizeLanguage(lang);
-        if (normalized != null && Extractors.ContainsKey(normalized))
+        if (normalized != null && supportedLanguages.Contains(normalized, StringComparer.Ordinal))
             return true;
 
         return NormalizePluginLanguage(lang) is string pluginLanguage
-            && ExtractorPluginRegistry.TryGetReferenceExtractor(pluginLanguage, out _);
+            && supportedLanguages.Contains(pluginLanguage, StringComparer.Ordinal);
     }
 
     /// <summary>
@@ -940,6 +945,18 @@ public static partial class ReferenceExtractor
             return null;
 
         return SupportsLanguage(lang);
+    }
+
+    internal static bool? SupportsSymbolGraph(
+        string? lang,
+        string? kind,
+        string? containerKind,
+        IReadOnlyCollection<string> supportedLanguages)
+    {
+        if (lang == null)
+            return null;
+
+        return SupportsLanguage(lang, supportedLanguages);
     }
 
     public static string? GetUnsupportedSymbolKind(string? lang, string? kind, string? containerKind)
