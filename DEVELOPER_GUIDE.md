@@ -398,6 +398,17 @@ requested token, but provider results remain conservative and index-backed:
 return empty arrays or null when the database cannot answer safely instead of
 inventing language-server analysis.
 
+LSP references resolve an indexed definition or call-site target through the same
+identity-scoped candidate path as CLI symbol analysis; `includeDeclaration` adds
+only that selected declaration. Document-symbol selections and workspace-symbol
+locations cover the identifier. The stored column is the lookup anchor; when the
+indexed source line is readable, the server confirms the identifier on that line
+to tolerate older imprecise columns. If source text is unavailable, it falls back
+to the stored column, then to character zero when no column was indexed. Type
+inlay hints are emitted only when the indexed return type is not already written
+before the declaration identifier, so explicit method return, local, and field
+types remain suppressed.
+
 ### Extractor performance contract
 
 Symbol and reference extractors run during `cdidx index`, so language-specific
@@ -3258,6 +3269,15 @@ editor integration は標準的な location 形状を直接要求できる。`de
 request token を特定できるよう disk より先に live cache を読む必要があるが、provider result は
 保守的かつ index-backed のままにする。database が安全に答えられない場合は、language-server
 analysis を作り上げず、空配列または null を返す。
+
+LSP reference は、indexed definition または call site の target を CLI の symbol analysis と
+同じ identity-scoped candidate 経路で解決する。`includeDeclaration` が追加するのは、その選択済み
+declaration だけである。document symbol の selection と workspace symbol の location は identifier
+範囲を返す。保存済み column を lookup の起点とし、indexed source line を読める場合はその行の
+identifier を確認して、古い不正確な column にも対応する。source text を利用できない場合は
+保存済み column に fallback し、column も無い場合だけ character 0 を使う。type inlay hint は
+indexed return type が declaration identifier の前に明示されていない場合だけ返すため、method の
+明示 return type、local、field の明示型は表示しない。
 
 ### 抽出器の性能契約
 

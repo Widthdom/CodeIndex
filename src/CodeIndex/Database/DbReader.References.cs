@@ -8,6 +8,11 @@ public partial class DbReader
     private const int CSharpUsingStaticReferenceFilterChunkSize = 64;
     private const int CSharpUsingStaticReferenceFilterMaxRawLimit = 65536;
     private sealed record SearchReferenceRawRow(string Path, string? Lang, string SymbolName, string ReferenceKind, int Line, int Column, string Context, string? ContainerKind, string? ContainerName, bool IsSelfReference, bool IsMutualRecursion, long? TargetSymbolId, string? TargetSymbolKey, string? ResolutionState, int ResolutionCandidateCount);
+    internal sealed record ReferencePositionCandidate(SymbolResult Definition, bool Authoritative);
+    internal sealed record ReferencePositionResolution(
+        bool IdentityAvailable,
+        bool CandidatesTruncated,
+        IReadOnlyList<ReferencePositionCandidate> Candidates);
 
     /// <summary>
     /// Search indexed references such as call sites.
@@ -119,6 +124,103 @@ public partial class DbReader
             maxLineWidth,
             excludeSelfReferences: false,
             targetSymbolId: symbolId);
+    }
+
+    internal ReferencePositionResolution GetReferencePositionResolution(
+        string path,
+        string symbolName,
+        int line,
+        int column,
+        int maxCandidates)
+    {
+        if (maxCandidates <= 0 ||
+            !_hasReferencesTable ||
+            !_referenceIdentityContractCurrent ||
+            !HasTable("symbol_reference_candidates"))
+        {
+            return new ReferencePositionResolution(false, false, []);
+        }
+
+        using var txn = _conn.BeginTransaction(deferred: true);
+        using var cmd = _conn.CreateCommand();
+        var startLineSql = GetSymbolColumnSql("start_line", "s.line");
+        var endLineSql = GetSymbolColumnSql("end_line", "s.line");
+        var signatureSql = GetSymbolColumnSql("signature");
+        cmd.CommandText = $@"
+            SELECT target_file.path,
+                   target_file.lang,
+                   s.kind,
+                   {GetSymbolColumnSql("sub_kind")} AS sub_kind,
+                   s.name,
+                   s.line,
+                   {startLineSql} AS start_line,
+                   {GetSymbolColumnSql("start_column")} AS start_column,
+                   {endLineSql} AS end_line,
+                   {GetSymbolColumnSql("body_start_line")} AS body_start_line,
+                   {GetSymbolColumnSql("body_end_line")} AS body_end_line,
+                   {signatureSql} AS signature,
+                   {GetSymbolColumnSql("container_kind")} AS container_kind,
+                   {GetSymbolColumnSql("container_name")} AS container_name,
+                   {GetSymbolColumnSql("container_qualified_name")} AS container_qualified_name,
+                   {GetSymbolColumnSql("visibility")} AS visibility,
+                   {GetSymbolColumnSql("return_type")} AS return_type,
+                   s.id AS symbol_id,
+                   MAX(CASE WHEN r.target_symbol_id = s.id THEN 1 ELSE 0 END) AS authoritative,
+                   MIN(candidate.scope_rank) AS scope_rank
+            FROM symbol_references AS r
+            JOIN files AS source_file ON source_file.id = r.file_id
+            JOIN symbol_reference_candidates AS candidate ON candidate.reference_id = r.id
+            JOIN symbols AS s ON s.id = candidate.symbol_id
+            JOIN files AS target_file ON target_file.id = s.file_id
+            WHERE source_file.path = @path
+              AND r.symbol_name = @symbolName COLLATE NOCASE
+              AND r.line = @line
+              AND r.column_number = @column
+            GROUP BY s.id
+            ORDER BY authoritative DESC, scope_rank, s.id
+            LIMIT @limit";
+        SqliteCommandPolicy.Add(cmd, "@path", path);
+        SqliteCommandPolicy.Add(cmd, "@symbolName", symbolName);
+        SqliteCommandPolicy.Add(cmd, "@line", line);
+        SqliteCommandPolicy.Add(cmd, "@column", column);
+        SqliteCommandPolicy.Add(cmd, "@limit", checked(maxCandidates + 1));
+
+        var candidates = new List<ReferencePositionCandidate>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var name = reader.GetString(4);
+            var signature = GetNullableString(reader, 11);
+            candidates.Add(new ReferencePositionCandidate(
+                new SymbolResult
+                {
+                    Path = reader.GetString(0),
+                    Lang = GetNullableString(reader, 1),
+                    Kind = reader.GetString(2),
+                    SubKind = GetNullableString(reader, 3),
+                    Name = name,
+                    Line = reader.GetInt32(5),
+                    StartLine = GetInt32OrFallback(reader, 6, 5),
+                    StartColumn = ResolveSymbolIdentifierStartColumn(GetNullableInt32(reader, 7), signature, name),
+                    EndLine = GetInt32OrFallback(reader, 8, 5),
+                    BodyStartLine = GetNullableInt32(reader, 9),
+                    BodyEndLine = GetNullableInt32(reader, 10),
+                    Signature = signature,
+                    ContainerKind = GetNullableString(reader, 12),
+                    ContainerName = GetNullableString(reader, 13),
+                    ContainerQualifiedName = GetNullableString(reader, 14),
+                    Visibility = GetNullableString(reader, 15),
+                    ReturnType = GetNullableString(reader, 16),
+                    SymbolId = reader.GetInt64(17),
+                },
+                reader.GetInt32(18) != 0));
+        }
+
+        var truncated = candidates.Count > maxCandidates;
+        if (truncated)
+            candidates.RemoveRange(maxCandidates, candidates.Count - maxCandidates);
+        txn.Commit();
+        return new ReferencePositionResolution(true, truncated, candidates);
     }
 
     private SqliteCommand CreateSearchReferencesCommand(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset = 0, bool includeOrdering = true, bool excludeSelfReferences = false)
