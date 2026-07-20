@@ -37,7 +37,7 @@ The loop is not just "suggest ideas". It is:
 - Create a work branch first. Use a descriptive branch name.
 - Keep **one task per commit**.
 - Before every commit, explicitly work through `.codex/workflows/precommit.md`.
-- Before every commit, review README `# Code Search Rules` and `# コードベース検索ルール`; strengthen them if AI behavior should change.
+- Before every commit, review the authoritative [Search and Indexing Rules](AGENT_GUIDE.md#search-and-indexing-rules); strengthen `AGENT_GUIDE.md` or the relevant workflow if AI search behavior should change.
 - After every commit, rebuild `cdidx` from the latest local source, run `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --json`, and refresh `.cdidx/codeindex.db` with that freshly built binary only when the check does not report `index_matches_workspace: true`.
 - Prefer the lightest truthful refresh mode: use `--files` only for known in-place edits or new files, use `--commits HEAD` after a normal commit because it tracks renames/deletes from git history, use `--changed-between <old-ref> <new-ref>` after branch switches when both refs are known, and reserve `cdidx . --json` for full-workspace scans after history-moving operations or cases where repo-wide stale files must be purged. `cdidx . --json` is not a forced rebuild and may report `mode:"incremental"` while skipping unchanged files; if `status --check --json` still reports stale after that scan, escalate to `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --rebuild --yes --json`.
 - Prefer the **locally built latest binary** (`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`) over an older globally installed `cdidx` whenever the repository code has changed. **Never fall back to a global `cdidx`** — the global version may have an older DB schema, missing query features, or stale extraction logic that silently produces wrong results. This is enforced at the Claude Code harness level via the repo-tracked `.claude/settings.json`, which denies the full set of shell code-search and file-discovery commands: `rg`, `grep`, `egrep`, `fgrep`, `zgrep`, `rgrep`, `ripgrep`, `ag`, `ack`, `ack-grep`, `git grep`, `find`, `locate`, `mlocate`, `mdfind`, and `cdidx`. Use the built-in Grep / Glob tools or the locally built binary instead.
@@ -210,9 +210,9 @@ Before committing, explicitly review:
 2. TESTING_GUIDE.md
 3. CHANGELOG.md — New entries normally go under bilingual fragments in `changelog.d/unreleased/`; only release-preparation PRs edit `CHANGELOG.md` directly. See `AGENT_GUIDE.md` and `.codex/workflows/precommit.md` for the full rules.
 4. README.md
-5. README `# Code Search Rules` / `# コードベース検索ルール`
+5. `AGENT_GUIDE.md`, especially [Search and Indexing Rules](AGENT_GUIDE.md#search-and-indexing-rules)
 6. DEVELOPER_GUIDE.md
-7. `AGENT_GUIDE.md` and `.codex/workflows/precommit.md`
+7. `.codex/workflows/precommit.md`
 8. This file (`SELF_IMPROVEMENT.md`)
 9. PR description, if a PR already exists
 
@@ -367,7 +367,7 @@ Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify
 - まず作業ブランチを切る。名前は内容が分かるものにする。
 - **1案件1コミット** を守る。
 - 毎コミット前に、`.codex/workflows/precommit.md` を明示的に確認する。
-- 毎コミット前に、README の `# Code Search Rules` と `# コードベース検索ルール` を見直し、AIの検索行動を変えるべきなら強化する。
+- 毎コミット前に、正本である [Search and Indexing Rules](AGENT_GUIDE.md#search-and-indexing-rules) を見直し、AIの検索行動を変えるべきなら `AGENT_GUIDE.md` または関連 workflow を強化する。
 - 毎コミット後に、ローカルソースの最新状態から `cdidx` を再ビルドし、`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --json` を実行する。`index_matches_workspace: true` でなければ、その新しいバイナリで `.cdidx/codeindex.db` を更新する。
 - 更新モードは「正しさを保てる範囲で最も軽いもの」を優先する。`--files` は把握している in-place 編集や新規追加だけに使い、通常のコミット後は rename/delete も拾える `--commits HEAD` を使う。ブランチ切り替え後は前後の ref が分かるなら `--changed-between <old-ref> <new-ref>` を使い、履歴を動かす操作や repo 全体で stale file を掃除したい場合だけ `cdidx . --json` の全 workspace scan へ上げる。`cdidx . --json` は強制 rebuild ではなく、`mode:"incremental"` と表示して unchanged file を skip する場合があるため、その後の `status --check --json` がまだ stale なら `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --rebuild --yes --json` に上げる。
 - リポジトリのコードを変更した後は、古いグローバルインストール版ではなく **ローカルでビルドした最新版バイナリ** (`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`) を使う。**グローバル版には絶対に戻らないこと** — グローバル版は DB スキーマが古い、クエリ機能が欠けている、抽出ロジックが古くて誤った結果を返す、といった問題が起こりうる。このルールはリポジトリ追跡の `.claude/settings.json` で harness レベルでも強制されており、shell のコード検索・ファイル探索系コマンドを網羅的に deny している（`rg`、`grep`、`egrep`、`fgrep`、`zgrep`、`rgrep`、`ripgrep`、`ag`、`ack`、`ack-grep`、`git grep`、`find`、`locate`、`mlocate`、`mdfind`、`cdidx`）。代わりに組み込みの Grep / Glob ツールかローカルビルド版を使うこと。
@@ -541,9 +541,9 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect ResolveGitCommonDir --
 2. TESTING_GUIDE.md
 3. CHANGELOG.md — 新エントリは通常、`changelog.d/unreleased/` の英日併記 fragment に書く。`CHANGELOG.md` を直接編集するのは release-preparation PR だけ。完全なルールは `AGENT_GUIDE.md` と `.codex/workflows/precommit.md` 参照。
 4. README.md
-5. README `# Code Search Rules` / `# コードベース検索ルール`
+5. `AGENT_GUIDE.md`（特に [Search and Indexing Rules](AGENT_GUIDE.md#search-and-indexing-rules)）
 6. DEVELOPER_GUIDE.md
-7. `AGENT_GUIDE.md` と `.codex/workflows/precommit.md`
+7. `.codex/workflows/precommit.md`
 8. このファイル（`SELF_IMPROVEMENT.md`）
 9. 既存PRがあるなら PR説明
 
