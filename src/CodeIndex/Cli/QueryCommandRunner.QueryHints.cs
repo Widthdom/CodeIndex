@@ -99,6 +99,7 @@ public static partial class QueryCommandRunner
         "test.method",
         "trait",
         "type",
+        "type_parameter",
         "typealias",
         "union",
         "variable",

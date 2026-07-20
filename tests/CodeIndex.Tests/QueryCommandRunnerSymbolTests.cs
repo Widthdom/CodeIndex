@@ -2804,6 +2804,69 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_PythonKindFiltersSeparateTypeDeclarationsFromImports_Issue4615()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_python_semantic_type_kinds");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "models.py"),
+                """
+                import typing
+                import typing_extensions
+
+                type Vector[T] = list[T]
+                JsonValue: typing.TypeAlias = dict[str, object]
+                UserId = typing.NewType("UserId", int)
+                T = typing.TypeVar("T")
+                P = typing.ParamSpec("P")
+                Ts = typing_extensions.TypeVarTuple("Ts")
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions));
+            var (typealiasExitCode, typealiasStdout, typealiasStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "python", "--kind", "typealias"],
+                _jsonOptions));
+            var (typeParameterExitCode, typeParameterStdout, typeParameterStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "python", "--kind", "type_parameter"],
+                _jsonOptions));
+            var (importExitCode, importStdout, importStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "python", "--kind", "import"],
+                _jsonOptions));
+
+            var typealiasRows = ParseJsonLines(typealiasStdout);
+            var typeParameterRows = ParseJsonLines(typeParameterStdout);
+            var importRows = ParseJsonLines(importStdout);
+
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, typealiasStderr);
+            Assert.Equal(CommandExitCodes.Success, typealiasExitCode);
+            Assert.Equal(string.Empty, typeParameterStderr);
+            Assert.Equal(CommandExitCodes.Success, typeParameterExitCode);
+            Assert.Equal(string.Empty, importStderr);
+            Assert.Equal(CommandExitCodes.Success, importExitCode);
+            Assert.Equal(
+                ["JsonValue", "UserId", "Vector"],
+                typealiasRows.Select(row => row.RootElement.GetProperty("name").GetString()).Order(StringComparer.Ordinal).ToArray());
+            Assert.Equal(
+                ["P", "T", "Ts"],
+                typeParameterRows.Select(row => row.RootElement.GetProperty("name").GetString()).Order(StringComparer.Ordinal).ToArray());
+            Assert.Equal(
+                ["typing", "typing_extensions"],
+                importRows.Select(row => row.RootElement.GetProperty("name").GetString()).Order(StringComparer.Ordinal).ToArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_SwiftSetterRestrictedBacktickEscapedPropertiesRemainQueryable()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_swift_private_set_backtick_properties");

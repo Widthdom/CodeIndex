@@ -917,6 +917,7 @@ public class DatabaseTests : IDisposable
     [InlineData("subroutine")]
     [InlineData("trait")]
     [InlineData("associatedtype")]
+    [InlineData("type_parameter")]
     [InlineData("typealias")]
     public void InsertSymbols_ExistingExtractorKinds_AreAccepted(string symbolKind)
     {
@@ -945,6 +946,14 @@ public class DatabaseTests : IDisposable
         cmd.CommandText = "SELECT COUNT(*) FROM symbols WHERE kind = @kind";
         cmd.Parameters.AddWithValue("@kind", symbolKind);
         Assert.Equal(1L, (long)cmd.ExecuteScalar()!);
+    }
+
+    [Theory]
+    [InlineData("type_parameter", "type")]
+    [InlineData("typealias", "type")]
+    public void SymbolKindCatalog_SemanticTypeKindsExposeCompatibilityFamily(string symbolKind, string compatibilityKind)
+    {
+        Assert.Equal(compatibilityKind, SymbolKindCatalog.CompatibilityKindFamilies[symbolKind]);
     }
 
     [Fact]

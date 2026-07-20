@@ -1767,7 +1767,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScan_RestampsExtractorVersionWhenOnlyStaleLanguageWasReindexed()
+    public void Run_FullScan_ReindexesPythonSemanticTypeKindsWhenExtractorContractChanges_Issue4615()
     {
         var projectRoot = CreateTempProject();
         try
@@ -1778,6 +1778,8 @@ public partial class IndexCommandRunnerTests
                 """
                 def target():
                     return 1
+
+                type UserId = int
                 """);
 
             var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
@@ -1790,7 +1792,8 @@ public partial class IndexCommandRunnerTests
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = """
                     UPDATE symbols SET signature = 'def stale():' WHERE name = 'target';
-                    UPDATE codeindex_meta SET value = '0' WHERE key = 'symbol_extractor_version_python';
+                    UPDATE symbols SET kind = 'import' WHERE name = 'UserId';
+                    UPDATE codeindex_meta SET value = '1' WHERE key = 'symbol_extractor_version_python';
                     """;
                 cmd.ExecuteNonQuery();
             }
@@ -1809,9 +1812,15 @@ public partial class IndexCommandRunnerTests
             signatureCmd.CommandText = "SELECT signature FROM symbols WHERE name = 'target'";
             Assert.Equal("def target():", signatureCmd.ExecuteScalar() as string);
 
+            using var typeKindCmd = verify.CreateCommand();
+            typeKindCmd.CommandText = "SELECT kind FROM symbols WHERE name = 'UserId'";
+            Assert.Equal("typealias", typeKindCmd.ExecuteScalar() as string);
+
             using var versionCmd = verify.CreateCommand();
             versionCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'symbol_extractor_version_python'";
-            Assert.Equal("1", versionCmd.ExecuteScalar() as string);
+            Assert.Equal(
+                SymbolExtractor.PythonContractVersion.ToString(CultureInfo.InvariantCulture),
+                versionCmd.ExecuteScalar() as string);
         }
         finally
         {

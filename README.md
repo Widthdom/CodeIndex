@@ -127,6 +127,11 @@ C# declaration-container resolution and GitHub Actions job ownership likewise
 use name-indexed candidates instead of a full container scan per reference.
 Dense Python import, GitHub Actions dependency, JSON path, and Fortran procedure
 lists are scanned in place instead of allocating temporary split arrays.
+Python PEP 695 aliases and `TypeAlias` / `NewType` declarations are persisted as
+`typealias`, while `TypeVar` / `ParamSpec` / `TypeVarTuple` declarations use
+`type_parameter`; `--kind import` therefore returns only real imports. Consumers
+with a coarser taxonomy can map both semantic kinds to the `type` compatibility
+family documented in the Developer Guide.
 Across all reference languages, duplicate detection stores structured identity
 keys instead of allocating a concatenated key string for every candidate.
 
@@ -489,6 +494,11 @@ C# declaration-container 解決と GitHub Actions の job ownership も同様に
 全 container 走査ではなく name-indexed candidate を使います。
 密な Python import、GitHub Actions dependency、JSON path、Fortran procedure list は、
 一時的な split array を作らず入力上で直接走査します。
+Python の PEP 695 alias と `TypeAlias` / `NewType` declaration は `typealias`、
+`TypeVar` / `ParamSpec` / `TypeVarTuple` declaration は `type_parameter` として
+永続化されるため、`--kind import` は実際の import だけを返します。より粗い taxonomy を
+使う consumer は、Developer Guide に記載した `type` compatibility family へ両方の
+semantic kind を mapping できます。
 全 reference language の重複検出でも、candidate ごとの連結 key string を作らず、
 structured identity key を保持します。
 
