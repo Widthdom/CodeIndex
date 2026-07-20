@@ -359,7 +359,7 @@ internal static class CliFlagSchema
             new() { Name = "--result-kind", ValuePlaceholder = "<call_site|declaration|identifier|comment|string_literal>", Description = "Search: keep only projected result kinds; repeat or comma-separate values", Commands = Set("search") },
             new() { Name = "--search-fields", ValuePlaceholder = "<path,line,column,symbol,origin,kind,score,snippet,query_name,recipe>", Description = "Search/Audit: project JSON/NDJSON result fields for audit pipelines", Commands = Set("search", "audit") },
             new() { Name = "--outline-fields", ValuePlaceholder = "<kind,name,path,line,signature,...>", Description = "Outline JSON: project symbol fields for audit pipelines", Commands = Set("outline") },
-            new() { Name = "--results-only", Description = "Search/Audit: emit result-only NDJSON without stream done records", Commands = Set("search", "audit") },
+            new() { Name = "--results-only", Description = "Search/Symbols/Files/Audit: emit result-only NDJSON without stream terminal records", Commands = Set("search", "symbols", "files", "audit") },
             new() { Name = "--first-per-file", Description = "Search: keep the first returned match for each file", Commands = Set("search") },
             new() { Name = "--sample", ValuePlaceholder = "<n>", Description = "Search: deterministically sample returned rows down to n results", Commands = Set("search") },
             new() { Name = "--per-file-limit", ValuePlaceholder = "<n>", Description = "Search/Audit grouped output: representative matches per file", Commands = Set("search", "audit") },

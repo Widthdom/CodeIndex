@@ -243,7 +243,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunDeps_MissingGraphJsonModesShareZeroPayloadFixture_Issue4112()
+    public void RunDeps_MissingGraphJsonModesShareZeroPayloadFixture_Issues4112And4619()
     {
         var (projectRoot, readOnlyUri) = CreateReadOnlyMissingGraphTableDb("cdidx_deps_missing_graph_max_json_bytes");
         try
@@ -270,6 +270,28 @@ public partial class QueryCommandRunnerTests
             Assert.True(summaryJson.GetProperty("summary_only").GetBoolean());
             Assert.True(summaryJson.GetProperty("degraded").GetBoolean());
             Assert.False(summaryJson.TryGetProperty("edges", out _));
+
+            foreach (var (arguments, resultsKey) in new[]
+            {
+                (new[] { "--db", readOnlyUri, "--json", "--cycles" }, "cycles"),
+                (new[] { "--db", readOnlyUri, "--format", "json-graph", "--cycles" }, "edges"),
+            })
+            {
+                var (cycleExitCode, cycleStdout, cycleStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                    arguments,
+                    _jsonOptions));
+
+                using var cycleDocument = ParseJsonOutput(cycleStdout);
+                var cycleJson = cycleDocument.RootElement;
+
+                Assert.Equal(CommandExitCodes.Success, cycleExitCode);
+                Assert.Equal(string.Empty, cycleStderr);
+                Assert.Equal(0, cycleJson.GetProperty("count").GetInt32());
+                Assert.False(cycleJson.GetProperty("graph_table_available").GetBoolean());
+                Assert.True(cycleJson.GetProperty("degraded").GetBoolean());
+                Assert.Contains("not authoritative", cycleJson.GetProperty("note").GetString());
+                Assert.Empty(cycleJson.GetProperty(resultsKey).EnumerateArray());
+            }
         }
         finally
         {

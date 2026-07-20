@@ -154,6 +154,7 @@ public static partial class QueryCommandRunner
         string? statusExplainField = null;
         bool statusLogPath = false;
         string outputFormat = OutputFormatText;
+        bool outputFormatExplicit = false;
         bool statusConfig = false;
         bool limitExplicit = false;
         bool snippetLinesExplicit = false;
@@ -172,6 +173,7 @@ public static partial class QueryCommandRunner
         bool dependencySuppressNoise = false;
         var dependencySymbols = new List<string>();
         var dependencySymbolFamilies = new List<string>();
+        bool dependencySymbolFilterCountExceeded = false;
         string? recipeName = null;
         var includeRecipeQueries = new List<string>();
         var excludeRecipeQueries = new List<string>();
@@ -237,8 +239,19 @@ public static partial class QueryCommandRunner
                 AddParseError($"Error: {optionName} value too long (max {QueryLimits.MaxQueryLength} characters).");
                 return;
             }
-            if (!target.Contains(trimmed, StringComparer.Ordinal))
-                target.Add(trimmed);
+            if (target.Contains(trimmed, StringComparer.Ordinal))
+                return;
+            if (dependencySymbols.Count + dependencySymbolFamilies.Count >= MaxDependencySymbolFilterCount)
+            {
+                if (!dependencySymbolFilterCountExceeded)
+                {
+                    AddParseError($"Error: deps accepts at most {MaxDependencySymbolFilterCount} combined --symbol and --symbol-family values. / deps では --symbol と --symbol-family を合計 {MaxDependencySymbolFilterCount} 件まで指定できます。");
+                    dependencySymbolFilterCountExceeded = true;
+                }
+                return;
+            }
+
+            target.Add(trimmed);
         }
 
         void AddIssueDraftLabels(string rawLabels)
@@ -494,6 +507,7 @@ public static partial class QueryCommandRunner
                         if (TryParseOutputFormat(formatValue!, out var parsedOutputFormat))
                         {
                             outputFormat = parsedOutputFormat;
+                            outputFormatExplicit = true;
                             if (parsedOutputFormat == OutputFormatCompact)
                                 compact = true;
                             if (parsedOutputFormat == OutputFormatCount)
@@ -506,6 +520,7 @@ public static partial class QueryCommandRunner
                         else if (allowIssueDraftsFormat && string.Equals(formatValue, OutputFormatIssueDrafts, StringComparison.OrdinalIgnoreCase))
                         {
                             outputFormat = OutputFormatIssueDrafts;
+                            outputFormatExplicit = true;
                             json = true;
                         }
                         else
@@ -1101,8 +1116,8 @@ public static partial class QueryCommandRunner
                 case "--results-only":
                     resultsOnly = true;
                     json = true;
-                    jsonOutputFormat = JsonOutputFormatNdjson;
-                    outputFormat = OutputFormatJson;
+                    if (!outputFormatExplicit)
+                        outputFormat = OutputFormatJson;
                     break;
                 case "--next-steps":
                     nextSteps = true;

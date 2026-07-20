@@ -518,6 +518,25 @@ public class ProgramRunnerTests
     }
 
     [Theory]
+    [InlineData("files", false)]
+    [InlineData("files", true)]
+    [InlineData("symbols", false)]
+    [InlineData("symbols", true)]
+    public void RunDiscovery_ResultsOnlyWithPretty_ReturnsUsageError_Issue4688(string command, bool prettyBeforeCommand)
+    {
+        var args = prettyBeforeCommand
+            ? new[] { "--pretty", command, "--results-only" }
+            : new[] { command, "--results-only", "--pretty" };
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(args, appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains("--pretty cannot be combined with --results-only", stderr, StringComparison.Ordinal);
+        Assert.Contains($"Usage: cdidx {command}", stderr, StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData("search", "format_json")]
     [InlineData("files", "json")]
     [InlineData("files", "format_json")]
