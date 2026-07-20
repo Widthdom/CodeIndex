@@ -53,6 +53,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 
 - `ChunkSplitterTests.cs`, `SymbolExtractorTests.cs`, `ReferenceExtractorTests.cs`, `SearchSnippetFormatterTests.cs`, `DbPathResolverTests.cs`, `ExcerptRecoveryCommandFormatterTests.cs`, `ConsoleUiTests.cs`
   Pure or mostly pure behavior tests with in-memory inputs.
+  `DbPathResolverPureTests` keeps only path, injected-input, and URI validation cases that neither read process-global state nor open SQLite, allowing them to run outside the `SQLite pool sensitive` collection. Keep environment/current-directory resolution, real database and metadata probes, pool resets, and static test seams in `DbPathResolverTests`.
   Search snippet origin-priority coverage keeps PascalCase, snake_case, and phrase queries in coordinated mixed comment/string/code fixtures so identifier focus, same-line code-column clamping, over-1-MiB valid chunks, final-window dropped counts, filtered-origin refocusing, and the phrase control share one contract.
   Recovery-command coverage asserts structured argv, current `dotnet`/apphost prefix preservation, replay of option-like paths, and display-only escaping for both POSIX sh and PowerShell, including spaces, quotes, dollar signs, and shell metacharacters.
   Console writer synchronization coverage yields between character writes instead of sleeping per character; use enough whole-line iterations to expose interleaving without adding wall-clock delay.
@@ -779,6 +780,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 
 - `ChunkSplitterTests.cs`、`SymbolExtractorTests.cs`、`ReferenceExtractorTests.cs`、`SearchSnippetFormatterTests.cs`、`DbPathResolverTests.cs`、`ExcerptRecoveryCommandFormatterTests.cs`、`ConsoleUiTests.cs`
   インメモリ入力中心の、純粋またはほぼ純粋な振る舞いのテスト。
+  `DbPathResolverPureTests` には process-global state を読まず SQLite も開かない path、注入済み入力、URI validation の case だけを置き、`SQLite pool sensitive` collection の外で実行できるようにします。環境変数 / current directory の解決、実 database / metadata probe、pool reset、static test seam は `DbPathResolverTests` に残してください。
   search snippet の origin 優先順位 coverage は PascalCase、snake_case、phrase query を連携した comment / string / code 混在 fixture にまとめ、identifier focus、同一行の code 列への clamping、1 MiB を超える有効 chunk、最終 window の dropped count、filter 後 origin への再 focus、phrase の control を一つの contract として検証します。
   recovery command の coverage では構造化 argv、現在の `dotnet` / apphost prefix の維持、option と紛らわしい path の再実行、POSIX sh と PowerShell 双方の表示専用 escaping を、空白、quote、dollar sign、shell metacharacter を含めて検証します。
   console writer synchronization coverageは文字writeごとのsleepではなくyieldを使い、wall-clock delayを追加せずinterleavingを露出できる十分なwhole-line iterationを維持してください。
