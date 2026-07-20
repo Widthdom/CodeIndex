@@ -19,6 +19,7 @@ internal static class PathCasing
 {
     private static readonly ConcurrentDictionary<string, bool> _ignoreCaseByAnchor =
         new(StringComparer.Ordinal);
+    private static readonly AsyncLocal<Func<string, bool>?> _ignoreCaseProbeOverride = new();
 
     /// <summary>
     /// True when the filesystem at <paramref name="referencePath"/> treats names as
@@ -32,6 +33,12 @@ internal static class PathCasing
     public static bool IsIgnoreCase(string referencePath)
     {
         var anchor = ResolveAnchor(referencePath);
+        if (_ignoreCaseByAnchor.TryGetValue(anchor, out var cachedIgnoreCase))
+            return cachedIgnoreCase;
+
+        if (IgnoreCaseProbeForTesting is not null)
+            return ProbeIgnoreCase(anchor);
+
         return _ignoreCaseByAnchor.GetOrAdd(anchor, ProbeIgnoreCase);
     }
 
@@ -105,7 +112,11 @@ internal static class PathCasing
 
     internal static void ResetCacheForTests() => _ignoreCaseByAnchor.Clear();
 
-    internal static Func<string, bool>? IgnoreCaseProbeForTesting { get; set; }
+    internal static Func<string, bool>? IgnoreCaseProbeForTesting
+    {
+        get => _ignoreCaseProbeOverride.Value;
+        set => _ignoreCaseProbeOverride.Value = value;
+    }
 
     private static string ResolveAnchor(string path)
     {

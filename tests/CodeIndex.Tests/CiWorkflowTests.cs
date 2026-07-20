@@ -361,7 +361,7 @@ public class CiWorkflowTests
     }
 
     [Fact]
-    public void Runsettings_DefinesSessionTimeoutAndXunitLongRunningDiagnostics()
+    public void Runsettings_DefinesSessionTimeoutNoTestsFailureAndXunitDiagnostics()
     {
         var path = RepositoryTestPaths.Combine("tests", "CodeIndex.Tests", "CodeIndex.Tests.runsettings");
         var document = XDocument.Load(path);
@@ -375,6 +375,9 @@ public class CiWorkflowTests
         Assert.Equal(
             "./TestResults",
             document.Root?.Element("RunConfiguration")?.Element("ResultsDirectory")?.Value);
+        Assert.Equal(
+            "true",
+            document.Root?.Element("RunConfiguration")?.Element("TreatNoTestsAsError")?.Value);
     }
 
     [Fact]
