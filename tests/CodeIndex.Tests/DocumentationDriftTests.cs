@@ -1,4 +1,6 @@
+using System.Reflection;
 using System.Text.RegularExpressions;
+using CodeIndex.Cli;
 using CodeIndex.Database;
 
 namespace CodeIndex.Tests;
@@ -20,6 +22,10 @@ public sealed class DocumentationDriftTests
     private static readonly Regex InlineCdidxCommandReferenceRegex = new(
         @"`(?:[A-Z_][A-Z0-9_]*=\S+\s+)*(?<prefix>cdidx|dotnet\s+\./src/CodeIndex/bin/Debug/net8\.0/cdidx\.dll|dotnet\s+run\s+--project\s+src/CodeIndex\s+--)\s+(?<token>[^\s`|;&]+)[^`]*`",
         RegexOptions.Compiled);
+
+    private static readonly Regex ErrorCodeTableRowRegex = new(
+        @"^\| `(?<code>E[0-9]{3}_[A-Z0-9_]+)` \|",
+        RegexOptions.Compiled | RegexOptions.Multiline);
 
     private static readonly HashSet<string> KnownCdidxEntrypointTokens = new(StringComparer.Ordinal)
     {
@@ -153,6 +159,24 @@ public sealed class DocumentationDriftTests
         Assert.Equal(2, content.Split(documentedRow, StringSplitOptions.None).Length - 1);
     }
 
+    [Fact]
+    public void UserGuide_ErrorCodeTablesMatchCommandErrorCodes_Issue4644()
+    {
+        var content = RepositoryTestPaths.ReadNormalizedText("USER_GUIDE.md");
+        var expectedCodes = typeof(CommandErrorCodes)
+            .GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Where(field => field.IsLiteral && field.FieldType == typeof(string))
+            .Select(field => (string)field.GetRawConstantValue()!)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        var englishCodes = ExtractErrorCodesFromSection(content, "### Error codes", "### Debugging reader errors");
+        var japaneseCodes = ExtractErrorCodesFromSection(content, "### エラーコード", "### reader エラーのデバッグ");
+
+        Assert.Equal(expectedCodes, englishCodes);
+        Assert.Equal(expectedCodes, japaneseCodes);
+    }
+
     [Theory]
     [InlineData("README.md", "## Quick Start", "## すぐに試す")]
     [InlineData("USER_GUIDE.md", "## Why cdidx", "## なぜ cdidx なのか")]
@@ -202,6 +226,22 @@ public sealed class DocumentationDriftTests
             .Matches(content)
             .Select(match => match.Groups["path"].Value)
             .ToHashSet(StringComparer.Ordinal);
+    }
+
+    private static string[] ExtractErrorCodesFromSection(string content, string heading, string nextHeading)
+    {
+        var sectionStart = content.IndexOf(heading, StringComparison.Ordinal);
+        if (sectionStart < 0)
+            throw new InvalidOperationException($"Missing documentation heading '{heading}'.");
+
+        var sectionEnd = content.IndexOf(nextHeading, sectionStart + heading.Length, StringComparison.Ordinal);
+        if (sectionEnd < 0)
+            throw new InvalidOperationException($"Missing documentation heading '{nextHeading}'.");
+
+        return ErrorCodeTableRowRegex
+            .Matches(content[sectionStart..sectionEnd])
+            .Select(match => match.Groups["code"].Value)
+            .ToArray();
     }
 
     private static HashSet<string> ExtractWorkflowReadmeReferences(HashSet<string> workflowFileNames)
