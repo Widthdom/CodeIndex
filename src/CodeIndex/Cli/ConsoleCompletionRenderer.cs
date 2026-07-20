@@ -42,7 +42,7 @@ internal static class ConsoleCompletionRenderer
             "method", "module", "namespace", "object", "operator", "procedure",
             "property", "razor_event_binding", "record", "reference", "specialization",
             "struct", "subscribe", "test.method", "trait", "type", "type_reference",
-            "typealias", "union", "unsubscribe", "variable",
+            "type_parameter", "typealias", "union", "unsubscribe", "variable",
         }.OrderBy(k => k, StringComparer.Ordinal));
 
     // Commands that get their own per-command completion branch (bash/zsh). Order matters: the

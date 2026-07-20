@@ -2060,6 +2060,7 @@ public class DbContext : IDisposable
     public const string LastIndexRunDiagnosticsMetaKey = "last_index_run_diagnostics_json";
     public const string LastIndexRunDiagnosticCountMetaKey = "last_index_run_diagnostic_count";
     public const string LastIndexRunDiagnosticsTruncatedMetaKey = "last_index_run_diagnostics_truncated";
+    public const string LastIndexRunReferenceExtractionCapHitsMetaKey = "last_index_run_reference_extraction_cap_hits_json";
     public const int LastIndexRunDiagnosticSampleLimit = 50;
     public const string LastFailedIndexRunStatusMetaKey = "last_failed_index_run_status";
     public const string LastFailedIndexRunModeMetaKey = "last_failed_index_run_mode";
@@ -2071,6 +2072,9 @@ public class DbContext : IDisposable
     public const string LastFailedIndexRunReasonMetaKey = "last_failed_index_run_reason";
     public const string LastFailedIndexRunProgressPersistedMetaKey = "last_failed_index_run_progress_persisted";
     public const string LastFailedIndexRunRecoveryHintMetaKey = "last_failed_index_run_recovery_hint";
+    public const string LastFailedIndexRunFileErrorsMetaKey = "last_failed_index_run_file_errors_json";
+    public const string IndexCompletenessMetaKey = "index_completeness";
+    public const string IndexIncompleteReasonsMetaKey = "index_incomplete_reasons_json";
     // Issue #1585: count of files seen by the most recent successful full-repository scan
     // whose non-empty extension did not map to a known language. This is a scan coverage
     // signal, not an indexed-file count, and is omitted by readers until a current index pass

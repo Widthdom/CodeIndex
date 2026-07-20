@@ -593,6 +593,66 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SafetyCaps_ReportOnlyAfterEachPublishedBoundary_Issue4620()
+    {
+        var previousLimits = ReferenceExtractor.SafetyLimitsForTesting;
+        static List<SymbolRecord> Symbols(int count, bool sameLine, bool containers) => Enumerable
+            .Range(0, count)
+            .Select(index => new SymbolRecord
+            {
+                Kind = "function",
+                Name = $"Generated{index}",
+                Line = sameLine ? 1 : index + 1,
+                StartLine = sameLine ? 1 : index + 1,
+                EndLine = sameLine ? 1 : index + 1,
+                BodyStartLine = containers ? (sameLine ? 1 : index + 1) : null,
+                BodyEndLine = containers ? (sameLine ? 1 : index + 1) : null,
+            })
+            .ToList();
+
+        static void AssertBoundary(
+            ReferenceExtractionSafetyLimits limits,
+            IReadOnlyList<SymbolRecord> atLimit,
+            IReadOnlyList<SymbolRecord> overLimit,
+            string reason)
+        {
+            ReferenceExtractor.SafetyLimitsForTesting = limits;
+            var exact = ReferenceExtractor.ExtractDetailed(1, "python", "pass\n", atLimit);
+            var exceeded = ReferenceExtractor.ExtractDetailed(1, "python", "pass\n", overLimit);
+            Assert.DoesNotContain(exact.Diagnostics, diagnostic => diagnostic.Kind == reason);
+            Assert.Contains(exceeded.Diagnostics, diagnostic => diagnostic.Kind == reason);
+        }
+
+        try
+        {
+            AssertBoundary(
+                new ReferenceExtractionSafetyLimits { MaxLookupSymbols = 2, MaxLookupLines = 100, MaxNamesPerLine = 100, MaxContainerCandidates = 100 },
+                Symbols(2, sameLine: false, containers: false),
+                Symbols(3, sameLine: false, containers: false),
+                "reference_definition_lookup_symbol_budget_exceeded");
+            AssertBoundary(
+                new ReferenceExtractionSafetyLimits { MaxLookupSymbols = 100, MaxLookupLines = 2, MaxNamesPerLine = 100, MaxContainerCandidates = 100 },
+                Symbols(2, sameLine: false, containers: false),
+                Symbols(3, sameLine: false, containers: false),
+                "reference_definition_lookup_line_budget_exceeded");
+            AssertBoundary(
+                new ReferenceExtractionSafetyLimits { MaxLookupSymbols = 100, MaxLookupLines = 100, MaxNamesPerLine = 2, MaxContainerCandidates = 100 },
+                Symbols(2, sameLine: true, containers: false),
+                Symbols(3, sameLine: true, containers: false),
+                "reference_definition_lookup_line_name_budget_exceeded");
+            AssertBoundary(
+                new ReferenceExtractionSafetyLimits { MaxLookupSymbols = 100, MaxLookupLines = 100, MaxNamesPerLine = 100, MaxContainerCandidates = 2 },
+                Symbols(2, sameLine: false, containers: true),
+                Symbols(3, sameLine: false, containers: true),
+                "reference_container_candidate_budget_exceeded");
+        }
+        finally
+        {
+            ReferenceExtractor.SafetyLimitsForTesting = previousLimits;
+        }
+    }
+
+    [Fact]
     public void Extract_StylusHighFanoutSymbols_ReportsAllDefinitionLookupBudgetDiagnostics_Issue3783()
     {
         var symbols = Enumerable

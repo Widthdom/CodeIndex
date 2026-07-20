@@ -2241,6 +2241,192 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void TryDetectLanguage_CppHeaderLexicalDetectionMasksCommentsStringsAndSplicedLines()
+    {
+        AssertHeaderDetection(
+            null,
+            "c",
+            FileIndexer.HeaderExtensionFallbackDetectionSource,
+            FileIndexer.LanguageDetectionConfidence.Low);
+
+        const string commentOnlyHeader = """
+            /*
+             * namespace phantom {
+             * class CommentOnly { public: std::vector<int> values; };
+             * }
+             */
+            struct real_c_type { int value; };
+            """;
+        AssertHeaderDetection(
+            commentOnlyHeader,
+            "c",
+            FileIndexer.HeaderLexicalFallbackDetectionSource,
+            FileIndexer.LanguageDetectionConfidence.Low);
+
+        const string macroHeader = """
+            #define CPP_TEXT "namespace phantom { class MacroString { public: std::vector<int> values; }; }"
+            #define DECLARE_CPP_TYPE(name) \
+                class name
+            typedef struct real_c_type { int value; } real_c_type;
+            """;
+        AssertHeaderDetection(
+            macroHeader,
+            "c",
+            FileIndexer.HeaderLexicalFallbackDetectionSource,
+            FileIndexer.LanguageDetectionConfidence.Low);
+
+        const string splicedNonCodeHeader = """
+            const char *message = "text \
+            namespace string_phantom";
+            // comment continues through translation-phase splicing \
+            class CommentPhantom {};
+            typedef struct real_c_type { int value; } real_c_type;
+            """;
+        AssertHeaderDetection(
+            splicedNonCodeHeader,
+            "c",
+            FileIndexer.HeaderLexicalFallbackDetectionSource,
+            FileIndexer.LanguageDetectionConfidence.Low);
+
+        const string spliceFormedDelimiterHeader = """
+            /\
+            / namespace line_comment_phantom { class Phantom {}; }
+            /\
+            * namespace block_comment_phantom { class Phantom {}; } *\
+            /
+            const char *text = R\
+            "tag(namespace raw_string_phantom { class Phantom {}; })tag\
+            ";
+            typedef struct real_c_type { int value; } real_c_type;
+            """;
+        AssertHeaderDetection(
+            spliceFormedDelimiterHeader,
+            "c",
+            FileIndexer.HeaderLexicalFallbackDetectionSource,
+            FileIndexer.LanguageDetectionConfidence.Low);
+
+        const string spliceFormedBlockCommentCloserHeader = """
+            /* comment closed through translation-phase splicing *\
+            /
+            namespace real_cpp { class RealType {}; }
+            """;
+        AssertHeaderDetection(
+            spliceFormedBlockCommentCloserHeader,
+            "cpp",
+            FileIndexer.HeaderLexicalMarkerDetectionSource,
+            FileIndexer.LanguageDetectionConfidence.High);
+
+        const string mixedHeader = """
+            typedef struct legacy_point { int x; int y; } legacy_point;
+            #ifdef __cplusplus
+            namespace modern {
+            template <typename T> class PointAdapter {};
+            }
+            #endif
+            """;
+        AssertHeaderDetection(
+            mixedHeader,
+            "cpp",
+            FileIndexer.HeaderLexicalMarkerDetectionSource,
+            FileIndexer.LanguageDetectionConfidence.High);
+    }
+
+    [Fact]
+    public void TryDetectLanguage_CppHeaderStrategicSamplingTracksLexicalStateAndUtf8Bytes()
+    {
+        var longLicensePrefix = string.Concat(Enumerable.Repeat("// Licensed material for strategic sampling.\n", 1_800));
+        var cSuffix = string.Concat(Enumerable.Repeat("int legacy_padding_value_for_sampling;\n", 1_800));
+        var longLicenseHeader = longLicensePrefix + """
+            namespace sampled {
+            template <typename T> class BeyondLegacyLineCutoff {};
+            }
+            """ + cSuffix;
+        AssertHeaderDetection(
+            longLicenseHeader,
+            "cpp",
+            FileIndexer.HeaderSampledLexicalMarkerDetectionSource,
+            FileIndexer.LanguageDetectionConfidence.Medium);
+
+        var longBlockCommentHeader = "/*" + new string('x', 55_000)
+            + "\nnamespace block_comment_phantom { class Phantom {}; }\n"
+            + new string('x', 55_000) + "*/\nstruct real_c_type { int value; };\n";
+        AssertHeaderDetection(
+            longBlockCommentHeader,
+            "c",
+            FileIndexer.HeaderSampledLexicalFallbackDetectionSource,
+            FileIndexer.LanguageDetectionConfidence.Low);
+
+        var longRawStringHeader = "const char *text = R\"tag(" + new string('x', 55_000)
+            + "\nnamespace raw_string_phantom { class Phantom {}; }\n"
+            + new string('x', 55_000) + ")tag\";\nstruct real_c_type { int value; };\n";
+        AssertHeaderDetection(
+            longRawStringHeader,
+            "c",
+            FileIndexer.HeaderSampledLexicalFallbackDetectionSource,
+            FileIndexer.LanguageDetectionConfidence.Low);
+
+        var longMacroHeader = "#define PHANTOM_DECL \\\n"
+            + string.Concat(Enumerable.Repeat("    ignored_macro_payload \\\n", 1_600))
+            + "    namespace macro_phantom { class Phantom {}; }\n"
+            + string.Concat(Enumerable.Repeat("int real_c_value;\n", 2_500));
+        AssertHeaderDetection(
+            longMacroHeader,
+            "c",
+            FileIndexer.HeaderSampledLexicalFallbackDetectionSource,
+            FileIndexer.LanguageDetectionConfidence.Low);
+
+        var singleLineHeader = new string('x', 55_000)
+            + " std::vector<int> sampled_values; "
+            + new string('x', 55_000);
+        AssertHeaderDetection(
+            singleLineHeader,
+            "cpp",
+            FileIndexer.HeaderSampledLexicalMarkerDetectionSource,
+            FileIndexer.LanguageDetectionConfidence.Medium);
+
+        const int boundaryFixtureLength = 100_000;
+        const int middleSampleStart = (boundaryFixtureLength / 2) - ((48 * 1024 / 3) / 2);
+        var boundarySplitIdentifierPrefix = new string('x', middleSampleStart - 2);
+        const string boundarySplitIdentifier = "myclass value;\n";
+        var boundarySplitIdentifierHeader = boundarySplitIdentifierPrefix
+            + boundarySplitIdentifier
+            + new string(
+                'x',
+                boundaryFixtureLength - boundarySplitIdentifierPrefix.Length - boundarySplitIdentifier.Length);
+        Assert.Equal(boundaryFixtureLength, boundarySplitIdentifierHeader.Length);
+        AssertHeaderDetection(
+            boundarySplitIdentifierHeader,
+            "c",
+            FileIndexer.HeaderSampledLexicalFallbackDetectionSource,
+            FileIndexer.LanguageDetectionConfidence.Low);
+
+        var multibyteHeader = "/*" + new string('界', 18_000) + "*/\n"
+            + "namespace utf8_sampled { class Utf8Marker {}; }\n"
+            + new string(' ', 18_000);
+        Assert.True(multibyteHeader.Length < 48 * 1024);
+        Assert.True(Encoding.UTF8.GetByteCount(multibyteHeader) > 48 * 1024);
+        AssertHeaderDetection(
+            multibyteHeader,
+            "cpp",
+            FileIndexer.HeaderSampledLexicalMarkerDetectionSource,
+            FileIndexer.LanguageDetectionConfidence.Medium);
+    }
+
+    private static void AssertHeaderDetection(
+        string? content,
+        string expectedLanguage,
+        string expectedSource,
+        FileIndexer.LanguageDetectionConfidence expectedConfidence)
+    {
+        var detection = FileIndexer.TryDetectLanguage("sample.h", content);
+
+        Assert.Equal(FileIndexer.FileProbeStatus.Supported, detection.Status);
+        Assert.Equal(expectedLanguage, detection.Language);
+        Assert.Equal(expectedSource, detection.DetectionSource);
+        Assert.Equal(expectedConfidence, detection.Confidence);
+    }
+
+    [Fact]
     public void ScanFiles_SkipsExcludedDirectories()
     {
         // Create a temp directory structure to test scanning

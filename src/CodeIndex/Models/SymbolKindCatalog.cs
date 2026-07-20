@@ -69,6 +69,7 @@ public static class SymbolKindCatalog
         "test.method",
         "trait",
         "type",
+        "type_parameter",
         "typealias",
         "union",
         "user",
@@ -78,6 +79,18 @@ public static class SymbolKindCatalog
         "volume",
         "workdir",
     ];
+
+    /// <summary>
+    /// Broad compatibility families for consumers that do not recognize newer semantic kinds.
+    /// 新しい semantic kind を認識しない consumer 向けの広い互換 family。
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> CompatibilityKindFamilies { get; } =
+        new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["type_parameter"] = "type",
+                ["typealias"] = "type",
+            });
 
     public static readonly string[] ReferenceKinds =
     [

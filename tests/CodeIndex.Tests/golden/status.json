@@ -136,9 +136,32 @@
   "version": null,
   "summary": "1 files, 3 symbols, 0 refs across 1 languages (csharp); index fresh, DEGRADED",
   "graph_table_available": false,
+  "graph_data_current": false,
+  "reference_extraction_limits": {
+    "max_lookup_symbols": 50000,
+    "max_lookup_lines": 20000,
+    "max_names_per_line": 512,
+    "max_container_candidates": 20000
+  },
+  "reference_graph_complete": false,
+  "reference_graph_incomplete_reasons": [
+    "reference_extraction_cap_state_unavailable"
+  ],
+  "reference_extraction_cap_hits": {
+    "state_available": false,
+    "hit_count": 0,
+    "affected_file_count": 0,
+    "reasons": [
+      "reference_extraction_cap_state_unavailable"
+    ],
+    "files": [],
+    "files_truncated": false,
+    "file_limit": 50
+  },
   "issues_table_available": true,
   "file_issues_data_current": false,
   "migration_in_progress": false,
+  "index_complete": true,
   "hotspot_family_ready": false,
   "hotspot_family_degraded_reason": "cross-file hotspot family grouping is degraded (hotspot_family_support_not_indexed=csharp); Run \u0060cdidx index \u003CprojectPath\u003E --rebuild\u0060 to rebuild and stamp authoritative hotspot families for every indexed row.",
   "language_readiness": {
@@ -174,6 +197,13 @@
       "degraded_reason": "Reference / caller / callee / unused counts are degraded to 0 because the symbol_references table is missing.",
       "recommended_action": "Run \u0060cdidx index \u003CprojectPath\u003E\u0060 to rebuild the graph-capable index.",
       "alternative_action": "Run \u0060cdidx index \u003CprojectPath\u003E --rebuild\u0060 for a full rebuild."
+    },
+    {
+      "field": "reference_graph_complete",
+      "root_cause": "reference_extraction_cap_state_unavailable",
+      "degraded_reason": "Reference-extraction cap state is unavailable for this legacy or stale issue generation, so graph completeness cannot be established.",
+      "recommended_action": "Run \u0060cdidx index \u003CprojectPath\u003E\u0060 to populate current per-file issue state before trusting missing callers, callees, dependencies, or impact edges.",
+      "alternative_action": "Run \u0060cdidx index \u003CprojectPath\u003E --rebuild\u0060 only if a normal index refresh cannot restore current issue state."
     },
     {
       "field": "file_issues_data_current",

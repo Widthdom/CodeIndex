@@ -15,6 +15,7 @@ public static partial class SymbolExtractor
 {
     public const int DefaultContractVersion = 1;
     public const int ExpandedLanguageContractVersion = 2;
+    public const int PythonContractVersion = 2;
     public const int CSharpContractVersion = 3;
     public const int DockerfileContractVersion = 2;
     public const int MakefileContractVersion = 2;
@@ -71,6 +72,7 @@ public static partial class SymbolExtractor
         return lang switch
         {
             null or "" => DefaultContractVersion,
+            "python" => PythonContractVersion,
             "csharp" => CSharpContractVersion,
             "dockerfile" => DockerfileContractVersion,
             "makefile" => MakefileContractVersion,
@@ -407,9 +409,9 @@ public static partial class SymbolExtractor
     private static readonly Regex SqlColumnDefinitionNameRegex = new(
         $@"^\s*(?<name>{SqlQualifiedIdentifierSegmentPattern})\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex SqlReturnsTableRegex = new(
-        @"\bRETURNS\s+TABLE\s*\((?<columns>(?:[^()]|\([^()]*\))*)\)",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline);
+    private static readonly Regex SqlReturnsTableMarkerRegex = new(
+        @"\bRETURNS\s+TABLE\s*\(",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex SqlOutParameterRegex = new(
         @"(?:^|,)\s*(?:OUT|INOUT)\s+(?<name>(?:\[(?:[^\]\r\n]|\]\])+\]|`[^`\r\n]+`|""(?:""""|[^""\r\n])+""|[_\p{L}][\p{L}\p{Mn}\p{Mc}\p{Nd}\p{Pc}$]*))\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -894,10 +896,10 @@ public static partial class SymbolExtractor
             new("class",    new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:(?:typing|typing_extensions)\.)?TypedDict\s*\(", RegexOptions.Compiled), BodyStyle.None),
             new("class",    new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:enum\.)?(?:Enum|IntEnum|Flag|IntFlag|StrEnum)\s*\(", RegexOptions.Compiled), BodyStyle.None),
             new("class",    new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:pydantic\.)?create_model\s*\(", RegexOptions.Compiled), BodyStyle.None),
-            new("import",   new Regex(@"^\s*type\s+(?<name>\w+)\s*(?:\[[^\]]*\])?\s*=", RegexOptions.Compiled), BodyStyle.None),
-            new("import",   new Regex(@"^\s*(?<name>\w+)\s*:\s*(?:(?:typing|typing_extensions)\.)?TypeAlias\s*=", RegexOptions.Compiled), BodyStyle.None),
-            new("import",   new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:(?:typing|typing_extensions)\.)?NewType\s*\(", RegexOptions.Compiled), BodyStyle.None),
-            new("import",   new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:(?:typing|typing_extensions)\.)?(?:TypeVar|ParamSpec|TypeVarTuple)\s*\(", RegexOptions.Compiled), BodyStyle.None),
+            new("typealias", new Regex(@"^\s*type\s+(?<name>\w+)\s*(?:\[[^\]]*\])?\s*=", RegexOptions.Compiled), BodyStyle.None),
+            new("typealias", new Regex(@"^\s*(?<name>\w+)\s*:\s*(?:(?:typing|typing_extensions)\.)?TypeAlias\s*=", RegexOptions.Compiled), BodyStyle.None),
+            new("typealias", new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:(?:typing|typing_extensions)\.)?NewType\s*\(", RegexOptions.Compiled), BodyStyle.None),
+            new("type_parameter", new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:(?:typing|typing_extensions)\.)?(?:TypeVar|ParamSpec|TypeVarTuple)\s*\(", RegexOptions.Compiled), BodyStyle.None),
             new("property", new Regex(@"^\s*(?<name>\w+)\s*:\s*(?:(?:typing|typing_extensions)\.)?Final(?:\[[^\]]+\])?\s*=", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*(?:from\s+(?<name>(?:\.+[\w.]*|[\w.]+))\s+import\b|import\s+(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*(?:[_\p{L}]\w*\s*=\s*)?(?:importlib\.import_module|importlib\.util\.find_spec|__import__)\s*\(\s*['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None),
@@ -3466,9 +3468,9 @@ public static partial class SymbolExtractor
             if (header.Contains("RETURNS", StringComparison.OrdinalIgnoreCase)
                 && header.Contains("TABLE", StringComparison.OrdinalIgnoreCase))
             {
-                foreach (Match match in SqlReturnsTableRegex.Matches(header))
+                foreach (var columns in EnumerateSqlReturnsTableColumnLists(header))
                 {
-                    foreach (var column in EnumerateSqlColumnDefinitions(match.Groups["columns"].Value))
+                    foreach (var column in EnumerateSqlColumnDefinitions(columns))
                         AddSqlRoutineFieldSymbol(fileId, lines, symbols, extractionState, lineNumber, column.Name, column.Type, ownerName, ownerBodyStart, ownerBodyEnd);
                 }
             }
@@ -3561,6 +3563,60 @@ public static partial class SymbolExtractor
             var type = trimmed[nameEnd..].Trim();
             yield return (name, type.Length == 0 ? null : type);
         }
+    }
+
+    private static IEnumerable<string> EnumerateSqlReturnsTableColumnLists(string header)
+    {
+        foreach (Match marker in SqlReturnsTableMarkerRegex.Matches(header))
+        {
+            var openParen = marker.Index + marker.Length - 1;
+            if (TryFindSqlClosingParen(header, openParen, out var closeParen))
+                yield return header[(openParen + 1)..closeParen];
+        }
+    }
+
+    private static bool TryFindSqlClosingParen(string value, int openParen, out int closeParen)
+    {
+        closeParen = -1;
+        var depth = 0;
+        char quote = '\0';
+        for (var i = openParen; i < value.Length; i++)
+        {
+            var current = value[i];
+            if (quote != '\0')
+            {
+                var quoteEnd = quote == '[' ? ']' : quote;
+                if (current != quoteEnd)
+                    continue;
+
+                if (i + 1 < value.Length && value[i + 1] == quoteEnd)
+                {
+                    i++;
+                    continue;
+                }
+
+                quote = '\0';
+                continue;
+            }
+
+            if (current is '\'' or '"' or '`' or '[')
+            {
+                quote = current;
+                continue;
+            }
+
+            if (current == '(')
+            {
+                depth++;
+            }
+            else if (current == ')' && --depth == 0)
+            {
+                closeParen = i;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static IEnumerable<string> SplitSqlTopLevelComma(string value)

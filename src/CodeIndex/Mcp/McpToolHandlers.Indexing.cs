@@ -735,10 +735,11 @@ public partial class McpServer
                     writer.InsertChunks(chunks, requestToken);
                     writer.InsertSymbols(symbols, requestToken);
                     List<ReferenceRecord> references;
+                    ReferenceExtractionResult referenceExtraction;
                     FileIssue? regexTimeoutIssue;
                     using (var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction"))
                     {
-                        references = ReferenceExtractor.ExtractNormalized(
+                        referenceExtraction = ReferenceExtractor.ExtractDetailedNormalized(
                             fileId,
                             record.Lang,
                             content,
@@ -750,6 +751,7 @@ public partial class McpServer
                             maxReferenceCount: maxReferencesPerFile + 1,
                             conflictMarkerLine: loaded.ConflictMarkerLine,
                             workspaceRoot: projectPath);
+                        references = referenceExtraction.References;
                         regexTimeoutIssue = IndexCommandRunner.BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                     }
                     postExtractionHooks.Value.OnReferencesExtracted(fileContext, references);
@@ -774,6 +776,10 @@ public partial class McpServer
                         issues = IndexCommandRunner.AppendIssue(issues, symbolRegexTimeoutIssue);
                     if (regexTimeoutIssue != null)
                         issues = IndexCommandRunner.AppendIssue(issues, regexTimeoutIssue);
+                    issues = IndexCommandRunner.AppendReferenceExtractionDiagnosticIssues(
+                        issues,
+                        record.Path,
+                        referenceExtraction.Diagnostics);
                     if (referenceCapIssue != null)
                         issues = IndexCommandRunner.AppendIssue(issues, referenceCapIssue);
                     InsertIssuesForIndexedFile(fileId, issues);
@@ -1001,6 +1007,8 @@ public partial class McpServer
                         mcpIndexDiagnostics,
                         authorizedRoot.EnsureAuthorizedEntry,
                         knownReadableFileSizes);
+            using var referenceExtractionReader = new DbReader(writer.Connection);
+            var referenceExtractionCapHits = referenceExtractionReader.GetReferenceExtractionCapHits();
             writer.SetMetaValues(
                 (DbContext.LastIndexRunModeMetaKey, rebuild ? "rebuild" : "mcp"),
                 (DbContext.LastIndexRunStartedAtMetaKey, runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture)),
@@ -1012,7 +1020,10 @@ public partial class McpServer
                 (DbContext.LastIndexRunBytesReadSkippedFileCountMetaKey, bytesRead.SkippedFileCount.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                 (DbContext.LastIndexRunBytesReadIncompleteMetaKey, (bytesRead.SkippedFileCount > 0).ToString(System.Globalization.CultureInfo.InvariantCulture)),
                 (DbContext.LastIndexRunRowsUpsertedMetaKey, processed.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-                (DbContext.LastIndexRunRowsDeletedMetaKey, purged.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+                (DbContext.LastIndexRunRowsDeletedMetaKey, purged.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastIndexRunReferenceExtractionCapHitsMetaKey, JsonSerializer.Serialize(
+                    referenceExtractionCapHits,
+                    StatusMetadataJsonContext.Default.ReferenceExtractionCapHitSummary)));
             writer.ClearLastFailedIndexRunMetadata();
             // Persist the current HEAD only after the run is fully successful (errors == 0).
             // Mirrors the CLI full-scan contract (Issue #1508) so MCP-driven re-indexes also
@@ -1166,9 +1177,10 @@ public partial class McpServer
                 $"mcp_index_file_failures count={failures.Count} first_path={QuoteMcpIndexFailureLogValue(failures[0].Path)} first_error={QuoteMcpIndexFailureLogValue($"{failures[0].ExceptionType}: {failures[0].Message}")}");
         }
         AddMcpIndexDiagnostics(structured, failures, mcpIndexDiagnostics);
+        using var signalReader = new DbReader(writer.Connection);
+        AddReferenceGraphCompletenessSignal(structured, signalReader);
         if (!sqlGraphContractReadyAfter)
         {
-            using var signalReader = new DbReader(writer.Connection);
             AddSqlGraphContractSignal(structured, signalReader.GetSqlGraphContractSignal());
         }
         return CreateToolResult(id,

@@ -10,6 +10,77 @@ namespace CodeIndex.Tests;
 public partial class QueryCommandRunnerTests
 {
     [Fact]
+    public void GraphCommands_ReferenceCapHitMarksAbsenceQueriesIncomplete_Issue4620()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_graph_reference_cap_hit_4620");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.py", "python", "def app():\n    pass\n");
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+                writer.MarkIssuesReady();
+                writer.MarkFoldReady();
+                writer.MarkCSharpSymbolNameContractReady();
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = """
+                    INSERT INTO file_issues (file_id, kind, line, message, severity)
+                    SELECT id, 'reference_definition_lookup_symbol_budget_exceeded', 0, 'synthetic cap hit', 'warning'
+                    FROM files
+                    WHERE path = 'src/app.py'
+                    """;
+                Assert.Equal(1, command.ExecuteNonQuery());
+            }
+
+            foreach (var commandName in new[] { "callers", "callees" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => RunGraphCommand(
+                    commandName,
+                    ["MissingSymbol", "--db", dbPath, "--json", "--count", "--exact"],
+                    _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                using var document = ParseJsonOutput(stdout);
+                AssertReferenceGraphIncomplete(document.RootElement);
+            }
+
+            var (depsExitCode, depsStdout, depsStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--json", "--summary-only"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, depsExitCode);
+            Assert.Equal(string.Empty, depsStderr);
+            using (var depsDocument = ParseJsonOutput(depsStdout))
+                AssertReferenceGraphIncomplete(depsDocument.RootElement);
+
+            var (impactExitCode, impactStdout, impactStderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["MissingSymbol", "--db", dbPath, "--json"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, impactExitCode);
+            Assert.Equal(string.Empty, impactStderr);
+            using (var impactDocument = ParseJsonOutput(impactStdout))
+                AssertReferenceGraphIncomplete(impactDocument.RootElement);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    private static void AssertReferenceGraphIncomplete(JsonElement json)
+    {
+        Assert.True(json.GetProperty("degraded").GetBoolean());
+        Assert.False(json.GetProperty("reference_graph_complete").GetBoolean());
+        Assert.Equal(50_000, json.GetProperty("reference_extraction_limits").GetProperty("max_lookup_symbols").GetInt32());
+        Assert.Contains(
+            "reference_definition_lookup_symbol_budget_exceeded",
+            json.GetProperty("reference_graph_incomplete_reasons").EnumerateArray().Select(value => value.GetString()));
+        Assert.Equal(1, json.GetProperty("reference_extraction_cap_hits").GetProperty("hit_count").GetInt64());
+    }
+
+    [Fact]
     public void RunDeps_InvalidFormat_FlattensControlCharacters_Issue3092()
     {
         var value = "bad\nforged\tvalue";

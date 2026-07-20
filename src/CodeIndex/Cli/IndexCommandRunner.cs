@@ -83,6 +83,7 @@ public static partial class IndexCommandRunner
     internal static Action<bool, string?>? FullScanExtractionSchedulingForTesting { get; set; }
     internal static Action? FullScanExtractionWorkStartedForTesting { get; set; }
     internal static Action<string>? FullScanFileContentLoadForTesting { get; set; }
+    internal static Action<string, string>? FullScanFilePhaseForTesting { get; set; }
     internal static Action<int>? FullScanExtractionQueueCapacityForTesting { get; set; }
     internal static Action? FullScanFtsOptimizeForTesting { get; set; }
     internal static Action? FullScanCSharpPrepassForTesting { get; set; }
@@ -324,6 +325,8 @@ public static partial class IndexCommandRunner
                     DbContext.IndexedProjectRootMetaKey,
                     SymbolKindFilterMetaKey,
                     DbContext.IndexedHeadCommitMetaKey,
+                    DbContext.IndexCompletenessMetaKey,
+                    DbContext.IndexIncompleteReasonsMetaKey,
                 ]);
                 string? PriorMeta(string key) => priorMeta.TryGetValue(key, out var value) ? value : null;
                 var priorFoldVersion = PriorMeta("fold_key_version");
@@ -336,6 +339,12 @@ public static partial class IndexCommandRunner
                     PriorMeta(DbContext.SymbolsOnlyGraphOmittedMetaKey),
                     "true",
                     StringComparison.OrdinalIgnoreCase);
+                var priorIndexIncompleteReasons = JsonStringListCodec.Deserialize(PriorMeta(DbContext.IndexIncompleteReasonsMetaKey));
+                var priorFileIndexIncomplete = string.Equals(
+                        PriorMeta(DbContext.IndexCompletenessMetaKey),
+                        "incomplete",
+                        StringComparison.OrdinalIgnoreCase)
+                    && priorIndexIncompleteReasons?.Contains("file_index_error", StringComparer.Ordinal) == true;
                 var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
                 var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
                 var priorIndexedProjectRoot = PriorMeta(DbContext.IndexedProjectRootMetaKey);
@@ -375,7 +384,7 @@ public static partial class IndexCommandRunner
                 var projectRoot = Path.GetFullPath(options.ProjectPath!);
 
                 initialExitCode = isUpdateMode
-                    ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, indexCancellation.Token)
+                    ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorFileIndexIncomplete, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, indexCancellation.Token)
                     : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, showNextSteps: !databaseExistedBeforeIndex, indexCancellation.Token);
                 if (initialExitCode == CommandExitCodes.Success)
                 {
@@ -577,7 +586,8 @@ public static partial class IndexCommandRunner
             rowsUpserted,
             rowsDeleted,
             memoryTimeline,
-            diagnostics: null);
+            diagnostics: null,
+            referenceExtractionCapHits: null);
 
     private static void StampLastIndexRunMetadata(
         DbWriter writer,
@@ -592,7 +602,8 @@ public static partial class IndexCommandRunner
         long rowsUpserted,
         long rowsDeleted,
         IndexMemoryTimelineJsonResult? memoryTimeline,
-        IReadOnlyList<string>? diagnostics)
+        IReadOnlyList<string>? diagnostics,
+        ReferenceExtractionCapHitSummary? referenceExtractionCapHits)
     {
         writer.SetMetaValues(
             (DbContext.LastIndexRunModeMetaKey, mode),
@@ -606,10 +617,14 @@ public static partial class IndexCommandRunner
             (DbContext.LastIndexRunBytesReadIncompleteMetaKey, (bytesReadSkippedFileCount > 0).ToString(System.Globalization.CultureInfo.InvariantCulture)),
             (DbContext.LastIndexRunRowsUpsertedMetaKey, rowsUpserted.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             (DbContext.LastIndexRunRowsDeletedMetaKey, rowsDeleted.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunReferenceExtractionCapHitsMetaKey, referenceExtractionCapHits == null
+                ? null
+                : JsonSerializer.Serialize(referenceExtractionCapHits, StatusMetadataJsonContext.Default.ReferenceExtractionCapHitSummary)),
             (DbContext.LastIndexRunPeakMemoryMbMetaKey, memoryTimeline == null
                 ? null
                 : (memoryTimeline.PeakWorkingSetBytes / (1024 * 1024)).ToString(System.Globalization.CultureInfo.InvariantCulture)));
         StampLastIndexRunDiagnostics(writer, diagnostics);
+        writer.MarkIndexComplete();
         writer.ClearLastFailedIndexRunMetadata();
     }
 
@@ -735,7 +750,10 @@ public static partial class IndexCommandRunner
                 (DbContext.LastFailedIndexRunErrorCodeMetaKey, errorCode),
                 (DbContext.LastFailedIndexRunReasonMetaKey, reason),
                 (DbContext.LastFailedIndexRunProgressPersistedMetaKey, progressPersisted?.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-                (DbContext.LastFailedIndexRunRecoveryHintMetaKey, recoveryHint));
+                (DbContext.LastFailedIndexRunRecoveryHintMetaKey, recoveryHint),
+                (DbContext.LastFailedIndexRunFileErrorsMetaKey, null));
+            if (progressPersisted == true)
+                writer.MarkIndexIncomplete(["interrupted_index_run"]);
         }
         catch (Exception ex) when (ex is CodeIndexException or IOException or UnauthorizedAccessException or NotSupportedException or SqliteException)
         {
@@ -1436,6 +1454,7 @@ public static partial class IndexCommandRunner
         IReadOnlyList<FileIssue>? Issues,
         FileIssue? GeneratedSuppressionIssue,
         bool GeneratedSuppressionChecked,
+        string? FailurePhase,
         Exception? Exception)
     {
         public static FullScanFileWorkItem Success(
@@ -1469,6 +1488,7 @@ public static partial class IndexCommandRunner
                 issues,
                 generatedSuppressionIssue,
                 generatedSuppressionChecked,
+                null,
                 null);
         }
 
@@ -1500,14 +1520,15 @@ public static partial class IndexCommandRunner
                 issues,
                 generatedSuppressionIssue,
                 generatedSuppressionChecked,
+                null,
                 null);
         }
 
-        public static FullScanFileWorkItem Failure(string filePath, string relativePath, Exception exception)
-            => new(-1, filePath, relativePath, null, null, null, null, null, null, null, null, null, null, false, exception);
+        public static FullScanFileWorkItem Failure(string filePath, string relativePath, string phase, Exception exception)
+            => new(-1, filePath, relativePath, null, null, null, null, null, null, null, null, null, null, false, phase, exception);
 
         public static FullScanFileWorkItem Skipped(string filePath, string relativePath, string warning)
-            => new(-1, filePath, relativePath, null, null, null, null, warning, null, null, null, null, null, false, null);
+            => new(-1, filePath, relativePath, null, null, null, null, warning, null, null, null, null, null, false, null, null);
     }
 
     private sealed record FoldOnlyRemediation(
@@ -1577,6 +1598,7 @@ public sealed class IndexCommandOptions
     public bool Verbose { get; init; }
     public bool Json { get; init; }
     public bool Quiet { get; init; }
+    public bool AllowPartial { get; init; }
     public List<string> Commits { get; init; } = [];
     public bool ChangedBetweenSpecified { get; init; }
     public List<string> ChangedBetweenRefs { get; init; } = [];

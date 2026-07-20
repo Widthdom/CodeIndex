@@ -510,6 +510,96 @@ public class SearchSnippetFormatterTests
         Assert.Equal(2, compact.NextMatch.RemainingMatchLineCount);
     }
 
+    [Theory]
+    [InlineData("PascalCase", "PascalCase();", 13, "code", 15, 3)]
+    [InlineData("snake_case", "snake_case();", 13, "code", 15, 3)]
+    [InlineData("plain phrase", "plain phrase;", 10, "comment", 13, 2)]
+    public void ToCompactResult_IdentifierQueriesPreferCodeOriginsOverCommentsAndStrings_Issue4618(
+        string query,
+        string codeExpression,
+        int expectedFocusLine,
+        string expectedFocusOrigin,
+        int expectedNextMatchLine,
+        int expectedDroppedMatchLineCount)
+    {
+        var result = new SearchResult
+        {
+            Path = "src/app.cs",
+            Lang = "csharp",
+            StartLine = 10,
+            EndLine = 15,
+            Content = $"// {query}\nvar text = \"{query}\";\nvar padding = 0;\n{codeExpression}\nvar gap = 0;\n{codeExpression}",
+            Score = -1.0,
+        };
+
+        var compact = SearchSnippetFormatter.ToCompactResult(result, query, maxLines: 2);
+
+        Assert.Equal(expectedFocusLine, compact.FocusLine);
+        Assert.Equal("full_query", compact.FocusReason);
+        var focusHighlight = Assert.Single(compact.Highlights, highlight => highlight.Line == expectedFocusLine);
+        Assert.Equal([expectedFocusOrigin], focusHighlight.MatchOrigins);
+        Assert.Equal(expectedDroppedMatchLineCount, compact.DroppedMatchLineCount);
+        Assert.NotNull(compact.NextMatch);
+        Assert.Equal(expectedNextMatchLine, compact.NextMatch.Line);
+        Assert.Equal(expectedDroppedMatchLineCount, compact.NextMatch.RemainingMatchLineCount);
+
+        var expanded = SearchSnippetFormatter.ToCompactResult(result, query, maxLines: 8);
+
+        Assert.Equal([10, 11, 13, 15], expanded.MatchLines);
+        Assert.Equal(0, expanded.DroppedMatchLineCount);
+        Assert.Null(expanded.NextMatch);
+
+        var sameLineResult = new SearchResult
+        {
+            Path = "src/app.cs",
+            Lang = "csharp",
+            StartLine = 20,
+            EndLine = 20,
+            Content = $"var text = \"{query}\"; {new string('x', 200)}; {codeExpression}",
+            Score = -1.0,
+        };
+
+        var sameLine = SearchSnippetFormatter.ToCompactResult(sameLineResult, query, maxLines: 1, maxLineWidth: 80);
+        var expectedSameLineOrigin = expectedFocusOrigin == "code" ? "code" : "string_literal";
+        var sameLineFocusFacet = Assert.Single(
+            sameLine.MatchFacets,
+            facet => facet.Line == sameLine.FocusLine
+                && facet.Length == query.Length
+                && facet.Origin == expectedSameLineOrigin);
+
+        Assert.Equal(sameLineFocusFacet.Column, sameLine.FocusColumn);
+        if (expectedSameLineOrigin == "code")
+        {
+            Assert.Contains(codeExpression, sameLine.Snippet, StringComparison.Ordinal);
+            Assert.DoesNotContain($"\"{query}\"", sameLine.Snippet, StringComparison.Ordinal);
+
+            var largePrefix = string.Join(
+                '\n',
+                Enumerable.Range(1, 18).Select(index => $"var text{index} = \"{query} {new string('x', 60_000)}\";"));
+            var largeResult = new SearchResult
+            {
+                Path = "src/large.cs",
+                Lang = "csharp",
+                StartLine = 1,
+                EndLine = 19,
+                Content = $"{largePrefix}\n{codeExpression}",
+                Score = -1.0,
+            };
+
+            var large = SearchSnippetFormatter.ToCompactResult(largeResult, query, maxLines: 1, maxLineWidth: 80);
+
+            Assert.Equal(19, large.FocusLine);
+            Assert.Equal(1, large.FocusColumn);
+            Assert.Equal(codeExpression, large.Snippet);
+            Assert.Equal(18, large.DroppedMatchLineCount);
+        }
+        else
+        {
+            Assert.Contains($"\"{query}\"", sameLine.Snippet, StringComparison.Ordinal);
+            Assert.DoesNotContain(codeExpression, sameLine.Snippet, StringComparison.Ordinal);
+        }
+    }
+
     [Fact]
     public void ToCompactResult_ReportsTruncationContext_WhenMultipleSnippetLinesAreClamped()
     {

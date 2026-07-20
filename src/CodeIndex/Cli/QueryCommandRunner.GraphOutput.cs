@@ -120,6 +120,52 @@ public static partial class QueryCommandRunner
             CommandErrorWriter.WriteStderr($"Note: call-graph queries are not indexed for '{lang}'. Use search, definition, excerpt, or files instead.");
     }
 
+    private static void AddGraphContractJsonFields(
+        JsonObject payload,
+        DbReader reader,
+        JsonSerializerOptions jsonOptions,
+        SqlGraphContractSignal sqlGraphSignal)
+    {
+        AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+        AddReferenceGraphCompletenessJsonFields(payload, reader, jsonOptions);
+    }
+
+    private static void AddReferenceGraphCompletenessJsonFields(
+        JsonObject payload,
+        DbReader reader,
+        JsonSerializerOptions jsonOptions)
+    {
+        var capHits = reader.GetReferenceExtractionCapHits();
+        var complete = capHits.StateAvailable && capHits.HitCount == 0;
+        payload["reference_extraction_limits"] = JsonSerializer.SerializeToNode(
+            ReferenceExtractor.GetSafetyLimits(),
+            CliJsonSerializerContextFactory.Create(jsonOptions).ReferenceExtractionSafetyLimits);
+        payload["reference_graph_complete"] = complete;
+        payload["reference_extraction_cap_hits"] = JsonSerializer.SerializeToNode(
+            capHits,
+            CliJsonSerializerContextFactory.Create(jsonOptions).ReferenceExtractionCapHitSummary);
+        if (!complete)
+        {
+            payload["reference_graph_incomplete_reasons"] = JsonSerializer.SerializeToNode(
+                capHits.Reasons,
+                CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+            payload["degraded"] = true;
+        }
+    }
+
+    private static void WriteReferenceGraphCompletenessWarningIfNeeded(bool json, DbReader reader)
+    {
+        if (json)
+            return;
+        var capHits = reader.GetReferenceExtractionCapHits();
+        if (capHits.StateAvailable && capHits.HitCount == 0)
+            return;
+        var reasons = capHits.Reasons.Count == 0
+            ? DbReader.ReferenceExtractionCapStateUnavailableReason
+            : string.Join(", ", capHits.Reasons.Take(4));
+        CommandErrorWriter.WriteStderr($"WARN: reference graph is incomplete ({reasons}); callers, callees, deps, and impact results are not authoritative absences.");
+    }
+
     private static void WriteImpactResolutionHint(ImpactAnalysisResult analysis)
     {
         if (analysis.DefinitionCount > 0)

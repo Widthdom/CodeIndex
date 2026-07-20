@@ -20,6 +20,18 @@ public static partial class QueryCommandRunner
             "reference graph queries degrade to empty or incomplete results because the symbol_references table is missing.",
             "Run `cdidx index <projectPath>` to rebuild the graph-capable index."),
         new(
+            "graph_data_current",
+            "Reference graph generation",
+            "all indexed reference rows belong to a complete current index generation.",
+            "successful graph rows remain queryable, but one or more files failed and graph coverage is incomplete.",
+            "Fix the per-file error reported in `last_failed_or_partial_index_run`, then rerun the same index command; do not rebuild unless separately required."),
+        new(
+            "reference_graph_complete",
+            "Reference extraction coverage",
+            "reference-extraction cap state is available and extraction completed without hitting a hard lookup or container-candidate safety cap.",
+            "reference-extraction cap state is unavailable, or one or more files hit a hard cap; absent graph edges are not authoritative in either case.",
+            "Inspect `reference_extraction_cap_hits.state_available`: when false, rerun `cdidx index <projectPath>` to populate current issue state; otherwise inspect `files`, reduce or exclude the cap-hitting generated/pathological source, and rerun indexing."),
+        new(
             "issues_table_available",
             "Validation issues table",
             "the file_issues table exists in this index.",
@@ -37,6 +49,12 @@ public static partial class QueryCommandRunner
             "no index write or migration is currently in progress.",
             "an index write or migration is in progress, so readiness may be temporarily degraded.",
             "Wait for the active `cdidx index` run to finish, then rerun `cdidx status --json`."),
+        new(
+            "index_complete",
+            "Index generation completeness",
+            "the latest persisted index generation completed every candidate file.",
+            "one or more files failed while successful files and their graph rows were committed.",
+            "Fix the structured per-file failure under `last_failed_or_partial_index_run.file_errors`, then rerun the same index command; a rebuild is not required."),
         new(
             "sql_graph_contract_ready",
             "SQL graph contract",
@@ -171,8 +189,8 @@ public static partial class QueryCommandRunner
             new(
                 "head_freshness",
                 "Compact HEAD freshness summary",
-                "`state=fresh` means `status --check` proved the index matches the workspace; without `--check`, `state=head_current` means only the runtime HEAD matched `indexed_head` (see `indexed_head_source`).",
-                "`state=stale`, `state=head_changed`, `state=check_unavailable`, or `state=unchecked` means consumers should inspect `state_reason`, `indexed_head_source`, and the nested head fields before trusting freshness-sensitive results.",
+                "`state=fresh` means `status --check` proved the complete index matches the workspace; `state=fresh_but_incomplete` keeps workspace freshness distinct from failed-file coverage; without `--check`, `state=head_current` means only the runtime HEAD matched `indexed_head` (see `indexed_head_source`).",
+                "`state=stale`, `state=stale_and_incomplete`, `state=head_changed`, `state=check_unavailable`, or `state=unchecked` means consumers should inspect `state_reason`, `index_complete`, and the nested head fields before trusting freshness-sensitive results.",
                 "Use this summary for machine routing, and use `indexed_head_sha` over legacy `indexed_head_commit` when `indexed_head_source=latest_index`."),
             new(
                 "index_matches_workspace",
