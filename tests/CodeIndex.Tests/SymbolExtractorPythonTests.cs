@@ -71,10 +71,13 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_Python_DetectsGenericFunctionsAndTypeAliases()
+    public void Extract_Python_DetectsGenericFunctionsAndSemanticTypeKinds()
     {
         var content = """
-            type Vector = list[float]
+            import typing
+            import typing_extensions
+
+            type Vector[T] = list[T]
             type Connection = str | int
             JsonValue: TypeAlias = dict[str, object]
             Handler: typing.TypeAlias = Callable[..., None]
@@ -120,15 +123,12 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fetch_all");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Stack");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Vector");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Connection");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "JsonValue");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Handler");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "UserId");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "OrderId");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "T");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "P");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Ts");
+        AssertSymbolsContain(symbols, "import", "typing", "typing_extensions");
+        AssertSymbolsContain(symbols, "typealias", "Vector", "Connection", "JsonValue", "Handler", "UserId", "OrderId", "Theme");
+        AssertSymbolsContain(symbols, "type_parameter", "T", "P", "Ts");
+        Assert.DoesNotContain(symbols, s =>
+            s.Kind == "import"
+            && s.Name is "Vector" or "Connection" or "JsonValue" or "Handler" or "UserId" or "OrderId" or "T" or "P" or "Ts" or "Theme");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Point");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Coordinate");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "DynamicUser");
@@ -143,7 +143,7 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "RuntimeOrder");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DEFAULT_TIMEOUT");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "API_HOST");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Theme" && s.ContainerName == "Config");
+        Assert.Contains(symbols, s => s.Kind == "typealias" && s.Name == "Theme" && s.ContainerName == "Config");
         Assert.DoesNotContain(symbols, s => s.Name == "type");
     }
 

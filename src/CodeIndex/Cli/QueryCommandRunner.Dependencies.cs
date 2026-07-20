@@ -54,6 +54,7 @@ public static partial class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
+            WriteReferenceGraphCompletenessWarningIfNeeded(options.Json, reader);
             var maxDepth = options.ContextAfterExplicit ? options.ContextAfter : 5; // --max-hops/--depth is parsed into ContextAfter; 0 means resolve-only
             if (!options.Json && options.ImpactDeprecatedDepthUsed)
                 CommandErrorWriter.WriteStderr("Warning: --depth is deprecated for impact; use --max-hops instead.");
@@ -125,7 +126,7 @@ public static partial class QueryCommandRunner
                                 AddImpactFailureJsonFields(zeroPayload, analysis, jsonOptions);
                                 if (analysis.Suggestion != null)
                                     zeroPayload["suggestion"] = analysis.Suggestion;
-                                AddSqlGraphContractJsonFields(zeroPayload, sqlGraphSignal);
+                                AddGraphContractJsonFields(zeroPayload, reader, jsonOptions, sqlGraphSignal);
                                 AddImpactOptionWarnings(zeroPayload, options);
                             });
                         var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
@@ -180,7 +181,7 @@ public static partial class QueryCommandRunner
                             payload["suggestion"] = analysis.Suggestion;
                         if (!analysis.GraphTableAvailable)
                             payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
-                        AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+                        AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal);
                         AddImpactOptionWarnings(payload, options);
                         AddCountEnvelopeJsonFields(payload, reader, jsonOptions, options);
                         var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
@@ -233,7 +234,7 @@ public static partial class QueryCommandRunner
                             AddImpactFailureJsonFields(zeroPayload, analysis, jsonOptions);
                             if (analysis.Suggestion != null)
                                 zeroPayload["suggestion"] = analysis.Suggestion;
-                            AddSqlGraphContractJsonFields(zeroPayload, sqlGraphSignal);
+                            AddGraphContractJsonFields(zeroPayload, reader, jsonOptions, sqlGraphSignal);
                             AddImpactOptionWarnings(zeroPayload, options);
                         });
                     if (!analysis.GraphTableAvailable)
@@ -280,7 +281,7 @@ public static partial class QueryCommandRunner
                     AddImpactTerminationJsonFields(payload, analysis, jsonOptions);
                     if (analysis.TruncatedReason != null)
                         payload["truncated_reason"] = analysis.TruncatedReason;
-                    AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+                    AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal);
                     AddImpactOptionWarnings(payload, options);
                     AddCountEnvelopeJsonFields(payload, reader, jsonOptions, options);
                     AddActiveSqliteDiagnostics(payload);
@@ -321,7 +322,7 @@ public static partial class QueryCommandRunner
                 if (analysis.Suggestion != null)
                     payload["suggestion"] = analysis.Suggestion;
                 AddImpactFailureJsonFields(payload, analysis, jsonOptions);
-                AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+                AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal);
                 AddImpactOptionWarnings(payload, options);
                 var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
                     payload,
@@ -494,6 +495,7 @@ public static partial class QueryCommandRunner
         return WithDb(options, jsonOptions, reader =>
         {
             cancellationToken.ThrowIfCancellationRequested();
+            WriteReferenceGraphCompletenessWarningIfNeeded(emitsJson, reader);
             if (TryWriteInvalidWorkspaceDependencyDatabaseError(options, out var workspaceDbExitCode))
                 return workspaceDbExitCode;
             if (options.SummaryOnly
@@ -603,7 +605,7 @@ public static partial class QueryCommandRunner
                         graphTableAvailable: false,
                         degraded: true,
                         queryOptions: options,
-                        extraFields: payload => AddDependencySchemaJsonFields(payload, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter));
+                        extraFields: payload => AddDependencySchemaJsonFields(payload, reader, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter));
                     if (options.SummaryOnly)
                         payload["summary_only"] = true;
                     payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
@@ -612,7 +614,7 @@ public static partial class QueryCommandRunner
                 }
                 else if (options.Json)
                 {
-                    var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: options.SummaryOnly ? null : "edges", graphTableAvailable: true, degraded: !zeroSqlGraphSignal.Ready, queryOptions: options, extraFields: payload => AddDependencySchemaJsonFields(payload, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter));
+                    var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: options.SummaryOnly ? null : "edges", graphTableAvailable: true, degraded: !zeroSqlGraphSignal.Ready, queryOptions: options, extraFields: payload => AddDependencySchemaJsonFields(payload, reader, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter));
                     if (options.SummaryOnly)
                         payload["summary_only"] = true;
                     var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions);
@@ -676,7 +678,7 @@ public static partial class QueryCommandRunner
                         graphTableAvailable: true,
                         degraded: !sqlGraphSignal.Ready,
                         queryOptions: options,
-                        extraFields: payload => AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary));
+                        extraFields: payload => AddDependencySchemaJsonFields(payload, reader, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary));
                     if (options.SummaryOnly)
                         payload["summary_only"] = true;
                     var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions);
@@ -700,7 +702,7 @@ public static partial class QueryCommandRunner
                         payload["cycles"] = new JsonArray();
                     if (dependencyCycleAnalysis != null)
                         AddDependencyCycleAnalysisJsonFields(payload, dependencyCycleAnalysis);
-                    AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary);
+                    AddDependencySchemaJsonFields(payload, reader, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary);
                     AddFreshnessHint(payload, reader);
                     WriteGraphLiveness("deps", "write_output", options, depsFormat, rows: outputEdges.Count, cycleCount: 0, machineReadable: machineReadable);
                     var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions);
@@ -750,7 +752,7 @@ public static partial class QueryCommandRunner
                 }
                 else if (!options.SummaryOnly)
                     payload["edges"] = JsonSerializer.SerializeToNode(outputEdges, CliJsonSerializerContextFactory.Create(jsonOptions).ListFileDependencyResult);
-                AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary);
+                AddDependencySchemaJsonFields(payload, reader, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary);
                 AddFreshnessHint(payload, reader);
                 WriteGraphLiveness("deps", "write_output", options, depsFormat, rows: outputEdges.Count, cycleCount: cycles.Count, machineReadable: machineReadable);
                 return WriteDepsJsonPayload(payload, options, jsonOptions);
@@ -1240,6 +1242,7 @@ public static partial class QueryCommandRunner
 
     private static void AddDependencySchemaJsonFields(
         JsonObject payload,
+        DbReader reader,
         QueryCommandOptions options,
         JsonSerializerOptions jsonOptions,
         SqlGraphContractSignal sqlGraphSignal,
@@ -1247,7 +1250,7 @@ public static partial class QueryCommandRunner
     {
         payload["api_version"] = JsonOutputContract.ApiVersion;
         payload["query_context"] = BuildQueryContextJson(options, jsonOptions);
-        AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+        AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal);
         AddDependencySymbolFilterJsonFields(payload, symbolFilter, jsonOptions);
     }
 
@@ -1379,7 +1382,7 @@ public static partial class QueryCommandRunner
             }).ToArray());
         }
         addExtraJsonFields?.Invoke(payload);
-        AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter);
+        AddDependencySchemaJsonFields(payload, reader, options, jsonOptions, sqlGraphSignal, symbolFilter);
         AddFreshnessHint(payload, reader);
         return WriteDepsJsonPayload(payload, options, jsonOptions);
     }

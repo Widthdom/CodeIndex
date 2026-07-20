@@ -364,6 +364,40 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRun_HeaderLanguageDetectionExposesSourceAndConfidence_Issue4608()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "ambiguous.h"),
+                "/* class CommentOnly {}; */\nstruct real_c_type { int value; };\n");
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "ambiguous.h",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(1, json.GetProperty("language_detections_total").GetInt32());
+            Assert.False(json.GetProperty("language_detections_truncated").GetBoolean());
+            Assert.Equal(IndexCommandRunner.DryRunLanguageDetectionLimit, json.GetProperty("language_detection_limit").GetInt32());
+            var detection = Assert.Single(json.GetProperty("language_detections").EnumerateArray().ToArray());
+            Assert.Equal("ambiguous.h", detection.GetProperty("path").GetString());
+            Assert.Equal("c", detection.GetProperty("language").GetString());
+            Assert.Equal("header_lexical_fallback", detection.GetProperty("source").GetString());
+            Assert.Equal("low", detection.GetProperty("confidence").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DryRun_WithFiles_NormalizesUnicodeDbPathForEstimates()
     {
         var projectRoot = CreateTempProject();

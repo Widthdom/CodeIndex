@@ -126,6 +126,31 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunLanguages_JsonModesPublishReferenceExtractionSafetyLimits_Issue4620()
+    {
+        string[][] modes =
+        [
+            ["--json"],
+            ["--json", "--summary-only"],
+            ["--json", "--format", "count"],
+        ];
+
+        foreach (var args in modes)
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(args, _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var limits = document.RootElement.GetProperty("reference_extraction_limits");
+            Assert.Equal(50_000, limits.GetProperty("max_lookup_symbols").GetInt32());
+            Assert.Equal(20_000, limits.GetProperty("max_lookup_lines").GetInt32());
+            Assert.Equal(512, limits.GetProperty("max_names_per_line").GetInt32());
+            Assert.Equal(20_000, limits.GetProperty("max_container_candidates").GetInt32());
+        }
+    }
+
+    [Fact]
     public void ParseArgs_AllowsZeroMaxLineWidth()
     {
         var options = QueryCommandRunner.ParseArgs(["RunSearch", "--max-line-width", "0"], jsonDefault: false, allowNamedQuery: true);
@@ -7529,6 +7554,7 @@ public partial class QueryCommandRunnerTests
         writer.MarkGraphReady();
         writer.MarkFoldReady();
         writer.MarkCSharpSymbolNameContractReady();
+        writer.MarkIssuesReady();
     }
 
     private static string CreateSqlGraphContractFixtureDb(string projectRoot)

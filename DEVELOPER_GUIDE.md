@@ -188,7 +188,7 @@ git status --short -- '**/packages.lock.json'
 | Workspace resolution | `Cli/DbPathResolver.cs`, `Cli/GitHelper.cs`, `Cli/IndexFreshnessChecker.cs`, `Cli/WorkspaceMetadataEnricher.cs`, `Cli/GlobalToolLog.cs` | DB path resolution, git-aware refresh inputs, DB/worktree freshness checks, workspace metadata, and persistent install logs. |
 | SQLite storage | `Database/DbContext.cs`, `Database/DbConnectionFactory.cs`, `Database/DbPragmaPolicy.cs`, `Database/SqliteConnectionPolicy.cs`, `Database/SqliteCommandPolicy.cs`, `Database/SqliteIdentifier.cs`, `Database/DbWriter.cs`, `Database/DbReader.cs` | WAL-backed SQLite schema, shared connection-string/read-only URI/command-timeout policy, retry and pragma policy, typed SQLite parameter/scalar helpers, quoted identifier SQL helpers, batch writes, stale-file cleanup, FTS5 search, symbol/reference lookups, excerpts, outlines, inspect bundles, status, and dependency queries. |
 | Repository map | `Database/RepoMapBuilder.cs` | Repo-level overview for `map`: file stats, likely entrypoints, hotspots, and module grouping. |
-| File scanning | `Indexer/Scanning/FileIndexer.cs`, `Indexer/Scanning/ChunkSplitter.cs` | Shared full/update path filtering, ignore handling, language detection, file records, and 80-line chunks with 10-line overlap. |
+| File scanning | `Indexer/Scanning/FileIndexer.cs`, `Indexer/Scanning/FileIndexer.LanguageDetection.cs`, `Indexer/Scanning/ChunkSplitter.cs` | Shared full/update path filtering, ignore handling, language detection, file records, and 80-line chunks with 10-line overlap. Ambiguous `.h` detection reuses the bounded C/C++ lexical masker, streams lexical and preprocessor state through skipped bytes, and scores either the full header or head/middle/tail ranges within a 48 KiB UTF-8 byte budget. Its source/confidence metadata is retained on loaded records and exposed by `index --dry-run --json` under `language_detections`. |
 | Symbol extraction | `Indexer/Symbols/SymbolExtractor.cs`, `Indexer/Symbols/SymbolExtractor.Lisp.cs`, `Indexer/Symbols/CSharpSymbolNameNormalizer.cs` | Hybrid symbol extraction across supported languages plus C# persisted-name canonicalization. |
 | Reference orchestration | `Indexer/References/ReferenceExtractor.cs` | Dispatches regex/state-machine reference extraction across graph-supported languages. |
 | Reference support | `Indexer/References/Support/*.cs` | Shared masking, type-position scanning, trailing-lambda handling, JVM method references, and SQL name resolution. |
@@ -511,6 +511,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `test.method` | Test methods detected by test-aware extraction | Callable definition; participates in callers/callees through reference rows |
 | `trait` | Trait declarations in languages that distinguish traits from interfaces | Definition target and container |
 | `type` | Type declarations where a narrower class/interface/struct/enum kind is not available | Definition target |
+| `type_parameter` | Python `TypeVar`, `ParamSpec`, and `TypeVarTuple` declarations | Type-like definition target for declared type parameters |
 | `typealias` | Type alias declarations | Definition target for alias names |
 | `union` | Union declarations | Definition target and container |
 | `user` | Dockerfile `USER` values | Container runtime search symbol |
@@ -518,6 +519,11 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `variable` | Variable bindings | Search/filter symbol |
 | `volume` | Dockerfile `VOLUME` paths | Container storage search symbol |
 | `workdir` | Dockerfile `WORKDIR` paths | Container filesystem search symbol |
+
+`SymbolKindCatalog.CompatibilityKindFamilies` maps both `typealias` and
+`type_parameter` to the broad `type` family for consumers that only understand
+the older coarse taxonomy. The persisted `kind` remains semantic, and `--kind`
+filters remain exact, so `--kind import` does not include local type declarations.
 
 `symbol_references.reference_kind` uses this separate reference taxonomy:
 
@@ -559,6 +565,18 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 `status --check` keeps the DB/worktree checksum comparison in `IndexFreshnessChecker`, but the user-facing age hint threshold is resolved in `QueryCommandRunner`: CLI `--stale-after <duration>` wins over `CDIDX_STALE_AFTER`, which wins over `.cdidxrc.json`'s `stale_after`, then the 24-hour default. Supported duration suffixes are `m`, `h`, and `d`. A valid CLI `--stale-after` implies the workspace check. Check-mode JSON includes the top-level `stale_after_seconds` and `index_age_seconds` fields plus `query_context.check_mode` (`explicit` or `implied_by_stale_after`) and `query_context.stale_after_seconds`, so clients can audit both the activation path and the effective threshold without inferring them from text. Ordinary status JSON omits these check-only fields.
 
 `status --json` emits structured readiness guidance whenever any trust field is degraded. The top-level `degraded_root_cause` is a stable machine-readable primary code, while `readiness_degradations[]` lists every degraded field with `root_cause`, human `degraded_reason`, `recommended_action`, and `alternative_action`. `migration_in_progress` is set from the active batch marker so clients can distinguish a temporary writer/migration window from a permanently degraded index. `issues_table_available` means the physical `file_issues` table exists; `file_issues_data_current` is the freshness/trust bit consumers should use before treating validate rows as authoritative.
+
+Reference extraction publishes its fixed safety limits through CLI
+`languages --json` / `status --json` and the corresponding MCP responses:
+50,000 lookup symbols, 20,000 lookup lines, 512 names per
+line, and 20,000 container candidates. Cap diagnostics are persisted as
+per-file `file_issues`, aggregated for the current generation in
+`reference_extraction_cap_hits`, and snapshotted into
+`last_index_run.reference_extraction_cap_hits`. Any hit makes
+`reference_graph_complete=false` and `graph_data_current=false`; callers,
+CLI/MCP callers, callees, deps, and impact responses repeat the bounded summary and stable diagnostic
+kinds so consumers cannot mistake an incomplete zero for an authoritative
+absence.
 
 ### Workspace version pinning
 
@@ -606,6 +624,7 @@ Current stable codes and triggers:
 | `hotspot_family_marker_fingerprint_incomplete` | hotspot-family marker fingerprint traversal hit a safety cap, so family trust was not stamped authoritative | reduce generated/ignored marker trees or raise the cap in code, then run `cdidx index <projectPath> --rebuild` |
 | `partial_family_key_population` | hotspot-family metadata is stamped but some indexed symbols still have NULL `family_key` values | `cdidx index <projectPath> --rebuild` |
 | `graph_table_available=false` | `symbol_references` is missing or not graph-ready | `cdidx index <projectPath>` |
+| `reference_graph_complete=false` | a reference-extraction safety cap was reached, or legacy storage cannot report cap state | narrow/exclude the reported generated or pathological files, then run `cdidx index <projectPath>` |
 | `issues_table_available=false` | `file_issues` is missing or not issue-ready | `cdidx index <projectPath>` |
 | `csharp_symbol_name_ready=false` | C# canonical symbol-name stamps are stale | `cdidx index <projectPath>` |
 | `csharp_metadata_target_ready=false` | C# metadata-target stamps are stale | `cdidx index <projectPath>` |
@@ -1140,7 +1159,7 @@ SQL-specific symbol extraction:
 | MySQL backtick identifiers | Backtick-quoted identifiers are treated as case-preserving symbol names. |
 | Unquoted identifiers | Continue through existing case-insensitive lookup paths. |
 | MySQL `DEFINER=user@host` | Emits `definer` symbols. |
-| PostgreSQL `RETURNS TABLE(...)` / `OUT` parameters | Emit function-scoped `field` symbols for synthetic result columns. |
+| PostgreSQL `RETURNS TABLE(...)` / `OUT` parameters | Emit function-scoped `field` symbols for synthetic result columns. `RETURNS TABLE` column lists are scanned with bounded, quote-aware parenthesis balancing so nested type modifiers and unsupported trailing syntax cannot abort the file extractor. |
 
 Supported symbol kinds by language:
 
@@ -1157,7 +1176,7 @@ Supported symbol kinds by language:
 | Swift | functions, classes, actors, structs, protocols, enums, stored properties | imports and trailing-closure calls | yes |
 | Ruby | `def`, Rails DSL, block calls, classes, modules, attributes | `require` | yes |
 | Perl | packages, subroutines, constants | `use`, `require`, `parent` / `base`, arrow method calls | yes |
-| C / C++ | functions, macros, structs, C++ classes, enums, enum classes | `#include`, type-position references | yes |
+| C / C++ | functions, macros, structs, C++ classes, enums, enum classes; balanced C++ callable declarators including constructors, destructors, operators, and trailing-return functions | `#include`, type-position references | yes |
 | PHP | functions, constants, enum cases, classes, interfaces, traits, enums | `use`, `require`, `include` | yes |
 | Scala | `def`, `implicit` declarations, `given`, classes, objects, traits, enums | imports, type aliases, block calls, `for` generators, implicit conversion types, `given` / `using` evidence types | yes |
 | Elixir | `def`, `defp`, modules, protocols | `import`, `alias`, `use`, `require` | yes |
@@ -1284,22 +1303,31 @@ For the AI agent search-rule template, see [AI Integration](USER_GUIDE.md#ai-int
 
 | Field group | Fields |
 |---|---|
-| Readiness and graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`. |
+| Readiness and graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `graph_data_current`, `reference_extraction_limits`, `reference_graph_complete`, `reference_graph_incomplete_reasons`, `reference_extraction_cap_hits`, `index_complete`, `index_incomplete_reasons`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`. |
 | Workspace and HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`, `head_freshness`. |
 | Version and forward compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`. |
-| Unknown-extension and runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `query_context.check_mode`, `query_context.stale_after_seconds`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`. |
+| Unknown-extension and runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `query_context.check_mode`, `query_context.stale_after_seconds`, `last_index_run.reference_extraction_cap_hits`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`, `last_failed_or_partial_index_run.file_errors`. |
 | Database maintenance | `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `busy_timeout_ms`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `prepared_command_cache` (`count`, `capacity`, `hit_count`, `miss_count`, `eviction_count`), `maintenance_guidance`. |
 | Remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`. |
 | MCP-only session diagnostics | `mcp_session`, `mcp_session.metrics`, `mcp_session.audit_log`, `mcp.rate_limit.bucket_limit`, and `mcp.rate_limit.bucket_limit_rejection_count`. `mcp_session` is session-scoped diagnostics rather than persisted DB state. It contains `log_level`, bounded `roots`, optional `client_info`, bounded optional `client_capabilities`, an always-present `metrics` object, and `audit_log` when audit emission is enabled. When advertised roots are capped, `roots_truncated`, `root_count`, `root_limit`, and `root_uri_length_limit` describe the truncation. When client capabilities are capped, `client_capabilities_truncated`, `client_capabilities_truncation_reason`, `client_capabilities_serialized_bytes`, `client_capabilities_byte_limit`, and `client_capabilities_depth_limit` describe the retained diagnostic subset. `mcp_session.metrics` is `{"enabled":false}` when unconfigured. An enabled metrics sink contains `enabled`, `path`, `max_bytes`, `bytes_written`, `disposed`, `degraded`, `queue_capacity`, `queue_depth`, `queued_event_count`, `written_event_count`, `dropped_event_count`, `queue_full_drop_count`, `serialization_failure_count`, `write_failure_count`, `rotation_failure_count`, `batch_flush_count`, `consecutive_failure_count`, and `recovery_count`, plus optional `next_retry_at`, `last_recovery_at`, and `last_failure`. MCP ping always mirrors the metrics object as `metrics`; metrics degradation is intentionally excluded from its top-level liveness result. The audit status fields and their health semantics are defined in [MCP audit log emission](#mcp-audit-log-emission). `mcp.rate_limit.bucket_limit` is the configured process-local cap across normalized `(partition, caller)` buckets: every direct call uses one fixed caller-wide coarse partition, canonical known tools additionally use secondary per-tool partitions, and unknown `batch_query` slots share one fixed invalid-slot partition per caller. `mcp.rate_limit.bucket_limit_rejection_count` counts calls denied because creating a new bucket would exceed that cap. |
 | Documentation sync | Keep this list synchronized with `README.md` and `AGENT_GUIDE.md`; `DocumentationStatusContractTests` fails when any required field is missing from one of those docs. |
 
 `head_freshness` is a compact summary for machine consumers. `state=fresh`
-requires a successful `status --check` workspace comparison, `state=head_current`
+requires a successful complete `status --check` workspace comparison,
+`state=fresh_but_incomplete` separates matching-workspace freshness from failed-file coverage, and `state=head_current`
 only proves the runtime HEAD matched the `indexed_head` selected by
 `indexed_head_source`, and
 `indexed_head_source` tells consumers whether `indexed_head` came from the latest
 index stamp (`indexed_head_sha`) or the legacy full-scan-only stamp
 (`indexed_head_commit`).
+
+Per-file full-scan or scoped-update failures commit their own successful file transactions and restore
+the graph-presence bit so persisted edges remain queryable. They do not restore issue,
+SQL graph, hotspot, C#, or fold currentness stamps. Instead they persist
+`index_completeness=incomplete`, bounded structured file errors, and recovery metadata;
+the next complete run clears that state. Full-scan JSON reports extracted and persisted
+counts separately, uses committed database counts for primary totals, and returns exit
+`11` unless `--allow-partial` explicitly selects exit `0`.
 
 Runtime diagnostic subcontracts:
 
@@ -1323,6 +1351,8 @@ Exact-match flag compatibility is documented in [USER_GUIDE.md](USER_GUIDE.md#fl
 `search`, `definition`, `references`, `callers`, `callees`, `symbols`, and `files` also share path-aware narrowing via `--path`, repeatable `--exclude-path`, and `--exclude-tests`. The read layer ranks source files ahead of tests and docs, and `search` further boosts exact symbol-name and path matches so AI clients are more likely to land on implementation files first.
 
 `search --json` and MCP `search` project full chunks into compact match-centered snippets with `chunk_start_line`, `chunk_end_line`, `snippet_start_line`, `snippet_end_line`, `snippet`, `match_lines`, `highlights`, `context_before`, `context_after`, `truncated_line_count`, `dropped_match_line_count`, and `truncation_context`. Compact CLI rows and MCP search results also echo effective output options with `snippet_lines` / `snippetLines`, `max_line_width` / `maxLineWidth`, `exact`, `raw_fts` / `rawFts`, `literal_highlights_available` / `literalHighlightsAvailable`, and optional `literal_highlight_warning` / `literalHighlightWarning`. `--snippet-lines` caps the snippet length up front (default: 8, max: 20), and `--max-line-width` (CLI) / `maxLineWidth` (MCP) clamps each individual snippet line around the first match token via the shared `LineWidthFormatter.ClampLine` contract used by `find` / `references` / `excerpt` / `inspect` (default: 512, max: 4096) so a single match inside a minified / transpiled / generated single-line file no longer returns hundreds of KB per hit. Clamped lines surface `...(+N)...` markers inside the snippet and expose `truncation_context.char_counts`, `truncation_context.total_chars`, `highlights[].truncated`, `highlights[].original_line_length`, and `highlights[].truncated_char_counts` so AI clients can detect clamping and quantify omitted characters. `highlights[].terms` remains a distinct term list for compatibility; `highlights[].term_occurrences` records every matched occurrence with `term`, 1-based `line`, 1-based `column`, `length`, plus `visible`, `visible_column`, and `visible_length` for the portion still present in the returned snippet text after line clamping. Exact substring search also adds `highlights[].literal_terms` and `highlights[].literal_term_occurrences` (camelCase in MCP) so clients can render only the requested literal phrase while preserving the broader diagnostic token list; raw FTS rows set `literal_highlight_warning` / `literalHighlightWarning` to `literal_highlights_unavailable_raw_fts` because FTS syntax can no longer be mapped to one literal phrase. Non-exact punctuation-heavy code-phrase searches add `exact_substring_hint` to CLI JSON compact results and `recovery_hint` to MCP `search` responses so clients can retry with exact substring semantics when FTS tokenization is likely to hide punctuation. `focus_mode`, `focus_line`, `focus_column`, and `focus_reason` describe the match window selected for the snippet, while `dropped_match_line_count` and optional `next_match` report match lines omitted because they fell outside that selected snippet window.
+
+Default `quality` snippet focus treats a single query that begins with a letter or underscore and otherwise contains only letters, digits, and underscores as identifier-shaped. When a result mixes matching code with earlier comments or strings, the first `code`-origin occurrence supplies both the preferred snippet line and column, including when a literal and executable occurrence share one long line; automatic occurrence focus scans the complete valid chunk even when its text exceeds the bounded line-only preferred-focus probe. Space-delimited phrase queries and explicit `leftmost` / `proximity` focus modes retain their existing selection. Explicit origin filters refocus on the first retained facet's line and column so focus metadata, visibility, and line clamping describe the filtered result. The selected occurrence remains auditable through the existing focus and origin metadata, `dropped_match_line_count` is computed from the final returned window, and `next_match` continues forward from that window.
 
 When the match line falls inside an indexed symbol range, `search --json` and MCP `search` also include optional `enclosing_symbol_name`, `enclosing_symbol_kind`, `enclosing_symbol_start_line`, `enclosing_symbol_end_line`, and `enclosing_container_name`.
 
@@ -2977,7 +3007,7 @@ git status --short -- '**/packages.lock.json'
 | ワークスペース解決 | `Cli/DbPathResolver.cs`, `Cli/GitHelper.cs`, `Cli/IndexFreshnessChecker.cs`, `Cli/WorkspaceMetadataEnricher.cs`, `Cli/GlobalToolLog.cs` | DB パス解決、git-aware な更新入力、DB/作業ツリー鮮度確認、workspace metadata、install log。 |
 | SQLite ストレージ | `Database/DbContext.cs`, `Database/DbConnectionFactory.cs`, `Database/DbPragmaPolicy.cs`, `Database/SqliteConnectionPolicy.cs`, `Database/SqliteCommandPolicy.cs`, `Database/SqliteIdentifier.cs`, `Database/DbWriter.cs`, `Database/DbReader.cs` | WAL 付き SQLite schema、共有 connection string / read-only URI / command timeout policy、retry と pragma policy、型付き SQLite parameter / scalar helper、quoted identifier SQL helper、batch write、古い file の cleanup、FTS5 search、symbol/reference lookup、excerpt、outline、inspect bundle、status、dependency query。 |
 | リポジトリマップ | `Database/RepoMapBuilder.cs` | `map` 用の repo overview: file stats、entrypoint 候補、hotspot、module grouping。 |
-| ファイル走査 | `Indexer/Scanning/FileIndexer.cs`, `Indexer/Scanning/ChunkSplitter.cs` | full/update 共通の path filtering、ignore 処理、language detection、file record、80 行 chunk と 10 行 overlap。 |
+| ファイル走査 | `Indexer/Scanning/FileIndexer.cs`, `Indexer/Scanning/FileIndexer.LanguageDetection.cs`, `Indexer/Scanning/ChunkSplitter.cs` | full/update 共通の path filtering、ignore 処理、language detection、file record、80 行 chunk と 10 行 overlap。曖昧な `.h` 判定は、上限付き C/C++ 字句マスカーを再利用し、評価対象外の byte でも字句・プリプロセッサ状態をストリーミング追跡しながら、48 KiB の UTF-8 byte budget 内でヘッダー全体または先頭・中央・末尾 range を評価します。判定元・信頼度 metadata は loaded record に保持し、`index --dry-run --json` の `language_detections` で公開します。 |
 | シンボル抽出 | `Indexer/Symbols/SymbolExtractor.cs`, `Indexer/Symbols/SymbolExtractor.Lisp.cs`, `Indexer/Symbols/CSharpSymbolNameNormalizer.cs` | 対応言語の hybrid symbol extraction と C# persisted name canonicalization。 |
 | 参照抽出の制御 | `Indexer/References/ReferenceExtractor.cs` | graph 対応言語の regex / state-machine reference extraction を dispatch。 |
 | 参照抽出サポート | `Indexer/References/Support/*.cs` | masking、type-position scan、trailing lambda、JVM method reference、SQL name resolution の共有処理。 |
@@ -3340,6 +3370,7 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | `test.method` | test-aware extraction が検出した test method | Callable definition。reference row 経由で callers/callees に参加 |
 | `trait` | trait を interface と区別する言語の trait declaration | Definition target and container |
 | `type` | より狭い class / interface / struct / enum kind が使えない type declaration | Definition target |
+| `type_parameter` | Python の `TypeVar`、`ParamSpec`、`TypeVarTuple` declaration | 宣言された type parameter の type-like definition target |
 | `typealias` | type alias declaration | alias name の definition target |
 | `union` | union declaration | Definition target and container |
 | `user` | Dockerfile `USER` value | container runtime search symbol |
@@ -3347,6 +3378,12 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | `variable` | variable binding | Search/filter symbol |
 | `volume` | Dockerfile `VOLUME` path | container storage search symbol |
 | `workdir` | Dockerfile `WORKDIR` path | container filesystem search symbol |
+
+古い粗い taxonomy だけを理解する consumer 向けに、
+`SymbolKindCatalog.CompatibilityKindFamilies` は `typealias` と
+`type_parameter` の両方を広い `type` family へ mapping します。永続化される
+`kind` は semantic な値を維持し、`--kind` filter も完全一致のままなので、
+`--kind import` にローカル type declaration は含まれません。
 
 `symbol_references.reference_kind` は別の reference taxonomy を使います。
 
@@ -3388,6 +3425,15 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 `status --check` の DB/worktree checksum 比較は `IndexFreshnessChecker` に置き、ユーザー向け age hint のしきい値は `QueryCommandRunner` で解決する。優先順位は CLI の `--stale-after <duration>`、`CDIDX_STALE_AFTER`、`.cdidxrc.json` の `stale_after`、24 時間の既定値。duration suffix は `m` / `h` / `d` をサポートする。有効な CLI `--stale-after` は workspace check を暗黙に有効化する。check mode の JSON はトップレベルの `stale_after_seconds` / `index_age_seconds` に加え、`query_context.check_mode`（`explicit` または `implied_by_stale_after`）と `query_context.stale_after_seconds` を返すため、クライアントは text を解析せず activation path と適用しきい値を監査できる。通常の status JSON はこれらの check 専用 field を省略する。
 
 `status --json` は trust field のいずれかが degraded の場合に structured readiness guidance を出す。トップレベルの `degraded_root_cause` は primary の安定した machine-readable code で、`readiness_degradations[]` は degraded な各 field と `root_cause`、人間向け `degraded_reason`、`recommended_action`、`alternative_action` を列挙する。`migration_in_progress` は active batch marker から設定し、一時的な writer/migration window と恒久的な degraded index をクライアントが区別できるようにする。`issues_table_available` は物理的な `file_issues` table の存在を意味し、validate rows を authoritative として扱う前の freshness/trust bit は `file_issues_data_current` を使う。
+
+reference extraction の固定 safety limit は lookup symbol 50,000件、lookup line
+20,000行、1行あたりの name 512件、container candidate 20,000件で、CLI の
+`languages --json` / `status --json` と対応する MCP response に公開します。cap diagnostic は file ごとの `file_issues`
+として永続化し、current generation の `reference_extraction_cap_hits` に集約し、
+`last_index_run.reference_extraction_cap_hits` に snapshot します。1件でも到達すると
+`reference_graph_complete=false` / `graph_data_current=false` になり、callers、callees、
+CLI/MCP の callers、callees、deps、impact response も上限付き summary と stable diagnostic kind を返すため、consumer
+は incomplete な0件を authoritative な不在と誤認しません。
 
 ### ワークスペースのバージョン固定
 
@@ -3457,6 +3503,7 @@ alternative action を同じ場所へ追加してください。
 | `hotspot_family_marker_fingerprint_incomplete` | hotspot-family marker fingerprint traversal が safety cap に到達し、family trust が authoritative に stamp されなかった | generated / ignored marker tree を減らすか code 側の cap を上げてから `cdidx index <projectPath> --rebuild` |
 | `partial_family_key_population` | hotspot-family metadata は stamp 済みだが、一部の indexed symbol で `family_key` が NULL | `cdidx index <projectPath> --rebuild` |
 | `graph_table_available=false` | `symbol_references` が無い、または graph-ready ではない | `cdidx index <projectPath>` |
+| `reference_graph_complete=false` | reference-extraction safety cap に到達した、または legacy storage で cap state を報告できない | 報告された generated / pathological file を絞り込むか除外してから `cdidx index <projectPath>` |
 | `issues_table_available=false` | `file_issues` が無い、または issue-ready ではない | `cdidx index <projectPath>` |
 | `csharp_symbol_name_ready=false` | C# canonical symbol-name stamp が stale | `cdidx index <projectPath>` |
 | `csharp_metadata_target_ready=false` | C# metadata-target stamp が stale | `cdidx index <projectPath>` |
@@ -4006,7 +4053,7 @@ SQL 固有の symbol extraction:
 | MySQL backtick identifier | case-preserving symbol name として扱います。 |
 | unquoted identifier | 既存の case-insensitive lookup path を通ります。 |
 | MySQL `DEFINER=user@host` | `definer` symbol を出力します。 |
-| PostgreSQL `RETURNS TABLE(...)` / `OUT` parameter | synthetic result column 用に function-scoped `field` symbol を出力します。 |
+| PostgreSQL `RETURNS TABLE(...)` / `OUT` parameter | synthetic result column 用に function-scoped `field` symbol を出力します。`RETURNS TABLE` の列リストは上限付き・quote-aware な括弧対応で走査するため、ネストした型修飾子や未対応の後続構文が file extractor 全体を中断しません。 |
 
 言語別対応シンボル種別:
 
@@ -4023,7 +4070,7 @@ SQL 固有の symbol extraction:
 | Swift | function、class、actor、struct、protocol、enum、stored property | import、trailing-closure call | yes |
 | Ruby | `def`、Rails DSL、block call、class、module、attribute | `require` | yes |
 | Perl | package、subroutine、constant | `use`、`require`、`parent` / `base`、arrow method call | yes |
-| C / C++ | function、macro、struct、C++ class、enum、enum class | `#include`、type-position reference | yes |
+| C / C++ | function、macro、struct、C++ class、enum、enum class。constructor、destructor、operator、後置戻り値 function を含む、括弧の対応を考慮した C++ callable declarator | `#include`、type-position reference | yes |
 | PHP | function、constant、enum case、class、interface、trait、enum | `use`、`require`、`include` | yes |
 | Scala | `def`、class、object、trait、enum | import、type alias、block call | yes |
 | Elixir | `def`、`defp`、module、protocol | `import`、`alias`、`use`、`require` | yes |
@@ -4152,21 +4199,29 @@ AI エージェント向け検索ルールのテンプレートについては�
 
 | field group | fields |
 |---|---|
-| readiness / graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`。 |
+| readiness / graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `graph_data_current`, `reference_extraction_limits`, `reference_graph_complete`, `reference_graph_incomplete_reasons`, `reference_extraction_cap_hits`, `index_complete`, `index_incomplete_reasons`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`。 |
 | workspace / HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`, `head_freshness`。 |
 | version / forward compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`。 |
-| unknown-extension / runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `query_context.check_mode`, `query_context.stale_after_seconds`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`。 |
+| unknown-extension / runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `query_context.check_mode`, `query_context.stale_after_seconds`, `last_index_run.reference_extraction_cap_hits`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`, `last_failed_or_partial_index_run.file_errors`。 |
 | database maintenance | `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `busy_timeout_ms`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `prepared_command_cache` (`count`, `capacity`, `hit_count`, `miss_count`, `eviction_count`), `maintenance_guidance`。 |
 | remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`。 |
 | MCP-only session diagnostics | `mcp_session`、`mcp_session.metrics`、`mcp_session.audit_log`、`mcp.rate_limit.bucket_limit`、`mcp.rate_limit.bucket_limit_rejection_count`。`mcp_session` は persisted DB state ではなく session-scoped diagnostics で、`log_level`、上限付きの `roots`、任意の `client_info`、上限付きの任意の `client_capabilities`、常設の `metrics` object、audit 出力が有効な場合の `audit_log` を含みます。advertised root が切り詰められた場合は `roots_truncated`、`root_count`、`root_limit`、`root_uri_length_limit` が切り詰め内容を示します。client capabilities が切り詰められた場合は `client_capabilities_truncated`、`client_capabilities_truncation_reason`、`client_capabilities_serialized_bytes`、`client_capabilities_byte_limit`、`client_capabilities_depth_limit` が保持された診断 subset を示します。未設定時の `mcp_session.metrics` は `{"enabled":false}` です。有効な metrics sink は `enabled`、`path`、`max_bytes`、`bytes_written`、`disposed`、`degraded`、`queue_capacity`、`queue_depth`、`queued_event_count`、`written_event_count`、`dropped_event_count`、`queue_full_drop_count`、`serialization_failure_count`、`write_failure_count`、`rotation_failure_count`、`batch_flush_count`、`consecutive_failure_count`、`recovery_count` に加え、任意の `next_retry_at`、`last_recovery_at`、`last_failure` を追加します。MCP ping は常に metrics object を `metrics` として返し、metrics の degradation は意図的に top-level liveness result へ反映しません。audit status field と health semantics は [MCP 監査ログの出力](#mcp-監査ログの出力) に定義します。`mcp.rate_limit.bucket_limit` は normalized な `(partition, caller)` bucket 全体に対する process-local 上限で、direct call はすべて caller-wide の固定 coarse partition、canonical な既知 tool は追加の secondary per-tool partition、unknown な `batch_query` slot は caller ごとの 1 つの固定 invalid-slot partition を使います。`mcp.rate_limit.bucket_limit_rejection_count` は新規 bucket 作成がその上限を超えるため拒否された呼び出し数です。 |
 | documentation sync | この一覧は `README.md` と `AGENT_GUIDE.md` と同期してください。必須 field がそれらの docs から欠けると `DocumentationStatusContractTests` が失敗します。 |
 
 `head_freshness` は machine consumer 向けの compact summary です。
-`state=fresh` は `status --check` の workspace 比較成功が必要で、
+`state=fresh` は complete な index に対する `status --check` の workspace 比較成功が必要で、
+`state=fresh_but_incomplete` は workspace freshness と failed-file coverage を分離し、
 `state=head_current` は runtime HEAD と `indexed_head_source` が選んだ
 `indexed_head` の一致だけを示します。
 `indexed_head_source` は `indexed_head` が最新 index stamp (`indexed_head_sha`) 由来か、
 legacy full-scan 限定 stamp (`indexed_head_commit`) 由来かを示します。
+
+full scan または scoped update の per-file failure は、成功した file transaction を commit し、persisted edge を
+query できるよう graph-presence bit を復元します。一方で issue、SQL graph、hotspot、C#、
+fold の currentness stamp は復元しません。代わりに `index_completeness=incomplete`、上限付きの
+構造化 file error、recovery metadata を永続化し、次の complete run がそれらを clear します。
+full-scan JSON は extracted / persisted count を分離し、primary total には commit 済み DB count を使い、
+`--allow-partial` で終了コード `0` を明示しない限り `11` を返します。
 
 runtime diagnostic subcontract:
 
@@ -4192,6 +4247,8 @@ exact-match flag の互換性は [USER_GUIDE.md](USER_GUIDE.md#フラグ互換�
 literal-safe な `search` query は reader 層で FTS5 sanitization 前に 1000 文字、128 whitespace term へ制限します。CLI、MCP、直接 reader caller の failure mode を揃えるため、この guard は `DbReader` に置きます。raw `--fts` query は別途 raw FTS complexity limit を使います。
 
 `search --json` と MCP の `search` は、フルチャンクを `chunk_start_line`、`chunk_end_line`、`snippet_start_line`、`snippet_end_line`、`snippet`、`match_lines`、`highlights`、`context_before`、`context_after`、`truncated_line_count`、`dropped_match_line_count`、`truncation_context` を持つ軽量スニペットへ投影します。compact CLI row と MCP search result は有効な出力オプションも `snippet_lines` / `snippetLines`、`max_line_width` / `maxLineWidth`、`exact`、`raw_fts` / `rawFts`、`literal_highlights_available` / `literalHighlightsAvailable`、任意の `literal_highlight_warning` / `literalHighlightWarning` として返します。`--snippet-lines` で抜粋長を先に制限でき（デフォルト: 8、最大: 20）、`--max-line-width`（CLI）/ `maxLineWidth`（MCP）は `find` / `references` / `excerpt` / `inspect` と同じ共有 `LineWidthFormatter.ClampLine` 契約（デフォルト: 512、最大: 4096、`0` で切り詰め解除）で各スニペット行を最初のマッチトークン周辺にクランプするため、minified / transpiled / 生成された 1 行ファイル内の 1 ヒットで数百 KB を返さなくなります。クランプされた行はスニペットに `...(+N)...` マーカーが入り、`truncation_context.char_counts`、`truncation_context.total_chars`、`highlights[].truncated`、`highlights[].original_line_length`、`highlights[].truncated_char_counts` で AI クライアントがクランプの有無と省略文字数を検出できます。`highlights[].terms` は互換性のため distinct な term list のまま残し、`highlights[].term_occurrences` は一致ごとの `term`、1-based の `line` / `column`、`length` に加えて、行クランプ後に返却 snippet text 内へ残っている部分を示す `visible`、`visible_column`、`visible_length` を記録します。exact substring search では `highlights[].literal_terms` と `highlights[].literal_term_occurrences`（MCP では camelCase）も追加され、広めの診断 token list を残したまま、要求された literal phrase だけを render できます。raw FTS row は FTS 構文を単一の literal phrase へ対応付けられないため、`literal_highlight_warning` / `literalHighlightWarning` に `literal_highlights_unavailable_raw_fts` を設定します。exact ではない記号の多い code phrase 検索では、FTS tokenization が記号を失いやすい場合に exact substring semantics で再検索できるよう、CLI JSON compact result に `exact_substring_hint`、MCP `search` に `recovery_hint` を追加します。`focus_mode`、`focus_line`、`focus_column`、`focus_reason` は snippet に選ばれた match window を説明し、`dropped_match_line_count` と任意の `next_match` は選択された snippet window 外に落ちた一致行を示します。
+
+既定の `quality` snippet focus は、先頭が文字または underscore で、残りが文字、数字、underscore だけで構成される単一 query を identifier 形状として扱います。一つの result に一致する code と、それより前の comment / string が混在する場合は、最初の `code` origin occurrence の行と列を snippet の優先位置にします。同じ長い行に literal と実行 code の occurrence がある場合も code 側を選び、自動 occurrence focus は text が行だけを指定する preferred-focus probe の上限を超える有効な chunk でも chunk 全体を走査します。空白区切りの phrase query と、明示的な `leftmost` / `proximity` focus mode は従来の選択を維持します。明示的な origin filter がある場合は、最初に残る facet の行と列へ再 focus し、focus metadata、visibility、行 clamping を filter 後の result と一致させます。選択位置は既存の focus / origin metadata で監査でき、`dropped_match_line_count` は最終的に返す window から計算し、`next_match` はその window の先を引き続き示します。
 
 マッチ行がインデックス済みシンボル範囲内にある場合、`search --json` と MCP の `search` は任意フィールドの `enclosing_symbol_name`、`enclosing_symbol_kind`、`enclosing_symbol_start_line`、`enclosing_symbol_end_line`、`enclosing_container_name` も返します。
 

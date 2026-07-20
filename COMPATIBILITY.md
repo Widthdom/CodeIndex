@@ -24,7 +24,7 @@ must refuse writes that could silently discard newer data.
 
 | Bit | Field | Meaning |
 |---|---|---|
-| `1` | `graph_table_available` / graph readiness | `symbol_references` has been fully populated for graph queries. |
+| `1` | `graph_table_available` / graph presence | `symbol_references` contains a queryable committed generation. Use `graph_data_current` / `index_complete` / `reference_graph_complete` to decide whether current-workspace coverage is complete. |
 | `2` | `issues_table_available` / issue readiness | `file_issues` has been populated for validation results. |
 | `4` | `fold_ready` | Folded-name columns are current for Unicode-aware exact-name matching. |
 | `8` | hotspot reference aggregate storage contract | The database uses `hotspot_reference_counts`; this permanent downgrade guard is preserved while other readiness bits are cleared. |
@@ -43,6 +43,12 @@ contract stamps, hotspot-family readiness, index writer version, indexed HEAD
 metadata, unknown-extension counts, filesystem case-sensitivity, MAC profile,
 and DB/WAL/status diagnostics. These stamps let readers distinguish a feature
 that is absent, stale, or newer than the running binary.
+
+Reference-extraction cap hits use existing per-file `file_issues` rows rather
+than a new schema bit. Current readers aggregate those rows into
+`reference_extraction_cap_hits` and set `reference_graph_complete=false`; a
+legacy database without inspectable issue state degrades rather than claiming
+complete graph coverage.
 
 ## Version Skew Behavior
 
@@ -96,7 +102,7 @@ degrade しなければなりません。古い binary が新しい database を
 
 | Bit | Field | 意味 |
 |---|---|---|
-| `1` | `graph_table_available` / graph readiness | graph query 用の `symbol_references` が完全に作成済み。 |
+| `1` | `graph_table_available` / graph presence | graph query 可能な commit 済み `symbol_references` generation が存在する。current workspace の coverage 完全性は `graph_data_current` / `index_complete` / `reference_graph_complete` で判定する。 |
 | `2` | `issues_table_available` / issue readiness | validation result 用の `file_issues` が作成済み。 |
 | `4` | `fold_ready` | Unicode-aware exact-name matching 用の folded-name column が最新。 |
 | `8` | hotspot reference aggregate storage contract | database が `hotspot_reference_counts` を使用することを示す永続 downgrade guard。他の readiness bit のクリア時にも保持される。 |
@@ -114,6 +120,11 @@ contract stamp、hotspot-family readiness、index writer version、indexed HEAD
 metadata、unknown-extension count、filesystem case-sensitivity、MAC profile、
 DB/WAL/status diagnostics が含まれます。reader はこれらの stamp により、feature
 が存在しないのか、stale なのか、実行中 binary より新しいのかを判別できます。
+
+reference-extraction cap hit は新しい schema bit ではなく、既存の file ごとの
+`file_issues` row を使います。current reader はそれを `reference_extraction_cap_hits`
+へ集約して `reference_graph_complete=false` にします。issue state を確認できない
+legacy database は complete graph coverage を主張せず degraded になります。
 
 ## Version skew 時の動作
 
