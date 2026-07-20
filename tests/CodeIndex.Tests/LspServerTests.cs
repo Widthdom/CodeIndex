@@ -1493,7 +1493,7 @@ public class LspServerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             var sourcePath = Path.Combine(projectRoot, "materialization.cs");
             var source = new StringBuilder("class MaterializationBudget\n{\n");
-            for (var i = 0; i < LspServer.MaxDocumentSymbolMaterialization + 25; i++)
+            for (var i = 0; i < LspServer.MaxDocumentSymbolMaterialization + 1; i++)
                 source.Append("    void Method").Append(i.ToString("D4", CultureInfo.InvariantCulture)).Append("() { }\n");
             source.Append("}\n");
 
@@ -2458,7 +2458,7 @@ public class LspServerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            for (var i = 0; i < 1001; i++)
+            for (var i = 0; i < LspServer.MaxDocumentPathFallbackCandidates; i++)
             {
                 TestProjectHelper.InsertIndexedFile(
                     dbPath,

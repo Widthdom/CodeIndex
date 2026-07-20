@@ -330,7 +330,8 @@ public partial class QueryCommandRunnerTests
                 """,
                 modified: new DateTime(2025, 2, 1, 0, 0, 0, DateTimeKind.Utc));
 
-            for (var i = 0; i < 501; i++)
+            const int expectedCandidateLimit = 200;
+            for (var i = 0; i < expectedCandidateLimit; i++)
             {
                 TestProjectHelper.InsertIndexedFile(
                     dbPath,
@@ -350,7 +351,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("src/GuardBudgetNeedle.cs", row.GetProperty("path").GetString());
             var diagnostic = Assert.Single(row.GetProperty("diagnostics").EnumerateArray());
             Assert.Equal("search_guard_candidates_truncated", diagnostic.GetProperty("code").GetString());
-            Assert.Equal(200, diagnostic.GetProperty("limit").GetInt32());
+            Assert.Equal(expectedCandidateLimit, diagnostic.GetProperty("limit").GetInt32());
         }
         finally
         {
