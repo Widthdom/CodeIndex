@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.Json;
+using CodeIndex.HookIsolationFixture;
 using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
 
@@ -18,9 +19,7 @@ public class PostExtractionHookTests
     internal const string StatefulHookEnvironmentVariable = "CDIDX_TEST_STATEFUL_POST_EXTRACTION_HOOK";
     internal const string ThrowingConstructorHookEnvironmentVariable = "CDIDX_TEST_THROWING_CTOR_POST_EXTRACTION_HOOK";
     internal const string ExpandingHookEnvironmentVariable = "CDIDX_TEST_EXPANDING_POST_EXTRACTION_HOOK";
-    internal const string ModuleInitializerPidPathEnvironmentVariable = "CDIDX_TEST_HOOK_MODULE_INITIALIZER_PID_PATH";
     internal const string ModuleInitializerDelayEnvironmentVariable = "CDIDX_TEST_HOOK_MODULE_INITIALIZER_DELAY_MS";
-    internal const string SelectiveSlowHookAssemblyEnvironmentVariable = "CDIDX_TEST_SELECTIVE_SLOW_HOOK_ASSEMBLY";
     internal const string PersistentDiscoveryWorkerPidPathEnvironmentVariable = "CDIDX_TEST_HOOK_DISCOVERY_PERSISTENT_PID_PATH";
     internal const string PersistentDiscoveryDescendantPidPathEnvironmentVariable = "CDIDX_TEST_HOOK_DISCOVERY_DESCENDANT_PID_PATH";
     private const string TimedOutHookDelayMilliseconds = "150";
@@ -142,8 +141,8 @@ public class PostExtractionHookTests
         var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-identities-4600");
         lock (TestConsoleLock.Gate)
         {
-            using var moduleInitializer = EnvironmentVariableScope.Capture(ModuleInitializerPidPathEnvironmentVariable);
-            using var selectiveSlow = EnvironmentVariableScope.Capture(SelectiveSlowHookAssemblyEnvironmentVariable);
+            using var moduleInitializer = EnvironmentVariableScope.Capture(HookIsolationFixtureEnvironment.ModuleInitializerPidPath);
+            using var selectiveSlow = EnvironmentVariableScope.Capture(HookIsolationFixtureEnvironment.SelectiveSlowHookAssembly);
             var originalBudget = PostExtractionHookRunner.CallbackBudgetForTesting;
             try
             {
@@ -151,11 +150,12 @@ public class PostExtractionHookTests
                 Directory.CreateDirectory(hooksDir);
                 var firstAssembly = Path.Combine(hooksDir, "a.dll");
                 var secondAssembly = Path.Combine(hooksDir, "b.dll");
-                File.Copy(Assembly.GetExecutingAssembly().Location, firstAssembly);
-                File.Copy(Assembly.GetExecutingAssembly().Location, secondAssembly);
+                var fixtureAssembly = typeof(PathSelectivePostExtractionHook).Assembly.Location;
+                File.Copy(fixtureAssembly, firstAssembly);
+                File.Copy(fixtureAssembly, secondAssembly);
                 var moduleInitializerPidPath = Path.Combine(projectRoot, "module-initializer.pid");
-                moduleInitializer.Set(ModuleInitializerPidPathEnvironmentVariable, moduleInitializerPidPath);
-                selectiveSlow.Set(SelectiveSlowHookAssemblyEnvironmentVariable, Path.GetFileName(firstAssembly));
+                moduleInitializer.Set(HookIsolationFixtureEnvironment.ModuleInitializerPidPath, moduleInitializerPidPath);
+                selectiveSlow.Set(HookIsolationFixtureEnvironment.SelectiveSlowHookAssembly, Path.GetFileName(firstAssembly));
                 PostExtractionHookRunner.CallbackBudgetForTesting = () => DuplicateHookCallbackBudget;
 
                 using var runner = PostExtractionHookRunner.Discover(hooksDir);
@@ -1083,34 +1083,6 @@ public sealed class SamplePostExtractionHook : IPostExtractionHook
             Column = 1,
             Context = context.Path,
         });
-    }
-}
-
-public sealed class PathSelectivePostExtractionHook : IPostExtractionHook
-{
-    public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols)
-    {
-        var assemblyName = Path.GetFileName(GetType().Assembly.Location);
-        if (string.Equals(
-                assemblyName,
-                Environment.GetEnvironmentVariable(PostExtractionHookTests.SelectiveSlowHookAssemblyEnvironmentVariable),
-                StringComparison.Ordinal))
-        {
-            Thread.Sleep(TimeSpan.FromSeconds(30));
-        }
-
-        symbols.Add(new SymbolRecord
-        {
-            Kind = "domain_tag",
-            Name = $"Selective:{assemblyName}",
-            Line = 1,
-            StartLine = 1,
-            EndLine = 1,
-        });
-    }
-
-    public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references)
-    {
     }
 }
 

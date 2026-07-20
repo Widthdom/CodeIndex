@@ -27,6 +27,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\CodeIndex\CodeIndex.csproj" />
+    <ProjectReference Include="..\CodeIndex.HookIsolationFixture\CodeIndex.HookIsolationFixture.csproj" />
     <ProjectReference Include="..\..\tools\CodeIndex.Changelog\CodeIndex.Changelog.csproj" />
     <ProjectReference Include="..\..\tools\CodeIndex.PackageNormalize\CodeIndex.PackageNormalize.csproj" />
     <ProjectReference Include="..\..\tools\CodeIndex.TestTelemetry\CodeIndex.TestTelemetry.csproj" />

@@ -1209,6 +1209,12 @@
       "codeindex.changelog": {
         "type": "Project"
       },
+      "codeindex.hookisolationfixture": {
+        "type": "Project",
+        "dependencies": {
+          "cdidx": "[1.38.0, )"
+        }
+      },
       "codeindex.packagenormalize": {
         "type": "Project"
       },
@@ -2423,6 +2429,12 @@
       },
       "codeindex.changelog": {
         "type": "Project"
+      },
+      "codeindex.hookisolationfixture": {
+        "type": "Project",
+        "dependencies": {
+          "cdidx": "[1.38.0, )"
+        }
       },
       "codeindex.packagenormalize": {
         "type": "Project"
