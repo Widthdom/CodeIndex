@@ -412,6 +412,8 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   uses one two-file recipe fixture to prove a compact search can emit a negative-score `next_cursor`, replay that exact cursor as a separated `--cursor` value, and return the next distinct page without an option-parsing error.
 - `QueryCommandRunnerTests.RunSearch_CursorDoesNotConsumeRecognizedShortOption_Issue4664`
   keeps the negative-cursor exception narrow by proving a recognized short option after `--cursor` remains an option and still produces the missing-cursor-value diagnostic.
+- `QueryCommandRunnerTests.RunReferences_ExactJson_StylesheetAndSqlFixturesShareIndexedWorkspace`
+  keeps SCSS variable/mixin/extend references beside SQL multiline MERGE hints, non-ASCII identifiers, quoted-string masking, and temporary-table body boundaries in one multi-file workspace with one CLI index. Use language-specific queries and unique per-file sentinels so count, kind, and line assertions remain independently diagnostic.
 - `LspServerTests.cs`
   LSP JSON-RPC behavior and indexed editor semantics. Reference parity coverage must compare LSP locations with the matching CLI candidate bundle, including overload identity and both `includeDeclaration` states. Keep document/workspace identifier ranges and explicit-versus-inferred inlay hints in one source-semantics fixture so persisted-column anchoring, source confirmation, and hint suppression cannot drift independently.
   The suite runs in parallel with other test classes: every process-global CodeIndex telemetry listener fixture, including LSP, MCP, and DB coverage, must capture stopped activities in a thread-safe collection and filter by the request trace, while fixtures that seed process-global `PathCasing` state must hold `PathCasingTestLock.Gate` for their full lifetime.
@@ -1132,6 +1134,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   は 2 file の recipe fixture を 1 つ使い、compact search が負の score で始まる `next_cursor` を生成し、その値を separated `--cursor` として変更せず再利用しても option parse error にならず、別の次ページを返すことを検証します。
 - `QueryCommandRunnerTests.RunSearch_CursorDoesNotConsumeRecognizedShortOption_Issue4664`
   は負の cursor に対する例外を狭く保ち、`--cursor` の直後にある既知の short option は cursor 値として消費されず、従来どおり cursor 値欠如の診断を返すことを検証します。
+- `QueryCommandRunnerTests.RunReferences_ExactJson_StylesheetAndSqlFixturesShareIndexedWorkspace`
+  は SCSS の variable / mixin / extend 参照と、SQL の multiline MERGE hint、非 ASCII identifier、quoted-string masking、temporary-table body boundary を、CLI index 1回の multi-file workspace で共有します。言語別 query と file ごとの固有 sentinel を使い、件数・kind・line assertion の診断性を独立に保ってください。
 - `LspServerTests.cs`
   LSP の JSON-RPC 挙動と indexed editor semantics のテスト。reference parity coverage では、overload identity と `includeDeclaration` の両状態を含め、LSP location と対応する CLI candidate bundle を比較してください。document/workspace の identifier range と explicit/inferred inlay hint は 1 つの source-semantics fixture にまとめ、保存済み column の anchoring、source 上の確認、hint 抑制が別々に drift しないようにします。
   suite は他の test class と並列実行されます。LSP、MCP、DB coverage を含む process-global な CodeIndex telemetry listener fixture はすべて、停止した activity を thread-safe collection に記録して request trace で絞り込み、process-global な `PathCasing` state を seed する fixture は全 lifetime にわたって `PathCasingTestLock.Gate` を保持してください。
