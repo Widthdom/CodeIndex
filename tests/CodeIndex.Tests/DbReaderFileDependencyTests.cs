@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Reflection;
 using System.Text;
 using CodeIndex.Database;
@@ -50,7 +51,7 @@ public partial class DbReaderTests
     }
 
     [Fact]
-    public void GetFileDependencies_SolutionResolvesProjectNamesToProjectPaths_Issue4452()
+    public void GetFileDependencies_SolutionResolvesProjectNamesToProjectPaths_Issues4452And4619()
     {
         InsertIndexedFile("Repo.sln", "solution",
             """
@@ -66,6 +67,9 @@ public partial class DbReaderTests
         Assert.Equal("Repo.sln", dependency.SourcePath);
         Assert.Equal("src/App/App.csproj", dependency.TargetPath);
         Assert.Equal("src/App/App.csproj", dependency.Symbols);
+        Assert.Contains(
+            _reader.GetFileDependencies(limit: 1, lang: "solution", dependencySymbols: ["src/App/App.csproj"]),
+            edge => edge.SourcePath == "Repo.sln" && edge.TargetPath == "src/App/App.csproj");
 
         var impact = _reader.AnalyzeImpact("App", maxDepth: 1, limit: 10, lang: "solution");
         var caller = Assert.Single(impact.Callers);
@@ -154,7 +158,7 @@ public partial class DbReaderTests
     }
 
     [Fact]
-    public void GetFileDependencies_CSharpLimitBoundsSourceNameCandidates_Issue4455()
+    public void GetFileDependencies_CSharpLimitBoundsSourceNameCandidates_Issues4455And4619()
     {
         var sourceFileId = InsertSyntheticDependencyFile("src/BoundedCaller.cs");
         var targetFileId = InsertSyntheticDependencyFile("src/BoundedTarget.cs");
@@ -180,9 +184,144 @@ public partial class DbReaderTests
         }).ToArray());
 
         var dependency = Assert.Single(_reader.GetFileDependencies(limit: 1, lang: "csharp"));
+        var scopedDependency = Assert.Single(_reader.GetFileDependencies(
+            limit: 1,
+            lang: "csharp",
+            dependencySymbols: [symbolNames[^1]]));
 
         Assert.Equal("src/BoundedTarget.cs", dependency.TargetPath);
         Assert.Equal(DependencyNoiseProfile.GetRankingCandidateLimit(1), dependency.ReferenceCount);
+        Assert.Equal("src/BoundedTarget.cs", scopedDependency.TargetPath);
+        Assert.Equal(1, scopedDependency.ReferenceCount);
+        Assert.Equal(symbolNames[^1], scopedDependency.Symbols);
+    }
+
+    [Fact]
+    public void GetFileDependencies_LowercaseNoiseIsSuppressedInLimitedNormalAndCycleQueries_Issue4619()
+    {
+        var firstFileId = InsertSyntheticDependencyFile("src/FirstNoise.cs");
+        var secondFileId = InsertSyntheticDependencyFile("src/SecondNoise.cs");
+        foreach (var fileId in new[] { firstFileId, secondFileId })
+        {
+            _writer.InsertSymbols([
+                new SymbolRecord { FileId = fileId, Kind = "class", Name = "append", Line = 1, StartLine = 1, EndLine = 1 },
+            ]);
+            _writer.InsertReferences([
+                new ReferenceRecord
+                {
+                    FileId = fileId,
+                    SymbolName = "append",
+                    ReferenceKind = "call",
+                    Line = 1,
+                    Column = 1,
+                    Context = "append()",
+                },
+            ]);
+        }
+
+        var dependencies = _reader.GetFileDependencies(
+            limit: 1,
+            lang: "csharp",
+            suppressDependencyNoise: true);
+        var cycleCandidates = _reader.GetFileDependencyCycleCandidates(
+            limit: 1,
+            out var candidateRowCount,
+            lang: "csharp",
+            suppressDependencyNoise: true);
+
+        Assert.Empty(dependencies);
+        Assert.Empty(cycleCandidates);
+        Assert.Equal(0, candidateRowCount);
+    }
+
+    [Fact]
+    public void GetFileDependencyCycleCandidates_AggregatesOnlyFilteredSymbols_Issue4619()
+    {
+        var firstFileId = InsertSyntheticDependencyFile("src/FirstMixedCycle.cs");
+        var secondFileId = InsertSyntheticDependencyFile("src/SecondMixedCycle.cs");
+        foreach (var fileId in new[] { firstFileId, secondFileId })
+        {
+            _writer.InsertSymbols([
+                new SymbolRecord { FileId = fileId, Kind = "class", Name = "Wanted", Line = 1, StartLine = 1, EndLine = 1 },
+                new SymbolRecord { FileId = fileId, Kind = "class", Name = "Other", Line = 2, StartLine = 2, EndLine = 2 },
+            ]);
+            _writer.InsertReferences([
+                new ReferenceRecord { FileId = fileId, SymbolName = "Wanted", ReferenceKind = "call", Line = 1, Column = 1, Context = "Wanted()" },
+                new ReferenceRecord { FileId = fileId, SymbolName = "Other", ReferenceKind = "call", Line = 2, Column = 1, Context = "Other()" },
+            ]);
+        }
+
+        var cycleCandidates = _reader.GetFileDependencyCycleCandidates(
+            limit: 10,
+            out var candidateRowCount,
+            lang: "csharp",
+            dependencySymbols: ["Wanted"]);
+
+        Assert.Equal(2, candidateRowCount);
+        Assert.Equal(2, cycleCandidates.Count);
+        Assert.All(cycleCandidates, candidate =>
+        {
+            Assert.Equal(1, candidate.ReferenceCount);
+            Assert.Equal(1, candidate.RankingScore);
+            Assert.Equal("Wanted", candidate.Symbols);
+        });
+    }
+
+    [ProductionRuntimeFact]
+    public void GetFileDependencies_ExactSymbolScopeStaysWithinLatencyAndAllocationBudgets_Issue4619()
+    {
+        // The Windows full suite already runs close to its bounded one-hour session timeout;
+        // functional pushdown coverage still runs there without this repository-scale fixture.
+        // Windows の全 test suite は1時間の上限に近いため、repository-scale fixture は除外し、
+        // filter pushdown の機能検証は軽量な別 test で維持する。
+        if (OperatingSystem.IsWindows())
+            return;
+
+        const int irrelevantSymbolCount = 10_000;
+        const long allocationBudgetBytes = 32L * 1024 * 1024;
+        var latencyBudget = TimeSpan.FromSeconds(2);
+        var sourceFileId = InsertSyntheticDependencyFile("src/RepositoryScaleCaller.cs");
+        var targetFileId = InsertSyntheticDependencyFile("src/RepositoryScaleTarget.cs");
+        var symbolNames = Enumerable
+            .Range(0, irrelevantSymbolCount)
+            .Select(index => $"IrrelevantTarget{index:D5}")
+            .Append("SelectedTarget")
+            .ToArray();
+
+        _writer.InsertSymbols(symbolNames.Select((name, index) => new SymbolRecord
+        {
+            FileId = targetFileId,
+            Kind = "class",
+            Name = name,
+            Line = index + 1,
+            StartLine = index + 1,
+            EndLine = index + 1,
+        }).ToArray());
+        _writer.InsertReferences(symbolNames.Select((name, index) => new ReferenceRecord
+        {
+            FileId = sourceFileId,
+            SymbolName = name,
+            ReferenceKind = "type_reference",
+            Line = index + 1,
+            Column = 1,
+            Context = name,
+        }).ToArray());
+
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        var stopwatch = Stopwatch.StartNew();
+        var dependency = Assert.Single(_reader.GetFileDependencies(
+            limit: 1,
+            dependencySymbols: ["SelectedTarget"]));
+        stopwatch.Stop();
+        var allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+
+        Assert.Equal("SelectedTarget", dependency.Symbols);
+        Assert.True(
+            stopwatch.Elapsed <= latencyBudget,
+            $"Scoped deps query took {stopwatch.Elapsed} (budget {latencyBudget}).");
+        Assert.True(
+            allocatedBytes <= allocationBudgetBytes,
+            $"Scoped deps query allocated {allocatedBytes} bytes (budget {allocationBudgetBytes}).");
     }
 
     [Fact]

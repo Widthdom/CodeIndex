@@ -172,6 +172,7 @@ public static partial class QueryCommandRunner
         bool dependencySuppressNoise = false;
         var dependencySymbols = new List<string>();
         var dependencySymbolFamilies = new List<string>();
+        bool dependencySymbolFilterCountExceeded = false;
         string? recipeName = null;
         var includeRecipeQueries = new List<string>();
         var excludeRecipeQueries = new List<string>();
@@ -237,8 +238,19 @@ public static partial class QueryCommandRunner
                 AddParseError($"Error: {optionName} value too long (max {QueryLimits.MaxQueryLength} characters).");
                 return;
             }
-            if (!target.Contains(trimmed, StringComparer.Ordinal))
-                target.Add(trimmed);
+            if (target.Contains(trimmed, StringComparer.Ordinal))
+                return;
+            if (dependencySymbols.Count + dependencySymbolFamilies.Count >= MaxDependencySymbolFilterCount)
+            {
+                if (!dependencySymbolFilterCountExceeded)
+                {
+                    AddParseError($"Error: deps accepts at most {MaxDependencySymbolFilterCount} combined --symbol and --symbol-family values. / deps では --symbol と --symbol-family を合計 {MaxDependencySymbolFilterCount} 件まで指定できます。");
+                    dependencySymbolFilterCountExceeded = true;
+                }
+                return;
+            }
+
+            target.Add(trimmed);
         }
 
         void AddIssueDraftLabels(string rawLabels)
