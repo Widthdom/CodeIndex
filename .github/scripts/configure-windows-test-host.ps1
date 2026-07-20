@@ -122,8 +122,9 @@ if ($env:GITHUB_STEP_SUMMARY) {
   }
 }
 
-foreach ($entry in $exclusions) {
-  Add-MpPreference -ExclusionPath $entry.Path -ErrorAction Stop
+[string[]]$exclusionPaths = @($exclusions | ForEach-Object { $_.Path })
+if ($exclusionPaths.Count -gt 0) {
+  Add-MpPreference -ExclusionPath $exclusionPaths -ErrorAction Stop
 }
 
 $prefs = Get-MpPreference

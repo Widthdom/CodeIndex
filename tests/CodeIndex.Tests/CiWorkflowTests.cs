@@ -176,7 +176,7 @@ public class CiWorkflowTests
     }
 
     [Fact]
-    public void WindowsTestHostSetup_IsSharedAcrossDotnetAndReleaseWorkflows()
+    public void WindowsTestHostSetup_IsSharedAndBatchesDefenderExclusions()
     {
         var dotnetWorkflow = RepositoryTestPaths.ReadNormalizedDotnetWorkflow();
         var releaseWorkflow = RepositoryTestPaths.ReadNormalizedReleaseWorkflow();
@@ -200,12 +200,21 @@ public class CiWorkflowTests
             "$tempAcl.SetAccessRuleProtection($true, $false)",
             "[System.Security.AccessControl.FileSystemRights]::FullControl",
             "Set-Acl -LiteralPath $tempRoot -AclObject $tempAcl",
-            "Add-MpPreference -ExclusionPath $entry.Path -ErrorAction Stop",
+            "$path = $_.Path.TrimEnd('\\','/')",
+            "Group-Object -Property Path",
+            "[string[]]$exclusionPaths = @($exclusions | ForEach-Object { $_.Path })",
+            "if ($exclusionPaths.Count -gt 0)",
+            "Add-MpPreference -ExclusionPath $exclusionPaths -ErrorAction Stop",
             "Get-MpPreference",
+            "if ($prefs.ExclusionPath -notcontains $entry.Path)",
+            "Windows Defender exclusion was not applied: $($entry.Path)",
             "Windows Defender exclusion audit:",
+            "### Windows Defender exclusion audit",
             "GitHub-hosted runner temp root used by actions.");
+        Assert.Equal(1, CountOccurrences(setupScript, "Add-MpPreference"));
         AssertDoesNotContainAny(
             setupScript,
+            "Add-MpPreference -ExclusionPath $entry.Path",
             "$tempRoot = Join-Path $env:RUNNER_TEMP \"cdidx-temp\"");
     }
 
