@@ -574,7 +574,7 @@ public class PostExtractionHookTests
     [Fact]
     public void Discover_ClampsOversizedDiscoveryLimit()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-discovery-limit-clamp");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("post-extraction-hook-discovery-limit-clamp");
         lock (TestConsoleLock.Gate)
         {
             var originalLimit = PostExtractionHookRunner.DiscoveryLimitForTesting;
@@ -601,7 +601,7 @@ public class PostExtractionHookTests
     [Fact]
     public void Discover_ClampsOversizedDiscoveryMaxBytes()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-discovery-bytes-clamp");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("post-extraction-hook-discovery-bytes-clamp");
         lock (TestConsoleLock.Gate)
         {
             var originalMaxBytes = PostExtractionHookRunner.DiscoveryMaxBytesForTesting;
@@ -775,7 +775,7 @@ public class PostExtractionHookTests
     [Fact]
     public void Discover_SkipsOversizeHookAssemblyCandidate()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-size-cap");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("post-extraction-hook-size-cap");
         lock (TestConsoleLock.Gate)
         {
             var originalMaxBytes = PostExtractionHookRunner.DiscoveryMaxBytesForTesting;

@@ -75,7 +75,7 @@ public class ExtractorPluginRegistryTests
     [Fact]
     public void EnumeratePluginAssemblyPaths_CapsCandidatesPerDirectory()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_plugin_cap");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("extractor_registry_plugin_cap");
         lock (TestConsoleLock.Gate)
         {
             try
@@ -109,7 +109,7 @@ public class ExtractorPluginRegistryTests
     [Fact]
     public void EnumeratePluginAssemblyPaths_CapsTotalCandidates()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_plugin_total_cap");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("extractor_registry_plugin_total_cap");
         lock (TestConsoleLock.Gate)
         {
             try
