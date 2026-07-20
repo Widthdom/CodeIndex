@@ -4499,6 +4499,68 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_RecipeAcceptsNegativeScoreCursorAsSeparatedValue_Issue4664()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_negative_cursor_4664");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/First.cs",
+                "csharp",
+                "public sealed class First { private const string Secret = \"first\"; }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Second.cs",
+                "csharp",
+                "public sealed class Second { private const string Secret = \"second\"; }");
+
+            var (firstExitCode, firstStdout, firstStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/secret-term", "--db", dbPath, "--format", "compact", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, firstExitCode);
+            Assert.Equal(string.Empty, firstStderr);
+            using var firstDocument = ParseJsonOutput(firstStdout);
+            var firstQuery = Assert.Single(firstDocument.RootElement.GetProperty("queries").EnumerateArray());
+            var firstResult = Assert.Single(firstQuery.GetProperty("results").EnumerateArray());
+            var nextCursor = firstQuery.GetProperty("next_cursor").GetString();
+
+            Assert.False(string.IsNullOrWhiteSpace(nextCursor));
+            Assert.True(nextCursor!.StartsWith("-", StringComparison.Ordinal), $"Expected a negative-score cursor, got '{nextCursor}'.");
+
+            var (secondExitCode, secondStdout, secondStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/secret-term", "--db", dbPath, "--format", "compact", "--limit", "1", "--cursor", nextCursor],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, secondExitCode);
+            Assert.Equal(string.Empty, secondStderr);
+            using var secondDocument = ParseJsonOutput(secondStdout);
+            var secondResult = Assert.Single(Assert.Single(secondDocument.RootElement.GetProperty("queries").EnumerateArray()).GetProperty("results").EnumerateArray());
+
+            Assert.NotEqual(firstResult.GetProperty("path").GetString(), secondResult.GetProperty("path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_CursorDoesNotConsumeRecognizedShortOption_Issue4664()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--recipe", "risky-code/secret-term", "--cursor", "-q"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("Error: --cursor requires a value.", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("--cursor must be a search", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RunSearch_RecipeJsonRunsBuiltInQueries_Issue3144()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_json");

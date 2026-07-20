@@ -727,7 +727,10 @@ public static partial class QueryCommandRunner
                         AddParseError(issueLabelError!);
                     break;
                 case "--cursor":
-                    if (TryReadStringOptionValue(args, ref i, "--cursor", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var cursorValue, out var cursorError))
+                    var allowSeparatedDashPrefixedCursorValue = inlineValue is null
+                        && i + 1 < args.Length
+                        && TryParseSearchCursor(args[i + 1], out _);
+                    if (TryReadStringOptionValue(args, ref i, "--cursor", inlineValue, allowSeparatedDashPrefixedLiteralValue: allowSeparatedDashPrefixedCursorValue, out var cursorValue, out var cursorError))
                     {
                         WarnIfDuplicateSingleValueOption("--cursor", cursorValue!);
                         if (TryParseSearchCursor(cursorValue!, out var parsedCursor))
