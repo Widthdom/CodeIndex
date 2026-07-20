@@ -896,8 +896,10 @@ public static partial class QueryCommandRunner
                 result.Lang,
                 options.SnippetFocus,
                 exposeLiteralHighlights: exact);
-            var preferredOriginFilterLine = GetPreferredSearchOriginFilterLine(compact, facetFilters);
-            if (preferredOriginFilterLine.HasValue && !IsLineWithinSnippet(compact, preferredOriginFilterLine.Value))
+            var preferredOriginFilterMatch = GetPreferredSearchOriginFilterMatch(compact, facetFilters);
+            if (preferredOriginFilterMatch != null
+                && (compact.FocusLine != preferredOriginFilterMatch.Line
+                    || compact.FocusColumn != preferredOriginFilterMatch.Column))
             {
                 compact = SearchSnippetFormatter.ToCompactResult(
                     result,
@@ -908,7 +910,9 @@ public static partial class QueryCommandRunner
                     result.Lang,
                     options.SnippetFocus,
                     exposeLiteralHighlights: exact,
-                    preferredMatchLine: preferredOriginFilterLine.Value);
+                    preferredMatchLine: preferredOriginFilterMatch.Line,
+                    preferredMatchColumn: preferredOriginFilterMatch.Column,
+                    preferredMatchLength: preferredOriginFilterMatch.Length);
             }
             SearchSnippetFormatter.ApplyOutputMetadata(compact, options.SnippetLines, options.MaxLineWidth, exact, rawFts);
 
@@ -1012,20 +1016,17 @@ public static partial class QueryCommandRunner
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
-    private static int? GetPreferredSearchOriginFilterLine(CompactSearchResult compact, SearchDisplayFacetFilters filters)
+    private static SearchMatchFacet? GetPreferredSearchOriginFilterMatch(CompactSearchResult compact, SearchDisplayFacetFilters filters)
     {
         if (!HasSearchOriginFilters(filters) || compact.MatchFacets.Count == 0)
             return null;
 
         return compact.MatchFacets
             .Where(facet => !IsSearchFacetExcluded(facet, filters))
-            .Select(facet => (int?)facet.Line)
-            .OrderBy(line => line)
+            .OrderBy(facet => facet.Line)
+            .ThenBy(facet => facet.Column)
             .FirstOrDefault();
     }
-
-    private static bool IsLineWithinSnippet(CompactSearchResult compact, int line)
-        => line >= compact.SnippetStartLine && line <= compact.SnippetEndLine;
 
     private static List<SearchDisplayRow> ReadSearchDisplayRows(DbReader reader, QueryCommandOptions options, bool exact)
     {

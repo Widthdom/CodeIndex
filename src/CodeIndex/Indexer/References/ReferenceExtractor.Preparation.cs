@@ -1,3 +1,4 @@
+using System.Text;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -85,7 +86,13 @@ public static partial class ReferenceExtractor
             : (MultilineStringContent: null, BlockComment: null);
         var csharpLinesInsideMultilineStringContent = csharpLineState.MultilineStringContent;
         var csharpLinesInsideBlockComment = csharpLineState.BlockComment;
-        var referenceStructuralLines = language == "pascal"
+        var referenceStructuralLines = language == "cpp"
+            ? SplitContentLines(MaskCppLexicalRanges(
+                maskedContent,
+                [new CppLexicalRange(0, maskedContent.Length)],
+                maskPreprocessorPayloads: false,
+                collapseLineSplices: false)[0])
+            : language == "pascal"
             ? MaskPascalBlockCommentLines(structuralLines)
             : language == "haskell"
                 ? MaskHaskellBlockCommentLines(structuralLines)
@@ -180,6 +187,319 @@ public static partial class ReferenceExtractor
         }
 
         return preparedLines ?? referenceStructuralLines;
+    }
+
+    internal readonly record struct CppLexicalRange(int Start, int End);
+
+    internal static string[] MaskCppLexicalRanges(
+        string content,
+        IReadOnlyList<CppLexicalRange> ranges,
+        bool maskPreprocessorPayloads,
+        bool collapseLineSplices)
+    {
+        if (ranges.Count == 0)
+            return [];
+
+        var builders = new StringBuilder[ranges.Count];
+        var previousEnd = 0;
+        for (var rangeIndex = 0; rangeIndex < ranges.Count; rangeIndex++)
+        {
+            var range = ranges[rangeIndex];
+            if (range.Start < previousEnd || range.Start < 0 || range.End < range.Start || range.End > content.Length)
+                throw new ArgumentOutOfRangeException(nameof(ranges), "C++ lexical ranges must be ordered, non-overlapping, and within content.");
+
+            builders[rangeIndex] = new StringBuilder(range.End - range.Start);
+            previousEnd = range.End;
+        }
+
+        var activeRangeIndex = 0;
+        var inBlockComment = false;
+        var inLineComment = false;
+        var inMaskedDirective = false;
+        var quote = '\0';
+        string? rawStringTerminator = null;
+        var onlyWhitespaceOnLine = true;
+
+        void WriteAt(int contentIndex, bool masked)
+        {
+            while (activeRangeIndex < ranges.Count && contentIndex >= ranges[activeRangeIndex].End)
+                activeRangeIndex++;
+            if (activeRangeIndex >= ranges.Count || contentIndex < ranges[activeRangeIndex].Start)
+                return;
+
+            var ch = content[contentIndex];
+            builders[activeRangeIndex].Append(masked && ch is not ('\r' or '\n') ? ' ' : ch);
+        }
+
+        void WriteRange(int start, int length, bool masked)
+        {
+            var end = start + length;
+            for (var cursor = start; cursor < end; cursor++)
+            {
+                if (collapseLineSplices && TryGetCppLineSpliceLength(content, cursor, out var spliceLength))
+                {
+                    cursor += spliceLength - 1;
+                    continue;
+                }
+
+                WriteAt(cursor, masked);
+            }
+        }
+
+        var index = 0;
+        while (index < content.Length && activeRangeIndex < ranges.Count)
+        {
+            var ch = content[index];
+            var isLineBreak = IsCppPhysicalLineBreak(content, index);
+            var isSplicedLineBreak = isLineBreak && IsCppSplicedLineBreak(content, index);
+
+            if (TryGetCppLineSpliceLength(content, index, out var spliceLength))
+            {
+                if (!collapseLineSplices)
+                    WriteRange(index, spliceLength, masked: true);
+                index += spliceLength;
+                continue;
+            }
+
+            if (rawStringTerminator != null)
+            {
+                if (TryMatchCppLogicalSequence(content, index, rawStringTerminator, out var rawTerminatorEnd))
+                {
+                    WriteRange(index, rawTerminatorEnd - index, masked: true);
+                    index = rawTerminatorEnd;
+                    rawStringTerminator = null;
+                    continue;
+                }
+
+                WriteAt(index, masked: true);
+                index++;
+                continue;
+            }
+
+            if (inBlockComment)
+            {
+                if (TryMatchCppLogicalSequence(content, index, "*/", out var blockCommentEnd))
+                {
+                    WriteRange(index, blockCommentEnd - index, masked: true);
+                    index = blockCommentEnd;
+                    inBlockComment = false;
+                    continue;
+                }
+
+                WriteAt(index, masked: true);
+                if (isLineBreak)
+                    onlyWhitespaceOnLine = true;
+                index++;
+                continue;
+            }
+
+            if (inLineComment)
+            {
+                WriteAt(index, masked: true);
+                if (isLineBreak && !isSplicedLineBreak)
+                {
+                    inLineComment = false;
+                    onlyWhitespaceOnLine = true;
+                }
+                index++;
+                continue;
+            }
+
+            if (quote != '\0')
+            {
+                if (ch == '\\' && index + 1 < content.Length)
+                {
+                    WriteRange(index, 2, masked: true);
+                    index += 2;
+                    continue;
+                }
+
+                WriteAt(index, masked: true);
+                if (ch == quote)
+                    quote = '\0';
+                else if (isLineBreak && !isSplicedLineBreak)
+                {
+                    quote = '\0';
+                    onlyWhitespaceOnLine = true;
+                }
+                index++;
+                continue;
+            }
+
+            if (inMaskedDirective)
+            {
+                WriteAt(index, masked: true);
+                if (isLineBreak && !isSplicedLineBreak)
+                {
+                    inMaskedDirective = false;
+                    onlyWhitespaceOnLine = true;
+                }
+                index++;
+                continue;
+            }
+
+            if (isLineBreak)
+            {
+                WriteAt(index, masked: false);
+                if (!isSplicedLineBreak)
+                    onlyWhitespaceOnLine = true;
+                index++;
+                continue;
+            }
+
+            if (onlyWhitespaceOnLine && ch is ' ' or '\t' or '\f' or '\v')
+            {
+                WriteAt(index, masked: false);
+                index++;
+                continue;
+            }
+
+            if (onlyWhitespaceOnLine && ch == '#' && maskPreprocessorPayloads)
+            {
+                inMaskedDirective = true;
+                WriteAt(index, masked: true);
+                index++;
+                continue;
+            }
+
+            if (ch == '/')
+            {
+                if (TryMatchCppLogicalSequence(content, index, "//", out var lineCommentEnd))
+                {
+                    WriteRange(index, lineCommentEnd - index, masked: true);
+                    index = lineCommentEnd;
+                    inLineComment = true;
+                    continue;
+                }
+                if (TryMatchCppLogicalSequence(content, index, "/*", out var blockCommentStartEnd))
+                {
+                    WriteRange(index, blockCommentStartEnd - index, masked: true);
+                    index = blockCommentStartEnd;
+                    inBlockComment = true;
+                    continue;
+                }
+            }
+
+            if (TryGetCppRawStringStart(content, index, out var rawTerminator, out var rawOpeningLength))
+            {
+                WriteRange(index, rawOpeningLength, masked: true);
+                index += rawOpeningLength;
+                rawStringTerminator = rawTerminator;
+                onlyWhitespaceOnLine = false;
+                continue;
+            }
+
+            if (ch is '"' or '\'')
+            {
+                quote = ch;
+                onlyWhitespaceOnLine = false;
+                WriteAt(index, masked: true);
+                index++;
+                continue;
+            }
+
+            WriteAt(index, masked: false);
+            onlyWhitespaceOnLine = false;
+            index++;
+        }
+
+        var result = new string[builders.Length];
+        for (var rangeIndex = 0; rangeIndex < builders.Length; rangeIndex++)
+            result[rangeIndex] = builders[rangeIndex].ToString();
+        return result;
+    }
+
+    private static bool IsCppPhysicalLineBreak(string content, int index)
+        => content[index] == '\n' || (content[index] == '\r' && (index + 1 >= content.Length || content[index + 1] != '\n'));
+
+    private static bool IsCppSplicedLineBreak(string content, int index)
+    {
+        var precedingIndex = index - 1;
+        if (content[index] == '\n' && precedingIndex >= 0 && content[precedingIndex] == '\r')
+            precedingIndex--;
+        return precedingIndex >= 0 && content[precedingIndex] == '\\';
+    }
+
+    private static bool TryGetCppLineSpliceLength(string content, int index, out int length)
+    {
+        length = 0;
+        if (content[index] != '\\' || index + 1 >= content.Length)
+            return false;
+
+        if (content[index + 1] == '\n' || content[index + 1] == '\r')
+        {
+            length = content[index + 1] == '\r'
+                && index + 2 < content.Length
+                && content[index + 2] == '\n'
+                    ? 3
+                    : 2;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryMatchCppLogicalSequence(
+        string content,
+        int index,
+        ReadOnlySpan<char> sequence,
+        out int physicalEnd)
+    {
+        var cursor = index;
+        foreach (var expected in sequence)
+        {
+            while (cursor < content.Length && TryGetCppLineSpliceLength(content, cursor, out var spliceLength))
+                cursor += spliceLength;
+
+            if (cursor >= content.Length || content[cursor] != expected)
+            {
+                physicalEnd = index;
+                return false;
+            }
+
+            cursor++;
+        }
+
+        physicalEnd = cursor;
+        return true;
+    }
+
+    private static bool TryGetCppRawStringStart(
+        string content,
+        int index,
+        out string terminator,
+        out int openingLength)
+    {
+        terminator = string.Empty;
+        openingLength = 0;
+        if (!TryMatchCppLogicalSequence(content, index, "R\"", out var cursor))
+            return false;
+
+        const int maxDelimiterLength = 16;
+        var delimiter = new StringBuilder(maxDelimiterLength);
+        while (delimiter.Length <= maxDelimiterLength)
+        {
+            while (cursor < content.Length && TryGetCppLineSpliceLength(content, cursor, out var spliceLength))
+                cursor += spliceLength;
+            if (cursor >= content.Length)
+                return false;
+
+            var ch = content[cursor];
+            if (ch == '(')
+            {
+                terminator = ")" + delimiter + "\"";
+                openingLength = cursor - index + 1;
+                return true;
+            }
+
+            if (char.IsWhiteSpace(ch) || ch is '\\' or ')')
+                return false;
+
+            delimiter.Append(ch);
+            cursor++;
+        }
+
+        return false;
     }
 
     private static IReadOnlyDictionary<int, IReadOnlyList<JsTaggedTemplateHit>>? GroupJsTaggedTemplatesByLine(

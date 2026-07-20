@@ -14,7 +14,7 @@ public static partial class IndexCommandRunner
     [
         "--db", "--data-dir", "--rebuild", "--verbose", "--json", "--quiet", "--dry-run", "--dry-run-path-limit", "--force",
         "--yes", "--watch", "--debounce", "--watch-pending-path-limit", "--duration-format", "--max-file-bytes", "--max-symbols-per-file",
-        "--max-references-per-file", "--notify",
+        "--max-references-per-file", "--allow-partial", "--notify",
         "--parallelism", "--memory-trace", "--follow-symlinks", "--symbols-only",
         "--commits", "--changed-between", "--files", "--solution", "--project",
         "--include-symbol-kind", "--exclude-symbol-kind", "--optimize", "--help",
@@ -37,6 +37,7 @@ public static partial class IndexCommandRunner
         bool verbose = false;
         bool json = false;
         bool quiet = false;
+        bool allowPartial = false;
         bool dryRun = false;
         var dryRunPathLimit = DefaultDryRunPathLimit;
         bool force = false;
@@ -109,6 +110,9 @@ public static partial class IndexCommandRunner
                     break;
                 case "--quiet":
                     quiet = true;
+                    break;
+                case "--allow-partial":
+                    allowPartial = true;
                     break;
                 case "--dry-run":
                     dryRun = true;
@@ -330,6 +334,7 @@ public static partial class IndexCommandRunner
             Verbose = verbose,
             Json = json,
             Quiet = quiet,
+            AllowPartial = allowPartial,
             Commits = commits,
             ChangedBetweenSpecified = changedBetweenSpecified,
             ChangedBetweenRefs = changedBetweenRefs,

@@ -54,7 +54,23 @@ public static partial class ReferenceExtractor
     internal const int MaxReferenceLookupLines = 20_000;
     internal const int MaxReferenceLookupNamesPerLine = 512;
     internal const int MaxReferenceContainerCandidates = 20_000;
-    internal const int MaxSwiftPropertyDefinitionsPerLine = 256;
+    internal const int MaxSwiftPropertyDefinitionsPerLine = MaxReferenceLookupNamesPerLine;
+    internal static readonly IReadOnlyList<string> ReferenceSafetyCapDiagnosticKinds =
+    [
+        "reference_all_definition_lookup_symbol_budget_exceeded",
+        "reference_container_candidate_budget_exceeded",
+        "reference_csharp_xml_doc_scope_candidate_budget_exceeded",
+        "reference_definition_lookup_line_budget_exceeded",
+        "reference_definition_lookup_line_name_budget_exceeded",
+        "reference_definition_lookup_symbol_budget_exceeded",
+        "reference_enclosing_type_candidate_budget_exceeded",
+        "reference_swift_property_line_budget_exceeded",
+        "reference_swift_property_line_name_budget_exceeded",
+        "reference_swift_property_symbol_budget_exceeded",
+    ];
+    private static readonly HashSet<string> ReferenceSafetyCapDiagnosticKindSet =
+        new(ReferenceSafetyCapDiagnosticKinds, StringComparer.Ordinal);
+    private static readonly AsyncLocal<ReferenceExtractionSafetyLimits?> SafetyLimitsOverride = new();
     private const int ReferenceListInitialCapacityLineThreshold = 128;
     private const int ReferenceListInitialCapacityMax = 1024;
     private static readonly IReadOnlySet<string> EmptyDefinitionNameSet = new HashSet<string>(StringComparer.Ordinal);
@@ -71,6 +87,24 @@ public static partial class ReferenceExtractor
 
     private static string[] SplitContentLines(string content) =>
         content.IndexOf('\n', StringComparison.Ordinal) < 0 ? [content] : content.Split('\n');
+
+    internal static ReferenceExtractionSafetyLimits? SafetyLimitsForTesting
+    {
+        get => SafetyLimitsOverride.Value;
+        set => SafetyLimitsOverride.Value = value;
+    }
+
+    public static ReferenceExtractionSafetyLimits GetSafetyLimits()
+        => SafetyLimitsOverride.Value ?? new ReferenceExtractionSafetyLimits
+        {
+            MaxLookupSymbols = MaxReferenceLookupSymbols,
+            MaxLookupLines = MaxReferenceLookupLines,
+            MaxNamesPerLine = MaxReferenceLookupNamesPerLine,
+            MaxContainerCandidates = MaxReferenceContainerCandidates,
+        };
+
+    internal static bool IsSafetyCapDiagnosticKind(string kind)
+        => ReferenceSafetyCapDiagnosticKindSet.Contains(kind);
 
     // THREAD-SAFETY: Reference extraction is stateless per call. Shared Regex instances and
     // lookup tables are initialized once and then read concurrently; language-specific state
@@ -1263,32 +1297,33 @@ public static partial class ReferenceExtractor
         if (symbols.Count == 0)
             return EmptyDefinitionNamesByLine;
 
+        var limits = GetSafetyLimits();
         var definitionNamesComparer = GetDefinitionNamesComparer(language);
         var namesByLine = new Dictionary<int, HashSet<string>>();
         var lineBudgetReported = false;
         var lineNameBudgetReported = false;
         for (var index = 0; index < symbols.Count; index++)
         {
-            if (index >= MaxReferenceLookupSymbols)
+            if (index >= limits.MaxLookupSymbols)
             {
                 ReportReferenceLookupBudgetHit(
                     reportDiagnostic,
                     "reference_definition_lookup_symbol_budget_exceeded",
-                    $"Reference definition-name lookup used the first {MaxReferenceLookupSymbols:N0} symbols and skipped additional symbols.");
+                    $"Reference definition-name lookup used the first {limits.MaxLookupSymbols:N0} symbols and skipped additional symbols.");
                 break;
             }
 
             var symbol = symbols[index];
             if (!namesByLine.TryGetValue(symbol.Line, out var names))
             {
-                if (namesByLine.Count >= MaxReferenceLookupLines)
+                if (namesByLine.Count >= limits.MaxLookupLines)
                 {
                     if (!lineBudgetReported)
                     {
                         ReportReferenceLookupBudgetHit(
                             reportDiagnostic,
                             "reference_definition_lookup_line_budget_exceeded",
-                            $"Reference definition-name lookup used the first {MaxReferenceLookupLines:N0} definition lines and skipped additional lines.");
+                            $"Reference definition-name lookup used the first {limits.MaxLookupLines:N0} definition lines and skipped additional lines.");
                         lineBudgetReported = true;
                     }
 
@@ -1299,14 +1334,14 @@ public static partial class ReferenceExtractor
                 namesByLine[symbol.Line] = names;
             }
 
-            if (names.Count >= MaxReferenceLookupNamesPerLine && !names.Contains(symbol.Name))
+            if (names.Count >= limits.MaxNamesPerLine && !names.Contains(symbol.Name))
             {
                 if (!lineNameBudgetReported)
                 {
                     ReportReferenceLookupBudgetHit(
                         reportDiagnostic,
                         "reference_definition_lookup_line_name_budget_exceeded",
-                        $"Reference definition-name lookup retained at most {MaxReferenceLookupNamesPerLine:N0} names per line and skipped additional names.");
+                        $"Reference definition-name lookup retained at most {limits.MaxNamesPerLine:N0} names per line and skipped additional names.");
                     lineNameBudgetReported = true;
                 }
 
@@ -1329,15 +1364,16 @@ public static partial class ReferenceExtractor
         if (symbols.Count == 0)
             return EmptyDefinitionNameSet;
 
+        var limits = GetSafetyLimits();
         var names = new HashSet<string>(GetDefinitionNamesComparer(language));
         for (var index = 0; index < symbols.Count; index++)
         {
-            if (index >= MaxReferenceLookupSymbols)
+            if (index >= limits.MaxLookupSymbols)
             {
                 ReportReferenceLookupBudgetHit(
                     reportDiagnostic,
                     "reference_all_definition_lookup_symbol_budget_exceeded",
-                    $"Reference all-definition lookup used the first {MaxReferenceLookupSymbols:N0} symbols and skipped additional symbols.");
+                    $"Reference all-definition lookup used the first {limits.MaxLookupSymbols:N0} symbols and skipped additional symbols.");
                 break;
             }
 
@@ -1485,10 +1521,11 @@ public static partial class ReferenceExtractor
         if (language != "swift")
             return null;
 
+        var limits = GetSafetyLimits();
         Dictionary<int, List<SymbolRecord>>? byLine = null;
         var lineBudgetReported = false;
         var perLineBudgetReported = false;
-        for (var index = 0; index < symbols.Count && index < MaxReferenceLookupSymbols; index++)
+        for (var index = 0; index < symbols.Count && index < limits.MaxLookupSymbols; index++)
         {
             var symbol = symbols[index];
             if (symbol.Kind != "property")
@@ -1497,14 +1534,14 @@ public static partial class ReferenceExtractor
             var lookup = byLine ??= new Dictionary<int, List<SymbolRecord>>();
             if (!lookup.TryGetValue(symbol.Line, out var lineSymbols))
             {
-                if (lookup.Count >= MaxReferenceLookupLines)
+                if (lookup.Count >= limits.MaxLookupLines)
                 {
                     if (!lineBudgetReported)
                     {
                         ReportReferenceLookupBudgetHit(
                             reportDiagnostic,
                             "reference_swift_property_line_budget_exceeded",
-                            $"Swift property lookup retained at most {MaxReferenceLookupLines:N0} definition lines and skipped additional lines.");
+                            $"Swift property lookup retained at most {limits.MaxLookupLines:N0} definition lines and skipped additional lines.");
                         lineBudgetReported = true;
                     }
 
@@ -1515,14 +1552,14 @@ public static partial class ReferenceExtractor
                 lookup[symbol.Line] = lineSymbols;
             }
 
-            if (lineSymbols.Count >= MaxSwiftPropertyDefinitionsPerLine)
+            if (lineSymbols.Count >= limits.MaxNamesPerLine)
             {
                 if (!perLineBudgetReported)
                 {
                     ReportReferenceLookupBudgetHit(
                         reportDiagnostic,
                         "reference_swift_property_line_name_budget_exceeded",
-                        $"Swift property lookup retained at most {MaxSwiftPropertyDefinitionsPerLine:N0} properties per line and skipped additional properties.");
+                        $"Swift property lookup retained at most {limits.MaxNamesPerLine:N0} properties per line and skipped additional properties.");
                     perLineBudgetReported = true;
                 }
 
@@ -1532,12 +1569,12 @@ public static partial class ReferenceExtractor
             lineSymbols.Add(symbol);
         }
 
-        if (symbols.Count > MaxReferenceLookupSymbols)
+        if (symbols.Count > limits.MaxLookupSymbols)
         {
             ReportReferenceLookupBudgetHit(
                 reportDiagnostic,
                 "reference_swift_property_symbol_budget_exceeded",
-                $"Swift property lookup used the first {MaxReferenceLookupSymbols:N0} symbols and skipped additional symbols.");
+                $"Swift property lookup used the first {limits.MaxLookupSymbols:N0} symbols and skipped additional symbols.");
         }
 
         if (byLine is not { Count: > 0 })
@@ -1584,6 +1621,7 @@ public static partial class ReferenceExtractor
         string diagnosticMessage,
         Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
     {
+        var limit = GetSafetyLimits().MaxContainerCandidates;
         List<ReferenceContainerCandidateSortEntry>? candidates = null;
         var truncated = false;
         for (var symbolIndex = 0; symbolIndex < symbols.Count; symbolIndex++)
@@ -1592,14 +1630,14 @@ public static partial class ReferenceExtractor
             if (!predicate(symbol))
                 continue;
 
-            if ((candidates?.Count ?? 0) >= MaxReferenceContainerCandidates)
+            if ((candidates?.Count ?? 0) >= limit)
             {
                 truncated = true;
                 continue;
             }
 
             (candidates ??= new List<ReferenceContainerCandidateSortEntry>(
-                Math.Min(symbols.Count, MaxReferenceContainerCandidates))).Add(new ReferenceContainerCandidateSortEntry(
+                Math.Min(symbols.Count, limit))).Add(new ReferenceContainerCandidateSortEntry(
                 symbol,
                 GetReferenceContainerCandidateSpanLength(symbol),
                 symbolIndex));

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Indexer;
@@ -196,6 +197,9 @@ public partial class McpServer
                     ["reason"] = diagnostic.Reason,
                     ["blocks_parent_fallback"] = diagnostic.BlocksParentFallback,
                 }).ToArray()),
+                ["reference_extraction_limits"] = JsonSerializer.SerializeToNode(
+                    ReferenceExtractor.GetSafetyLimits(),
+                    _jsonOptions),
                 ["filters"] = new JsonObject
                 {
                     ["indexedOnly"] = indexedOnly,

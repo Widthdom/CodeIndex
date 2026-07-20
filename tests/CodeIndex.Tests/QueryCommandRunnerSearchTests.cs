@@ -458,6 +458,42 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_MatchOriginRefocusesTheRetainedSameLineOccurrence_Issue4618()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_origin_focus");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/mixed.cs",
+                "csharp",
+                $"/* FilteredNeedle */ {new string('x', 240)}; FilteredNeedle();\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["FilteredNeedle", "--db", dbPath, "--exact-substring", "--match-origin", "comment", "--snippet-lines", "1", "--max-line-width", "80", "--json=array", "--no-dedup"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+            Assert.Equal(1, row.GetProperty("focus_line").GetInt32());
+            Assert.Equal(4, row.GetProperty("focus_column").GetInt32());
+            Assert.Contains("/* FilteredNeedle */", row.GetProperty("snippet").GetString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("FilteredNeedle();", row.GetProperty("snippet").GetString(), StringComparison.Ordinal);
+            var highlight = Assert.Single(row.GetProperty("highlights").EnumerateArray());
+            var occurrence = Assert.Single(highlight.GetProperty("term_occurrences").EnumerateArray());
+            Assert.True(occurrence.GetProperty("visible").GetBoolean());
+            Assert.Equal(["comment"], row.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()).ToArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_ExcludeCommentsSuppressesNonCSharpInlineComments_Issue3423()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_exclude_inline_comments");

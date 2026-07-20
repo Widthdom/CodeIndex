@@ -1025,8 +1025,19 @@ cdidx ./myproject --json
 ```
 
 ```json
-{"status":"success","mode":"incremental","summary":{"files_total":42,"chunks_total":318,"symbols_total":156,"references_total":1024,"files_scanned":42,"files_skipped":28,"files_purged":0,"warnings":0,"errors":0},"graph_table_available":true,"issues_table_available":true,"sql_graph_contract_ready":true,"hotspot_family_ready":true,"csharp_symbol_name_ready":true,"fold_ready":true,"elapsed_ms":2012}
+{"status":"success","mode":"incremental","summary":{"files_total":42,"chunks_total":318,"symbols_total":156,"references_total":1024,"files_scanned":42,"files_skipped":28,"files_purged":0,"warnings":0,"errors":0},"graph_table_available":true,"graph_data_current":true,"index_complete":true,"issues_table_available":true,"sql_graph_contract_ready":true,"hotspot_family_ready":true,"csharp_symbol_name_ready":true,"fold_ready":true,"elapsed_ms":2012}
 ```
+
+When one file throws, successful files and graph edges remain committed. The full-scan
+JSON summary separates extracted and persisted file/chunk/symbol/reference counts, the
+primary totals describe committed database rows, and `file_errors[]` carries bounded
+`category`, `phase`, `file`, `detail`, and optional `line` / `column`. The command exits
+with partial-result code `11`; `--allow-partial` opts into exit `0` without changing
+`status: "partial"`. Status keeps `index_complete=false` and `graph_data_current=false`
+separate from workspace freshness and prioritizes the per-file failure over rebuild advice.
+A later scoped `--files`, `--commits`, or `--changed-between` retry automatically uses a
+normal incremental full scan until the unresolved file has been revisited, so an unrelated
+update cannot erase the failure and a fixed file restores readiness without `--rebuild`.
 
 With `--verbose`, each file also shows a status tag so you can see exactly what happened:
 
@@ -1596,7 +1607,8 @@ Run it at the start of AI-agent work to decide whether `.cdidx/codeindex.db` can
 
 `status --json` also reports readiness and availability metadata:
 
-- storage/index readiness: `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`;
+- storage/index readiness: `fold_ready`, `fold_ready_reason`, `graph_table_available`, `graph_data_current`, `index_complete`, `index_incomplete_reasons`, `issues_table_available`;
+- reference-graph completeness: `reference_extraction_limits`, `reference_graph_complete`, `reference_graph_incomplete_reasons`, `reference_extraction_cap_hits`, and `last_index_run.reference_extraction_cap_hits`;
 - SQL graph readiness: `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`;
 - hotspot and C# metadata readiness: `hotspot_family_ready`, `hotspot_family_degraded_reason`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`;
 - worktree HEAD freshness (#1508 / #1512): `indexed_head_commit` (the HEAD SHA captured at the last successful full-scan) and `worktree_head_changed` (`true` when the runtime HEAD differs — detects per-worktree `git switch` / `git worktree add` that silently invalidate the index);
@@ -1605,7 +1617,19 @@ Run it at the start of AI-agent work to decide whether `.cdidx/codeindex.db` can
 
 `hotspot_family_degraded_reason` may report `partial_family_key_population` when some indexed symbols still lack family keys, or `hotspot_family_marker_fingerprint_incomplete` when marker fingerprint traversal hit safety caps during the last index run; rebuild to restamp missing family keys, and narrow or ignore generated/vendor marker trees before rebuilding after an incomplete fingerprint.
 
-Human `status` output includes a `Readiness:` section that translates these JSON field names into short labels such as `Unicode exact-name fold contract` and prints degraded reasons/remediation inline. Use `cdidx status --explain <field>` for the full description of one readiness field without opening the database; accepted field names are `graph_table_available`, `issues_table_available`, `sql_graph_contract_ready`, `hotspot_family_ready`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `fold_ready`, and `index_newer_than_reader`.
+Reference extraction stops bounded lookup work at 50,000 symbols, 20,000 lines,
+512 names on one line, or 20,000 container candidates. CLI `languages --json` /
+`status --json` and the corresponding MCP responses expose those values under
+`reference_extraction_limits`. If a
+file reaches one of them, its stable diagnostic kind remains in `file_issues`,
+the current and last-run summaries count it in `reference_extraction_cap_hits`,
+and `reference_graph_complete` becomes false. JSON from callers, callees, deps,
+and the corresponding MCP tools repeat the incomplete reasons and set
+`degraded=true`; do not treat
+an empty result as proof that no edge exists until the offending generated or
+pathological files are narrowed/excluded and reindexed.
+
+Human `status` output includes a `Readiness:` section that translates these JSON field names into short labels such as `Unicode exact-name fold contract` and prints degraded reasons/remediation inline. Use `cdidx status --explain <field>` for the full description of one readiness field without opening the database; accepted field names include `graph_table_available`, `graph_data_current`, `index_complete`, `issues_table_available`, `sql_graph_contract_ready`, `hotspot_family_ready`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `fold_ready`, and `index_newer_than_reader`.
 
 Use these fields as concrete remediation hints:
 
@@ -1852,6 +1876,7 @@ For scripts and AI agents that need to classify failures without substring-match
 | `E019_FILE_NOT_FOUND` | An exact indexed file path requested by a query command does not exist |
 | `E020_LINE_OUT_OF_RANGE` | A requested source line falls outside the indexed file's 1-based line range |
 | `E021_SUGGESTION_STORE_UNAVAILABLE` | Suggestion JSON/archive/lock storage could not be resolved, created, read, or written safely |
+| `E022_INDEX_PARTIAL` | Indexing committed successful files but one or more files failed; inspect `file_errors` and rerun after fixing that file |
 
 ### Debugging reader errors
 
@@ -2262,7 +2287,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 
 **Symbol notes**
 
-- C/C++ headers: `.h` stays on the C path unless the file has clear C++ markers such as `namespace`, `template`, `using`, `class`, or `std::`; those headers are promoted to `cpp` at index time.
+- C/C++ headers: `.h` stays on the C path unless lexical code (after comments, strings, and macro payloads are masked) has clear C++ markers such as `namespace`, `template`, `using`, `class`, or `std::`; those headers are promoted to `cpp` at index time. Detection scores the full header up to 48 KiB, then uses head/middle/tail ranges for larger files while retaining lexical state across skipped bytes, so long license blocks do not impose a fixed line cutoff. `index --dry-run --json` reports ambiguous-header decisions in `language_detections` with stable `source` and `confidence` values.
 - Cython and CUDA: Cython `cdef` / `cpdef` declarations, `cimport` entries, and extern declarations are indexed as symbols. CUDA files reuse C++ symbols and classify `__global__`, `__device__`, and `__host__` functions with CUDA-specific sub-kinds.
 - Shaders: GLSL, HLSL, Metal, and WGSL entry points, structs, type aliases, resource bindings, constant buffers, samplers, textures, and uniform/input/output declarations are indexed as symbols.
 - HDL: Verilog, SystemVerilog, and VHDL module/package/type/function/resource declarations are indexed as symbols. References and graph queries are not advertised for HDL yet.
@@ -4060,8 +4085,19 @@ cdidx ./myproject --json
 ```
 
 ```json
-{"status":"success","mode":"incremental","summary":{"files_total":42,"chunks_total":318,"symbols_total":156,"references_total":1024,"files_scanned":42,"files_skipped":28,"files_purged":0,"warnings":0,"errors":0},"graph_table_available":true,"issues_table_available":true,"sql_graph_contract_ready":true,"hotspot_family_ready":true,"csharp_symbol_name_ready":true,"fold_ready":true,"elapsed_ms":2012}
+{"status":"success","mode":"incremental","summary":{"files_total":42,"chunks_total":318,"symbols_total":156,"references_total":1024,"files_scanned":42,"files_skipped":28,"files_purged":0,"warnings":0,"errors":0},"graph_table_available":true,"graph_data_current":true,"index_complete":true,"issues_table_available":true,"sql_graph_contract_ready":true,"hotspot_family_ready":true,"csharp_symbol_name_ready":true,"fold_ready":true,"elapsed_ms":2012}
 ```
+
+1 ファイルで例外が発生しても、成功ファイルと graph edge は commit されたままです。
+full-scan JSON summary は file / chunk / symbol / reference の extracted 数と persisted 数を分け、
+primary total は database に commit 済みの row を表します。`file_errors[]` は上限付きの
+`category`、`phase`、`file`、`detail` と、取得可能な場合の `line` / `column` を返します。
+既定の終了コードは partial-result の `11` で、`--allow-partial` は `status: "partial"` を
+保ったまま終了コード `0` を明示的に許容します。status は workspace freshness と別に
+`index_complete=false` / `graph_data_current=false` を保持し、rebuild 案内より per-file error を優先します。
+未解決 file が残る間、後続の scoped `--files` / `--commits` / `--changed-between` retry は
+通常の incremental full scan に自動移行します。無関係な update が failure を消すことを防ぎ、
+file 修正後は `--rebuild` なしで readiness を復元します。
 
 `--verbose` を付けると、各ファイルにステータスタグも表示され、何が起きたか一目でわかります:
 
@@ -4633,7 +4669,8 @@ AI agent の作業開始時はこれを先に実行し、`.cdidx/codeindex.db` �
 
 `status --json` は readiness / availability metadata も返します。
 
-- storage / index: `fold_ready`、`fold_ready_reason`、`graph_table_available`、`issues_table_available`
+- storage / index: `fold_ready`、`fold_ready_reason`、`graph_table_available`、`graph_data_current`、`index_complete`、`index_incomplete_reasons`、`issues_table_available`
+- reference graph completeness: `reference_extraction_limits`、`reference_graph_complete`、`reference_graph_incomplete_reasons`、`reference_extraction_cap_hits`、`last_index_run.reference_extraction_cap_hits`
 - SQL graph: `sql_graph_contract_ready`、`sql_graph_contract_degraded_reason`
 - hotspot metadata: `hotspot_family_ready`、`hotspot_family_degraded_reason`
 - C# metadata: `csharp_symbol_name_ready`、`csharp_metadata_target_ready`
@@ -4643,7 +4680,18 @@ AI agent の作業開始時はこれを先に実行し、`.cdidx/codeindex.db` �
 
 `hotspot_family_degraded_reason` は、一部の indexed symbol に family key が未設定の場合に `partial_family_key_population`、前回 index の marker fingerprint traversal が安全上限に到達した場合に `hotspot_family_marker_fingerprint_incomplete` を返すことがあります。未設定 family key は rebuild で restamp し、incomplete fingerprint の場合は過剰な project marker を含む generated/vendor tree を絞り込むか ignore してから rebuild してください。
 
-人間向け `status` 出力には `Readiness:` セクションがあり、これらの JSON field 名を `Unicode exact-name fold contract` のような短いラベルに翻訳し、degraded reason と対処を同じ場所に表示します。`cdidx status --explain <field>` を使うと DB を開かずに 1 つの readiness field の詳細説明を確認できます。指定できる field は `graph_table_available`、`issues_table_available`、`sql_graph_contract_ready`、`hotspot_family_ready`、`csharp_symbol_name_ready`、`csharp_metadata_target_ready`、`fold_ready`、`index_newer_than_reader` です。
+reference extraction は lookup symbol 50,000件、lookup line 20,000行、1行の name
+512件、container candidate 20,000件で上限付き処理を停止します。CLI の
+`languages --json` / `status --json` と対応する MCP response はこれらを
+`reference_extraction_limits` に公開します。file が
+いずれかへ到達すると stable diagnostic kind を `file_issues` に保持し、current / last-run
+の `reference_extraction_cap_hits` に件数を集約して `reference_graph_complete=false` にします。
+CLI/MCP の callers / callees / deps / impact response も incomplete reason と
+`degraded=true` を返します。
+該当する generated / pathological file を絞り込むか除外して再 index するまでは、空結果を
+edge が存在しない証拠として扱わないでください。
+
+人間向け `status` 出力には `Readiness:` セクションがあり、これらの JSON field 名を `Unicode exact-name fold contract` のような短いラベルに翻訳し、degraded reason と対処を同じ場所に表示します。`cdidx status --explain <field>` を使うと DB を開かずに 1 つの readiness field の詳細説明を確認できます。指定できる field には `graph_table_available`、`graph_data_current`、`index_complete`、`issues_table_available`、`sql_graph_contract_ready`、`hotspot_family_ready`、`csharp_symbol_name_ready`、`csharp_metadata_target_ready`、`fold_ready`、`index_newer_than_reader` があります。
 
 各 flag の対処は機械的に判断できます。
 
@@ -4876,6 +4924,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `E019_FILE_NOT_FOUND` | query command が要求した indexed file の完全一致 path が存在しない |
 | `E020_LINE_OUT_OF_RANGE` | 要求した source line が indexed file の 1-based 行範囲外だった |
 | `E021_SUGGESTION_STORE_UNAVAILABLE` | suggestion JSON / archive / lock の保存先を安全に解決・作成・読み書きできなかった |
+| `E022_INDEX_PARTIAL` | 成功ファイルを commit した一方で1件以上の file が失敗した。`file_errors` を確認して該当 file の修正後に再実行する |
 
 ### reader エラーのデバッグ
 
@@ -5281,7 +5330,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 
 **シンボル抽出メモ**
 
-- C/C++ ヘッダー: `.h` は既定では C として扱います。`namespace`、`template`、`using`、`class`、`std::` などの明確な C++ マーカーがある場合だけ、index 時に `cpp` へ昇格します。
+- C/C++ ヘッダー: `.h` は既定では C として扱います。コメント、文字列、マクロのペイロードをマスクした後の字句コードに `namespace`、`template`、`using`、`class`、`std::` などの明確な C++ マーカーがある場合だけ、index 時に `cpp` へ昇格します。48 KiB まではヘッダー全体、それを超える場合は評価対象外の byte をまたいで字句状態を保持しながら先頭・中央・末尾 range を評価するため、長いライセンスブロックが固定行数の打ち切りを引き起こしません。`index --dry-run --json` は曖昧なヘッダー判定を、安定した `source` と `confidence` を持つ `language_detections` として報告します。
 - Cython と CUDA: Cython の `cdef` / `cpdef` 宣言、`cimport`、extern 宣言をシンボルとして索引します。CUDA ファイルは C++ のシンボル抽出を再利用し、`__global__`、`__device__`、`__host__` 関数に CUDA 固有の sub-kind を付けます。
 - Shaders: GLSL、HLSL、Metal、WGSL の entry point、struct、type alias、resource binding、constant buffer、sampler、texture、uniform/input/output 宣言をシンボルとして索引します。
 - HDL: Verilog、SystemVerilog、VHDL の module / package / type / function / resource 宣言をシンボルとして索引します。HDL の references と graph queries はまだ対応として広告しません。

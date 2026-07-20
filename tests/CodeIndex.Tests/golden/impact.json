@@ -55,5 +55,21 @@
   ],
   "termination_reason": "completed",
   "cycle_detected": false,
-  "suggestion": "These file-level dependents are heuristic only; confirm with \u0060cdidx deps --path \u003Cdefinition-path\u003E --reverse\u0060 and a member-level \u0060impact\u0060 query."
+  "suggestion": "These file-level dependents are heuristic only; confirm with \u0060cdidx deps --path \u003Cdefinition-path\u003E --reverse\u0060 and a member-level \u0060impact\u0060 query.",
+  "reference_extraction_limits": {
+    "max_lookup_symbols": 50000,
+    "max_lookup_lines": 20000,
+    "max_names_per_line": 512,
+    "max_container_candidates": 20000
+  },
+  "reference_graph_complete": true,
+  "reference_extraction_cap_hits": {
+    "state_available": true,
+    "hit_count": 0,
+    "affected_file_count": 0,
+    "reasons": [],
+    "files": [],
+    "files_truncated": false,
+    "file_limit": 50
+  }
 }

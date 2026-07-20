@@ -540,11 +540,38 @@ public partial class FileIndexer
 
         if (LangMap.TryGetValue(ext, out var lang))
         {
-            if (lang == "c" && string.Equals(ext, ".h", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(content))
+            if (lang == "c" && string.Equals(ext, ".h", StringComparison.OrdinalIgnoreCase))
             {
-                var cppHeaderLanguage = TryDetectCppHeaderLanguage(content);
-                if (cppHeaderLanguage != null)
-                    return new LanguageDetectionResult(FileProbeStatus.Supported, cppHeaderLanguage);
+                if (string.IsNullOrEmpty(content))
+                {
+                    return new LanguageDetectionResult(
+                        FileProbeStatus.Supported,
+                        lang,
+                        HeaderExtensionFallbackDetectionSource,
+                        LanguageDetectionConfidence.Low);
+                }
+
+                var cppHeaderDetection = DetectCppHeaderLanguage(content);
+                if (cppHeaderDetection.IsCpp)
+                {
+                    return new LanguageDetectionResult(
+                        FileProbeStatus.Supported,
+                        "cpp",
+                        cppHeaderDetection.UsedStrategicSampling
+                            ? HeaderSampledLexicalMarkerDetectionSource
+                            : HeaderLexicalMarkerDetectionSource,
+                        cppHeaderDetection.UsedStrategicSampling
+                            ? LanguageDetectionConfidence.Medium
+                            : LanguageDetectionConfidence.High);
+                }
+
+                return new LanguageDetectionResult(
+                    FileProbeStatus.Supported,
+                    lang,
+                    cppHeaderDetection.UsedStrategicSampling
+                        ? HeaderSampledLexicalFallbackDetectionSource
+                        : HeaderLexicalFallbackDetectionSource,
+                    LanguageDetectionConfidence.Low);
             }
 
             return new LanguageDetectionResult(FileProbeStatus.Supported, lang);
@@ -659,51 +686,207 @@ public partial class FileIndexer
         return false;
     }
 
-    private static string? TryDetectCppHeaderLanguage(string content)
+    private const int CppHeaderDetectionByteBudget = 48 * 1024;
+    private const int CppHeaderDetectionSampleByteBudget = CppHeaderDetectionByteBudget / 3;
+
+    private readonly record struct CppHeaderDetectionResult(bool IsCpp, bool UsedStrategicSampling);
+
+    private static CppHeaderDetectionResult DetectCppHeaderLanguage(string content)
     {
-        const int maxLines = 200;
-        var remaining = content.AsSpan();
-        var inspectedLines = 0;
+        var usedStrategicSampling = !FitsUtf8ByteBudget(content, CppHeaderDetectionByteBudget);
+        IReadOnlyList<ReferenceExtractor.CppLexicalRange> ranges = usedStrategicSampling
+            ? BuildCppHeaderDetectionRanges(content)
+            : [new ReferenceExtractor.CppLexicalRange(0, content.Length)];
+        var maskedSamples = ReferenceExtractor.MaskCppLexicalRanges(
+            content,
+            ranges,
+            maskPreprocessorPayloads: true,
+            collapseLineSplices: true);
 
-        while (remaining.Length > 0 && inspectedLines < maxLines)
+        for (var sampleIndex = 0; sampleIndex < maskedSamples.Length; sampleIndex++)
         {
-            var newlineIndex = remaining.IndexOf('\n');
-            var line = newlineIndex >= 0 ? remaining[..newlineIndex] : remaining;
-            if (line.Length > 0 && line[^1] == '\r')
-                line = line[..^1];
-
-            if (LooksLikeCppHeaderLine(line))
-                return "cpp";
-
-            if (newlineIndex < 0)
-                break;
-
-            remaining = remaining[(newlineIndex + 1)..];
-            inspectedLines++;
+            if (ContainsCppHeaderMarker(
+                maskedSamples[sampleIndex],
+                firstLineIsComplete: IsCppLogicalLineBoundary(content, ranges[sampleIndex].Start)))
+            {
+                return new CppHeaderDetectionResult(true, usedStrategicSampling);
+            }
         }
 
-        return null;
+        return new CppHeaderDetectionResult(false, usedStrategicSampling);
     }
 
-    private static bool LooksLikeCppHeaderLine(ReadOnlySpan<char> line)
+    private static IReadOnlyList<ReferenceExtractor.CppLexicalRange> BuildCppHeaderDetectionRanges(string content)
+    {
+        var midpoint = content.Length / 2;
+        var candidateStarts = new[]
+        {
+            0,
+            RetreatByUtf8ByteBudget(content, midpoint, CppHeaderDetectionSampleByteBudget / 2),
+            RetreatByUtf8ByteBudget(content, content.Length, CppHeaderDetectionSampleByteBudget),
+        };
+        Array.Sort(candidateStarts);
+
+        var mergedRanges = new List<ReferenceExtractor.CppLexicalRange>(candidateStarts.Length);
+        foreach (var start in candidateStarts)
+        {
+            var end = AdvanceByUtf8ByteBudget(content, start, CppHeaderDetectionSampleByteBudget);
+            if (end <= start)
+                continue;
+
+            if (mergedRanges.Count > 0 && start <= mergedRanges[^1].End)
+            {
+                var previous = mergedRanges[^1];
+                mergedRanges[^1] = new ReferenceExtractor.CppLexicalRange(previous.Start, Math.Max(previous.End, end));
+            }
+            else
+            {
+                mergedRanges.Add(new ReferenceExtractor.CppLexicalRange(start, end));
+            }
+        }
+
+        return mergedRanges;
+    }
+
+    private static bool ContainsCppHeaderMarker(string content, bool firstLineIsComplete)
+    {
+        var lines = content.Split('\n');
+
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        {
+            var line = lines[lineIndex].AsSpan();
+            if (line.Length > 0 && line[^1] == '\r')
+                line = line[..^1];
+            if (LooksLikeCppHeaderLine(line, allowLineStartMarkers: lineIndex > 0 || firstLineIsComplete))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsCppLogicalLineBoundary(string content, int index)
+    {
+        if (index == 0)
+            return true;
+        if (index < 0 || index > content.Length)
+            return false;
+
+        var lineBreakIndex = index - 1;
+        if (content[lineBreakIndex] == '\n')
+            return !IsCppHeaderSplicedLineBreak(content, lineBreakIndex);
+        if (content[lineBreakIndex] == '\r')
+        {
+            return (index >= content.Length || content[index] != '\n')
+                && !IsCppHeaderSplicedLineBreak(content, lineBreakIndex);
+        }
+
+        return false;
+    }
+
+    private static bool IsCppHeaderSplicedLineBreak(string content, int lineBreakIndex)
+    {
+        var precedingIndex = lineBreakIndex - 1;
+        if (content[lineBreakIndex] == '\n' && precedingIndex >= 0 && content[precedingIndex] == '\r')
+            precedingIndex--;
+        return precedingIndex >= 0 && content[precedingIndex] == '\\';
+    }
+
+    private static bool FitsUtf8ByteBudget(string content, int byteBudget)
+        => AdvanceByUtf8ByteBudget(content, 0, byteBudget) == content.Length;
+
+    private static int AdvanceByUtf8ByteBudget(string content, int start, int byteBudget)
+    {
+        var byteCount = 0;
+        var index = start;
+        while (index < content.Length)
+        {
+            var charCount = 1;
+            int currentByteCount;
+            var ch = content[index];
+            if (ch <= 0x7f)
+            {
+                currentByteCount = 1;
+            }
+            else if (ch <= 0x7ff)
+            {
+                currentByteCount = 2;
+            }
+            else if (char.IsHighSurrogate(ch) && index + 1 < content.Length && char.IsLowSurrogate(content[index + 1]))
+            {
+                currentByteCount = 4;
+                charCount = 2;
+            }
+            else
+            {
+                currentByteCount = 3;
+            }
+
+            if (byteCount + currentByteCount > byteBudget)
+                break;
+
+            byteCount += currentByteCount;
+            index += charCount;
+        }
+
+        return index;
+    }
+
+    private static int RetreatByUtf8ByteBudget(string content, int end, int byteBudget)
+    {
+        var byteCount = 0;
+        var index = end;
+        while (index > 0)
+        {
+            var charCount = 1;
+            var candidateIndex = index - 1;
+            int currentByteCount;
+            var ch = content[candidateIndex];
+            if (char.IsLowSurrogate(ch) && candidateIndex > 0 && char.IsHighSurrogate(content[candidateIndex - 1]))
+            {
+                currentByteCount = 4;
+                charCount = 2;
+                candidateIndex--;
+            }
+            else if (ch <= 0x7f)
+            {
+                currentByteCount = 1;
+            }
+            else if (ch <= 0x7ff)
+            {
+                currentByteCount = 2;
+            }
+            else
+            {
+                currentByteCount = 3;
+            }
+
+            if (byteCount + currentByteCount > byteBudget)
+                break;
+
+            byteCount += currentByteCount;
+            index -= charCount;
+        }
+
+        return index;
+    }
+
+    private static bool LooksLikeCppHeaderLine(ReadOnlySpan<char> line, bool allowLineStartMarkers)
     {
         line = line.Trim();
         if (line.IsEmpty)
             return false;
 
-        if (line.StartsWith("//") || line.StartsWith("/*") || line.StartsWith("*"))
-            return false;
-
-        if (line.StartsWith("namespace ", StringComparison.Ordinal)
-            || line.StartsWith("template ", StringComparison.Ordinal)
-            || line.StartsWith("template<", StringComparison.Ordinal)
-            || line.StartsWith("using ", StringComparison.Ordinal)
-            || line.StartsWith("class ", StringComparison.Ordinal)
-            || line.StartsWith("enum class ", StringComparison.Ordinal)
-            || line.StartsWith("enum struct ", StringComparison.Ordinal)
-            || line.StartsWith("public:", StringComparison.Ordinal)
-            || line.StartsWith("private:", StringComparison.Ordinal)
-            || line.StartsWith("protected:", StringComparison.Ordinal))
+        if (allowLineStartMarkers
+            && (line.StartsWith("namespace ", StringComparison.Ordinal)
+                || line.StartsWith("template ", StringComparison.Ordinal)
+                || line.StartsWith("template<", StringComparison.Ordinal)
+                || line.StartsWith("using ", StringComparison.Ordinal)
+                || line.StartsWith("class ", StringComparison.Ordinal)
+                || line.StartsWith("enum class ", StringComparison.Ordinal)
+                || line.StartsWith("enum struct ", StringComparison.Ordinal)
+                || line.StartsWith("public:", StringComparison.Ordinal)
+                || line.StartsWith("private:", StringComparison.Ordinal)
+                || line.StartsWith("protected:", StringComparison.Ordinal)))
         {
             return true;
         }
