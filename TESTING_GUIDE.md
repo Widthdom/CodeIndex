@@ -525,7 +525,7 @@ Use the inventory below before adding or moving a test class:
 - SQLite connection-string and command-policy tests are parallel-safe when every in-memory connection and command is instance-owned and disposed; referencing `Microsoft.Data.Sqlite` alone is not a reason to join the SQLite-sensitive collection.
 - Cross-platform path matrices can run in parallel when cache seeding is guarded by `PathCasingTestLock` and every filesystem/git fixture owns a unique temporary workspace.
 - Exception-formatting contract tests should guard their shared console helper with `TestConsoleLock` and remain parallelizable; their in-memory SQLite retry probes do not mutate the process pool.
-- Split pure pre-cancelled import and bounded-stream checks from import-replacement fixtures that mutate test-only hooks, so only the hook-owning class remains serialized.
+- Split pure pre-cancelled import and bounded-stream checks from import-replacement fixtures that mutate test-only hooks. Keep the pre-cancelled import fixture in the console-sensitive collection because empty stderr is part of its contract, while the bounded-stream fixture remains parallel-safe and only the hook-owning class needs SQLite-sensitive serialization.
 - Release workflow and package-normalizer tests can run outside the SQLite-sensitive collection: xUnit keeps methods in their single class sequential, so its two scoped durability-hook probes cannot overlap each other.
 - Database-diff fixtures own independent left/right projects, lock console capture, and keep their sole row-budget override within the same sequential xUnit class; they do not require process-wide SQLite serialization.
 - Keep `SuggestionStore` environment-boundary and configured-pruning cases in their small non-parallel fixture; hashing, deduplication, archive, and ordinary persistence cases own isolated directories and should remain parallelizable.
@@ -1230,7 +1230,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - SQLite connection-string / command-policy test は、各 in-memory connection と command を test instance が所有して dispose する限り parallel-safe である。`Microsoft.Data.Sqlite` を参照するだけでは SQLite-sensitive collection に入れる理由にならない。
 - cross-platform path matrix は、cache seed を `PathCasingTestLock` で保護し、各 filesystem / git fixture が一意な temporary workspace を所有する限り parallel 実行できる。
 - exception-formatting contract test は共有 console helper を `TestConsoleLock` で保護して parallel 実行可能に保つ。in-memory SQLite retry probe は process pool を変更しない。
-- pure な事前 cancellation import / bounded-stream check は test-only hook を変更する import replacement fixture から分離し、hook を所有する class だけを直列化する。
+- pure な事前 cancellation import / bounded-stream check は test-only hook を変更する import replacement fixture から分離する。空の stderr が契約の一部であるため、事前 cancellation import fixture は console-sensitive collection に保ち、bounded-stream fixture は parallel-safe なままとして、SQLite-sensitive な直列化は hook を所有する class だけに限定する。
 - release workflow / package-normalizer test は SQLite-sensitive collection の外で実行できる。xUnit は単一 class 内の method を直列に保つため、scope された2件の durability-hook probe は互いに重ならない。
 - database diff fixture は独立した left / right project を所有し、console capture を lock し、唯一の row-budget override を同じ xUnit class の直列実行内に閉じるため、process-wide な SQLite 直列化は不要である。
 - `SuggestionStore` の environment boundary / configured pruning case は小さな non-parallel fixture に隔離する。hash、deduplication、archive、通常の persistence case は独立 directory を所有し、parallel 実行可能に保つ。
