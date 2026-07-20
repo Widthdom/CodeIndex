@@ -88,11 +88,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   XAML `Binding`, `x:Bind`, `CompiledBinding`, and `ReflectionBinding` paths share one fixture with distinct leaf names; assert source/root and converter-parameter exclusions from the same collected property-name set.
   XAML `ElementName` and `x:Reference` target forms share one Grid fixture; collect property names once and retain inline, object-element, property-element, and ignored-parameter assertions together.
   XAML plain and `x:Static`-derived `x:Key` declarations live with static/dynamic resource lookups, including nested `Member={x:Type ...}` syntax, so key production and consumption share one resource dictionary.
-  JavaScript spaced and unspaced chained comparisons before plain templates share one function fixture with distinct operand names, preventing generic-tag false positives in one extraction.
-  JavaScript single-line `for...of` and `for await...of` plain-template negatives share synchronous and asynchronous functions in one source, asserting zero phantom `call of` edges once.
-  JavaScript multiline `for...of` and `for await...of` plain-template negatives likewise share one source and one phantom-call exclusion.
-  JavaScript for-of header negatives share NBSP synchronous/asynchronous and BOM synchronous forms in one source because they assert the same special-whitespace suppression.
-  JavaScript reserved-word member tags share one synchronous/asynchronous fixture and exact per-name call counts for `default`, `return`, `finally`, and `await`.
+  JavaScript and TypeScript tagged-template coverage shares valid bare, contextual `of`, classic-for, special-whitespace, binding-pattern, multiline/comment, reserved-word member-tag, and ignored-name member-call forms with string/plain-template/operator/comparison/for-of/clause-keyword negatives in one theory fixture. Retain unique containers and sentinels for scenario diagnostics, and keep the tight chained-comparison source JavaScript-only because TypeScript legitimately parses it as a generic tag.
   CSS selector-form coverage shares one fixture for selector lists, descendants, compound classes/IDs, standalone IDs, quoted-attribute lookalikes, and hex-color negatives, using unique names for exact diagnostics.
   CSS animation shorthand and comma-separated `animation-name` coverage share one fixture with distinct keyframe names and a shared `none` exclusion.
   SCSS quoted, URL, bare-URL, and media-qualified imports share one entry-point fixture with parameterized and parameterless mixin includes, asserting import and call edges together.
@@ -819,11 +815,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   XAML の `Binding`、`x:Bind`、`CompiledBinding`、`ReflectionBinding` path は、固有の leaf 名を持つ1つの fixture を共有します。同じ property-name 集合から source/root と converter-parameter の除外も検証します。
   XAML の `ElementName` と `x:Reference` target 形式は1つの Grid fixture を共有します。property 名を一度だけ収集し、inline、object-element、property-element、ignored parameter の assertion をまとめて維持します。
   XAML の plain および `x:Static` 由来の `x:Key` declaration は、nested `Member={x:Type ...}` 構文も含めて static/dynamic resource lookup と同居させ、key の生成と利用を1つの resource dictionary で検証します。
-  JavaScript の plain template 前にある空白付き・空白なしの chained comparison は、固有の operand 名を持つ1つの function fixture を共有し、generic tag の false positive を1回の抽出で防ぎます。
-  JavaScript の single-line `for...of` / `for await...of` plain-template 負例は、同期・非同期 function を1つの source に置き、phantom `call of` がゼロであることを1回だけ検証します。
-  JavaScript の multiline `for...of` / `for await...of` plain-template 負例も1つの source と1つの phantom-call 除外を共有します。
-  JavaScript の for-of header 負例は、同じ特殊空白抑制を検証する NBSP 同期・非同期形と BOM 同期形を1つの source で共有します。
-  JavaScript の予約語 member tag は、`default`、`return`、`finally`、`await` の名前別 call 数を厳密に検証する同期・非同期 fixture を共有します。
+  JavaScript / TypeScript の tagged-template coverage は、正当な bare、contextual `of`、classic-for、特殊空白、binding-pattern、multiline/comment、予約語 member-tag、ignored-name member-call 形式と、string/plain-template/operator/comparison/for-of/clause-keyword 負例を、固有 container / sentinel を持つ1 theory fixture で共有します。TypeScript は空白なし chained-comparison source を正当な generic tag として parse するため、その形は JavaScript 側だけに維持します。
   CSS selector-form coverage は、selector list、descendant、compound class/ID、standalone ID、quoted-attribute の類似文字列、hex-color 負例を、厳密に診断できる固有名付きの1 fixture で共有します。
   CSS animation shorthand と comma-separated `animation-name` coverage は、固有の keyframe 名と共通の `none` 除外を持つ1 fixture を共有します。
   SCSS の quoted、URL、bare-URL、media-qualified import は、引数あり・なしの mixin include と1つの entry-point fixture を共有し、import と call edge を同時に検証します。
