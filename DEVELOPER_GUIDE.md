@@ -566,6 +566,18 @@ filters remain exact, so `--kind import` does not include local type declaration
 
 `status --json` emits structured readiness guidance whenever any trust field is degraded. The top-level `degraded_root_cause` is a stable machine-readable primary code, while `readiness_degradations[]` lists every degraded field with `root_cause`, human `degraded_reason`, `recommended_action`, and `alternative_action`. `migration_in_progress` is set from the active batch marker so clients can distinguish a temporary writer/migration window from a permanently degraded index. `issues_table_available` means the physical `file_issues` table exists; `file_issues_data_current` is the freshness/trust bit consumers should use before treating validate rows as authoritative.
 
+Reference extraction publishes its fixed safety limits through CLI
+`languages --json` / `status --json` and the corresponding MCP responses:
+50,000 lookup symbols, 20,000 lookup lines, 512 names per
+line, and 20,000 container candidates. Cap diagnostics are persisted as
+per-file `file_issues`, aggregated for the current generation in
+`reference_extraction_cap_hits`, and snapshotted into
+`last_index_run.reference_extraction_cap_hits`. Any hit makes
+`reference_graph_complete=false` and `graph_data_current=false`; callers,
+CLI/MCP callers, callees, deps, and impact responses repeat the bounded summary and stable diagnostic
+kinds so consumers cannot mistake an incomplete zero for an authoritative
+absence.
+
 ### Workspace version pinning
 
 On startup, `cdidx` walks up from the current directory looking for `.cdidx-version`. The first non-empty line is treated as the required CLI version for that workspace. The pin file is read with a 4096-byte cap; `cdidx` skips at most 16 leading blank lines, and each scanned line must be at most 256 characters. If those limits are exceeded, the pin is ignored with a warning. A mismatch prints a warning and continues by default; `--strict-version` or `CDIDX_STRICT_VERSION=1` turns the mismatch into exit code `64` (`EX_USAGE`). This check is advisory and does not rewrite the file. Use it to keep teams on the same binary when index contracts or query behavior differ between releases.
@@ -612,6 +624,7 @@ Current stable codes and triggers:
 | `hotspot_family_marker_fingerprint_incomplete` | hotspot-family marker fingerprint traversal hit a safety cap, so family trust was not stamped authoritative | reduce generated/ignored marker trees or raise the cap in code, then run `cdidx index <projectPath> --rebuild` |
 | `partial_family_key_population` | hotspot-family metadata is stamped but some indexed symbols still have NULL `family_key` values | `cdidx index <projectPath> --rebuild` |
 | `graph_table_available=false` | `symbol_references` is missing or not graph-ready | `cdidx index <projectPath>` |
+| `reference_graph_complete=false` | a reference-extraction safety cap was reached, or legacy storage cannot report cap state | narrow/exclude the reported generated or pathological files, then run `cdidx index <projectPath>` |
 | `issues_table_available=false` | `file_issues` is missing or not issue-ready | `cdidx index <projectPath>` |
 | `csharp_symbol_name_ready=false` | C# canonical symbol-name stamps are stale | `cdidx index <projectPath>` |
 | `csharp_metadata_target_ready=false` | C# metadata-target stamps are stale | `cdidx index <projectPath>` |
@@ -1146,7 +1159,7 @@ SQL-specific symbol extraction:
 | MySQL backtick identifiers | Backtick-quoted identifiers are treated as case-preserving symbol names. |
 | Unquoted identifiers | Continue through existing case-insensitive lookup paths. |
 | MySQL `DEFINER=user@host` | Emits `definer` symbols. |
-| PostgreSQL `RETURNS TABLE(...)` / `OUT` parameters | Emit function-scoped `field` symbols for synthetic result columns. |
+| PostgreSQL `RETURNS TABLE(...)` / `OUT` parameters | Emit function-scoped `field` symbols for synthetic result columns. `RETURNS TABLE` column lists are scanned with bounded, quote-aware parenthesis balancing so nested type modifiers and unsupported trailing syntax cannot abort the file extractor. |
 
 Supported symbol kinds by language:
 
@@ -1290,22 +1303,31 @@ For the AI agent search-rule template, see [AI Integration](USER_GUIDE.md#ai-int
 
 | Field group | Fields |
 |---|---|
-| Readiness and graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`. |
+| Readiness and graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `graph_data_current`, `reference_extraction_limits`, `reference_graph_complete`, `reference_graph_incomplete_reasons`, `reference_extraction_cap_hits`, `index_complete`, `index_incomplete_reasons`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`. |
 | Workspace and HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`, `head_freshness`. |
 | Version and forward compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`. |
-| Unknown-extension and runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `query_context.check_mode`, `query_context.stale_after_seconds`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`. |
+| Unknown-extension and runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `query_context.check_mode`, `query_context.stale_after_seconds`, `last_index_run.reference_extraction_cap_hits`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`, `last_failed_or_partial_index_run.file_errors`. |
 | Database maintenance | `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `busy_timeout_ms`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `prepared_command_cache` (`count`, `capacity`, `hit_count`, `miss_count`, `eviction_count`), `maintenance_guidance`. |
 | Remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`. |
 | MCP-only session diagnostics | `mcp_session`, `mcp_session.metrics`, `mcp_session.audit_log`, `mcp.rate_limit.bucket_limit`, and `mcp.rate_limit.bucket_limit_rejection_count`. `mcp_session` is session-scoped diagnostics rather than persisted DB state. It contains `log_level`, bounded `roots`, optional `client_info`, bounded optional `client_capabilities`, an always-present `metrics` object, and `audit_log` when audit emission is enabled. When advertised roots are capped, `roots_truncated`, `root_count`, `root_limit`, and `root_uri_length_limit` describe the truncation. When client capabilities are capped, `client_capabilities_truncated`, `client_capabilities_truncation_reason`, `client_capabilities_serialized_bytes`, `client_capabilities_byte_limit`, and `client_capabilities_depth_limit` describe the retained diagnostic subset. `mcp_session.metrics` is `{"enabled":false}` when unconfigured. An enabled metrics sink contains `enabled`, `path`, `max_bytes`, `bytes_written`, `disposed`, `degraded`, `queue_capacity`, `queue_depth`, `queued_event_count`, `written_event_count`, `dropped_event_count`, `queue_full_drop_count`, `serialization_failure_count`, `write_failure_count`, `rotation_failure_count`, `batch_flush_count`, `consecutive_failure_count`, and `recovery_count`, plus optional `next_retry_at`, `last_recovery_at`, and `last_failure`. MCP ping always mirrors the metrics object as `metrics`; metrics degradation is intentionally excluded from its top-level liveness result. The audit status fields and their health semantics are defined in [MCP audit log emission](#mcp-audit-log-emission). `mcp.rate_limit.bucket_limit` is the configured process-local cap across normalized `(partition, caller)` buckets: every direct call uses one fixed caller-wide coarse partition, canonical known tools additionally use secondary per-tool partitions, and unknown `batch_query` slots share one fixed invalid-slot partition per caller. `mcp.rate_limit.bucket_limit_rejection_count` counts calls denied because creating a new bucket would exceed that cap. |
 | Documentation sync | Keep this list synchronized with `README.md` and `AGENT_GUIDE.md`; `DocumentationStatusContractTests` fails when any required field is missing from one of those docs. |
 
 `head_freshness` is a compact summary for machine consumers. `state=fresh`
-requires a successful `status --check` workspace comparison, `state=head_current`
+requires a successful complete `status --check` workspace comparison,
+`state=fresh_but_incomplete` separates matching-workspace freshness from failed-file coverage, and `state=head_current`
 only proves the runtime HEAD matched the `indexed_head` selected by
 `indexed_head_source`, and
 `indexed_head_source` tells consumers whether `indexed_head` came from the latest
 index stamp (`indexed_head_sha`) or the legacy full-scan-only stamp
 (`indexed_head_commit`).
+
+Per-file full-scan or scoped-update failures commit their own successful file transactions and restore
+the graph-presence bit so persisted edges remain queryable. They do not restore issue,
+SQL graph, hotspot, C#, or fold currentness stamps. Instead they persist
+`index_completeness=incomplete`, bounded structured file errors, and recovery metadata;
+the next complete run clears that state. Full-scan JSON reports extracted and persisted
+counts separately, uses committed database counts for primary totals, and returns exit
+`11` unless `--allow-partial` explicitly selects exit `0`.
 
 Runtime diagnostic subcontracts:
 
@@ -3400,6 +3422,15 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 
 `status --json` は trust field のいずれかが degraded の場合に structured readiness guidance を出す。トップレベルの `degraded_root_cause` は primary の安定した machine-readable code で、`readiness_degradations[]` は degraded な各 field と `root_cause`、人間向け `degraded_reason`、`recommended_action`、`alternative_action` を列挙する。`migration_in_progress` は active batch marker から設定し、一時的な writer/migration window と恒久的な degraded index をクライアントが区別できるようにする。`issues_table_available` は物理的な `file_issues` table の存在を意味し、validate rows を authoritative として扱う前の freshness/trust bit は `file_issues_data_current` を使う。
 
+reference extraction の固定 safety limit は lookup symbol 50,000件、lookup line
+20,000行、1行あたりの name 512件、container candidate 20,000件で、CLI の
+`languages --json` / `status --json` と対応する MCP response に公開します。cap diagnostic は file ごとの `file_issues`
+として永続化し、current generation の `reference_extraction_cap_hits` に集約し、
+`last_index_run.reference_extraction_cap_hits` に snapshot します。1件でも到達すると
+`reference_graph_complete=false` / `graph_data_current=false` になり、callers、callees、
+CLI/MCP の callers、callees、deps、impact response も上限付き summary と stable diagnostic kind を返すため、consumer
+は incomplete な0件を authoritative な不在と誤認しません。
+
 ### ワークスペースのバージョン固定
 
 startup 時、`cdidx` は current directory から上へ `.cdidx-version` を探します。最初の non-empty
@@ -3468,6 +3499,7 @@ alternative action を同じ場所へ追加してください。
 | `hotspot_family_marker_fingerprint_incomplete` | hotspot-family marker fingerprint traversal が safety cap に到達し、family trust が authoritative に stamp されなかった | generated / ignored marker tree を減らすか code 側の cap を上げてから `cdidx index <projectPath> --rebuild` |
 | `partial_family_key_population` | hotspot-family metadata は stamp 済みだが、一部の indexed symbol で `family_key` が NULL | `cdidx index <projectPath> --rebuild` |
 | `graph_table_available=false` | `symbol_references` が無い、または graph-ready ではない | `cdidx index <projectPath>` |
+| `reference_graph_complete=false` | reference-extraction safety cap に到達した、または legacy storage で cap state を報告できない | 報告された generated / pathological file を絞り込むか除外してから `cdidx index <projectPath>` |
 | `issues_table_available=false` | `file_issues` が無い、または issue-ready ではない | `cdidx index <projectPath>` |
 | `csharp_symbol_name_ready=false` | C# canonical symbol-name stamp が stale | `cdidx index <projectPath>` |
 | `csharp_metadata_target_ready=false` | C# metadata-target stamp が stale | `cdidx index <projectPath>` |
@@ -4017,7 +4049,7 @@ SQL 固有の symbol extraction:
 | MySQL backtick identifier | case-preserving symbol name として扱います。 |
 | unquoted identifier | 既存の case-insensitive lookup path を通ります。 |
 | MySQL `DEFINER=user@host` | `definer` symbol を出力します。 |
-| PostgreSQL `RETURNS TABLE(...)` / `OUT` parameter | synthetic result column 用に function-scoped `field` symbol を出力します。 |
+| PostgreSQL `RETURNS TABLE(...)` / `OUT` parameter | synthetic result column 用に function-scoped `field` symbol を出力します。`RETURNS TABLE` の列リストは上限付き・quote-aware な括弧対応で走査するため、ネストした型修飾子や未対応の後続構文が file extractor 全体を中断しません。 |
 
 言語別対応シンボル種別:
 
@@ -4163,21 +4195,29 @@ AI エージェント向け検索ルールのテンプレートについては�
 
 | field group | fields |
 |---|---|
-| readiness / graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`。 |
+| readiness / graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `graph_data_current`, `reference_extraction_limits`, `reference_graph_complete`, `reference_graph_incomplete_reasons`, `reference_extraction_cap_hits`, `index_complete`, `index_incomplete_reasons`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`。 |
 | workspace / HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`, `head_freshness`。 |
 | version / forward compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`。 |
-| unknown-extension / runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `query_context.check_mode`, `query_context.stale_after_seconds`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`。 |
+| unknown-extension / runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `query_context.check_mode`, `query_context.stale_after_seconds`, `last_index_run.reference_extraction_cap_hits`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`, `last_failed_or_partial_index_run.file_errors`。 |
 | database maintenance | `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `busy_timeout_ms`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `prepared_command_cache` (`count`, `capacity`, `hit_count`, `miss_count`, `eviction_count`), `maintenance_guidance`。 |
 | remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`。 |
 | MCP-only session diagnostics | `mcp_session`、`mcp_session.metrics`、`mcp_session.audit_log`、`mcp.rate_limit.bucket_limit`、`mcp.rate_limit.bucket_limit_rejection_count`。`mcp_session` は persisted DB state ではなく session-scoped diagnostics で、`log_level`、上限付きの `roots`、任意の `client_info`、上限付きの任意の `client_capabilities`、常設の `metrics` object、audit 出力が有効な場合の `audit_log` を含みます。advertised root が切り詰められた場合は `roots_truncated`、`root_count`、`root_limit`、`root_uri_length_limit` が切り詰め内容を示します。client capabilities が切り詰められた場合は `client_capabilities_truncated`、`client_capabilities_truncation_reason`、`client_capabilities_serialized_bytes`、`client_capabilities_byte_limit`、`client_capabilities_depth_limit` が保持された診断 subset を示します。未設定時の `mcp_session.metrics` は `{"enabled":false}` です。有効な metrics sink は `enabled`、`path`、`max_bytes`、`bytes_written`、`disposed`、`degraded`、`queue_capacity`、`queue_depth`、`queued_event_count`、`written_event_count`、`dropped_event_count`、`queue_full_drop_count`、`serialization_failure_count`、`write_failure_count`、`rotation_failure_count`、`batch_flush_count`、`consecutive_failure_count`、`recovery_count` に加え、任意の `next_retry_at`、`last_recovery_at`、`last_failure` を追加します。MCP ping は常に metrics object を `metrics` として返し、metrics の degradation は意図的に top-level liveness result へ反映しません。audit status field と health semantics は [MCP 監査ログの出力](#mcp-監査ログの出力) に定義します。`mcp.rate_limit.bucket_limit` は normalized な `(partition, caller)` bucket 全体に対する process-local 上限で、direct call はすべて caller-wide の固定 coarse partition、canonical な既知 tool は追加の secondary per-tool partition、unknown な `batch_query` slot は caller ごとの 1 つの固定 invalid-slot partition を使います。`mcp.rate_limit.bucket_limit_rejection_count` は新規 bucket 作成がその上限を超えるため拒否された呼び出し数です。 |
 | documentation sync | この一覧は `README.md` と `AGENT_GUIDE.md` と同期してください。必須 field がそれらの docs から欠けると `DocumentationStatusContractTests` が失敗します。 |
 
 `head_freshness` は machine consumer 向けの compact summary です。
-`state=fresh` は `status --check` の workspace 比較成功が必要で、
+`state=fresh` は complete な index に対する `status --check` の workspace 比較成功が必要で、
+`state=fresh_but_incomplete` は workspace freshness と failed-file coverage を分離し、
 `state=head_current` は runtime HEAD と `indexed_head_source` が選んだ
 `indexed_head` の一致だけを示します。
 `indexed_head_source` は `indexed_head` が最新 index stamp (`indexed_head_sha`) 由来か、
 legacy full-scan 限定 stamp (`indexed_head_commit`) 由来かを示します。
+
+full scan または scoped update の per-file failure は、成功した file transaction を commit し、persisted edge を
+query できるよう graph-presence bit を復元します。一方で issue、SQL graph、hotspot、C#、
+fold の currentness stamp は復元しません。代わりに `index_completeness=incomplete`、上限付きの
+構造化 file error、recovery metadata を永続化し、次の complete run がそれらを clear します。
+full-scan JSON は extracted / persisted count を分離し、primary total には commit 済み DB count を使い、
+`--allow-partial` で終了コード `0` を明示しない限り `11` を返します。
 
 runtime diagnostic subcontract:
 

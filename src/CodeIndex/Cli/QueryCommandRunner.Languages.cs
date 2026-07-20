@@ -163,6 +163,9 @@ public static partial class QueryCommandRunner
                     indexedLanguageCounts,
                     options,
                     languageMapDiagnostics);
+                payload["reference_extraction_limits"] = JsonSerializer.SerializeToNode(
+                    ReferenceExtractor.GetSafetyLimits(),
+                    CliJsonSerializerContextFactory.Create(jsonOptions).ReferenceExtractionSafetyLimits);
                 AddActiveSqliteDiagnostics(payload);
                 CommandOutputWriter.WriteJsonNode(payload, jsonOptions);
                 return CommandExitCodes.Success;
@@ -191,7 +194,8 @@ public static partial class QueryCommandRunner
                     new LanguagesJsonResult(
                         entries,
                         BuildLanguageDetectionPolicy(),
-                        BuildLanguageMapDiagnostics(languageMapDiagnostics)),
+                        BuildLanguageMapDiagnostics(languageMapDiagnostics),
+                        ReferenceExtractor.GetSafetyLimits()),
                     CliJsonSerializerContextFactory.Create(jsonOptions).LanguagesJsonResult,
                     jsonOptions));
             }

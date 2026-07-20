@@ -968,7 +968,7 @@ public partial class IndexCommandRunnerTests
             File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--files", "app.cs", "--json"]);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
 
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
@@ -1120,14 +1120,19 @@ public partial class IndexCommandRunnerTests
             File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
-            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(json.GetProperty("graph_data_current").GetBoolean());
+            Assert.False(json.GetProperty("index_complete").GetBoolean());
+            Assert.Equal(CommandErrorCodes.IndexPartial, json.GetProperty("error_code").GetString());
             Assert.False(json.GetProperty("issues_table_available").GetBoolean());
             Assert.False(json.GetProperty("fold_ready").GetBoolean());
 
             var (_, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
-            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("graph_data_current").GetBoolean());
+            Assert.False(statusJson.GetProperty("index_complete").GetBoolean());
             Assert.True(statusJson.GetProperty("issues_table_available").GetBoolean());
             Assert.False(statusJson.GetProperty("file_issues_data_current").GetBoolean());
             Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
@@ -1137,7 +1142,7 @@ public partial class IndexCommandRunnerTests
             using var verifyCmd = verify.CreateCommand();
             verifyCmd.CommandText = "PRAGMA user_version";
             var userVersion = (long)verifyCmd.ExecuteScalar()!;
-            Assert.Equal(0, userVersion & DbContext.GraphReadyFlag);
+            Assert.NotEqual(0, userVersion & DbContext.GraphReadyFlag);
             Assert.Equal(0, userVersion & DbContext.IssuesReadyFlag);
             Assert.Equal(0, userVersion & DbContext.FoldReadyFlag);
         }
@@ -2070,6 +2075,7 @@ public partial class IndexCommandRunnerTests
         {
             var sourcePath = Path.Combine(projectRoot, "a.cs");
             File.WriteAllText(sourcePath, "public class A { }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "b.cs"), "public class B { }\n");
 
             var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
@@ -2837,11 +2843,13 @@ public partial class IndexCommandRunnerTests
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "tool", "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
-            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(json.GetProperty("graph_data_current").GetBoolean());
+            Assert.False(json.GetProperty("index_complete").GetBoolean());
             Assert.False(json.GetProperty("issues_table_available").GetBoolean());
             Assert.False(json.GetProperty("fold_ready").GetBoolean());
             Assert.Equal("tool", json.GetProperty("errors")[0].GetProperty("file").GetString());
@@ -2853,7 +2861,9 @@ public partial class IndexCommandRunnerTests
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
-            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("graph_data_current").GetBoolean());
+            Assert.False(statusJson.GetProperty("index_complete").GetBoolean());
             Assert.True(statusJson.GetProperty("issues_table_available").GetBoolean());
             Assert.False(statusJson.GetProperty("file_issues_data_current").GetBoolean());
             Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
@@ -2887,22 +2897,60 @@ public partial class IndexCommandRunnerTests
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "a.cs", "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
-            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(json.GetProperty("graph_data_current").GetBoolean());
+            Assert.False(json.GetProperty("index_complete").GetBoolean());
             Assert.False(json.GetProperty("issues_table_available").GetBoolean());
             Assert.False(json.GetProperty("fold_ready").GetBoolean());
             Assert.Equal("a.cs", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.Equal(CommandErrorCodes.IndexPartial, json.GetProperty("error_code").GetString());
+            Assert.Equal("a.cs", json.GetProperty("file_errors")[0].GetProperty("file").GetString());
+            Assert.Equal("file_read_error", json.GetProperty("file_errors")[0].GetProperty("category").GetString());
+            Assert.Equal("reading", json.GetProperty("file_errors")[0].GetProperty("phase").GetString());
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
-            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("graph_data_current").GetBoolean());
+            Assert.False(statusJson.GetProperty("index_complete").GetBoolean());
             Assert.True(statusJson.GetProperty("issues_table_available").GetBoolean());
             Assert.False(statusJson.GetProperty("file_issues_data_current").GetBoolean());
             Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal("a.cs", statusJson.GetProperty("last_failed_or_partial_index_run").GetProperty("file_errors")[0].GetProperty("file").GetString());
+
+            // A scoped mutation cannot clear a failure that it did not revisit. The runner
+            // promotes this attempt to an incremental full scan, which sees the unreadable
+            // file and preserves both the partial result and recovery metadata.
+            var (unrelatedExitCode, unrelatedJson) = RunAndCaptureJson([projectRoot, "--files", "b.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.PartialResult, unrelatedExitCode);
+            Assert.Equal("partial", unrelatedJson.GetProperty("status").GetString());
+            Assert.Equal("a.cs", unrelatedJson.GetProperty("file_errors")[0].GetProperty("file").GetString());
+
+            SetUnixPermissions(sourcePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(4));
+
+            // Retrying the same scoped command also promotes to a normal full scan so every
+            // workspace readiness contract is restored without requiring --rebuild.
+            var (recoveryExitCode, recoveryJson) = RunAndCaptureJson([projectRoot, "--files", "a.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, recoveryExitCode);
+            Assert.Equal("success", recoveryJson.GetProperty("status").GetString());
+            Assert.True(recoveryJson.GetProperty("graph_data_current").GetBoolean());
+            Assert.True(recoveryJson.GetProperty("index_complete").GetBoolean());
+            Assert.True(recoveryJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(recoveryJson.GetProperty("fold_ready").GetBoolean());
+
+            var (recoveredStatusExitCode, recoveredStatusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, recoveredStatusExitCode);
+            Assert.True(recoveredStatusJson.GetProperty("graph_data_current").GetBoolean());
+            Assert.True(recoveredStatusJson.GetProperty("index_complete").GetBoolean());
+            Assert.True(recoveredStatusJson.GetProperty("file_issues_data_current").GetBoolean());
+            Assert.True(recoveredStatusJson.GetProperty("fold_ready").GetBoolean());
+            Assert.False(recoveredStatusJson.TryGetProperty("last_failed_or_partial_index_run", out _));
         }
         finally
         {
@@ -2931,11 +2979,13 @@ public partial class IndexCommandRunnerTests
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "b.cs", "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
-            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(json.GetProperty("graph_data_current").GetBoolean());
+            Assert.False(json.GetProperty("index_complete").GetBoolean());
             Assert.False(json.GetProperty("issues_table_available").GetBoolean());
             Assert.False(json.GetProperty("fold_ready").GetBoolean());
             Assert.Equal("b.cs", json.GetProperty("errors")[0].GetProperty("file").GetString());
@@ -2943,7 +2993,9 @@ public partial class IndexCommandRunnerTests
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
-            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("graph_data_current").GetBoolean());
+            Assert.False(statusJson.GetProperty("index_complete").GetBoolean());
             Assert.True(statusJson.GetProperty("issues_table_available").GetBoolean());
             Assert.False(statusJson.GetProperty("file_issues_data_current").GetBoolean());
             Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());

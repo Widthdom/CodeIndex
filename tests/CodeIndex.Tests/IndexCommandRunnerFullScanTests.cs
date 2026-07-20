@@ -84,6 +84,164 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_ExtractorFailurePersistsSuccessfulGraphAndTruthfulPartialState_Issue4609()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "Service.cs"), "public class Service { public void Target() { } }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "Caller.cs"), "public class Caller { public void Run(Service service) { service.Target(); } }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "Broken.cs"), "public class Broken { }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "schema.sql"), "CREATE TABLE audit_events (id bigint);\nSELECT id FROM audit_events;\n");
+
+            lock (FullScanContentLoadHookGate)
+            {
+                var brokenSymbolPhaseCalls = 0;
+                try
+                {
+                    IndexCommandRunner.FullScanFilePhaseForTesting = (path, phase) =>
+                    {
+                        if (path == "Broken.cs"
+                            && phase == "symbols"
+                            && Interlocked.Increment(ref brokenSymbolPhaseCalls) == 2)
+                            throw new JsonException("synthetic extractor failure", "Broken.cs", 5, 7);
+                    };
+
+                    var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+                    Assert.Equal(CommandExitCodes.PartialResult, exitCode);
+                    Assert.Equal("partial", json.GetProperty("status").GetString());
+                    Assert.Equal(CommandErrorCodes.IndexPartial, json.GetProperty("error_code").GetString());
+                    Assert.False(json.GetProperty("index_complete").GetBoolean());
+                    Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+                    Assert.False(json.GetProperty("graph_data_current").GetBoolean());
+                    Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
+
+                    var summary = json.GetProperty("summary");
+                    Assert.True(summary.GetProperty("references_total").GetInt64() > 0);
+                    Assert.Equal(summary.GetProperty("references_extracted").GetInt64(), summary.GetProperty("references_persisted").GetInt64());
+                    Assert.True(summary.GetProperty("files_extracted").GetInt64() > summary.GetProperty("files_persisted").GetInt64());
+
+                    var fileError = Assert.Single(json.GetProperty("file_errors").EnumerateArray());
+                    Assert.Equal("Broken.cs", fileError.GetProperty("file").GetString());
+                    Assert.Equal("extraction_error", fileError.GetProperty("category").GetString());
+                    Assert.Equal("symbols", fileError.GetProperty("phase").GetString());
+                    Assert.Contains("synthetic extractor failure", fileError.GetProperty("detail").GetString(), StringComparison.Ordinal);
+                    Assert.Equal(6, fileError.GetProperty("line").GetInt64());
+                    Assert.Equal(8, fileError.GetProperty("column").GetInt64());
+
+                    var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+                    using (var connection = OpenNonPoolingConnection(dbPath))
+                    {
+                        connection.Open();
+                        using var countCommand = connection.CreateCommand();
+                        countCommand.CommandText = "SELECT COUNT(*) FROM symbol_references";
+                        var persistedReferenceCount = Convert.ToInt64(countCommand.ExecuteScalar(), CultureInfo.InvariantCulture);
+                        Assert.Equal(summary.GetProperty("references_total").GetInt64(), persistedReferenceCount);
+                        Assert.True(persistedReferenceCount > 0);
+                    }
+
+                    var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
+                    Assert.NotEqual(CommandExitCodes.Success, statusExitCode);
+                    Assert.True(statusJson.GetProperty("graph_table_available").GetBoolean());
+                    Assert.False(statusJson.GetProperty("graph_data_current").GetBoolean());
+                    Assert.False(statusJson.GetProperty("index_complete").GetBoolean());
+                    Assert.Equal(summary.GetProperty("references_total").GetInt64(), statusJson.GetProperty("references").GetInt64());
+                    Assert.Contains("INCOMPLETE", statusJson.GetProperty("summary").GetString(), StringComparison.Ordinal);
+                    var lastFailure = statusJson.GetProperty("last_failed_or_partial_index_run");
+                    Assert.Equal(CommandErrorCodes.IndexPartial, lastFailure.GetProperty("error_code").GetString());
+                    Assert.True(lastFailure.GetProperty("progress_persisted").GetBoolean());
+                    Assert.Contains("rebuild is not required", lastFailure.GetProperty("recovery_hint").GetString(), StringComparison.Ordinal);
+                    Assert.Equal("Broken.cs", lastFailure.GetProperty("file_errors")[0].GetProperty("file").GetString());
+
+                    brokenSymbolPhaseCalls = 0;
+                    var (allowedExitCode, allowedJson) = RunAndCaptureJson([projectRoot, "--json", "--allow-partial"]);
+                    Assert.Equal(CommandExitCodes.Success, allowedExitCode);
+                    Assert.Equal("partial", allowedJson.GetProperty("status").GetString());
+                }
+                finally
+                {
+                    IndexCommandRunner.FullScanFilePhaseForTesting = null;
+                }
+            }
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFilePhaseForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_ReferenceCapHitPersistsPerFileAndRunCompleteness_Issue4620()
+    {
+        var projectRoot = CreateTempProject();
+        var previousLimits = ReferenceExtractor.SafetyLimitsForTesting;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "def first():\n    pass\n\ndef second():\n    pass\n");
+            ReferenceExtractor.SafetyLimitsForTesting = new ReferenceExtractionSafetyLimits
+            {
+                MaxLookupSymbols = 1,
+                MaxLookupLines = 100,
+                MaxNamesPerLine = 100,
+                MaxContainerCandidates = 100,
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.False(json.GetProperty("reference_graph_complete").GetBoolean());
+            Assert.False(json.GetProperty("graph_data_current").GetBoolean());
+            Assert.Equal(1, json.GetProperty("reference_extraction_limits").GetProperty("max_lookup_symbols").GetInt32());
+            AssertReferenceCapHitSummary(json.GetProperty("reference_extraction_cap_hits"), "app.py");
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.False(statusJson.GetProperty("reference_graph_complete").GetBoolean());
+            Assert.False(statusJson.GetProperty("graph_data_current").GetBoolean());
+            Assert.Contains(
+                "reference_definition_lookup_symbol_budget_exceeded",
+                statusJson.GetProperty("reference_graph_incomplete_reasons").EnumerateArray().Select(value => value.GetString()));
+            AssertReferenceCapHitSummary(statusJson.GetProperty("reference_extraction_cap_hits"), "app.py");
+            AssertReferenceCapHitSummary(
+                statusJson.GetProperty("last_index_run").GetProperty("reference_extraction_cap_hits"),
+                "app.py");
+
+            var (checkExitCode, checkJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check=graph", "--json"]);
+            Assert.NotEqual(CommandExitCodes.Success, checkExitCode);
+            var repairCommand = Assert.Single(checkJson.GetProperty("repair_commands").EnumerateArray());
+            Assert.Equal("reference_graph_complete", repairCommand.GetProperty("reason").GetString());
+            Assert.Contains(
+                "cap-hitting",
+                repairCommand.GetProperty("safety_notes")[0].GetString(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            ReferenceExtractor.SafetyLimitsForTesting = previousLimits;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    private static void AssertReferenceCapHitSummary(JsonElement summary, string expectedFile)
+    {
+        Assert.True(summary.GetProperty("state_available").GetBoolean());
+        Assert.True(summary.GetProperty("hit_count").GetInt64() > 0);
+        Assert.Equal(1, summary.GetProperty("affected_file_count").GetInt64());
+        Assert.Contains(
+            "reference_definition_lookup_symbol_budget_exceeded",
+            summary.GetProperty("reasons").EnumerateArray().Select(value => value.GetString()));
+        var file = Assert.Single(summary.GetProperty("files").EnumerateArray());
+        Assert.Equal(expectedFile, file.GetProperty("file").GetString());
+        Assert.True(file.GetProperty("hit_count").GetInt64() > 0);
+    }
+
+    [Fact]
     public void Run_FullScan_RechecksIndexabilityBeforeContentRead()
     {
         if (OperatingSystem.IsWindows())
@@ -116,7 +274,7 @@ public partial class IndexCommandRunnerTests
                     var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
 
                     Assert.True(swapped);
-                    Assert.Equal(CommandExitCodes.Success, exitCode);
+                    Assert.Equal(CommandExitCodes.PartialResult, exitCode);
                     Assert.Equal("partial", json.GetProperty("status").GetString());
                     Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
                     Assert.Contains(
@@ -642,8 +800,12 @@ public partial class IndexCommandRunnerTests
             RunGit(projectRoot, "add", "app.cs");
             RunGit(projectRoot, "commit", "-m", "initial");
 
-            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
-            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            var (initialExitCode, initialJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            var initialStatus = initialJson.GetProperty("status").GetString();
+            Assert.Contains(initialStatus, ["success", "partial"]);
+            Assert.Equal(
+                initialStatus == "partial" ? CommandExitCodes.PartialResult : CommandExitCodes.Success,
+                initialExitCode);
 
             File.AppendAllText(Path.Combine(projectRoot, "app.cs"), "public class Next { public void Run() { } }\n");
             RunGit(projectRoot, "add", "app.cs");
@@ -653,8 +815,11 @@ public partial class IndexCommandRunnerTests
 
             var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
-            Assert.Contains(refreshJson.GetProperty("status").GetString(), ["success", "partial"]);
+            var refreshStatus = refreshJson.GetProperty("status").GetString();
+            Assert.Contains(refreshStatus, ["success", "partial"]);
+            Assert.Equal(
+                refreshStatus == "partial" ? CommandExitCodes.PartialResult : CommandExitCodes.Success,
+                refreshExitCode);
             Assert.False(parallelized);
         }
         finally
@@ -709,7 +874,7 @@ public partial class IndexCommandRunnerTests
             }
 
             var (exitCode, json) = RunAndCaptureJson([projectRootB, "--db", dbPath, "--json"]);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
 
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
@@ -1270,7 +1435,7 @@ public partial class IndexCommandRunnerTests
             SetUnixPermissions(secretDir, UnixFileMode.None);
             var (partialExitCode, partialJson) = RunAndCaptureJson([projectRoot, "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, partialExitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, partialExitCode);
             Assert.Equal("partial", partialJson.GetProperty("status").GetString());
             Assert.Equal(0, partialJson.GetProperty("summary").GetProperty("files_purged").GetInt32());
             Assert.Equal(1, partialJson.GetProperty("summary").GetProperty("errors").GetInt32());
@@ -1283,7 +1448,7 @@ public partial class IndexCommandRunnerTests
             Assert.True(File.Exists(checkpointPath));
 
             var (humanExitCode, _, stderr) = RunAndCaptureStreams([projectRoot]);
-            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, humanExitCode);
             Assert.Contains("secret", stderr);
             Assert.Contains("Could not scan directory due to permissions.", stderr);
 
@@ -1333,7 +1498,7 @@ public partial class IndexCommandRunnerTests
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
             Assert.Contains(
@@ -1345,7 +1510,7 @@ public partial class IndexCommandRunnerTests
 
             IndexCommandRunner.WriteScanCheckpointForTesting = null;
             var (partialExitCode, partialJson) = RunAndCaptureJson([projectRoot, "--json"]);
-            Assert.Equal(CommandExitCodes.Success, partialExitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, partialExitCode);
             Assert.Equal("partial", partialJson.GetProperty("status").GetString());
 
             var checkpointPath = Path.Combine(projectRoot, ".cdidx", "scan-checkpoint.json");
@@ -1448,7 +1613,7 @@ public partial class IndexCommandRunnerTests
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
             Assert.Equal("secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
@@ -1488,7 +1653,7 @@ public partial class IndexCommandRunnerTests
 
             var (humanExitCode, stdout, stderr) = RunAndCaptureStreams([projectRoot]);
 
-            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, humanExitCode);
             Assert.Contains("positively observed as no longer indexable or missing from directories whose file listing completed successfully", stdout);
             Assert.Contains("Skipped authoritative purge outside directories whose file listing completed successfully", stderr);
         }
@@ -1524,7 +1689,7 @@ public partial class IndexCommandRunnerTests
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
             Assert.Equal("secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
@@ -1564,7 +1729,7 @@ public partial class IndexCommandRunnerTests
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
             Assert.Equal("secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
@@ -1605,7 +1770,7 @@ public partial class IndexCommandRunnerTests
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
             Assert.Equal("src/secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
@@ -1646,7 +1811,7 @@ public partial class IndexCommandRunnerTests
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());

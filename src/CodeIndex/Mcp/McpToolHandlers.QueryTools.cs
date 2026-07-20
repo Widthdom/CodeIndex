@@ -877,6 +877,7 @@ public partial class McpServer
                 countOnlyPayload["lang"] = lang;
                 countOnlyPayload["path"] = PathEcho(pathPatterns);
                 countOnlyPayload["excludeTests"] = excludeTests;
+                AddReferenceGraphCompletenessSignal(countOnlyPayload, reader);
                 adjustments.ApplyTo(countOnlyPayload);
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countOnlyTotal, "caller")}.", countOnlyPayload);
             }
@@ -920,6 +921,7 @@ public partial class McpServer
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
+            AddReferenceGraphCompletenessSignal(payload, reader);
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
@@ -986,6 +988,7 @@ public partial class McpServer
                 countOnlyPayload["lang"] = lang;
                 countOnlyPayload["path"] = PathEcho(pathPatterns);
                 countOnlyPayload["excludeTests"] = excludeTests;
+                AddReferenceGraphCompletenessSignal(countOnlyPayload, reader);
                 adjustments.ApplyTo(countOnlyPayload);
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countOnlyTotal, "callee")}.", countOnlyPayload);
             }
@@ -1029,6 +1032,7 @@ public partial class McpServer
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
+            AddReferenceGraphCompletenessSignal(payload, reader);
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
@@ -1305,6 +1309,26 @@ public partial class McpServer
             {
                 payload["sql_graph_contract_degraded_reason"] = signal.DegradedReason;
             }
+        }
+    }
+
+    private void AddReferenceGraphCompletenessSignal(JsonObject payload, DbReader reader)
+    {
+        var capHits = reader.GetReferenceExtractionCapHits();
+        var complete = capHits.StateAvailable && capHits.HitCount == 0;
+        payload["reference_extraction_limits"] = JsonSerializer.SerializeToNode(
+            ReferenceExtractor.GetSafetyLimits(),
+            _jsonOptions);
+        payload["reference_graph_complete"] = complete;
+        payload["reference_extraction_cap_hits"] = JsonSerializer.SerializeToNode(
+            capHits,
+            _jsonOptions);
+        if (!complete)
+        {
+            payload["reference_graph_incomplete_reasons"] = JsonSerializer.SerializeToNode(
+                capHits.Reasons,
+                _jsonOptions);
+            payload["degraded"] = true;
         }
     }
 
@@ -2761,6 +2785,7 @@ public partial class McpServer
             payload["generated_code_filter_supported"] = true;
             payload["generated_code_scope"] = "source_and_target_files";
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
+            AddReferenceGraphCompletenessSignal(payload, reader);
             var summary = payload["count"]!.GetValue<int>() > 0
                 ? cyclesOnly ? $"Found {ConsoleUi.Counted(cycles.Count, "dependency cycle")}." : $"Found {ConsoleUi.Counted(results.Count, "dependency edge")}."
                 : cyclesOnly ? "No dependency cycles found." : "No file dependencies found.";

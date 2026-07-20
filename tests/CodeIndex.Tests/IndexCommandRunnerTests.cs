@@ -94,6 +94,14 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_AllowPartialSetsIndexOptIn_Issue4609()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--allow-partial"]);
+
+        Assert.True(options.AllowPartial);
+    }
+
+    [Fact]
     public void Run_UnknownIndexOption_ReturnsUsageError()
     {
         var projectRoot = CreateTempProject();
@@ -6601,7 +6609,7 @@ public sealed class Caller
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--yes", "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
 
             var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));

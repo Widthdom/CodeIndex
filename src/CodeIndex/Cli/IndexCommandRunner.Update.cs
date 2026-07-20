@@ -21,6 +21,7 @@ public static partial class IndexCommandRunner
         string[] spinnerFrames,
         JsonSerializerOptions jsonOptions,
         int priorReadiness,
+        bool priorFileIndexIncomplete,
         bool priorSymbolsOnlyGraphOmitted,
         string? priorFoldVersion,
         string? priorFoldFingerprint,
@@ -77,7 +78,8 @@ public static partial class IndexCommandRunner
         var typeScriptJavaScriptConfigChanged = ContainsJavaScriptTypeScriptConfigPath(targetPaths);
         var extractorConfigurationChanged = ContainsExtractorConfigurationPath(projectRoot, targetPaths);
         var ambiguousLanguageProjectMarkerChanged = targetPaths.Any(FileIndexer.IsAmbiguousLanguageProjectMarkerPath);
-        if (relevantIgnoreFileChanged
+        if (priorFileIndexIncomplete
+            || relevantIgnoreFileChanged
             || ContainsIgnoreFilePath(targetPaths)
             || typeScriptJavaScriptConfigChanged
             || extractorConfigurationChanged
@@ -88,7 +90,9 @@ public static partial class IndexCommandRunner
 
             if (!options.Json && !options.Quiet)
             {
-                var reason = extractorConfigurationChanged
+                var reason = priorFileIndexIncomplete
+                    ? "an earlier partial index still has unresolved file failures"
+                    : extractorConfigurationChanged
                     ? "extractor configuration changes"
                     : typeScriptJavaScriptConfigChanged
                         ? "JavaScript/TypeScript config changes"
@@ -99,6 +103,14 @@ public static partial class IndexCommandRunner
                 CommandOutputWriter.WriteLine();
             }
 
+            // A scoped pass cannot prove that failures outside its target set recovered, and
+            // the partial pass deliberately cleared workspace-wide readiness stamps. Reuse the
+            // normal incremental full-scan path until every failed file has been revisited; this
+            // preserves the failure on unrelated updates and restores all contracts without a
+            // destructive rebuild once the source problem is fixed. Issue #4609 review.
+            // scoped pass だけでは対象外の失敗回復を証明できず、partial pass は workspace 全体の
+            // readiness を落としている。失敗解消までは通常の incremental full-scan に切り替え、
+            // 無関係 update で failure を消さず、修正後は rebuild なしで全 contract を復元する。
             return RunFullScan(
                 writer,
                 indexer,
@@ -138,6 +150,7 @@ public static partial class IndexCommandRunner
         var interactiveUpdateSpinner = !options.Json && !options.Quiet && ConsoleUi.ShouldUseInteractiveConsole();
         int updated = 0, removed = 0, skipped = 0, warnings = 0, errors = 0;
         var errorList = new List<CliJsonMessage>();
+        var fileErrorList = new List<StatusIndexFileError>();
         var warningList = new List<CliJsonMessage>();
         warnings += AddProjectMarkerFingerprintWarnings(currentHotspotFamilyMarkerFingerprints, warningList, options);
         var scanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -225,6 +238,18 @@ public static partial class IndexCommandRunner
                     DemoteReadinessOnce();
                     errors++;
                     errorList.Add(new CliJsonMessage(scanError.Path, scanError.Message));
+                    if (fileErrorList.Count < PartialIndexFileErrorLimit)
+                    {
+                        fileErrorList.Add(new StatusIndexFileError
+                        {
+                            File = FileIndexer.NormalizePathSeparators(scanError.Path),
+                            Category = "file_read_error",
+                            Phase = "discovery",
+                            Detail = scanError.Message.Length <= 240
+                                ? scanError.Message
+                                : string.Concat(scanError.Message.AsSpan(0, 239), "\u2026"),
+                        });
+                    }
                 }
                 else
                 {
@@ -474,6 +499,7 @@ public static partial class IndexCommandRunner
 
         WriteIndexJsonLiveness(options, $"updating {ConsoleUi.Counted(targetPaths.Count, "file")}...");
         string? currentUpdatePath = null;
+        var currentUpdatePhase = "preparing";
         var updateHeartbeat = StartIndexJsonPhaseHeartbeat(
             options,
             "updating index",
@@ -494,6 +520,7 @@ public static partial class IndexCommandRunner
                 StartUpdateSpinnerIfNeeded();
                 var relPath = target.RelativePath;
                 currentUpdatePath = relPath;
+                currentUpdatePhase = "preparing";
                 var absPath = target.FilePath;
                 var dbPath = target.IndexPath;
                 var fileBatchMarked = false;
@@ -606,6 +633,16 @@ public static partial class IndexCommandRunner
 
                         errors++;
                         errorList.Add(new CliJsonMessage(relPath, "Could not probe file for indexability/language."));
+                        if (fileErrorList.Count < PartialIndexFileErrorLimit)
+                        {
+                            fileErrorList.Add(new StatusIndexFileError
+                            {
+                                File = FileIndexer.NormalizePathSeparators(relPath),
+                                Category = "file_read_error",
+                                Phase = "reading",
+                                Detail = "Could not probe file for indexability/language.",
+                            });
+                        }
                         if (!options.Json)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
@@ -748,6 +785,7 @@ public static partial class IndexCommandRunner
                         ? statReusableLanguage
                         : FileIndexer.GetReusableDetectedLanguage(absPath, scannedUpdateLanguages);
 
+                    currentUpdatePhase = "reading";
                     var loaded = indexer.BuildLoadedRecordWithRawBytes(
                         absPath,
                         relPath,
@@ -830,6 +868,7 @@ public static partial class IndexCommandRunner
                     WriteProjectRootOnce();
                     var fileId = writer.UpsertFile(record);
                     currentUpdatePath = FormatIndexPhasePath(relPath, "chunking");
+                    currentUpdatePhase = "chunking";
                     var chunks = ChunkSplitter.SplitNormalized(fileId, content, loaded.HasOversizeLine, record.Lines);
                     if (generatedSuppressionIssue != null)
                     {
@@ -837,11 +876,13 @@ public static partial class IndexCommandRunner
                         writer.InsertSymbols([], cancellationToken);
                         writer.InsertReferences([], refreshMutualRecursionFlags: false, cancellationToken);
                         currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
+                        currentUpdatePhase = "validating";
                         var generatedIssues = AppendIssueIfMissing(
                             FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine, loaded.ConflictMarkerLine),
                             generatedSuppressionIssue);
                         writer.InsertIssues(fileId, generatedIssues);
                         currentUpdatePath = FormatIndexPhasePath(relPath, "committing");
+                        currentUpdatePhase = "committing";
                         writer.ClearBatchInProgress();
                         txn.Commit();
                         fileBatchMarked = false;
@@ -852,6 +893,7 @@ public static partial class IndexCommandRunner
                         continue;
                     }
                     currentUpdatePath = FormatIndexPhasePath(relPath, "symbols");
+                    currentUpdatePhase = "symbols";
                     var symbolExtraction = ExtractSymbolsWithStallTimeout(
                         fileId,
                         record.Lang,
@@ -911,6 +953,7 @@ public static partial class IndexCommandRunner
                     FileIndexer.ValidateSymbolLineRanges(record, symbols);
                     writer.InsertSymbols(symbols, cancellationToken);
                     currentUpdatePath = FormatIndexPhasePath(relPath, "references");
+                    currentUpdatePhase = "references";
                     List<ReferenceRecord> references;
                     FileIssue? referenceRegexTimeoutIssue;
                     ReferenceExtractionResult referenceExtraction;
@@ -941,6 +984,7 @@ public static partial class IndexCommandRunner
                     writer.InsertReferences(references, refreshMutualRecursionFlags: false, cancellationToken);
                     // Validate content for encoding issues / エンコーディング問題を検証
                     currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
+                    currentUpdatePhase = "validating";
                     IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine, loaded.ConflictMarkerLine);
                     if (symbolRegexTimeoutIssue != null)
                         issues = AppendIssue(issues, symbolRegexTimeoutIssue);
@@ -951,6 +995,7 @@ public static partial class IndexCommandRunner
                         issues = AppendIssue(issues, referenceCapIssue);
                     writer.InsertIssues(fileId, issues);
                     currentUpdatePath = FormatIndexPhasePath(relPath, "committing");
+                    currentUpdatePhase = "committing";
                     writer.ClearBatchInProgress();
                     txn.Commit();
 
@@ -1090,6 +1135,8 @@ public static partial class IndexCommandRunner
                     errors++;
                     var errorMessage = FormatIndexFileException(ex);
                     errorList.Add(new CliJsonMessage(relPath, errorMessage));
+                    if (fileErrorList.Count < PartialIndexFileErrorLimit)
+                        fileErrorList.Add(BuildIndexFileError(relPath, currentUpdatePhase, ex));
                     if (!options.Json)
                     {
                         PauseUpdateSpinnerForConsoleWrite();
@@ -1176,6 +1223,29 @@ public static partial class IndexCommandRunner
                 (priorReadiness & DbContext.FoldReadyFlag) != 0,
                 priorFoldVersion == currentFoldVersion,
                 priorFoldFingerprint == currentFoldFingerprint);
+        if (errors > 0)
+        {
+            if (!options.SymbolsOnly && (priorReadiness & DbContext.GraphReadyFlag) != 0)
+            {
+                // Successful file transactions remain a useful graph generation. Keep the
+                // presence signal while completeness/currentness identifies the failed files.
+                writer.MarkGraphReady();
+                graphTableAvailableAfter = true;
+            }
+            writer.MarkIndexIncomplete(["file_index_error"]);
+            writer.SetMetaValues(
+                (DbContext.LastFailedIndexRunStatusMetaKey, "partial"),
+                (DbContext.LastFailedIndexRunModeMetaKey, "update"),
+                (DbContext.LastFailedIndexRunStartedAtMetaKey, runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastFailedIndexRunDurationMsMetaKey, stopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastFailedIndexRunFilesProcessedMetaKey, (updated + removed + skipped).ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastFailedIndexRunFilesTotalMetaKey, targetPaths.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastFailedIndexRunErrorCodeMetaKey, CommandErrorCodes.IndexPartial),
+                (DbContext.LastFailedIndexRunReasonMetaKey, "file_index_error"),
+                (DbContext.LastFailedIndexRunProgressPersistedMetaKey, true.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastFailedIndexRunRecoveryHintMetaKey, "Fix the reported file/extractor error, then rerun the same index command. Successful files and graph edges remain persisted; a rebuild is not required."),
+                (DbContext.LastFailedIndexRunFileErrorsMetaKey, JsonSerializer.Serialize(fileErrorList, StatusMetadataJsonContext.Default.ListStatusIndexFileError)));
+        }
         if (readinessDemoted && errors == 0)
         {
             writer.MarkBatchInProgress();
@@ -1298,7 +1368,8 @@ public static partial class IndexCommandRunner
                 updated,
                 removed,
                 memoryTimelineForStamp,
-                indexRunDiagnostics);
+                indexRunDiagnostics,
+                new DbReader(writer.Connection).GetReferenceExtractionCapHits());
         }
         stopwatch.Stop();
         var memoryTimeline = BuildMemoryTimeline(memorySamples);
@@ -1318,6 +1389,9 @@ public static partial class IndexCommandRunner
         warnings += AddPostExtractionHookWarnings(postExtractionHooks.ValueIfCreated, warningList);
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
         var signalReader = new DbReader(writer.Connection);
+        var referenceExtractionCapHitsAfter = signalReader.GetReferenceExtractionCapHits();
+        var referenceGraphCompleteAfter = referenceExtractionCapHitsAfter.StateAvailable
+            && referenceExtractionCapHitsAfter.HitCount == 0;
         var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);
         var hotspotFamilySignalAfter = signalReader.GetHotspotFamilySignal(lang: null);
         var sqlGraphContractReadyAfter = sqlGraphContractSignalAfter.Ready;
@@ -1359,6 +1433,12 @@ public static partial class IndexCommandRunner
                 },
                 SymbolKindFilter = options.SymbolKindFilter.ToJsonResult(),
                 GraphTableAvailable = graphTableAvailableAfter,
+                GraphDataCurrent = errors == 0 && graphTableAvailableAfter && referenceGraphCompleteAfter,
+                IndexComplete = errors == 0,
+                ReferenceExtractionLimits = ReferenceExtractor.GetSafetyLimits(),
+                ReferenceGraphComplete = referenceGraphCompleteAfter,
+                ReferenceExtractionCapHits = referenceExtractionCapHitsAfter,
+                ErrorCode = errors > 0 ? CommandErrorCodes.IndexPartial : null,
                 IssuesTableAvailable = issuesTableAvailableAfter,
                 SqlGraphContractReady = sqlGraphContractReadyAfter,
                 SqlGraphContractDegradedReason = sqlGraphContractDegradedReasonAfter,
@@ -1379,6 +1459,7 @@ public static partial class IndexCommandRunner
                 CwdAtFinalize = finalCwd,
                 CwdDriftNotice = cwdDriftNotice,
                 Errors = errorList.Count > 0 ? errorList : null,
+                FileErrors = fileErrorList.Count > 0 ? fileErrorList : null,
                 Warnings = warningList.Count > 0 ? warningList : null,
                 MemoryTimeline = memoryTimeline,
                 ElapsedMs = stopwatch.ElapsedMilliseconds,
@@ -1423,7 +1504,9 @@ public static partial class IndexCommandRunner
                 options.NotifyMode,
                 $"cdidx index update complete ({ConsoleUi.Counted(updated + removed + skipped, "file", format: "N0")})");
 
-        return CommandExitCodes.Success;
+        return errors > 0 && !options.AllowPartial
+            ? CommandExitCodes.PartialResult
+            : CommandExitCodes.Success;
     }
 
 }

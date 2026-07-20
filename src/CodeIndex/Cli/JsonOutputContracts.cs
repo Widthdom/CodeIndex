@@ -581,6 +581,7 @@ internal sealed record LanguagesJsonResult(
     [property: JsonPropertyName("languages")] List<LanguageEntryJsonResult> Languages,
     [property: JsonPropertyName("detection_policy")] LanguageDetectionPolicyJsonResult DetectionPolicy,
     [property: JsonPropertyName("language_map_diagnostics")] List<LanguageMapDiagnosticJsonResult> LanguageMapDiagnostics,
+    [property: JsonPropertyName("reference_extraction_limits")] ReferenceExtractionSafetyLimits ReferenceExtractionLimits,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record IndexLanguageDetectionJsonResult(
@@ -675,6 +676,14 @@ internal sealed class IndexFullScanSummaryJsonResult
     public long ChunksTotal { get; init; }
     public long SymbolsTotal { get; init; }
     public long ReferencesTotal { get; init; }
+    public long FilesExtracted { get; init; }
+    public long FilesPersisted { get; init; }
+    public long ChunksExtracted { get; init; }
+    public long ChunksPersisted { get; init; }
+    public long SymbolsExtracted { get; init; }
+    public long SymbolsPersisted { get; init; }
+    public long ReferencesExtracted { get; init; }
+    public long ReferencesPersisted { get; init; }
     public int FilesScanned { get; init; }
     public int FilesSkipped { get; init; }
     public int FilesPurged { get; init; }
@@ -720,6 +729,12 @@ internal sealed class IndexUpdateJsonResult : IVersionedJsonResult
     public IndexUpdateSummaryJsonResult Summary { get; init; } = new();
     public IndexSymbolKindFilterJsonResult SymbolKindFilter { get; init; } = new();
     public bool GraphTableAvailable { get; init; }
+    public bool GraphDataCurrent { get; init; }
+    public bool IndexComplete { get; init; }
+    public ReferenceExtractionSafetyLimits ReferenceExtractionLimits { get; init; } = new();
+    public bool ReferenceGraphComplete { get; init; }
+    public ReferenceExtractionCapHitSummary ReferenceExtractionCapHits { get; init; } = new();
+    public string? ErrorCode { get; init; }
     public bool IssuesTableAvailable { get; init; }
     public bool SqlGraphContractReady { get; init; }
     public string? SqlGraphContractDegradedReason { get; init; }
@@ -739,6 +754,7 @@ internal sealed class IndexUpdateJsonResult : IVersionedJsonResult
     public string? CwdAtFinalize { get; init; }
     public string? CwdDriftNotice { get; init; }
     public List<CliJsonMessage>? Errors { get; init; }
+    public List<StatusIndexFileError>? FileErrors { get; init; }
     public List<CliJsonMessage>? Warnings { get; init; }
     public IndexMemoryTimelineJsonResult? MemoryTimeline { get; init; }
     public long ElapsedMs { get; init; }
@@ -752,6 +768,12 @@ internal sealed class IndexFullScanJsonResult : IVersionedJsonResult
     public IndexFullScanSummaryJsonResult Summary { get; init; } = new();
     public IndexSymbolKindFilterJsonResult SymbolKindFilter { get; init; } = new();
     public bool GraphTableAvailable { get; init; }
+    public bool GraphDataCurrent { get; init; }
+    public bool IndexComplete { get; init; }
+    public ReferenceExtractionSafetyLimits ReferenceExtractionLimits { get; init; } = new();
+    public bool ReferenceGraphComplete { get; init; }
+    public ReferenceExtractionCapHitSummary ReferenceExtractionCapHits { get; init; } = new();
+    public string? ErrorCode { get; init; }
     public bool IssuesTableAvailable { get; init; }
     public bool SqlGraphContractReady { get; init; }
     public string? SqlGraphContractDegradedReason { get; init; }
@@ -775,6 +797,7 @@ internal sealed class IndexFullScanJsonResult : IVersionedJsonResult
     public string? CwdAtFinalize { get; init; }
     public string? CwdDriftNotice { get; init; }
     public List<CliJsonMessage>? Errors { get; init; }
+    public List<StatusIndexFileError>? FileErrors { get; init; }
     public List<CliJsonMessage>? Warnings { get; init; }
     public IndexMemoryTimelineJsonResult? MemoryTimeline { get; init; }
     public long ElapsedMs { get; init; }
@@ -906,9 +929,13 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(IndexFreshnessCheckResult))]
 [JsonSerializable(typeof(IndexFullScanJsonResult))]
 [JsonSerializable(typeof(IndexFullScanSummaryJsonResult))]
+[JsonSerializable(typeof(StatusIndexFileError))]
+[JsonSerializable(typeof(List<StatusIndexFileError>))]
 [JsonSerializable(typeof(IndexMemorySampleJsonResult))]
 [JsonSerializable(typeof(IndexMemoryTimelineJsonResult))]
 [JsonSerializable(typeof(IndexUpdateJsonResult))]
+[JsonSerializable(typeof(ReferenceExtractionSafetyLimits))]
+[JsonSerializable(typeof(ReferenceExtractionCapHitSummary))]
 [JsonSerializable(typeof(IndexUpdateSummaryJsonResult))]
 [JsonSerializable(typeof(IndexWatchEventJsonResult))]
 [JsonSerializable(typeof(IndexWatchStartedJsonResult))]

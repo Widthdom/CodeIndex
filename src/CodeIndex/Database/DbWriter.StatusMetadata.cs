@@ -29,7 +29,23 @@ public partial class DbWriter
             DbContext.LastFailedIndexRunErrorCodeMetaKey,
             DbContext.LastFailedIndexRunReasonMetaKey,
             DbContext.LastFailedIndexRunProgressPersistedMetaKey,
-            DbContext.LastFailedIndexRunRecoveryHintMetaKey);
+            DbContext.LastFailedIndexRunRecoveryHintMetaKey,
+            DbContext.LastFailedIndexRunFileErrorsMetaKey);
+    }
+
+    public void MarkIndexComplete()
+    {
+        SetMetaValues(
+            (DbContext.IndexCompletenessMetaKey, "complete"),
+            (DbContext.IndexIncompleteReasonsMetaKey, null));
+    }
+
+    public void MarkIndexIncomplete(IReadOnlyList<string> reasons)
+    {
+        ArgumentNullException.ThrowIfNull(reasons);
+        SetMetaValues(
+            (DbContext.IndexCompletenessMetaKey, "incomplete"),
+            (DbContext.IndexIncompleteReasonsMetaKey, JsonStringListCodec.Serialize(reasons)));
     }
 
     /// <summary>
