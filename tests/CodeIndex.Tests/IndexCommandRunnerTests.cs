@@ -3520,6 +3520,19 @@ public sealed class Caller
         Assert.Contains($"max {IndexCommandRunner.MaxCommitRefLength}", options.ParseError);
     }
 
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(4, 4)]
+    [InlineData(8, 8)]
+    [InlineData(10, 8)]
+    [InlineData(64, 8)]
+    public void CalculateDefaultIndexParallelism_CapsAutomaticWorkersWithoutLoweringSmallHosts(
+        int processorCount,
+        int expected)
+    {
+        Assert.Equal(expected, IndexCommandRunner.CalculateDefaultIndexParallelism(processorCount));
+    }
+
     [Fact]
     public void ParseArgs_ParallelismFlag_ParsesPositiveValue()
     {

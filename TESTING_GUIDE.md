@@ -280,6 +280,8 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   runs a rebuild preview as redirected input without `--yes`, verifies live memory phases and samples, and byte-compares the complete project file set before and after so source, DB, WAL, SHM, and other workspace artifacts cannot be changed silently.
 - `IndexCommandRunnerTests.Run_MemoryTrace_ReportsFullScanAndUpdatePhaseBoundaries`
   keeps the full-scan and file-scoped update memory timelines ordered and complete. The fixture uses one C# file and one Python file to cover the C# prepass plus language-neutral extraction, reference-graph, text-index, finalize, and full-scan commit boundaries without scaling up the repository.
+- `IndexCommandRunnerTests.CalculateDefaultIndexParallelism_CapsAutomaticWorkersWithoutLoweringSmallHosts`
+  uses a five-value processor-count matrix to keep automatic full-scan workers equal to the available CPUs through eight, cap larger hosts at eight, and leave the explicit worker maximum covered by the parser boundary tests.
 - `IndexCommandRunnerTests.SymbolExtractionWorker_LegacyEnvironmentHooksAreIgnored_Issue3398`
   launches the isolated symbol worker to prove legacy worker environment variables are ignored. Its callback budget includes process startup and is intentionally wider than ordinary in-process checks so local process load does not turn the legacy-env regression check into a timeout flake (#3863).
 - `IndexCommandRunnerTests` and `FileIndexerTests` also cover `CSharpStaticInterfacePrepass` text, raw-byte, chunked raw-token, and streaming file contract probes. Keep byte-array, chunked, and file-level probe coverage aligned so the prepass can avoid whole-file allocation without losing UTF-8 / UTF-16 static-interface contract candidates.
@@ -1020,6 +1022,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   redirect input で `--yes` なしの rebuild preview を実行し、live memory phase/sample を検証します。実行前後の project file set 全体を byte 比較し、source、DB、WAL、SHM、その他 workspace artifact が暗黙に変更されないことも固定します。
 - `IndexCommandRunnerTests.Run_MemoryTrace_ReportsFullScanAndUpdatePhaseBoundaries`
   full-scan と file-scoped update の memory timeline が順序どおり完全に出ることを固定します。C# 1ファイルと Python 1ファイルだけで、C# prepass と言語共通の extraction、reference graph、text index、finalize、full-scan commit 境界を検証し、大規模 fixture は作りません。
+- `IndexCommandRunnerTests.CalculateDefaultIndexParallelism_CapsAutomaticWorkersWithoutLoweringSmallHosts`
+  processor count 5値の matrix で、8 CPU までは利用可能 CPU 数と automatic full-scan worker 数を一致させ、それより大きい host は8 workerに抑えます。明示指定の最大値は既存 parser boundary test が引き続き固定します。
 - `IndexCommandRunnerTests.SymbolExtractionWorker_LegacyEnvironmentHooksAreIgnored_Issue3398`
   isolated symbol worker を起動し、legacy worker 環境変数が無視されることを検証します。この callback budget はプロセス起動時間も含むため、通常の in-process チェックより意図的に広く取り、ローカル負荷で legacy-env 回帰テストが timeout flake にならないようにします（#3863）。
 - `IndexCommandRunnerTests` と `FileIndexerTests` は `CSharpStaticInterfacePrepass` のテキスト判定、raw-byte、chunked raw-token、streaming file 契約 probe も扱います。prepass がファイル全体の割り当てを避けても UTF-8 / UTF-16 の static-interface 契約候補を落とさないよう、byte-array、chunked、file-level probe のカバレッジを揃えてください。

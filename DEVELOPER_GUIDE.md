@@ -242,7 +242,7 @@ Set `CDIDX_SLOW_QUERY_MS=<milliseconds>` to write slow SQLite command diagnostic
 
 ```
 Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdidxignore` + directory symlink policy + reparse/Windows Hidden/System attribute pruning)
-  → Parallel extraction workers (`--parallelism`, `CDIDX_INDEX_PARALLELISM`; default CPU count capped at 16) read UTF-8, split chunks, extract symbols/references, and validate content
+  → Parallel extraction workers (`--parallelism`, `CDIDX_INDEX_PARALLELISM`; default CPU count capped at 8, explicit maximum 16) read UTF-8, split chunks, extract symbols/references, and validate content
   → Single SQLite writer checks unchanged-file reuse, UPSERTs file records, runs post-extraction hooks, and inserts chunks + symbols + references + issues in per-file transactions
   → Populate FTS5 index
 ```

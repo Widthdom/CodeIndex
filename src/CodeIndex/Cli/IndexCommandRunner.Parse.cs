@@ -24,6 +24,7 @@ public static partial class IndexCommandRunner
     internal const string CompletionNotificationEnvironmentVariable = "CDIDX_NOTIFY";
     internal const string IndexParallelismEnvironmentVariable = "CDIDX_INDEX_PARALLELISM";
     internal const string WatchPendingPathLimitEnvironmentVariable = "CDIDX_INDEX_WATCH_PENDING_PATH_LIMIT";
+    internal const int DefaultIndexParallelismCap = 8;
     internal const int MaxIndexParallelism = 16;
     internal const int MaxSymbolKindFilterCsvLength = 2048;
     internal const int MaxSymbolKindFilterCsvEntries = 128;
@@ -503,7 +504,10 @@ public static partial class IndexCommandRunner
     }
 
     internal static int DefaultIndexParallelism()
-        => Math.Clamp(Environment.ProcessorCount, 1, MaxIndexParallelism);
+        => CalculateDefaultIndexParallelism(Environment.ProcessorCount);
+
+    internal static int CalculateDefaultIndexParallelism(int processorCount)
+        => Math.Clamp(processorCount, 1, DefaultIndexParallelismCap);
 
     private static int ReadIndexParallelismFromEnvironment()
     {
