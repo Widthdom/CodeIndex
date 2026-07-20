@@ -578,7 +578,7 @@ public static partial class QueryCommandRunner
                         else
                             payload["cycles"] = new JsonArray();
                         AddDependencyCycleAnalysisJsonFields(payload, zeroAnalysis);
-                        AddDependencySchemaJsonFields(payload, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter);
+                        AddDependencySchemaJsonFields(payload, reader, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter);
                         AddDependencyGraphAvailabilityJsonFields(payload, reader._hasReferencesTable);
                         AddFreshnessHint(payload, reader);
                         WriteGraphLiveness("deps", "write_output", options, depsFormat, rows: 0, cycleCount: 0, machineReadable: machineReadable);

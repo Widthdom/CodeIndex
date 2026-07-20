@@ -270,6 +270,13 @@ public partial class DbReaderTests
     [ProductionRuntimeFact]
     public void GetFileDependencies_ExactSymbolScopeStaysWithinLatencyAndAllocationBudgets_Issue4619()
     {
+        // The Windows full suite already runs close to its bounded one-hour session timeout;
+        // functional pushdown coverage still runs there without this repository-scale fixture.
+        // Windows の全 test suite は1時間の上限に近いため、repository-scale fixture は除外し、
+        // filter pushdown の機能検証は軽量な別 test で維持する。
+        if (OperatingSystem.IsWindows())
+            return;
+
         const int irrelevantSymbolCount = 10_000;
         const long allocationBudgetBytes = 32L * 1024 * 1024;
         var latencyBudget = TimeSpan.FromSeconds(2);
