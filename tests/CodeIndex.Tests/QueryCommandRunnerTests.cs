@@ -351,6 +351,7 @@ public partial class QueryCommandRunnerTests
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_solution_filter");
         var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
         var originalCurrentDirectory = Environment.CurrentDirectory;
         try
         {
@@ -367,7 +368,10 @@ public partial class QueryCommandRunnerTests
                 });
 
             Environment.CurrentDirectory = projectRoot;
-            var options = QueryCommandRunner.ParseArgs(["Auth", "--project", "App"], jsonDefault: false, allowNamedQuery: true);
+            var options = QueryCommandRunner.ParseArgs(
+                ["Auth", "--project", "App", "--db", dbPath],
+                jsonDefault: false,
+                allowNamedQuery: true);
 
             Assert.Equal("Auth", options.Query);
             Assert.Equal(["App"], options.ProjectFilters);
@@ -2487,6 +2491,8 @@ public partial class QueryCommandRunnerTests
         using var databaseProject = TestProjectHelper.CreateTempProjectScope("cdidx_languages_default_db_4602");
         using var indexedProject = TestProjectHelper.CreateTempProjectScope("cdidx_languages_indexed_root_4602");
         var dbPath = TestProjectHelper.CreateProjectDb(databaseProject.Root);
+        using var activeWorkspace = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable);
+        Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, dbPath);
         using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
         {
             var writer = new DbWriter(db.Connection);

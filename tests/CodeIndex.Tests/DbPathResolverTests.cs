@@ -121,13 +121,15 @@ public class DbPathResolverTests
     [Fact]
     public void ResolveDataDirForQuery_PrefersOutermostAncestorCdidx()
     {
-        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_query_root_db");
+        using var fixture = TestProjectHelper.CreateTempProjectScope("cdidx_query_root_db");
         using var config = TestProjectHelper.CreateTempProjectScope("cdidx_query_root_config");
-        var projectRoot = project.Root;
+        var fixtureRoot = fixture.Root;
+        var projectRoot = Path.Combine(fixtureRoot, "workspace");
         var configHome = config.Root;
         using var env = IsolateActiveWorkspace(configHome);
         var child = Path.Combine(projectRoot, "src", "App");
         Directory.CreateDirectory(child);
+        Directory.CreateDirectory(Path.Combine(fixtureRoot, ".cdidx"));
         Directory.CreateDirectory(Path.Combine(projectRoot, ".cdidx"));
         Directory.CreateDirectory(Path.Combine(projectRoot, "src", ".cdidx"));
 
@@ -136,7 +138,8 @@ public class DbPathResolverTests
             explicitDataDir: null,
             environmentDataDir: null,
             xdgDataHome: null,
-            activeWorkspaceLoader: () => null);
+            activeWorkspaceLoader: () => null,
+            ancestorSearchRoot: projectRoot);
 
         Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), resolved.DbPath);
         Assert.Equal(DbPathResolver.DataDirSourceWorkspace, resolved.DataDirSource);
@@ -169,20 +172,23 @@ public class DbPathResolverTests
     [Fact]
     public void ResolveDataDirForQuery_FallsBackToCurrentDirectoryWhenNoAncestorCdidxExists()
     {
-        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_query_no_root_db");
+        using var fixture = TestProjectHelper.CreateTempProjectScope("cdidx_query_no_root_db");
         using var config = TestProjectHelper.CreateTempProjectScope("cdidx_query_no_root_config");
-        var projectRoot = project.Root;
+        var fixtureRoot = fixture.Root;
+        var projectRoot = Path.Combine(fixtureRoot, "workspace");
         var configHome = config.Root;
         using var env = IsolateActiveWorkspace(configHome);
         var child = Path.Combine(projectRoot, "src", "App");
         Directory.CreateDirectory(child);
+        Directory.CreateDirectory(Path.Combine(fixtureRoot, ".cdidx"));
 
         var resolved = DbPathResolver.ResolveDataDirForQuery(
             child,
             explicitDataDir: null,
             environmentDataDir: null,
             xdgDataHome: null,
-            activeWorkspaceLoader: () => null);
+            activeWorkspaceLoader: () => null,
+            ancestorSearchRoot: projectRoot);
 
         Assert.Equal(Path.Combine(child, ".cdidx", "codeindex.db"), resolved.DbPath);
         Assert.Equal(DbPathResolver.DataDirSourceWorkspace, resolved.DataDirSource);

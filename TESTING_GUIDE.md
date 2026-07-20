@@ -579,6 +579,7 @@ Prefer the existing helper before writing new setup code.
 
 - `CreateTempProject(prefix)` creates a unique temp workspace.
 - Use `CreateTempProject(prefix)` instead of adding local `Path.GetTempPath()` / `Guid.NewGuid()` directory helpers; keep any local wrapper as a thin prefix-specific delegate only when it preserves existing call-site readability.
+- `ResolveQueryDataDirWithinWorkspace(workspacePath)` bounds query DB ancestor discovery at the fixture workspace root. Use it when a resolver test must ignore unrelated `.cdidx` directories above a shared temp root while preserving workspace-source fallback behavior.
 - `ProjectPath(projectRoot, ...)` resolves fixture paths relative to the temp project and rejects absolute paths or `..` escapes outside that root.
 - `CreateDirectory(projectRoot, ...)`, `WriteTextFile(...)`, `WriteTextFiles(...)`, `WriteBinaryFile(...)`, `AppendTextFile(...)`, and `ReadTextFile(...)` centralize fixture directory creation and file setup. Prefer them over local `Path.Combine` + `Directory.CreateDirectory` + `File.*` chains when the path belongs to a temp project.
 - Use the `WriteTextFile(..., Encoding)` overload when fixture encoding is part of the behavior under test; do not drop back to `File.WriteAllText(Path.Combine(...), ..., encoding)` for temp-project files.
@@ -1285,6 +1286,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 
 - `CreateTempProject(prefix)` は一意な一時ワークスペースを作成します。
 - 独自に `Path.GetTempPath()` / `Guid.NewGuid()` を組み合わせた directory helper を増やさず、`CreateTempProject(prefix)` を使ってください。既存呼び出し側の読みやすさを保つ場合だけ、local wrapper は prefix 固有の薄い委譲に留めます。
+- `ResolveQueryDataDirWithinWorkspace(workspacePath)` は query DB の ancestor 探索を fixture の workspace root で打ち切ります。workspace source の fallback 挙動を維持しつつ、共有 temp root より上にある無関係な `.cdidx` directory を resolver test から除外する場合に使ってください。
 - `ProjectPath(projectRoot, ...)` は temp project からの相対 fixture path を解決し、その root の外へ出る絶対 path や `..` escape を拒否します。
 - `CreateDirectory(projectRoot, ...)`、`WriteTextFile(...)`、`WriteTextFiles(...)`、`WriteBinaryFile(...)`、`AppendTextFile(...)`、`ReadTextFile(...)` は fixture directory 作成と file setup を集約します。path が temp project に属する場合は、ローカルな `Path.Combine` + `Directory.CreateDirectory` + `File.*` の連鎖より優先してください。
 - fixture encoding がテスト対象の挙動に含まれる場合は `WriteTextFile(..., Encoding)` overload を使い、temp project 配下の file に対して `File.WriteAllText(Path.Combine(...), ..., encoding)` へ戻さないでください。
