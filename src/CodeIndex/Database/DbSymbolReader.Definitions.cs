@@ -43,6 +43,9 @@ public partial class DbReader
         return results;
     }
 
+    internal DefinitionResult? GetDefinitionForSymbol(SymbolResult symbol) =>
+        BuildDefinitionResult(symbol, includeBody: false);
+
     private DefinitionResult? BuildDefinitionResult(
         SymbolResult symbol,
         bool includeBody,

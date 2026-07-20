@@ -2047,6 +2047,132 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_References_MatchesCliCandidateIdentityForOverload_Issue4622()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_reference_identity");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourceSemantics = InsertSourceSemanticsFixtureIssue4622(projectRoot, dbPath);
+            var definitionPath = Path.Combine(projectRoot, "resolver.cs");
+            var cappedDefinitionPath = Path.Combine(projectRoot, "capped-resolver.cs");
+            var oneArgCallerPath = Path.Combine(projectRoot, "one.cs");
+            var twoArgCallerPath = Path.Combine(projectRoot, "two.cs");
+            var definitionSource = """
+                class Resolver
+                {
+                    internal static int Choose(int value) => value;
+                    internal static int Choose(int left, int right) => left + right;
+                    internal static int Call() => Choose(1, 2);
+                }
+                """;
+            var cappedDefinitionSourceBuilder = new StringBuilder();
+            cappedDefinitionSourceBuilder.AppendLine("class CappedResolver");
+            cappedDefinitionSourceBuilder.AppendLine("{");
+            for (var arity = 1; arity <= 6; arity++)
+            {
+                var parameters = string.Join(", ", Enumerable.Range(1, arity).Select(index => $"int value{index}"));
+                cappedDefinitionSourceBuilder.AppendLine($"    internal static int Select({parameters}) => value1;");
+            }
+
+            const string sixArguments = "1, 2, 3, 4, 5, 6";
+            const int cappedCallCount = 55;
+            for (var call = 0; call < cappedCallCount; call++)
+                cappedDefinitionSourceBuilder.AppendLine($"    internal static int Call{call}() => Select({sixArguments});");
+            cappedDefinitionSourceBuilder.AppendLine("}");
+            var cappedDefinitionSource = cappedDefinitionSourceBuilder.ToString();
+            var oneArgCallerSource = "class One { int Call() => Resolver.Choose(1); }\n";
+            var twoArgCallerSource = "class Two { int Call() => Resolver.Choose(1, 2); }\n";
+            File.WriteAllText(definitionPath, definitionSource);
+            File.WriteAllText(cappedDefinitionPath, cappedDefinitionSource);
+            File.WriteAllText(oneArgCallerPath, oneArgCallerSource);
+            File.WriteAllText(twoArgCallerPath, twoArgCallerSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "resolver.cs", "csharp", definitionSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "capped-resolver.cs", "csharp", cappedDefinitionSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "one.cs", "csharp", oneArgCallerSource);
+            TestProjectHelper.InsertIndexedFile(dbPath, "two.cs", "csharp", twoArgCallerSource);
+            MarkGraphReady(dbPath);
+
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var reader = new DbReader(db);
+            var cliAnalysis = reader.AnalyzeSymbol("Choose", 50, exact: true);
+            var cliCandidate = Assert.Single(cliAnalysis.CandidateBundles!
+                .Where(candidate => candidate.Definition.Line == 4));
+            Assert.True(cliCandidate.IdentityScoped);
+            Assert.NotEmpty(cliCandidate.References);
+            var twoArgumentReference = Assert.Single(cliCandidate.References.Where(reference => reference.Path == "two.cs"));
+            var sameFileReference = Assert.Single(cliCandidate.References.Where(reference => reference.Path == "resolver.cs"));
+            var expectedReferences = cliCandidate.References
+                .Select(reference => (reference.Path, Line: reference.Line - 1, Character: Math.Max(reference.Column - 1, 0)))
+                .OrderBy(reference => reference.Path, StringComparer.Ordinal)
+                .ThenBy(reference => reference.Line)
+                .ThenBy(reference => reference.Character)
+                .ToArray();
+            using var server = new LspServer(reader, "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var definitionCharacter = CharacterOf(definitionSource, 3, "Choose");
+            var requestCharacter = CharacterOf(definitionSource, 4, "Choose");
+            Assert.Equal(CharacterOf(twoArgCallerSource, 0, "Choose") + 1, twoArgumentReference.Column);
+            Assert.Equal(requestCharacter + 1, sameFileReference.Column);
+
+            var withoutDeclaration = server.HandleMessage(CreateReferencesRequest(
+                definitionPath,
+                46223,
+                4,
+                requestCharacter,
+                includeDeclaration: false));
+            var withDeclaration = server.HandleMessage(CreateReferencesRequest(
+                definitionPath,
+                46224,
+                4,
+                requestCharacter,
+                includeDeclaration: true));
+            var lastCappedCallLine = 8 + cappedCallCount - 1;
+            var cappedDefinition = server.HandleMessage(CreateDefinitionRequest(
+                cappedDefinitionPath,
+                46225,
+                lastCappedCallLine,
+                CharacterOf(cappedDefinitionSource, lastCappedCallLine, "Select")));
+
+            Assert.NotNull(withoutDeclaration);
+            Assert.NotNull(withDeclaration);
+            Assert.NotNull(cappedDefinition);
+            var actualReferences = withoutDeclaration!["result"]!.AsArray()
+                .Select(location =>
+                {
+                    var absolutePath = new Uri(location!["uri"]!.GetValue<string>()).LocalPath;
+                    var relativePath = Path.GetRelativePath(projectRoot, absolutePath).Replace('\\', '/');
+                    return (
+                        Path: relativePath,
+                        Line: location["range"]!["start"]!["line"]!.GetValue<int>(),
+                        Character: location["range"]!["start"]!["character"]!.GetValue<int>());
+                })
+                .OrderBy(reference => reference.Path, StringComparer.Ordinal)
+                .ThenBy(reference => reference.Line)
+                .ThenBy(reference => reference.Character)
+                .ToArray();
+            Assert.Equal(expectedReferences, actualReferences);
+            var withLocations = withDeclaration!["result"]!.AsArray();
+            Assert.Equal(expectedReferences.Length + 1, withLocations.Count);
+            var declaration = Assert.Single(withLocations.Where(location =>
+                new Uri(location!["uri"]!.GetValue<string>()).LocalPath == definitionPath &&
+                location["range"]!["start"]!["line"]!.GetValue<int>() == 3));
+            Assert.Equal(definitionCharacter, declaration!["range"]!["start"]!["character"]!.GetValue<int>());
+            Assert.Equal(definitionCharacter + "Choose".Length, declaration["range"]!["end"]!["character"]!.GetValue<int>());
+            const int sixArgumentDefinitionLine = 7;
+            var definition = Assert.Single(cappedDefinition!["result"]!.AsArray());
+            Assert.Equal(sixArgumentDefinitionLine, definition!["range"]!["start"]!["line"]!.GetValue<int>());
+            var expectedCharacter = CharacterOf(cappedDefinitionSource, sixArgumentDefinitionLine, "Select");
+            Assert.Equal(expectedCharacter, definition["range"]!["start"]!["character"]!.GetValue<int>());
+            Assert.Equal(expectedCharacter + "Select".Length, definition["range"]!["end"]!["character"]!.GetValue<int>());
+            AssertSourceSemanticsIssue4622(server, sourceSemantics.SourcePath, sourceSemantics.SourceLines);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_References_PrefersCurrentIndexedDocumentWhenCommonTokenHasNoDefinitions()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_references_common_token_no_definition");
@@ -2672,6 +2798,92 @@ public class LspServerTests
             builder.Append('}');
         builder.Append('}');
         return builder.ToString();
+    }
+
+    private static (string SourcePath, string[] SourceLines) InsertSourceSemanticsFixtureIssue4622(
+        string projectRoot,
+        string dbPath)
+    {
+        var sourcePath = Path.Combine(projectRoot, "app.cs");
+        var source = """
+            internal static bool TryReadUtf8File() => true;
+            public Widget Widget { get; }
+            int explicitField = 1;
+            var inferredLocal = 1;
+            int explicitLocal = 1;
+            """;
+        var sourceLines = source.Split('\n');
+        File.WriteAllText(sourcePath, source);
+        using var fixtureDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        var writer = new DbWriter(fixtureDb.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "app.cs",
+            Lang = "csharp",
+            Size = source.Length,
+            Lines = 5,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = "issue4622-source-semantics",
+        });
+        writer.InsertChunks([
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 5,
+                Content = source,
+            },
+        ]);
+        writer.InsertSymbols([
+            new SymbolRecord { FileId = fileId, Kind = "function", Name = "TryReadUtf8File", Line = 1, StartLine = 1, StartColumn = 20, EndLine = 1, ReturnType = "bool" },
+            new SymbolRecord { FileId = fileId, Kind = "property", Name = "Widget", Line = 2, StartLine = 2, StartColumn = sourceLines[1].IndexOf("Widget", StringComparison.Ordinal), EndLine = 2, Signature = "public Widget Widget { get; }", ReturnType = "Widget" },
+            new SymbolRecord { FileId = fileId, Kind = "field", Name = "explicitField", Line = 3, StartLine = 3, StartColumn = 0, EndLine = 3, ReturnType = "int" },
+            new SymbolRecord { FileId = fileId, Kind = "variable", Name = "inferredLocal", Line = 4, StartLine = 4, StartColumn = 0, EndLine = 4, ReturnType = "int" },
+            new SymbolRecord { FileId = fileId, Kind = "variable", Name = "explicitLocal", Line = 5, StartLine = 5, StartColumn = 0, EndLine = 5, ReturnType = "int" },
+        ]);
+        return (sourcePath, sourceLines);
+    }
+
+    private static void AssertSourceSemanticsIssue4622(
+        LspServer server,
+        string sourcePath,
+        IReadOnlyList<string> sourceLines)
+    {
+        var documentSymbols = server.HandleMessage(CreateTextDocumentRequest("textDocument/documentSymbol", sourcePath, 46220));
+        var workspaceSymbols = server.HandleMessage(JsonSerializer.Serialize(new
+        {
+            jsonrpc = "2.0",
+            id = 46221,
+            method = "workspace/symbol",
+            @params = new { query = "Widget" },
+        }));
+        var inlayHints = server.HandleMessage(CreateInlayHintRequest(sourcePath, 46222, 0, 0, 4, int.MaxValue));
+
+        Assert.NotNull(documentSymbols);
+        Assert.NotNull(workspaceSymbols);
+        Assert.NotNull(inlayHints);
+        var expectedStart = sourceLines[0].IndexOf("TryReadUtf8File", StringComparison.Ordinal);
+        var documentSymbol = Assert.Single(FlattenDocumentSymbols(documentSymbols!["result"]!.AsArray())
+            .Where(symbol => symbol?["name"]?.GetValue<string>() == "TryReadUtf8File"));
+        Assert.Equal(expectedStart, documentSymbol!["selectionRange"]!["start"]!["character"]!.GetValue<int>());
+        Assert.Equal(expectedStart + "TryReadUtf8File".Length, documentSymbol["selectionRange"]!["end"]!["character"]!.GetValue<int>());
+        Assert.Equal(0, documentSymbol["range"]!["start"]!["character"]!.GetValue<int>());
+        Assert.True(documentSymbol["range"]!["end"]!["character"]!.GetValue<int>() >=
+            documentSymbol["selectionRange"]!["end"]!["character"]!.GetValue<int>());
+        var widgetStart = sourceLines[1].LastIndexOf("Widget", StringComparison.Ordinal);
+        var widgetDocumentSymbol = Assert.Single(FlattenDocumentSymbols(documentSymbols["result"]!.AsArray())
+            .Where(symbol => symbol?["name"]?.GetValue<string>() == "Widget"));
+        Assert.Equal(widgetStart, widgetDocumentSymbol!["selectionRange"]!["start"]!["character"]!.GetValue<int>());
+        Assert.True(widgetDocumentSymbol["range"]!["end"]!["character"]!.GetValue<int>() >=
+            widgetDocumentSymbol["selectionRange"]!["end"]!["character"]!.GetValue<int>());
+        var workspaceSymbol = Assert.Single(workspaceSymbols!["result"]!.AsArray());
+        Assert.Equal(widgetStart, workspaceSymbol!["location"]!["range"]!["start"]!["character"]!.GetValue<int>());
+        Assert.Equal(widgetStart + "Widget".Length, workspaceSymbol["location"]!["range"]!["end"]!["character"]!.GetValue<int>());
+        var hint = Assert.Single(inlayHints!["result"]!.AsArray());
+        Assert.Equal(3, hint!["position"]!["line"]!.GetValue<int>());
+        Assert.Equal(4 + "inferredLocal".Length, hint["position"]!["character"]!.GetValue<int>());
+        Assert.Equal(": int", hint["label"]!.GetValue<string>());
     }
 
     private static ActivityListener CaptureCodeIndexActivities(List<Activity> activities)
