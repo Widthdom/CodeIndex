@@ -1775,7 +1775,8 @@ same source location.
 | `--result-kind <kind>` | `search` | Keep only projected result kinds such as `call_site`, `declaration`, `identifier`, `comment`, or `string_literal` |
 | `--unique <path\|file\|symbol\|origin>` / `--count-by <path\|file\|symbol\|origin>` | `search` | Emit unique aggregation rows or count aggregation rows for broad audits, including recipe runs |
 | `--format grouped` / `--per-file-limit <n>` | `search` | Return file-grouped JSON with bounded representative matches per file |
-| `--search-fields <fields>` / `--results-only` | `search` | Project compact JSON fields, including recipe `query_name` and `recipe`, and emit result-only NDJSON for shell pipelines |
+| `--search-fields <fields>` | `search` | Project compact JSON fields, including recipe `query_name` and `recipe` |
+| `--results-only` | `search`, `symbols`, `files` | Emit result-only NDJSON without a stream terminal record for shell pipelines |
 | `--first-per-file` / `--sample <n>` / `--total-limit <n>` | `search` | Bound broad audit output by file, deterministic sample size, or recipe total rows |
 | `--max-json-bytes <n>` | `search`, `recipes`, `audit`, `deps`, `hotspots` | Fail before emitting JSON that exceeds this UTF-8 byte budget. For large graph outputs, pair it with `deps --summary-only`, `deps --format json-graph --summary-only`, or `hotspots --summary-only`. |
 | `--next-steps` | `search` | Emit inspect/excerpt follow-up commands for top search hits |
@@ -4831,7 +4832,8 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--result-kind <kind>` | `search` | `call_site`、`declaration`、`identifier`、`comment`、`string_literal` など、projection された result kind だけを保持する |
 | `--unique <path\|file\|symbol\|origin>` / `--count-by <path\|file\|symbol\|origin>` | `search` | 広い audit や recipe run 向けに unique aggregation row または count aggregation row を出力する |
 | `--format grouped` / `--per-file-limit <n>` | `search` | file ごとに grouped JSON を返し、各 file の代表 match 数を制限する |
-| `--search-fields <fields>` / `--results-only` | `search` | recipe の `query_name` / `recipe` を含む compact JSON field を projection し、shell pipeline 向けの result-only NDJSON を出力する |
+| `--search-fields <fields>` | `search` | recipe の `query_name` / `recipe` を含む compact JSON field を projection する |
+| `--results-only` | `search`、`symbols`、`files` | shell pipeline 向けに stream の終端レコードを含まない result-only NDJSON を出力する |
 | `--first-per-file` / `--sample <n>` / `--total-limit <n>` | `search` | file 単位、決定的 sample 数、recipe 全体の row 数で広い audit 出力を制限する |
 | `--max-json-bytes <n>` | `search`、`recipes`、`audit`、`deps`、`hotspots` | 指定した UTF-8 byte 上限を超える JSON を出力する前に失敗する。大きい graph 出力では `deps --summary-only`、`deps --format json-graph --summary-only`、または `hotspots --summary-only` と組み合わせる。 |
 | `--next-steps` | `search` | 上位 search hit に対する inspect / excerpt follow-up command を出力する |
