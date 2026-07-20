@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.Json;
@@ -286,12 +287,12 @@ public partial class McpServerTests : IDisposable
         var parentTraceId = ActivityTraceId.CreateRandom();
         var parentSpanId = ActivitySpanId.CreateRandom();
         var traceParent = $"00-{parentTraceId}-{parentSpanId}-01";
-        var stopped = new List<Activity>();
+        var stopped = new ConcurrentQueue<Activity>();
         using var listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == CodeIndex.CodeIndexTelemetry.ActivitySourceName,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
-            ActivityStopped = activity => stopped.Add(activity),
+            ActivityStopped = stopped.Enqueue,
         };
         ActivitySource.AddActivityListener(listener);
 
@@ -314,7 +315,8 @@ public partial class McpServerTests : IDisposable
         Assert.NotNull(response);
         using var responseDocument = JsonDocument.Parse(response);
         Assert.Equal(requestId, responseDocument.RootElement.GetProperty("id").GetString());
-        var activity = Assert.Single(stopped.Where(activity => activity.OperationName == "mcp.request"));
+        var activity = Assert.Single(stopped.Where(activity =>
+            activity.OperationName == "mcp.request" && activity.TraceId == parentTraceId));
         Assert.Equal(parentTraceId, activity.TraceId);
         Assert.Equal(parentSpanId, activity.ParentSpanId);
         Assert.Equal("tools/list", activity.GetTagItem("rpc.method"));
@@ -331,18 +333,21 @@ public partial class McpServerTests : IDisposable
     [InlineData("42")]
     public void ProcessFrame_WithoutSingleValidRequestId_OmitsActivityRequestIdTags_Issue4551(string frame)
     {
-        var stopped = new List<Activity>();
+        var stopped = new ConcurrentQueue<Activity>();
+        using var parentActivity = new Activity("mcp-test-request").Start();
+        var expectedTraceId = parentActivity.TraceId;
         using var listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == CodeIndex.CodeIndexTelemetry.ActivitySourceName,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
-            ActivityStopped = activity => stopped.Add(activity),
+            ActivityStopped = stopped.Enqueue,
         };
         ActivitySource.AddActivityListener(listener);
 
         _ = _server.ProcessFrame(frame);
 
-        var activity = Assert.Single(stopped.Where(activity => activity.OperationName == "mcp.request"));
+        var activity = Assert.Single(stopped.Where(activity =>
+            activity.OperationName == "mcp.request" && activity.TraceId == expectedTraceId));
         Assert.Null(activity.GetTagItem("rpc.request_id"));
         Assert.Null(activity.GetTagItem("rpc.request_id_type"));
         Assert.Null(activity.GetTagItem("rpc.request_id_length"));
