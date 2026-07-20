@@ -135,21 +135,21 @@ jobs:
       # SQLitePCLRaw.bundle_e_sqlite3 の native を含む推移依存の予期せぬ
       # bump が公開アーティファクトに紛れ込まず release restore で気付ける。
       # 詳細は issue #1556 参照。
-      - name: Restore dependencies
+      - name: Restore test dependencies
         if: ${{ !matrix.cross_compile }}
-        run: dotnet restore CodeIndex.sln --locked-mode
+        run: dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=net8.0 --locked-mode
 
       - name: Restore publish dependencies
         if: matrix.cross_compile
         run: dotnet restore src/CodeIndex/CodeIndex.csproj --locked-mode
 
-      - name: Build
+      - name: Build tests
         if: ${{ !matrix.cross_compile }}
-        run: dotnet build CodeIndex.sln --configuration Release --no-restore
+        run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework net8.0 --no-restore
 
-      - name: Test
+      - name: Test net8
         if: ${{ !matrix.cross_compile }}
-        run: dotnet test CodeIndex.sln --configuration Release --no-build --no-restore --nologo
+        run: dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework net8.0 --no-build --no-restore --nologo
 
       # Generate a CycloneDX SBOM once per release on the linux-x64 lane.
       # SBOM content is RID-independent (it lists NuGet package dependencies
@@ -201,18 +201,22 @@ jobs:
       # RestorePackagesWithLockFile=true. We deliberately do not pass
       # RestoreLockedMode=true here: publish for a new RID and trimming
       # (Microsoft.NET.ILLink.Tasks) legitimately add lock entries that did
-      # not exist at the preceding locked restore (solution restore on native
-      # lanes, production-project restore on cross-compile lanes). The security
-      # guarantee against silent SQLitePCLRaw-style transitive drift is already
-      # enforced by that lane-appropriate restore. See issue #1556 / DEVELOPER_GUIDE.md.
+      # not exist at the preceding locked restore (net8 test-project restore on
+      # native lanes, production-project restore on cross-compile lanes). The
+      # native restore covers the production dependency graph through the test
+      # project's ProjectReference. The security guarantee against silent
+      # SQLitePCLRaw-style transitive drift is already enforced by that
+      # lane-appropriate restore. See issue #1556 / DEVELOPER_GUIDE.md.
       # publish が target RID 向けに走らせる runtime-specific restore は
       # Directory.Build.props の RestorePackagesWithLockFile=true により
       # lock ファイルで固定された版を解決対象とする。ここで
       # RestoreLockedMode=true を渡さないのは意図的で、publish 時に新規 RID と
       # trimming（Microsoft.NET.ILLink.Tasks）が、直前の locked restore（native lane
-      # では solution、cross-compile lane では production project）時にはなかった
-      # lock エントリを正当に追加するため。SQLitePCLRaw のような推移依存
-      # ドリフトに対する保証は、その lane に対応する restore で確保済み。
+      # では net8 test project、cross-compile lane では production project）時には
+      # なかった lock エントリを正当に追加するため。native restore は test project
+      # の ProjectReference 経由で production dependency graph も検証する。
+      # SQLitePCLRaw のような推移依存ドリフトに対する保証は、その lane に対応する
+      # restore で確保済み。
       # 詳細は issue #1556 / DEVELOPER_GUIDE.md。
       - name: Publish (self-contained)
         run: >
