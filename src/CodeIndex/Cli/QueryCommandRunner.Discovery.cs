@@ -711,6 +711,14 @@ public static partial class QueryCommandRunner
 
     private static bool TryWriteDiscoveryOutputControlUsageError(string commandName, QueryCommandOptions options)
     {
+        if (options.ResultsOnly && (!IsDiscoveryNdjson(options) || options.CountOnly))
+        {
+            WriteUsageError(
+                $"--results-only is only supported with {commandName} NDJSON row output.",
+                GetUsageLineOrThrow(commandName),
+                $"Use `cdidx {commandName} --results-only --json=ndjson`, or remove --results-only when using array, compact, summary, or count output.");
+            return true;
+        }
         if (!options.SummaryOnly && !options.MaxJsonBytes.HasValue)
             return false;
         if (options.Json && options.OutputFormat is OutputFormatJson or OutputFormatCompact or OutputFormatCount)

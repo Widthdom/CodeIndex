@@ -3606,6 +3606,59 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunFilesAndSymbols_ResultsOnlyEmitsNdjsonRowsWithoutTerminalRecord_Issue4688()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_discovery_results_only_4688");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.py",
+                "python",
+                "import os\n\ndef main():\n    return os.getcwd()\n");
+
+            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--results-only", "--lang", "python", "--kind", "import", "--limit", "1"],
+                _jsonOptions));
+            var (filesExitCode, filesStdout, filesStderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath, "--json", "--results-only", "--lang", "python", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+            Assert.Equal(CommandExitCodes.Success, filesExitCode);
+            Assert.Equal(string.Empty, symbolsStderr);
+            Assert.Equal(string.Empty, filesStderr);
+
+            using var symbolRow = JsonDocument.Parse(Assert.Single(symbolsStdout.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)));
+            using var fileRow = JsonDocument.Parse(Assert.Single(filesStdout.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)));
+            Assert.Equal("import", symbolRow.RootElement.GetProperty("kind").GetString());
+            Assert.Equal("src/app.py", symbolRow.RootElement.GetProperty("path").GetString());
+            Assert.False(symbolRow.RootElement.TryGetProperty("terminal_record", out _));
+            Assert.Equal("src/app.py", fileRow.RootElement.GetProperty("path").GetString());
+            Assert.False(fileRow.RootElement.TryGetProperty("terminal_record", out _));
+
+            var (symbolsArrayExitCode, symbolsArrayStdout, symbolsArrayStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--results-only", "--json=array"],
+                _jsonOptions));
+            var (filesArrayExitCode, filesArrayStdout, filesArrayStderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath, "--results-only", "--json=array"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, symbolsArrayExitCode);
+            Assert.Equal(CommandExitCodes.UsageError, filesArrayExitCode);
+            Assert.Equal(string.Empty, symbolsArrayStdout);
+            Assert.Equal(string.Empty, filesArrayStdout);
+            Assert.Contains("--results-only is only supported with symbols NDJSON row output", symbolsArrayStderr);
+            Assert.Contains("--results-only is only supported with files NDJSON row output", filesArrayStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunDiscoveryCountsCompactAndMap_LegacySchemaReportsGeneratedFilterUnavailable_Issue4563()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_generated_filter_legacy_4563");
