@@ -85,7 +85,7 @@ public sealed class TestTelemetryTests
                     new RetryTrxCase("passing", "Sample.OtherTests", "Passes", "Passed"),
                     new RetryTrxCase("skipped", "Sample.OtherTests", "Skips", "NotExecuted")
                 ],
-                runInfoOutcome: "Warning"));
+                runInfos: [new RetryRunInfo("Warning", "adapter diagnostic")]));
 
             var decision = TrxRetryFilter.Load(trxPath);
 
@@ -161,26 +161,93 @@ public sealed class TestTelemetryTests
         }
     }
 
-    [Theory]
-    [InlineData("Error")]
-    [InlineData("Failed")]
-    [InlineData("Aborted")]
-    public void LoadRetryFilter_RunLevelFailureFallsBackToFullSuite(string runInfoOutcome)
+    [Fact]
+    public void LoadRetryFilter_CorrelatedXunitFailureRunInfosUseFocusedRetry()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_trx_retry_filter_xunit_failure");
+        try
+        {
+            var scenarios = new[]
+            {
+                (
+                    FileName: "fact.trx",
+                    TestCase: new RetryTrxCase(
+                        "fact",
+                        "CodeIndex.Tests.TestDeterminismTests",
+                        "WaitUntilAsync_PollsUntilConditionIsTrue",
+                        "Failed"),
+                    DisplayName: "CodeIndex.Tests.TestDeterminismTests.WaitUntilAsync_PollsUntilConditionIsTrue",
+                    ExpectedFilter: "FullyQualifiedName=CodeIndex.Tests.TestDeterminismTests.WaitUntilAsync_PollsUntilConditionIsTrue"),
+                (
+                    FileName: "theory.trx",
+                    TestCase: new RetryTrxCase(
+                        "theory",
+                        "Sample.TheoryTests",
+                        "Theory",
+                        "Failed",
+                        DisplayName: "Sample.TheoryTests.Theory(value: \"quoted\")"),
+                    DisplayName: "Sample.TheoryTests.Theory(value: \"quoted\")",
+                    ExpectedFilter: "FullyQualifiedName=Sample.TheoryTests.Theory")
+            };
+
+            foreach (var scenario in scenarios)
+            {
+                var trxPath = Path.Combine(projectRoot, scenario.FileName);
+                File.WriteAllText(
+                    trxPath,
+                    RetryTrx(
+                        [scenario.TestCase],
+                        runInfos: [new RetryRunInfo("Error", XunitFailureRunInfo(scenario.DisplayName))]));
+
+                var decision = TrxRetryFilter.Load(trxPath);
+
+                Assert.True(decision.UseFocusedRetry);
+                Assert.Equal(TrxRetryFilterReasons.Focused, decision.Reason);
+                Assert.Equal(scenario.ExpectedFilter, decision.Filter);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void LoadRetryFilter_RunLevelFailuresFallBackToFullSuite()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_trx_retry_filter_run_info");
         try
         {
-            var trxPath = Path.Combine(projectRoot, "run-level-failure.trx");
-            File.WriteAllText(
-                trxPath,
-                RetryTrx(
-                    [new RetryTrxCase("failed", "Sample.AdapterTests", "Fails", "Failed")],
-                    runInfoOutcome: runInfoOutcome));
+            var correlatedFailure = new RetryRunInfo(
+                "Error",
+                XunitFailureRunInfo("Sample.AdapterTests.Fails"));
+            var scenarios = new (string FileName, IReadOnlyCollection<RetryRunInfo> RunInfos)[]
+            {
+                ("generic-error.trx", [new RetryRunInfo("Error", "adapter diagnostic")]),
+                ("uncorrelated-xunit.trx", [new RetryRunInfo("Error", XunitFailureRunInfo("Sample.OtherTests.Fails"))]),
+                ("case-mismatched-xunit.trx", [new RetryRunInfo("Error", XunitFailureRunInfo("sample.AdapterTests.Fails"))]),
+                ("malformed-xunit.trx", [new RetryRunInfo("Error", "[xUnit.net 00:00:01.23]    Sample.AdapterTests.Fails [FAIL]")]),
+                ("multiple-text.trx", [new RetryRunInfo("Error", correlatedFailure.Text, IncludeSecondText: true)]),
+                ("nested-text.trx", [new RetryRunInfo("Error", correlatedFailure.Text, NestText: true)]),
+                ("failed.trx", [new RetryRunInfo("Failed", "adapter diagnostic")]),
+                ("aborted.trx", [new RetryRunInfo("Aborted", "adapter diagnostic")]),
+                ("mixed.trx", [correlatedFailure, new RetryRunInfo("Error", "adapter diagnostic")])
+            };
 
-            var decision = TrxRetryFilter.Load(trxPath);
+            foreach (var scenario in scenarios)
+            {
+                var trxPath = Path.Combine(projectRoot, scenario.FileName);
+                File.WriteAllText(
+                    trxPath,
+                    RetryTrx(
+                        [new RetryTrxCase("failed", "Sample.AdapterTests", "Fails", "Failed")],
+                        runInfos: scenario.RunInfos));
 
-            Assert.False(decision.UseFocusedRetry);
-            Assert.Equal(TrxRetryFilterReasons.RunIncomplete, decision.Reason);
+                var decision = TrxRetryFilter.Load(trxPath);
+
+                Assert.False(decision.UseFocusedRetry);
+                Assert.Equal(TrxRetryFilterReasons.RunIncomplete, decision.Reason);
+            }
         }
         finally
         {
@@ -694,7 +761,7 @@ public sealed class TestTelemetryTests
         IReadOnlyCollection<RetryTrxCase> testCases,
         string summaryOutcome = "Failed",
         int? failedCounter = null,
-        string? runInfoOutcome = null)
+        IReadOnlyCollection<RetryRunInfo>? runInfos = null)
     {
         XNamespace trx = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
         var executed = testCases.Count(testCase =>
@@ -711,7 +778,9 @@ public sealed class TestTelemetryTests
                             trx + "UnitTestResult",
                             new XAttribute("executionId", $"execution-{index}"),
                             new XAttribute("testId", testCase.Id),
-                            new XAttribute("testName", $"{testCase.ClassName}.{testCase.MethodName}"),
+                            new XAttribute(
+                                "testName",
+                                testCase.DisplayName ?? $"{testCase.ClassName}.{testCase.MethodName}"),
                             new XAttribute("outcome", testCase.Outcome)))),
                 new XElement(
                     trx + "TestDefinitions",
@@ -769,24 +838,42 @@ public sealed class TestTelemetryTests
                         new XAttribute("completed", 0),
                         new XAttribute("inProgress", 0),
                         new XAttribute("pending", 0)),
-                    runInfoOutcome is null
+                    runInfos is null
                         ? null
                         : new XElement(
                             trx + "RunInfos",
-                            new XElement(
-                                trx + "RunInfo",
-                                new XAttribute("outcome", runInfoOutcome),
-                                new XElement(trx + "Text", "adapter diagnostic"))))));
+                            runInfos.Select(runInfo =>
+                                new XElement(
+                                    trx + "RunInfo",
+                                    new XAttribute("outcome", runInfo.Outcome),
+                                    new XElement(
+                                        trx + "Text",
+                                        runInfo.NestText
+                                            ? new XElement(trx + "Detail", runInfo.Text)
+                                            : runInfo.Text),
+                                    runInfo.IncludeSecondText
+                                        ? new XElement(trx + "Text", runInfo.Text)
+                                        : null))))));
 
         return document.ToString(SaveOptions.DisableFormatting);
     }
+
+    private static string XunitFailureRunInfo(string displayName) =>
+        $"[xUnit.net 00:00:01.23]     {displayName} [FAIL]";
 
     private sealed record RetryTrxCase(
         string Id,
         string ClassName,
         string MethodName,
         string Outcome,
-        bool IncludeDefinition = true);
+        bool IncludeDefinition = true,
+        string? DisplayName = null);
+
+    private sealed record RetryRunInfo(
+        string Outcome,
+        string Text,
+        bool IncludeSecondText = false,
+        bool NestText = false);
 
     [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "mkfifo", SetLastError = true)]
     private static extern int Mkfifo(string path, uint mode);

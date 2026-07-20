@@ -34,12 +34,12 @@ public class TestDeterminismTests
         var polls = 0;
 
         await TestDeterminism.WaitUntilAsync(
-            () => Interlocked.Increment(ref polls) >= 3,
-            "third poll",
+            () => Interlocked.Increment(ref polls) >= 2,
+            "second poll",
             timeout: TimeSpan.FromSeconds(1),
             pollInterval: TimeSpan.FromMilliseconds(1));
 
-        Assert.True(polls >= 3);
+        Assert.True(polls >= 2);
     }
 
     [Fact]

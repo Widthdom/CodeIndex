@@ -50,9 +50,6 @@ public static class TrxRetryFilter
         if (summary is null || counters is null)
             return Fallback(TrxRetryFilterReasons.TrxInconsistent);
 
-        if (HasUnsafeRunInfo(summary))
-            return Fallback(TrxRetryFilterReasons.RunIncomplete);
-
         if (!string.Equals(GetTrimmedAttribute(summary, "outcome"), "Failed", StringComparison.OrdinalIgnoreCase))
             return Fallback(TrxRetryFilterReasons.RunIncomplete);
 
@@ -84,6 +81,7 @@ public static class TrxRetryFilter
             return Fallback(TrxRetryFilterReasons.TrxInconsistent);
 
         var failedResults = new List<XElement>();
+        var failedTestNames = new HashSet<string>(StringComparer.Ordinal);
         var passedResults = 0;
         var notExecutedResults = 0;
         foreach (var result in results)
@@ -92,6 +90,11 @@ public static class TrxRetryFilter
             if (string.Equals(outcome, "Failed", StringComparison.OrdinalIgnoreCase))
             {
                 failedResults.Add(result);
+                var testName = GetTrimmedAttribute(result, "testName");
+                if (testName is null)
+                    return Fallback(TrxRetryFilterReasons.TrxInconsistent);
+
+                failedTestNames.Add(testName);
                 continue;
             }
 
@@ -118,6 +121,9 @@ public static class TrxRetryFilter
             counterValues.Total != passedResults + failedResults.Count + notExecutedResults ||
             (counterValues.NotExecuted != 0 && counterValues.NotExecuted != notExecutedResults))
             return Fallback(TrxRetryFilterReasons.TrxInconsistent);
+
+        if (HasUnsafeRunInfo(summary, failedTestNames))
+            return Fallback(TrxRetryFilterReasons.RunIncomplete);
 
         if (failedResults.Count > MaxFailedResults)
         {
@@ -257,13 +263,66 @@ public static class TrxRetryFilter
             CultureInfo.InvariantCulture,
             out value) && value >= 0;
 
-    private static bool HasUnsafeRunInfo(XElement summary) =>
+    private static bool HasUnsafeRunInfo(XElement summary, IReadOnlySet<string> failedTestNames) =>
         summary.Descendants()
             .Where(element => string.Equals(element.Name.LocalName, "RunInfo", StringComparison.Ordinal))
-            .Any(runInfo => !string.Equals(
-                GetTrimmedAttribute(runInfo, "outcome"),
-                "Warning",
-                StringComparison.OrdinalIgnoreCase));
+            .Any(runInfo => !IsSafeRunInfo(runInfo, failedTestNames));
+
+    private static bool IsSafeRunInfo(XElement runInfo, IReadOnlySet<string> failedTestNames)
+    {
+        var outcome = GetTrimmedAttribute(runInfo, "outcome");
+        if (string.Equals(outcome, "Warning", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!string.Equals(outcome, "Error", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var children = runInfo.Elements().Take(2).ToArray();
+        if (children.Length != 1 ||
+            !string.Equals(children[0].Name.LocalName, "Text", StringComparison.Ordinal) ||
+            children[0].HasElements)
+        {
+            return false;
+        }
+
+        var text = children[0].Value.Trim();
+        return TryReadXunitFailureName(text, out var failedTestName) &&
+               failedTestNames.Contains(failedTestName);
+    }
+
+    private static bool TryReadXunitFailureName(string text, out string failedTestName)
+    {
+        const string prefix = "[xUnit.net ";
+        const string separator = "]     ";
+        const string suffix = " [FAIL]";
+        failedTestName = string.Empty;
+
+        if (!text.StartsWith(prefix, StringComparison.Ordinal) ||
+            !text.EndsWith(suffix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var separatorIndex = text.IndexOf(separator, prefix.Length, StringComparison.Ordinal);
+        if (separatorIndex < 0 ||
+            !TimeSpan.TryParseExact(
+                text.AsSpan(prefix.Length, separatorIndex - prefix.Length),
+                @"hh\:mm\:ss\.ff",
+                CultureInfo.InvariantCulture,
+                TimeSpanStyles.None,
+                out _))
+        {
+            return false;
+        }
+
+        var nameStart = separatorIndex + separator.Length;
+        var nameLength = text.Length - nameStart - suffix.Length;
+        if (nameLength <= 0)
+            return false;
+
+        failedTestName = text.Substring(nameStart, nameLength);
+        return failedTestName.Length == failedTestName.Trim().Length;
+    }
 
     private static XElement? GetSingleChild(XElement parent, string localName)
     {
